@@ -36,7 +36,7 @@ const time = (value) => {
  * read, and no verdict is possible. An empty list is a repository with no CI on
  * that head, which has nothing to wait for.
  *
- * @param {Array<{name?: string, status?: string, conclusion?: string|null, started_at?: string|null, completed_at?: string|null}>|null} checks
+ * @param {Array<{name?: string, status?: string, conclusion?: string|null, created_at?: string|null, completed_at?: string|null}>|null} checks
  * @param {string} mergedAt
  * @returns {{ readable: boolean, notGreenAtMerge: string[], failing: string[], settled: boolean }}
  */
@@ -47,15 +47,17 @@ export function classifyHeadChecks(checks, mergedAt) {
   const failing = [];
   let settled = true;
   for (const check of checks) {
+    // A run whose suite was created after the merge (a manual rerun, a scheduled
+    // workflow) was never something the merge could have waited for, so it can
+    // neither flag the merge nor drive a recovery. Judged by creation, not start:
+    // a check queued before the merge may not begin until well after it.
+    const createdMs = time(check?.created_at);
+    if (createdMs !== null && mergedMs !== null && createdMs > mergedMs + LEASE_CLOCK_SKEW_MS) continue;
     const name = String(check?.name || 'unnamed check');
     const completed = check?.status === 'completed';
     const conclusion = String(check?.conclusion || '').toLowerCase();
     if (!completed) settled = false;
     if (completed && RED_CONCLUSIONS.has(conclusion)) failing.push(name);
-    // A run created after the merge (a push workflow on the merge commit, a manual
-    // rerun) was never something the merge could have waited for.
-    const startedMs = time(check?.started_at);
-    if (startedMs !== null && mergedMs !== null && startedMs > mergedMs + LEASE_CLOCK_SKEW_MS) continue;
     const completedMs = time(check?.completed_at);
     const greenBeforeMerge = completed && GREEN_CONCLUSIONS.has(conclusion)
       && mergedMs !== null && completedMs !== null && completedMs <= mergedMs;

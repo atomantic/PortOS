@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // run's recorded lease history and the task queue are injected; the audit,
 // the watch sweep and the pure assessment run for real.
 const f = vi.hoisted(() => ({
-  agent: null, apps: new Map(), tasks: [], prs: [], checks: [], statuses: [], held: null, addTaskFailures: 0,
+  agent: null, apps: new Map(), tasks: [], prs: [], checks: [], statuses: [], suites: [], held: null, addTaskFailures: 0,
 }));
 
 const execGhMock = vi.fn();
@@ -53,7 +53,7 @@ const MERGED_AT = '2026-10-20T02:16:47Z';
 const task = { id: 'task-agent-1', metadata: { app: 'app1' } };
 
 const run = (agentId = 'agent-1') => auditClaimMergeGate({ agentId, task, agentState: { ...f.agent, id: agentId } });
-const check = (overrides) => ({ name: 'build', status: 'completed', conclusion: 'success', completed_at: '2026-10-20T02:10:00Z', ...overrides });
+const check = (overrides) => ({ name: 'build', status: 'completed', conclusion: 'success', suite: 1, completed_at: '2026-10-20T02:10:00Z', ...overrides });
 const lease = (overrides) => ({ repository: 'github.com/example/repo', outcome: 'merged',
   acquiredAt: '2026-10-20T02:16:30Z', releasedAt: '2026-10-20T02:16:55Z', ...overrides });
 
@@ -68,6 +68,7 @@ beforeEach(() => {
   f.prs = [{ number: 7, url: PR_URL, headRefOid: HEAD, mergedAt: MERGED_AT, baseRefName: 'main' }];
   f.checks = [check()];
   f.statuses = [];
+  f.suites = [{ id: 1, created_at: '2026-10-20T02:09:00Z' }, { id: 2, created_at: '2026-10-20T02:30:00Z' }];
   f.addTaskFailures = 0;
   addTaskMock.mockClear();
   notifyMock.mockClear();
@@ -75,7 +76,8 @@ beforeEach(() => {
   execGhMock.mockReset().mockImplementation(async (args) => {
     if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(f.prs);
     if (args[0] === 'api') {
-      const rows = args.some((arg) => String(arg).includes('/status')) ? f.statuses : f.checks;
+      const path = args.find((arg) => String(arg).startsWith('repos/'));
+      const rows = path.includes('/check-suites') ? f.suites : path.includes('/status') ? f.statuses : f.checks;
       if (rows === null) throw new Error('forge down');
       return rows.map((c) => JSON.stringify(c)).join('\n');
     }
@@ -172,7 +174,7 @@ describe('post-merge gate audit', () => {
     f.checks = [
       check(),
       // A push workflow on the merge commit was never something the merge could wait for.
-      check({ name: 'post-merge deploy', started_at: '2026-10-20T02:30:00Z', status: 'in_progress', conclusion: null, completed_at: null }),
+      check({ name: 'post-merge deploy', suite: 2, conclusion: 'failure', completed_at: '2026-10-20T02:31:00Z' }),
     ];
     f.statuses = [{ name: 'ci/legacy', status: 'completed', conclusion: 'failure', completed_at: '2026-10-20T02:20:00Z' }];
     await run();
@@ -180,6 +182,8 @@ describe('post-merge gate audit', () => {
       codes: ['no-admission-lease', 'checks-not-green-at-merge'], notGreenAtMerge: ['ci/legacy'],
     })]);
     expect(f.tasks).toHaveLength(1);
+    expect(f.tasks[0].context).toContain('ci/legacy');
+    expect(f.tasks[0].context).not.toContain('post-merge deploy');
   });
 
   it('keeps an audit the forge could not answer and completes it from the durable sweep', async () => {

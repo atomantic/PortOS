@@ -44,9 +44,9 @@ const watchKey = (repository, headSha) => `${repository}#${String(headSha).toLow
 const readWatches = (app) => readList(app?.mergeGateWatches).filter((watch) => isPlainObject(watch) && watch.key);
 
 // Commit statuses (CI that reports through the status API rather than check
-// runs) are mapped onto the check-run shape. A status has no start time worth
-// trusting: its `created_at` moves when the context flips pending to success.
-const CHECK_RUN_JQ = '.check_runs[] | {name, status, conclusion, started_at, completed_at}';
+// runs) are mapped onto the check-run shape.
+const CHECK_RUN_JQ = '.check_runs[] | {name, status, conclusion, suite: .check_suite.id, completed_at}';
+const CHECK_SUITE_JQ = '.check_suites[] | {id, created_at}';
 const STATUS_JQ = '.statuses[] | {name: .context, status: (if .state == "pending" then "in_progress" else "completed" end), conclusion: (if .state == "error" then "failure" else .state end), completed_at: .updated_at}';
 
 async function readGhLines({ origin, repoSpec, forgeExec, path, jq }) {
@@ -58,14 +58,21 @@ async function readGhLines({ origin, repoSpec, forgeExec, path, jq }) {
   return rows.every(isPlainObject) ? rows : null;
 }
 
-/** The check runs and commit statuses of `headSha`, or null when either could not be read. */
+/**
+ * The check runs and commit statuses of `headSha`, or null when any read failed.
+ * Each run carries its suite's `created_at`; a status has no creation time worth
+ * trusting (its context flips pending to success in place) and carries none.
+ */
 async function readHeadCheckRuns({ origin, repoSpec, forgeExec, headSha }) {
   const base = `repos/${origin.fullName}/commits/${headSha}`;
-  const [runs, statuses] = await Promise.all([
+  const [runs, suites, statuses] = await Promise.all([
     readGhLines({ origin, repoSpec, forgeExec, path: `${base}/check-runs?per_page=100`, jq: CHECK_RUN_JQ }),
+    readGhLines({ origin, repoSpec, forgeExec, path: `${base}/check-suites?per_page=100`, jq: CHECK_SUITE_JQ }),
     readGhLines({ origin, repoSpec, forgeExec, path: `${base}/status?per_page=100`, jq: STATUS_JQ }),
   ]);
-  return runs && statuses ? [...runs, ...statuses] : null;
+  if (!runs || !suites || !statuses) return null;
+  const created = new Map(suites.map((suite) => [suite.id, suite.created_at]));
+  return [...runs.map(({ suite, ...run }) => ({ ...run, created_at: created.get(suite) ?? null })), ...statuses];
 }
 
 async function readMergedPrs({ repoSpec, forgeExec, branch, since }) {
