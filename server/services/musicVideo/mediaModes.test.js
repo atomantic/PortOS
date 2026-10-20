@@ -1,7 +1,61 @@
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+// Aggregate fixed phase names only: no fixture paths, record ids or error text.
+const importPhases = vi.hoisted(() => {
+  let phases = null;
+  return {
+    start: () => { phases = new Map(); },
+    async run(name, work) {
+      if (!phases) return work();
+      const phase = phases.get(name) ?? { calls: 0, pending: 0, maxMs: 0, pendingSince: 0 };
+      phases.set(name, phase);
+      phase.calls += 1;
+      if (!phase.pending) phase.pendingSince = performance.now();
+      phase.pending += 1;
+      const started = performance.now();
+      try { return await work(); }
+      finally {
+        phase.pending -= 1;
+        phase.maxMs = Math.max(phase.maxMs, performance.now() - started);
+      }
+    },
+    report() {
+      if (!phases) return;
+      const summary = [...phases].map(([name, phase]) =>
+        `${name}:calls=${phase.calls},pending=${phase.pending},pendingMs=${phase.pending ? Math.round(performance.now() - phase.pendingSince) : 0},maxMs=${Math.round(phase.maxMs)}`).join('; ');
+      const log = [...phases.values()].some(phase => phase.pending) ? console.error : console.log;
+      log(`🧭 Media admission awaited phases ${summary}`);
+      phases = null;
+    },
+  };
+});
+vi.mock('fs/promises', async (original) => {
+  const fs = await original();
+  const phases = { readdir: 'scan', lstat: 'scan', realpath: 'scan', readFile: 'read',
+    mkdir: 'copy', cp: 'copy', writeFile: 'copy', rename: 'copy', rm: 'cleanup' };
+  return { ...fs, ...Object.fromEntries(Object.entries(phases).map(([name, phase]) =>
+    [name, (...args) => importPhases.run(phase, () => fs[name](...args))])) };
+});
+vi.mock('./documentMediaPolicy.js', async (original) => {
+  const policy = await original();
+  return { ...policy, assertDocumentMediaPolicy: (...args) =>
+    importPhases.run('policy', () => policy.assertDocumentMediaPolicy(...args)) };
+});
+vi.mock('../../lib/backupSnapshotBoundary.js', async (original) => {
+  const boundary = await original();
+  return { ...boundary, withBackupAssetPublication: (work, ...args) =>
+    importPhases.run('publication', () => boundary.withBackupAssetPublication(
+      () => importPhases.run('admitted-work', work), ...args)) };
+});
+vi.mock('./projects.js', async (original) => {
+  const store = await original();
+  return { ...store, mutateProjectRecord: (...args) =>
+    importPhases.run('persist', () => store.mutateProjectRecord(...args)),
+  listProjects: (...args) => importPhases.run('prune-list', () => store.listProjects(...args)) };
+});
+afterEach(() => importPhases.report());
 vi.mock('../../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-media-policy-') }));
 vi.mock('./devArtifactStore.js', async (original) => {
   const store = await original();
@@ -48,6 +102,7 @@ describe('whole-workflow media modes', () => {
   });
 
   it('refuses raster and embedded image documents before activation, accepts code+local fonts', async () => {
+    importPhases.start();
     const project = await projects.createProject({ name: 'Document', mediaMode: 'code-only' });
     const dir = join(PATHS.data, 'candidate'); await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'index.html'), '<img src="data:image/png;base64,AAAA">');

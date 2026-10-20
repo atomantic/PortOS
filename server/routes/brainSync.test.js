@@ -24,9 +24,24 @@ vi.mock('../services/brainParity.js', () => ({
   getBrainParityReports: vi.fn(),
   runBrainParityCheck: vi.fn(),
 }));
+// The real peer-pull gate runs; only the peer registry and settings it reads
+// are stubbed, as in routes/dataSync.test.js.
+const peers = [];
+vi.mock('../services/instances.js', async () => ({
+  ...(await vi.importActual('../services/instances.js')),
+  getPeers: async () => peers,
+}));
+let settings = {};
+vi.mock('../services/settings.js', async () => ({
+  ...(await vi.importActual('../services/settings.js')),
+  getSettings: async () => settings,
+}));
 
 import * as brainParity from '../services/brainParity.js';
 import * as brainSync from '../services/brainSync.js';
+import * as brainSyncLog from '../services/brainSyncLog.js';
+import * as brainReconcile from '../services/brainReconcile.js';
+import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
 import brainSyncRoutes from './brainSync.js';
 
 const buildApp = () => {
@@ -39,6 +54,59 @@ const buildApp = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  peers.length = 0;
+  settings = {};
+  __resetPullWarnThrottleForTests();
+});
+
+describe('brain pulls honor the per-peer brain category', () => {
+  const PEER_ID = 'peer-a-instance-id';
+  const peer = (syncCategories) => ({
+    instanceId: PEER_ID, name: 'Example Peer', enabled: true, syncEnabled: true,
+    directions: ['outbound', 'inbound'], syncCategories,
+  });
+  const reads = [
+    ['/api/brain/sync', () => brainSyncLog.getChangesSince],
+    ['/api/brain/reconcile/checksum', () => brainReconcile.getBrainChecksum],
+    ['/api/brain/reconcile/snapshot', () => brainReconcile.getBrainSnapshot],
+    ['/api/brain/reconcile/manifest', () => brainParity.buildBrainManifest],
+  ];
+  beforeEach(() => {
+    brainSyncLog.getChangesSince.mockResolvedValue({ changes: [], maxSeq: 0, hasMore: false });
+    brainReconcile.getBrainChecksum.mockResolvedValue('abc');
+    brainReconcile.getBrainSnapshot.mockResolvedValue({ records: {} });
+    brainParity.buildBrainManifest.mockResolvedValue({ types: {} });
+  });
+
+  it.each(reads)('strict mode refuses %s to a peer paired without brain sync', async (path, read) => {
+    settings = { federation: { strictPullAuthorization: true } };
+    peers.push(peer({ brain: false, catalog: true }));
+
+    const res = await request(buildApp()).get(path).set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('PEER_PULL_FORBIDDEN');
+    expect(read()).not.toHaveBeenCalled();
+  });
+
+  it.each(reads)('serves %s to a peer the user shares brain with', async (path, read) => {
+    settings = { federation: { strictPullAuthorization: true } };
+    peers.push(peer({ brain: true }));
+
+    const res = await request(buildApp()).get(path).set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+
+    expect(res.status).toBe(200);
+    expect(read()).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the warn-first ramp: without strict mode a denied pull is still served', async () => {
+    peers.push(peer({ brain: false }));
+
+    const res = await request(buildApp()).get('/api/brain/reconcile/snapshot').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+
+    expect(res.status).toBe(200);
+    expect(brainReconcile.getBrainSnapshot).toHaveBeenCalledOnce();
+  });
 });
 
 describe('POST /api/brain/sync', () => {

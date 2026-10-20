@@ -2896,8 +2896,8 @@ describe('spawnTuiAgent runtime', () => {
     await capturedOnData(Buffer.from('world\n'));
     await flushMicrotasks();
 
-    // Fire the 250ms debounced raw flush.
-    await vi.advanceTimersByTimeAsync(300);
+    // Fire the one-second debounced raw flush.
+    await vi.advanceTimersByTimeAsync(1000);
     await flushMicrotasks();
 
     const inMemTruncWarns = warnSpy.mock.calls.filter(args =>
@@ -2998,13 +2998,13 @@ describe('spawnTuiAgent runtime', () => {
     // First chunk (80 bytes) fits under the 100-byte cap → appendFile.
     await capturedOnData(Buffer.alloc(80, 0x61));
     await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(1000);
     await flushMicrotasks();
 
     // Second chunk (80 bytes) would push total to 160 > 100 → writeFile.
     await capturedOnData(Buffer.alloc(80, 0x62));
     await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(1000);
     await flushMicrotasks();
 
     const writeFileRawCalls = vi.mocked(fsPromises.writeFile).mock.calls.filter(

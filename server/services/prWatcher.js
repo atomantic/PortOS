@@ -619,6 +619,12 @@ async function runPendingMergePrs(app, { spendTicks }) {
         continue;
       }
       if (merge.success) {
+        // The post-merge gate audit (#12549) exempts only a merge made here.
+        if (binding) {
+          const { markMergeHandoffMerged } = await import('./cosMergeAdmission.js');
+          await markMergeHandoffMerged({ agentId: binding.agentId, receiptId: binding.receiptId, headSha: binding.headSha })
+            .catch((err) => console.warn(`⚠️ Could not mark PR #${entry.prNumber} as coordinator-merged: ${err.message}`));
+        }
         // Admission has released before potentially slow archival cleanup.
         outcomes.set(key, await finishMergedReceipt(app, entry, binding));
         result.merged += 1;

@@ -1,8 +1,8 @@
 /**
  * Bidirectional catalog↔canon projection — the highest-risk file in this PR.
  *
- * Needs a live Postgres (the same one `npm start` uses) for the catalog rows +
- * refs; SKIPS cleanly when no DB is reachable. The universe side is INJECTED as
+ * Uses the isolated portos_test database for catalog rows and refs; skips
+ * when the test DB is unavailable. The universe side is INJECTED as
  * a spy (`updateUniverse` dep) so the suite asserts the projection's fan-out /
  * loop-break / LWW behavior without standing up a real universe store.
  *
@@ -18,10 +18,10 @@
  */
 
 import { describe, it, expect, afterAll, vi } from 'vitest';
-import { checkHealth, ensureSchema, close } from '../lib/db.js';
+import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as catalogDB from './catalogDB.js';
-import { projectToCanon, projectToCatalog, _inFlightSize } from './catalogCanonProjection.js';
+import { projectToCanon, projectToCatalog } from './catalogCanonProjection.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -55,6 +55,16 @@ async function makeLinkedCharacter(universeId, { name = 'Proj Test', payload = {
   return ing;
 }
 
+// Pin a row's change clock so entry clocks can sit deterministically between
+// it and the NOW() a later write stamps (the trigger keeps an explicit clock).
+const PINNED_AT = '2020-01-01T00:00:00.000Z';
+const AFTER_PIN = '2020-01-01T00:00:01.000Z';
+const LATER_AFTER_PIN = '2020-01-01T00:00:02.000Z';
+async function pinClock(id, at = PINNED_AT) {
+  await query('UPDATE catalog_ingredients SET updated_at = $2 WHERE id = $1', [id, at]);
+}
+const canonEntry = (ingredientId, name, updatedAt) => ({ id: `e-${ingredientId}`, ingredientId, name, updatedAt });
+
 describe.skipIf(!runDb)('catalogCanonProjection', () => {
   it('projectToCanon fans a catalog edit into every linked universe canon entry', async () => {
     const uA = `u-proj-${Date.now()}-a`;
@@ -68,7 +78,7 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
       seenUniverses.push(universeId);
       // Simulate the embedded entry carrying this ingredientId so the mutator
       // produces a patch (returns null otherwise → counted as skipped).
-      const patch = mutator({
+      const patch = await mutator({
         characters: [{
           id: 'e1', ingredientId: ing.id, name: 'old',
           createdAt: '2026-01-01T00:00:00.000Z', staleField: 'remove me',
@@ -78,7 +88,8 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
       return patch; // truthy → counted as "written"
     });
 
-    const stats = await projectToCanon(ing.id, { ...ing, name: 'Renamed', payload: { role: 'Hero' } }, { updateUniverse });
+    const updated = await catalogDB.updateIngredient(ing.id, { name: 'Renamed', payload: { role: 'Hero' } });
+    const stats = await projectToCanon(ing.id, updated, { updateUniverse });
     expect(stats.universes).toBe(2);
     expect(stats.written).toBe(2);
     expect(seenUniverses.sort()).toEqual([uA, uB].sort());
@@ -87,8 +98,6 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
     });
     expect(projected[0]).not.toHaveProperty('staleField');
-    // Guard set drains — no leaked in-flight token.
-    expect(_inFlightSize()).toBe(0);
   });
 
   it('projectToCanon is a silent no-op for an ingredient with no universe ref', async () => {
@@ -140,6 +149,7 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
     // projectToCatalog with the originating guard token — which must skip the
     // originating ingredient and therefore NOT write the catalog row again.
     const updSpy = vi.spyOn(catalogDB, 'updateIngredient');
+    const condSpy = vi.spyOn(catalogDB, 'updateIngredientIfFresh');
     let catalogWritesInsideEcho = 0;
 
     const updateUniverse = vi.fn(async (universeId, mutator, opts) => {
@@ -148,13 +158,16 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
       // would persist canon then synchronously project back to catalog.
       const canon = {
         characters: [{
-          id: 'e1', ingredientId: ing.id, name: 'Loop Guard', role: 'after',
-          updatedAt: new Date(Date.now() + 60_000).toISOString(),
+          id: 'e1', ingredientId: ing.id, name: 'Loop Guard', role: 'before',
+          updatedAt: ing.updatedAt,
         }],
       };
-      await projectToCatalog(universeId, canon, { guardToken: opts?.canonProjectionGuard });
+      const patch = await mutator(canon);
+      expect(patch).not.toBeNull();
+      const persisted = { ...canon, ...patch };
+      await projectToCatalog(universeId, persisted, { guardToken: opts?.canonProjectionGuard });
       catalogWritesInsideEcho = updSpy.mock.calls.length - before;
-      return mutator(canon); // truthy
+      return persisted;
     });
 
     const updated = await catalogDB.updateIngredient(ing.id, { payload: { role: 'after' } });
@@ -165,11 +178,95 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
     // The echo (projectToCatalog inside updateUniverse) must NOT have written
     // the originating catalog row — the guard token skipped it.
     expect(catalogWritesInsideEcho).toBe(0);
+    expect(condSpy).not.toHaveBeenCalled();
     // Total catalog writes across the whole round-trip: only the primary edit.
     expect(updSpy.mock.calls.length).toBe(writesAfterPrimary);
     // Canon side written exactly once.
     expect(updateUniverse).toHaveBeenCalledTimes(1);
-    expect(_inFlightSize()).toBe(0);
     updSpy.mockRestore();
+    condSpy.mockRestore();
+  });
+
+  it('a catalog edit committed after the batched lookup survives a pending projection (#12503)', async () => {
+    const uId = `u-proj-${Date.now()}-f`;
+    const a = await makeLinkedCharacter(uId, { name: 'Race A' });
+    const b = await makeLinkedCharacter(uId, { name: 'Race B' });
+    await pinClock(a.id);
+    await pinClock(b.id);
+    const realWrite = catalogDB.updateIngredientIfFresh;
+    // While A's write is pending, an explicit catalog PATCH commits B.
+    const spy = vi.spyOn(catalogDB, 'updateIngredientIfFresh').mockImplementation(async (id, ...rest) => {
+      if (id === a.id) await catalogDB.updateIngredient(b.id, { name: 'New catalog edit' });
+      return realWrite(id, ...rest);
+    });
+    try {
+      const stats = await projectToCatalog(uId, {
+        characters: [canonEntry(a.id, 'Canon edit A', AFTER_PIN), canonEntry(b.id, 'Older canon edit', AFTER_PIN)],
+      });
+      expect(stats).toEqual({ written: 1, skipped: 1 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await catalogDB.getIngredient(a.id)).name).toBe('Canon edit A');
+    expect((await catalogDB.getIngredient(b.id)).name).toBe('New catalog edit');
+    const { items } = await catalogDB.listIngredientRevisions(b.id);
+    expect(items.filter((r) => r.actor === 'canon-projection')).toEqual([]);
+  });
+
+  it('two universe saves of one identity honor the same locked check', async () => {
+    const ing = await makeLinkedCharacter(`u-proj-${Date.now()}-g`, { name: 'Shared' });
+    await pinClock(ing.id);
+    const realLookup = catalogDB.getIngredientTimestamps;
+    let newerStats;
+    // The older save takes its snapshot, then the newer save commits first.
+    const spy = vi.spyOn(catalogDB, 'getIngredientTimestamps').mockImplementationOnce(async (...args) => {
+      const snapshot = await realLookup(...args);
+      newerStats = await projectToCatalog('u-newer', { characters: [canonEntry(ing.id, 'Newer universe save', LATER_AFTER_PIN)] });
+      return snapshot;
+    });
+    try {
+      const olderStats = await projectToCatalog('u-older', { characters: [canonEntry(ing.id, 'Older universe save', AFTER_PIN)] });
+      expect(olderStats).toEqual({ written: 0, skipped: 1 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(newerStats).toEqual({ written: 1, skipped: 0 });
+    expect((await catalogDB.getIngredient(ing.id)).name).toBe('Newer universe save');
+  });
+
+  it('a newer duplicate in the same save supersedes the write made earlier in that save (#4006)', async () => {
+    const uId = `u-proj-${Date.now()}-i`;
+    const ing = await makeLinkedCharacter(uId, { name: 'Duplicate' });
+    await pinClock(ing.id);
+    const stats = await projectToCatalog(uId, {
+      characters: [canonEntry(ing.id, 'First copy', AFTER_PIN)],
+      places: [canonEntry(ing.id, 'Newer copy', LATER_AFTER_PIN)],
+    });
+    expect(stats).toEqual({ written: 2, skipped: 0 });
+    expect((await catalogDB.getIngredient(ing.id)).name).toBe('Newer copy');
+  });
+
+  it('an equal-clock entry still writes; a row deleted after the lookup is skipped', async () => {
+    const uId = `u-proj-${Date.now()}-h`;
+    const equal = await makeLinkedCharacter(uId, { name: 'Equal' });
+    const gone = await makeLinkedCharacter(uId, { name: 'Gone' });
+    await pinClock(equal.id);
+    await pinClock(gone.id);
+    const realLookup = catalogDB.getIngredientTimestamps;
+    const spy = vi.spyOn(catalogDB, 'getIngredientTimestamps').mockImplementationOnce(async (...args) => {
+      const snapshot = await realLookup(...args);
+      await catalogDB.deleteIngredient(gone.id);
+      return snapshot;
+    });
+    try {
+      const stats = await projectToCatalog(uId, {
+        characters: [canonEntry(equal.id, 'Equal clock edit', PINNED_AT), canonEntry(gone.id, 'Revived?', AFTER_PIN)],
+      });
+      expect(stats).toEqual({ written: 1, skipped: 1 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await catalogDB.getIngredient(equal.id)).name).toBe('Equal clock edit');
+    expect(await catalogDB.getIngredient(gone.id)).toBeNull();
   });
 });

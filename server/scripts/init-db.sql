@@ -375,7 +375,12 @@ BEGIN
   END IF;
 
   IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-    NEW.updated_at := NOW();
+    -- Wire clocks are milliseconds; advance even within one transaction or
+    -- after a future peer clock. NOW() would reuse transaction-start time.
+    NEW.updated_at := GREATEST(
+      date_trunc('milliseconds', clock_timestamp()),
+      date_trunc('milliseconds', OLD.updated_at) + INTERVAL '1 millisecond'
+    );
   END IF;
   NEW.sync_sequence := nextval(pg_get_serial_sequence('memories', 'sync_sequence'));
   RETURN NEW;
@@ -660,6 +665,18 @@ CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_ingredient ON catalog_ingredien
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_key ON catalog_ingredient_media (media_key);
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_sync_seq ON catalog_ingredient_media (sync_sequence);
 
+-- #12500: the LWW clock every catalog trigger stamps on a local change —
+-- millisecond-representable (the wire precision) and strictly above the
+-- previous clock, so a transaction that began before a concurrent committed
+-- edit cannot stamp an older clock, and a future clock never moves backward.
+CREATE OR REPLACE FUNCTION catalog_next_change_clock(previous TIMESTAMPTZ)
+RETURNS TIMESTAMPTZ AS $$
+  SELECT GREATEST(
+    date_trunc('milliseconds', clock_timestamp()),
+    date_trunc('milliseconds', previous) + INTERVAL '1 millisecond'
+  )
+$$ LANGUAGE sql VOLATILE;
+
 -- Auto-update updated_at and bump sync_sequence on content/metadata changes.
 -- Mirrors update_memory_timestamp's pattern: skip the bump on no-content-change
 -- so cosmetic touches don't trigger sync. Respects explicit updated_at (used by
@@ -685,7 +702,7 @@ BEGIN
   END IF;
 
   IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-    NEW.updated_at := NOW();
+    NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
   END IF;
   NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredients', 'sync_sequence'));
   RETURN NEW;
@@ -719,7 +736,7 @@ BEGIN
   END IF;
 
   IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-    NEW.updated_at := NOW();
+    NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
   END IF;
   NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_scraps', 'sync_sequence'));
   RETURN NEW;
@@ -766,7 +783,7 @@ BEGIN
   IF NEW.deleted IS DISTINCT FROM OLD.deleted
      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
     IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-      NEW.updated_at := NOW();
+      NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
     END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_refs', 'sync_sequence'));
   END IF;
@@ -790,7 +807,7 @@ BEGIN
   IF NEW.deleted IS DISTINCT FROM OLD.deleted
      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
     IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-      NEW.updated_at := NOW();
+      NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
     END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
   END IF;
@@ -818,7 +835,7 @@ BEGIN
      OR NEW.caption IS DISTINCT FROM OLD.caption
      OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
     IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-      NEW.updated_at := NOW();
+      NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
     END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
   END IF;
@@ -854,7 +871,7 @@ BEGIN
   END IF;
 
   IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
-    NEW.updated_at := NOW();
+    NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
   END IF;
   NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_tags', 'sync_sequence'));
   RETURN NEW;
