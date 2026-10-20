@@ -234,15 +234,15 @@ router.get('/rate-limits', asyncHandler(async (req, res) => {
 // GET /queue/:agentId — Get queue for an agent
 router.get('/queue/:agentId', asyncHandler(async (req, res) => {
   const { agentId } = req.params;
-  console.log(`📋 GET /api/agents/tools/moltworld/queue/${agentId}`);
   const queue = moltworldQueue.getQueue(agentId);
+  console.log(`📋 GET moltworld queue (${queue.length} item(s))`);
   res.json(queue);
 }));
 
 // POST /queue — Add action to queue
 router.post('/queue', asyncHandler(async (req, res) => {
   const data = validateRequest(moltworldQueueAddSchema, req.body);
-  console.log(`📋 POST /api/agents/tools/moltworld/queue agentId=${data.agentId} action=${data.actionType}`);
+  console.log(`📋 POST /api/agents/tools/moltworld/queue action=${data.actionType}`);
   const item = moltworldQueue.addAction(data.agentId, data.actionType, data.params, data.scheduledFor);
   res.json(item);
 }));

@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const mockedSettings = { current: {}, writes: Promise.resolve() }
 vi.mock('./settings.js', () => ({
   getSettings: () => Promise.resolve(mockedSettings.current),
+  refreshSettingsIfChangedOnDisk: vi.fn(),
   updateSettingsWith: vi.fn((mutate) => {
     const write = mockedSettings.writes.then(async () => {
       mockedSettings.current = await mutate(mockedSettings.current)

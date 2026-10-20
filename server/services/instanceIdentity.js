@@ -110,6 +110,15 @@ export async function getInstanceId() {
 }
 
 /**
+ * Drop the memoized id so the next read follows instances.json. A file restore
+ * that installs instances.json calls this, or the running process would keep
+ * stamping its old id while getSelf() returned the restored one (#12596).
+ */
+export function resetInstanceIdCache() {
+  cachedInstanceId = null;
+}
+
+/**
  * Resolve this machine's real federation instance id, creating the local
  * identity on the cold path. `getInstanceId()` returns the
  * `UNKNOWN_INSTANCE_ID` sentinel (and never throws) before the identity exists

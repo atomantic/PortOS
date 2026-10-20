@@ -505,9 +505,11 @@ export async function unblockExpiredCooldowns(userTaskData, cosTaskData) {
  * many autonomous admissions the autonomous tiers may add this cycle.
  *
  * Off/dry-run withhold all AUTOMATIC internal spawns (auto-approved system
- * tasks, feature-agent, idle-review); user and on-demand tasks are
- * unaffected. Usage is tallied in completeAgent for autonomous runs only, so a
- * pure dry-run never accrues; user/on-demand spawns are already past this gate.
+ * tasks, feature-agent, idle-review). User and on-demand tasks bypass this mode
+ * gate; on-demand tasks also bypass the global pause. All non-user runs,
+ * including on-demand work, count toward the daily actions/minutes ledger in
+ * completeAgent and the in-flight action allowance here. A pure dry-run never
+ * accrues usage.
  *
  * @returns {Promise<{ cosAutonomyMode: string, autonomousActionsRemaining: number }>}
  */
@@ -706,11 +708,12 @@ export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, ad
 }
 
 /**
- * Priority 0: On-demand task requests (highest priority — user explicitly
- * requested these). Reads the live schedule's `onDemandRequests`, clears each
+ * Priority 0: On-demand task requests, including user, refill and quota-burn
+ * origins. Reads the live schedule's `onDemandRequests`, clears each
  * as it is processed, and admits any produced task (deduped) through the
- * cycle's shared `spawnAdapter`. Runs against the global slot cap — on-demand
- * work never counts against the autonomous action budget.
+ * cycle's shared `spawnAdapter`. On-demand work bypasses the auto-run mode gate
+ * and global pause, but uses global slots and counts toward the daily budget
+ * like other non-user runs.
  *
  * Returns the schedule the drain loaded so `evaluateTasks` can hand it to
  * Priority 2 explicitly (its disabled-analysis-type gate) instead of a second
@@ -1006,11 +1009,12 @@ export async function evaluateTasks(options) {
     // Priority 1 spends against the global slot cap.
     await spawnPriority1UserTasks(ctx);
 
-    // Ceiling for AUTONOMOUS admissions this cycle (#711). On-demand + user tasks
-    // are already in `tasksToSpawn` and never count against the CoS action budget,
-    // so the autonomous sections below may add at most `autonomousActionsRemaining`
-    // more. With no action cap this equals `availableSlots`, so the default path is
-    // unchanged. The autonomous tiers use this in place of `availableSlots`.
+    // Ceiling for AUTOMATIC admissions this cycle (#711). User and on-demand
+    // tasks already bypassed the mode gate; on-demand also bypasses pause. The
+    // automatic tiers may add at most `autonomousActionsRemaining` more tasks.
+    // On-demand runs still count as non-user work in the completion ledger and
+    // subsequent in-flight allowance; only user tasks are exempt. With no action
+    // cap this equals `availableSlots`.
     const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
 
     // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
