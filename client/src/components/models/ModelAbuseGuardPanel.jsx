@@ -140,7 +140,7 @@ export default function ModelAbuseGuardPanel() {
       </p>
       {guardStatus?.contributionAssessment?.ready === false && (
         <p role="status" className="text-xs text-port-warning max-w-2xl">
-          GitHub pull request and issue assessment is not ready ({guardStatus.contributionAssessment.code}): no eligible API provider resolves a model, so the pending-merge coordinator cannot merge. Pick a provider and model in Content safety policies below.
+          GitHub pull request and issue assessment is not ready ({guardStatus.contributionAssessment.code}), so the pending-merge coordinator cannot merge.{guardStatus.contributionAssessment.code === 'untrusted-content-model-required' ? ' Pick a provider and model in Content safety policies below.' : ''}
         </p>
       )}
       <details className="text-sm rounded-lg border border-port-border p-3">
