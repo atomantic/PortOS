@@ -321,6 +321,8 @@ async function createAppUnlocked(appData) {
     // repoStateVerificationEnabled), so writing a default here would freeze the
     // app against a future change of that default — but an explicit `false` on
     // create MUST survive, or a new app cannot opt out through POST at all.
+    ...(Number.isSafeInteger(appData.mergeHandoffMinQueuedRuns) && appData.mergeHandoffMinQueuedRuns > 0
+      ? { mergeHandoffMinQueuedRuns: appData.mergeHandoffMinQueuedRuns } : {}),
     ...(typeof appData.verifyRepoStateOnCompletion === 'boolean'
       ? { verifyRepoStateOnCompletion: appData.verifyRepoStateOnCompletion }
       : {}),

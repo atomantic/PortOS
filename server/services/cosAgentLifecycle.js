@@ -62,6 +62,13 @@ export async function updateAgent(agentId, updates) {
       updates = { ...updates, metadata: { ...updates.metadata, securityScan: previousScan } };
     }
 
+    // Each claim-swarm branch has its own recovery. Merge these server-written
+    // backlinks under the state lock so sibling audits cannot revoke one another.
+    if (updates.metadata?.repoStateRecoveries) {
+      updates = { ...updates, metadata: { ...updates.metadata, repoStateRecoveries: {
+        ...state.agents[agentId].metadata?.repoStateRecoveries, ...updates.metadata.repoStateRecoveries,
+      } } };
+    }
     // Merge metadata if present in updates
     if (updates.metadata) {
       state.agents[agentId] = {
@@ -135,6 +142,43 @@ async function archiveCompletedAgent(agentId, agent) {
   await saveAgentIndex();
 }
 
+/** Persist completion work after live-state retention expires. The same state
+ * lock serializes live updates and archive rewrites; no transcript is loaded.
+ */
+export function recordRepoStateVerification(agentId, verification) {
+  return updateCompletionReceipt(agentId, metadata => ({ ...metadata, repoStateVerification: verification }));
+}
+
+/** Server-only recovery backlink; works after the parent leaves live retention. */
+export function recordRepoStateRecovery(agentId, link, { claimRun = false } = {}) {
+  return updateCompletionReceipt(agentId, metadata => ({ ...metadata, repoStateRecovery: link,
+    ...(claimRun ? { repoStateRecoveries: { ...metadata?.repoStateRecoveries, [link.branch]: link } } : {}),
+  }));
+}
+
+async function updateCompletionReceipt(agentId, update) {
+  return withBackupAssetPublication(() => withStateLock(async () => {
+    const state = await loadState();
+    let agent = state.agents[agentId];
+    const date = agent?.completedAt?.slice(0, 10) || (await loadAgentIndex()).get(agentId);
+    if (!agent && date) {
+      const content = await tryReadFile(join(getAgentDir(agentId, date), 'metadata.json'));
+      if (!content) return false;
+      agent = JSON.parse(content);
+    }
+    if (!agent || (agent.id || agent.agentId) !== agentId || agent.status !== 'completed') return false;
+    const updated = { ...agent, metadata: update(agent.metadata || {}) };
+    // Never synthesize a bucket before archiveCompletedAgent moved the flat
+    // directory: its retry treats an existing bucket as the completed move.
+    if (date && (!state.agents[agentId] || await tryReadFile(join(getAgentDir(agentId, date), 'metadata.json')))) {
+      const { output: _output, ...record } = updated;
+      await atomicWrite(join(getAgentDir(agentId, date), 'metadata.json'), record);
+    }
+    if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state); }
+    return true;
+  }));
+}
+
 export async function completeAgent(agentId, result = {}) {
   const existing = await getAgentRecord(agentId);
   if (existing?.metadata?.taskAnalysisType === 'security' && existing.metadata.useRunner) {
@@ -174,6 +218,18 @@ export async function completeAgent(agentId, result = {}) {
       return state.agents[agentId];
     }
 
+    // Capture while the state lock still protects this run's active bindings.
+    // A later audit must never turn an old branch name into checkout authority.
+    const agent = state.agents[agentId];
+    let completedCheckouts;
+    if (agent.metadata?.claimPicksOwnBranch) {
+      completedCheckouts = [];
+      if (result.success === true) {
+        const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+        completedCheckouts = await captureCompletedCheckouts(agent, { success: true }).catch(() => []);
+      }
+    }
+
     state.agents[agentId] = {
       ...state.agents[agentId],
       status: 'completed',
@@ -184,7 +240,10 @@ export async function completeAgent(agentId, result = {}) {
       // "not declared" with "declared and failed" (false). Distinct from
       // result.success (the runner's exit-code verdict).
       result: { validationPassed: null, ...result },
+      ...(result.success && (state.agents[agentId].metadata?.isWorktree || state.agents[agentId].metadata?.claimPicksOwnBranch)
+        ? { metadata: { ...state.agents[agentId].metadata, repoStateVerification: { status: 'pending' } } } : {}),
     };
+    if (completedCheckouts) state.agents[agentId].metadata = { ...state.agents[agentId].metadata, completedCheckouts };
 
     if (result.success) {
       state.stats.tasksCompleted++;

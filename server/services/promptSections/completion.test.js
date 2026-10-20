@@ -27,13 +27,10 @@ describe('review-enabled completion merge gate', () => {
     expect(section).toContain('gh pr checks "<PR_URL>" --watch --fail-fast --interval 30');
     expect(section).toContain('repeat the configured review loop for `copilot` against the new HEAD');
     expect(section).toContain('gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>');
-    expect(section.indexOf('GitHub auto-merge handoff')).toBeLessThan(section.indexOf('4. **Wait for CI to finish**'));
-    expect(section).toContain('allow_auto_merge: true');
-    expect(section).toContain('autoMergeRequest.enabledAt');
-    expect(section).toContain('If this run requires repository merge admission, do not enable GitHub auto-merge');
-    expect(section).toContain('every outstanding check');
-    expect(section).toContain('Missing/unknown required-check policy');
-    expect(section).toContain('all configured reviews pass');
+    expect(section).toContain('By default stay responsible');
+    expect(section).toContain('mergeHandoffMinQueuedRuns');
+    expect(section).toContain('Unknown backlog, refused handoff');
+    expect(section).not.toContain('--auto --merge');
     expect(section).toContain('8. Write a short markdown summary');
   });
 

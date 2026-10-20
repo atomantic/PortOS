@@ -77,8 +77,6 @@ export function summaryStatesLeaveOpen(summary) {
  *   one that's CLOSED rather than merged). Either way there is nothing here
  *   to act on: finalize normally and let the post-teardown audit
  *   (`agentRepoStateVerification.js`) be the backstop, as today.
- * - `auto-merge-enabled` — GitHub confirms a pending handoff; finalize without
- *   claiming it has merged.
  * - `merge-handoff-queued` — the server's pending-merge coordinator holds a
  *   verified receipt for the published head (#12247); finalize without claiming
  *   it has merged. The branch is the coordinator's until it merges or recovers.
@@ -90,13 +88,12 @@ export function summaryStatesLeaveOpen(summary) {
  * @param {object} params
  * @param {{prState: string|null, readable: boolean, autoMergeEnabled?: boolean, mergeHandoffQueued?: boolean}|null} params.prProbe
  * @param {string|null|undefined} params.summary
- * @returns {'merged'|'no-pr-action'|'leave-open-stated'|'auto-merge-enabled'|'merge-handoff-queued'|'needs-reprompt'}
+ * @returns {'merged'|'no-pr-action'|'leave-open-stated'|'merge-handoff-queued'|'needs-reprompt'}
  */
 export function resolveMergeGateVerdict({ prProbe, summary }) {
   if (!prProbe || prProbe.readable === false) return 'no-pr-action';
   if (prProbe.prState === 'MERGED') return 'merged';
   if (prProbe.prState !== 'OPEN') return 'no-pr-action';
-  if (prProbe.autoMergeEnabled === true) return 'auto-merge-enabled';
   if (prProbe.mergeHandoffQueued === true) return 'merge-handoff-queued';
   if (summaryStatesLeaveOpen(summary)) return 'leave-open-stated';
   return 'needs-reprompt';
@@ -113,7 +110,7 @@ export function resolveMergeGateVerdict({ prProbe, summary }) {
 export function buildMergeGateReprompt(prUrl) {
   return [
     `Your Merge Gate is not finished: ${prUrl} is still OPEN and your last summary did not say you were leaving it open.`,
-    'Work through the Merge Gate steps from your original instructions now: use the verified PortOS pending-merge handoff (or, outside merge admission, the GitHub auto-merge handoff) when eligible, otherwise watch required CI to green, merge with `gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>`, and confirm `gh pr view "<PR_URL>" --json state -q .state` returns `MERGED` before exiting.',
+    'Work through the Merge Gate steps from your original instructions now: use a persisted PortOS pending-merge receipt only when the server accepts measured CI backlog under the configured policy; otherwise watch required CI to green, merge with `gh pr merge "<PR_URL>" --merge --match-head-commit <verified-head>`, and confirm `gh pr view "<PR_URL>" --json state -q .state` returns `MERGED` before exiting.',
     'If it truly cannot merge (a required check is red after a genuine fix attempt, or there is a conflict only a human can resolve), say so explicitly and leave it open.',
   ].join('\n');
 }
@@ -136,7 +133,7 @@ export function hasHealthyAutoMergeRequest(pr, now = Date.now()) {
 
 /** Shared GitHub handoff contract for inline, review-follow-up and recovery prompts. */
 export function buildAutoMergeHandoffInstructions(prRef) {
-  return `**GitHub auto-merge handoff (before waiting for CI):** If this run requires repository merge admission, do not enable GitHub auto-merge: a deferred GitHub merge cannot honor the local lease. Use the normal in-session CI wait and immediate admission-gated merge below. The remaining handoff applies only to workflows explicitly outside local admission. After local validation and all configured reviews pass on the published head, inspect \`gh pr view ${prRef} --json state,isDraft,headRefOid,mergeable,statusCheckRollup,reviewDecision\` and \`gh api repos/{owner}/{repo}\` (the PR's BASE repository). Require \`allow_auto_merge: true\`, a ready/non-draft conflict-free PR, satisfied reviews, no failed checks, and CI queued or running on that head. Read \`gh pr checks ${prRef} --required --json name,state\` and compare with every outstanding check in the workflow's CI gate: every such check must be enforced by GitHub. Missing/unknown required-check policy or any outstanding unenforced check means wait for all workflow checks and use the normal immediate merge gate. Only then enable \`gh pr merge ${prRef} --auto --merge --match-head-commit <published-head>\`. Use \`--squash\` or \`--rebase\` only if merge commits are disallowed. Never use \`--admin\`, change branch protection, or enable repository auto-merge settings. Read back \`gh pr view ${prRef} --json state,headRefOid,autoMergeRequest\`: require the same published head and OPEN with a non-null \`autoMergeRequest.enabledAt\`, or confirm MERGED. Exit status alone is not proof. A verified pending handoff is successful only outside local admission: report the PR URL and head, explicitly say auto-merge enabled with CI pending, write the completion sentinel if required, and stop without waiting for MERGED. Preserve the unmerged branch; do not close its issue or claim it landed. This eligible handoff overrides later in-session CI waits and MERGED-only completion instructions, including delegated slashdo workflows. If unavailable, rejected, or unverified, follow the normal CI/merge gate below; failed checks require a real fix.`;
+  return `**Own delivery through completion:** By default stay responsible for ${prRef} through all required CI, review, confirmed MERGED and safe cleanup. GitHub auto-merge enabled is not completion and does not transfer failure recovery or cleanup. Early finish is allowed only with an explicit persisted PortOS pending-merge receipt for the exact published/reviewed head, accepted after the server observes the configured CI backlog threshold. The app setting \`mergeHandoffMinQueuedRuns\` is opt-in: absent/null means keep ownership; no threshold is inferred from elapsed time. Unknown backlog, refused handoff or failed receipt persistence means continue in-session. The receipt owns CI failure recovery, changed heads, merge confirmation and preserved cleanup across restarts. Report its receipt ID and PR/head as pending, never merged; preserve the checkout and issue until the successor confirms completion. Intentional leave-open policies remain unchanged. Never enable native GitHub auto-merge to bypass local admission or a refused handoff.`;
 }
 
 /** Shared preservation ordering for every managed checkout delivery prompt. */

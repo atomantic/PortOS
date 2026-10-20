@@ -107,10 +107,57 @@ queue. Heads whose checks were still running are watched on the app
 pending-merge sweep. Detection only: nothing merges, reverts or changes branch
 protection.
 
+### Completion recovery and merged cleanup
+
+Successful worktree and claim-swarm runs persist a pending completion audit
+before publishing completion. The existing 30-minute merge sweep resumes up to
+ten oldest pending audits from live and archived agent records. Every recorded
+claim branch has its own recovery backlink; interruption after task creation can
+repair the exact existing backlink rather than minting another merge authority.
+Missing tasks, unreadable state, active owners and explicit leave-open policy
+never grant recovery permission. GitHub auto-merge enabled alone is unfinished.
+
+Routine reconciliation retains superseded but unmerged branches. Their separate
+backup-and-retire workflow requires explicit `reapSuperseded: true`; merged cleanup
+does not enable it.
+
+The Git page's merged badge is a display hint. Delete merged branches and
+completion cleanup use the same retirement path: resolve the current checkout,
+re-read ownership and policy, verify the exact commit's merge evidence, archive
+and verify ignored content, private Git evidence and reflog-only commit objects.
+Before local ref deletion, a separate archive preserves the shared branch
+reflog verbatim and bundles every historical commit it names, including for
+branches without a checkout. Missing objects or changed archive bytes hold the ref.
+Local ref retirement uses Git’s checked-out-branch guard and an exact-head lease
+inside the worktree creation queue. Remote deletion binds its fresh proof and
+exact-head lease to one captured, matching fetch/push endpoint. Recovery refs retain original commit objects even for a squash
+merge without a checkout. Cleanup reports locked, dirty, active, unmanaged,
+unverified manual claim, changed-head and archive-failure holds explicitly.
+An absent live registry entry alone cannot waive a manual claim hold; a
+successful completion receipt bound to the current checkout path, head and
+filesystem incarnation is required. Older records cannot release a reused claim. Initialized submodules currently retain
+the checkout because their complete content is not supported by the archive.
+A held merged receipt names a recovery task when policy and source ownership
+permit it; intentional human handoffs stay with their existing owner. The recovery
+task prepares preservation prerequisites; the coordinator makes one final retirement
+attempt after that task completes. A further refusal remains held with its reason
+and recovery task, without creating a loop.
+
 ### Pending-merge handoff (#12247)
 
-A participant that has pushed a head and satisfied its configured reviews may
-hand the CI wait to the server instead of holding its session open:
+Runs default to owning delivery through CI, confirmed merge and safe cleanup.
+Early finish is opt-in through the managed-app API setting
+`mergeHandoffMinQueuedRuns` (positive integer; absent or null disables it).
+Operators choose this threshold from their CI runner capacity; PortOS does not
+invent a waiting-time or queue-size default. The server reads GitHub Actions'
+current queued workflow-run count and requires that count to meet the configured
+threshold, plus queued work on this exact PR head, no failed/unknown checks,
+mergeability and satisfied reviews. Unknown backlog, an unavailable/paused
+coordinator or failed persistence keeps responsibility with the original run.
+This signal measures queued runs, not estimated completion time; repositories
+using other CI providers keep in-session ownership until a supported signal exists.
+
+An eligible participant may hand the CI wait to the server:
 `POST /api/cos/merge-handoff` (host-control gated) takes the registered agent
 ID, the PR URL, the full head SHA and — for a claim run, which cuts its own
 checkout — the worktree path. The server binds everything else itself: the
@@ -135,15 +182,19 @@ creating nested `[Review Loop]` descendants. A live owner keeps its receipt
 until it releases the branch. Unreadable ownership defers; a changed target,
 manual hold or exhausted retry budget remains blocked even if CI later turns
 green. A new verified handoff is needed to replace that binding. An unreadable binding never merges and is
-handed to the operator by notification; a PR that never settles times out to a
-notification as before.
+retained with an explicit blocked reason and an operator notification. A
+verified receipt that exceeds its polling budget or cannot read the forge
+remains durable and is retried by the scheduled sweep; notification never
+discards custody. A closed, unmerged PR is retained for explicit disposition,
+even when its old checks failed. Failure recovery waits for an active source
+task to finish before transferring ownership to a persisted recovery task.
 
 Immediately before merging under admission, the coordinator re-reads its owning
 task. A new manual hold or changed completion policy blocks the old receipt;
 an unreadable owner or queued recovery defers without consuming a worker slot.
 
-The merge-admission prompt section offers this handoff to every participant
-before its CI wait. When a local review round returns clean, the run records
+The merge-admission prompt section describes this optional handoff before the
+normal in-session CI wait. When a local review round returns clean, the run records
 `REVIEW_HEAD=$(git rev-parse HEAD)` beside `REVIEW_STATUS` (one line, replacing
 any earlier one); a later commit means that head was not reviewed. On
 `queued: true` with a receipt for its head, the run stops: it does not wait for
@@ -156,7 +207,7 @@ A receipt is a pending end state. `probePrForBranch` reports
 the published local head, so the merge-gate check finalizes without a nudge
 (`merge-handoff-queued`), worktree cleanup keeps the branch, and the repo-state
 audit treats the queued entry as the branch's owner. The receipt starts one
-immediate sweep of the app, which merges a head whose CI already settled
+immediate, daemon-gated sweep of the app, which merges a head whose CI settled after acceptance
 without waiting for the 30-minute timer and spends no tick budget. Overlapping
 sweeps of one app (timer, task generator, receipt) join a single pass; a receipt
 that lands during a pass which already read the queue gets one follow-up pass
@@ -168,7 +219,7 @@ follow-up poll for the app so a head whose CI turns green a minute later does
 not wait out the rest of the 30-minute timer. It re-runs the receipt sweep
 every 60 seconds for the first five polls, then every 120 seconds
 (`HANDOFF_FOLLOW_UP_*` in `server/services/prWatcher.js`), and stops once
-every receipt it tracks has merged, escalated, timed out to a notification or
+every receipt it tracks has merged, escalated, reached its polling cap or
 left the queue. An app has at most one poller: a receipt that lands while one
 is active joins it with its own 45-minute cap, after which the 30-minute timer
 sweep owns the entry exactly as before. Polls spend no tick budget, so

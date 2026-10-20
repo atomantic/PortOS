@@ -82,8 +82,8 @@ describe('resolveMergeGateVerdict', () => {
     })).toBe('leave-open-stated');
   });
 
-  it('accepts live auto-merge evidence even without a handoff summary', () => {
-    expect(resolveMergeGateVerdict({ prProbe: { prState: 'OPEN', readable: true, autoMergeEnabled: true }, summary })).toBe('auto-merge-enabled');
+  it('requires continued ownership when only GitHub auto-merge is enabled', () => {
+    expect(resolveMergeGateVerdict({ prProbe: { prState: 'OPEN', readable: true, autoMergeEnabled: true }, summary })).toBe('needs-reprompt');
     expect(resolveMergeGateVerdict({ prProbe: { prState: 'OPEN', readable: true }, summary: 'Auto-merge enabled.' })).toBe('needs-reprompt');
   });
 

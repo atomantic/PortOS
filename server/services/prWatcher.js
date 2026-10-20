@@ -365,7 +365,7 @@ function followUpPolicy(entry, binding) {
   };
 }
 
-async function currentHandoffOwnerPolicy(binding) {
+async function currentHandoffOwnerPolicy(binding, { recovery = false } = {}) {
   if (!binding) return null; // Legacy PortOS-opened entries have no task binding.
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = binding.taskId && await getTaskById(binding.taskId).catch(() => null);
@@ -375,7 +375,7 @@ async function currentHandoffOwnerPolicy(binding) {
     || resolvePrCompletion(metadata) !== binding.prCompletion) {
     return { ownerBlocked: 'The coordinating task completion policy changed; a fresh verified handoff is required' };
   }
-  if (task.status === 'pending') return { ownerDeferred: true };
+  if (task.status === 'pending' || (recovery && task.status === 'in_progress')) return { ownerDeferred: true };
   if (!['in_progress', 'completed'].includes(task.status)) {
     return { ownerBlocked: `The coordinating task is ${task.status || 'unreadable'}` };
   }
@@ -387,7 +387,9 @@ async function notifyPendingMergeTimeout(app, pending, reason, description = nul
     type: NOTIFICATION_TYPES.AGENT_WARNING,
     priority: PRIORITY_LEVELS.HIGH,
     title: `Pending PR #${pending.prNumber} needs attention`,
-    description: description || `PortOS stopped polling this PR after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}.`,
+    description: description || (readHandoffBinding(pending)
+      ? `PR polling needs attention after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}. PortOS retains its pending-merge receipt and continues checking for recovery.`
+      : `PortOS stopped polling this PR after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}.`),
     link: pending.prUrl,
     metadata: { appId: app.id, pendingMergePrNumber: pending.prNumber }
   }).catch((err) => {
@@ -396,11 +398,39 @@ async function notifyPendingMergeTimeout(app, pending, reason, description = nul
   });
 }
 
+// A permanent cleanup hold needs a named task, not an invisible retry loop.
+// Manual policy holds remain with their owner and never grant new authority.
+async function recoverHeldCleanup(app, entry, binding) {
+  if (entry.cleanup?.reason === 'pr-completion-human-handoff') return entry;
+  const { getTaskById } = await import('./cosTaskStore.js');
+  if (entry.cleanup?.recoveryTaskId) {
+    const task = await getTaskById(entry.cleanup.recoveryTaskId).catch(() => null);
+    return task?.status === 'completed' && !entry.cleanup.recoveryCompleted
+      ? { ...entry, cleanup: { ...entry.cleanup, status: 'pending', retryAt: 0, recoveryCompleted: true } } : entry;
+  }
+  if (await currentHandoffOwnerPolicy(binding, { recovery: true })) return entry;
+  const { addTask } = await import('./cos.js');
+  const task = await addTask({
+    description: `[Recovery] Prepare retained checkout for coordinator retirement: ${entry.prBranch} in ${app.name || app.id}`,
+    app: app.id, priority: 'HIGH', isRecovery: true, useWorktree: false,
+    metadata: { existingBranch: entry.prBranch, recoveryOrigin: { parentAgentId: binding.agentId,
+      parentTaskId: binding.taskId, subsystem: 'repository-cleanup' } },
+    context: `PR ${entry.prUrl} is MERGED at ${binding.headSha}; cleanup is still owned by its receipt.
+Repository: ${app.repoPath}
+Checkout: ${binding.worktreePath}
+Retained reason: ${entry.cleanup.reason}
+Archive: ${entry.cleanup.archiveDir || 'not yet verified'}
+Repair preservation prerequisites for only this checkout, leaving final worktree/ref removal to its receipt coordinator. Do not delete the checkout or refs yourself. Re-read live ownership, locks, head and completion policy. Preserve every unique tracked, untracked and ignored byte and verify recovery evidence before removal. Never infer inactivity from an absent process or missing registry entry. Do not reopen or merge the PR, change the primary checkout, bypass unmanaged-location guards, remove another agent’s lock, or discard content. If retirement is not authorized, retain the checkout and record the exact owner, blocker and next step.`,
+  }, 'user').catch(() => null);
+  return task?.id ? { ...entry, cleanup: { ...entry.cleanup, recoveryTaskId: task.id } } : entry;
+}
+
 async function finishMergedReceipt(app, entry, binding) {
   // Legacy queue records did not bind a checkout. Their existing branch
   // reconciliation remains the cleanup owner; never infer a deletion target.
   if (!binding?.worktreePath) return null;
-  if (entry.cleanup?.status === 'held' || Date.now() < (entry.cleanup?.retryAt || 0)) return entry;
+  if (entry.cleanup?.status === 'held') return recoverHeldCleanup(app, entry, binding);
+  if (Date.now() < (entry.cleanup?.retryAt || 0)) return entry;
   const { retirePendingMergeCheckout } = await import('./heldCheckoutRecovery.js');
   const result = await retirePendingMergeCheckout({
     repoPath: app.repoPath, prUrl: entry.prUrl, expectedHeadSha: binding.headSha,
@@ -413,7 +443,7 @@ async function finishMergedReceipt(app, entry, binding) {
   const attempts = (entry.cleanup?.attempts || 0) + 1;
   const reason = result.reason || result.branchRetainedReason || 'branch-retained';
   const requiresRecovery = CLEANUP_REQUIRES_RECOVERY.has(reason);
-  const cleanup = { status: requiresRecovery || attempts >= MAX_PENDING_MERGE_TICKS ? 'held' : 'pending',
+  const cleanup = { ...entry.cleanup, status: entry.cleanup?.recoveryCompleted || requiresRecovery || attempts >= MAX_PENDING_MERGE_TICKS ? 'held' : 'pending',
     reason, attempts, retryAt: Date.now() + PENDING_MERGE_SWEEP_INTERVAL_MS,
     ...(result.archiveDir ? { archiveDir: result.archiveDir } : {}) };
   if (!entry.cleanup || cleanup.status === 'held') {
@@ -472,7 +502,7 @@ async function runPendingMergePrs(app, { spendTicks }) {
 
   for (const entry of pending) {
     const key = pendingMergeKey(entry);
-    if (entry.cleanup?.status === 'held' || Date.now() < (entry.cleanup?.retryAt || 0)) {
+    if (Date.now() < (entry.cleanup?.retryAt || 0)) {
       outcomes.set(key, entry);
       continue;
     }
@@ -482,9 +512,9 @@ async function runPendingMergePrs(app, { spendTicks }) {
       if (binding.repository !== repositoryKey(origin)) binding = INVALID_HANDOFF;
     }
     if (binding === INVALID_HANDOFF) {
-      await notifyPendingMergeTimeout(app, entry, null,
+      if (!entry.recoveryBlocked) await notifyPendingMergeTimeout(app, entry, null,
         'PortOS will not merge this handed-off PR: its recorded head/policy binding is unreadable or names another repository. Verify the PR and merge or re-dispatch it.');
-      outcomes.set(key, null);
+      outcomes.set(key, { ...entry, recoveryBlocked: 'handoff-binding-unreadable' });
       result.invalidated += 1;
       continue;
     }
@@ -500,8 +530,8 @@ async function runPendingMergePrs(app, { spendTicks }) {
       result.errors += 1;
       const unreadable = { ...entry, ticks: entry.ticks + charge };
       if (unreadable.ticks >= MAX_PENDING_MERGE_TICKS) {
-        await notifyPendingMergeTimeout(app, entry, 'it could not be read from the forge');
-        outcomes.set(key, null);
+        if (!entry.attention) await notifyPendingMergeTimeout(app, entry, 'it could not be read from the forge');
+        outcomes.set(key, binding ? { ...unreadable, ticks: MAX_PENDING_MERGE_TICKS, attention: 'forge-unreadable' } : null);
         result.timedOut += 1;
       } else {
         outcomes.set(key, unreadable);
@@ -512,6 +542,13 @@ async function runPendingMergePrs(app, { spendTicks }) {
 
     if (String(prView.state || '').toUpperCase() === 'MERGED') {
       outcomes.set(key, await finishMergedReceipt(app, entry, binding));
+      continue;
+    }
+
+    if (binding && String(prView.state || '').toUpperCase() === 'CLOSED') {
+      if (!entry.recoveryBlocked) await notifyPendingMergeTimeout(app, entry, null,
+        `PR #${entry.prNumber} was closed without merging. Its receipt retains the branch and checkout; explicit disposition is required.`);
+      outcomes.set(key, { ...entry, recoveryBlocked: 'pr-closed-unmerged' });
       continue;
     }
 
@@ -528,7 +565,7 @@ async function runPendingMergePrs(app, { spendTicks }) {
     const failure = headMoved ? 'head-moved' : classifyPrFailure(prView);
     if (failure) {
       try {
-        const ownerPolicy = await currentHandoffOwnerPolicy(binding);
+        const ownerPolicy = await currentHandoffOwnerPolicy(binding, { recovery: true });
         if (ownerPolicy) {
           outcomes.set(key, ownerPolicy.ownerBlocked ? { ...entry, recoveryBlocked: ownerPolicy.ownerBlocked } : entry);
           result.waiting = (result.waiting || 0) + 1;
@@ -554,6 +591,11 @@ async function runPendingMergePrs(app, { spendTicks }) {
           outcomes.set(key, { ...entry, recoveryBlocked: recovery.blocked });
           await notifyPendingMergeTimeout(app, entry, null,
             `PR #${entry.prNumber} remains owned by review task ${recovery.id}: ${recovery.blocked}. Resume that task after resolving the blocker; its worktree and exact-head merge gate are preserved.`);
+          continue;
+        }
+        if (!recovery?.id) {
+          outcomes.set(key, { ...entry, attention: 'recovery-not-persisted' });
+          result.errors += 1;
           continue;
         }
         outcomes.set(key, null);
@@ -638,8 +680,8 @@ async function runPendingMergePrs(app, { spendTicks }) {
       const reason = String(prView.state || '').toUpperCase() !== 'OPEN'
         ? `it is ${String(prView.state).toLowerCase()} rather than open`
         : withheldReason || 'CI or mergeability did not settle';
-      await notifyPendingMergeTimeout(app, entry, reason);
-      outcomes.set(key, null);
+      if (!entry.attention) await notifyPendingMergeTimeout(app, entry, reason);
+      outcomes.set(key, binding ? { ...next, ticks: MAX_PENDING_MERGE_TICKS, attention: reason } : null);
       result.timedOut += 1;
     } else {
       outcomes.set(key, next);
@@ -736,8 +778,12 @@ function receiptSweep(appId) {
  * queued (CI pending, admission deferred, forge briefly unreadable) — the app's
  * bounded follow-up poll. Never rejects.
  */
+export async function mergeHandoffSuccessorBlocked() {
+  return handoffFollowUpGate ? await handoffFollowUpGate().catch(() => 'gate-unreadable') : 'daemon-stopped';
+}
+
 export function followUpHandoffReceipt(appId, receiptId) {
-  return _sweepPendingMergeApp(appId)
+  return mergeHandoffSuccessorBlocked().then(blocked => blocked ? null : _sweepPendingMergeApp(appId))
     .then(() => armHandoffFollowUp(appId, receiptId))
     .catch((err) => {
       console.error(`❌ Handoff follow-up for app ${appId} could not be armed: ${err.message}`);
