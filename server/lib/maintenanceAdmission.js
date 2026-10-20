@@ -59,9 +59,26 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       return schema.parse(JSON.parse(io.readFileSync(file, 'utf8')));
     } catch { throw unavailable(); }
   };
+  // status()/held() are polled several times a second (media drain loop, spawn
+  // gates); re-parsing a journal that carries every settled operation allocated
+  // ~400 KB per call. Writers publish by renaming a new file into place, so any
+  // change gives it a new identity; the stat is taken before the read, so a
+  // racing publish can only cost a re-parse. Read-only: transactions mutate the
+  // state they read and must keep calling read() for a private copy.
+  let statusCache = null;
+  const readForStatus = () => {
+    if (uncertain) throw unavailable();
+    let stats;
+    try { stats = io.lstatSync(file); }
+    catch (err) { if (err.code === 'ENOENT') return empty(); throw unavailable(); }
+    if (!stats.isFile()) throw unavailable();
+    const key = `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
+    if (statusCache?.key !== key) statusCache = { key, state: read() };
+    return statusCache.state;
+  };
   const project = state => ({
     state: state.hold ? (state.operations.length || state.exclusive ? 'draining' : 'ready') : 'normal',
-    revision: state.revision, hold: state.hold,
+    revision: state.revision, hold: state.hold && { ...state.hold },
     blockers: [...state.operations.map(({ kind, resource, startedAt, pid, unsettled }) => ({ kind, resource, startedAt, pid, unsettled })),
       ...(state.exclusive ? [{ kind: 'exclusive-maintenance', resource: state.exclusive.operation.operationId,
         startedAt: state.exclusive.claimedAt, unsettled: state.exclusive.phase === 'uncertain' }] : [])],
@@ -70,7 +87,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const status = () => {
     try {
       if (exists(lock)) throw unavailable();
-      return project(read());
+      return project(readForStatus());
     } catch {
       return { state: 'unavailable', revision: null, hold: null, blockers: [],
         error: 'Maintenance state needs recovery. New work is held; readiness is unknown.' };

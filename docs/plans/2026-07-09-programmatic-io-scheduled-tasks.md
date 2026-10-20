@@ -39,7 +39,7 @@ A task-type registry gains two optional async hooks (co-located with the task ty
 other config; resolved by id at dispatch/completion time):
 
 - **`buildTaskInput(app, config)` → `{ promptAugmentation?, context?, skip?: { reason } }`**
-  Runs before spawn, inside `generateManagedAppImprovementTaskForType`
+  Runs before spawn, inside `prepareManagedAppImprovementTask`
   (`cosTaskGenerator.js:1665`) after metadata assembly and alongside the existing
   perpetual work-detector gate (`:1744`, which is already the precedent for a
   programmatic "should we even spawn?" check). For LI: the park-check + `gatherSources`
@@ -115,7 +115,7 @@ provider → non-interactive but still a visible agent card. This is exactly the
    installs).
 2. **Hook interface + registry.** Add optional `buildTaskInput`/`processTaskOutput`
    resolution keyed by task type. Wire `buildTaskInput` into
-   `generateManagedAppImprovementTaskForType`; wire `processTaskOutput` into
+   `prepareManagedAppImprovementTask`; wire `processTaskOutput` into
    `finalizeAgent`/`processAgentCompletion`.
 3. **Sentinel payload.** Extend `ingestDoneSentinel` to parse an optional JSON
    `payload`; thread it into `agentResult`. Back-compat preserved.

@@ -453,6 +453,24 @@ export async function getTaskDiagnostics() {
 }
 
 /**
+ * Approval-state view of the internal queue for pollers that need the awaiting
+ * list or the auto-approved count, not the whole queue. `getCosTasks()` clones
+ * every archived prompt body to answer the same question. Derived once per
+ * snapshot; only the first `limit` awaiting tasks are cloned.
+ */
+export async function getCosApprovalView({ limit = Infinity } = {}) {
+  const filePath = await resolveSourceFile('internal');
+  if (!filePath) return { awaitingApproval: [], autoApprovedCount: 0 };
+  const snapshot = await readTaskSnapshot(filePath);
+  snapshot.approval ??= {
+    awaiting: getAwaitingApprovalTasks(snapshot.tasks),
+    autoApprovedCount: getAutoApprovedTasks(snapshot.tasks).length,
+  };
+  const { awaiting, autoApprovedCount } = snapshot.approval;
+  return { awaitingApproval: structuredClone(awaiting.slice(0, limit)), autoApprovedCount };
+}
+
+/**
  * Alias for backward compatibility
  */
 export const getTasks = getUserTasks;

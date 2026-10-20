@@ -829,7 +829,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {(output.length > 0 || inactive || !remote) && (
               <button
                 onClick={() => setExpanded(!expanded)}
-                className="text-gray-500 hover:text-white transition-colors text-xs whitespace-nowrap"
+                className="min-h-[44px] min-w-[44px] justify-center px-2 text-gray-500 hover:text-white transition-colors text-xs whitespace-nowrap sm:min-h-0 sm:min-w-0"
                 aria-expanded={expanded}
               >
                 {expanded ? 'Hide' : 'Show'}
@@ -838,7 +838,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {!inactive && onRelaunch && (
               <button
                 onClick={() => onRelaunch(agent)}
-                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors sm:min-h-0 sm:min-w-0"
                 aria-label="Relaunch this agent's task on a different provider or model"
               >
                 <RefreshCw size={12} aria-hidden="true" />
@@ -849,7 +849,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               <button
                 onClick={handlePause}
                 disabled={pausing}
-                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50 sm:min-h-0 sm:min-w-0"
                 aria-label="Pause agent and preserve worktree"
               >
                 {pausing ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : <Pause size={12} aria-hidden="true" />}
@@ -862,6 +862,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 <ConfirmButtonPair
                   prompt="Kill?"
                   className="flex-wrap max-w-full"
+                  responsiveTouchTargets
                   confirmText="Confirm"
                   cancelText="Cancel"
                   ariaLabel="Confirm kill agent"
@@ -874,7 +875,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 <button
                   onClick={() => setConfirmingKill(true)}
                   disabled={killing}
-                  className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50"
+                  className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 sm:min-h-0 sm:min-w-0"
                   aria-label="Force kill agent (SIGKILL)"
                 >
                   {killing ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : <Skull size={12} aria-hidden="true" />}
@@ -885,7 +886,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {(completed || paused) && onResume && (
               <button
                 onClick={() => onResume(agent)}
-                className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors sm:min-h-0 sm:min-w-0"
                 aria-label={paused
                   ? "Resume this agent's task on its preserved worktree"
                   : "Create new task from this agent's context"}
@@ -899,6 +900,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 <ConfirmButtonPair
                   prompt="Remove?"
                   className="flex-wrap max-w-full"
+                  responsiveTouchTargets
                   confirmText="Remove"
                   ariaLabel="Confirm remove agent"
                   onConfirm={() => confirmDelete(() => onDelete(agent.id))}

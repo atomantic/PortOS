@@ -328,11 +328,6 @@ export function getReconciledUsageRunIds() {
 }
 
 /**
- * Run ids whose NESTED-session (sibling-family) attribution has already landed.
- * A separate marker from `reconciledRuns` on purpose: the sibling pass has to be
- * able to run on a run whose own transcript was reconciled long ago (#5831).
- */
-/**
  * Drop sibling markers that only guarded a single apply — the interactive scan's
  * synthetic ids, which its own watermark makes redundant once the batch lands.
  * Left in place they would grow `usage.json` by a key per family per day per scan.
@@ -346,17 +341,36 @@ export async function forgetSiblingReconciledUsageRuns(runIds = []) {
   if (dropped > 0) await saveUsage();
 }
 
+/**
+ * Run ids whose NESTED-session (sibling-family) attribution has already landed.
+ * A separate marker from `reconciledRuns` on purpose: the sibling pass has to be
+ * able to run on a run whose own transcript was reconciled long ago (#5831).
+ */
 export function getSiblingReconciledUsageRunIds() {
   return Object.keys(usageData?.siblingReconciledRuns || {});
 }
 
-export async function markUsageRunReconciled(runId) {
+/**
+ * Record that a completed run's accounting landed. `siblings` also marks its
+ * nested-session pass, which the live path runs whenever it has a provider list —
+ * without that marker a later backfill would bill those nested sessions again.
+ */
+export async function markUsageRunReconciled(runId, { siblings = false } = {}) {
   if (!runId) return;
   if (!usageData) await loadUsage();
   usageData.reconciledRuns ??= {};
-  if (usageData.reconciledRuns[runId]) return;
-  usageData.reconciledRuns[runId] = new Date().toISOString();
-  await saveUsage();
+  usageData.siblingReconciledRuns ??= {};
+  const now = new Date().toISOString();
+  let changed = false;
+  if (!usageData.reconciledRuns[runId]) {
+    usageData.reconciledRuns[runId] = now;
+    changed = true;
+  }
+  if (siblings && !usageData.siblingReconciledRuns[runId]) {
+    usageData.siblingReconciledRuns[runId] = now;
+    changed = true;
+  }
+  if (changed) await saveUsage();
 }
 
 /**
