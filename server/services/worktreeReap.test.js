@@ -27,9 +27,10 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-reap-archives-') }));
 afterAll(cleanupTempDataRoots);
 import { PATHS } from '../lib/paths.js';
+import { PATHS as FILE_PATHS } from '../lib/fileUtils.js';
 import { preserveBranchRetirement } from '../lib/branchRetirementArchive.js';
 import { hasBranchMergeEvidence, getStatus, getStatusPorcelain } from './git.js';
-import { reapMergedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
+import { reapMergedWorktrees, cleanupOrphanedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 
@@ -624,6 +625,52 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(branches).not.toContain('vanished-br');
     const listed = (await execGit(['worktree', 'list', '--porcelain'], dir)).stdout;
     expect(listed).not.toContain('vanished');
+  });
+
+  // gh-pages is a publishing branch. Both sweeps used to copy the protected
+  // list and drop it, so a clean merged checkout was archived and removed.
+  // The disposable sibling is the same shape on an unprotected name, so a
+  // sweep that protected every branch would fail here too.
+  it('holds a merged + clean gh-pages worktree in both reapers', async () => {
+    const pagesPath = await addWorktree(dir, 'pages', 'gh-pages');
+    const disposablePath = await addWorktree(dir, 'disposable', 'disposable-br');
+    await execGit(['merge', '--no-ff', 'gh-pages', '--no-edit'], dir);
+    await execGit(['merge', '--no-ff', 'disposable-br', '--no-edit'], dir);
+
+    const reaped = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+    expect(reaped.reaped.map(r => r.branch)).not.toContain('gh-pages');
+    expect(skipReason(reaped, pagesPath)).toBe('protected');
+    expect(existsSync(pagesPath)).toBe(true);
+    expect(reaped.reaped.map(r => r.branch)).toContain('disposable-br');
+    expect(existsSync(disposablePath)).toBe(false);
+
+    // cleanupExternalRepoWorktrees only admits agent-* dirs under the shared
+    // worktrees root, and that root must be the temp one both PATHS see.
+    expect(PATHS.worktrees).toContain('portos-reap-archives-');
+    expect(FILE_PATHS.worktrees).toBe(PATHS.worktrees);
+    const managedApp = join(externalRoot, 'managed-app');
+    await materializeGitRepo(managedApp, { identity: { email: 'test@example.com', name: 'Test' } });
+    await mkdir(PATHS.worktrees, { recursive: true });
+    const externalPages = join(PATHS.worktrees, 'agent-pages');
+    const externalDisposable = join(PATHS.worktrees, 'agent-disposable');
+    try {
+      await execGit(['worktree', 'add', '-b', 'gh-pages', externalPages, 'main'], managedApp);
+      await execGit(['worktree', 'add', '-b', 'disposable-br', externalDisposable, 'main'], managedApp);
+      await commitFile(externalPages, 'pages.txt', 'pages\n', 'pages work');
+      await commitFile(externalDisposable, 'disposable.txt', 'disposable\n', 'disposable work');
+      await execGit(['merge', '--no-ff', 'gh-pages', '--no-edit'], managedApp);
+      await execGit(['merge', '--no-ff', 'disposable-br', '--no-edit'], managedApp);
+
+      const cleaned = await cleanupOrphanedWorktrees(dir, new Set(), { claimOwners: { agents: [] } });
+      expect(cleaned).toBe(1);
+      expect(existsSync(externalPages)).toBe(true);
+      expect((await execGit(['show-ref', '--verify', 'refs/heads/gh-pages'], managedApp, { ignoreExitCode: true })).exitCode).toBe(0);
+      expect(existsSync(externalDisposable)).toBe(false);
+      expect((await execGit(['show-ref', '--verify', 'refs/heads/disposable-br'], managedApp, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    } finally {
+      await rm(PATHS.worktrees, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      await rm(managedApp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
   });
 
   it('excludes .claude trees when includeClaudeTrees is false', async () => {
