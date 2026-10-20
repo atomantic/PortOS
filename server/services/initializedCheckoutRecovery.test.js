@@ -20,7 +20,17 @@ vi.mock('./taskScheduleStore.js', () => ({
 }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, lstat: async path => {
+  return { ...actual, link: async (source, target) => {
+    if (fixture?.conflictNextJournal) {
+      fixture.conflictNextJournal = false;
+      await actual.writeFile(target, 'concurrent-evidence', { flag: 'wx', mode: 0o600 });
+    }
+    await actual.link(source, target);
+    if (fixture?.stopAfterJournalPublication) {
+      fixture.stopAfterJournalPublication = false;
+      throw new Error('journal-publication-interrupted');
+    }
+  }, lstat: async path => {
     const info = await actual.lstat(path);
     // Model POSIX permission bits even when this Darwin-capability fixture runs
     // on Windows; the unsafe-mode branch below still exercises real refusal.
@@ -31,11 +41,17 @@ vi.mock('node:fs/promises', async importOriginal => {
     return info;
   }, open: async (path, ...args) => {
     if (persisted.rejectDirectoryOpen && (await actual.lstat(path).catch(() => null))?.isDirectory()) throw new Error('directory-open-unsupported');
-    if (fixture?.failNextJournal && /[\\/]\d{6}\.json$/.test(String(path))) {
+    const isJournalStage = /[\\/]\.\d{6}\.json\.[a-f0-9-]+\.staging$/.test(String(path));
+    if (fixture?.failNextJournal && isJournalStage) {
       fixture.failNextJournal = false;
       throw new Error('journal-write-interrupted');
     }
     const handle = await actual.open(path, ...args);
+    if (fixture?.partialNextJournal && isJournalStage) {
+      fixture.partialNextJournal = false;
+      const write = handle.writeFile.bind(handle);
+      handle.writeFile = async text => { await write(text.slice(0, 1)); throw new Error('partial-journal-write'); };
+    }
     const originalSync = handle.sync.bind(handle);
     handle.sync = async () => { persisted.fileSyncs++; return originalSync(); };
     return handle;
@@ -258,6 +274,57 @@ describe('initialized checkout transaction', () => {
     const fresh = { ...input, journalDigest: status.journalDigest };
     const second = await fixture.service.reviewMetadataRestore(fresh);
     expect(await fixture.service.restoreMetadata({ ...fresh, review: { digest: second.review.digest } }))
+      .toMatchObject({ ok: true, restored: true });
+    expect(fixture.cut).toBeNull();
+  });
+  it('preserves a partial staged journal without blocking fresh metadata recovery', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    fixture.partialNextJournal = true;
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'partial-journal-write' });
+    expect(fixture.cut).not.toBeNull();
+    const directory = join(root, input.transactionId);
+    const partial = (await readdir(directory)).filter(name => name.endsWith('.staging'));
+    const fragments = (await Promise.all(partial.map(async name => [name, await readFile(join(directory, name), 'utf8')])))
+      .filter(([, text]) => text === '{');
+    expect(fragments).toHaveLength(1);
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status(input);
+    expect(status.journalDigest).toBe(input.journalDigest);
+    const fresh = await restarted.reviewMetadataRestore(input);
+    expect(await restarted.restoreMetadata({ ...input, review: { digest: fresh.review.digest } }))
+      .toMatchObject({ ok: true, restored: true });
+    expect(await readFile(join(directory, fragments[0][0]), 'utf8')).toBe('{');
+    expect(fixture.cut).toBeNull();
+  });
+  it('never replaces a conflicting canonical journal during metadata recovery', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    fixture.conflictNextJournal = true;
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, recoveryRequired: true });
+    const directory = join(root, input.transactionId);
+    const names = (await readdir(directory)).filter(name => /^\d{6}\.json$/.test(name)).sort();
+    expect(await readFile(join(directory, names.at(-1)), 'utf8')).toBe('concurrent-evidence');
+    expect(fixture.placement.working).toBe('quarantined');
+    expect(fixture.cut).not.toBeNull();
+  });
+  it('resumes from a complete journal published just before interruption', async () => {
+    const input = await interruptedMetadata();
+    const prepared = await fixture.service.reviewMetadataRestore(input);
+    fixture.stopAfterJournalPublication = true;
+    expect(await fixture.service.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'journal-publication-interrupted' });
+    const restarted = _createInitializedCheckoutRecovery(fixture.deps);
+    const status = await restarted.status(input);
+    expect(status.phase).toBe('metadata-restore-approved');
+    expect(fixture.cut).not.toBeNull();
+    expect(await restarted.restoreMetadata({ ...input, review: { digest: prepared.review.digest } }))
+      .toMatchObject({ ok: false, reason: 'retirement-journal-changed' });
+    const freshInput = { ...input, journalDigest: status.journalDigest };
+    const fresh = await restarted.reviewMetadataRestore(freshInput);
+    expect(await restarted.restoreMetadata({ ...freshInput, review: { digest: fresh.review.digest } }))
       .toMatchObject({ ok: true, restored: true });
     expect(fixture.cut).toBeNull();
   });

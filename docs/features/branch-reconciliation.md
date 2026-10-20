@@ -165,6 +165,10 @@ it records a durable pending intent before execution and then a response. A
 pending-only record means inspect the transaction before any retry. The CLI
 requires an existing self-install registry and trusted owner state, and refuses
 an absent or uncertain reservation. It never initializes a different data tree.
+Journal rows are fully written and synced to private staging files before
+exclusive hardlink publication to their numbered names. Staging files remain
+as evidence, including partial writes; recovery reads only committed numbered
+rows. Existing malformed numbered rows are never silently ignored or replaced.
 After an interrupted recovery, read status again and obtain a new review for
 the new journal digest rather than replaying an old approval.
 

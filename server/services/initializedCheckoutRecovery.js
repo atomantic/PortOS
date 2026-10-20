@@ -5,7 +5,7 @@
  */
 import { spawn } from '../lib/childProcess.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readFile, readdir } from 'node:fs/promises';
+import { link, lstat, mkdir, open, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type as hostOsType } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -94,9 +94,15 @@ async function appendStep(directory, state, phase, patch = {}) {
   await privateDirectory(directory);
   const next = { ...state, ...patch, phase, sequence: (state.sequence ?? -1) + 1,
     previous: state.sequence == null ? null : hash(state) };
-  const file = await open(join(directory, `${String(next.sequence).padStart(6, '0')}.json`), 'wx', 0o600);
+  const name = `${String(next.sequence).padStart(6, '0')}.json`;
+  const staged = join(directory, `.${name}.${randomUUID()}.staging`);
+  const file = await open(staged, 'wx', 0o600);
   try { await file.writeFile(`${JSON.stringify(next)}\n`); await file.sync(); }
   finally { await file.close(); }
+  // A partial write must never occupy the next committed sequence. Hardlink
+  // publication is atomic and refuses an existing name on every supported
+  // test platform. Retain staging names, including interrupted rows, as evidence.
+  await link(staged, join(directory, name));
   await syncDirectory(directory);
   return next;
 }
