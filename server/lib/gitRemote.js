@@ -13,6 +13,11 @@ export function isUpstreamOwner(fullNameOrOwner) {
   return owner.toLowerCase() === UPSTREAM_OWNER.toLowerCase();
 }
 
+/** Return whether a full owner/repository name identifies PortOS upstream. */
+export function isUpstreamFullName(fullName) {
+  return typeof fullName === 'string' && fullName.trim().toLowerCase() === UPSTREAM_FULL_NAME.toLowerCase();
+}
+
 /**
  * Strip any `://user:token@` credentials from a URL so a PAT embedded in an
  * https remote can't leak into API responses, logs, or telemetry. SCP-style

@@ -11,7 +11,7 @@ import { PROCESS_AUDIT_LIMITS as LIMITS, processAuditFingerprint, processAuditSi
   processAuditNextSchema, processAuditReadSchema, processAuditOutcomeSchema, processAuditFixSchema } from '../lib/persistentMindProcessAudit.js';
 import { loadState } from './cosState.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
-import { isUpstreamOwner, UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
+import { isUpstreamFullName } from '../lib/gitRemote.js';
 
 // Access projections must not load the archived-job graph merely to read grants.
 const loadAgentIndex = async () => (await import('./cosAgentIndex.js')).loadAgentIndex();
@@ -273,7 +273,7 @@ export async function recordProcessAuditOutcome(raw, context = {}) {
           const { listAppIssues } = await import('./appIssues.js');
           const listed = await listAppIssues(app);
           if (listed.transient) throw new Error('Tracker unreadable; nothing filed');
-          const cleanupState = args.template === 'recovery-loop' && isUpstreamOwner(app.fullName) && app.fullName.toLowerCase() === UPSTREAM_FULL_NAME.toLowerCase()
+          const cleanupState = args.template === 'recovery-loop' && isUpstreamFullName(app.fullName)
             && anchors.includes('server/services/agentRepoStateVerification.js')
             ? await cleanupFixState(app, await getAgentRecord(receipt.agentId)) : null;
           if (cleanupState === 'unknown') {
@@ -331,7 +331,7 @@ export async function readPendingProcessAudit(appId) {
   return { appId, pending: page.records.filter(record => !Object.values(store.receipts).some(receipt => receipt.agentId === record.id && receipt.outcome)).length,
     truncated: !!page.nextCursor || page.missingMetadata > 0 || page.unknownApp > 0, missingMetadata: page.missingMetadata, unattributedJobs: page.unknownApp, nextCursor: page.nextCursor, checkpoint: store.checkpoints[appId] || null, metrics: processAuditMetrics(page.records),
     fixes: Object.values(store.findings).filter(finding => finding.sourceAppId === appId && finding.fix).map(finding => ({ revision: finding.fix.revision, cleanObservations: finding.fix.cleanObservations, recurrences: finding.fix.recurrences })),
-    knownCleanupFix: isUpstreamOwner(app.fullName) && app.fullName.split('/')[1]?.toLowerCase() === UPSTREAM_FULL_NAME.split('/')[1].toLowerCase() ? { revision: KNOWN_CLEANUP_FIX, url: 'https://github.com/atomantic/PortOS/pull/7817', recurrence: 'unknown-until-comparable-post-fix-evidence' } : null };
+    knownCleanupFix: isUpstreamFullName(app.fullName) ? { revision: KNOWN_CLEANUP_FIX, url: 'https://github.com/atomantic/PortOS/pull/7817', recurrence: 'unknown-until-comparable-post-fix-evidence' } : null };
 }
 
 /** Safe automatic-wake projection: no transcript prose, job identifiers or task titles. */
