@@ -82,6 +82,27 @@ and reports progress every minute; after 10 minutes the reviewed PR (and any
 claim) is left open — a refusal is never permission to merge without admission. Sweep deferrals preserve their retry budget; the sweep already
 holds the lease only around its own read → assess → pinned merge.
 
+### Post-merge gate audit (#12549)
+
+Admission and "merge on green" are prompt rules; an agent with `gh` access can
+still merge around them. When a claim run finishes, `mergeGateAudit.js` (hung
+off the post-cleanup audit in `agentWorktreeCleanup.js`) lists the PRs merged
+from the run's bound claim branches and flags each one that either held no
+admission lease at `mergedAt` or had a check on the merged head that was not
+completed-green before it. The lease evidence is `mergeAdmissionHistory` on the
+run (each release records its `acquiredAt`/`releasedAt`) plus a lease it still
+holds. A head named by a `mergeHandoffReceipts` entry — recorded when the run
+handed it to the pending-merge coordinator — is never flagged.
+
+A violation is written to the run (`mergeGateViolations`), the run-events ledger
+(`run.merge-gate-violation`) and a notification. If the flagged head's checks
+fail, ONE recovery task for the default branch is queued; its description names
+the merged SHA, so concurrent runs and repeat audits deduplicate on the task
+queue. Heads whose checks were still running are watched on the app
+(`mergeGateWatches`) and resolved by a bounded fast poll and the 30-minute
+pending-merge sweep. Detection only: nothing merges, reverts or changes branch
+protection.
+
 ### Pending-merge handoff (#12247)
 
 A participant that has pushed a head and satisfied its configured reviews may

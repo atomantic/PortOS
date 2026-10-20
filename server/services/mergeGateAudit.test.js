@@ -1,0 +1,167 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Post-merge gate audit (#12549) at the finalizer boundary: the forge, the
+// run's recorded lease history and the task queue are injected; the audit,
+// the watch sweep and the pure assessment run for real.
+const f = vi.hoisted(() => ({
+  agent: null, apps: new Map(), tasks: [], prs: [], checks: [], held: null,
+}));
+
+const execGhMock = vi.fn();
+vi.mock('./github.js', () => ({ execGh: (...args) => execGhMock(...args) }));
+vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async (cwd) => ({ cwd, env: {} }) }));
+vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo' }) }));
+vi.mock('./apps.js', () => ({
+  getAppById: async (id) => f.apps.get(id) ?? null,
+  getActiveApps: async () => [...f.apps.values()],
+  updateApp: async (id, patch) => { const next = { ...f.apps.get(id), ...patch }; f.apps.set(id, next); return next; },
+}));
+vi.mock('./cosState.js', () => ({
+  readMergeAdmissionStateForSafetyCheck: async () => ({
+    trusted: true, agents: {}, mergeAdmissions: f.held ? { 'github.com/example/repo': f.held } : {},
+  }),
+}));
+vi.mock('./cosMergeAdmission.js', () => ({ repositoryKey: (origin) => `${origin.host}/${origin.fullName}`.toLowerCase() }));
+vi.mock('./cosAgentLifecycle.js', () => ({
+  updateAgent: async (_id, patch) => { f.agent = { ...f.agent, metadata: { ...f.agent.metadata, ...patch.metadata } }; return f.agent; },
+}));
+// addTask's real dedupe is first-line + app against open tasks; mirror it.
+const addTaskMock = vi.fn(async (data) => {
+  const open = f.tasks.find((task) => task.description.split('\n')[0] === data.description.split('\n')[0] && task.app === data.app);
+  if (open) return { ...open, duplicate: true };
+  const created = { id: `task-${f.tasks.length + 1}`, ...data };
+  f.tasks.push(created);
+  return created;
+});
+vi.mock('./cosTaskStore.js', () => ({ addTask: (...args) => addTaskMock(...args) }));
+const notifyMock = vi.fn(async () => ({ id: 'notification-1' }));
+vi.mock('./notifications.js', () => ({
+  addNotification: (...args) => notifyMock(...args),
+  NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
+  PRIORITY_LEVELS: { HIGH: 'high' },
+}));
+const appendRunEventMock = vi.fn(async () => ({ appended: true }));
+vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: (...args) => appendRunEventMock(...args) }));
+
+import { auditClaimMergeGate, sweepMergeGateWatches, __cancelMergeGatePolls } from './mergeGateAudit.js';
+
+const HEAD = 'a'.repeat(40);
+const PR_URL = 'https://github.com/example/repo/pull/7';
+const MERGED_AT = '2026-10-20T02:16:47Z';
+const task = { id: 'task-agent-1', metadata: { app: 'app1' } };
+
+const run = (agentId = 'agent-1') => auditClaimMergeGate({ agentId, task, agentState: { ...f.agent, id: agentId } });
+const check = (overrides) => ({ name: 'build', status: 'completed', conclusion: 'success', completed_at: '2026-10-20T02:10:00Z', ...overrides });
+const lease = (overrides) => ({ repository: 'github.com/example/repo', outcome: 'merged',
+  acquiredAt: '2026-10-20T02:16:30Z', releasedAt: '2026-10-20T02:16:55Z', ...overrides });
+
+beforeEach(() => {
+  f.agent = {
+    id: 'agent-1', taskId: 'task-agent-1', startedAt: '2026-10-20T02:00:00Z',
+    metadata: { sourceWorkspace: '/repos/source', claimBranches: ['claim/issue-1'], runId: 'run-1' },
+  };
+  f.apps = new Map([['app1', { id: 'app1', name: 'Example App', repoPath: '/repos/source', forgeAccount: null }]]);
+  f.tasks = [];
+  f.held = null;
+  f.prs = [{ number: 7, url: PR_URL, headRefOid: HEAD, mergedAt: MERGED_AT, baseRefName: 'main' }];
+  f.checks = [check()];
+  addTaskMock.mockClear();
+  notifyMock.mockClear();
+  appendRunEventMock.mockClear();
+  execGhMock.mockReset().mockImplementation(async (args) => {
+    if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(f.prs);
+    if (args[0] === 'api') return f.checks.map((c) => JSON.stringify(c)).join('\n');
+    throw new Error('unexpected forge read');
+  });
+});
+
+afterEach(() => __cancelMergeGatePolls());
+
+describe('post-merge gate audit', () => {
+  it('flags a merge made without a lease before its checks were green and queues ONE recovery when they fail', async () => {
+    // The #12549 incident: merged 25s after the build started, check failed minutes later.
+    f.checks = [check({ name: 'build (22.x)', conclusion: 'failure', completed_at: '2026-10-20T02:20:00Z' })];
+
+    expect(await run()).toMatchObject({ audited: 1, violations: 1 });
+    expect(f.agent.metadata.mergeGateViolations).toEqual([expect.objectContaining({
+      prUrl: PR_URL, prNumber: 7, headSha: HEAD, mergedAt: MERGED_AT,
+      codes: ['no-admission-lease', 'checks-not-green-at-merge'], notGreenAtMerge: ['build (22.x)'],
+    })]);
+    expect(appendRunEventMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'run.merge-gate-violation', agentId: 'agent-1', runId: 'run-1',
+    }));
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: 'high', link: PR_URL }));
+    expect(f.tasks).toHaveLength(1);
+    expect(f.tasks[0]).toMatchObject({ app: 'app1', isRecovery: true, priority: 'HIGH' });
+    expect(f.tasks[0].description).toContain(HEAD.slice(0, 12));
+
+    // A concurrent run auditing the same merged head queues nothing more, and a
+    // repeat finalize of the first run is a no-op.
+    f.agent = { ...f.agent, id: 'agent-2' };
+    await run('agent-2');
+    await run('agent-2');
+    expect(f.tasks).toHaveLength(1);
+  });
+
+  it('watches a flagged head whose checks are still running and queues the recovery when they finish red', async () => {
+    f.checks = [check({ name: 'build', status: 'in_progress', conclusion: null, completed_at: null })];
+    expect(await run()).toMatchObject({ violations: 1 });
+    expect(f.tasks).toEqual([]);
+    expect(f.apps.get('app1').mergeGateWatches).toEqual([expect.objectContaining({ headSha: HEAD, prNumber: 7 })]);
+
+    f.checks = [check({ name: 'build', conclusion: 'failure', completed_at: '2026-10-20T02:20:00Z' })];
+    expect(await sweepMergeGateWatches()).toMatchObject({ recovered: 1, remaining: 0 });
+    expect(await sweepMergeGateWatches()).toMatchObject({ checked: 0 });
+    expect(f.tasks).toHaveLength(1);
+    expect(f.apps.get('app1').mergeGateWatches).toEqual([]);
+  });
+
+  it('records a lease-only violation but queues no recovery when the head settles green', async () => {
+    f.checks = [check({ name: 'build', status: 'in_progress', conclusion: null, completed_at: null })];
+    f.agent.metadata.mergeAdmissionHistory = [lease()];
+    await run();
+    expect(f.agent.metadata.mergeGateViolations[0].codes).toEqual(['checks-not-green-at-merge']);
+
+    f.checks = [check({ name: 'build', completed_at: '2026-10-20T02:25:00Z' })];
+    expect(await sweepMergeGateWatches()).toMatchObject({ recovered: 0, remaining: 0 });
+    expect(f.tasks).toEqual([]);
+  });
+
+  it('never flags an admission-gated merge on green checks, a held-but-unreleased lease or a coordinator merge', async () => {
+    // Held lease, green checks.
+    f.agent.metadata.mergeAdmissionHistory = [lease()];
+    expect(await run()).toMatchObject({ audited: 1, violations: 0 });
+
+    // The run exited holding the lease it merged under.
+    f.agent.metadata = { ...f.agent.metadata, mergeAdmissionHistory: [], mergeGateAudits: [] };
+    f.held = { kind: 'agent', agentId: 'agent-1', startedAt: f.agent.startedAt, taskId: f.agent.taskId,
+      repository: 'github.com/example/repo', acquiredAt: '2026-10-20T02:16:30Z' };
+    expect(await run()).toMatchObject({ violations: 0 });
+
+    // The coordinator merged the handed-off head under its own lease: no agent
+    // lease on record and a check still reporting in progress must not flag it.
+    f.held = null;
+    f.agent.metadata = { ...f.agent.metadata, mergeGateAudits: [],
+      mergeHandoffReceipts: [{ receiptId: 'receipt-1', prUrl: PR_URL, headSha: HEAD, acceptedAt: '2026-10-20T02:10:00Z' }] };
+    f.checks = [check({ status: 'in_progress', conclusion: null, completed_at: null })];
+    expect(await run()).toMatchObject({ violations: 0 });
+
+    expect(f.agent.metadata.mergeGateViolations).toBeUndefined();
+    expect(f.tasks).toEqual([]);
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves a run alone when the forge cannot be read or the run is not a claim', async () => {
+    f.checks = null;
+    execGhMock.mockImplementation(async (args) => {
+      if (args[0] === 'pr') return JSON.stringify(f.prs);
+      throw new Error('forge down');
+    });
+    // Unreadable checks are no verdict on the checks rule; the missing lease still is.
+    expect(await run()).toMatchObject({ audited: 0, violations: 1 });
+    expect(f.tasks).toEqual([]);
+
+    f.agent.metadata.claimBranches = [];
+    expect(await run()).toMatchObject({ skipReason: 'not-a-claim-run' });
+  });
+});
