@@ -56,9 +56,14 @@ vi.mock('./googleAuth.js', () => ({
   getTokens: vi.fn(async () => ({ access_token: 'fake' })),
 }));
 
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn(async () => 'UTC'),
+}));
+
 import * as goalStore from './identity/store.js';
 import { scheduleTimeBlocks, removeScheduledEvents, rescheduleTimeBlocks } from './goalCalendarScheduler.js';
 import { addProgressEntry, deleteGoal } from './identity/goals.js';
+import { getUserTimezone } from './userTimezone.js';
 
 afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
 
@@ -91,6 +96,7 @@ describe('goalCalendarScheduler write serialization (#8755)', () => {
     insertAttempts = 0;
     rejectInsert = undefined;
     deleteEvent.mockReset().mockResolvedValue({});
+    getUserTimezone.mockResolvedValue('UTC');
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-12-20T12:00:00Z'));
   });
@@ -312,5 +318,129 @@ describe('goalCalendarScheduler write serialization (#8755)', () => {
 
     const written = JSON.parse(readFileSync(goalsFile(), 'utf8'));
     expect(written.goals[0].scheduledEvents).toEqual([]);
+  });
+
+  describe('user timezone and milestone boundary scheduling (#12611)', () => {
+    it('schedules events in the user timezone with local wall-clock times and correct local weekdays under TZ=UTC', async () => {
+      getUserTimezone.mockResolvedValue('America/Los_Angeles');
+      // 2026-10-21T01:00:00Z is 2026-10-20T18:00:00 in America/Los_Angeles (Tuesday evening).
+      // Under TZ=UTC, server Date is Wednesday Oct 21, but in LA it is Tuesday Oct 20.
+      vi.setSystemTime(new Date('2026-10-21T01:00:00Z'));
+
+      const goal = {
+        id: 'g-la',
+        title: 'Morning Routine',
+        status: 'active',
+        createdAt: '2026-10-20T00:00:00.000Z',
+        targetDate: '2026-10-28',
+        milestones: [
+          { id: 'ms1', title: 'Phase 1', order: 0, targetDate: '2026-10-28', completedAt: null }
+        ],
+        timeBlockConfig: {
+          preferredDays: ['mon', 'wed'],
+          timeSlot: 'morning',
+          sessionDurationMinutes: 30,
+        },
+        scheduledEvents: [],
+      };
+      writeFileSync(goalsFile(), JSON.stringify({ goals: [goal] }));
+
+      const result = await scheduleTimeBlocks('g-la');
+      expect(result.count).toBe(3);
+
+      // Local LA days starting from Tuesday Oct 20: Wed Oct 21, Mon Oct 26, Wed Oct 28
+      const firstEvent = insertedEvents[0].requestBody;
+      expect(firstEvent.start).toEqual({
+        dateTime: '2026-10-21T09:00:00',
+        timeZone: 'America/Los_Angeles',
+      });
+      expect(firstEvent.end).toEqual({
+        dateTime: '2026-10-21T09:30:00',
+        timeZone: 'America/Los_Angeles',
+      });
+
+      const dates = insertedEvents.map(e => e.requestBody.start.dateTime.slice(0, 10));
+      expect(dates).toEqual(['2026-10-21', '2026-10-26', '2026-10-28']);
+
+      for (const event of insertedEvents) {
+        expect(event.requestBody.start.timeZone).toBe('America/Los_Angeles');
+        expect(event.requestBody.start.dateTime).toMatch(/T09:00:00$/);
+        expect(event.requestBody.start.dateTime).not.toContain('Z');
+        expect(event.requestBody.end.timeZone).toBe('America/Los_Angeles');
+        expect(event.requestBody.end.dateTime).toMatch(/T09:30:00$/);
+        expect(event.requestBody.end.dateTime).not.toContain('Z');
+      }
+    });
+
+    it('allocates exactly one session on a preferred boundary day shared by consecutive milestones', async () => {
+      getUserTimezone.mockResolvedValue('America/Los_Angeles');
+      // 2026-10-19 is Monday
+      vi.setSystemTime(new Date('2026-10-19T12:00:00Z'));
+
+      const goal = {
+        id: 'g-boundary',
+        title: 'Milestone Goal',
+        status: 'active',
+        createdAt: '2026-10-19T00:00:00.000Z',
+        targetDate: '2026-10-28',
+        milestones: [
+          { id: 'ms1', title: 'Phase 1', order: 0, targetDate: '2026-10-21', completedAt: null }, // Wednesday
+          { id: 'ms2', title: 'Phase 2', order: 1, targetDate: '2026-10-28', completedAt: null }, // Wednesday
+        ],
+        timeBlockConfig: {
+          preferredDays: ['wed'],
+          timeSlot: 'morning',
+          sessionDurationMinutes: 60,
+        },
+        scheduledEvents: [],
+      };
+      writeFileSync(goalsFile(), JSON.stringify({ goals: [goal] }));
+
+      const result = await scheduleTimeBlocks('g-boundary');
+      expect(result.count).toBe(2);
+
+      const boundaryEvents = insertedEvents.filter(e => e.requestBody.start.dateTime.startsWith('2026-10-21'));
+      expect(boundaryEvents).toHaveLength(1);
+      expect(boundaryEvents[0].requestBody.summary).toBe('Milestone Goal - Phase 1');
+
+      const phase2Events = insertedEvents.filter(e => e.requestBody.summary.includes('Phase 2'));
+      expect(phase2Events).toHaveLength(1);
+      expect(phase2Events[0].requestBody.start.dateTime).toBe('2026-10-28T09:00:00');
+    });
+
+    it('continues scheduling sessions for a milestone following one with targetDate: null', async () => {
+      getUserTimezone.mockResolvedValue('America/Los_Angeles');
+      // 2026-10-19 is Monday
+      vi.setSystemTime(new Date('2026-10-19T12:00:00Z'));
+
+      const goal = {
+        id: 'g-undated',
+        title: 'Undated Milestone Goal',
+        status: 'active',
+        createdAt: '2026-10-19T00:00:00.000Z',
+        targetDate: '2026-10-30',
+        milestones: [
+          { id: 'ms1', title: 'Phase 1', order: 0, targetDate: '2026-10-21', completedAt: null }, // Wednesday
+          { id: 'ms2', title: 'Phase 2 (undated)', order: 1, targetDate: null, completedAt: null },
+          { id: 'ms3', title: 'Phase 3', order: 2, targetDate: '2026-10-30', completedAt: null }, // Friday
+        ],
+        timeBlockConfig: {
+          preferredDays: ['mon', 'wed', 'fri'],
+          timeSlot: 'morning',
+          sessionDurationMinutes: 30,
+        },
+        scheduledEvents: [],
+      };
+      writeFileSync(goalsFile(), JSON.stringify({ goals: [goal] }));
+
+      const result = await scheduleTimeBlocks('g-undated');
+      expect(result.count).toBeGreaterThan(0);
+
+      const phase2Events = insertedEvents.filter(e => e.requestBody.summary.includes('Phase 2 (undated)'));
+      expect(phase2Events.length).toBeGreaterThan(0);
+
+      const phase3Events = insertedEvents.filter(e => e.requestBody.summary.includes('Phase 3'));
+      expect(phase3Events.length).toBeGreaterThan(0);
+    });
   });
 });
