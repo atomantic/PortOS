@@ -54,7 +54,8 @@ describe('maintenance notifications', () => {
     const op = maintenance.admit('agent', 'resource-that-must-not-leak');
     await notifyJournalChange();
     expect(count('maintenance:changed')).toBeGreaterThanOrEqual(1);
-    op.finish();
+    expect(await op.finish()).toBe(true);
+    expect(maintenance.status().blockers).toEqual([]);
     await notifyJournalChange();
     expect(count('maintenance:changed')).toBeGreaterThanOrEqual(2);
     expect(count('maintenance:readiness')).toBe(0);
@@ -67,7 +68,7 @@ describe('maintenance notifications', () => {
     expect(sent.find(e => e.name === 'maintenance:readiness').payload).toEqual({ state: 'draining', blockerCount: 1 });
 
     // Settling the blocker moves to ready (count no longer displayed).
-    running.finish();
+    expect(await running.finish()).toBe(true);
     await notifyJournalChange();
     expect(count('maintenance:readiness')).toBe(2);
     expect(sent.filter(e => e.name === 'maintenance:readiness')[1].payload).toEqual({ state: 'ready', blockerCount: 0 });

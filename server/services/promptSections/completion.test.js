@@ -110,6 +110,35 @@ describe('pending-merge handoff instructions (#12247)', () => {
     expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true })).not.toContain('/merge-handoff');
   });
 
+  it.skipIf(process.platform === 'win32')('records optional inconclusive evidence only for the attempted head and preserves blocked evidence', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    expect(prompt).toContain('before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)`');
+    expect(prompt).toContain('nonempty all-optional roster');
+    expect(prompt).toContain('accepted unresolved findings or rejection');
+    const command = prompt.split('\n').find((line) => line.includes('printf "REVIEW_STATUS=optional-inconclusive'));
+    const repo = mkdtempSync(join(tmpdir(), 'optional-review-head-'));
+    try {
+      const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+      git('init', '-q');
+      git('-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-q', '--allow-empty', '-m', 'example');
+      const head = git('rev-parse', 'HEAD');
+      const statusFile = join(repo, git('rev-parse', '--git-path', 'portos-review-status'));
+      const run = (attempted) => execFileSync('sh', ['-c', command], { cwd: repo, env: { ...process.env, REVIEW_ATTEMPTED_HEAD: attempted } });
+      for (const blocked of ['review-blocked', 'findings', 'pending']) {
+        writeFileSync(statusFile, `REVIEW_STATUS=${blocked}\n`);
+        expect(() => run(head)).toThrow();
+        expect(readFileSync(statusFile, 'utf8')).toBe(`REVIEW_STATUS=${blocked}\n`);
+      }
+      writeFileSync(statusFile, 'REVIEW_STATUS=clean\n');
+      expect(() => run('f'.repeat(40))).toThrow();
+      expect(readFileSync(statusFile, 'utf8')).toBe('REVIEW_STATUS=clean\n');
+      run(head);
+      expect(readFileSync(statusFile, 'utf8')).toBe(`REVIEW_STATUS=optional-inconclusive\nREVIEW_HEAD=${head}\n`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   // The recorded line must be the one shape cosMergeHandoff reads: REVIEW_STATUS
   // kept, exactly one REVIEW_HEAD naming the reviewed commit.
   it.skipIf(process.platform === 'win32')('records exactly one REVIEW_HEAD for the reviewed commit beside REVIEW_STATUS', () => {
