@@ -602,7 +602,7 @@ describe('Music Video cover font install policy (#12493)', () => {
 });
 
 describe('Music Video agent workflow policy (#9869)', () => {
-  it('gates mounted agent workflows and keeps record, cancellation and contained rendering contracts', () => {
+  it('gates mounted agent workflows and keeps record and cancellation contracts open while gating ffmpeg renders (#12514)', () => {
     const protectedRoutes = [
       'POST /api/music-video/:id/plan',
       'POST /api/music-video/:id/treatment/compile',
@@ -621,6 +621,11 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/production-runs/:runId/resume',
       'POST /api/music-video/:id/auto-reviews',
       'POST /api/music-video/:id/auto-reviews/:runId/resume',
+      'POST /api/music-video/:id/render',
+      'POST /api/music-video/:id/shots/:sceneId/render',
+      'POST /api/music-video/:id/shot-renders/preview',
+      'POST /api/music-video/:id/excerpt',
+      'POST /api/music-video/:id/publish-kit/build',
     ];
     const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
     for (const route of protectedRoutes) {
@@ -637,8 +642,6 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/auto-reviews/:runId/cancel',
       'POST /api/music-video/:id/composition/document/directory',
       'GET /api/music-video/:id/composition/document',
-      'POST /api/music-video/:id/render',
-      'POST /api/music-video/:id/publish-kit/build',
       'POST /api/music-video/:id/publish/:target/prepare',
     ]) {
       const [method, path] = route.split(' ');
