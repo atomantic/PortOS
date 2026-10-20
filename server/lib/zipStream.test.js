@@ -460,6 +460,16 @@ describe('collectZipEntries', () => {
     })).rejects.toMatchObject({ status: 413 });
   });
 
+  it('allows more than 10000 ignored members without spending the selected-entry budget', async () => {
+    const entries = Array.from({ length: 10001 }, (_, i) => buildEntry(`skip/${i}`, Buffer.alloc(0)));
+    const zipPath = await writeZip('skipped.zip', Buffer.concat([
+      ...entries, buildEntry('keep.json', Buffer.from('{}')), buildEocd()
+    ]));
+    const found = [];
+    await collectZipEntries(zipPath, { match: '.json', maxEntries: 1, onMatch: buf => found.push(buf.toString()) });
+    expect(found).toEqual(['{}']);
+  });
+
   it('resolves with no matches on a truncated archive whose central directory is cut off', async () => {
     // A truncated ZIP (upload interrupted): a complete stored entry followed by a
     // sliced-off second header and no EOCD. The parser reads the whole first entry

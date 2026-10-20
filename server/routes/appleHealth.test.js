@@ -86,7 +86,7 @@ describe('POST /api/health/import/xml — ZIP extraction temp dir', () => {
     // afterEach checks that the partial XML and extraction directory are gone.
   });
 
-  it.each([{ maxTotalBytes: 5 }, { maxEntries: 2 }])('rejects aggregate clinical-record limits and cleans extraction: %j', async (limits) => {
+  it.each([{ maxTotalBytes: 5 }, { maxEntries: 1 }])('rejects aggregate clinical-record limits and cleans extraction: %j', async (limits) => {
     imports.limits = limits;
     const res = await postZip([
       { name: 'export.xml', data: XML },

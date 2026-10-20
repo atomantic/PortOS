@@ -260,8 +260,10 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       .on('error', onErr)
       .pipe(parser)
       .on('entry', (entry) => {
-        try { archiveBudget.addEntry(); } catch (err) { onErr(err); return; }
         const { path } = entry;
+        if (IS_ASSET_NAME_MAP(path) || IS_CONVO_JSON(path) || (IS_DAT(path) && isSafeDatMember(path))) {
+          try { archiveBudget.addEntry(); } catch (err) { onErr(err); return; }
+        }
         if (IS_ASSET_NAME_MAP(path)) {
           inFlight.push(collectZipEntry(entry, { maxBytes: MAX_MEMBER_BYTES, budget: jsonBudget })
             .then((buf) => { assetNameMap = JSON.parse(buf.toString('utf8')); })

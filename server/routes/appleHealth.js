@@ -123,7 +123,6 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
     const xmlPath = join(extractDir, 'export.xml');
     let foundXml = false;
     const clinicalBudget = createZipBudget();
-    const archiveBudget = createZipBudget();
     const maxXmlBytes = Math.min(20 * 1024 ** 3, (await fs.stat(filePath)).size * 200);
     // Each clinical-record collect is async (entries stream through an inflate
     // pipeline), so track them and await all before resolving — otherwise
@@ -159,7 +158,6 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
       src
         .pipe(parser)
         .on('entry', (entry) => {
-          try { archiveBudget.addEntry(); } catch (err) { settle(reject)(err); return; }
           if (entry.path === 'apple_health_export/export.xml' || entry.path === 'export.xml') {
             if (foundXml) { settle(reject)(new ServerError('ZIP contains duplicate export.xml', { status: 400 })); return; }
             foundXml = true;

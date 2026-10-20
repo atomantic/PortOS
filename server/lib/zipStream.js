@@ -314,13 +314,14 @@ export function isZipUpload(file) {
  * is honored) or a substring shorthand. `onMatch` may be sync or async and
  * accumulates into the caller's own closure (an array, a `Map`, a string). Each
  * matching member is buffered under `maxBytes` (see `collectZipEntry`), so a
- * pathological member can't exhaust RAM. Leaves the caller with ONLY its domain
- * match/parse logic.
+ * pathological member can't exhaust RAM. maxTotalBytes and maxEntries bound
+ * selected members together; ignored members drain without inflation or retained
+ * tasks, so large exports full of unrelated media do not spend this budget.
+ * Leaves the caller with ONLY its domain match/parse logic.
  */
 export function collectZipEntries(zipPath, { match, onMatch, maxBytes = MAX_ZIP_MEMBER_BYTES,
   maxTotalBytes = MAX_ZIP_TOTAL_BYTES, maxEntries = MAX_ZIP_ENTRIES } = {}) {
   const budget = createZipBudget({ maxTotalBytes, maxEntries });
-  const archiveBudget = createZipBudget({ maxEntries });
   const test = typeof match === 'function' ? match : (name) => name.includes(match);
   const reads = [];
   return new Promise((resolve, reject) => {
@@ -339,7 +340,6 @@ export function collectZipEntries(zipPath, { match, onMatch, maxBytes = MAX_ZIP_
     src
       .pipe(parser)
       .on('entry', (entry) => {
-        try { archiveBudget.addEntry(); } catch (err) { settle(reject)(err); return; }
         if (test(entry.path)) {
           const entryPath = entry.path;
           reads.push(
