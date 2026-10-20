@@ -17,6 +17,7 @@ import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManage
 import { getActiveAgentIds } from '../agentState.js'
 import { sweepStaleDoneSentinels } from '../agentSentinelSweep.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
+import { resolveAgentApiEnv } from '../agentApiAuth.js'
 import { runBrainParitySweep } from './brainParitySweep.js'
 
 // Loaded lazily to keep the built-in handler registry free of an import cycle:
@@ -31,14 +32,16 @@ async function eidoverseProjection(options = {}) {
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
  * Returns a summary object when the script exits.
  */
-function runMoltworldExploration() {
+async function runMoltworldExploration() {
   const scriptPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'moltworld-explore.mjs')
   const durationMinutes = process.env.MOLTWORLD_DURATION_MINUTES || '30'
+
+  const apiEnv = await resolveAgentApiEnv();
 
   return new Promise((resolve, reject) => {
     const child = spawn('node', [scriptPath, durationMinutes], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: { ...process.env, ...apiEnv },
     })
 
     const output = []
