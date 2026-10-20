@@ -1,3 +1,4 @@
+import { pinPlatform } from '../lib/testHelper.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -105,14 +106,13 @@ const reviewed = async () => {
 describe('initialized checkout transaction', () => {
   it('uses actual Windows filesystem capabilities for mocked workflows without suppressing file fsync', async () => {
     persisted.hostType = 'Windows_NT'; persisted.syntheticModes = true; persisted.rejectDirectoryOpen = true;
-    const platform = process.platform;
+    const restorePlatform = pinPlatform('darwin');
     try {
-      Object.defineProperty(process, 'platform', { value: 'darwin' });
       const result = await fixture.service.retire(await reviewed());
       expect(result).toMatchObject({ ok: true, originalsQuarantined: true });
       expect((await fixture.service.status({ appId: 'app', transactionId: result.transactionId })).phase).toBe('quarantined');
       expect(persisted.fileSyncs).toBeGreaterThan(0);
-    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
+    } finally { restorePlatform(); }
   });
   it('does not suppress directory sync failure or POSIX mode checks on Darwin', async () => {
     persisted.hostType = 'Darwin'; persisted.rejectDirectoryOpen = true;
@@ -122,14 +122,13 @@ describe('initialized checkout transaction', () => {
     expect(await fixture.service.retire(await reviewed())).toMatchObject({ ok: false, reason: 'retirement-journal-directory-unsafe' });
   });
   it('keeps the real native backend unavailable on unsupported platforms', async () => {
-    const platform = process.platform;
+    const restorePlatform = pinPlatform('win32');
     try {
-      Object.defineProperty(process, 'platform', { value: 'win32' });
       const { native: _native, ...deps } = fixture.deps;
       const service = _createInitializedCheckoutRecovery(deps);
       expect(await service.review({ appId: 'app', release, prUrl })).toMatchObject({ ok: false, reason: 'retirement-platform-unsupported' });
       expect(await readdir(root)).toEqual([]);
-    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
+    } finally { restorePlatform(); }
   });
   it('quarantines both original directories only after preservation, retaining the rollback ref', async () => {
     const result = await fixture.service.retire(await reviewed());

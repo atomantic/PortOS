@@ -1,3 +1,4 @@
+import { pinPlatform } from './testHelper.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { execFileSync, spawn as realSpawn } from 'node:child_process';
@@ -46,13 +47,12 @@ describe('durable checkout admission', () => {
   it('releases on actual Windows capability even if process.platform is emulated', async () => {
     const cut = await reserveCheckoutRetirement(repo, 'windows-cut');
     delayed.hostType = 'Windows_NT'; delayed.rejectDirectoryOpen = delayed.syntheticModes = true;
-    const platform = process.platform;
+    const restorePlatform = pinPlatform('darwin');
     try {
-      Object.defineProperty(process, 'platform', { value: 'darwin' });
       await releaseCheckoutReservation(cut);
       await withCheckoutPublication(repo, async () => {});
       expect((await _checkoutAdmission(repo)).admission.status().cut).toBeNull();
-    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
+    } finally { restorePlatform(); }
   });
   it('retains the live cut when Darwin directory fsync cannot open its parent', async () => {
     const cut = await reserveCheckoutRetirement(repo, 'darwin-cut');
