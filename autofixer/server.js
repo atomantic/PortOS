@@ -119,6 +119,10 @@ async function recordInterrupted({ sessionId, processName, app, startTime, promp
 async function sweepInterruptedRepairs() {
   const swept = await sweepStaleWorktrees(WORKTREES_DIR);
   for (const sessionId of swept) {
+    // Shutdown already recorded this repair with its real start time, prompt and
+    // partial output; a second empty write would destroy that evidence.
+    const alreadyRecorded = await access(join(SESSIONS_DIR, sessionId, 'metadata.json')).then(() => true, () => false);
+    if (alreadyRecorded) continue;
     const processName = sessionId.match(/^autofixer_(.+)_\d+_[a-z0-9]+$/)?.[1] || 'unknown';
     const now = new Date().toISOString();
     await recordInterrupted({ sessionId, processName, startTime: now }).catch((err) => {
@@ -182,6 +186,9 @@ async function saveSession(sessionId, prompt, output, metadata, patch) {
     outputSize: output.length
   };
 
+  // One row per session: a re-save replaces the earlier row instead of duplicating it.
+  const existing = index.findIndex(entry => entry.sessionId === sessionId);
+  if (existing >= 0) index.splice(existing, 1);
   index.unshift(indexEntry);
   if (index.length > 100) {
     index.splice(100);
