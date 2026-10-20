@@ -374,13 +374,12 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
  * and its mtime says when it was created, not whether its owner is finished.
  * Reconcile once deleted a release worktree a minute after a still-running
  * release run created it (#10270). So such a tree holds, at any age, with its
- * branch; the operator's explicit merged-branch cleanup (`deleteMergedBranches`,
- * `includeUnmanagedTrees`) keeps its wider reach, and the superseded reap —
- * which carries a recorded verdict and a backup, not just "merged and clean" —
- * takes one after SUPERSEDED_UNMANAGED_IDLE_MS.
+ * branch. The Git page shares this hold. The explicit superseded reap carries
+ * a recorded verdict and backup and can admit one after
+ * SUPERSEDED_UNMANAGED_IDLE_MS.
  *
  * Arbitrary names are accepted INSIDE these roots on purpose: claim trees are
- * `claim-*`, not `agent-*`, and still need their stale/shipped retirement.
+ * `claim-*`, not `agent-*`, and can retire with exact completion evidence.
  *
  * @param {string} repoPath
  * @returns {Array<{path:string, requireAgentId:boolean}>}
@@ -1116,36 +1115,12 @@ async function retainedClaimMarkers(repoPath, branch, { origin } = {}) {
  * worktree, then delete the local branch. Safety gates (ALL must hold):
  *   1. `hasBranchMergeEvidence(default)` re-verified true (fail closed).
  *   2. the branch's worktree (if any) has no real uncommitted changes.
- *   3. that worktree (if any) lives in a managed root (`reconcileWorktreeRoots`)
- *      and no lock, live owner, or claim window holds it.
- * A failed gate skips the branch (with a reason) — never a force-delete of
- * unmerged or dirty work.
- *
- * With a fresh owner-registry read under the claim binding lock, an owner-free
- * claim can retire immediately. The age windows below are only the fallback
- * for callers without that authoritative recheck; neither path bypasses dirty
- * work, managed-root, lock, or active-owner guards.
- *
- * SHIPPED_CLAIM fallback: a `claim-*` worktree holds for STALE_CLAIM_IDLE_MS on the chance
- * a claim session is still using it. Waiting out a full week is pointless once
- * the claim has demonstrably SHIPPED, and doing it anyway is what left four
- * finished claims parked while every run reported "cleaned 0" and parked on
- * "merged branches held back" — the exact stall this reconcile exists to clear.
- *
- * A shipped claim is one where all three hold, established here in order:
- *   1. Merge evidence — re-verified against the default branch just above.
- *   2. `upstreamGone` — the branch was pushed and its remote ref is no longer on
- *      origin, i.e. its PR merged with `--delete-branch`.
- *   3. clean worktree — the dirty gate below, which this never overrides.
- * Together they say the /claim flow finished everything except its own teardown.
- * `upstreamGone` is the discriminator the long window was standing in for: a
- * claim still being WORKED either has no upstream yet or has one that still
- * exists.
- *
- * What it does NOT prove is that the claim PROCESS has exited — so this
- * SHORTENS the idle window to SHIPPED_CLAIM_IDLE_MS rather than removing it,
- * for callers without a registry recheck. The fallback remains conservative: an
- * unreadable mtime fails safe to protected, and an explicit lock still wins.
+ *   3. that worktree (if any) lives in a managed root and is unlocked.
+ *   4. fresh ownership and completion policy permit retirement under the claim
+ *      binding lock; manual claims have an exact successful checkout receipt.
+ *   5. recovery archives verify before removal and exact-head ref deletion.
+ * A failed gate skips the branch with a reason. Age, an absent upstream, and
+ * a cached merged flag never substitute for successful completion evidence.
  *
  * @param {string} repoPath
  * @param {string} defaultBranch
@@ -1166,17 +1141,11 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       skipped.push({ branch: b.branch, reason: 'not-merged-on-recheck' });
       continue;
     }
-    // A SHIPPED claim (see SHIPPED_CLAIM above) waits out the short window instead
-    // of the week-long one — merge evidence was established above, and retireBranch's
-    // dirty gate is still ahead of the removal.
     const retired = await retireBranch(repoPath, b, {
       activeAgentIds,
       claimOwners,
       mergedRetirement: true,
       mergeTarget: defaultBranch,
-      staleClaimIdleMs: isMalformedClaimBranch(b.branch)
-        ? SHIPPED_CLAIM_IDLE_MS
-        : b.upstreamGone ? SHIPPED_CLAIM_IDLE_MS : STALE_CLAIM_IDLE_MS,
       label: `🔀 branch-reconcile: remove worktree for ${b.branch}`,
     });
     if (!retired.ok) {
