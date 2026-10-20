@@ -61,6 +61,17 @@ describe('buildSmokeEnv', () => {
     });
     expect(SMOKE_DATABASE).toMatch(/_test$/);
   });
+
+  // #12543: fixed default ports made parallel worktree pregates collide with
+  // EADDRINUSE; an empty override must not fall through to the production port.
+  it.each([
+    [{}, '0', '0'],
+    [{ SMOKE_PORT: '', SMOKE_HTTP_PORT: '' }, '0', '0'],
+    [{ SMOKE_PORT: '56001', SMOKE_HTTP_PORT: '56002' }, '56001', '56002']
+  ])('binds kernel-assigned loopback ports unless explicitly pinned (%o)', (overrides, port, httpPort) => {
+    const env = buildSmokeEnv({ root: join(tmpdir(), 'portos-smoke-example'), parentEnv: { PORT: '5555', ...overrides } });
+    expect(env).toMatchObject({ HOST: '127.0.0.1', PORT: port, PORTOS_HTTP_PORT: httpPort });
+  });
 });
 
 describe('createSmokeRoot', () => {
