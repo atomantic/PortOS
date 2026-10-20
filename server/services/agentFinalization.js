@@ -887,7 +887,21 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   const claimed = claimFlow
     ? await claimedIssueObjective(workspacePath).catch(() => null)
     : null;
-  const objective = claimFlow ? claimed?.objective : taskObjective(task);
+  let objective = claimFlow ? claimed?.objective : taskObjective(task);
+  if (!claimFlow && (!objective || /^Resume\s+agent-[a-f0-9]+/i.test(objective))) {
+    const resumeAgentId = task?.metadata?.resumedFromAgentId
+      || task?.description?.match(/^Resume\s+(agent-[a-f0-9]+)/i)?.[1];
+    if (resumeAgentId) {
+      const resumed = await getAgentRecord(resumeAgentId).catch(() => null);
+      const resumedObjective = taskObjective({
+        description: resumed?.metadata?.taskDescription || '',
+        metadata: resumed?.metadata || {},
+      }) || resumed?.metadata?.taskDescription;
+      if (resumedObjective) {
+        objective = resumedObjective;
+      }
+    }
+  }
   if (!objective) return noFidelityVerdict(claimFlow ? 'Claimed issue requirements unavailable; claim workflow is not a code objective.' : null);
 
   // Retain the actual compared commits for an investigator on another checkout.

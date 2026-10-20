@@ -417,7 +417,7 @@ export async function resumeAgent(agentId, overrides = {}) {
       resumed = await requeuePausedTask({ task, taskType, overrides });
       break;
     case 'new-task':
-      resumed = await replacePausedTask({ agentId, task, taskType, overrides });
+      resumed = await replacePausedTask({ agentId, agent, task, taskType, overrides });
       break;
     default:
       // `already-active` / `superseded` — the task needs nothing done to it.
@@ -679,21 +679,35 @@ const REPLACEMENT_RUNTIME_METADATA_KEYS = new Set([
  * dropping those is how the replacement ended up running against the wrong repo, or
  * against a default model the user had deliberately moved off.
  */
-async function replacePausedTask({ agentId, task, taskType, overrides }) {
+async function replacePausedTask({ agentId, agent, task, taskType, overrides }) {
   const description = overrides.description
     || task?.description
+    || agent?.metadata?.taskDescription
     || `Resume ${agentId}`;
   // `prompt` rides along with `context` (#4153): on a task written by current
   // code the agent-facing payload lives there, and a replacement queued without
   // it would run with nothing but the one-line description.
-  const { context, prompt, provider, model, effort, app } = task?.metadata || {};
-  const inheritedMetadata = { ...(task?.metadata || {}) };
+  const taskMeta = task?.metadata || {};
+  const agentMeta = agent?.metadata || {};
+  const context = taskMeta.context ?? agentMeta.context;
+  const prompt = taskMeta.prompt ?? agentMeta.prompt;
+  const provider = taskMeta.provider ?? agentMeta.providerId ?? agentMeta.provider;
+  const model = taskMeta.model ?? agentMeta.model;
+  const effort = taskMeta.effort ?? agentMeta.effort;
+  const app = taskMeta.app ?? agentMeta.taskApp ?? agentMeta.app;
+  const inheritedMetadata = { ...taskMeta };
+  if (!task && agent?.metadata) {
+    if (agent.metadata.taskDescription) inheritedMetadata.taskDescription = agent.metadata.taskDescription;
+    if (agent.metadata.jobId) inheritedMetadata.jobId = agent.metadata.jobId;
+    if (agent.metadata.taskApp) inheritedMetadata.taskApp = agent.metadata.taskApp;
+  }
   for (const key of REPLACEMENT_RUNTIME_METADATA_KEYS) delete inheritedMetadata[key];
+  if (agentId) inheritedMetadata.resumedFromAgentId = agentId;
   const created = await addTask({
     description,
     context, prompt, provider, model, effort, app,
     metadata: inheritedMetadata,
-    ...resumeOverrideMetadata(overrides, task?.metadata)
+    ...resumeOverrideMetadata(overrides, task?.metadata || agent?.metadata)
   }, taskType);
   if (created?.error) {
     throw new ServerError(`Failed to queue resume task: ${created.error}`, {
