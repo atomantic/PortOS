@@ -94,6 +94,52 @@ describe('vitestTempRootSetup teardown', () => {
     expect(leaked.exitCode).toBe(1);
   });
 
+  it('removes documented .NET registration receipts without treating them as fixture leaks', () => {
+    const clean = runTeardown(root => {
+      const cache = join(root, 'system-commandline-sentinel-files');
+      mkdirSync(cache);
+      writeFileSync(join(cache, 'dotnet-suggest-registration-git-credential-manager, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null'),
+        'Exception during registration: dotnet-suggest is unavailable');
+    });
+    expect(clean).toEqual({ warnings: [], exitCode: undefined, removed: true });
+  });
+
+  it.each(['unknown-file', 'empty-unknown-file', 'nested-directory', 'empty-nested-directory', 'linked-directory', 'lookalike-name', 'unreadable'])(
+    'still reports unrecognized content beside .NET receipts: %s', kind => {
+      const leaked = runTeardown(root => {
+        const cacheName = kind === 'lookalike-name'
+          ? 'system-commandline-sentinel-files-fixture' : 'system-commandline-sentinel-files';
+        const cache = join(root, cacheName);
+        mkdirSync(cache);
+        writeFileSync(join(cache, 'dotnet-suggest-registration-example'), kind.startsWith('empty-') ? '' : 'registration receipt');
+        if (kind === 'unknown-file') writeFileSync(join(cache, 'fixture.json'), '{}');
+        if (kind === 'empty-unknown-file') writeFileSync(join(cache, 'fixture.json'), '');
+        if (kind === 'nested-directory' || kind === 'empty-nested-directory') {
+          const nested = join(cache, 'dotnet-suggest-registration-nested');
+          mkdirSync(nested);
+          if (kind === 'nested-directory') writeFileSync(join(nested, 'fixture.json'), '{}');
+        }
+        if (kind === 'linked-directory') {
+          const target = join(root, 'linked-target');
+          mkdirSync(target);
+          symlinkSync(target, join(cache, 'dotnet-suggest-registration-link'), 'junction');
+        }
+        if (kind === 'unreadable') {
+          const original = lstatSync.getMockImplementation();
+          lstatSync.mockImplementation(path => {
+            if (path === cache) throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
+            return original(path);
+          });
+        }
+      });
+      expect(leaked.warnings).toEqual([
+        `⚠️ test temp leak: system-commandline-sentinel-files${kind === 'lookalike-name' ? '-' : ''} ×1`,
+      ]);
+      expect(leaked.exitCode).toBe(1);
+      expect(leaked.removed).toBe(true);
+    },
+  );
+
   it('names the test file that minted a leaked root, and never reports the owner sidecar itself', () => {
     const leaked = runTeardown((root) => {
       mkdirSync(join(root, 'mv-song-browser-Abc123'));
