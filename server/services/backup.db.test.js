@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { checkHealth, ensureSchema, query, close, getServerMajorVersion, POOL_CONFIG } from '../lib/db.js';
+import { checkHealth, ensureSchema, query, close, getServerMajorVersion, isTestDatabase, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
@@ -178,6 +178,17 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
   }
 
   async function prepareFixture() {
+    // Other branches can leave entirely retired functions, not just overloads
+    // of names current DDL still owns. Model that residue before rebuilding the
+    // disposable fixture; production restore must continue refusing it (#12526).
+    if (!isTestDatabase()) throw new Error('Restore fixture requires a test database');
+    await query('CREATE OR REPLACE FUNCTION public.restore_retired_fixture_function() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$');
+    // The run-wide DB lock grants this whole-database restore suite exclusive
+    // ownership. Start from a clean schema instead of dumping another branch's
+    // objects into every snapshot. Reapply base DDL before its additive upgrades.
+    await query('DROP SCHEMA public CASCADE');
+    await query('CREATE SCHEMA public');
+    await query(await readFile(new URL('../scripts/init-db.sql', import.meta.url), 'utf8'));
     await ensureSchema({ force: true });
     await runDbMigrations();
     appliedBefore = await query('SELECT id, applied_at FROM schema_migrations WHERE id <> $1 ORDER BY id', [pendingMigration]);
