@@ -1,6 +1,7 @@
 // Exercise both native-file-tool and API prompt assembly paths.
 
 import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../lib/dispatchLabels.js';
+import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
@@ -486,7 +487,12 @@ describe('generic own-PR delivery merges inside repository admission (#11435)', 
     expect(prompt).toContain('agent-1');
     expect(prompt).toContain('--match-head-commit <sha>');
     expect(prompt).not.toContain('--delete-branch');
-    expect(prompt).toContain('Archive failure');
+    expect(prompt).toContain('Local teardown is API-only');
+    expect(prompt).toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
+    expect(prompt).toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
+    expect(prompt).toContain('Require ok:true, archiveDir and branchDeleted:true plus the matching persisted retirement receipt');
+    expect(prompt).not.toContain('git worktree remove');
+    expect(prompt).not.toContain('git branch -d');
     expect(prompt).toMatch(/gh pr merge "[^"]+" --merge --match-head-commit <verified-head>/);
     // Read before the workflow whose TUI form ends on the sentinel write.
     expect(prompt.indexOf(ADMISSION)).toBeLessThan(prompt.search(/^## Completion/m));
@@ -1733,21 +1739,13 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/READ THAT FILE/);
       expect(prompt).toMatch(/\/data\/slashdo-resolved\/local-agent-review-loop\.md/);
       expect(prompt).not.toMatch(/RECIPE HEADER/);
-      // The fixed review-blocked publication/merge contract and the sentinel
-      // write-permission note (#7405) both add prose to the prompt, but the
-      // 40KB recipe itself must still stay in the staged file — which is the
-      // only thing this ceiling is measuring, so it carries growth headroom
-      // rather than pinning today's byte count.
-      // #9837 adds remote-state-first recovery and managed-cleanup ownership.
-      // Keep bounded headroom for that safety prose while the explicit recipe
-      // omission above and this ceiling still reject inlining the 40KB recipe.
-      // #11435 adds the repository merge admission contract to own-PR runs.
-      // The verified auto-merge handoff adds ~1.7KB of required policy. Keep
-      // the staging ceiling below the 40KB recipe and retain its explicit
-      // absence assertion above; this allowance covers only the new contract.
-      // #12133 adds the managed-worktree preservation handoff to the merge gate;
-      // the ceiling stays well below the 40KB recipe.
-      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(33_000);
+      // This ceiling detects accidentally inlining the staged 40KB recipe.
+      // Exclude the exact shared safety contracts, whose independently tested
+      // required prose is not recipe content; retain the original ceiling.
+      expect(prompt).toContain(MANAGED_WORKTREE_CLEANUP_CONTRACT);
+      const withoutFixedGuidance = prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '')
+        .replace(MANAGED_WORKTREE_CLEANUP_CONTRACT, '');
+      expect(withoutFixedGuidance.length).toBeLessThan(33_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
