@@ -127,7 +127,7 @@ const INTERRUPTED_RENDER_ERROR = 'interrupted by restart';
 // Same read-time projection as a mood-board note: a queued card whose job is
 // gone fails. A missing job id is not a live claim (deck stamps always carry
 // one). The wire strips `render`, so this must not move either clock.
-export function projectInterruptedCardRenders(cards, isLive = () => false) {
+function projectInterruptedCardRenders(cards, isLive = () => false) {
   const updates = [];
   let changed = false;
   const next = (Array.isArray(cards) ? cards : []).map((card) => {

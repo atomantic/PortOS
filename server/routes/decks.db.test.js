@@ -159,6 +159,18 @@ describe.skipIf(!ready)('decks over HTTP and PostgreSQL', () => {
     expect(cardStatus((await get(`/${deck.id}`)).body.cards.find((c) => c.id === card.id))).toBe('failed');
   });
 
+  it('fails a queued card that never received a job id', async () => {
+    const deck = await create({ name: 'Unstamped Deck', kind: 'playing' });
+    const card = deck.cards.find((c) => c.key === 'clubs-A');
+    await query(
+      `UPDATE deck_cards SET definition = jsonb_set(COALESCE(definition, '{}'::jsonb), '{render}', $2::jsonb) WHERE id = $1`,
+      [card.id, JSON.stringify({ status: 'queued', queuedAt: '2026-01-01T00:00:00.000Z' })],
+    );
+    const healed = (await get(`/${deck.id}`)).body.cards.find((c) => c.id === card.id);
+    expect(healed.render).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
+    expect(healed.render.jobId ?? null).toBeNull();
+  });
+
   it('adds a sample with an adopted style guide in one write, removes it, and cascades on delete', async () => {
     const deck = await create({ name: 'Sample Deck', kind: 'tarot' });
     const sample = { id: 'deck-sample-1', title: 'Poster', prompt: 'a lighthouse poster', imageRef: 'upload-1.png' };
