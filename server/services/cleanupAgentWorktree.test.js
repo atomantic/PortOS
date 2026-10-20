@@ -1,3 +1,5 @@
+const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ recordBranchCompletionPolicy: vi.fn() }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
@@ -1876,6 +1878,17 @@ describe('spawnReviewLoopFollowUp', () => {
     addTask.mockResolvedValue({ id: 'sys-rl-x' });
     forceSpawnTask.mockResolvedValue({ success: true });
     readClaimOwnershipAgents.mockResolvedValue([]);
+  });
+
+  it('pins a missing-review followup to its inspected owner and head without resetting the task budget', async () => {
+    const originalTask = { id: 'task-owner', metadata: { app: 'example' } };
+    const reviewTarget = { ownerId: 'owner', ownerTaskId: originalTask.id, prUrl: 'https://github.com/o/r/pull/7', branch: 'feature', headSha: 'a'.repeat(40), worktreePath: '/worktree' };
+    const request = { originalAgentId: 'owner', originalTask, prUrl: reviewTarget.prUrl, prBranch: 'feature', sourceWorkspace: '/repo', reviewTarget, reviewers: ['codex'] };
+    const task = await spawnReviewLoopFollowUp(request);
+    expect(task.metadata).toMatchObject({ cleanupReviewTarget: reviewTarget, resumeWorktreePath: '/worktree', reviewLoopMergeOnly: false });
+    recoveryCheck.mockResolvedValueOnce('review-head-moved');
+    expect(await spawnReviewLoopFollowUp(request)).toEqual({ blocked: 'review-head-moved' });
+    expect(addTask).toHaveBeenCalledOnce();
   });
 
   it('resumes a persisted coordinator without resetting its budget or creating a descendant', async () => {

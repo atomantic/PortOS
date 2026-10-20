@@ -21,11 +21,18 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true) }));
+vi.mock('./repoCleanupRecovery.js', () => ({ inspectOrQueueCompletedReview: vi.fn(async () => ({ disposition: 'held', reason: 'delivery-ci-or-review-pending' })) }));
+vi.mock('./repoCleanupObservation.js', async original => ({ ...await original(), readCheckoutPathPresence: vi.fn(async () => false), readLocalBranchPresence: vi.fn(async () => false) }));
+vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/repo', isGithub: true })) }));
+vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: vi.fn(async () => ({})) }));
+vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: vi.fn(async () => ({ prHead: '1'.repeat(40), defaultHead: '2'.repeat(40) })) }));
+vi.mock('./completedCheckoutEvidence.js', () => ({ readCompletedCheckoutIdentity: vi.fn() }));
+vi.mock('./cosAgentLifecycle.js', () => ({ reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]) }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn().mockResolvedValue(null) }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({
+  retireInventoriedCheckout: vi.fn(async () => ({ ok: true, archiveDir: '/private/archive', branchDeleted: true })),
   prepareInventoriedCheckoutRetirement: vi.fn().mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64) } }),
 }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
@@ -46,6 +53,7 @@ vi.mock('./git.js', () => ({
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: null }),
 }));
 vi.mock('./github.js', () => ({
+  execGh: vi.fn(), getPullRequestState: vi.fn(async () => ({ status: 'known', state: 'MERGED' })),
   findPullRequestForBranch: vi.fn().mockResolvedValue({ status: 'none', url: null, detail: null }),
 }));
 vi.mock('./gitlab.js', () => ({
@@ -62,18 +70,22 @@ vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolved
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
-import { updateAgent, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
+import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
+import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanupObservation.js';
+import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
+import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
+import { recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { verifyAgentRepoState, sweepRepoStateVerifications, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { getTaskById } from './cosTaskStore.js';
 import { recordBranchReconcileOutcome } from './taskSchedule.js';
-import { prepareInventoriedCheckoutRetirement } from './heldCheckoutRecovery.js';
+import { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
 import { addTask, getAllTasks } from './cos.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import { listWorktrees } from './worktreeManager.js';
 import { listRemoteHeads, cleanupMerged } from './branchReconcile.js';
 import { hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
-import { findPullRequestForBranch } from './github.js';
+import { findPullRequestForBranch, execGh, getPullRequestState } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
 import { getAppById } from './apps.js';
 import { addNotification, exists as notificationExists } from './notifications.js';
@@ -105,7 +117,13 @@ const task = (metadata = {}) => ({
 });
 
 /** `git show-ref --verify refs/heads/<branch>` — exit 0 means the branch is present. */
-const localBranch = (present) => execGit.mockResolvedValue({ exitCode: present ? 0 : 1, stdout: '', stderr: '' });
+const localBranch = present => {
+  readLocalBranchPresence.mockResolvedValue(present);
+  execGit.mockImplementation(async args => ({ exitCode: args[0] === 'merge-base' || present ? 0 : 1, stdout: args[0] === 'rev-parse' ? `${HEAD}\n` : '', stderr: '' }));
+};
+const review = () => ({ digest: 'a'.repeat(64), policy: { policies: [{ id: 'agent-1', startedAt: CREATED_AT }] },
+  comparison: { disposition: 'review-supersession', localPatch: '+old behavior', difference: '+new behavior' }, forge: { prHead: HEAD } });
+const openView = (patch = {}) => JSON.stringify({ number: 9, state: 'OPEN', isDraft: false, isCrossRepository: false, headRefName: BRANCH, headRefOid: HEAD, mergeable: 'MERGEABLE', reviewDecision: '', statusCheckRollup: [{ name: 'CI', status: 'QUEUED' }], ...patch });
 
 /** The `{user, cos}` shape `getAllTasks` really returns. Follow-ups land in `cos`. */
 const queuedTasks = (tasks) => getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks } });
@@ -121,14 +139,20 @@ const run = (overrides = {}) => verifyAgentRepoState({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'delivery-ci-or-review-pending' });
   readBranchCompletionPolicies.mockResolvedValue([]);
   getTaskById.mockResolvedValue(null);
   recordBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [{ ...RELEASE, createdAt: CREATED_AT }] });
-  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64) } });
+  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: review() });
+  retireInventoriedCheckout.mockResolvedValue({ ok: true, archiveDir: '/private/archive', branchDeleted: true });
+  execGh.mockResolvedValue(openView());
+  readClaimOwnershipAgents.mockResolvedValue([]);
+  reserveRepoCleanupRecovery.mockResolvedValue({ admitted: true, attempt: 1 });
   listWorktrees.mockResolvedValue([]);
   listRemoteHeads.mockResolvedValue(new Map());
   cleanupMerged.mockResolvedValue({ cleaned: [] });
   existsSync.mockReturnValue(false);
+  readCheckoutPathPresence.mockImplementation(async () => existsSync());
   hasBranchMergeEvidence.mockResolvedValue(true);
   queuedTasks([]);
   getAppById.mockResolvedValue({ id: 'demo-app', name: 'Demo App', repoPath: '/repo' });
@@ -142,19 +166,63 @@ beforeEach(() => {
 });
 
 describe('verifyAgentRepoState — clean runs', () => {
+  it.each([['broken leaf symlink', true], ['unreadable EACCES leaf', null]])('never treats %s as absent or verified cleanup', async (_name, presence) => {
+    readCheckoutPathPresence.mockResolvedValue(presence);
+    const result = await run();
+    expect(result.verified).toBe(false);
+    expect(result.observed?.worktreePresent).toBe(presence);
+    expect(result.skipReason).not.toBe('already-absent-preservation-unverified');
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps a reused branch with a different checkout out of recovery across owner completion', async () => {
+    listWorktrees.mockResolvedValue([{ ...RELEASE, path: '/repo/new-owner' }]);
+    readClaimOwnershipAgents.mockResolvedValue([{ id: 'new-owner', status: 'running' }]);
+    for (let i = 0; i < 70; i++) expect(await run()).toMatchObject({ skipReason: 'checkout-incarnation-changed', recoveryTaskId: null });
+    readClaimOwnershipAgents.mockResolvedValue([{ id: 'new-owner', status: 'completed', result: { success: true } }]);
+    expect(await run()).toMatchObject({ skipReason: 'checkout-incarnation-changed', recoveryTaskId: null });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(prepareInventoriedCheckoutRetirement).not.toHaveBeenCalled();
+  });
+
+  it('retains a recreated same-path checkout despite identical branch and head', async () => {
+    listWorktrees.mockResolvedValue([RELEASE]);
+    readCompletedCheckoutIdentity.mockResolvedValue({ head: HEAD, incarnation: { pointer: { ino: 'new' } } });
+    expect(await run({ agentState: agentState({ completedCheckouts: [{ ...RELEASE, incarnation: { pointer: { ino: 'old' } } }] }) })).toMatchObject({ skipReason: 'checkout-incarnation-changed' });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps missing checkout/ref integration separate from unavailable private content preservation', async () => {
+    const state = agentState({ reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } });
+    for (let i = 0; i < 70; i++) expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'already-absent', committedIntegrationVerified: true }));
+    expect(addTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
+  it('does not associate a stored foreign-repository PR number with this repository', async () => {
+    localBranch(true);
+    existsSync.mockReturnValue(true);
+    await run({ agentState: agentState({ reviewLoopMergeTarget: { url: 'https://github.com/foreign/repo/pull/7' } }) });
+    expect(getPullRequestState).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('files nothing when the worktree, branch and PR all landed', async () => {
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
 
     const result = await run();
 
-    expect(result.verified).toBe(true);
+    expect(result.verified).toBe(false);
+    expect(result.skipReason).toBe('already-absent-preservation-unverified');
     expect(result.issues).toEqual([]);
     expect(addTask).not.toHaveBeenCalled();
     expect(addNotification).not.toHaveBeenCalled();
   });
 
   it('reads the PR state from the list call rather than a second forge round trip', async () => {
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'merged' });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'merged' });
+    localBranch(true);
     const result = await run();
     expect(result.observed.prState).toBe('MERGED');
     expect(findPullRequestForBranch).toHaveBeenCalledTimes(1);
@@ -165,15 +233,16 @@ describe('verifyAgentRepoState — divergent runs', () => {
   it('retires a clean merged branch deterministically instead of queuing an agent', async () => {
     existsSync.mockReturnValue(true);
     localBranch(true);
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
-    cleanupMerged.mockResolvedValue({ cleaned: [BRANCH], skipped: [] });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+    listWorktrees.mockResolvedValue([RELEASE]);
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
 
     const result = await run();
 
     expect(result).toMatchObject({ verified: true, recoveryTaskId: null });
-    expect(cleanupMerged).toHaveBeenCalledWith('/repo', 'main', [{ branch: BRANCH, upstreamGone: true }]);
+    expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({ review: expect.objectContaining({ acceptSuperseded: false }) }), expect.objectContaining({ beforeMutation: expect.any(Function) }));
     expect(addTask).not.toHaveBeenCalled();
-    expect(updateAgent).toHaveBeenCalledWith('agent-1', { metadata: { maintenanceOutcome: 'deterministic-cleanup' } });
+    expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified', reason: 'retirement-receipt-verified' }));
   });
 
   it('files ONE recovery task for a leftover worktree and branch after a merged PR', async () => {
@@ -182,7 +251,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     existsSync.mockReturnValue(true);
     localBranch(true);
     listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
 
     const result = await run();
 
@@ -227,12 +296,12 @@ describe('verifyAgentRepoState — divergent runs', () => {
     existsSync.mockReturnValue(true);
     localBranch(true);
     listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
     prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'active-agent-owner' });
     expect(await run()).toMatchObject({ verified: false, skipReason: 'active-agent-owner', recoveryTaskId: null });
     expect(addTask).not.toHaveBeenCalled();
     expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({ reason: 'active-agent-owner' }));
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), digest: 'b'.repeat(64) } });
     expect(await run()).toMatchObject({ verified: false, recoveryTaskId: 'task-recovery-1' });
     expect(prepareInventoriedCheckoutRetirement).toHaveBeenCalledTimes(2);
   });
@@ -240,7 +309,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
   it.each(['locked', 'persistence-failed', 'obligation-missing', 'inventory-missing'])('preserves %s cleanup without shell fallback', async cause => {
     existsSync.mockReturnValue(true);
     localBranch(true);
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
     listWorktrees.mockResolvedValue(cause === 'inventory-missing' ? [] : [{ ...RELEASE, locked: cause === 'locked', branch: `refs/heads/${BRANCH}` }]);
     if (cause === 'persistence-failed') recordBranchReconcileOutcome.mockRejectedValue(new Error('write refused'));
     if (cause === 'obligation-missing') recordBranchReconcileOutcome.mockResolvedValue({});
@@ -257,36 +326,40 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(result.issues.map(i => i.code)).toEqual([REPO_STATE_ISSUES.WORKTREE_PRESENT]);
   });
 
-  it('files recovery when GitHub auto-merge has no durable completion owner', async () => {
+  it('holds an orphan OPEN PR waiting for CI through 70 scans without cognitive work', async () => {
     localBranch(true);
     hasBranchMergeEvidence.mockResolvedValue(false);
-    listRemoteHeads.mockResolvedValue(new Map([[BRANCH, 'abc123']]));
-    execGit.mockImplementation(async (args) => ({ exitCode: 0, stdout: args[0] === 'rev-parse' ? 'abc123\n' : '' }));
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/9', detail: 'OPEN', autoMergeEnabled: true, headRefOid: 'abc123' });
-    const result = await run();
-    expect(result.issues.map(issue => issue.code)).toContain(REPO_STATE_ISSUES.PR_UNMERGED);
-    expect(result.observed).toMatchObject({ prState: 'OPEN', autoMergeEnabled: true });
-    expect(addTask).toHaveBeenCalled();
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/9', detail: 'OPEN', autoMergeEnabled: true, headRefOid: HEAD });
+    for (let i = 0; i < 70; i++) expect(await run()).toMatchObject({ verified: false, skipReason: 'delivery-ci-or-review-pending', recoveryTaskId: null });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(reserveRepoCleanupRecovery).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['failed CI', false, 'abc123'],
-    ['unpublished local head', true, 'different-head'],
-  ])('retains recovery for an auto-merge request with %s', async (_name, autoMergeEnabled, headRefOid) => {
+  it.each(['CONFLICTING', 'FAILURE'])('admits genuine exact-head code repair after %s evidence', async failure => {
     localBranch(true);
     hasBranchMergeEvidence.mockResolvedValue(false);
-    execGit.mockImplementation(async (args) => ({ exitCode: 0, stdout: args[0] === 'rev-parse' ? 'abc123\n' : '' }));
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/9', detail: 'OPEN', autoMergeEnabled, headRefOid });
-    const result = await run();
-    expect(result.issues.map(issue => issue.code)).toContain(REPO_STATE_ISSUES.PR_UNMERGED);
-    expect(addTask).toHaveBeenCalled();
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/9', detail: 'OPEN', headRefOid: HEAD });
+    execGh.mockResolvedValue(openView(failure === 'CONFLICTING' ? { mergeable: failure } : { statusCheckRollup: [{ name: 'CI', conclusion: failure }] }));
+    inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'queued-review', reason: 'code-repair-queued', taskId: 'review-1' });
+    expect(await run()).toMatchObject({ recoveryTaskId: 'review-1' });
+    expect(inspectOrQueueCompletedReview).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-1', branch: BRANCH, headSha: HEAD, worktreePath: WORKTREE, repairEvidence: expect.objectContaining({ head: HEAD }) }));
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('does not send changed/unpublished head or malformed forge data to code recovery', async () => {
+    localBranch(true);
+    hasBranchMergeEvidence.mockResolvedValue(false);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/9', detail: 'OPEN' });
+    execGh.mockResolvedValue(openView({ headRefOid: '3'.repeat(40), mergeable: 'CONFLICTING' }));
+    expect(await run()).toMatchObject({ skipReason: 'delivery-head-unverified', recoveryTaskId: null });
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('reports an unmerged PR the agent left open', async () => {
     localBranch(true);
     hasBranchMergeEvidence.mockResolvedValue(false);
     listRemoteHeads.mockResolvedValue(new Map([[BRANCH, 'abc123']]));
-    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/9', detail: 'OPEN' });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/9', detail: 'OPEN' });
 
     const result = await run();
 
@@ -296,7 +369,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
       REPO_STATE_ISSUES.BRANCH_UNMERGED,
       REPO_STATE_ISSUES.PR_UNMERGED,
     ]);
-    expect(addTask.mock.calls[0][0].context).toContain('https://example.com/pr/9');
+    expect(result.skipReason).toBe('delivery-ci-or-review-pending');
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('does not re-file when a recovery task for the branch already exists', async () => {
@@ -309,11 +383,11 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(result.recoveryTaskId).toBeNull();
   });
 
-  it('still ensures the existing recovery task has a Brain thread', async () => {
+  it('does not create a Brain recovery thread for routine retained content', async () => {
     existsSync.mockReturnValue(true);
     await run({ prExpected: false });
 
-    expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-recovery-1' }));
+    expect(ensureTaskThread).not.toHaveBeenCalled();
   });
 });
 
@@ -359,7 +433,7 @@ describe('verifyAgentRepoState — never fires', () => {
     // The merge-on-green GitHub path never spawns a follow-up TASK — it queues the
     // PR on the app record for the next watcher tick. Reading only the task queue
     // would call every one of those branches leaked.
-    readPendingMergePrs.mockReturnValue([{ prBranch: BRANCH, prUrl: 'https://example.com/pr/2' }]);
+    readPendingMergePrs.mockReturnValue([{ prBranch: BRANCH, prUrl: 'https://github.com/example/repo/pull/2' }]);
     existsSync.mockReturnValue(true);
 
     const result = await run();
@@ -393,7 +467,7 @@ describe('verifyAgentRepoState — never fires', () => {
 
     const result = await run();
 
-    expect(result.skipReason).toBe(REPO_STATE_SKIPS.PROBE_INCOMPLETE);
+    expect(result.skipReason).toBe('checkout-inventory-unavailable');
     expect(result.verified).toBe(false);
     expect(addTask).not.toHaveBeenCalled();
   });
@@ -406,8 +480,7 @@ describe('verifyAgentRepoState — never fires', () => {
 
     const result = await run();
 
-    expect(result.skipReason).toBe(REPO_STATE_SKIPS.PROBE_INCOMPLETE);
-    expect(result.observed.unreadable).toContain('pull-request');
+    expect(result.skipReason).toBe('absent-checkout-integration-unverified');
     expect(addTask).not.toHaveBeenCalled();
   });
 
@@ -419,7 +492,7 @@ describe('verifyAgentRepoState — never fires', () => {
     const result = await run();
 
     expect(result.issues.map(i => i.code)).toContain(REPO_STATE_ISSUES.WORKTREE_PRESENT);
-    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('fails closed when the app record cannot be read', async () => {
@@ -460,24 +533,23 @@ describe('verifyAgentRepoState — never fires', () => {
   it('reports an unmerged GitLab merge request', async () => {
     // GitLab is probed too — leaving it unasked would silently pass an open MR as
     // a clean repo. States come back lowercase from glab.
+    localBranch(true);
     resolveForgeForRepo.mockResolvedValue({ cli: 'glab', env: null });
     findMergeRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://gitlab.example.com/mr/4', number: 4, detail: 'opened' });
 
     const result = await run();
 
     expect(findPullRequestForBranch).not.toHaveBeenCalled();
-    expect(result.issues.map(i => i.code)).toEqual([REPO_STATE_ISSUES.PR_UNMERGED]);
-    // The remediation must speak glab — a `gh pr merge` line is unrunnable there.
-    // The real IID, not a `<iid>` placeholder the recovery agent cannot run.
-    expect(addTask.mock.calls[0][0].context).toContain('glab mr merge 4 --yes');
-    expect(addTask.mock.calls[0][0].context).not.toContain('--remove-source-branch');
-    expect(addTask.mock.calls[0][0].context).not.toContain('gh pr merge');
+    expect(result.issues.map(i => i.code)).toContain(REPO_STATE_ISSUES.PR_UNMERGED);
+    expect(addTask).not.toHaveBeenCalled();
+    expect(result.verified).toBe(false);
   });
 
   it('does not claim unmerged work when the merge check could not be answered', async () => {
     // `hasBranchMergeEvidence` fails CLOSED (`false`, not a throw) when it cannot read
     // a ref — right for its original caller, inverted into a false finding here.
     // An unresolvable ref must read as unknown, not as "carries unmerged commits".
+    readLocalBranchPresence.mockResolvedValue(true);
     execGit.mockImplementation((args) => {
       if (args[0] === 'show-ref') return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
       // rev-parse --verify fails => the ref could not be resolved
@@ -497,7 +569,8 @@ describe('verifyAgentRepoState — never fires', () => {
     resolveForgeForRepo.mockResolvedValue({ cli: 'glab', env: null });
     findMergeRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://gitlab.example.com/mr/4', detail: 'merged' });
     const result = await run();
-    expect(result.verified).toBe(true);
+    expect(result.verified).toBe(false);
+    expect(result.skipReason).toBe('already-absent-preservation-unverified');
   });
 });
 
@@ -509,7 +582,7 @@ describe('remediation coverage', () => {
   });
 
   it('renders each remediation from the branch, worktree and PR in hand', () => {
-    const ctx = { branchName: BRANCH, base: 'main', prUrl: 'https://example.com/pr/1', worktreePath: WORKTREE };
+    const ctx = { branchName: BRANCH, base: 'main', prUrl: 'https://github.com/example/repo/pull/1', worktreePath: WORKTREE };
     for (const [code, render] of Object.entries(REPO_STATE_REMEDIATIONS)) {
       const text = render(ctx);
       expect(text, code).toBeTypeOf('string');
@@ -530,7 +603,7 @@ it.each(['draft', 'leave-open'])('reports divergence without cleanup or recovery
 });
 
 describe('claim-swarm completion', () => {
-  it('recovers every recorded branch and preserves its independent merge backlink', async () => {
+  it('retains each missing claim checkout without spawning bookkeeping agents', async () => {
     const branches = ['claim/issue-11', 'claim/issue-12'];
     findPullRequestForBranch.mockImplementation(async branch => ({ status: 'found', detail: 'OPEN', number: branches.indexOf(branch) + 11,
       url: `https://github.com/example/repo/pull/${branches.indexOf(branch) + 11}` }));
@@ -538,9 +611,8 @@ describe('claim-swarm completion', () => {
       claimBranches: [branches[0]], claimReleasedBranches: branches });
     const result = await run({ agentState: state });
     expect(result.branches.map(item => item.branch)).toEqual(branches);
-    expect(addTask).toHaveBeenCalledTimes(2);
-    for (const branch of branches) expect(recordRepoStateRecovery).toHaveBeenCalledWith('agent-1',
-      expect.objectContaining({ branch, taskId: 'task-recovery-1' }), { claimRun: true });
+    expect(addTask).not.toHaveBeenCalled();
+    for (const branch of branches) expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({ branch, status: 'blocked' }));
     expect(cleanupMerged).not.toHaveBeenCalled();
   });
   it('does not infer branches from output or override manual handoffs and failed retries', async () => {
@@ -563,7 +635,7 @@ describe('durable completion replay', () => {
     getTaskById.mockResolvedValue(task());
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', url: 'https://github.com/example/repo/pull/7' });
     expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
-    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
+    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'pending' }));
     expect(addTask).not.toHaveBeenCalled();
   });
   it('keeps missing policy pending with an updated retry time rather than granting authority or starving other audits', async () => {
@@ -572,16 +644,13 @@ describe('durable completion replay', () => {
     expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'pending', reasons: ['task-unavailable'], checkedAt: expect.any(String) }));
     expect(addTask).not.toHaveBeenCalled();
   });
-  it('repairs a lost backlink only for the exact duplicate task and parent', async () => {
+  it('uses the exact successor result without creating an unrelated generic recovery task', async () => {
+    localBranch(true);
+    execGh.mockResolvedValue(openView({ number: 7, mergeable: 'CONFLICTING' }));
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'OPEN', url: 'https://github.com/example/repo/pull/7' });
-    addTask.mockResolvedValue({ id: 'existing', duplicate: true });
-    getTaskById.mockResolvedValue({ metadata: { recoveryOrigin: { parentAgentId: 'agent-1', parentTaskId: 'task-1', subsystem: 'repository-cleanup' },
-      recoveryMergeTarget: { url: 'https://github.com/example/repo/pull/7', branch: BRANCH } } });
-    await run();
-    expect(recordRepoStateRecovery).toHaveBeenCalledWith('agent-1', { taskId: 'existing', url: 'https://github.com/example/repo/pull/7', branch: BRANCH }, { claimRun: false });
-    recordRepoStateRecovery.mockClear();
-    getTaskById.mockResolvedValue({ metadata: { recoveryOrigin: { parentAgentId: 'someone-else' } } });
-    await run();
+    inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'join-existing', reason: 'review-successor-exists', taskId: 'existing' });
+    expect(await run()).toMatchObject({ skipReason: 'review-successor-exists' });
+    expect(addTask).not.toHaveBeenCalled();
     expect(recordRepoStateRecovery).not.toHaveBeenCalled();
   });
 });

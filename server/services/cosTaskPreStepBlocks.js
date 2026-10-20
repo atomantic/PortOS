@@ -541,13 +541,48 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     const { prepareReconcileRetirements } = await import('./branchReconcileRetirement.js');
     retirementReviews = await prepareReconcileRetirements(app, result);
   }
-  const allActionable = filterActionable([...result.inFlight, ...retirementReviews.candidates], actions);
+  const retiredNames = new Set((retirementReviews.retired || []).map(row => row.branch));
+  if (retiredNames.size) {
+    result.wip = result.wip.filter(row => !retiredNames.has(row.branch));
+    result.worktreeInventory = result.worktreeInventory.filter(row => !retiredNames.has(row.branch));
+    result.cleaned.push(...retiredNames);
+  }
+  // CI waiting and an open PR alone do not require a provider. Existing local
+  // receipts were nudged above; only current exact-head code repair is cognitive.
+  const routineDeliveryHolds = [];
+  const cognitiveInFlight = [];
+  const { inspectOpenDeliveryRepair } = await import('./repoCleanupObservation.js');
+  const { inspectOrQueueCompletedReview } = await import('./repoCleanupRecovery.js');
+  const reviewHeldOpen = (result.wip || []).filter(branch => branch.openPr && !branch.openPr.isDraft
+    && branch.completionPolicyReason === 'pr-completion-review-required' && !branch.liveOwnerReason
+    && !branch.worktreeDirty && !branch.worktreeStatusUnavailable);
+  for (const branch of [...result.inFlight, ...reviewHeldOpen]) {
+    if (branch.state !== 'IN_REVIEW' && !reviewHeldOpen.includes(branch)) { cognitiveInFlight.push(branch); continue; }
+    // The existing review-loop can merge. A resolve-only schedule cannot grant
+    // that authority by entering this earlier deterministic dispatch path.
+    if (actions.autoMerge === false) {
+      routineDeliveryHolds.push({ branch: branch.branch, reason: 'auto-merge-disabled' });
+      continue;
+    }
+    const delivery = await inspectOpenDeliveryRepair(app.repoPath, branch.branch, branch.openPr?.url, { forgeAccount: app.forgeAccount ?? null })
+      .catch(() => ({ reason: 'delivery-evidence-unavailable' }));
+    if (delivery.evidence?.conflicts && actions.resolveConflicts === false) {
+      routineDeliveryHolds.push({ branch: branch.branch, reason: 'conflict-resolution-disabled' });
+      continue;
+    }
+    const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
+    const review = delivery.headSha && tree?.locked === false ? await inspectOrQueueCompletedReview({ repoPath: app.repoPath,
+      branch: branch.branch, prUrl: branch.openPr.url, headSha: delivery.headSha, worktreePath: tree.path, forgeAccount: app.forgeAccount ?? null, repairEvidence: delivery.evidence })
+      .catch(() => ({ reason: 'completed-review-inspection-unavailable' })) : null;
+    routineDeliveryHolds.push({ branch: branch.branch, reason: review?.reason || delivery.reason || 'completed-review-target-unverified' });
+  }
+  const allActionable = filterActionable([...cognitiveInFlight, ...retirementReviews.candidates], actions);
   const actionableNames = new Set(allActionable.map(branch => branch.branch));
-  const idlePark = describeIdleReconcilePark([...(result.skipped || []), ...retirementReviews.held, ...absentObligations], heldLive, {
-    wip: result.wip?.filter(branch => !actionableNames.has(branch.branch) && !retirementReviews.held.some(held => held.branch === branch.branch)), detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
+  const idlePark = describeIdleReconcilePark([...(result.skipped || []), ...retirementReviews.held, ...absentObligations, ...routineDeliveryHolds], heldLive, {
+    wip: result.wip?.filter(branch => !actionableNames.has(branch.branch) && !retirementReviews.held.some(held => held.branch === branch.branch) && !routineDeliveryHolds.some(held => held.branch === branch.branch)), detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     claimMarkersHeld: result.claimMarkersHeld,
     worktreeInventory: result.worktreeInventory?.filter(tree => !actionableNames.has(tree.branch)) ?? result.worktreeInventory,
-    gated: result.inFlight.filter(branch => !allActionable.includes(branch))
+    gated: cognitiveInFlight.filter(branch => !allActionable.includes(branch))
   });
   // This is a scan outcome, not the coordinator's success flag or a claim that
   // the repository contains only its default branch. Keep known holds visible.
@@ -590,7 +625,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     const signature = actionableSignature([branch]);
     if (drain.branchAttempts?.[branch.branch] === signature) branchAttempts[branch.branch] = signature;
   }
-  const actionable = limitBranchesForAgent(
+  let actionable = limitBranchesForAgent(
     allActionable.filter(b => !Object.hasOwn(branchAttempts, b.branch)), metadata.branchesPerAgent
   );
   if (!actionable.length) {
@@ -598,9 +633,8 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
       reason: 'no-progress', actionableCount: allActionable.length, signature: null, branchAttempts: null,
       counts: { ...idlePark.counts, unchangedBranches: allActionable.length },
       skipCauses: { ...idlePark.skipCauses, 'unchanged-after-attempt': allActionable.length },
-      notLaterThan: idlePark.notLaterThan
+      notLaterThan: idlePark.notLaterThan,
     });
-    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: all ${allActionable.length} branch(es) were attempted without further progress`, { appId: app.id });
     return { skip: true };
   }
   for (const branch of actionable) branchAttempts[branch.branch] = actionableSignature([branch]);
@@ -614,6 +648,23 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     branchAttempts
   });
   if (!dispatch) return { skip: true };
+  const { reserveRetirementReview } = await import('./branchReconcileRetirement.js');
+  const admitted = [];
+  for (const branch of actionable) {
+    if (!branch.retirement || (await reserveRetirementReview(branch))?.admitted) admitted.push(branch);
+    else branchAttempts[branch.branch] = actionableSignature([branch]);
+  }
+  actionable = admitted;
+  if (!actionable.length) {
+    await taskSchedule.parkPerpetual(taskType, app.id, {
+      reason: 'no-progress', actionableCount: allActionable.length, signature: null, branchAttempts: null,
+      counts: { ...idlePark.counts, unchangedBranches: allActionable.length },
+      skipCauses: { ...idlePark.skipCauses, 'unchanged-after-attempt': allActionable.length },
+      notLaterThan: idlePark.notLaterThan
+    });
+    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: all ${allActionable.length} branch(es) were attempted without further progress`, { appId: app.id });
+    return { skip: true };
+  }
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,

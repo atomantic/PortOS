@@ -6,7 +6,9 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
-| `branchReconcileRetirement.js` | Prepares exact, owner-checked historical review obligations and API-only review/retirement instructions; no inferred approval or deletion. |
+| `branchReconcileRetirement.js` | Retires exact-head, integrated checkouts through fresh fenced archive proof; reserves bounded cognitive review only for source/history differences. |
+| `repoCleanupRecovery.js` | Reserves one bounded exact-owner review or code-repair obligation, rechecks policy and delivery evidence before publication, and never queues a provider for routine holds. |
+| `repoCleanupObservation.js` | Read-only exact-ref presence/absence accounting; malformed, changing or unsupported metadata remains unknown. |
 | `branchReconcileCompletion.js` | Runs ownership-checked merged and superseded cleanup on coordinator completion, independent of perpetual scheduling. |
 | `initializedCheckoutRecovery.js` | Explicit macOS private-module checkout archive, standalone recovery proof, durable reservation, reversible whole-directory quarantine and transaction-bound branch finalization/receipt replay; automatic module cleanup remains blocked. |
 | `heldCheckoutReview.js` | Computes fresh forge identity, merged PR/default refs and exact code comparisons for a digest-bound operator retirement; no saved consent or policy rewrites. |

@@ -476,6 +476,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
 
   return withClaimOwnershipLock(async () => {
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return { ok: false, reason: 'release-not-in-inventory' };
+    await opts.beforeMutation?.();
     const first = await matchRelease(repoPath, release);
     if (!first.tree) return { ok: false, reason: first.reason };
     const { tree } = first;
@@ -499,6 +500,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     // Archiving takes time; never unlock a lock that changed hands meanwhile.
     const second = await matchRelease(repoPath, release);
     if (!second.tree) return { ok: false, reason: second.reason, archiveDir: archive.dir };
+    await opts.beforeMutation?.();
     if (release.locked) {
       const unlocked = await execGit(['worktree', 'unlock', tree.path], repoPath).then(() => true, () => false);
       if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed', archiveDir: archive.dir };
@@ -518,7 +520,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       return current?.fingerprint === archive.fingerprint ? null : 'checkout-content-changed';
     };
     const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
-      label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
+      label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval, beforeMutation: opts.beforeMutation,
     });
     if (!removal.removed) {
       // Hand the lock back exactly as released. A lock someone took in the
@@ -545,7 +547,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
     // A new checkout/commit cannot be deleted by a stale name-only operation.
     const holders = await listWorktrees(repoPath).catch(() => null);
     if (!holders || holders.some(holder => shortBranch(holder.branch) === branch)) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'branch-has-new-holder' };
-    const deleted = await deleteCompletedLocalBranch(repoPath, branch, release.head);
+    const deleted = await deleteCompletedLocalBranch(repoPath, branch, release.head, { beforeMutation: opts.beforeMutation });
     if (!deleted) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: 'branch-ref-changed-or-delete-failed' };
     return { ok: true, archiveDir: archive.dir, branchDeleted: true };
   });
