@@ -80,9 +80,11 @@ export const WINDOW_SLACK_MS = 60_000;
 // needed only while some run still to be reconciled can start before the
 // message. Every run path is bounded far below this (the CoS max-runtime
 // ceiling, the toolkit's API run cap), and the ledger never sees in-flight
-// runs, so a fixed bound stands in for "oldest pending run start". A run that
-// outlives it can re-bill a pruned neighbour's overlap — the same exposure a
-// server restart, which empties the ledger, already accepts.
+// runs, so a fixed bound stands in for "oldest pending run start". A live run
+// that outlives it can re-bill a pruned neighbour's overlap — the same exposure
+// a server restart, which empties the ledger, already accepts. The historical
+// backfill, which reaches runs of any age, does not rely on these claims for
+// old windows: it re-claims what settled runs billed from their run records.
 export const CLAIM_RETENTION_MS = 48 * 60 * 60 * 1000;
 
 // Messages already billed to a run: transcript key -> message key -> stamp.
@@ -946,20 +948,27 @@ export async function recordCompletedRunUsage(metadata, output, { home = homedir
   const resolved = providers ?? await import('./providers.js')
     .then((module) => module.listProviders())
     .catch(() => null);
+  // Same condition `reconcileRunUsage` scans siblings under.
+  const siblingsScanned = Array.isArray(resolved) && resolved.length > 0;
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
   await reconcileRunUsage(metadata, estimate, { home, providers: resolved, estimateSource })
     .then(recordRunUsage)
     .then(async () => {
       if (!metadata?.id) return;
-      await markUsageRunReconciled(metadata.id);
+      await markUsageRunReconciled(metadata.id, { siblings: siblingsScanned });
       const metadataPath = join(PATHS.runs, metadata.id, 'metadata.json');
       // Non-strict exception: missing/unreadable metadata skips the marker
       // write; the usage ledger remains authoritative for the accounting.
       const persisted = await readJSONFile(metadataPath, null);
       if (!persisted) return;
+      const now = new Date().toISOString();
       persisted.usageReconciled = true;
-      persisted.usageReconciledAt = new Date().toISOString();
+      persisted.usageReconciledAt = now;
+      if (siblingsScanned) {
+        persisted.usageSiblingsReconciled = true;
+        persisted.usageSiblingsReconciledAt = now;
+      }
       await atomicWrite(metadataPath, persisted);
     })
     .catch((err) => {

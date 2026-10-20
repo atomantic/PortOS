@@ -117,6 +117,30 @@ describe('historical usage worker', () => {
     expect(result.corrections).toEqual([]);
     expect(result.claimsSnapshot.claimedMessages).toEqual(claimsSeed.claimedMessages);
   });
+
+  // The live ledger is empty after a restart and prunes old claims, so a
+  // settled run on disk is the durable record of what was already billed.
+  it('does not re-bill what a settled run billed once the live claim is gone', async () => {
+    await writeRun('run-settled-live', {
+      providerId: 'claude-code-tui',
+      model: 'claude-opus-5',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      usageReconciled: true
+    });
+    await writeRun('run-overlapping-history', {
+      providerId: 'claude-code-tui',
+      model: 'claude-opus-5',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:02:00.000Z',
+      endTime: '2026-07-01T10:12:00.000Z'
+    });
+
+    const result = await scanHistoricalUsage({ runsDir: root, home, claimsSeed: snapshotUsageClaims() });
+    expect(result.total).toBe(1);
+    expect(result.corrections).toEqual([]);
+  });
 });
 
 // A nested `--review-with grok` pass leaves a grok session but never a PortOS
@@ -128,8 +152,8 @@ describe('historical sibling-family attribution', () => {
   const GROK_PROVIDER = { id: 'grok-cli', type: 'cli', command: 'grok', enabled: true, defaultModel: GROK_MODEL };
   const CLAUDE_PROVIDER = { id: 'claude-code-tui', type: 'tui', command: 'claude', enabled: true, defaultModel: 'claude-opus-5' };
 
-  const writeGrokSession = async () => {
-    const dir = join(home, '.grok', 'sessions', encodeURIComponent(workspace), 'session-aaaa');
+  const writeGrokSession = async (cwd = workspace) => {
+    const dir = join(home, '.grok', 'sessions', encodeURIComponent(cwd), 'session-aaaa');
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'updates.jsonl'), JSON.stringify({
       timestamp: Math.round(Date.parse('2026-07-01T10:05:00.000Z') / 1000),
@@ -191,6 +215,28 @@ describe('historical sibling-family attribution', () => {
     await writeGrokSession();
 
     const result = await scanHistoricalUsage({ runsDir: root, home, providers: [CLAUDE_PROVIDER, GROK_PROVIDER] });
+    expect(result.corrections).toEqual([]);
+  });
+
+  // Readers match a cwd or any subdirectory of it, so the settled run and the
+  // pending one can sit at, above, or below each other and share one session.
+  it.each([
+    ['the same workspace', workspace, workspace],
+    ['a parent workspace', '/work', workspace],
+    ['a subdirectory workspace', `${workspace}/server`, `${workspace}/server`]
+  ])('does not re-bill a nested session a settled run already covered, from %s', async (_label, pendingWorkspace, sessionCwd) => {
+    await writeRun('run-already-scanned', { ...reconciledRun, usageSiblingsReconciled: true });
+    await writeRun('run-overlapping-history', {
+      ...reconciledRun,
+      workspacePath: pendingWorkspace,
+      startTime: '2026-07-01T10:04:00.000Z',
+      endTime: '2026-07-01T10:14:00.000Z',
+      usageReconciled: false
+    });
+    await writeGrokSession(sessionCwd);
+
+    const result = await scanHistoricalUsage({ runsDir: root, home, providers: [CLAUDE_PROVIDER, GROK_PROVIDER] });
+    expect(result.total).toBe(1);
     expect(result.corrections).toEqual([]);
   });
 

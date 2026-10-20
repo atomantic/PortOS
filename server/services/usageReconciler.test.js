@@ -509,17 +509,24 @@ describe('recordCompletedRunUsage', () => {
   });
 
   it('durably marks a completed run so a later backfill skips it', async () => {
-    await recordCompletedRunUsage({
-      id: 'run-example-live',
+    const run = {
       providerId: 'ollama',
       model: 'llama3',
       workspacePath: WORKSPACE,
       promptLength: 40,
       startTime: '2026-07-01T10:00:00.000Z',
       endTime: '2026-07-01T10:10:00.000Z'
-    }, 'captured output');
+    };
+    await recordCompletedRunUsage({ ...run, id: 'run-example-live' }, 'captured output', { home, providers: [] });
+    // With a provider list the nested-session pass ran too, so a backfill must
+    // not bill those sessions a second time.
+    await recordCompletedRunUsage({ ...run, id: 'run-example-scanned' }, 'captured output', {
+      home,
+      providers: [{ id: 'grok-cli', type: 'cli', command: 'grok', enabled: true }]
+    });
 
-    expect(markUsageRunReconciled).toHaveBeenCalledWith('run-example-live');
+    expect(markUsageRunReconciled).toHaveBeenCalledWith('run-example-live', { siblings: false });
+    expect(markUsageRunReconciled).toHaveBeenCalledWith('run-example-scanned', { siblings: true });
   });
 
   it('records the estimate when no transcript exists rather than recording nothing', async () => {
