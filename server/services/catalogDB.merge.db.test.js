@@ -167,7 +167,7 @@ describe.skipIf(!ready)('recoverable local catalog merge', () => {
     const updated = await getIngredient(input.sourceId);
     let projected;
     const stats = await projectToCanon(input.sourceId, updated, { updateUniverse: async (_id, mutate) => {
-      projected = mutate({ characters: [oldEntry] });
+      projected = await mutate({ characters: [oldEntry] });
       // The synchronous echo cannot race the source alias against the survivor.
       expect(await projectToCatalog('example-universe', projected)).toEqual({ written: 0, skipped: 1 });
       return projected;

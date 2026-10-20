@@ -34,11 +34,12 @@
  *
  * Conflict policy. LWW on `updatedAt` (no field-level merge). projectToCatalog
  * only writes when the embedded entry's `updatedAt` is newer-or-equal to the
- * catalog row's; projectToCanon always wins (the catalog row IS the store of
- * record after a catalog edit). The boot reconciler (reconcileCanonCatalog.js)
+ * catalog row's; projectToCanon accepts only the current catalog revision and
+ * never replaces a newer embedded edit. The boot reconciler (reconcileCanonCatalog.js)
  * runs the same LWW comparison to collapse any pre-existing divergence.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import * as catalogDB from './catalogDB.js';
 import { getCatalogIdentityAccess } from './catalogDB/identityAccess.js';
 import { BIBLE_FIELD } from '../lib/storyBible.js';
@@ -96,8 +97,6 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
   if (await getCatalogIdentityAccess(ingredientId)) return { universes: 0, written: 0, skipped: 1 };
   const identityIds = new Set(await catalogDB.getIngredientIdentityIds(ingredientId));
 
-  // Guard the originating ingredient so the updateUniverse → projectToCatalog
-  // echo inside this call can't write the catalog row a second time.
   for (const id of identityIds) inFlight.add(id);
   const stats = { universes: 0, written: 0, skipped: 0 };
   try {
@@ -109,7 +108,8 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
 
     const name = updatedIngredient.name;
     const payload = entryToPayload(updatedIngredient.payload || {});
-    const updatedAt = updatedIngredient.updatedAt || new Date().toISOString();
+    const updatedAt = updatedIngredient.updatedAt;
+    const sourceAt = Date.parse(updatedAt || '');
 
     for (const universeId of universeIds) {
       stats.universes++;
@@ -122,14 +122,24 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
       // touches N universes doesn't emit N recordUpdated events. `guardToken`
       // threads the originating ingredientId so updateUniverse's synchronous
       // projectToCatalog skips it (loop break).
-      const result = await updateUniverse(universeId, (cur) => {
-        let touched = false;
+      let touched = false;
+      const result = await updateUniverse(universeId, async (cur) => {
+        // Read without taking the catalog write queue: reverse projection already
+        // runs inside this universe queue. Waiting on both queues can deadlock.
+        const current = await catalogDB.getIngredient(ingredientId);
+        if (!current || current.id !== ingredientId || !Number.isFinite(sourceAt)
+          || Date.parse(current.updatedAt || '') !== sourceAt
+          || current.name !== name
+          || !isDeepStrictEqual(entryToPayload(current.payload || {}), payload)) return null;
         const patch = {};
         for (const arrayKey of CANON_ARRAY_KEYS) {
           const list = Array.isArray(cur[arrayKey]) ? cur[arrayKey] : [];
           if (!list.some((e) => identityIds.has(e?.ingredientId))) continue;
           patch[arrayKey] = list.map((e) => {
             if (!identityIds.has(e?.ingredientId)) return e;
+            // Alias-backed entries are archived context, not newer edits of
+            // the canonical identity; an explicit catalog edit refreshes them.
+            if (e.ingredientId === ingredientId && Date.parse(e.updatedAt || '') > sourceAt) return e;
             touched = true;
             const controlFields = Object.fromEntries(
               NON_PAYLOAD_KEYS.filter((key) => e[key] !== undefined).map((key) => [key, e[key]]),
@@ -142,7 +152,7 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
         console.error(`🔁 projectToCanon: universe ${universeId} update failed: ${err.message}`);
         return null;
       });
-      if (result) stats.written++;
+      if (result && touched) stats.written++;
       else stats.skipped++;
     }
     return stats;

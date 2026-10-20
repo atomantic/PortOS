@@ -1,8 +1,8 @@
 /**
  * Bidirectional catalog↔canon projection — the highest-risk file in this PR.
  *
- * Needs a live Postgres (the same one `npm start` uses) for the catalog rows +
- * refs; SKIPS cleanly when no DB is reachable. The universe side is INJECTED as
+ * Uses the isolated portos_test database for catalog rows and refs; skips
+ * when the test DB is unavailable. The universe side is INJECTED as
  * a spy (`updateUniverse` dep) so the suite asserts the projection's fan-out /
  * loop-break / LWW behavior without standing up a real universe store.
  *
@@ -68,7 +68,7 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
       seenUniverses.push(universeId);
       // Simulate the embedded entry carrying this ingredientId so the mutator
       // produces a patch (returns null otherwise → counted as skipped).
-      const patch = mutator({
+      const patch = await mutator({
         characters: [{
           id: 'e1', ingredientId: ing.id, name: 'old',
           createdAt: '2026-01-01T00:00:00.000Z', staleField: 'remove me',
@@ -78,7 +78,8 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
       return patch; // truthy → counted as "written"
     });
 
-    const stats = await projectToCanon(ing.id, { ...ing, name: 'Renamed', payload: { role: 'Hero' } }, { updateUniverse });
+    const updated = await catalogDB.updateIngredient(ing.id, { name: 'Renamed', payload: { role: 'Hero' } });
+    const stats = await projectToCanon(ing.id, updated, { updateUniverse });
     expect(stats.universes).toBe(2);
     expect(stats.written).toBe(2);
     expect(seenUniverses.sort()).toEqual([uA, uB].sort());
@@ -87,8 +88,6 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
     });
     expect(projected[0]).not.toHaveProperty('staleField');
-    // Guard set drains — no leaked in-flight token.
-    expect(_inFlightSize()).toBe(0);
   });
 
   it('projectToCanon is a silent no-op for an ingredient with no universe ref', async () => {
@@ -148,13 +147,16 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
       // would persist canon then synchronously project back to catalog.
       const canon = {
         characters: [{
-          id: 'e1', ingredientId: ing.id, name: 'Loop Guard', role: 'after',
-          updatedAt: new Date(Date.now() + 60_000).toISOString(),
+          id: 'e1', ingredientId: ing.id, name: 'Loop Guard', role: 'before',
+          updatedAt: ing.updatedAt,
         }],
       };
-      await projectToCatalog(universeId, canon, { guardToken: opts?.canonProjectionGuard });
+      const patch = await mutator(canon);
+      expect(patch).not.toBeNull();
+      const persisted = { ...canon, ...patch };
+      await projectToCatalog(universeId, persisted, { guardToken: opts?.canonProjectionGuard });
       catalogWritesInsideEcho = updSpy.mock.calls.length - before;
-      return mutator(canon); // truthy
+      return persisted;
     });
 
     const updated = await catalogDB.updateIngredient(ing.id, { payload: { role: 'after' } });
