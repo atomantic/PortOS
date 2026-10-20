@@ -52,6 +52,7 @@ import { loadState } from './cosState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
 import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
 import { acquireCosGlobalSlot } from './cosAdmissionReservations.js';
+import { releaseAgentReservation } from './agentMaintenanceReservations.js';
 // This module's own event wiring drives three LIFECYCLE TRANSITIONS, so it takes
 // them from the facade rather than from the three separate leaves that happen to
 // implement them (#3450). It can: nothing the facade imports imports this module
@@ -443,6 +444,7 @@ async function runInitSpawner() {
       // criterion was evaluated, so validation is the null sentinel (issue
       // #2344), never a false that would look like a declared-and-failed run.
       await completeAgent(agentId, { success: false, validationPassed: null, error });
+      await releaseAgentReservation(agentId);
       await completeAgentRun(agent.runId, '', 1, 0, { message: error, category: 'runner-error' });
       runnerAgents.delete(agentId);
     }
