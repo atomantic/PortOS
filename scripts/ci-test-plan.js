@@ -516,6 +516,9 @@ export const ALWAYS_RUN_TESTS = [
   'server/routeTestCoverageConventions.test.js',
   'server/routeValidationConventions.test.js',
   'server/timerCallbackConventions.test.js',
+  // Whole-tree scanner (#12815): any server file can bind a bare JSON.stringify to
+  // a jsonb parameter, with no import edge to this guard.
+  'server/pgJsonConventions.test.js',
 ];
 
 const DB_RISK_RULES = [

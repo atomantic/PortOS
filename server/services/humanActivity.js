@@ -26,6 +26,7 @@ import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { normalizeIdentifier } from '../lib/tribeMatch.js';
 import { getLocalParts, localDayRangeUtc, todayInTimezone, anchorLocalMidnightUtc } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 export { localDayRangeUtc };
 
@@ -337,7 +338,7 @@ export async function recordEvents(candidates = []) {
 
 // Insert one chunk of normalized rows; returns the count actually inserted.
 // 12 bound params per row (created_at is a NOW() literal, not a param);
-// participants and metadata are JSON.stringify'd + ::jsonb-cast (node-pg would
+// participants and metadata are toPgJson-serialized + ::jsonb-cast (node-pg would
 // otherwise coerce a JS array to a Postgres array literal and fail on jsonb).
 async function insertActivityChunk(rows) {
   const paramsPerRow = 12;
@@ -346,8 +347,8 @@ async function insertActivityChunk(rows) {
     const b = i * paramsPerRow;
     values.push(
       r.id, r.source, r.accountId, r.kind, r.happenedAt, r.durationS,
-      r.title, r.summary, r.url, JSON.stringify(r.participants),
-      JSON.stringify(r.metadata), r.dedupeKey,
+      r.title, r.summary, r.url, toPgJson(r.participants),
+      toPgJson(r.metadata), r.dedupeKey,
     );
     return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9}, $${b + 10}::jsonb, $${b + 11}::jsonb, $${b + 12}, NOW())`;
   });
@@ -447,7 +448,7 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
   }
   if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
   if (personId) {
-    params.push(JSON.stringify([{ personId: String(personId) }]));
+    params.push(toPgJson([{ personId: String(personId) }]));
     clauses.push(`participants @> $${params.length}::jsonb`);
   }
   if (chatGuid != null && String(chatGuid).length > 0) {

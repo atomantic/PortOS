@@ -34,6 +34,7 @@
 import { query } from '../lib/db.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const LEGACY_KEY = 'catalogUserTypes';
 const IMPORTED_KEY = 'catalogUserTypes_imported';
@@ -79,7 +80,7 @@ export async function migrateCatalogUserTypesToDB() {
       `INSERT INTO catalog_user_types (id, data, updated_at, deleted_at)
        VALUES ($1, $2::jsonb, COALESCE($3::timestamptz, NOW()), $4)
        ON CONFLICT (id) DO NOTHING`,
-      [type.id, JSON.stringify(type), mirrorTimestamp(type.updatedAt, null), mirrorTimestamp(type.deletedAt, null)],
+      [type.id, toPgJson(type), mirrorTimestamp(type.updatedAt, null), mirrorTimestamp(type.deletedAt, null)],
     );
     if (result.rowCount > 0) imported += 1;
     else skipped += 1;

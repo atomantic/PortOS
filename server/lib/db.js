@@ -11,6 +11,7 @@ import { isTestRunner } from './runtimeEnv.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 import { assertDatabasePoolAuthority } from './databaseAuthority.js';
 import { createDatabaseRestoreRecovery, databaseRestoreRecoveryError } from './databaseRestoreRecovery.js';
+import { normalizePgParams } from './pgJson.js';
 
 const { Pool } = pg;
 
@@ -207,6 +208,11 @@ const GUARDED_CLIENT_HANDLER = {
       return (config, ...rest) => {
         const sql = typeof config === 'string' ? config : config?.text;
         assertWriteAllowed(sql);
+        // A Submittable (pg-cursor) also carries `values`; only a plain config is rewritten.
+        if (typeof config === 'string' && Array.isArray(rest[0])) return target.query(config, normalizePgParams(rest[0]), ...rest.slice(1));
+        if (Array.isArray(config?.values) && Object.getPrototypeOf(config) === Object.prototype) {
+          return target.query({ ...config, values: normalizePgParams(config.values) }, ...rest);
+        }
         return target.query(config, ...rest);
       };
     }
@@ -295,7 +301,7 @@ export async function withDatabaseMaintenance(fn, { restoreRecoveryId } = {}) {
 /**
  * Execute a query against the connection pool.
  * @param {string} text - SQL query text with $1, $2, etc. placeholders
- * @param {Array} params - Parameter values
+ * @param {Array} params - Parameter values; strings are repaired for PostgreSQL (see pgJson.js) and plain objects serialized, here and on the withTransaction client
  * @returns {Promise<pg.QueryResult>}
  */
 export async function query(text, params) {
@@ -304,7 +310,7 @@ export async function query(text, params) {
   // author calls query('INSERT …') directly, or a backend selector mis-chose
   // Postgres because NODE_ENV wasn't 'test').
   assertWriteAllowed(text);
-  return databaseOperation(() => pool.query(text, params));
+  return databaseOperation(() => pool.query(text, normalizePgParams(params)));
 }
 
 /**

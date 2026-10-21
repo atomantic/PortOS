@@ -35,6 +35,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { mirrorStatus, mirrorTimestamp } from '../services/creativeDirector/projectsLogic.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const LEGACY_FILENAME = 'creative-director-projects.json';
 const IMPORTED_SUFFIX = '.imported';
@@ -91,7 +92,7 @@ export async function migrateCreativeDirectorToDB() {
       [
         project.id,
         mirrorStatus(project.status),
-        JSON.stringify(project),
+        toPgJson(project),
         createdAt,
         mirrorTimestamp(project.updatedAt, createdAt),
       ],

@@ -9,6 +9,8 @@
  * drive it against `portos_test` under `npm run test:db`.
  */
 
+import { toPgJson } from '../lib/pgJson.js';
+
 const iso = (value) => (value instanceof Date ? value.toISOString() : value);
 
 /** Map a `user_action_events` row to the camelCase event shape the API returns. */
@@ -42,8 +44,8 @@ export async function insertUserActionEvent(db, event) {
      RETURNING id`,
     [
       event.id, event.type, event.actor, event.happenedAt, event.target, event.targetName,
-      event.success, event.summary, JSON.stringify(event.payload),
-      JSON.stringify(event.source), event.dedupeKey,
+      event.success, event.summary, toPgJson(event.payload),
+      toPgJson(event.source), event.dedupeKey,
     ],
   );
   return (result.rowCount || 0) > 0;

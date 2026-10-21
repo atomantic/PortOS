@@ -18,6 +18,7 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
   withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 function rowToArtist(row) {
   return row ? row.data : null;
@@ -38,7 +39,7 @@ async function persist(exec, artist) {
     [
       artist.id,
       typeof artist.name === 'string' ? artist.name : '',
-      JSON.stringify(artist),
+      toPgJson(artist),
       createdAt,
       mirrorTimestamp(artist.updatedAt, createdAt),
       artist.deleted === true,

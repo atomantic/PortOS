@@ -14,6 +14,7 @@ import { query } from '../../lib/db.js';
 import { resolveRefs } from '../catalogRefResolver.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, assertCatalogRelationRemovable } from './identityAccess.js';
 import { rowToRef, rowToSource, rowToIngredient } from './shared.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 // Canonical detail views omit local-merge originals; original-ID user exports
 // retain those raw rows alongside the bilateral receipt-backed evidence.
@@ -32,7 +33,7 @@ export async function linkIngredientToSource(ingredientId, scrapId, span = null,
     `INSERT INTO catalog_ingredient_sources (ingredient_id, scrap_id, span)
      VALUES (catalog_resolve_ingredient_id($1), $2, $3::jsonb)
      ON CONFLICT (ingredient_id, scrap_id) ${preserveExisting ? 'DO NOTHING' : 'DO UPDATE SET span = EXCLUDED.span'}`,
-    [ingredientId, scrapId, span ? JSON.stringify(span) : null],
+    [ingredientId, scrapId, span ? toPgJson(span) : null],
   );
 }
 

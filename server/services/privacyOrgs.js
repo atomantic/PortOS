@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { resolveSubjectId, assertSubject } from './privacySubjects.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const ORG_COLUMNS = `id, subject_id, name, category, website, trust, status, contact,
   social_account_id, notes, created_at, updated_at`;
@@ -73,7 +74,7 @@ export async function createOrg(input) {
       id, subjectId, input.name,
       input.category ?? 'other', input.website ?? '',
       input.trust ?? 'trusted', input.status ?? 'active',
-      JSON.stringify(input.contact ?? {}),
+      toPgJson(input.contact ?? {}),
       input.socialAccountId ?? null,
       input.notes ?? '',
     ],
@@ -117,7 +118,7 @@ export async function updateOrg(id, patch) {
   if (patch.website !== undefined) add('website', patch.website);
   if (patch.trust !== undefined) add('trust', patch.trust);
   if (patch.status !== undefined) add('status', patch.status);
-  if (patch.contact !== undefined) add('contact', JSON.stringify(patch.contact));
+  if (patch.contact !== undefined) add('contact', toPgJson(patch.contact));
   if (patch.socialAccountId !== undefined) add('social_account_id', patch.socialAccountId);
   if (patch.notes !== undefined) add('notes', patch.notes);
   params.push(id);

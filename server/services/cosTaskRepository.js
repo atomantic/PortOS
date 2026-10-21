@@ -20,6 +20,7 @@ import { isTestRunner } from '../lib/runtimeEnv.js';
 import {
   WORKING_SET_COMPLETED_WINDOW_MS, WORKING_SET_KEEP_COMPLETED, completionStamp, rowColumns, selectWorkingSet,
 } from '../lib/cosTaskRows.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const SOURCES = ['user', 'internal'];
 // Bounds a single statement's parameter payload (prompts can be MBs).
@@ -65,7 +66,7 @@ function makePgBackend(db) {
                position = EXCLUDED.position, completed_at = EXCLUDED.completed_at, description = EXCLUDED.description, task = EXCLUDED.task`,
             [source, columns.map((c) => c.task.id), columns.map((c) => c.status), columns.map((c) => c.priorityValue),
               columns.map((c) => c.position), columns.map((c) => c.completedAt), columns.map((c) => c.description),
-              columns.map((c) => JSON.stringify(c.task))],
+              columns.map((c) => toPgJson(c.task))],
           );
         }
         return bumpVersions(client, [source]);

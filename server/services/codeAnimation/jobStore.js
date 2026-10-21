@@ -9,6 +9,7 @@ import { query } from '../../lib/db.js';
 import { PATHS } from '../../lib/paths.js';
 import { atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ANIMATIONS_DIR = join(PATHS.data, 'code-animations');
@@ -81,7 +82,7 @@ export async function saveCodeAnimationJobRecord(job) {
        model = EXCLUDED.model,
        data = EXCLUDED.data,
        updated_at = EXCLUDED.updated_at`,
-    [job.id, job.status, job.title, job.input?.concept || '', job.providerId, job.model, JSON.stringify(job), job.createdAt, job.updatedAt],
+    [job.id, job.status, job.title, job.input?.concept || '', job.providerId, job.model, toPgJson(job), job.createdAt, job.updatedAt],
   );
   return job;
 }

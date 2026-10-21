@@ -2,6 +2,7 @@
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 const columns = `id, title, data, accepted_revision_id AS "acceptedRevisionId",
   candidate_revision_id AS "candidateRevisionId", created_at AS "createdAt", updated_at AS "updatedAt"`;
@@ -210,8 +211,8 @@ export async function setAcceptedOutput(projectId, accepted) {
     const result = await client.query(`UPDATE code_animation_projects SET data = data || jsonb_build_object('acceptedOutput', $2::jsonb, 'acceptanceProjection', $5::jsonb),
       accepted_revision_id = CASE WHEN $4 THEN $3 ELSE accepted_revision_id END,
       candidate_revision_id = CASE WHEN $4 THEN NULL ELSE candidate_revision_id END, updated_at = NOW()
-      WHERE id = $1 RETURNING ${columns}`, [projectId, JSON.stringify(accepted), accepted.revisionId, promoteSource,
-      JSON.stringify({ decisionId: randomUUID(), status: 'pending' })]);
+      WHERE id = $1 RETURNING ${columns}`, [projectId, toPgJson(accepted), accepted.revisionId, promoteSource,
+      toPgJson({ decisionId: randomUUID(), status: 'pending' })]);
     return present(result.rows[0]);
   });
 }

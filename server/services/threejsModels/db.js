@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { GENERAL_FAMILY_ID } from '../../lib/threejsModelFamilies.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 const rowToModel = (row) => row?.data ?? null;
 
@@ -28,7 +29,7 @@ async function persist(exec, model) {
       model.id,
       model.name,
       model.status,
-      JSON.stringify(model),
+      toPgJson(model),
       model.createdAt,
       model.updatedAt,
       model.deleted === true,

@@ -42,6 +42,7 @@ import {
   WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord,
   WRITERS_ROOM_EXERCISE_KIND, mergeExerciseRecord,
 } from './syncLogic.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 /**
  * Shared per-record LWW merge for a body-less Writers Room record (folder /
@@ -151,7 +152,7 @@ function persistFolderTx(client, folder) {
       typeof folder?.parentId === 'string' && folder.parentId ? folder.parentId : null,
       String(folder?.name ?? ''),
       Number.isInteger(folder?.sortOrder) ? folder.sortOrder : 0,
-      JSON.stringify(folderData),
+      toPgJson(folderData),
       createdAt,
       mirrorTimestamp(folder?.updatedAt, createdAt),
       deleted,
@@ -241,7 +242,7 @@ function persistExerciseTx(client, exercise) {
       exercise.id,
       typeof exercise?.workId === 'string' && exercise.workId ? exercise.workId : null,
       typeof exercise?.status === 'string' ? exercise.status.slice(0, 16) : null,
-      JSON.stringify(exerciseData),
+      toPgJson(exerciseData),
       mirrorTimestamp(exercise?.startedAt, null),
       mirrorTimestamp(exercise?.finishedAt, null),
       deleted,
@@ -377,9 +378,9 @@ function draftBinds(workId, draft) {
     String(draft?.contentFile ?? ''),
     typeof draft?.contentHash === 'string' ? draft.contentHash : null,
     Number.isInteger(draft?.wordCount) ? draft.wordCount : 0,
-    JSON.stringify(Array.isArray(draft?.segmentIndex) ? draft.segmentIndex : []),
+    toPgJson(Array.isArray(draft?.segmentIndex) ? draft.segmentIndex : []),
     typeof draft?.createdFromVersionId === 'string' ? draft.createdFromVersionId : null,
-    JSON.stringify(draft),
+    toPgJson(draft),
     mirrorTimestamp(draft?.createdAt, new Date().toISOString()),
   ];
 }
@@ -453,7 +454,7 @@ async function persistWorkTx(client, manifest) {
       typeof manifest?.pipelineIssueId === 'string' ? manifest.pipelineIssueId : null,
       typeof manifest?.cdProjectId === 'string' ? manifest.cdProjectId : null,
       typeof manifest?.mediaCollectionId === 'string' ? manifest.mediaCollectionId : null,
-      JSON.stringify(workData),
+      toPgJson(workData),
       createdAt,
       mirrorTimestamp(manifest?.updatedAt, createdAt),
       deleted,

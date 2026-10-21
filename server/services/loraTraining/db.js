@@ -18,6 +18,7 @@
 import { query } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 const rowToRun = (row) => row?.data ?? null;
 
@@ -39,7 +40,7 @@ async function persist(run) {
       run.id,
       run.status,
       run.character?.entryId || null,
-      JSON.stringify(run),
+      toPgJson(run),
       run.createdAt || new Date().toISOString(),
       new Date().toISOString(),
     ],

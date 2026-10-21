@@ -30,6 +30,7 @@ import {
 } from './shared.js';
 import { normalizeTags } from './tags.js';
 import { assertCatalogIdentityWritable } from './identityAccess.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 // `{ client }` is optional — when supplied, SQL runs on the caller's transaction
 // client (so the write rolls back if a later step in the same `withTransaction`
@@ -81,7 +82,7 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
       id,
       type,
       String(name).trim(),
-      JSON.stringify(storedPayload),
+      toPgJson(storedPayload),
       normalizedTags,
       embedding ? arrayToPgvector(embedding) : null,
       embeddingModel,
@@ -187,7 +188,7 @@ export async function updateIngredient(id, patch = {}, { client, source = 'user'
     if (normalizedPatch[jsField] === undefined) continue;
     if (jsField === 'payload') {
       fields.push(`${dbField} = $${idx++}::jsonb`);
-      params.push(JSON.stringify(normalizedPatch.payload || {}));
+      params.push(toPgJson(normalizedPatch.payload || {}));
     } else if (jsField === 'embedding') {
       fields.push(`${dbField} = $${idx++}`);
       params.push(normalizedPatch.embedding ? arrayToPgvector(normalizedPatch.embedding) : null);
@@ -270,7 +271,7 @@ export async function recordIngredientRevision(ingredient, { source = 'user', ac
       newRevisionId(),
       ingredient.id,
       ingredient.name,
-      JSON.stringify(ingredient.payload || {}),
+      toPgJson(ingredient.payload || {}),
       ingredient.tags || [],
       src,
       actor ? String(actor).slice(0, 120) : null,
@@ -346,7 +347,7 @@ export async function reviveDeletedIngredient(id, { type, name, payload = {}, ta
             type = $2, name = $3, payload = $4::jsonb, tags = $5
       WHERE id = $1 AND deleted = true
       RETURNING *`,
-    [id, type, String(name).trim(), JSON.stringify(storedPayload), tags || []],
+    [id, type, String(name).trim(), toPgJson(storedPayload), tags || []],
   );
   return result.rows.length > 0 ? rowToIngredient(result.rows[0]) : null;
 }

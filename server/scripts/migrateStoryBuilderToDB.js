@@ -27,6 +27,7 @@ import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { readLegacyJSON, legacyDirectory, incompleteImport } from './legacyImport.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const LEGACY_DIRNAME = 'story-builder';
 const IMPORTED_DIRNAME = 'story-builder.imported';
@@ -49,7 +50,7 @@ export async function importRecord(record, execute = query) {
       typeof record.universeId === 'string' && record.universeId ? record.universeId : null,
       typeof record.seriesId === 'string' && record.seriesId ? record.seriesId : null,
       record.sync === true,
-      JSON.stringify(record),
+      toPgJson(record),
       record.ephemeral === true,
       createdAt,
       mirrorTimestamp(record.updatedAt, createdAt),
