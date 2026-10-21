@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exportNames, mockDrift } from '../scripts/lib/mockContractScan.js';
+import { exportNames, mask, mockDrift } from '../scripts/lib/mockContractScan.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -35,6 +35,25 @@ describe('vi.mock factory contract conventions', () => {
       "vi.mock('./validation.js', async () => ({ ...(await vi.importActual('./validation.js')), spreadKey: vi.fn() }));",
     ].join('\n');
     expect(drift(probe, src)).toEqual(['server/lib/__probe.test.js:1 — ./validation.js mocks plantedDeadKey']);
+  });
+
+  it('does not read a JSX-text apostrophe as a string opener (#12794)', () => {
+    const src = [
+      'export function Panel() {',
+      "  return <p>Style is prepended to every scene's image prompt.</p>;",
+      '}',
+      'export default Panel;',
+    ].join('\n');
+    expect(mask(src)).toContain('export default Panel');
+    expect(mask('export const a = <i>the default\'s value</i>;\nexport const b = 1;')).toContain('export const b');
+    expect(mask('export const a = <i>Zoë\'s</i>;\nexport const b = 1;')).toContain('export const b');
+    expect(mask("export const a = 'x';\nexport const b = 1;")).toContain('export const b');
+    expect(mask("export const c = 'don\\'t';")).not.toContain('don');
+  });
+
+  it('collects the default export of a component with an apostrophe in JSX text (#12794)', () => {
+    const file = join(ROOT, 'client/src/components/writers-room/StoryboardConfigTab.jsx');
+    expect(exportNames(file).has('default')).toBe(true);
   });
 
   it('follows export * when collecting real exports', () => {
