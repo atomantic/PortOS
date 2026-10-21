@@ -537,13 +537,28 @@ const DOCUMENTATION_RULES = [
 // Text snapshots are executable test inputs, but their extension is deliberately
 // outside EXECUTABLE_RE. Keep this mapping explicit rather than treating every
 // `.txt` file as a test fixture: an unmapped text artifact must still widen CI.
-// `dir` names the directory the pattern covers so the test memo
-// (scripts/lib/testMemo.js) can hash every fixture an owning test reads.
+// `dir` names the directory the test memo (scripts/lib/testMemo.js) hashes for
+// an owning test. `fileRe`, when set, keeps only that directory's direct
+// children — `scripts/` is past the memo's directory limit, and hashing the
+// whole tree would fail the installer suites closed instead of keying the pins.
 export const FIXTURE_OWNERS = [
   {
     re: /^server\/services\/promptSections\/__snapshots__\/reviewLoopMatrix\/[^/]+\.txt$/,
     dir: 'server/services/promptSections/__snapshots__/reviewLoopMatrix',
     tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
+  },
+  // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`).
+  // No Vitest suite reads the files; the installer-contract tests are the suites
+  // that exercise that script and server/lib/pythonSetup.js.
+  {
+    re: /^scripts\/requirements-[^/]+\.txt$/,
+    dir: 'scripts',
+    fileRe: /^requirements-[^/]+\.txt$/,
+    tests: [
+      'scripts/setup-image-video.test.js',
+      'server/lib/pythonSetup.install.test.js',
+      'server/lib/pythonSetup.test.js',
+    ],
   },
 ];
 
@@ -1246,6 +1261,7 @@ function buildSuitePlan(changedFiles, {
   let reason = 'Vitest related-test fallback';
   if (features.length) reason = `targeted features: ${features.join(', ')}`;
   else if (jsSources.length === 0 && pythonSources.length > 0) reason = 'python script parsing contracts';
+  else if (jsSources.length === 0 && fixtureTests.length > 0) reason = 'text fixture owners';
 
   return finishPlan({
     full: false,

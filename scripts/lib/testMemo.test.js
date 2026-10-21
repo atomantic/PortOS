@@ -128,6 +128,43 @@ describe('floor key', () => {
   });
 });
 
+describe('fixture owners', () => {
+  // No package import: a scripts/ owner does not walk up into server/node_modules.
+  const stub = "it('pin', () => {});\n";
+  const owners = [
+    'scripts/setup-image-video.test.js',
+    'server/lib/pythonSetup.install.test.js',
+    'server/lib/pythonSetup.test.js',
+  ];
+  const files = {
+    ...TREE,
+    ...Object.fromEntries(owners.map((owner) => [owner, stub])),
+    'scripts/requirements-ltx25-cuda.txt': 'pillow==1\n',
+    'scripts/requirements-wan22-cuda.txt': 'diffusers==1\n',
+    'scripts/notes.txt': 'unmapped\n',
+    'scripts/nested/requirements-extra.txt': 'nested\n',
+  };
+
+  it('hashes requirements pins into the installer-contract owners and ignores other text', () => {
+    for (const owner of owners) {
+      const before = keyOf(files, owner);
+      expect(before.floor.memoizable, owner).toBe(true);
+      expect(keyOf({ ...files, 'scripts/requirements-ltx25-cuda.txt': 'pillow==2\n' }, owner).floor.key, owner)
+        .not.toBe(before.floor.key);
+      expect(keyOf({ ...files, 'scripts/notes.txt': 'changed\n' }, owner).floor.key, owner).toBe(before.floor.key);
+      expect(keyOf({ ...files, 'scripts/nested/requirements-extra.txt': 'changed\n' }, owner).floor.key, owner)
+        .toBe(before.floor.key);
+      const recorded = keyOf(files, owner, { records: new Map([[owner, [owner]]]) });
+      expect(recorded.recorded.memoizable, owner).toBe(true);
+      expect(keyOf(
+        { ...files, 'scripts/requirements-wan22-cuda.txt': 'diffusers==2\n' },
+        owner,
+        { records: new Map([[owner, [owner]]]) },
+      ).recorded.key, owner).not.toBe(recorded.recorded.key);
+    }
+  });
+});
+
 describe('recorded key', () => {
   const recorded = ['server/lib/a.test.js', 'server/lib/a.js', 'server/lib/b.js'];
   const withRecord = (files, test = 'server/lib/a.test.js', loaded = recorded) => keyOf(files, test, { records: new Map([[test, loaded]]) });

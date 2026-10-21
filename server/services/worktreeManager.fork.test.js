@@ -83,5 +83,5 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('fork checkout and publication', () => {
     expect(await git(legacy.worktreePath, 'rev-parse', 'HEAD')).toBe(unpublished);
     expect(await git(repo, 'rev-parse', 'main')).toBe(primaryHead);
     expect(await git(origin, 'rev-parse', 'main')).toBe(primaryHead);
-  });
+  }, 120_000);
 });

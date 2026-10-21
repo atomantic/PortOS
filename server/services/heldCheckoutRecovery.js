@@ -559,7 +559,7 @@ const sameRelease = (entry, release) => entry.path === release.path && entry.hea
 
 // Preview and receipt paths may acquire exact server-verified proof commits
 // into the object store, never a branch, index or implicit approval.
-async function fetchRetirementProofObjects(repoPath, release, prUrl, expectedHeadSha, opts) {
+export async function fetchRetirementProofObjects(repoPath, release, prUrl, expectedHeadSha, opts) {
   const [{ readRetirementForgeEvidence }, { getOriginInfo }, { resolveForgeExecOptions }] = await Promise.all([
     import('./heldCheckoutReview.js'), import('../lib/gitRemote.js'), import('./forgeExecOptions.js'),
   ]);
