@@ -299,7 +299,7 @@ export async function getContributionAssessmentReadiness() {
   const sources = {};
   for (const source of ['github-pr', 'github-issue']) {
     const policy = resolveUntrustedContentPolicy(state.settings.untrustedContent, source);
-    const selection = policy ? selectUntrustedContentProvider({ providers, policy, source }) : { code: 'untrusted-content-policy-invalid' };
+    const selection = policy ? selectProvider({ providers, policy, source }) : { code: 'untrusted-content-policy-invalid' };
     sources[source] = selection.provider
       ? { ready: true, providerId: selection.provider.id, model: selection.model }
       : { ready: false, code: selection.code };
@@ -319,7 +319,7 @@ export async function getContributionAssessmentFingerprint(source = 'github-pr')
   if (state.corrupt) return 'settings-unreadable';
   const policy = resolveUntrustedContentPolicy(state.settings.untrustedContent, source);
   const providers = (await getAllProviders()).providers || [];
-  const selection = policy ? selectUntrustedContentProvider({ providers, policy, source }) : null;
+  const selection = policy ? selectProvider({ providers, policy, source }) : null;
   const chosen = selection?.provider;
   return createHash('sha256').update(JSON.stringify({
     policy,
@@ -329,40 +329,43 @@ export async function getContributionAssessmentFingerprint(source = 'github-pr')
   })).digest('hex');
 }
 
+/**
+ * The token budget an analysis against this provider/model gets.
+ *
+ * The runtime projection folds in the ambient `OLLAMA_CONTEXT_LENGTH` ceiling
+ * before the shared ladder resolves anything, so an Ollama daemon configured
+ * through the env var alone still budgets at what it serves (#7472).
+ * `knownContextWindow` clamps on `numCtx` only for Ollama-backed providers;
+ * other OpenAI-compatible local endpoints ignore `num_ctx` and must not be
+ * shrunk by it. A local endpoint with no explicit `numCtx` keeps this guard's
+ * own 4096 floor: this is a security guard, and the floor only ever LOWERS the
+ * shared ladder's answer.
+ */
+function resolveUntrustedContentWindow(selected, effectiveModel) {
+  const runtimeProvider = withOllamaRuntimeContextWindow(selected);
+  const claimedWindow = knownContextWindow(runtimeProvider, effectiveModel) ?? 4096;
+  const local = isUntrustedContentProvider(selected, 'messages');
+  return local && !(Number(runtimeProvider.numCtx) > 0) ? Math.min(claimedWindow, 4096) : claimedWindow;
+}
+const selectProvider = (args) => selectUntrustedContentProvider({ ...args, windowOf: resolveUntrustedContentWindow });
+
 // Private transport entry: only callers above can supply a completed screen.
 async function analyzeScreenedContent({ provider, model, content, prompt, source, responseSchema, screened }) {
   const config = screened.policy;
   const providers = provider ? [provider] : (await getAllProviders()).providers || [];
-  const selection = selectUntrustedContentProvider({ providers, policy: config, source, provider, model });
+  const selection = selectProvider({ providers, policy: config, source, provider, model });
   if (!selection.provider) return failure(selection.code, selection.message);
   const { provider: selected, model: effectiveModel } = selection;
   const taskPrompt = `${UNTRUSTED_CONTENT_INSTRUCTIONS}\n\nTRUSTED TASK:\n${prompt}`;
   const evidence = formatUntrustedContent(content);
-  const local = isUntrustedContentProvider(selected, 'messages');
-  // The runtime projection folds in the ambient `OLLAMA_CONTEXT_LENGTH`
-  // ceiling before the shared ladder resolves anything, so an Ollama daemon
-  // configured through the env var alone (numCtx unset) still budgets at
-  // what it actually serves rather than an unenforced catalog window (#7472).
-  // `knownContextWindow` then resolves through the one shared `num_ctx`
-  // clamp (`aiToolkit/internal/ollamaBacked.js#clampToRuntimeContextWindow`)
-  // instead of this guard's own Math.min pair, so it picks up the provider's
-  // own `/models` catalog window and only clamps on `numCtx` for an
-  // Ollama-backed provider — every other OpenAI-compatible local endpoint
-  // (LM Studio, vLLM, …) ignores `num_ctx` entirely and must not be shrunk
-  // by it.
-  const runtimeProvider = withOllamaRuntimeContextWindow(selected);
-  const claimedWindow = knownContextWindow(runtimeProvider, effectiveModel) ?? 4096;
-  // A local endpoint with no explicit `numCtx` keeps this guard's own harder
-  // floor rather than trusting a declared/catalog window an unconfigured
-  // local endpoint has no confirmed way to honor — this is a security guard
-  // that must stay conservative, not a budgeting nicety. Preserved verbatim
-  // from the pre-#7473 behavior; it only ever LOWERS the shared ladder's
-  // answer, so it never re-opens the catalog-window blind spot #7472 closed.
-  const contextWindow = local && !(Number(runtimeProvider.numCtx) > 0) ? Math.min(claimedWindow, 4096) : claimedWindow;
+  const contextWindow = resolveUntrustedContentWindow(selected, effectiveModel);
   const maxTokens = Math.min(8192, config.maxOutputChars, Math.floor(contextWindow / 4));
   // UTF-8 bytes are a conservative upper bound for byte-fallback text tokens.
   // Never clip evidence to make an undersized context appear successful.
-  if (Buffer.byteLength(taskPrompt + evidence, 'utf8') + maxTokens + 128 > contextWindow) return failure('untrusted-content-context-too-small', 'The complete evidence does not fit this provider context. Increase its context size or analyze a smaller complete batch.');
+  const needed = Buffer.byteLength(taskPrompt + evidence, 'utf8');
+  if (needed + maxTokens + 128 > contextWindow) {
+    return failure('untrusted-content-context-too-small', `The complete evidence (about ${needed} bytes) does not fit ${selected.id} / ${effectiveModel}, whose resolved window is ${contextWindow} tokens. Set numCtx on that provider or pin a larger-window provider in Models > LLMs > Abuse Guard; or analyze a smaller complete batch.`);
+  }
   const endpointPolicy = selected.apiKey ? evaluateSecretEndpoint(selected.endpoint, { allowCustomEndpoint: selected.allowCustomEndpoint === true }) : { allowed: true };
   if (!endpointPolicy.allowed) return failure('untrusted-content-endpoint-blocked', 'The configured API endpoint cannot receive this provider credential.');
   const { ensureProviderReadyForExecution } = await import('./providerExecutionReadiness.js');

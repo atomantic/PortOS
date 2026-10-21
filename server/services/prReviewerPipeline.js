@@ -306,7 +306,10 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   const reports = securityScanReports(scan);
   if (!scan.ok && !reports.length) {
     const reason = scan.code || 'security-scan-not-passed';
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
+    // `message` is server-authored guard text (provider, window, fix hint), never contribution content.
+    const detail = typeof scan.message === 'string' ? scan.message.replace(/[\r\n]+/g, ' ').trim().slice(0, 400) : '';
+    const hint = detail ? ` — ${detail}` : '';
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}${hint}`, { appId: app.id, analysisType: taskType });
     return { skipped: true, reason };
   }
 
