@@ -175,17 +175,17 @@ describe('PullRequestsTab', () => {
     fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-5' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /PR review/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Untrusted:Review/ }));
 
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, {},
     ));
   });
 
-  // PR review hands its run to the `pr-reviewer` scheduled task, so it takes the
+  // Untrusted:Review hands its run to the `pr-reviewer` scheduled task, so it takes the
   // provider pin only when the user opts in — and never the Code review setting,
   // which governs the two actions PortOS composes here.
-  it('passes the Run with pin to PR review once the opt-in is ticked, and nothing else', async () => {
+  it('passes the Run with pin to Untrusted:Review once the opt-in is ticked, and nothing else', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{
         id: 'claude', name: 'Claude', type: 'cli', enabled: true,
@@ -199,8 +199,8 @@ describe('PullRequestsTab', () => {
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-5' } });
     fireEvent.change(screen.getByLabelText('Code review'), { target: { value: 'self' } });
 
-    fireEvent.click(screen.getByLabelText('Also run PR review on the Run with provider'));
-    fireEvent.click(screen.getByRole('button', { name: /PR review/ }));
+    fireEvent.click(screen.getByLabelText('Also run Untrusted:Review on the Run with provider'));
+    fireEvent.click(screen.getByRole('button', { name: /Untrusted:Review/ }));
 
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
@@ -328,12 +328,12 @@ describe('PullRequestsTab', () => {
   it('queues a pr-reviewer run scoped to the row it was pressed on', async () => {
     await renderTab();
 
-    fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Untrusted:Review/ }));
 
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, {},
     ));
-    expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Queued/ })).toBeInTheDocument();
     // The resolve action is a separate lane and must stay offered.
     expect(screen.getByRole('button', { name: /Resolve & merge/ })).toBeInTheDocument();
   });
@@ -341,8 +341,8 @@ describe('PullRequestsTab', () => {
   it('binds a pr-reviewer task update to the row by its target PR number', async () => {
     await renderTab();
 
-    fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
-    expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /Untrusted:Review/ }));
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Queued/ })).toBeInTheDocument();
 
     act(() => socketHandlers.get('cos:tasks:changed')({
       task: {
@@ -352,7 +352,7 @@ describe('PullRequestsTab', () => {
       },
     }));
 
-    expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Active/ })).toBeInTheDocument();
   });
 
   it('restores the preflight explanation after reloading the PR list', async () => {
@@ -361,13 +361,13 @@ describe('PullRequestsTab', () => {
     }]));
     await renderTab();
     expect(await screen.findByRole('alert')).toHaveTextContent('Prompt Guard stopped');
-    expect(screen.getByRole('button', { name: 'Retry PR review' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry Untrusted:Review' })).toBeInTheDocument();
   });
 
   it('replaces a queued review with a durable preflight explanation and retry', async () => {
     await renderTab();
-    fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
-    await screen.findByRole('link', { name: /PR review: Queued/ });
+    fireEvent.click(await screen.findByRole('button', { name: /Untrusted:Review/ }));
+    await screen.findByRole('link', { name: /Untrusted:Review: Queued/ });
     act(() => socketHandlers.get('cos:tasks:changed')({ task: {
       id: 'preflight-17', status: 'completed',
       metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17,
@@ -375,9 +375,9 @@ describe('PullRequestsTab', () => {
     } }));
     expect(screen.getByRole('alert')).toHaveTextContent('before an agent started');
     expect(screen.getByRole('link', { name: 'View failure record' })).toHaveAttribute('href', '/cos/tasks?task=preflight-17&source=internal');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry PR review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry Untrusted:Review' }));
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledTimes(2));
-    expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Queued/ })).toBeInTheDocument();
   });
 
   // #7258: the preflight card is the programmatic phase of this row's run, and
@@ -386,14 +386,14 @@ describe('PullRequestsTab', () => {
   // later update, because a row binds to one task id for good.
   it('follows a finished preflight card onto the review task it started', async () => {
     await renderTab();
-    fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
-    await screen.findByRole('link', { name: /PR review: Queued/ });
+    fireEvent.click(await screen.findByRole('button', { name: /Untrusted:Review/ }));
+    await screen.findByRole('link', { name: /Untrusted:Review: Queued/ });
     act(() => socketHandlers.get('cos:tasks:changed')({ task: {
       id: 'preflight-demand-1', status: 'in_progress',
       metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17,
         preflight: { phase: 'preparing', steps: [] } },
     } }));
-    expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Active/ })).toBeInTheDocument();
 
     act(() => socketHandlers.get('cos:tasks:changed')({ task: {
       id: 'preflight-demand-1', status: 'completed',
@@ -401,13 +401,13 @@ describe('PullRequestsTab', () => {
         preflightResultTaskId: 'app-improve-17',
         preflight: { phase: 'done', outcome: 'handed-off', steps: [] } },
     } }));
-    expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Active/ })).toBeInTheDocument();
 
     act(() => socketHandlers.get('cos:tasks:changed')({ task: {
       id: 'app-improve-17', status: 'completed',
       metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17 },
     } }));
-    expect(await screen.findByRole('link', { name: /PR review: Completed/ }))
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Completed/ }))
       .toHaveAttribute('href', '/cos/tasks?task=app-improve-17&source=internal');
   });
 
@@ -418,7 +418,7 @@ describe('PullRequestsTab', () => {
     await renderTab();
 
     expect(await screen.findByText('Fix the save path')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'PR review' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Untrusted:Review' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Do:Review' }));
 
@@ -467,7 +467,7 @@ describe('PullRequestsTab', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Resolve & merge failed');
     expect(screen.queryByRole('link', { name: 'Abuse Guard setup' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Retry PR review' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry Untrusted:Review' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry Resolve & merge' }));
     await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { provider: undefined, model: undefined, effort: undefined, reviewMode: 'delegated' },
@@ -484,8 +484,8 @@ describe('PullRequestsTab', () => {
 
     await renderTab();
 
-    expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /PR review/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Active/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Untrusted:Review/ })).not.toBeInTheDocument();
   });
 
   it('omits the pr-reviewer action on a row the server marked ineligible', async () => {
@@ -494,7 +494,7 @@ describe('PullRequestsTab', () => {
     await renderTab();
 
     expect(await screen.findByRole('button', { name: /Resolve & merge/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /PR review/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Untrusted:Review/ })).not.toBeInTheDocument();
   });
 
   it('merges a request directly once the inline confirm is answered', async () => {
