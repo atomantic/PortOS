@@ -7,12 +7,13 @@
  * generated HTML or private media bytes.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS } from '../../lib/fileUtils.js';
 import { PREVIEW_PAGE_CSP } from '../../lib/generatedPreviewSandbox.js';
 import { createCooperativePlayback, playbackSchema } from './cooperativePlayback.js';
+import { stageCodeAnimationPage, writeComposition as writeNamedComposition } from './codeAnimationPage.js';
 
 const MAX_SESSIONS = 3;
 const IDLE_MS = 120_000;
@@ -20,7 +21,6 @@ const RECORDING_CAP = 8 * 1024 * 1024;
 const SLICE_BYTES = 256 * 1024;
 const AUDIO_CAP = 12 * 1024 * 1024;
 const MUSIC_URL = /^\/data\/music\/([^/]+)$/;
-const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
 
 const sessions = new Map();
 const opening = new Map();
@@ -344,25 +344,7 @@ async function inlineLibraryAudio(url) {
   return `data:${mime};base64,${(await readFile(path)).toString('base64')}`;
 }
 
-function injectPolicy(html, { csp, audioGlobal, audioDataUrl }) {
-  const stripped = String(html).replace(/<meta\b[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>/gi, '');
-  const audio = audioDataUrl && IDENT.test(String(audioGlobal || ''))
-    ? `<script>window[${JSON.stringify(audioGlobal)}] = ${JSON.stringify(audioDataUrl).replace(/</g, '\\u003c')};</script>`
-    : '';
-  const tags = `<meta http-equiv="Content-Security-Policy" content="${csp}">${audio}`;
-  const head = stripped.match(/<head[^>]*>/i);
-  if (!head) return `${tags}${stripped}`;
-  const at = head.index + head[0].length;
-  return `${stripped.slice(0, at)}${tags}${stripped.slice(at)}`;
-}
-
-async function writeComposition(sessionId, html) {
-  const scratchRoot = join(PATHS.data, 'music-video-song-renders', `preview-${sessionId}`);
-  const composition = join(scratchRoot, 'composition');
-  await mkdir(composition, { recursive: true });
-  await writeFile(join(composition, 'index.html'), html);
-  return { scratchRoot, directory: `music-video-song-renders/preview-${sessionId}/composition`, composition };
-}
+const writeComposition = (sessionId, html) => writeNamedComposition(`preview-${sessionId}`, html);
 
 async function openDirectory(session, directory, { width, height, csp, screencast }) {
   const { openComposition } = await import('../htmlComposition/browser.js');
@@ -481,24 +463,14 @@ async function startCodeAnimation(session, input) {
     error.code = 'NOT_FOUND';
     throw error;
   }
-  const { importsThree, injectThreeImportMap, threeStagedFiles } = await import('../codeAnimation/threeVendor.js');
-  let pageHtml = importsThree(html) ? injectThreeImportMap(html) : html;
   let audio = 'none';
   let audioDataUrl = null;
   if (input.withAudio) {
     audioDataUrl = await inlineLibraryAudio(audioUrl);
     audio = audioDataUrl ? 'ready' : 'unavailable';
   }
-  pageHtml = injectPolicy(pageHtml, { csp: PREVIEW_PAGE_CSP, audioGlobal: input.audioGlobal, audioDataUrl });
-  const written = await writeComposition(session.id, pageHtml);
+  const written = await stageCodeAnimationPage(`preview-${session.id}`, html, { audioGlobal: input.audioGlobal, audioDataUrl });
   session.scratchRoot = written.scratchRoot;
-  if (importsThree(html)) {
-    for (const file of await threeStagedFiles()) {
-      const target = join(written.composition, file.rel);
-      await mkdir(join(target, '..'), { recursive: true });
-      await writeFile(target, file.data);
-    }
-  }
   const width = input.width || 1280;
   const height = input.height || 720;
   const page = await openDirectory(session, written.directory, { width, height, csp: PREVIEW_PAGE_CSP, screencast: true });

@@ -11,9 +11,11 @@ import { createCodeAnimationPackage, CODE_ANIMATION_PACKAGE_LIMITS } from '../li
 import { JSON_BODY_LIMIT } from '../lib/uploadLimits.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const { codeAnimationRecords, codeAnimationHtml } = vi.hoisted(() => ({
+const { codeAnimationRecords, codeAnimationHtml, codeAnimationPosters } = vi.hoisted(() => ({
   codeAnimationRecords: new Map(),
   codeAnimationHtml: new Map(),
+  // id → poster mtime; capture is a jailed-browser render, doubled here.
+  codeAnimationPosters: new Map(),
 }));
 
 vi.mock('../lib/paths.js', async (importOriginal) =>
@@ -35,6 +37,15 @@ vi.mock('../services/codeAnimation/jobStore.js', () => ({
   readCodeAnimationHtml: vi.fn(async (id) => codeAnimationHtml.get(id)),
   saveCodeAnimationHtml: vi.fn(async (id, html) => codeAnimationHtml.set(id, html)),
   saveCodeAnimationJobRecord: vi.fn(async (job) => codeAnimationRecords.set(job.id, job)),
+  codeAnimationPosterPath: (id) => `${process.env.PORTOS_TEST_POSTER_DIR}/${id}.jpg`,
+  codeAnimationPosterVersions: vi.fn(async (ids) => new Map(ids.filter((id) => codeAnimationPosters.has(id)).map((id) => [id, codeAnimationPosters.get(id)]))),
+}));
+vi.mock('../services/codeAnimation/poster.js', () => ({
+  captureCodeAnimationPoster: vi.fn(async (id) => {
+    writeFileSync(`${process.env.PORTOS_TEST_POSTER_DIR}/${id}.jpg`, 'jpeg-bytes');
+    codeAnimationPosters.set(id, 1700000000000);
+    return true;
+  }),
 }));
 vi.mock('../services/socket.js', () => ({
   // Observe the persisted state at emit time: a notification before a save
@@ -67,6 +78,7 @@ import { getTrack } from '../services/tracks/index.js';
 import { listCodeAnimationJobPage, listCodeAnimationJobRecords, readCodeAnimationHtml, saveCodeAnimationHtml, saveCodeAnimationJobRecord } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
+import { captureCodeAnimationPoster } from '../services/codeAnimation/poster.js';
 import routes from './codeAnimation.js';
 
 const makeApp = () => {
@@ -103,6 +115,8 @@ const BOARD = {
 const brief = { concept: 'A lantern drifts over a sleeping city', universeId: 'universe-1' };
 
 beforeAll(() => {
+  process.env.PORTOS_TEST_POSTER_DIR = join(PATHS.data, 'code-animations');
+  mkdirSync(process.env.PORTOS_TEST_POSTER_DIR, { recursive: true });
   mkdirSync(PATHS.uploads, { recursive: true });
   mkdirSync(PATHS.imageRefs, { recursive: true });
   mkdirSync(PATHS.images, { recursive: true });
@@ -121,6 +135,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   codeAnimationRecords.clear();
   codeAnimationHtml.clear();
+  codeAnimationPosters.clear();
   getUniverse.mockResolvedValue(UNIVERSE);
   getBoard.mockResolvedValue(BOARD);
   resolveProviderAndModel.mockResolvedValue({ provider: { id: 'api-1', type: 'api' }, selectedModel: 'example-model' });
@@ -376,6 +391,39 @@ describe('GET /api/code-animation/jobs', () => {
     expect(capped.body.items).toHaveLength(100);
     expect(listCodeAnimationJobPage).toHaveBeenLastCalledWith({ limit: 100, cursor: null });
     expect((await request(app).get('/api/code-animation/jobs?cursor=garbage')).status).toBe(400);
+  });
+});
+
+describe('Code Animation gallery posters', () => {
+  const id = '00000000-0000-4000-8000-0000000000aa';
+  const completed = { id, status: 'completed', title: 'Lantern', concept: 'x', createdAt: '2026-01-01T00:00:00.000Z' };
+
+  it('draws a missing poster on request, lists its version, and serves it cacheably', async () => {
+    codeAnimationRecords.set(id, completed);
+    const app = makeApp();
+    const before = await request(app).get('/api/code-animation/jobs?limit=50');
+    expect(before.body.items[0]).not.toHaveProperty('posterVersion');
+    const missing = await request(app).get(`/api/code-animation/jobs/${id}/poster?v=1`);
+    expect(missing.status).toBe(404);
+    expect(missing.headers['cache-control'] || '').not.toMatch(/immutable/);
+
+    const drawn = await request(app).post(`/api/code-animation/jobs/${id}/poster`);
+    expect(drawn.status).toBe(200);
+    expect(drawn.body).toEqual({ posterVersion: 1700000000000 });
+    expect((await request(app).get('/api/code-animation/jobs?limit=50')).body.items[0].posterVersion).toBe(1700000000000);
+    const served = await request(app).get(`/api/code-animation/jobs/${id}/poster?v=1700000000000`);
+    expect(served.status).toBe(200);
+    expect(served.headers['content-type']).toMatch(/image\/jpeg/);
+    expect(served.headers['cache-control']).toMatch(/immutable/);
+  });
+
+  it('refuses a poster for a job that has not completed, an unknown job, and a non-uuid id', async () => {
+    codeAnimationRecords.set(id, { ...completed, status: 'running' });
+    const app = makeApp();
+    expect((await request(app).post(`/api/code-animation/jobs/${id}/poster`)).status).toBe(409);
+    expect((await request(app).post('/api/code-animation/jobs/00000000-0000-4000-8000-0000000000bb/poster')).status).toBe(404);
+    expect((await request(app).get('/api/code-animation/jobs/..%2F..%2Fsecrets/poster')).status).toBe(400);
+    expect(captureCodeAnimationPoster).not.toHaveBeenCalled();
   });
 });
 
@@ -636,6 +684,7 @@ describe('POST /api/code-animation/generate', () => {
     expect(call.cwd).toBe(PATHS.data);
     expect(call.screenshots).toEqual([join(PATHS.imageRefs, 'style-ref.png'), join(PATHS.images, 'pin.png'), join(PATHS.imageRefs, 'sheet.png')]);
     expect(call.prompt).toContain('attached to this request');
+    await vi.waitFor(() => expect(captureCodeAnimationPoster).toHaveBeenCalledWith(job.id));
   });
 
   it('attaches the references for a vision-capable CLI provider instead of only naming their paths', async () => {

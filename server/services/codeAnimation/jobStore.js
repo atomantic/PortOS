@@ -3,7 +3,7 @@
  * the generated HTML stays in its managed data directory as a file asset.
  */
 
-import { readFile } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { query } from '../../lib/db.js';
 import { PATHS } from '../../lib/paths.js';
@@ -103,4 +103,22 @@ export async function readCodeAnimationHtml(id) {
     }
     throw error;
   }
+}
+
+// The gallery poster is a derived thumbnail of the completed HTML, beside it.
+export function codeAnimationPosterPath(id) {
+  return htmlPath(id).replace(/\.html$/, '.jpg');
+}
+
+export async function saveCodeAnimationPoster(id, jpeg) {
+  await atomicWrite(codeAnimationPosterPath(id), jpeg);
+}
+
+/** Poster mtimes (ms) for the given ids; an id without a poster is absent. */
+export async function codeAnimationPosterVersions(ids) {
+  const entries = await Promise.all(ids.filter(isCodeAnimationJobId).map(async (id) => {
+    const info = await stat(codeAnimationPosterPath(id)).catch(() => null);
+    return info?.isFile() ? [id, Math.round(info.mtimeMs)] : null;
+  }));
+  return new Map(entries.filter(Boolean));
 }
