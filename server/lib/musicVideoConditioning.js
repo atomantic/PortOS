@@ -50,6 +50,8 @@ export function sceneCastVariant(scene) {
 
 // A file a frame render can name as a reference (routes/imageGen.js galleryImageFilenameSchema).
 const SENDABLE_REFERENCE_FILE = /^[^/\\]+\.(png|jpe?g|webp)$/i;
+// The catalog media kinds pickGuideMedia treats as images (catalogMediaLibrary.js).
+const CAST_IMAGE_KINDS = new Set(['portrait', 'reference']);
 
 /**
  * The Casting guide images (catalogMediaLibrary.pickGuideMedia) for the cast
@@ -64,9 +66,14 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
   if (!Array.isArray(media)) return [];
   const name = (project?.concept?.subjects || []).find((s) => s?.ingredientId === variant.ingredientId)?.name || 'Cast guide';
   // Frame renders accept only a png/jpg/jpeg/webp basename (routes/imageGen.js). Filtering before
-  // the pick lets the next candidate take an unsendable file's slot.
+  // the pick lets the next candidate take an unsendable file's slot. The guide-vs-fallback choice
+  // reads the member's real guide flags: with guides flagged, only sendable guides qualify (none
+  // left = the automatic set), never the non-guide images pickGuideMedia falls back to.
   const sendable = media.filter((m) => typeof m?.mediaKey === 'string' && SENDABLE_REFERENCE_FILE.test(m.mediaKey));
-  return pickGuideMedia(sendable, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES)
+  const flagged = media.some((m) => m && !m.deleted && CAST_IMAGE_KINDS.has(m.kind) && m.library?.guide === true);
+  const candidates = flagged ? sendable.filter((m) => m.library?.guide === true) : sendable;
+  if (!candidates.length) return [];
+  return pickGuideMedia(candidates, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES)
     .map((m) => {
       const v = m.library?.variant || {};
       const detail = v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || '');

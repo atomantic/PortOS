@@ -42,6 +42,15 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
       .toEqual(['teen.png', 'lead.png', 'set.png']);
   });
 
+  // Uniquely catches unsendable flagged guides letting non-guide images condition the shot.
+  it('uses the automatic set when every flagged guide is unsendable, never the non-guide images', () => {
+    const media = { [CAST_ID]: [guide('hero.avif', 7), { mediaKey: 'stale.png', kind: 'reference', library: { variant: { age: 7 } } }] };
+    expect(ids(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID, age: 7 } }, media)))
+      .toEqual(['lead.png', 'set.png']);
+    const unflagged = { [CAST_ID]: [{ mediaKey: 'face.png', kind: 'portrait', library: {} }] };
+    expect(ids(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, unflagged))[0]).toBe('face.png');
+  });
+
   it('is unchanged without a variant or before the cast media loads', () => {
     const today = ids(musicVideoConditioningReferences(project(authored), {}));
     expect(today).toEqual(['lead.png', 'set.png']);
