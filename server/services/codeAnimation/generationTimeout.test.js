@@ -32,14 +32,18 @@ const { startCodeAnimationGeneration } = await import('./index.js');
 afterAll(() => cleanupTempDataRoots('code-animation-timeout-'));
 
 describe('code animation generation run budget', () => {
-  it('runs the authoring prompt with no wall-clock or runtime cap', async () => {
+  it('runs the authoring prompt with no total-runtime cap on any provider type', async () => {
     await startCodeAnimationGeneration({
       providerId: 'example-tui', concept: 'A cube hops over a cone.',
       format: { aspectRatio: '16:9', resolution: '720p', fps: 24, durationSeconds: 4 },
     });
     await vi.waitFor(() => expect(jobs.saveCodeAnimationJobRecord).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'completed' })));
-    expect(runner.runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
-      source: 'code-animation-generation', timeout: 0, absoluteTimeoutMs: 0,
-    }));
+    const [{ source, timeout, absoluteTimeoutMs }] = runner.runPromptThroughProvider.mock.calls.at(-1);
+    expect({ source, absoluteTimeoutMs }).toEqual({ source: 'code-animation-generation', absoluteTimeoutMs: 0 });
+    // CLI/TUI read `timeout` as a total cap; API runs keep their no-progress bound.
+    expect(timeout({ type: 'tui', timeout: 300000 })).toBe(0);
+    expect(timeout({ type: 'cli', timeout: 300000 })).toBe(0);
+    expect(timeout({ type: 'api', timeout: 300000 })).toBe(15 * 60 * 1000);
+    expect(timeout({ type: 'api', timeout: 30 * 60 * 1000 })).toBe(30 * 60 * 1000);
   });
 });
