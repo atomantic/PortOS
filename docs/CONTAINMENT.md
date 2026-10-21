@@ -66,9 +66,11 @@ The worktree is mounted **read-only** at `/src` and copied (without
 `node_modules` and `.git`) into a per-worktree work volume at `/work`.
 `node_modules`, build output and anything a lifecycle script plants live only
 there. A trusted in-container driver then writes a unified diff of every
-**tracked** file the step changed (a regenerated lockfile) to `/out`; the host
-reads it bounded and only applies it when asked (`contained-run.js
---apply-patch`).
+**tracked** file the step changed to `/out`; the host reads it bounded and
+applies only its lockfile sections, and only when asked (`contained-run.js
+--apply-patch`). Edits the untrusted step made to anything else — scripts,
+tests, hooks — are withheld and listed, so that code never reaches the host
+checkout to run uncontained later (`selectApplicablePatch`).
 
 ### Two phases
 

@@ -287,6 +287,56 @@ fi
 exit $status
 `;
 
+/**
+ * Lockfiles a contained step may write back to the host. Everything else the
+ * untrusted step changed (package.json scripts, tests, hooks) is withheld:
+ * applying it would let that code run later on the host, uncontained.
+ */
+export const DOCKER_CONTAINMENT_APPLY_BASENAMES = Object.freeze(['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock']);
+
+/**
+ * Split the driver's unified diff into per-file sections — walking hunk line
+ * counts, so a changed line that itself reads `--- a/x` cannot start a forged
+ * section — and keep only lockfile sections. A malformed patch keeps nothing.
+ * Returns `{ patch, applied, withheld }` (`patch` is null when nothing applies).
+ */
+export function selectApplicablePatch(text) {
+  const lines = String(text ?? '').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  const sections = [];
+  let i = 0;
+  while (i < lines.length) {
+    const from = /^--- a\/(.+)$/.exec(lines[i]);
+    const to = /^\+\+\+ (?:b\/(.+)|\/dev\/null)$/.exec(lines[i + 1] ?? '');
+    if (!from || !to || (to[1] !== undefined && to[1] !== from[1])) return { patch: null, applied: [], withheld: [], malformed: true };
+    const start = i;
+    i += 2;
+    while (i < lines.length && lines[i].startsWith('@@')) {
+      const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(lines[i]);
+      if (!hunk) return { patch: null, applied: [], withheld: [], malformed: true };
+      let oldLeft = Number(hunk[1] ?? 1);
+      let newLeft = Number(hunk[2] ?? 1);
+      i += 1;
+      while ((oldLeft > 0 || newLeft > 0) && i < lines.length) {
+        const mark = lines[i][0];
+        if (mark === ' ') { oldLeft -= 1; newLeft -= 1; } else if (mark === '-') oldLeft -= 1;
+        else if (mark === '+') newLeft -= 1;
+        else if (mark !== '\\') return { patch: null, applied: [], withheld: [], malformed: true };
+        i += 1;
+      }
+      while (lines[i]?.startsWith('\\')) i += 1;
+    }
+    sections.push({ path: from[1], text: lines.slice(start, i).join('\n') });
+  }
+  const applicable = (path) => !path.split('/').includes('..') && DOCKER_CONTAINMENT_APPLY_BASENAMES.includes(posix.basename(path));
+  const kept = sections.filter((section) => applicable(section.path));
+  return {
+    patch: kept.length ? `${kept.map((section) => section.text).join('\n')}\n` : null,
+    applied: kept.map((section) => section.path),
+    withheld: sections.filter((section) => !applicable(section.path)).map((section) => section.path),
+  };
+}
+
 function assertName(value, label) {
   if (!NAME_RE.test(String(value ?? ''))) throw new Error(`${label} must be a docker object name`);
 }

@@ -537,8 +537,8 @@ checkout you are validating, probe once:
 Exit 0 means Docker containment is ready; then run every install and validation
 step through it instead of on the host:
 - install or lockfile regeneration: \`node "{portosRoot}/scripts/contained-run.js" --phase install --apply-patch -- <install command>\`
-  (registry-only network; \`--apply-patch\` brings back tracked-file changes such as a
-  regenerated lockfile — review them in \`git diff\` before committing);
+  (registry-only network; \`--apply-patch\` brings back lockfile changes only — edits the
+  container made to any other file are withheld and listed; review \`git diff\` before committing);
 - lint, typecheck, test, build: \`node "{portosRoot}/scripts/contained-run.js" --phase validate -- "<command>"\`
   (no network; it reuses the node_modules the install left in its container volume).
 Exit 2 means containment is unavailable and nothing ran: proceed with the host

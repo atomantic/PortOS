@@ -10,9 +10,10 @@
  * The step runs in a throwaway Linux container: the worktree is read-only,
  * node_modules live in a Docker volume, there is no host environment or
  * credential, `validate` has no network and `install` reaches only allowlisted
- * registries. Tracked files the step changed (a regenerated lockfile) come
- * back as a patch; `--apply-patch` applies it to the worktree with
- * `git apply`, `--patch-out <file>` saves it.
+ * registries. Tracked files the step changed come back as a patch;
+ * `--apply-patch` applies only its lockfile sections to the worktree with
+ * `git apply` (edits to scripts, tests or hooks made by untrusted code are
+ * withheld and listed), `--patch-out <file>` saves the whole patch for review.
  *
  * It asks this machine's PortOS server (`POST /api/docker-containment/run`)
  * with the same credentials as `scripts/portos-api.js`. When the feature is
@@ -27,6 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { selectApplicablePatch } from '../server/lib/dockerContainment.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { requestApi, resolveCredentials } from './portos-api.js';
 
@@ -143,8 +145,15 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       console.error(`📝 contained-run: wrote the tracked-file patch to ${options.patchOut}`);
     }
     if (options.applyPatch) {
-      (deps.applyPatch ?? applyPatch)(worktree, result.patch);
-      console.error('📝 contained-run: applied the tracked-file patch to the worktree');
+      const selected = selectApplicablePatch(result.patch);
+      if (selected.patch) {
+        (deps.applyPatch ?? applyPatch)(worktree, selected.patch);
+        console.error(`📝 contained-run: applied lockfile changes to the worktree: ${selected.applied.join(', ')}`);
+      }
+      if (selected.malformed) console.error('⚠️ contained-run: the change patch is malformed; nothing was applied');
+      if (selected.withheld.length) {
+        console.error(`⚠️ contained-run: withheld changes to ${selected.withheld.join(', ')} — code run in the container edited them; review with --patch-out before applying anything by hand`);
+      }
     } else if (!options.patchOut) {
       console.error('📝 contained-run: the step changed tracked files; rerun with --apply-patch or --patch-out <file> to keep them');
     }
