@@ -614,10 +614,11 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir =
 // Linux CI job) does not pull the Docker executor in.
 // A disposable worktree has no node_modules, so a repo with an npm lockfile
 // gets a contained `npm ci` (registry-only network) into the same work volume
-// first; the verify command then runs with no network over that install.
+// first, under the install phase's own wall limit (the verify timeout bounds
+// the verify command alone); the verify then runs with no network over it.
 async function runDockerVerify(command, cwd, { dataDir, homeDir, timeoutMs, docker, bubblewrapReason }) {
   const run = docker.run ?? (await import('../server/services/dockerContainment.js')).runContained;
-  const common = { worktree: cwd, settings: docker.settings ?? {}, dataDir, homeDir, timeoutMs };
+  const common = { worktree: cwd, settings: docker.settings ?? {}, dataDir, homeDir };
   const hasLockfile = await lstat(join(cwd, 'package-lock.json')).then((info) => info.isFile(), () => false);
   let installLog = '';
   if (hasLockfile) {
@@ -627,7 +628,7 @@ async function runDockerVerify(command, cwd, { dataDir, homeDir, timeoutMs, dock
       return { ok: false, code: Number.isInteger(install.exitCode) ? install.exitCode : -1, contained: true, mechanism: 'docker', output: `${installLog}[verify] the contained npm ci failed (${install.reason ?? install.error ?? `exit ${install.exitCode}`})` };
     }
   }
-  const result = await run({ ...common, phase: 'validate', command });
+  const result = await run({ ...common, phase: 'validate', command, timeoutMs });
   if (result.status === 'refused') {
     return { ok: false, code: -1, contained: false, output: `[verify] refused: no enforced containment for the verify command — ${bubblewrapReason}; Docker containment unavailable — ${result.reason}` };
   }

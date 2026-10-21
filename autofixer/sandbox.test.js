@@ -292,7 +292,7 @@ describe('runVerifyCommand — contained, credential-free verify', () => {
       await writeFile(join(worktree, 'package-lock.json'), '{}');
       const run = vi.fn(async ({ phase }) => ({ status: 'completed', exitCode: 0, log: `${phase} ok`, contained: true }));
       const result = await runVerifyCommand('npm test', worktree, { probe: noBubblewrap, docker: { enabled: true, run } });
-      expect(run.mock.calls.map(([opts]) => [opts.phase, opts.command])).toEqual([['install', 'npm ci'], ['validate', 'npm test']]);
+      expect(run.mock.calls.map(([opts]) => [opts.phase, opts.command, opts.timeoutMs])).toEqual([['install', 'npm ci', undefined], ['validate', 'npm test', 300000]]);
       expect(result).toMatchObject({ ok: true, contained: true, output: 'install ok\nvalidate ok' });
       run.mockImplementationOnce(async () => ({ status: 'completed', exitCode: 1, log: 'ERESOLVE', contained: true }));
       const broken = await runVerifyCommand('npm test', worktree, { probe: noBubblewrap, docker: { enabled: true, run } });

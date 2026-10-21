@@ -69,6 +69,21 @@ describe('reconcileDockerContainment', () => {
   });
 });
 
+it("leaves another process's live run alone: only stopped containers, and a fresh run network survives", async () => {
+  const freshRun = `r${Date.now().toString(36)}abcdef12`;
+  const engine = fakeEngine([
+    ['network inspect', { success: true }],
+    ['ps --all', { stdout: `portos-contained-proxy-${freshRun}\t${freshRun}\tcreated\n` }],
+    ['network ls', { stdout: `portos-contained-net-${freshRun}\t${freshRun}\n` }],
+  ]);
+  engineState.resolve = vi.fn(() => engine);
+  await reconcileDockerContainment({ enabled: true, reason: 'boot' });
+  const ps = engine.calls.find((call) => call.startsWith('ps --all'));
+  expect(ps).toContain('--filter status=exited');
+  expect(ps).not.toContain('status=running');
+  expect(engine.calls.some((call) => call.startsWith('rm --force') || call.startsWith('network rm'))).toBe(false);
+});
+
 describe('runContained refusals', () => {
   it('refuses when the pinned image is not pulled, without creating anything', async () => {
     writeFileSync(join(repo, '.nvmrc'), '24\n');

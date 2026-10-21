@@ -60,7 +60,18 @@ const activeRuns = new Map(); // runId → { abort, worktreeKey }
 const worktreeTails = new Map(); // worktreeKey → Promise
 let armedThisProcess = false;
 
-const newRunId = () => `r${Date.now().toString(36)}${randomBytes(4).toString('hex')}`;
+// The run id encodes its start time, so a sweep can age objects other
+// processes created without another label.
+const newRunId = (now = Date.now()) => `r${now.toString(36)}${randomBytes(4).toString('hex')}`;
+const runStartedAt = (runId) => {
+  const match = /^r([0-9a-z]+)[0-9a-f]{8}$/.exec(String(runId));
+  const ms = match ? parseInt(match[1], 36) : NaN;
+  return Number.isFinite(ms) ? ms : null;
+};
+// A created-but-not-started proxy or a still-empty run network belongs to a run
+// another process is setting up; leave it alone until well past any wall limit.
+const CREATED_CONTAINER_GRACE_MS = 10 * 60_000;
+const RUN_NETWORK_GRACE_MS = 5 * 60 * 60_000;
 
 const refusal = (reason, state = 'unavailable', extra = {}) => ({
   status: 'refused', code: CONTAINMENT_UNAVAILABLE, state, reason, contained: false, ...extra,
@@ -292,24 +303,24 @@ async function executeRun({ engine, worktree, worktreeKey, phase, command, setti
   const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
   if (signal?.aborted) return { status: 'terminated', reason: 'cancelled', exitCode: null, log: '', patch: null, contained: true };
   const limits = resolveDockerContainmentLimits(settings?.limits);
-  const runId = newRunId();
+  const runId = newRunId(now());
   const user = dockerContainmentUser({ uid: process.getuid?.(), gid: process.getgid?.() });
   const workVolume = dockerContainmentWorkVolume(worktree);
   const containerName = `portos-contained-${runId}`;
   const network = phase === 'install' ? `portos-contained-net-${runId}` : null;
   const controller = new AbortController();
   const onOuterAbort = () => controller.abort();
-  signal?.addEventListener?.('abort', onOuterAbort, { once: true });
-  activeRuns.set(runId, { abort: () => controller.abort(), worktreeKey });
-  armedThisProcess = true;
-
   const started = now();
-  const runDir = await realpath(await mkdtemp(join(deps.tmpRoot ?? tmpdir(), 'portos-contained-')));
-  const inputDir = join(runDir, 'in');
-  const outputDir = join(runDir, 'out');
+  let runDir = null;
   let proxyName = null;
   let result;
   try {
+    signal?.addEventListener?.('abort', onOuterAbort, { once: true });
+    activeRuns.set(runId, { abort: () => controller.abort(), worktreeKey });
+    armedThisProcess = true;
+    runDir = await realpath(await mkdtemp(join(deps.tmpRoot ?? tmpdir(), 'portos-contained-')));
+    const inputDir = join(runDir, 'in');
+    const outputDir = join(runDir, 'out');
     await mkdir(inputDir);
     await mkdir(outputDir);
     // The container user may not be the host user (fallback uid); let it write here only.
@@ -369,7 +380,7 @@ async function executeRun({ engine, worktree, worktreeKey, phase, command, setti
     if (network) await capture(cli, ['network', 'rm', network]).catch(() => null);
     // A killed run's volume may hold half-written state; drop it.
     if (result?.status === 'terminated') await capture(cli, ['volume', 'rm', '--force', workVolume]).catch(() => null);
-    await rm(runDir, { recursive: true, force: true }).catch(() => {});
+    if (runDir) await rm(runDir, { recursive: true, force: true }).catch(() => {});
     activeRuns.delete(runId);
   }
   return {
@@ -402,14 +413,20 @@ async function sweepDockerContainmentOrphans({ engine, all = false, now = Date.n
   // running one is bounded by its owner's wall-time kill and `--rm`. Docker
   // itself refuses to remove a network or volume a live container uses.
   const states = all ? [] : ['created', 'exited', 'dead'].flatMap((state) => ['--filter', `status=${state}`]);
-  const containers = await capture(cli, ['ps', '--all', '--filter', `label=${label}`, ...states, '--format', `{{.Names}}\t{{.Label "${label}"}}`]);
-  for (const [name, runId] of parseRows(containers.stdout)) {
+  const olderThan = (runId, graceMs) => {
+    const startedAt = runStartedAt(runId);
+    return startedAt === null || startedAt < now() - graceMs;
+  };
+  const containers = await capture(cli, ['ps', '--all', '--filter', `label=${label}`, ...states, '--format', `{{.Names}}\t{{.Label "${label}"}}\t{{.State}}`]);
+  for (const [name, runId, state] of parseRows(containers.stdout)) {
     if (active.has(runId)) continue;
+    if (!all && state === 'created' && !olderThan(runId, CREATED_CONTAINER_GRACE_MS)) continue;
     if ((await forceRemoveContainer(cli, name)).success) removed.containers += 1;
   }
   const networks = await capture(cli, ['network', 'ls', '--filter', `label=${label}`, '--format', `{{.Name}}\t{{.Label "${label}"}}`]);
   for (const [name, runId] of parseRows(networks.stdout)) {
     if (active.has(runId) || (runId === SHARED && !all)) continue;
+    if (!all && !olderThan(runId, RUN_NETWORK_GRACE_MS)) continue;
     if ((await capture(cli, ['network', 'rm', name])).success) removed.networks += 1;
   }
   const volumes = await capture(cli, ['volume', 'ls', '--filter', `label=${label}`, '--format',
