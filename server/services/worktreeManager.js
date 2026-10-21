@@ -1964,7 +1964,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   includeClaudeTrees = true
 } = {}) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
-  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { readClaimOwnershipAgents, retireWithUnlockedArchive } = await import('./cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   // Every entry point (scheduled or reconcile) needs a trusted
   // registry. loadState/getAgents may default a corrupt file to empty state.
@@ -2030,41 +2030,52 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     if (!hasMergeEvidence) { hold('unmerged'); continue; }
 
     // The early reconcile pass must see the SAME registered owners and branch
-    // reservations as later retirement. Keep binding excluded until removal and
-    // branch deletion settle, and re-read after a Git refusal too.
-    await withClaimOwnershipLock(async () => {
-      const verifyRemoval = async (holder) => {
-        if (!holder || holder.branch !== wt.branch) return 'worktree-holder-changed';
-        const agents = await readOwners();
-        const ownerReason = claimCheckoutOwnerReason({ branchName, holderPath: wt.path, sourceWorkspace, agents });
-        if (ownerReason) return ownerReason;
-        const policyHold = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
-        if (policyHold) return policyHold;
-        const reason = worktreeOwnershipReason({ path: wt.path, locked: holder.locked, activeAgentIds: readActiveIds(), roots: managedRoots, requireKnownLiveness: true });
-        if (reason) return reason;
-        const freshStatus = await readWorktreeStatus(wt.path);
-        if (freshStatus === null) return 'worktree-status-unavailable';
-        if (!classifyWorktreeDirt(freshStatus).clean) return 'worktree-dirty';
-        return await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false) ? null : 'unmerged';
-      };
-      const initialHold = await verifyRemoval(wt);
-      if (initialHold) { hold(initialHold); return; }
-      const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
-      const preservation = await preserveMergedCheckout(sourceWorkspace, wt, target).catch(error => ({ error }));
-      if (preservation.error) { skipped.push({ path: wt.path, branch: branchName, reason: 'archive-failed', detail: preservation.error.message }); return; }
-      const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
-        label: `worktree remove failed for ${wt.path}`,
-        verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
-      });
-      if (!removal.removed) {
-        skipped.push({ path: wt.path, branch: branchName, reason: removal.reason || 'remove-failed', warning: removal.warning });
-        return;
-      }
-      const holders = await listWorktrees(sourceWorkspace).catch(() => null);
-      const branchDeleted = holders && !holders.some(holder => holder.branch === wt.branch)
-        && await deleteCompletedLocalBranch(sourceWorkspace, branchName, wt.head);
-      reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: Boolean(branchDeleted), archiveDir: preservation.archiveDir });
-      if (!branchDeleted) hold('branch-ref-changed-or-new-holder');
+    // reservations as later retirement. Binding stays excluded until removal and
+    // branch deletion settle — by the lock, and by the checkout fence while the
+    // archive runs between the two critical sections (#12682).
+    const verifyRemoval = async (holder) => {
+      if (!holder || holder.branch !== wt.branch) return 'worktree-holder-changed';
+      const agents = await readOwners();
+      const ownerReason = claimCheckoutOwnerReason({ branchName, holderPath: wt.path, sourceWorkspace, agents });
+      if (ownerReason) return ownerReason;
+      const policyHold = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
+      if (policyHold) return policyHold;
+      const reason = worktreeOwnershipReason({ path: wt.path, locked: holder.locked, activeAgentIds: readActiveIds(), roots: managedRoots, requireKnownLiveness: true });
+      if (reason) return reason;
+      const freshStatus = await readWorktreeStatus(wt.path);
+      if (freshStatus === null) return 'worktree-status-unavailable';
+      if (!classifyWorktreeDirt(freshStatus).clean) return 'worktree-dirty';
+      return await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false) ? null : 'unmerged';
+    };
+    await retireWithUnlockedArchive({
+      busy: () => hold('checkout-retirement-reserved'),
+      admit: async () => {
+        const initialHold = await verifyRemoval(wt);
+        if (initialHold) { hold(initialHold); return {}; }
+        return { fence: { repoPath: sourceWorkspace, path: wt.path, branch: branchName } };
+      },
+      archive: async () => {
+        const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
+        return preserveMergedCheckout(sourceWorkspace, wt, target).then(archive => ({ archive }), (error) => {
+          skipped.push({ path: wt.path, branch: branchName, reason: 'archive-failed', detail: error.message });
+          return {};
+        });
+      },
+      finish: async (_admitted, preservation) => {
+        const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
+          label: `worktree remove failed for ${wt.path}`,
+          verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
+        });
+        if (!removal.removed) {
+          skipped.push({ path: wt.path, branch: branchName, reason: removal.reason || 'remove-failed', warning: removal.warning });
+          return;
+        }
+        const holders = await listWorktrees(sourceWorkspace).catch(() => null);
+        const branchDeleted = holders && !holders.some(holder => holder.branch === wt.branch)
+          && await deleteCompletedLocalBranch(sourceWorkspace, branchName, wt.head);
+        reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: Boolean(branchDeleted), archiveDir: preservation.archiveDir });
+        if (!branchDeleted) hold('branch-ref-changed-or-new-holder');
+      },
     });
   }
 

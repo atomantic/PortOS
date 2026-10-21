@@ -20,11 +20,13 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [] }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, execGit: (args, cwd, options) => {
+  return { ...actual, execGit: async (args, cwd, options) => {
+    // Pauses an archive mid-write, after its first snapshot and before its re-read.
+    if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
     if (args.includes('credential.helper=!gh auth git-credential') && args.includes('fetch')) {
       injected.fetches.push({ args, options });
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
@@ -49,6 +51,7 @@ vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id
 
 const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
+const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () => {
   let scratch;
@@ -58,7 +61,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async () => {
-    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [] });
+    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -382,6 +385,48 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(result).toMatchObject({ ok: false, reason: 'archive-failed' });
     expect(await lockText(release.path)).toBe('synthetic external owner');
     expect(existsSync(join(path, 'nested', '.git'))).toBe(true);
+    expect(await archives()).toEqual([]);
+  });
+
+  // #12682: archive I/O ran inside the shared ownership lock and starved every
+  // claim-ownership check behind its 15 s queue budget for minutes.
+  it('archives with the ownership queue free while fencing only the checkout being retired', async () => {
+    const { path, release } = await heldCheckout('fenced', { branch: 'feature/fenced' });
+    let paused;
+    let resume;
+    const pausedArchive = new Promise(resolve => { paused = resolve; });
+    injected.onBundle = () => new Promise(resolve => { resume = resolve; paused(); });
+    const admission = branch => checkReconcileOwnership({ appId: 'app-1', branch },
+      { getAgents: async () => [], getActiveAgentIds: () => [], readCompletionHold: async () => null });
+
+    const retiring = retire(release);
+    await pausedArchive;
+    injected.onBundle = null;
+    expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
+    expect(await admission('feature/fenced')).toEqual({ admitted: false, reason: 'checkout-retirement-reserved' });
+    expect(await admission('feature/unrelated')).toEqual({ admitted: true });
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners }))
+      .toEqual({ ok: false, reason: 'checkout-retirement-reserved' });
+    expect(existsSync(join(path, 'ignored.txt'))).toBe(true);
+
+    resume();
+    expect(await retiring).toMatchObject({ ok: true });
+    expect(existsSync(path)).toBe(false);
+    expect(await admission('feature/fenced')).toEqual({ admitted: true });
+  });
+
+  it.each([
+    // A file the archive did not see when it started, so only the final re-read catches it.
+    ['content', async (path) => writeFile(join(path, 'late.txt'), 'late work\n'), 'checkout content changed while archiving'],
+    ['administration', async (path) => writeFile(join((await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim(), 'MERGE_MSG'), 'synthetic\n'),
+      'administration changed while archiving'],
+  ])('keeps the checkout when its %s changes while the unlocked archive runs', async (label, change, detail) => {
+    const { path, release } = await heldCheckout(`mid-archive-${label}`);
+    injected.onBundle = () => change(path);
+
+    expect(await retire(release)).toEqual({ ok: false, reason: 'archive-failed', detail });
+    expect(await registered(release.path)).toBe(true);
+    expect(await lockText(release.path)).toBe('synthetic external owner');
     expect(await archives()).toEqual([]);
   });
 

@@ -1,4 +1,6 @@
 /** Shared claim-ownership fence and trusted reader, independent of reconciliation. */
+import { resolve } from 'path';
+
 // One in-process tail shared by binding and branch-reconcile's retirement, so a
 // bind cannot land between cleanup's ownership re-read and its removal.
 let ownershipTail = Promise.resolve();
@@ -6,6 +8,71 @@ export function withClaimOwnershipLock(work) {
   const run = ownershipTail.then(work, work);
   ownershipTail = run.catch(() => {});
   return run;
+}
+
+// Checkouts being archived for retirement with the ownership lock released
+// (#12682). Every ownership operation queues behind that lock with a 15 s budget,
+// so slow archive I/O runs outside it; this fence keeps binds and reconcile
+// admissions off the one checkout meanwhile. The removal path still re-reads
+// owners and fingerprints under the lock, so the fence adds refusal, never permission.
+const retirementFences = new Set();
+const fencePath = p => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+const fenceBranch = b => (b ? String(b).replace(/^refs\/heads\//, '') : null);
+
+/** `checkout-retirement-reserved` when `branch` or checkout `path` of `repoPath` is fenced. */
+export function checkoutRetirementFenceReason({ repoPath, path = null, branch = null }) {
+  if (!repoPath) return null;
+  const repo = fencePath(repoPath);
+  const at = path ? fencePath(path) : null;
+  const name = fenceBranch(branch);
+  for (const fence of retirementFences) {
+    if (fence.repo !== repo) continue;
+    if ((at && fence.path === at) || (name && name !== 'HEAD' && fence.branch === name)) return 'checkout-retirement-reserved';
+  }
+  return null;
+}
+
+/**
+ * Fence one checkout while it is archived outside the lock. Call while holding
+ * `withClaimOwnershipLock`, after the ownership checks pass, and call the returned
+ * release under the lock once removal settles (it is idempotent, so a `finally`
+ * may repeat it). Returns null when the checkout is already fenced.
+ */
+export function reserveCheckoutRetirementFence({ repoPath, path, branch = null }) {
+  if (checkoutRetirementFenceReason({ repoPath, path, branch })) return null;
+  const fence = { repo: fencePath(repoPath), path: fencePath(path), branch: fenceBranch(branch) };
+  retirementFences.add(fence);
+  return () => { retirementFences.delete(fence); };
+}
+
+/**
+ * Retire one checkout with its archive between two ownership critical sections.
+ * - `admit()` runs under the lock and returns `{ result }` to settle there, or
+ *   `{ fence: { repoPath, path, branch }, ... }` to archive. An already-fenced
+ *   checkout settles as `busy()`.
+ * - `archive(admitted)` runs with the lock released and the fence held, and
+ *   returns `{ result }` to stop or `{ archive }` to continue.
+ * - `finish(admitted, archive)` runs under the lock again with the fence held;
+ *   it must re-prove ownership and the archived bytes before removing anything.
+ */
+export async function retireWithUnlockedArchive({ admit, archive, finish, busy }) {
+  const admitted = await withClaimOwnershipLock(async () => {
+    const step = await admit();
+    if (!step.fence) return step;
+    const release = reserveCheckoutRetirementFence(step.fence);
+    return release ? { ...step, release } : { result: busy() };
+  });
+  if (!admitted.release) return admitted.result;
+  try {
+    const archived = await archive(admitted);
+    if (!('archive' in archived)) return archived.result;
+    return await withClaimOwnershipLock(async () => {
+      try { return await finish(admitted, archived.archive); }
+      finally { admitted.release(); }
+    });
+  } finally {
+    admitted.release();
+  }
 }
 
 /** Destructive callers must not consume loadState's empty recovery default. */
