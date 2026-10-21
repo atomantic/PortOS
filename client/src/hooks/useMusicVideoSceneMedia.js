@@ -176,6 +176,13 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .then((entries) => { if (active) setCastMedia(Object.fromEntries(entries)); });
     return () => { active = false; };
   }, [castIds, castRefresh]);
+  // A render before the shot's cast guides load would silently go out without them.
+  const castGuidesPending = (scene) => {
+    const id = scene?.characterVariant?.ingredientId;
+    if (!id || castMedia[id] !== undefined) return false;
+    toast.error('Cast guides are still loading. Try again in a moment.');
+    return true;
+  };
 
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
@@ -211,6 +218,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    */
   const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
+    if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     // The shot's references (the card's References row) ride along on every frame render, a refine included.
     const conditioning = conditioningReferences(project, scene, castMedia);
     const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
@@ -279,6 +287,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const refining = Boolean(refine?.trim() && referenceImageId);
     const endPrompt = scene.endFramePrompt?.trim();
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
+    if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     const projectId = project.id;
     // The frame it renders from leads, then the shot's references (the card's References row).
     const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene, castMedia));

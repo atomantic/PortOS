@@ -33,6 +33,7 @@ import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { resolveImageInputPath } from '../../lib/pathSafety.js';
 import { getSettings } from '../settings.js';
 import { resolveImageCleaners } from '../../lib/imageCleanDefaults.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL, editIncapableModeError, isEditCapableMode, modeLabel } from './modes.js';
@@ -376,7 +377,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // without mislabeling them as an init/edit source. Keep these first so their
   // strengths align with `referenceStrengths`, followed by multipart uploads.
   for (const [index, filename] of namedReferenceFiles.entries()) {
-    const resolved = resolveGalleryImage(filename);
+    // The gallery first; a Casting guide (#12763) may sit in any image-input root the catalog accepts.
+    const resolved = resolveGalleryImage(filename) || resolveImageInputPath(filename);
     if (!resolved) {
       cleanupStagedAndTemp();
       throw new ServerError(
