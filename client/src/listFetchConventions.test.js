@@ -68,9 +68,7 @@ export const LIST_COLLAPSE = new RegExp(
  * Files still carrying a collapse, with how many. Lower or remove a row when a
  * site is migrated to `useListResource`; never raise one.
  */
-const KNOWN = Object.freeze({
-  'src/components/privacy/PrivacyOrgsTab.jsx': 2,
-});
+const KNOWN = Object.freeze({});
 
 /**
  * Sites that match on purpose, each with the reason it is not a list collapse.
