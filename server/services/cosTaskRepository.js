@@ -134,7 +134,9 @@ async function makeMemoryBackend({ persist }) {
   const lists = Object.fromEntries(SOURCES.map((source) => [source, new Map()]));
   const versions = Object.fromEntries(SOURCES.map((source) => [source, 0]));
   if (persist) {
-    const saved = await readJSONFileStrict(tasksFile(), {}, { logError: false });
+    // readJSONFileStrict returns `{ ok, value }`; never start empty over an unreadable file.
+    const { ok, value: saved } = await readJSONFileStrict(tasksFile(), {}, { logError: false });
+    if (!ok) throw new Error(`Unreadable ${tasksFile()} — repair or remove it before starting the dev file backend`);
     for (const source of SOURCES) {
       for (const row of saved?.[source]?.rows ?? []) lists[source].set(row.task.id, row);
       versions[source] = saved?.[source]?.version ?? 0;
@@ -231,5 +233,5 @@ export function __resetCosTaskRepository() { backendFacade.reset(); }
 
 /** Test seam: the PostgreSQL backend over a `{ query, withTransaction }` handle, for the DB suite. */
 export const __makePgCosTaskBackend = makePgBackend;
-/** Test seam: a fresh in-memory backend that never touches disk. */
-export const __makeMemoryCosTaskBackend = () => makeMemoryBackend({ persist: false });
+/** Test seam: a fresh in-memory backend; it touches disk only with `persist: true`. */
+export const __makeMemoryCosTaskBackend = ({ persist = false } = {}) => makeMemoryBackend({ persist });

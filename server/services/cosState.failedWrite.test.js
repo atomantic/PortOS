@@ -7,6 +7,11 @@ const { tempRoot, makeProxy, spies, cleanup } = mockPathsDataRoot({
   prefix: 'cos-failed-write-', wrapExports: ['atomicWrite', 'ensureDirs', 'readJSONFileStrict'], makeSpy: vi.fn,
 });
 vi.mock('../lib/fileUtils.js', async importOriginal => makeProxy(await importOriginal()));
+// Agent records are cos_agents rows (#12738): their write is the injectable failure point.
+vi.mock('./cosAgentRepository.js', async importOriginal => {
+  const real = await importOriginal();
+  return { ...real, applyAgentSave: vi.fn(real.applyAgentSave) };
+});
 
 const cosDir = join(tempRoot, 'cos');
 const statePath = join(cosDir, 'state.json');
@@ -16,15 +21,23 @@ const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value));
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 const writeFailure = () => Object.assign(new Error('Synthetic persistence failure'), { code: 'EIO' });
 let store;
+let repo;
 let realWrite;
+let realApply;
+const storedAgents = async () => Object.fromEntries((await repo.loadAgentRows()).rows.map(row => [row.id, JSON.parse(row.body)]));
 
 beforeEach(async () => {
   vi.resetModules();
   rmSync(cosDir, { force: true, recursive: true });
   mkdirSync(cosDir, { recursive: true });
   writeJson(configPath, { maxConcurrentAgents: 3 });
-  writeJson(statePath, { agents: { example: { id: 'example', status: 'running', metadata: { claimBranches: [] } } } });
+  writeJson(statePath, {});
   store = await import('./cosState.js');
+  repo = await import('./cosAgentRepository.js');
+  repo.__resetCosAgentRepository();
+  realApply ??= repo.applyAgentSave.getMockImplementation();
+  repo.applyAgentSave.mockReset().mockImplementation(realApply);
+  await repo.__seedCosAgents({ example: { id: 'example', status: 'running', metadata: { claimBranches: [] } } });
   const actual = await vi.importActual('../lib/fileUtils.js');
   realWrite = actual.atomicWrite;
   for (const [name, spy] of Object.entries(spies)) spy.mockReset().mockImplementation(actual[name]);
@@ -42,9 +55,9 @@ async function saveHealthCheck() {
 describe('CoS failed persistence recovery', () => {
   it.each(['bind', 'release'])('does not carry a rejected %s into the next queued write or a stale retry', async action => {
     const durable = action === 'bind' ? [] : [binding];
-    writeJson(statePath, { agents: { example: { status: 'running', metadata: { claimBranches: durable } } } });
+    await repo.__seedCosAgents({ example: { status: 'running', metadata: { claimBranches: durable } } });
     let rejectedState;
-    spies.atomicWrite.mockRejectedValueOnce(writeFailure());
+    repo.applyAgentSave.mockRejectedValueOnce(writeFailure());
     await expect(store.withStateLock(async () => {
       const state = await store.loadState();
       rejectedState = { ...state, agents: { ...state.agents, example: {
@@ -52,19 +65,19 @@ describe('CoS failed persistence recovery', () => {
       } } };
       await store.saveState(rejectedState);
     })).rejects.toMatchObject({ code: 'EIO' });
-    expect(readJson(statePath).agents.example.metadata.claimBranches).toEqual(durable);
+    expect((await storedAgents()).example.metadata.claimBranches).toEqual(durable);
     await saveHealthCheck();
-    expect(readJson(statePath).agents.example.metadata.claimBranches).toEqual(durable);
+    expect((await storedAgents()).example.metadata.claimBranches).toEqual(durable);
     expect(readJson(statePath).lastHealthCheck).toBe('2026-01-01T00:00:00.000Z');
     await expect(store.saveState({ ...rejectedState })).rejects.toMatchObject({ code: 'COS_PERSISTENCE_STALE_WRITE' });
   });
 
   it('discards an existing agent lifecycle caller\'s in-place mutation after rejection', async () => {
     const { updateAgent } = await import('./cosAgentLifecycle.js');
-    spies.atomicWrite.mockRejectedValueOnce(writeFailure());
+    repo.applyAgentSave.mockRejectedValueOnce(writeFailure());
     await expect(updateAgent('example', { metadata: { claimBranches: [binding] } })).rejects.toMatchObject({ code: 'EIO' });
     await updateAgent('example', { status: 'paused' });
-    expect(readJson(statePath).agents.example).toMatchObject({ status: 'paused', metadata: { claimBranches: [] } });
+    expect((await storedAgents()).example).toMatchObject({ status: 'paused', metadata: { claimBranches: [] } });
   });
 
   it('reloads rejected in-place config changes and re-anchors a live runtime read independently', async () => {
@@ -131,9 +144,26 @@ describe('CoS failed persistence recovery', () => {
     expect(readJson(path).repaired).toBe(true);
   });
 
+  it('reads the stored outcome when an agent row write commits before reporting failure', async () => {
+    const value = await store.loadState();
+    value.agents.example = { ...value.agents.example, status: 'completed' };
+    repo.applyAgentSave.mockImplementationOnce(async (...args) => {
+      await realApply(...args);
+      throw writeFailure();
+    });
+    await expect(store.withStateLock(() => store.saveState(value))).rejects.toMatchObject({ code: 'EIO' });
+    await store.withStateLock(async () => {
+      const current = await store.loadState();
+      expect(current.agents.example.status).toBe('completed');
+      current.agents.example.metadata = { claimBranches: [binding] };
+      await store.saveState(current);
+    });
+    expect((await storedAgents()).example).toMatchObject({ status: 'completed', metadata: { claimBranches: [binding] } });
+  });
+
   it('retries a rejected legacy config split before runtime writes can remove the legacy settings', async () => {
     rmSync(configPath);
-    writeJson(statePath, { agents: {}, config: { maxConcurrentAgents: 9 } });
+    writeJson(statePath, { config: { maxConcurrentAgents: 9 } });
     spies.atomicWrite.mockRejectedValueOnce(writeFailure());
     await expect(store.loadState()).rejects.toMatchObject({ code: 'EIO' });
     expect(readJson(statePath).config.maxConcurrentAgents).toBe(9);
@@ -144,7 +174,7 @@ describe('CoS failed persistence recovery', () => {
 
   it('shares a pending legacy split so a late loader cannot overwrite the next config update', async () => {
     rmSync(configPath);
-    writeJson(statePath, { agents: {}, config: { maxConcurrentAgents: 9 } });
+    writeJson(statePath, { config: { maxConcurrentAgents: 9 } });
     spies.atomicWrite.mockRejectedValueOnce(writeFailure());
     await expect(store.saveConfig({ maxConcurrentAgents: 9 })).rejects.toMatchObject({ code: 'EIO' });
     // Keep the interleaving deterministic: only the first write waits; all
@@ -184,7 +214,7 @@ describe('CoS failed persistence recovery', () => {
     let rejectWrite;
     let signalStarted;
     const started = new Promise(resolve => { signalStarted = resolve; });
-    spies.atomicWrite.mockImplementationOnce(() => new Promise((resolve, reject) => {
+    repo.applyAgentSave.mockImplementationOnce(() => new Promise((resolve, reject) => {
       rejectWrite = reject;
       signalStarted();
     }));
@@ -203,7 +233,7 @@ describe('CoS failed persistence recovery', () => {
     rejectWrite(writeFailure());
     await failureAssertion;
     await next;
-    expect(readJson(statePath).agents.example.metadata.claimBranches).toEqual([]);
+    expect((await storedAgents()).example.metadata.claimBranches).toEqual([]);
     expect((await store.loadState()).config.maxConcurrentAgents).toBe(5);
   });
 });

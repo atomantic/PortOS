@@ -5,6 +5,7 @@ Autonomous agent manager that works the task queues, spawns sub-agents, and main
 ## Architecture
 
 - **Task Store** (`server/services/cosTaskStore.js`): The user and internal queues as `cos_tasks` rows (working-set cache, row-diff saves); `server/services/cosTaskRepository.js` is the persistence layer
+- **Agent Records** (`server/services/cosAgentRepository.js`): The running and recently finished agents as `cos_agents` rows; `cosState.saveState()` writes only the rows whose record changed
 - **CoS Service** (`server/services/cos.js`): State management, health monitoring, task evaluation
 - **Sub-Agent Spawner** (`server/services/subAgentSpawner.js`): Claude CLI execution with MCP
 - **CoS Routes** (`server/routes/cos.js`): REST API endpoints
@@ -263,7 +264,8 @@ silently released, and no initialized submodule is discarded. Older receipts
 without a checkout binding retain the existing branch-reconciliation fallback.
 
 Leases extend the existing machine-local CoS runtime ownership in
-`data/cos/state.json`, under its existing write queue; there is no new store,
+`data/cos/state.json` (the agent records they bind are `cos_agents` rows),
+under its existing write queue; there is no new store,
 seed, migration, or federation payload. Admission waits at most 15 seconds to
 start its state-queue callback; an expired waiter returns `admitted: false`,
 `reason: state-queue-timeout`, and `retryAfterMs: 5000`. Its fenced callback
@@ -309,7 +311,7 @@ The claim prompt binds each branch through the host-control-gated
 `POST /api/cos/claim-ownership` (`action: "bind"`, registered agent ID, branch)
 BEFORE creating that worktree, and `release` hands a branch off mid-run. The
 run's completion releases everything; quiet diffs, cwd, or a missing basename
-never do. Bindings live on the run record in `data/cos/state.json` — no new
+never do. Bindings live on the run record (a `cos_agents` row) — no new
 store or migration; records without them keep their previous behavior.
 
 branch-reconcile applies the same owners twice: its scan holds a branch with a
@@ -380,7 +382,7 @@ authorize an unreadable first result.
 
 ```
 ./data/cos/
-├── state.json           # Daemon state and config
+├── state.json           # Daemon runtime state (config is config.json; agent records are cos_agents rows)
 ├── agents/{agentId}/    # Agent prompts and outputs
 ├── reports/{date}.json  # Daily reports
 └── scripts/             # Generated automation scripts

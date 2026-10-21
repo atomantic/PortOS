@@ -76,6 +76,49 @@ describe('link-worktree-deps script', () => {
     expect(readFileSync(join(linked, '@acme', 'core', 'marker.txt'), 'utf8')).toBe('fresh');
   });
 
+  it('replaces a cache-only root node_modules with a link to source dependencies', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
+    const source = join(root, 'source');
+    const worktree = join(root, 'worktree');
+    mkdirSync(join(source, 'node_modules'), { recursive: true });
+    writeFileSync(join(source, 'node_modules', 'real-pkg.txt'), 'real');
+
+    // Simulate vitest creating cache directories before linking
+    mkdirSync(join(worktree, 'node_modules', '.vite'), { recursive: true });
+    mkdirSync(join(worktree, 'node_modules', '.vitest-cache'), { recursive: true });
+    mkdirSync(join(worktree, 'node_modules', '.cache'), { recursive: true });
+
+    const result = runScript(source, worktree);
+
+    expect(result.status).toBe(0);
+    expect(lstatSync(join(worktree, 'node_modules')).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(worktree, 'node_modules'))).toBe(join(source, 'node_modules'));
+    expect(readFileSync(join(worktree, 'node_modules', 'real-pkg.txt'), 'utf8')).toBe('real');
+  });
+
+  it('never removes a worktree node_modules holding real packages and logs a warning', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
+    const source = join(root, 'source');
+    const worktree = join(root, 'worktree');
+    mkdirSync(join(source, 'node_modules'), { recursive: true });
+    writeFileSync(join(source, 'node_modules', 'source-pkg.txt'), 'source');
+
+    // Real package directory inside worktree node_modules
+    mkdirSync(join(worktree, 'node_modules', 'some-package'), { recursive: true });
+    writeFileSync(join(worktree, 'node_modules', 'some-package', 'index.js'), 'custom');
+
+    const result = runScript(source, worktree);
+
+    expect(result.status).toBe(0);
+    expect(lstatSync(join(worktree, 'node_modules')).isSymbolicLink()).toBe(false);
+    expect(existsSync(join(worktree, 'node_modules', 'some-package', 'index.js'))).toBe(true);
+    const output = (result.stderr || '') + (result.stdout || '');
+    expect(output).toContain('⚠️');
+    expect(output).toContain(join(worktree, 'node_modules'));
+    // Source checkout real node_modules is never touched
+    expect(existsSync(join(source, 'node_modules', 'source-pkg.txt'))).toBe(true);
+  });
+
   it('exits non-zero without both paths', () => {
     const result = runScript('/only-one-path');
     expect(result.status).toBe(1);

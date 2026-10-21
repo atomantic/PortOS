@@ -593,13 +593,13 @@ CoS runtime records share one serialized state queue (`withStateLock` in `server
 |------|------|
 | `🚦 Merge admission operation=… status=settled …` | a settled admission transaction that took 1 s or more |
 | `🚦 Merge admission … status=queue-timeout\|pending\|failed …` | always |
-| `🐢 CoS state write slow outcome=… totalMs=… prepareMs serializeMs writeMs replaceMs dirSyncMs loopLagMs loopLagMaxMs sizeKiB` | any `saveState` of 1 s or more |
+| `🐢 CoS state write slow outcome=… totalMs=… prepareMs agentsMs serializeMs writeMs replaceMs dirSyncMs loopLagMs loopLagMaxMs sizeKiB` | any `saveState` of 1 s or more |
 | `🐢 CoS state queue slow hold heldMs=… waitMs=… loopLagMs=… loopLagMaxMs=…` | any operation that held the queue for 1 s or more |
 
 Elapsed time inside an awaited phase is asynchronous wait plus delayed scheduling. While an instrumented operation is open, a 100 ms tick measures how long timers sat overdue (`server/lib/eventLoopLagProbe.js`) and charges that to the current phase as `…LagMs`. Read each slow phase as lag versus the rest:
 
 - **`queueMs` high, `queueLagMs` near 0** — the state queue was held by other operations while the loop stayed responsive. Look for `🐢 CoS state queue slow hold` lines in the same window.
-- **`persistenceMs` (or `trustedStateMs`) high, its `…LagMs` near 0** — asynchronous I/O wait: storage or fsync latency, or libuv threadpool queueing behind other file work. `writeMs` (temp write + file flush), `replaceMs` (rename) and `dirSyncMs` (directory flush) locate it; `readMs`/`parseMs` split the ownership read.
+- **`persistenceMs` (or `trustedStateMs`) high, its `…LagMs` near 0** — asynchronous I/O wait: storage or fsync latency, or libuv threadpool queueing behind other file work. `agentsMs` (the changed `cos_agents` rows, written in one transaction), `writeMs` (temp write + file flush), `replaceMs` (rename) and `dirSyncMs` (directory flush) locate it; `readMs`/`parseMs` split the ownership read.
 - **`…LagMs` close to the phase time, or `timerLateMs` well above 0** — the event loop could not run: blocking JavaScript, garbage collection, host CPU starvation or process suspension. These numbers do not tell those apart; capture a CPU profile ([safely](#dynamic-import-callback-missing-after-profiling)) and host load at the time.
 
 Lag resolves to about one tick: the first 100 ms of a stall and any overdue stretch of 20 ms or less are not counted. `timerLateMs` is how late the 15 s admission deadline fired; anything beyond a few milliseconds of timer jitter proves scheduling delay on its own.

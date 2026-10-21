@@ -473,8 +473,10 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
         // detector regex) but is not a DB-backed suite — exclude it.
         if (base === 'db.guards.test.js') continue;
         const head = readHead(join(root, rel));
-        // A real DB-backed suite both gates on checkHealth() and exposes dbReady.
-        if (!(/\bcheckHealth\b/.test(head) && /\bdbReady\b/.test(head))) continue;
+        // A real DB-backed suite gates on checkHealth() and either exposes dbReady or
+        // gates through requireDbOrSkip (the cos_tasks suites slipped past a
+        // dbReady-only detector and never ran).
+        if (!(/\bcheckHealth\b/.test(head) && /\b(dbReady|requireDbOrSkip)\b/.test(head))) continue;
         const relativePath = join(prefix, rel);
         const covered = (hasDbGlob && base === 'db.test.js') || explicitIncludes.has(relativePath);
         if (!covered) offenders.push(prefix + rel.split(sep).join('/'));

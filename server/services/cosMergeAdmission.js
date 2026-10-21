@@ -57,8 +57,16 @@ export function __setMergeAdmissionClockForTests(next) {
 
 const REPORTED_PHASES = ['queue', 'trustedState', 'stateLoad', 'origin', 'ownerRecovery', 'persistence'];
 const REPORTED_STAGES = [['trustedState', 'read'], ['trustedState', 'parse'], ['persistence', 'prepare'],
-  ['persistence', 'serialize'], ['persistence', 'write'], ['persistence', 'replace'], ['persistence', 'dirSync']];
+  ['persistence', 'agents'], ['persistence', 'serialize'], ['persistence', 'write'], ['persistence', 'replace'], ['persistence', 'dirSync']];
 const REPORTED_LAG_PHASES = ['queue', 'trustedState', 'persistence'];
+
+// Per record, not per serialized map: the stored rows come back in insertion
+// order, which a map that deleted and re-added an id does not keep.
+function sameAgentRecords(cached, stored) {
+  const ids = Object.keys(cached ?? {});
+  return isPlainObject(cached) && ids.length === Object.keys(stored).length
+    && ids.every((id) => Object.hasOwn(stored, id) && JSON.stringify(cached[id]) === JSON.stringify(stored[id]));
+}
 
 async function transaction(work, operation) {
   // Lazy: almost every task-generator suite reaches prWatcher, even when no
@@ -112,7 +120,7 @@ async function transaction(work, operation) {
       const state = await measure('stateLoad', loadState);
       // A recovered/defaulted or externally replaced state is not proof of an
       // empty ownership set. Do not let the cache overwrite contradictory disk.
-      if (JSON.stringify(state.agents) !== JSON.stringify(snapshot.agents)
+      if (!sameAgentRecords(state.agents, snapshot.agents)
         || JSON.stringify(state.mergeAdmissions ?? {}) !== JSON.stringify(snapshot.mergeAdmissions)) {
         return refuse('ownership-stale');
       }
