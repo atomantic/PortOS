@@ -380,6 +380,41 @@ describe('BackupWidget snapshots', () => {
     ));
   });
 
+  it('announces a pre-May-2026 ledger adoption and asks for a restart afterwards', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({
+        dryRun: true,
+        changedFiles: ['migrations/.applied.json'],
+        restoredLegacyLedger: { status: 'pending', parkedAs: null },
+      })
+      .mockResolvedValueOnce({
+        changedFiles: ['migrations/.applied.json'],
+        restoredLegacyLedger: { status: 'adopted', parkedAs: 'migrations.applied.json.pre-restore-example' },
+      });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/older migrations\/\.applied\.json location.*re-runs every migration/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      "File restore complete — 1 file(s) restored. Adopted the snapshot's migration record (previous record kept as migrations.applied.json.pre-restore-example); restart PortOS to re-run the migrations it predates",
+    ));
+  });
+
+  it('warns that an unreadable legacy ledger keeps this install\'s record', async () => {
+    mockRestoreBackup.mockResolvedValueOnce({
+      dryRun: true,
+      changedFiles: ['migrations/.applied.json'],
+      restoredLegacyLedger: { status: 'unreadable', parkedAs: null },
+    });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/is unreadable, so this install keeps its own record/);
+  });
+
   it('shows no migration warning for a gap that is empty or unknown', async () => {
     mockRestoreBackup
       .mockResolvedValueOnce({ changedFiles: ['cos/quota-burn.json'], ledgerGap: { count: 0, names: [] } })

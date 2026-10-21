@@ -2564,6 +2564,90 @@ describe('restoreSnapshot manifest verification', () => {
       expect(await finishRestore({ dryRun: true })).not.toHaveProperty('ledgerGap');
     });
 
+    // Snapshots from before migrations moved out of data/ (May 2026) carry the
+    // ledger at migrations/.applied.json. rsync lands it beside the live
+    // migrations.applied.json, which the runner then keeps, so without adoption
+    // a full restore would re-run nothing over the restored records.
+    describe('snapshot with the pre-May-2026 ledger location', () => {
+      const liveLegacyLedgerPath = () => joinPath(PATHS.data, 'migrations', '.applied.json');
+      const parkedLedgers = async () => (await realFs.readdir(PATHS.data)).filter(name => name.startsWith('migrations.applied.json.pre-restore-'));
+
+      afterEach(async () => {
+        await realFs.rm(joinPath(PATHS.data, 'migrations'), { recursive: true, force: true });
+        for (const name of await parkedLedgers()) await realFs.rm(joinPath(PATHS.data, name), { force: true });
+      });
+
+      async function seedLegacySnapshot({ alsoCurrent = false } = {}) {
+        const manifest = { 'migrations/.applied.json': await writeSnapshotFile('migrations/.applied.json', JSON.stringify(['001-example.js'])) };
+        if (alsoCurrent) manifest['migrations.applied.json'] = await writeSnapshotFile('migrations.applied.json', JSON.stringify(['001-example.js']));
+        await writeManifest(manifest);
+      }
+
+      it('announces the adoption in a preview without touching the live ledger', async () => {
+        await seedLegacySnapshot();
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+
+        await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'pending', parkedAs: null } });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js', '359-example.js']);
+      });
+
+      it('installs the restored legacy ledger as the live one and parks the previous ledger', async () => {
+        await seedLegacySnapshot();
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+        // rsync is faked, so stand in for its transfer of the snapshot ledger.
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), JSON.stringify(['001-example.js']));
+
+        const result = await finishRestore({ dryRun: false });
+
+        expect(result.restoredLegacyLedger).toEqual({ status: 'adopted', parkedAs: expect.stringMatching(/^migrations\.applied\.json\.pre-restore-/) });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js']);
+        expect(JSON.parse(await realFs.readFile(joinPath(PATHS.data, result.restoredLegacyLedger.parkedAs), 'utf8'))).toEqual(['001-example.js', '359-example.js']);
+        expect(existsSync(liveLegacyLedgerPath())).toBe(false);
+      });
+
+      it('adopts the ledger on an install that had none, parking nothing', async () => {
+        await seedLegacySnapshot();
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), JSON.stringify(['001-example.js']));
+
+        await expect(finishRestore({ dryRun: false })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'adopted', parkedAs: null } });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js']);
+        expect(await parkedLedgers()).toEqual([]);
+      });
+
+      it('reports an unreadable legacy ledger and keeps the live ledger', async () => {
+        await writeManifest({ 'migrations/.applied.json': await writeSnapshotFile('migrations/.applied.json', '{ not a ledger') });
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), '{ not a ledger');
+
+        await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'unreadable', parkedAs: null } });
+        spawn.mockReset();
+        await expect(finishRestore({ dryRun: false })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'unreadable', parkedAs: null } });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js', '359-example.js']);
+        expect(await parkedLedgers()).toEqual([]);
+      });
+
+      it('leaves a snapshot that also carries a current-path ledger to rsync', async () => {
+        await seedLegacySnapshot({ alsoCurrent: true });
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+
+        const result = await finishRestore({ dryRun: false });
+        expect(result).not.toHaveProperty('restoredLegacyLedger');
+        expect(await parkedLedgers()).toEqual([]);
+      });
+
+      it('keeps the live ledger on a folder restore and reads the legacy ledger for the gap', async () => {
+        await seedLegacySnapshot();
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+
+        const result = await finishRestore({ dryRun: true, subdirFilter: 'cos' });
+        expect(result).not.toHaveProperty('restoredLegacyLedger');
+        expect(result.ledgerGap).toEqual({ count: 1, names: ['359-example.js'] });
+      });
+    });
+
     it('converts a restored legacy quota-burn plan to task references, once', async () => {
       await seedSnapshot();
       // rsync is faked, so stand in for its transfer of the snapshot plan.

@@ -9,11 +9,11 @@
 import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'fs/promises';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { hostname, tmpdir } from 'os';
-import { basename, join, resolve, relative, isAbsolute } from 'path';
+import { basename, dirname, join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
@@ -29,6 +29,7 @@ import {
   restoreRecoveryRefusal, settleReplayOutcome,
 } from './backupRestoreRecovery.js';
 import { getBackendName } from './memoryBackend.js';
+import { APPLIED_LEDGER_RELPATH, LEGACY_APPLIED_LEDGER_RELPATH } from '../../scripts/lib/migrationLedger.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
 import { reloadSettings, withLiveSettingsRestore } from './settings.js';
@@ -845,6 +846,16 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 }
 
 /**
+ * The explicit file escape hatch (MEMORY_BACKEND=file, or a backend that
+ * resolved to 'file'): the one state in which PostgreSQL is not required. The
+ * backend initializes lazily (ensureBackend), so the env var is consulted too —
+ * an uninitialized backend under the hatch must not count as "Postgres required".
+ * Shared by the dump, the restore compatibility check and restore reconciliation
+ * so the three cannot disagree about one install.
+ */
+const usesFileEscapeHatch = () => process.env.MEMORY_BACKEND === 'file' || getBackendName() === 'file';
+
+/**
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
  * Returns an explicit status so the caller can distinguish the benign file
  * escape hatch from "PG required but dump failed" (data at risk):
@@ -869,9 +880,7 @@ export async function dumpPostgres(outputPath) {
     // rather than silently skip; gating on getBackendName() === 'postgres'
     // alone would let an outage-before-first-memory-access read as a green
     // "not configured" run.
-    const env = process.env.MEMORY_BACKEND;
-    const fileEscapeHatch = env === 'file' || getBackendName() === 'file';
-    if (!fileEscapeHatch) {
+    if (!usesFileEscapeHatch()) {
       return { status: 'failed', reason: 'pg_unreachable', error: health.error || 'PostgreSQL is required but is unreachable or uninitialized' };
     }
     return { status: 'skipped', reason: 'not_configured' };
@@ -1486,7 +1495,7 @@ async function reconcileLiveFileRestore(subdirFilter) {
     { label: 'settings reload', run: reloadSettings },
     ...((!subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json']
       .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`)))
-      && getBackendName() !== 'file'
+      && !usesFileEscapeHatch()
       ? [{ label: 'media index rebuild', run: async () => {
         const { reconcileMediaAssets } = await import('./mediaAssetIndex/db.js');
         await reconcileMediaAssets({ rebuild: true });
@@ -1735,7 +1744,7 @@ const LEGACY_DB_METADATA = [
 
 async function assertRestoreStorageCompatible(srcDir, inventory, snapshotId) {
   // Match dumpPostgres: an uninitialized backend still requires PostgreSQL.
-  if (process.env.MEMORY_BACKEND === 'file' || getBackendName() === 'file') return;
+  if (usesFileEscapeHatch()) return;
   if (!inventory) throw snapshotFileIntegrityError(snapshotId);
   const domains = new Set(LEGACY_DB_METADATA
     .filter(([, pattern]) => inventory.paths.some(path => pattern.test(path)))
@@ -1896,9 +1905,11 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // Split migrations gate on their output, so neither ledger re-runs them over
   // a restored monolith; restore converts those stores itself (#12626).
   const legacyStores = await snapshotLegacySplitStores(srcDir, subdirFilter);
-  const restoreNotes = (restoredLegacyStores) => ({
+  const legacyLedger = await snapshotLegacyLedger(srcDir, subdirFilter);
+  const restoreNotes = (restoredLegacyStores, restoredLegacyLedger = legacyLedger) => ({
     ...(ledgerGap !== undefined && { ledgerGap }),
     ...(restoredLegacyStores.length > 0 && { restoredLegacyStores }),
+    ...(restoredLegacyLedger && { restoredLegacyLedger }),
     ...(identity.preserved && { identityPreserved: identity.preserved }),
     ...(identity.adopted && { identityAdopted: identity.adopted }),
   });
@@ -1960,6 +1971,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
 
   const scope = subdirFilter;
   let restoredLegacyStores = [];
+  let restoredLegacyLedger = legacyLedger;
   // Conversion parks live stores, so it runs only after a successful transfer,
   // and before reconciliation so the Brain caches drop the parked records.
   const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, () => transferAndReconcileLiveFiles({
@@ -1974,17 +1986,77 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
         transferFiles,
       });
       restoredLegacyStores = await convertRestoredLegacySplitStores(legacyStores);
+      if (legacyLedger) restoredLegacyLedger = await adoptRestoredLegacyLedger(legacyLedger);
       return changed;
     },
   }));
-  return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(restoredLegacyStores) };
+  return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(restoredLegacyStores, restoredLegacyLedger) };
 }
-
-const MIGRATION_LEDGER_FILE = 'migrations.applied.json';
 
 async function readMigrationLedger(path) {
   const { ok, value } = await readJSONFileStrict(path, null, { logError: false });
   return ok && Array.isArray(value) ? value.filter(name => typeof name === 'string') : null;
+}
+
+const ledgerPaths = (dataDir) => ({ current: join(dataDir, APPLIED_LEDGER_RELPATH), legacy: join(dataDir, LEGACY_APPLIED_LEDGER_RELPATH) });
+const fileExists = (path) => stat(path).then(info => info.isFile(), error => { if (error.code === 'ENOENT') return false; throw error; });
+
+/**
+ * The snapshot's migration ledger: `data/migrations.applied.json`, or the
+ * `data/migrations/.applied.json` a snapshot from before the May 2026 move of
+ * migrations out of `data/` still carries. Null when neither is readable.
+ */
+async function readSnapshotMigrationLedger(srcDir) {
+  const { current, legacy } = ledgerPaths(srcDir);
+  return (await readMigrationLedger(current)) ?? (await readMigrationLedger(legacy));
+}
+
+/**
+ * Whether a full restore of this snapshot must adopt its ledger by hand: the
+ * snapshot carries the ledger only at the legacy path. rsync lands that file
+ * beside the live `migrations.applied.json` instead of over it, and the runner
+ * then keeps the live ledger (a current ledger is authoritative over a legacy
+ * one), so nothing would re-run over the restored records (#12355 assumed the
+ * two paths coincide). Null when the snapshot carries a current ledger or none.
+ * A legacy ledger that does not parse as a list is reported `unreadable` and
+ * never adopted: the live ledger is worth more than a broken one, which the
+ * runner would rename aside and rebuild from scratch.
+ */
+async function snapshotLegacyLedger(srcDir, subdirFilter) {
+  if (subdirFilter) return null;
+  const { current, legacy } = ledgerPaths(srcDir);
+  if (await fileExists(current) || !await fileExists(legacy)) return null;
+  return { status: await readMigrationLedger(legacy) ? 'pending' : 'unreadable', parkedAs: null };
+}
+
+/**
+ * Install the restored legacy ledger as the live one, after the transfer and
+ * before cache reconciliation: the live ledger is parked beside it (evidence,
+ * like a parked split store), and the next migration run starts from the
+ * snapshot's list, exactly as a full restore with a current-path ledger does.
+ */
+async function adoptRestoredLegacyLedger(legacyLedger) {
+  if (legacyLedger.status !== 'pending') {
+    console.warn(`⚠️ Restore left the live migration ledger in place: the snapshot's ${LEGACY_APPLIED_LEDGER_RELPATH} is unreadable`);
+    return legacyLedger;
+  }
+  const { current, legacy } = ledgerPaths(PATHS.data);
+  // Confirmed on the transferred copy before the live ledger moves: parking it
+  // and then failing would leave no ledger (or a broken one), which the next
+  // boot reads as a fresh install: every migration re-runs and purge migrations
+  // are disarmed.
+  if (!await readMigrationLedger(legacy)) {
+    throw new Error(`Restore transferred no readable ${LEGACY_APPLIED_LEDGER_RELPATH}; the live migration ledger was left unchanged`);
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const parkedAs = `${basename(current)}.pre-restore-${stamp}`;
+  const parked = await rename(current, join(dirname(current), parkedAs)).then(
+    () => true,
+    error => { if (error.code === 'ENOENT') return false; throw error; },
+  );
+  await rename(legacy, current);
+  console.log(`📦 Restore adopted the snapshot's pre-May-2026 migration ledger${parked ? `; previous ledger parked as ${parkedAs}` : ''}`);
+  return { status: 'adopted', parkedAs: parked ? parkedAs : null };
 }
 
 /**
@@ -1994,8 +2066,8 @@ async function readMigrationLedger(path) {
  * unknown — the snapshot (or the live install) has no readable ledger.
  */
 async function migrationLedgerGap(srcDir) {
-  const snapshotLedger = await readMigrationLedger(join(srcDir, MIGRATION_LEDGER_FILE));
-  const liveLedger = snapshotLedger && await readMigrationLedger(join(PATHS.data, MIGRATION_LEDGER_FILE));
+  const snapshotLedger = await readSnapshotMigrationLedger(srcDir);
+  const liveLedger = snapshotLedger && await readMigrationLedger(ledgerPaths(PATHS.data).current);
   if (!snapshotLedger || !liveLedger) return null;
   const recorded = new Set(snapshotLedger);
   const names = liveLedger.filter(name => !recorded.has(name));

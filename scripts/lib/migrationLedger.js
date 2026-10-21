@@ -18,13 +18,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT_DIR = resolveInstallRoot(join(__dirname, '..', '..'));
 export const DEFAULT_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
 
-export const appliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations.applied.json');
+/** Ledger locations relative to `data/`; restore reads a snapshot's copy by the same names. */
+export const APPLIED_LEDGER_RELPATH = 'migrations.applied.json';
+export const LEGACY_APPLIED_LEDGER_RELPATH = join('migrations', '.applied.json');
+
+export const appliedFilePath = (rootDir) => join(rootDir, 'data', APPLIED_LEDGER_RELPATH);
 
 // Installs from before the 2026-05-16 move of migrations out of data/ keep the
 // ledger here. The booting server runs migrations on a plain pull-and-restart
 // without setup-data.js, so every runner adopts it: an unread legacy ledger
 // reads as empty, re-runs every applied migration and disarms the purge class.
-export const legacyAppliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations', '.applied.json');
+export const legacyAppliedFilePath = (rootDir) => join(rootDir, 'data', LEGACY_APPLIED_LEDGER_RELPATH);
 
 const pathExists = (path) => stat(path).then(() => true, (err) => {
   if (err.code === 'ENOENT') return false;

@@ -159,7 +159,10 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
       const suffix = result.verification?.status === 'unverified' ? ' (unverified legacy snapshot)' : '';
       const parked = (result.restoredLegacyStores ?? []).filter(store => store.parkedAs).map(store => store.parkedAs);
       const conversion = parked.length > 0 ? `. Converted older-format data; the replaced stores were kept as ${parked.join(', ')}` : '';
-      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}${conversion}`);
+      const ledger = result.restoredLegacyLedger?.status === 'adopted'
+        ? `. Adopted the snapshot's migration record${result.restoredLegacyLedger.parkedAs ? ` (previous record kept as ${result.restoredLegacyLedger.parkedAs})` : ''}; restart PortOS to re-run the migrations it predates`
+        : '';
+      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}${conversion}${ledger}`);
       onClose();
     }
   }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot]);
@@ -263,6 +266,16 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               <span className="min-w-0 break-words">
                 This snapshot predates {pluralize(preview.ledgerGap.count, 'data migration')} this install has applied ({preview.ledgerGap.names.join(', ')}). A folder restore keeps this install&apos;s migration record, so restored files may stay in their older format. A full restore (leave the folder blank) re-runs the missing migrations on the next start.
+              </span>
+            </p>
+          )}
+          {preview.restoredLegacyLedger && (
+            <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">
+                {preview.restoredLegacyLedger.status === 'unreadable'
+                  ? <>This snapshot&apos;s migration record (<code>migrations/.applied.json</code>) is unreadable, so this install keeps its own record and no migration re-runs over the restored files; repair the snapshot copy or run the migrations by hand afterwards.</>
+                  : <>This snapshot keeps its migration record in the older <code>migrations/.applied.json</code> location. Restoring installs it as this install&apos;s record (the current one is kept as <code>migrations.applied.json.pre-restore-&lt;time&gt;</code>) so the next start re-runs every migration the snapshot predates.</>}
               </span>
             </p>
           )}
