@@ -222,8 +222,10 @@ function fakeProc() {
 // The restore/dump helpers await filesystem and health checks before calling
 // spawn() and attaching child-process listeners. Wait for the mocked spawn
 // call itself so CI scheduling cannot emit into an uninitialized fake process.
+// The explicit timeout covers that real filesystem work on a loaded Windows
+// runner, where it has exceeded vi.waitFor's 1s default.
 const settle = () => new Promise(resolve => setTimeout(resolve, 25));
-const flush = () => vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+const flush = () => vi.waitFor(() => expect(spawn).toHaveBeenCalled(), { timeout: 10_000 });
 
 const overridable = DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path);
 const nonOverridable = DEFAULT_EXCLUDES.filter(e => !e.overridable).map(e => e.path);
@@ -2306,7 +2308,7 @@ describe('restoreSnapshot manifest verification', () => {
     const proc = fakeProc();
     spawn.mockReturnValueOnce(proc);
     const pending = restoreSnapshot(tmpRoot, 'snap-1', options);
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    await flush();
     proc.emit('close', 0);
     return pending;
   }
@@ -2926,7 +2928,7 @@ describe('restoreSnapshot manifest verification', () => {
       const proc = fakeProc();
       spawn.mockReturnValueOnce(proc);
       const pending = restoreSnapshot(tmpRoot, 'snap-1', options);
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
       return { proc, pending };
     }
 
@@ -3278,7 +3280,7 @@ describe('restoreSnapshot manifest verification', () => {
       await realFs.writeFile(joinPath(snapshotDataDir, 'database-authority.json'), 'edited after sealing');
       spawn.mockReturnValueOnce(fakeProc());
       const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
       spawn.mock.results[0].value.emit('close', 0);
       await expect(pending).resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
     });
@@ -3389,7 +3391,7 @@ describe('restoreSnapshot manifest verification', () => {
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
 
       // Silent well past the old deadline: the floor, not the default, governs.
       await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
@@ -3419,7 +3421,7 @@ describe('restoreSnapshot manifest verification', () => {
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
 
       await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
       expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
@@ -3445,7 +3447,7 @@ describe('restoreSnapshot manifest verification', () => {
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
 
       await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
       expect(proc.kill).not.toHaveBeenCalled();
@@ -3794,7 +3796,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = restoreSnapshot(...args);
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    await flush();
     proc.emit('close', 0);
     return pending;
   }
@@ -4115,7 +4117,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
       proc.emit('close', 1);
       await expect(pending).rejects.toThrow();
       expect(order).toEqual(['settings', 'cos', 'media', 'media:released']);
@@ -4355,7 +4357,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: true });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
       proc.stderr.emit('data', Buffer.from('preview failed'));
       proc.emit('close', 1);
 
@@ -4392,7 +4394,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
       proc.stderr.emit('data', Buffer.from('transfer failed'));
       proc.emit('close', 1);
 
@@ -4411,7 +4413,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      await flush();
       proc.emit('close', 0);
 
       await expect(pending).rejects.toThrow(/media index rebuild: ECONNREFUSED\)/);
