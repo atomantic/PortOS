@@ -27,7 +27,7 @@ import { currentPlateEvidence } from '../../lib/musicVideoPlateEvidence.js';
 
 import { withMusicVideoStyle } from './styleReferences.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { resolveGalleryImage } from '../../lib/pathSafety.js';
+import { resolveGalleryImage, resolveImageInputPath } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields } from '../../lib/musicVideoShotTiming.js';
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
@@ -55,8 +55,9 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
   const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes });
   if (!prompt) throw unprompted(scene, 'frame');
+  // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
   const referenceImagePaths = conditioningReferences(project, scene, await loadSceneCastMedia(scene))
-    .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);
+    .map((ref) => (ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false }))).filter(Boolean);
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../../lib/imageCleanDefaults.js'),

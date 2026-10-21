@@ -63,3 +63,14 @@ describe('a shot that names a Casting cast member', () => {
     expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['mvr-guide-child.png', 'mvr-guide-adult.png'] });
   });
 });
+
+describe('a shot whose Casting guides are still loading', () => {
+  // Uniquely catches an edit made before the guides load saving the shot's references without them.
+  it('locks the row until the cast member\'s media arrives', () => {
+    const scene = { sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-x' }, frameReferenceIds: ['r1', 'mvr-guide-child.png'] };
+    const { rerender } = render(<SceneFrameReferences project={project} scene={scene} castMedia={{}} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /Don't send Lead/ }).disabled).toBe(true);
+    rerender(<SceneFrameReferences project={project} scene={scene} castMedia={{ 'cat-chr-x': null }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /Don't send Lead/ }).disabled).toBe(false);
+  });
+});

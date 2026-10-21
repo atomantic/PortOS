@@ -11,6 +11,7 @@ import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
+import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
@@ -159,18 +160,22 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     return () => { live = false; };
   }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs]);
   // The Casting media of every cast member a shot names in its `characterVariant`
-  // (#12763), keyed by ingredient id. A shot's frames lead with that member's
-  // guides; until a load lands (or when it fails) the shot uses the automatic set.
+  // (#12763), keyed by ingredient id: an array once loaded, null when the load
+  // failed, absent while pending. A shot's frames lead with that member's guides;
+  // without an array the shot uses the automatic set. Casting has no change event,
+  // so the board reloads them when its tab comes back into view.
   const castIds = [...new Set((project?.scenes || []).map((scene) => scene?.characterVariant?.ingredientId).filter(Boolean))].sort().join(',');
   const [castMedia, setCastMedia] = useState({});
+  const [castRefresh, setCastRefresh] = useState(0);
+  useVisibilityEvent((state) => { if (state === 'visible') setCastRefresh((n) => n + 1); });
   useEffect(() => {
     if (!castIds) return undefined;
     let active = true;
     Promise.all(castIds.split(',').map((id) => listCatalogIngredientMedia(id, { silent: true })
-      .then((media) => (Array.isArray(media) ? [id, media] : null), () => null)))
-      .then((entries) => { if (active) setCastMedia(Object.fromEntries(entries.filter(Boolean))); });
+      .then((media) => [id, Array.isArray(media) ? media : null], () => [id, null])))
+      .then((entries) => { if (active) setCastMedia(Object.fromEntries(entries)); });
     return () => { active = false; };
-  }, [castIds]);
+  }, [castIds, castRefresh]);
 
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
