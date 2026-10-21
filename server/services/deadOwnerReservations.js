@@ -12,15 +12,23 @@
  * label, not a run, so it cannot be matched to a finished call and stays.
  */
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { maintenance } from '../lib/maintenanceAdmission.js';
-import { isPidAlive } from '../lib/heavyJobClaim.js';
 import { PATHS } from '../lib/paths.js';
+
+const require = createRequire(import.meta.url);
+
+// heavyJobClaim computes its claim path at import. Load it on use so a suite
+// that stubs fileUtils without a data root can still import this module.
+function defaultPidAlive(pid) {
+  return require('../lib/heavyJobClaim.js').isPidAlive(pid);
+}
 
 // Run ids are minted as UUIDs. Reject anything that could escape the runs directory.
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
 
-export function cliRunRecordEnded(runId, runsDir) {
+function cliRunRecordEnded(runId, runsDir) {
   if (typeof runId !== 'string' || !SAFE_RUN_ID.test(runId)) return false;
   try {
     const metadata = JSON.parse(readFileSync(join(runsDir, runId, 'metadata.json'), 'utf8'));
@@ -31,15 +39,15 @@ export function cliRunRecordEnded(runId, runsDir) {
 }
 
 /** True only for a persisted mind object that is not inside a turn. */
-export function mindRecordHasNoActiveTurn(state) {
+function mindRecordHasNoActiveTurn(state) {
   const mind = state?.persistentMind;
   if (!mind || typeof mind !== 'object' || Array.isArray(mind)) return false;
   return mind.activeTurn == null;
 }
 
-function readMindIdle() {
+function readMindIdle(mindStatePath = join(PATHS.cos, 'state.json')) {
   try {
-    return mindRecordHasNoActiveTurn(JSON.parse(readFileSync(join(PATHS.cos, 'state.json'), 'utf8')));
+    return mindRecordHasNoActiveTurn(JSON.parse(readFileSync(mindStatePath, 'utf8')));
   } catch {
     return false;
   }
@@ -47,15 +55,17 @@ function readMindIdle() {
 
 /**
  * @param {{ admission?: object, pidAlive?: (pid: number) => boolean, runsDir?: string,
- *   cliRunEnded?: (runId: string) => boolean, mindTurnIdle?: () => boolean }} [options]
+ *   cliRunEnded?: (runId: string) => boolean, mindStatePath?: string,
+ *   mindTurnIdle?: () => boolean }} [options]
  * @returns {{ marked: number, released: number }}
  */
 export function reconcileDeadOwnerReservations({
   admission = maintenance,
-  pidAlive = isPidAlive,
+  pidAlive = defaultPidAlive,
   runsDir = PATHS.runs,
   cliRunEnded = (runId) => cliRunRecordEnded(runId, runsDir),
-  mindTurnIdle = readMindIdle,
+  mindStatePath,
+  mindTurnIdle = () => readMindIdle(mindStatePath),
 } = {}) {
   try {
     const dead = admission.operations().filter(op => op.unsettled !== true && !pidAlive(op.pid));

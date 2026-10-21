@@ -3,9 +3,7 @@ import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createMaintenanceAdmission } from '../lib/maintenanceAdmission.js';
-import {
-  cliRunRecordEnded, mindRecordHasNoActiveTurn, reconcileDeadOwnerReservations,
-} from './deadOwnerReservations.js';
+import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 
 const roots = [];
 const DEAD_PID = 2147483646;
@@ -118,6 +116,7 @@ describe('reconcileDeadOwnerReservations', () => {
 
 describe('owning-record proofs', () => {
   it('treats a non-empty end time as a finished cli run and ignores escapes', () => {
+    const { admission } = gate();
     const root = fs.mkdtempSync(join(tmpdir(), 'dead-owner-runs-'));
     roots.push(root);
     const write = (id, endTime) => {
@@ -126,19 +125,57 @@ describe('owning-record proofs', () => {
     };
     write('fixture-run-ended', '2026-01-01T00:00:00.000Z');
     write('fixture-run-open', null);
-    expect(cliRunRecordEnded('fixture-run-ended', root)).toBe(true);
-    expect(cliRunRecordEnded('fixture-run-open', root)).toBe(false);
-    expect(cliRunRecordEnded('fixture-run-missing', root)).toBe(false);
-    expect(cliRunRecordEnded('../fixture-run-ended', root)).toBe(false);
-    expect(cliRunRecordEnded('', root)).toBe(false);
+    for (const id of ['fixture-run-ended', 'fixture-run-open', 'fixture-run-missing', '../fixture-run-ended', '']) {
+      rewritePid(admission, admission.admit('cli-run', id).id, DEAD_PID);
+    }
+    expect(reconcileDeadOwnerReservations({
+      admission,
+      pidAlive: (pid) => pid === process.pid,
+      runsDir: root,
+      mindTurnIdle: () => false,
+    })).toEqual({ marked: 0, released: 1 });
+    expect(admission.operations().map(op => op.resource).sort()).toEqual(
+      ['', '../fixture-run-ended', 'fixture-run-missing', 'fixture-run-open'],
+    );
   });
 
   it('requires a mind object with no active turn', () => {
-    expect(mindRecordHasNoActiveTurn(null)).toBe(false);
-    expect(mindRecordHasNoActiveTurn({})).toBe(false);
-    expect(mindRecordHasNoActiveTurn({ persistentMind: [] })).toBe(false);
-    expect(mindRecordHasNoActiveTurn({ persistentMind: {} })).toBe(true);
-    expect(mindRecordHasNoActiveTurn({ persistentMind: { activeTurn: null } })).toBe(true);
-    expect(mindRecordHasNoActiveTurn({ persistentMind: { activeTurn: { id: 'fixture-turn' } } })).toBe(false);
+    const { admission } = gate();
+    const root = fs.mkdtempSync(join(tmpdir(), 'dead-owner-mind-'));
+    roots.push(root);
+    const file = join(root, 'state.json');
+    const turn = admission.admit('mind-turn', 'persistent-mind');
+    rewritePid(admission, turn.id, DEAD_PID);
+    const kept = (state) => {
+      fs.writeFileSync(file, JSON.stringify(state));
+      expect(reconcileDeadOwnerReservations({
+        admission,
+        pidAlive: (pid) => pid === process.pid,
+        cliRunEnded: () => false,
+        mindStatePath: file,
+      })).toEqual({ marked: 0, released: 0 });
+      expect(admission.operations().some(op => op.id === turn.id)).toBe(true);
+    };
+    kept(null);
+    kept({});
+    kept({ persistentMind: [] });
+    kept({ persistentMind: { activeTurn: { id: 'fixture-turn' } } });
+    fs.writeFileSync(file, JSON.stringify({ persistentMind: {} }));
+    expect(reconcileDeadOwnerReservations({
+      admission,
+      pidAlive: (pid) => pid === process.pid,
+      cliRunEnded: () => false,
+      mindStatePath: file,
+    })).toEqual({ marked: 0, released: 1 });
+    expect(admission.operations().some(op => op.id === turn.id)).toBe(false);
+    const again = admission.admit('mind-turn', 'persistent-mind');
+    rewritePid(admission, again.id, DEAD_PID);
+    fs.writeFileSync(file, JSON.stringify({ persistentMind: { activeTurn: null } }));
+    expect(reconcileDeadOwnerReservations({
+      admission,
+      pidAlive: (pid) => pid === process.pid,
+      cliRunEnded: () => false,
+      mindStatePath: file,
+    })).toEqual({ marked: 0, released: 1 });
   });
 });
