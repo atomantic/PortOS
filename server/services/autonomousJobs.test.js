@@ -1252,12 +1252,12 @@ describe('autonomousJobs', () => {
       expect(opts.activeAgentIds().has('live-agent-99')).toBe(true)
     })
 
-    it('handles an unreadable agent store gracefully', async () => {
+    it('skips every reap when the stored statuses cannot be read (a paused agent could look orphaned)', async () => {
       listStoredAgentStatuses.mockRejectedValueOnce(new Error('database unavailable'))
 
-      await expect(agentDataCleanup()).resolves.not.toThrow()
-      expect(reapMergedWorktrees).toHaveBeenCalledOnce()
-      expect(cleanupOrphanedWorktrees).toHaveBeenCalledOnce()
+      await expect(agentDataCleanup()).resolves.toMatchObject({ cleaned: 0, mergedReaped: 0, worktreesReaped: 0 })
+      expect(reapMergedWorktrees).not.toHaveBeenCalled()
+      expect(cleanupOrphanedWorktrees).not.toHaveBeenCalled()
     })
   })
 })

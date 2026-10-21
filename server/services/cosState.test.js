@@ -7,6 +7,12 @@ import { __createManualClock } from '../lib/eventLoopLagProbe.js';
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'cos-state-test-' });
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makeProxy(await importOriginal()));
+// cosState's view of the backend choice; the repositories keep the real (in-memory) one.
+const backendMode = vi.hoisted(() => ({ postgres: false }));
+vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return { ...real, isFileBackend: () => !backendMode.postgres && real.isFileBackend() };
+});
 // Observe the row writes cosState sends, against the real in-memory backend.
 vi.mock('./cosAgentRepository.js', async (importOriginal) => {
   const real = await importOriginal();
@@ -39,6 +45,7 @@ beforeEach(async () => {
   rmSync(COS_DIR, { recursive: true, force: true });
   mkdirSync(COS_DIR, { recursive: true });
   (await import('./cosAgentRepository.js')).__resetCosAgentRepository();
+  backendMode.postgres = false;
 });
 
 describe('cosState persistence', () => {
@@ -592,5 +599,38 @@ describe('agent records in cos_agents', () => {
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+// Boot starts CoS before the database phase runs db-migrations 020/021.
+describe('agent migration boot gate', () => {
+  const legacy = { 'agent-example-1': { id: 'agent-example-1', status: 'completed' } };
+
+  it('holds a read of a legacy agents map until the migrations settle, so no save can drop it first', async () => {
+    writeState({ running: false, agents: legacy });
+    backendMode.postgres = true;
+    const store = await freshModule();
+    let loaded = null;
+    const load = store.loadState().then((state) => { loaded = state; });
+    const save = store.saveState({ running: true, agents: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(loaded).toBeNull();
+    // Nothing touched the file while the import was pending.
+    expect(readJson(STATE_PATH).agents).toEqual(legacy);
+
+    // What 020 + 021 leave behind: the rows, and a file without the map.
+    await seedAgents(legacy);
+    writeState({ running: false });
+    store.markCosAgentMigrationsSettled();
+    await Promise.all([load, save]);
+    expect(loaded.agents).toEqual(legacy);
+  });
+
+  it('never waits once the map is gone', async () => {
+    writeState({ running: false });
+    backendMode.postgres = true;
+    const store = await freshModule();
+    await seedAgents(legacy);
+    expect((await store.loadState()).agents).toEqual(legacy);
   });
 });

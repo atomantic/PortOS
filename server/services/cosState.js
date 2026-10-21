@@ -26,6 +26,7 @@ import {
 import { cosEvents } from './cosEvents.js';
 import { planAgentSave } from '../lib/cosAgentRows.js';
 import { applyAgentSave, loadAgentRows } from './cosAgentRepository.js';
+import { isFileBackend } from '../lib/pgFileFacade.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_ALWAYS_APPROVE_KINDS } from './taskLearning/safetyKind.js';
 
@@ -459,6 +460,40 @@ let agentStore = null;
 let lastStatePayload = null;
 let warnedLegacyAgents = false;
 
+// db-migrations 020/021 move a legacy state.json `agents` map into cos_agents,
+// but boot starts CoS before the database phase runs them. A read of a file that
+// still carries the map would cache an empty agent set, and its next save would
+// drop the map before 020 could import it. So that read waits for the boot to
+// report the migrations settled (bounded, so an early awaited caller fails
+// loudly instead of deadlocking the boot). Steady state never waits: the map is
+// gone once 021 has run.
+const AGENT_MIGRATION_WAIT_MS = 120_000;
+let settleAgentMigrations;
+let agentMigrationsSettled = false;
+const agentMigrations = new Promise((resolve) => { settleAgentMigrations = resolve; });
+
+/** Called by the boot once the DB migrations have run (or were skipped by the escape hatch). */
+export function markCosAgentMigrationsSettled() {
+  agentMigrationsSettled = true;
+  settleAgentMigrations();
+}
+
+async function awaitAgentMigrations() {
+  if (agentMigrationsSettled || isFileBackend()) return;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new ServerError('CoS agent records are still being migrated into the database. Retry once startup finishes.', {
+      status: 503, code: 'COS_AGENTS_MIGRATING',
+    })), AGENT_MIGRATION_WAIT_MS);
+    timer.unref?.();
+  });
+  try {
+    await Promise.race([agentMigrations, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function dropRuntimeCaches() {
   stateCache = null;
   agentStore = null;
@@ -540,6 +575,10 @@ export async function loadState() {
   } else if (existsSync(STATE_FILE)) {
     const content = await readFile(STATE_FILE, 'utf-8');
     state = parseStateFile(content) ?? await recoverFromUnreadableState(content);
+  }
+  if (state && Object.hasOwn(state, 'agents') && !agentMigrationsSettled && !isFileBackend()) {
+    await awaitAgentMigrations();
+    return loadState();
   }
   const { store, agents } = await loadAgentStore();
   // A concurrent read/write or restore may have superseded this read.
@@ -648,7 +687,9 @@ export async function saveState(state, { onStage } = {}) {
   try {
     await ensureDirectories();
     state.config = await loadConfig();
-    agentStore ??= (await loadAgentStore()).store;
+    // A save with no cached read behind it goes through loadState first, so it
+    // waits out a pending agent migration (and loads the store) like any read.
+    if (!agentStore) await loadState();
     // Agent records are rows: write only those whose serialization changed, so
     // one agent's update never rewrites another's (#12738).
     stage('agents');

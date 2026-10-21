@@ -143,6 +143,14 @@ async function agentDataCleanup() {
     return 0
   })
 
+  // Without the stored statuses a paused agent is indistinguishable from an
+  // orphan, so everything below that deletes on "not live" waits for a run that
+  // can read them.
+  if (!storedStatuses) {
+    console.warn('⚠️ Agent data cleanup: stored agent statuses unavailable — skipping agent dir and worktree reaping')
+    return { cleaned: 0, sentinelsRemoved, mergedReaped: 0, worktreesReaped: 0, removalFailures: 0 }
+  }
+
   const agentsDir = join(PATHS.cos, 'agents')
   let cleaned = 0
   if (existsSync(agentsDir)) {
