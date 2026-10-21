@@ -936,8 +936,9 @@ gets two content-addressed keys (`scripts/lib/testMemo.js`):
 Both keys also cover: every non-JS file a member names through a literal path
 anchored at `import.meta.url`, `__dirname`, `process.cwd()` or an identifier
 bound to one of those (a literal directory contributes its whole tree, up to
-400 files; snapshot files and the planner's `FIXTURE_OWNERS` directories are
-added for the test itself); the installed version of every package the
+400 files; snapshot files and each `FIXTURE_OWNERS` directory — or only
+its direct children when the owner sets `fileRe` — are added for the test
+itself); the installed version of every package the
 members reach (so a lockfile bump invalidates exactly the suites that reach
 the bumped packages); a Python sidecar's resolvable sibling imports; the
 version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
