@@ -244,7 +244,20 @@ const TASK_INTERVAL_DEFAULTS = {
   // needs no model and runs every pass regardless of whether any zombie exists.
   'issue-reconcile':     { type: INTERVAL_TYPES.ON_DEMAND, perpetual: true, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, autoClose: true } },
   'console-errors':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'dependency-updates':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null },
+  // dependency-updates runs package-manager installs, so it ALWAYS gets an
+  // isolated CoS worktree whose node_modules are private to it
+  // (agentWorkspacePrep passes `linkDependencies: false`). In the live checkout
+  // an `npm install` follows the shared-dependency symlinks into the source
+  // tree and, for PortOS itself, rewrites the running server's node_modules on
+  // whatever branch the user has checked out, then commits there. `useWorktree`
+  // is therefore LOCKED (MANAGED_AGENT_OPTIONS). `openPR` is the shipped
+  // delivery so a bump is validated by CI instead of merged back locally (a
+  // local merge-back lands the new lockfile in the live checkout while its
+  // node_modules stay at the old versions until a reinstall), but the operator
+  // may flip it. `noChangeSuccess`: dependencies that are already
+  // current are the common outcome — the run ends with an empty branch and is
+  // still a success (lib/noChangeCompletion.js admits this type explicitly).
+  'dependency-updates':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, noChangeSuccess: true } },
   'documentation':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'ui-bugs':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'mobile-responsive':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
@@ -486,6 +499,9 @@ export const MANAGED_AGENT_OPTIONS = {
   // even when a global/per-app metadata override tries to make it writable.
   'issue-watcher': ['useWorktree', 'openPR', 'readOnly', 'worktreeChangesExpected'],
   'pr-watcher': ['prAuthorFilter'],
+  // Package-manager installs are never safe in the live checkout (see the task's
+  // entry above), so isolation is not an operator choice; `openPR` stays free.
+  'dependency-updates': ['useWorktree'],
   // The non-committing coordinators (NON_COMMITTING_COORDINATOR_METADATA above) all
   // run in the app's LIVE checkout and ship no code, so a CoS-managed worktree is at
   // best unused and at worst harmful — branch-reconcile needs to see the sibling

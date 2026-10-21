@@ -390,6 +390,30 @@ describe('evaluateSuccessCriteria — commit criterion (#2344, #3637)', () => {
     expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
   });
 
+  // dependency-updates is not a catalog audit, but "every dependency is already
+  // current" is its ordinary outcome, so its schedule default ships
+  // `noChangeSuccess: true` and lib/noChangeCompletion.js admits the type by name.
+  it('accepts a verified no-change result for a marked dependency-updates run', async () => {
+    const task = {
+      id: 'deps-1',
+      taskType: 'internal',
+      metadata: { analysisType: 'dependency-updates', useWorktree: true, openPR: true, noChangeSuccess: true }
+    };
+    expect(await evaluateSuccessCriteria({
+      task, workspacePath: '/w', success: true, branchProvenEmpty: true, startedAt: STARTED_AT
+    })).toBe(true);
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('does not extend the no-change exemption to other marked non-audit scheduled types', async () => {
+    committedDuringRun.mockResolvedValueOnce(false);
+    expect(await evaluateSuccessCriteria({
+      task: { id: 'ideas-1', taskType: 'internal', metadata: { analysisType: 'feature-ideas', noChangeSuccess: true } },
+      workspacePath: '/w', success: true, branchProvenEmpty: true, startedAt: STARTED_AT
+    })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
   it('does not let an unmarked task claim the no-change exemption', async () => {
     committedDuringRun.mockResolvedValueOnce(false);
     expect(await evaluateSuccessCriteria({
