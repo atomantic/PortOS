@@ -2,6 +2,7 @@ import { act, render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import EpisodeVideoStage from './EpisodeVideoStage';
+import { listVideoModels } from '../../../services/api';
 import { getCreativeDirectorProject } from '../../../services/apiCreativeDirector';
 
 const handlers = vi.hoisted(() => new Map());
@@ -56,4 +57,16 @@ it('drops late reads after the stage switches projects', async () => {
   await act(async () => resolveOld({ id: 'cd-old', status: 'failed', failureReason: 'Stale failure' }));
   expect(screen.queryByText('Stale failure')).not.toBeInTheDocument();
   expect(screen.getByText('Current project failure')).toBeInTheDocument();
+});
+
+it('shows a video-model load error with Retry instead of silently hiding the model picker', async () => {
+  listVideoModels.mockRejectedValueOnce(new Error('Models unavailable'));
+  await act(async () => render(view(undefined)));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load video models — Models unavailable');
+  expect(screen.queryByRole('combobox', { name: 'Video model' })).toBeNull();
+
+  listVideoModels.mockResolvedValueOnce([{ id: 'model-a', name: 'Model A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+  expect(await screen.findByRole('combobox', { name: 'Video model' })).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).toBeNull();
 });

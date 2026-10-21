@@ -73,36 +73,6 @@ const KNOWN = Object.freeze({
   // Named-parameter, multi-statement spelling (#12807); migrated under #12819.
   'src/components/loraTraining/CharacterLoraChip.jsx': 1,
   'src/components/meatspace/post/MemoryPractice.jsx': 1,
-  // Spellings the widened pattern (#12790) newly sees; migrated under #12804.
-  'src/components/CmdKSearch.jsx': 1,
-  'src/components/TagPicker.jsx': 1,
-  'src/components/apps/LaunchVideoPanel.jsx': 1,
-  'src/components/apps/tabs/OverviewTab.jsx': 1,
-  'src/components/cos/tabs/MemoryRunsUsedBy.jsx': 1,
-  'src/components/eidoverse/EidoverseTravel.jsx': 1,
-  'src/components/media/RigPanel.jsx': 1,
-  'src/components/messages/MessageDetail.jsx': 1,
-  'src/components/music/ArtistPicker.jsx': 1,
-  'src/components/musicVideo/CharacterStyleSelect.jsx': 1,
-  'src/components/musicVideo/ExistingSongSelect.jsx': 1,
-  'src/components/musicVideo/PromotionPlanPanel.jsx': 1,
-  'src/components/pipeline/AuthorPicker.jsx': 1,
-  'src/components/pipeline/SeriesLoomsPanel.jsx': 1,
-  'src/components/pipeline/stages/EpisodeVideoStage.jsx': 1,
-  'src/components/privacy/OrgDrawer.jsx': 1,
-  'src/components/providers/ProviderServiceForm.jsx': 1,
-  'src/components/settings/ImageGenProviderSections.jsx': 1,
-  'src/components/settings/SecurityTab.jsx': 1,
-  'src/components/songbook/SongLinks.jsx': 2,
-  'src/components/sprites/SpriteReferencePicker.jsx': 1,
-  'src/components/threads/AddToThreadButton.jsx': 1,
-  'src/components/ui/ProcessLogModal.jsx': 1,
-  'src/components/videoGen/GalleryVideoPicker.jsx': 1,
-  'src/pages/Instances.jsx': 1,
-  'src/pages/OpenClaw.jsx': 1,
-  'src/pages/PipelineEditorialChecks.jsx': 2,
-  'src/pages/PipelineExport.jsx': 1,
-  'src/pages/Tribe.jsx': 3,
 });
 
 /**
@@ -117,6 +87,14 @@ const EXEMPT = Object.freeze({
   // SYSTEM_STAGE_PROTECTED guard answer. The empty `usedBy`/`referencedBy` feed
   // a delete-confirm prompt, not a library listing, so no "you have none" copy.
   'src/pages/PromptManager.jsx': 1,
+  // Canon-entity linkify lookup: a failed universe read just shows no entity chips
+  // on findings (the findings themselves render, and nothing says "no canon exists");
+  // nothing writes from it.
+  'src/pages/PipelineEditorialChecks.jsx': 1,
+  // Tag typeahead: a failed lookup shows no suggestions, freeform tags are accepted
+  // regardless (the server normalizes and creates the canonical row on save), and
+  // nothing says "no tags exist" or writes from the suggestion list.
+  'src/components/TagPicker.jsx': 1,
 });
 
 const allowedIn = (file) => (KNOWN[file] || 0) + (EXEMPT[file] || 0);

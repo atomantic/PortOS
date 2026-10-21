@@ -329,6 +329,25 @@ describe('PeerCard snapshot progress', () => {
     expect(badge('Pipeline').getByText('synced')).toBeInTheDocument();
   });
 
+  it('flags a failed subscription read with Retry instead of hiding schema warnings, then shows the gap after Retry', async () => {
+    listPeerSubscriptions.mockRejectedValueOnce(new Error('Subscriptions unavailable'));
+    renderUI(<PeerCard peer={peer} syncStatus={syncStatus} onRefresh={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Subscriptions unavailable');
+    expect(screen.queryByText('Schema version mismatch')).not.toBeInTheDocument();
+
+    listPeerSubscriptions.mockResolvedValueOnce({
+      subscriptions: [{
+        recordKind: 'universe', recordId: 'universe-1', peerId: peer.instanceId,
+        blockedBySchema: { ahead: [], behind: ['universe'], peerPortosVersion: '1.0.0' },
+      }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('Schema version mismatch')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   // Active sync takes precedence until the user-triggered request completes.
   it('shows syncing ahead of checksum status and restores status on completion', async () => {
     let resolveSync;

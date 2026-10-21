@@ -16,13 +16,19 @@
  * renamed round shouldn't read stale), and falls back to the stored label.
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Link } from 'react-router';
 import { Link2, Plus, X } from 'lucide-react';
 import { listRounds, listTracks } from '../../services/api';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import {
   SONG_LINK_TYPES, songLinkHref, songLinkKey, songLinkTypeLabel, inputClass, labelClass,
 } from './constants';
+
+// The editor owns the error UI, so the requests are silent.
+const fetchRounds = () => listRounds({ silent: true }).then((res) => res?.rounds);
+const fetchTracks = () => listTracks({ silent: true });
 
 // What a chip/row shows: the target's current title when we can see it, else the
 // label captured when the link was made, else the raw id (never blank).
@@ -73,29 +79,14 @@ export function SongLinkChips({ links, className = '' }) {
 }
 
 export function SongLinksEditor({ links, onChange }) {
-  // null = not fetched yet (or the fetch failed) vs [] = fetched and this
-  // install genuinely has no records of that kind — the two must not collapse,
-  // or an empty install reads as "still loading" forever.
-  const [rounds, setRounds] = useState(null);
-  const [tracks, setTracks] = useState(null);
+  // A rounds/tracks outage must not block editing the SONG, so a failed read
+  // shows a retryable error for that kind instead of "none available".
+  const rounds = useListResource(fetchRounds);
+  const tracks = useListResource(fetchTracks);
   const [type, setType] = useState(SONG_LINK_TYPES[0].id);
   const [targetId, setTargetId] = useState('');
 
-  // Both lists load once when the editor mounts. `.catch` swallows the failure
-  // on purpose — a rounds/tracks outage must not block editing the SONG, and
-  // request() already toasted, so `{ silent: true }` keeps it to one toast.
-  useEffect(() => {
-    let alive = true;
-    listRounds({ silent: true })
-      .then((res) => { if (alive) setRounds(Array.isArray(res?.rounds) ? res.rounds : []); })
-      .catch(() => { if (alive) setRounds([]); });
-    listTracks({ silent: true })
-      .then((res) => { if (alive) setTracks(Array.isArray(res) ? res : []); })
-      .catch(() => { if (alive) setTracks([]); });
-    return () => { alive = false; };
-  }, []);
-
-  const recordsByType = useMemo(() => ({ round: rounds, track: tracks }), [rounds, tracks]);
+  const recordsByType = useMemo(() => ({ round: rounds.items, track: tracks.items }), [rounds.items, tracks.items]);
 
   // Options for the currently selected type, minus anything already linked.
   const linked = useMemo(() => new Set(links.map(songLinkKey)), [links]);
@@ -128,7 +119,8 @@ export function SongLinksEditor({ links, onChange }) {
   // {type,id} twice, and filtering on identity would delete both at once.
   const remove = (index) => onChange(links.filter((_, i) => i !== index));
 
-  const loading = recordsByType[type] === null;
+  const { state, error, retry } = type === 'track' ? tracks : rounds;
+  const loading = state === 'loading';
 
   return (
     <div>
@@ -177,11 +169,11 @@ export function SongLinksEditor({ links, onChange }) {
             id="song-link-target"
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
-            disabled={loading || options.length === 0}
+            disabled={state !== 'ready' || options.length === 0}
             className={inputClass}
           >
             <option value="">
-              {loading ? 'Loading…' : options.length === 0 ? `No ${songLinkTypeLabel(type).toLowerCase()}s available` : 'Select…'}
+              {loading ? 'Loading…' : state === 'error' ? 'Unavailable' : options.length === 0 ? `No ${songLinkTypeLabel(type).toLowerCase()}s available` : 'Select…'}
             </option>
             {options.map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
           </select>
@@ -196,6 +188,9 @@ export function SongLinksEditor({ links, onChange }) {
           Add link
         </button>
       </div>
+      {state === 'error' && (
+        <ListLoadError what={`${songLinkTypeLabel(type).toLowerCase()}s`} error={error} onRetry={retry} className="mt-2" />
+      )}
     </div>
   );
 }

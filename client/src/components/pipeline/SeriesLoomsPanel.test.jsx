@@ -53,14 +53,19 @@ describe('SeriesLoomsPanel', () => {
       .toHaveAttribute('href', '/fableloom/loom-1');
   });
 
-  it('shows an empty state when nothing links to the series', async () => {
-    api.listLooms.mockResolvedValue([]);
+  it('shows a load error with Retry, not "None yet", when the loom read fails', async () => {
+    api.listLooms.mockRejectedValueOnce(new Error('Looms unavailable'));
     await renderPanel();
-    await waitFor(() => expect(screen.getByText(/None yet/)).toBeInTheDocument());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load branching narratives — Looms unavailable');
+    expect(screen.queryByText(/None yet/)).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Example Series — branching narrative')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('degrades to the empty state when the list fetch fails', async () => {
-    api.listLooms.mockRejectedValue(new Error('offline'));
+  it('shows an empty state when nothing links to the series', async () => {
+    api.listLooms.mockResolvedValue([]);
     await renderPanel();
     await waitFor(() => expect(screen.getByText(/None yet/)).toBeInTheDocument());
   });

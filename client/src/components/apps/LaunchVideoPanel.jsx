@@ -5,8 +5,10 @@ import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
 import FilmStylePicker from '../codeAnimation/FilmStylePicker';
 import FilePickerButton from '../ui/FilePickerButton';
+import ListLoadError from '../ui/ListLoadError';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
+import useListResource from '../../hooks/useListResource';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -19,6 +21,7 @@ import { trackAudioUrl } from '../../services/apiTracks';
 import { formatBytes, formatDateTime, formatDurationSec, formatLoudness } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
+const fetchSkillPacks = () => getMotionToolkit({ silent: true }).then(result => result.skillPacks);
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50';
 const videoUrl = video => `/data/videos/${encodeURIComponent(video.filename)}`;
@@ -56,7 +59,7 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [motionBlur, setMotionBlur] = useState('');
   const [motionSkills, setMotionSkills] = useState(false);
   const [installingSkills, setInstallingSkills] = useState(false);
-  const [skillPacks, setSkillPacks] = useState(null);
+  const { items: skillPacks, state: skillPacksState, error: skillPacksError, retry: retrySkillPacks, setItems: setSkillPacks } = useListResource(fetchSkillPacks);
   const [music, setMusic] = useState(false);
   const [generateMusic, setGenerateMusic] = useState(false);
   const [musicMethod, setMusicMethod] = useState('agent');
@@ -79,12 +82,9 @@ function LaunchVideoForm({ appId, onQueued }) {
     listPipelineMusicLibrary({ silent: true }).then(result => {
       if (active) setTracks(result.tracks);
     }).catch(err => { if (active) { setTracks([]); setError(err.message); } });
-    getMotionToolkit({ silent: true }).then(result => {
-      if (active) setSkillPacks(result.skillPacks);
-    }).catch(() => { if (active) setSkillPacks([]); });
     return () => { active = false; };
   }, []);
-  const installedSkills = (skillPacks ?? []).filter(pack => pack.found.length);
+  const installedSkills = skillPacks.filter(pack => pack.found.length);
   const consultSkills = motionSkills && installedSkills.length > 0;
 
   const handleInstallSkills = async () => {
@@ -203,10 +203,12 @@ function LaunchVideoForm({ appId, onQueued }) {
     </div>
     <div>
       <label htmlFor="launch-motion-skills"><input id="launch-motion-skills" type="checkbox" disabled={!installedSkills.length} checked={consultSkills} onChange={event => setMotionSkills(event.target.checked)} /> Consult motion skills</label>
-      <p className="text-sm text-port-text-muted">{skillPacks === null ? 'Checking installed skills…' : installedSkills.length
-        ? `Technique guides from ${installedSkills.map(pack => pack.label).join(', ')}.`
-        : 'HyperFrames, Remotion and Claude Animation skills are not installed.'}</p>
-      {skillPacks !== null && skillPacks.some(pack => !pack.installed) && (
+      {skillPacksState === 'error'
+        ? <ListLoadError what="installed motion skills" error={skillPacksError} onRetry={retrySkillPacks} />
+        : <p className="text-sm text-port-text-muted">{skillPacksState === 'loading' ? 'Checking installed skills…' : installedSkills.length
+          ? `Technique guides from ${installedSkills.map(pack => pack.label).join(', ')}.`
+          : 'HyperFrames, Remotion and Claude Animation skills are not installed.'}</p>}
+      {skillPacksState === 'ready' && skillPacks.some(pack => !pack.installed) && (
         <button type="button" className="btn btn-secondary" disabled={installingSkills} onClick={handleInstallSkills}>
           {installingSkills ? 'Installing motion skills…' : installedSkills.length ? 'Install missing motion skills' : 'Install and enable motion skills'}
         </button>

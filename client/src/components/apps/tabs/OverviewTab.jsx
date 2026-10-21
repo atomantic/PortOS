@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2, Smartphone, Clapperboard, X, Loader2 } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -8,6 +8,8 @@ import { PORTOS_APP_ID } from '../../../lib/appIdentity.js';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 import { safeReadStorage, safeWriteStorage } from '../../../lib/safeStorage';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import * as api from '../../../services/api';
@@ -27,8 +29,6 @@ export default function OverviewTab({ app, onRefresh }) {
   const [deleting, setDeleting] = useState(false);
   const [installingScripts, setInstallingScripts] = useState(false);
   const [detectingIcon, setDetectingIcon] = useState(false);
-  // Reverse lookup (#2991): sprite records that publish assets into this app.
-  const [spriteBindings, setSpriteBindings] = useState([]);
 
   const onComplete = useMemo(() => () => onRefresh(), [onRefresh]);
   // Scoped to this app: the shared hook otherwise reports whichever operation
@@ -37,15 +37,15 @@ export default function OverviewTab({ app, onRefresh }) {
   const updating = isOperating && operationType === 'update';
   const standardizing = isOperating && operationType === 'standardize';
 
-  // Load the sprite records bound to this app (empty for an app with none).
-  useEffect(() => {
-    if (!app?.id) return;
-    let cancelled = false;
-    api.getAppSpriteBindings(app.id)
-      .then((res) => { if (!cancelled) setSpriteBindings(res?.bindings || []); })
-      .catch(() => { if (!cancelled) setSpriteBindings([]); });
-    return () => { cancelled = true; };
-  }, [app?.id]);
+  // Reverse lookup (#2991): sprite records that publish assets into this app.
+  const appId = app?.id;
+  const fetchSpriteBindings = useCallback(
+    () => api.getAppSpriteBindings(appId).then((res) => res?.bindings || []),
+    [appId],
+  );
+  const {
+    items: spriteBindings, state: spriteBindingsState, error: spriteBindingsError, retry: retrySpriteBindings,
+  } = useListResource(fetchSpriteBindings, { enabled: Boolean(appId) });
 
   const handleUpdate = () => startUpdate(app.id, app.name);
 
@@ -313,8 +313,11 @@ export default function OverviewTab({ app, onRefresh }) {
       )}
 
       {/* Sprite assets PortOS publishes into this app (reverse lookup, #2991).
-          Shown only when at least one sprite record is bound — makes "PortOS is
+          Shown only when at least one sprite record is bound (or the read failed) — makes "PortOS is
           the creative source for this app" visible from the app side. */}
+      {spriteBindingsState === 'error' && (
+        <ListLoadError what="published sprite assets" error={spriteBindingsError} onRetry={retrySpriteBindings} />
+      )}
       {spriteBindings.length > 0 && (
         <div>
           <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Published Sprite Assets</div>

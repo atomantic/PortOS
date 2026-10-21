@@ -64,6 +64,20 @@ describe('launch video drawer', () => {
     expect(installMotionSkills).toHaveBeenCalledWith({ silent: true });
   });
 
+  it('reports a failed motion-toolkit read with Retry instead of "skills are not installed"', async () => {
+    getMotionToolkit.mockRejectedValueOnce(new Error('toolkit unreachable'));
+    getMotionToolkit.mockResolvedValueOnce({ ffmpeg: true, skillPacks: [{ id: 'hyperframes', label: 'HyperFrames', found: ['motion-graphics'], installed: true }] });
+    renderPanel('/?launchVideo=true');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load installed motion skills.*toolkit unreachable/i);
+    expect(screen.queryByText(/skills are not installed/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Technique guides from HyperFrames.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(getMotionToolkit).toHaveBeenCalledTimes(2);
+  });
+
   it.each(['agent', 'service'])('queues %s music without requiring a library track or installed engine', async musicMethod => {
     createAppLaunchVideo.mockReset().mockResolvedValue({ taskId: 'task-generated' });
     getMotionToolkit.mockResolvedValueOnce({ ffmpeg: true, skillPacks: [{ id: 'hyperframes', label: 'HyperFrames', found: ['motion-graphics'] }] });

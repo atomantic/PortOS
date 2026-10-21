@@ -384,3 +384,66 @@ describe('Tribe memory links panel — failed reads', () => {
     expect(screen.queryByText(/Could not load/)).toBeNull();
   });
 });
+
+describe('Tribe person panels and outreach — failed reads', () => {
+  beforeEach(() => {
+    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    api.getTribeTouchpoints.mockResolvedValue({ touchpoints: [] });
+    api.getTribePerson.mockResolvedValue({ identities: [] });
+    api.getTribeOutreach.mockResolvedValue({ threads: [] });
+  });
+
+  it('shows an error with Retry instead of "No touchpoints logged yet" when the touchpoint read fails', async () => {
+    api.getTribeTouchpoints.mockRejectedValueOnce(new Error('touchpoints down'));
+
+    renderAt('/tribe?tab=circle');
+    fireEvent.click(await screen.findByText('Example Person'));
+
+    expect(await screen.findByText(/Could not load touchpoints — touchpoints down/)).toBeTruthy();
+    expect(screen.queryByText('No touchpoints logged yet.')).toBeNull();
+
+    api.getTribeTouchpoints.mockResolvedValueOnce({ touchpoints: [{ id: 't1', happenedAt: '2026-01-02T00:00:00.000Z', source: 'user', summary: 'Coffee catch-up' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Coffee catch-up')).toBeTruthy();
+    expect(screen.queryByText(/Could not load touchpoints/)).toBeNull();
+  });
+
+  it('shows an error with Retry instead of hiding the Beeper block when the identity read fails', async () => {
+    api.getTribePerson.mockRejectedValueOnce(new Error('person down'));
+
+    renderAt('/tribe?tab=circle');
+    fireEvent.click(await screen.findByText('Example Person'));
+
+    expect(await screen.findByText(/Could not load Beeper links — person down/)).toBeTruthy();
+    expect(screen.queryByText('Linked on Beeper')).toBeNull();
+
+    api.getTribePerson.mockResolvedValueOnce({
+      identities: [{ id: 'identity-1', personId: 'p1', kind: 'handle', network: 'discord', handle: 'ada', source: 'user', conversations: [] }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Linked on Beeper')).toBeTruthy();
+    expect(screen.queryByText(/Could not load Beeper links/)).toBeNull();
+  });
+
+  it('shows an error with Retry instead of hiding the reply queue when the outreach read fails', async () => {
+    api.getTribeOutreach.mockRejectedValueOnce(new Error('outreach down'));
+
+    renderAt('/tribe');
+
+    expect(await screen.findByText(/Could not load threads waiting on a reply — outreach down/)).toBeTruthy();
+    expect(screen.queryByText('Waiting on a reply')).toBeNull();
+
+    api.getTribeOutreach.mockResolvedValueOnce({
+      threads: [{
+        conversationKey: 'conv-1', personId: 'p1', personName: 'Example Person', source: 'imessage',
+        daysAgo: 3, snippet: 'Are we still on for Friday?',
+      }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Waiting on a reply')).toBeTruthy();
+    expect(screen.queryByText(/Could not load threads/)).toBeNull();
+  });
+});

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
   AlertTriangle,
@@ -31,6 +31,7 @@ import { localDateStr } from '../components/meatspace/constants';
 import toast from '../components/ui/Toast';
 import ListLoadError from '../components/ui/ListLoadError';
 import TabPills from '../components/ui/TabPills';
+import useListResource from '../hooks/useListResource';
 import TribeCircleMap from '../components/tribe/TribeCircleMap.jsx';
 import { copyToClipboard } from '../lib/clipboard.js';
 import { safeReadStorage, safeRemoveStorage } from '../lib/safeStorage.js';
@@ -544,16 +545,11 @@ function TouchpointSource({ source }) {
 }
 
 function TouchpointsPanel({ personId }) {
-  const [touchpoints, setTouchpoints] = useState([]);
-
-  useEffect(() => {
-    if (!personId) return;
-    let cancelled = false;
-    api.getTribeTouchpoints(personId, 8)
-      .then((result) => { if (!cancelled) setTouchpoints(result?.touchpoints || []); })
-      .catch(() => { if (!cancelled) setTouchpoints([]); });
-    return () => { cancelled = true; };
-  }, [personId]);
+  const fetchTouchpoints = useCallback(
+    () => api.getTribeTouchpoints(personId, 8, { silent: true }).then((result) => result?.touchpoints || []),
+    [personId],
+  );
+  const { items: touchpoints, state, error, retry } = useListResource(fetchTouchpoints, { enabled: !!personId });
 
   if (!personId) return null;
 
@@ -561,7 +557,9 @@ function TouchpointsPanel({ personId }) {
     <section className="mt-4 border border-port-border bg-port-card rounded p-4">
       <h2 className="text-sm font-semibold text-white">Touchpoints</h2>
       <div className="mt-3 grid gap-2">
-        {touchpoints.length ? touchpoints.map((touchpoint) => (
+        {state === 'error' ? (
+          <ListLoadError what="touchpoints" error={error} onRetry={retry} />
+        ) : touchpoints.length ? touchpoints.map((touchpoint) => (
           <div key={touchpoint.id} className="rounded border border-port-border bg-port-bg p-3">
             <div className="flex items-center justify-between gap-3 text-xs text-gray-500">
               <span>{touchpoint.happenedAt?.slice(0, 10)}</span>
@@ -569,9 +567,9 @@ function TouchpointsPanel({ personId }) {
             </div>
             <p className="mt-1 text-sm text-gray-300">{touchpoint.summary || touchpoint.channel || 'Touchpoint'}</p>
           </div>
-        )) : (
+        )) : state === 'ready' ? (
           <p className="text-sm text-gray-500">No touchpoints logged yet.</p>
-        )}
+        ) : null}
       </div>
     </section>
   );
@@ -632,16 +630,11 @@ function BeeperIdentityChip({ identity, onUnlink }) {
 // `TouchpointsPanel` already use. Renders nothing when the person has no
 // Beeper claims (no empty heading).
 function BeeperIdentitiesPanel({ personId }) {
-  const [identities, setIdentities] = useState([]);
-
-  useEffect(() => {
-    if (!personId) { setIdentities([]); return; }
-    let cancelled = false;
-    api.getTribePerson(personId, { silent: true })
-      .then((person) => { if (!cancelled) setIdentities(person?.identities || []); })
-      .catch(() => { if (!cancelled) setIdentities([]); });
-    return () => { cancelled = true; };
-  }, [personId]);
+  const fetchIdentities = useCallback(
+    () => api.getTribePerson(personId, { silent: true }).then((person) => person?.identities || []),
+    [personId],
+  );
+  const { items: identities, state, error, retry, setItems: setIdentities } = useListResource(fetchIdentities, { enabled: !!personId });
 
   const unlink = async (identityId) => {
     const result = await api.unlinkBeeperIdentity(identityId, { silent: true }).catch((err) => {
@@ -652,6 +645,7 @@ function BeeperIdentitiesPanel({ personId }) {
     setIdentities((current) => current.filter((identity) => identity.id !== identityId));
   };
 
+  if (state === 'error') return <ListLoadError what="Beeper links" error={error} onRetry={retry} className="mt-4" />;
   if (identities.length === 0) return null;
 
   return (
@@ -702,10 +696,10 @@ const agoLabel = (days) => (days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${
 // replied to. Detection is server-side and LLM-free; the "Draft reply" button is
 // the only path that calls a provider (user action, per the AI-provider policy).
 // Nothing is ever auto-sent — the generated draft is filed for review.
+const fetchOutreachThreads = () => api.getTribeOutreach({ silent: true }).then((result) => result?.threads || []);
+
 function OutreachQueue() {
-  // null = still loading; [] = loaded-empty. Distinguishing them keeps the panel
-  // from flashing an empty state before the first fetch resolves.
-  const [threads, setThreads] = useState(null);
+  const { items: threads, state: threadsState, error: threadsError, retry: retryThreads, setItems: setThreads } = useListResource(fetchOutreachThreads);
   // A SET of in-flight conversation keys, not a single key — with one key, starting
   // a second generation re-enables the first thread's button and a re-click fires a
   // duplicate provider call + duplicate draft.
@@ -721,15 +715,7 @@ function OutreachQueue() {
   const outreachKey = searchParams.get('outreach');
 
   useEffect(() => {
-    let cancelled = false;
-    api.getTribeOutreach({ silent: true })
-      .then((result) => { if (!cancelled) setThreads(result?.threads || []); })
-      .catch(() => { if (!cancelled) setThreads([]); });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    if (!outreachKey || !Array.isArray(threads)) return;
+    if (!outreachKey) return;
     const target = threads.find((t) => t.conversationKey === outreachKey);
     if (!target) return;
     const el = rowRefs.current[target.conversationKey];
@@ -761,7 +747,7 @@ function OutreachQueue() {
       //  - STALE_INBOUND: they sent a newer message → it's STILL unanswered, so
       //    refetch to pick up the latest turn rather than falsely dropping it.
       if (err?.code === 'ALREADY_REPLIED') {
-        setThreads((prev) => (prev || []).filter((t) => t.conversationKey !== key));
+        setThreads((prev) => prev.filter((t) => t.conversationKey !== key));
         toast.success(`Looks like you already replied to ${thread.personName}`);
       } else if (err?.code === 'STALE_INBOUND') {
         api.getTribeOutreach({ silent: true })
@@ -790,9 +776,11 @@ function OutreachQueue() {
     }
   };
 
+  // A failed read must not look like "nothing is unanswered".
+  if (threadsState === 'error') return <ListLoadError what="threads waiting on a reply" error={threadsError} onRetry={retryThreads} />;
   // Quiet when loading or when nothing is unanswered — the Care Queue below still
   // shows cadence nudges, so an empty outreach panel would just be noise.
-  if (threads === null || !threads.length) return null;
+  if (!threads.length) return null;
 
   return (
     <section className="border border-port-border bg-port-card rounded p-4">

@@ -58,3 +58,19 @@ describe('OrgDrawer holdings (replace-set)', () => {
     expect(api.setOrgHoldings).toHaveBeenCalledWith('org-1', [{ vaultRecordId: 'v1' }], { silent: true });
   });
 });
+
+describe('OrgDrawer linked social account picker', () => {
+  it('shows a retryable error, not an unavailable link, when the account read failed', async () => {
+    api.getOrgHoldings.mockResolvedValue([]);
+    api.getSocialAccounts.mockRejectedValueOnce(new Error('twin down'));
+    api.getSocialAccounts.mockResolvedValue({ accounts: [{ id: 'acct-1', platform: 'github', username: 'alice' }] });
+    render(<OrgDrawer open org={{ ...ORG, socialAccountId: 'acct-1' }} vaultRecords={VAULT} onClose={() => {}} onSaved={() => {}} />);
+
+    expect(await screen.findByText(/Could not load Digital Twin social accounts/)).toBeInTheDocument();
+    expect(screen.queryByText('Linked account (unavailable)')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: 'github · @alice' })).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load Digital Twin social accounts/)).not.toBeInTheDocument();
+  });
+});

@@ -19,9 +19,15 @@ import { normalizeVideo } from '../media/normalize';
 import { listVideoHistory, uploadGalleryVideo } from '../../services/apiImageVideo';
 import { uploadFile } from '../../services/apiMedia';
 import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../../lib/mediaSearch';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 
 const VIDEO_ACCEPT = 'video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v';
+
+const fetchVideoItems = () => listVideoHistory({ silent: true }).then((videos) => (
+  (Array.isArray(videos) ? videos : []).map(normalizeVideo).filter((it) => !it.hidden)
+));
 
 export default function GalleryVideoPicker({
   open,
@@ -31,8 +37,7 @@ export default function GalleryVideoPicker({
   uploadToGallery = false,
   accept = VIDEO_ACCEPT,
 }) {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const { items, state, error, retry } = useListResource(fetchVideoItems, { enabled: open });
   const [uploading, setUploading] = useState(false);
   const [query, setQuery] = useState('');
   // Invalidate on every open/close transition and on unmount. A host can
@@ -49,20 +54,7 @@ export default function GalleryVideoPicker({
   }, [open]);
 
   useEffect(() => {
-    if (!open) { setQuery(''); return undefined; }
-    let cancelled = false;
-    setLoading(true);
-    listVideoHistory()
-      .then((videos) => {
-        if (cancelled) return;
-        const normalized = (Array.isArray(videos) ? videos : [])
-          .map(normalizeVideo)
-          .filter((it) => !it.hidden);
-        setItems(normalized);
-      })
-      .catch(() => { if (!cancelled) setItems([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    if (!open) setQuery('');
   }, [open]);
 
   const haystacks = useMemo(() => items.map(buildMediaHaystack), [items]);
@@ -167,10 +159,12 @@ export default function GalleryVideoPicker({
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">
-        {loading ? (
+        {state === 'loading' ? (
           <div className="flex items-center justify-center gap-2 text-xs text-gray-400 py-10">
             <RefreshCw className="w-4 h-4 animate-spin" /> Loading videos…
           </div>
+        ) : state === 'error' ? (
+          <ListLoadError what="your video gallery" error={error} onRetry={retry} />
         ) : filtered.length === 0 ? (
           <div className="text-xs text-gray-500 py-10 text-center">
             {items.length === 0 ? 'No videos in your gallery yet.' : 'No videos match your search.'}

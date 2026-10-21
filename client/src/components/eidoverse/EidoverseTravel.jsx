@@ -3,6 +3,7 @@ import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
+import ListLoadError from '../ui/ListLoadError';
 import { departEidoverse, getEidoverseDestinations } from '../../services/api';
 
 export default function EidoverseTravel({ travelRef, enabled, objects = [], onDestinationsChange, beforeDeparture }) {
@@ -12,6 +13,9 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
   const watching = enabled && visible;
   const [pending, setPending] = useState(null);
   const [error, setError] = useState('');
+  // A failed read keeps the last known destinations: it is not evidence that none exist,
+  // and clearing them would also fire onDestinationsChange for a world rebuild.
+  const [loadError, setLoadError] = useState(null);
   const generation = useRef(0);
   const lastDestinations = useRef(null);
   const busy = useRef(false);
@@ -24,6 +28,7 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
   const applyDestinations = useCallback((result) => {
     if (!Array.isArray(result?.destinations)) return;
     setDestinations(result.destinations);
+    setLoadError(null);
     const fingerprint = JSON.stringify(result.destinations.map((entry) => entry.peerId).sort());
     if (lastDestinations.current === null) lastDestinations.current = fingerprint;
   }, []);
@@ -43,8 +48,8 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
     await getEidoverseDestinations({ silent: true }).then((result) => {
       if (!mounted.current || generation.current !== current || sequence !== fetchSequence.current) return;
       applyDestinations(result);
-    }).catch(() => {
-      if (mounted.current && generation.current === current && sequence === fetchSequence.current) setDestinations([]);
+    }).catch((failure) => {
+      if (mounted.current && generation.current === current && sequence === fetchSequence.current) setLoadError(failure);
     });
   }, [mounted, applyDestinations]);
   useEffect(() => {
@@ -85,7 +90,7 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
     travelRef.current = depart;
     return () => { travelRef.current = null; };
   }, [depart, travelRef]);
-  if (!enabled || (!destinations.length && !error)) return null;
+  if (!enabled || (!destinations.length && !error && !loadError)) return null;
   return <div className="flex flex-wrap items-center gap-2 border-b border-port-border px-4 py-2 text-sm">
     {Boolean(destinations.length) && (
       <span className="text-gray-400">Federation Terminal · Use a pod in-world or choose a destination</span>
@@ -95,6 +100,7 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
       {pending === destination.peerId ? 'Opening guest visit…' : destination.label}
       <span className="ml-2 text-xs text-gray-400">{objects.find((object) => object.travelPeerId === destination.peerId)?.name}</span>
     </button>)}
+    {loadError && <ListLoadError what="travel destinations" error={loadError} onRetry={refresh} />}
     {error && <p role="alert" className="text-red-400">{error}</p>}
   </div>;
 }

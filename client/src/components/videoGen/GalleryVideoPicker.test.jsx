@@ -54,6 +54,18 @@ describe('GalleryVideoPicker', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('shows a load error with Retry instead of the empty copy when the history read fails', async () => {
+    listVideoHistory.mockRejectedValueOnce(new Error('History unavailable'));
+    render(<GalleryVideoPicker open onClose={vi.fn()} onSelect={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your video gallery — History unavailable');
+    expect(screen.queryByText('No videos in your gallery yet.')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('a neon chase')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('uploads into the gallery and selects the normalized entry with uploadToGallery (#4188)', async () => {
     uploadGalleryVideo.mockResolvedValue({
       id: 'upload-ab12cd34', filename: 'upload-ab12cd34.mp4', thumbnail: 'upload-ab12cd34.jpg', source: 'upload',

@@ -4,9 +4,14 @@ import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import AgentKeyCard from './AgentKeyCard';
 import { getAuthStatus, setAuthPassword, clearAuthPassword, listAuthSessions, revokeAuthSession, revokeAllAgentSessions } from '../../services/api';
 import { formatDateShort } from '../../utils/formatters';
+
+const fetchAgentSessions = () => listAuthSessions({ silent: true })
+  .then((res) => (Array.isArray(res?.sessions) ? res.sessions : []).filter((s) => s?.label === 'agent'));
 
 // PortOS is single-user and normally trusted because it's tailnet-only — auth
 // here is opt-in defense against an attacker on the same network (a sidecar
@@ -25,11 +30,14 @@ export function SecurityTab() {
   const [disablePassword, setDisablePassword] = useState('');
   const [disabling, setDisabling] = useState(false);
   const statusRequestRef = useRef(0);
-  const [agentSessions, setAgentSessions] = useState([]);
   const [revokingId, setRevokingId] = useState(null);
   const [confirmRevokeAll, setConfirmRevokeAll] = useState(false);
   const [revokingAll, setRevokingAll] = useState(false);
-  const sessionsRequestRef = useRef(0);
+  // Sessions only exist while auth is on (agentApiAuth only mints a token when
+  // isAuthEnabled(), and disabling clears every session) — skip the fetch otherwise.
+  const {
+    items: agentSessions, state: sessionsState, error: sessionsError, retry: loadSessions, setItems: setAgentSessions,
+  } = useListResource(fetchAgentSessions, { enabled: !!enabled });
 
   const loadAuthStatus = useCallback(() => {
     const requestId = ++statusRequestRef.current;
@@ -57,32 +65,6 @@ export function SecurityTab() {
     loadAuthStatus();
   }, [loadAuthStatus]);
 
-  const loadSessions = useCallback(() => {
-    if (!enabled) {
-      setAgentSessions([]);
-      return;
-    }
-    const requestId = ++sessionsRequestRef.current;
-    listAuthSessions({ silent: true })
-      .then((res) => {
-        if (requestId !== sessionsRequestRef.current) return;
-        const sessions = Array.isArray(res?.sessions) ? res.sessions : [];
-        setAgentSessions(sessions.filter((s) => s?.label === 'agent'));
-      })
-      // Listing is a nice-to-have here — a failed fetch just hides the panel
-      // rather than blocking the password form above it.
-      .catch(() => {
-        if (requestId === sessionsRequestRef.current) setAgentSessions([]);
-      });
-  }, [enabled]);
-
-  // Sessions only exist while auth is on (agentApiAuth only mints a token
-  // when isAuthEnabled(), and disabling clears every session) — skip the
-  // fetch otherwise, and drop any list left over from a prior enabled state.
-  useEffect(() => {
-    loadSessions();
-  }, [loadSessions]);
-
   const handleRevokeSession = async (id) => {
     setRevokingId(id);
     const result = await revokeAuthSession(id).catch((err) => err);
@@ -104,8 +86,6 @@ export function SecurityTab() {
       toast.error(result.message || 'Revoke failed');
       return;
     }
-    // Invalidate any in-flight list fetch so it can't resurrect revoked rows.
-    sessionsRequestRef.current += 1;
     setConfirmRevokeAll(false);
     setAgentSessions([]);
     toast.success(`Revoked ${result?.revoked ?? 0} agent session${result?.revoked === 1 ? '' : 's'}`);
@@ -314,6 +294,10 @@ export function SecurityTab() {
       </div>
 
       {enabled && <AgentKeyCard />}
+
+      {enabled && sessionsState === 'error' && (
+        <ListLoadError what="agent sessions" error={sessionsError} onRetry={loadSessions} />
+      )}
 
       {enabled && agentSessions.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">

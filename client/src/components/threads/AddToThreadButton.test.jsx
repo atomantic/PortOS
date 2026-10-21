@@ -58,12 +58,11 @@ describe('AddToThreadButton', () => {
     const btn = screen.getByRole('button', { name: 'Add to Brain thread' });
     fireEvent.click(btn);
 
-    expect(api.listThreads).toHaveBeenCalledWith(
-      { status: 'open,waiting,someday' },
-      { silent: true }
-    );
-
     await waitFor(() => {
+      expect(api.listThreads).toHaveBeenCalledWith(
+        { status: 'open,waiting,someday' },
+        { silent: true }
+      );
       expect(screen.getByText('Add to Brain thread')).toBeInTheDocument();
       expect(screen.getByText('Attaching:')).toBeInTheDocument();
       expect(screen.getByText('#100 Fix widget layout')).toBeInTheDocument();
@@ -219,6 +218,22 @@ describe('AddToThreadButton', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Network error');
     });
+  });
+
+  it('shows a retryable error instead of the "No open threads yet" create hint when the list read fails', async () => {
+    api.listThreads.mockRejectedValueOnce(new Error('brain down'));
+    render(<AddToThreadButton threadRef={sampleRef} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Brain thread' }));
+
+    expect(await screen.findByText(/Could not load your open threads/)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No open threads yet/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    const input = await screen.findByRole('combobox');
+    fireEvent.focus(input);
+    expect(await screen.findByText('Sprint planning')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load your open threads/)).not.toBeInTheDocument();
   });
 
   it('closes popover on Close button click', async () => {

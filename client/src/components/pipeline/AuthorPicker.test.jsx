@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import AuthorPicker from './AuthorPicker';
 
@@ -49,5 +50,23 @@ describe('AuthorPicker', () => {
     renderPicker({ value: 'a1', byline: 'Alice' });
     await screen.findByRole('option', { name: 'Alice' });
     expect(screen.getAllByRole('option', { name: 'Alice' })).toHaveLength(1);
+  });
+
+  it('shows a load error with Retry, not the empty-personas copy, when the read fails', async () => {
+    listAuthors.mockRejectedValueOnce(new Error('Authors unavailable'));
+    renderPicker({ value: '', byline: '' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load author personas — Authors unavailable');
+    expect(screen.queryByText(/No author personas yet/)).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('option', { name: 'Alice' });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the empty-personas copy only once an empty list loaded', async () => {
+    listAuthors.mockResolvedValueOnce([]);
+    renderPicker({ value: '', byline: '' });
+    expect(await screen.findByText(/No author personas yet/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

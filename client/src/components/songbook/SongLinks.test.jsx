@@ -132,4 +132,23 @@ describe('SongLinksEditor', () => {
     await waitFor(() => expect(target.textContent).toContain('No rounds available'));
     expect(target.disabled).toBe(true);
   });
+
+  it('shows a retryable error per kind, not "none available", when a list read fails', async () => {
+    api.listRounds.mockRejectedValueOnce(new Error('rounds down'));
+    renderEditor([]);
+
+    expect(await screen.findByText(/Could not load rounds/)).toBeTruthy();
+    const target = screen.getByLabelText('Record to link');
+    expect(target.textContent).not.toContain('No rounds available');
+    expect(target.disabled).toBe(true);
+
+    // The healthy kind is unaffected by the other kind's outage.
+    fireEvent.change(screen.getByLabelText('Link type'), { target: { value: 'track' } });
+    await waitFor(() => expect(screen.queryByText(/Could not load/)).toBeNull());
+    expect(within(screen.getByLabelText('Record to link')).getByRole('option', { name: 'Example Track' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Link type'), { target: { value: 'round' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await within(screen.getByLabelText('Record to link')).findByRole('option', { name: 'Example Round' })).toBeTruthy();
+  });
 });

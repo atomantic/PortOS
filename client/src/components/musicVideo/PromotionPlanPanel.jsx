@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { CalendarClock, Sparkles } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { getMusicVideoPromotionPlan, planMusicVideoPromotion } from '../../services/apiMusicVideo.js';
 import { formatWeekdayTime } from '../../utils/formatters.js';
+import useListResource from '../../hooks/useListResource.js';
+import ListLoadError from '../ui/ListLoadError.jsx';
 import PublishCard from './PublishCard.jsx';
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
@@ -19,7 +21,6 @@ const DAY_CHOICES = [3, 7, 14];
  */
 export default function PromotionPlanPanel({ project }) {
   const projectId = project?.id;
-  const [steps, setSteps] = useState(null);
   const [goal, setGoal] = useState('');
   const [audience, setAudience] = useState('');
   const [days, setDays] = useState(7);
@@ -28,15 +29,11 @@ export default function PromotionPlanPanel({ project }) {
     providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel,
   } = useProviderModels({ allowDefault: true, silent: true });
 
-  useEffect(() => {
-    if (!projectId) return undefined;
-    let active = true;
-    setSteps(null);
-    getMusicVideoPromotionPlan(projectId, { silent: true })
-      .then((res) => { if (active) setSteps(res?.steps || []); })
-      .catch(() => { if (active) setSteps([]); });
-    return () => { active = false; };
-  }, [projectId]);
+  const fetchSteps = useCallback(
+    () => getMusicVideoPromotionPlan(projectId, { silent: true }).then((res) => res?.steps || []),
+    [projectId],
+  );
+  const { items: steps, state, error, retry, setItems: setSteps } = useListResource(fetchSteps, { enabled: !!projectId });
 
   const plan = () => {
     setPlanning(true);
@@ -55,7 +52,7 @@ export default function PromotionPlanPanel({ project }) {
   const idFor = (name) => `mv-promo-${name}`;
   return (
     <PublishCard projectId={projectId} cardId="promotion" label="Promotion plan" icon={CalendarClock}
-      summary={steps?.length ? `${steps.length} step${steps.length === 1 ? '' : 's'}` : ''}>
+      summary={steps.length ? `${steps.length} step${steps.length === 1 ? '' : 's'}` : ''}>
       <p className="text-port-text-muted">Schedules the steps only you can take, with the text ready to paste. Each one shows up in <Link to="/review" className="text-port-accent underline">Actions</Link> and notifies you when it&apos;s time. Planning again replaces the open steps.</p>
       <div className="grid gap-2 sm:grid-cols-2">
         <label htmlFor={idFor('goal')} className="space-y-1">
@@ -82,12 +79,13 @@ export default function PromotionPlanPanel({ project }) {
             label="Planner" compact alwaysShowModel modelDisabled={availableModels.length === 0}
             emptyProviderOption="Active provider (default)" emptyModelOption="Default model" disabled={planning} />
         )}
-        <button type="button" onClick={plan} disabled={planning || !projectId}
+        <button type="button" onClick={plan} disabled={planning || !projectId || state === 'error'}
           className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
-          <Sparkles size={13} /> {planning ? 'Planning…' : (steps?.length ? 'Plan again' : 'Plan promotion')}
+          <Sparkles size={13} /> {planning ? 'Planning…' : (steps.length ? 'Plan again' : 'Plan promotion')}
         </button>
       </div>
-      {steps?.length > 0 && (
+      {state === 'error' && <ListLoadError what="the scheduled steps" error={error} onRetry={retry} />}
+      {steps.length > 0 && (
         <ol aria-label="Scheduled steps" className="space-y-1">
           {steps.map((step) => (
             <li key={step.id} className="flex flex-wrap items-baseline gap-x-2">

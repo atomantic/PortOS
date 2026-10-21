@@ -43,6 +43,11 @@ import { useOpenClawAttachments, OPENCLAW_ATTACHMENT_ACCEPT } from '../hooks/use
 import { useOpenClawStream } from '../hooks/useOpenClawStream';
 import { modKey } from '../utils/platform';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
+import useListResource from '../hooks/useListResource';
+import ListLoadError from '../components/ui/ListLoadError';
+
+const NO_APPS = Object.freeze([]);
+const fetchActiveApps = () => coreApi.getApps({ silent: true }).then(data => (data || []).filter(app => !app.archived));
 
 function getRuntimeState(status, featureEnabled) {
   if (!featureEnabled || status?.featureEnabled === false) {
@@ -131,7 +136,8 @@ export default function OpenClaw() {
   const featureEnabled = isFeatureEnabled('openclaw');
   const [status, setStatus] = useState(null);
   const [sessions, setSessions] = useState([]);
-  const [apps, setApps] = useState([]);
+  const { items: loadedApps, state: appsState, error: appsError, retry: retryApps } = useListResource(fetchActiveApps, { enabled: featureEnabled });
+  const apps = featureEnabled ? loadedApps : NO_APPS;
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [composer, setComposer] = useState('');
   const [context, setContext] = useState({
@@ -274,16 +280,7 @@ export default function OpenClaw() {
 
   useEffect(() => {
     loadRuntime();
-    if (!featureEnabled) {
-      setApps([]);
-      return undefined;
-    }
-    let active = true;
-    coreApi.getApps()
-      .then(data => { if (active) setApps((data || []).filter(app => !app.archived)); })
-      .catch(() => { if (active) setApps([]); });
-    return () => { active = false; };
-  }, [featureEnabled, loadRuntime]);
+  }, [loadRuntime]);
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
@@ -599,6 +596,10 @@ export default function OpenClaw() {
               )}
               {showContextFields ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </button>
+
+            {featureEnabled && appsState === 'error' && (
+              <ListLoadError what="apps for context" error={appsError} onRetry={retryApps} className="mb-3" />
+            )}
 
             <div className={`mb-3 gap-3 md:grid-cols-2 xl:grid-cols-3 ${showContextFields ? 'grid' : 'hidden'}`}>
               <AppContextPicker

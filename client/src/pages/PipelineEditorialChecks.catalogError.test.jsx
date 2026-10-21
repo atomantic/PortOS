@@ -54,9 +54,9 @@ vi.mock('../components/ProviderModelSelector', () => ({ default: () => <div>prov
 
 const CHECK = { id: 'naming.dissimilar-names', label: 'Character name dissimilarity', scope: 'series', kind: 'deterministic', enabled: true };
 
-function renderPage() {
+function renderPage(search = '') {
   return render(
-    <MemoryRouter initialEntries={[`/pipeline/editorial-checks`]}>
+    <MemoryRouter initialEntries={[`/pipeline/editorial-checks${search}`]}>
       <PipelineEditorialChecks />
     </MemoryRouter>,
   );
@@ -80,6 +80,30 @@ describe('PipelineEditorialChecks — failed catalog read', () => {
     getEditorialChecks.mockResolvedValueOnce({ checks: [CHECK] });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('check-card')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('PipelineEditorialChecks — failed findings read', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listPipelineSeries.mockResolvedValue([{ id: 'ser-1', title: 'My Series' }]);
+    getEditorialChecks.mockResolvedValue({ checks: [CHECK] });
+    getEditorialChecksRunStatus.mockResolvedValue({ active: false });
+    getEditorialHealth.mockResolvedValue(null);
+  });
+
+  it('shows a load error with Retry instead of the empty-findings copy, then loads the findings', async () => {
+    getPipelineManuscriptReview.mockRejectedValueOnce(new Error('Review unavailable'));
+    renderPage('?series=ser-1');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the findings for this series — Review unavailable');
+    expect(screen.queryByText(/No findings/i)).toBeNull();
+
+    getPipelineManuscriptReview.mockResolvedValueOnce({
+      comments: [{ id: 'c1', checkId: CHECK.id, status: 'open', problem: 'Names too similar', location: 'Ch 1' }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/Names too similar/)).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

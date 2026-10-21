@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 const api = vi.hoisted(() => ({
   createMessageDraft: vi.fn(),
@@ -126,5 +127,26 @@ describe('MessageDetail SafeHtmlBody remote content blocking', () => {
 
     await waitFor(() => expect(iframeCsp()).toContain("default-src 'none'"));
     expect(screen.queryByText('Remote images blocked')).not.toBeInTheDocument();
+  });
+});
+
+describe('MessageDetail thread load', () => {
+  const threaded = { ...baseMessage, threadId: 'thr-1', bodyText: 'Hello body' };
+
+  it('shows a load error with Retry, still shows the message, and loads the thread on retry', async () => {
+    api.getMessageThread.mockRejectedValueOnce(new Error('Thread unavailable'));
+    renderMessage(threaded);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the conversation — Thread unavailable');
+    expect(screen.getByText('Hello body')).toBeTruthy();
+    expect(screen.queryByText(/messages$/)).toBeNull();
+
+    api.getMessageThread.mockResolvedValueOnce({ messages: [
+      { id: 'm1', from: { name: 'Alice' }, bodyText: 'First', bodyFull: true },
+      { id: 'm2', from: { name: 'Bob' }, bodyText: 'Second', bodyFull: true },
+    ] });
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Second')).toBeTruthy();
+    expect(screen.getByText('2 messages')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

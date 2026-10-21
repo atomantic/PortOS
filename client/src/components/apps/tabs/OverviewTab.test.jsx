@@ -96,6 +96,25 @@ describe('OverviewTab PortOS registration removal', () => {
   });
 });
 
+describe('OverviewTab sprite bindings', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows a load error with Retry when the bindings read fails, then the assets after retry', async () => {
+    api.getAppSpriteBindings.mockRejectedValueOnce(new Error('bindings unavailable'));
+    api.getAppSpriteBindings.mockResolvedValueOnce({ bindings: [{ recordId: 'sprite-1', name: 'Example Sprite', kind: 'character' }] });
+    const user = userEvent.setup();
+    renderOverview();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load published sprite assets.*bindings unavailable/i);
+    expect(screen.queryByText('Published Sprite Assets')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('link', { name: 'Example Sprite' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(api.getAppSpriteBindings).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('OverviewTab native app actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();

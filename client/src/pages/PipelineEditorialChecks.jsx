@@ -87,13 +87,21 @@ export default function PipelineEditorialChecks() {
   // severity saves have drained.
   const [severitySaveCount, setSeveritySaveCount] = useState(0);
   const seriesId = searchParams.get('series') || '';
-  const [comments, setComments] = useState([]);
+  const fetchFindings = useCallback(
+    () => (seriesId
+      ? getPipelineManuscriptReview(seriesId, { silent: true }).then((review) => (Array.isArray(review?.comments) ? review.comments : []))
+      : Promise.resolve([])),
+    [seriesId],
+  );
+  const {
+    items: comments, state: findingsState, error: findingsError, retry: reloadFindings, setItems: setComments,
+  } = useListResource(fetchFindings);
   // Canon entities (#1631) for the selected series' linked universe, flattened to
   // a name→entity lookup so the triage can linkify entity references in findings.
   // Empty until a series with a universe is selected; load failures degrade to no
   // links (the findings still render).
   const [canonEntities, setCanonEntities] = useState([]);
-  const [loadingFindings, setLoadingFindings] = useState(false);
+  const loadingFindings = !!seriesId && findingsState === 'loading';
   // Bumped whenever the findings are (re)loaded so the health panel refetches
   // its score/trend in lockstep — a run that seeds new findings also moves the
   // health score + records a trend snapshot server-side.
@@ -181,35 +189,26 @@ export default function PipelineEditorialChecks() {
   }, [catalogAttempt]);
 
   // ---- Load findings + re-attach to an in-flight run when the series changes. ----
-  // Tracks the currently-selected series so a slow findings fetch for a series
-  // the user has since navigated away from can't overwrite the new series'
-  // comments (which would also point the deep-links at the wrong series).
+  // Tracks the currently-selected series so a queued save resolves against the
+  // series it was issued for, not whichever is selected when it runs.
   const activeSeriesRef = useRef(seriesId);
   useEffect(() => { activeSeriesRef.current = seriesId; }, [seriesId]);
 
-  const loadFindings = useCallback((id) => {
-    // The session mute is local to the currently-shown findings: a series switch,
-    // a fresh load, or a run-completion reload resets it. This happened for free
-    // while the set lived in the triage (it unmounted during the loading state and
-    // remounted with empty local state); now that the parent owns it (#1697), reset
-    // it explicitly so a mute can't bleed across series or outlive a reload.
-    setHiddenCheckIds((s) => (s.size ? new Set() : s));
-    if (!id) { setComments([]); return; }
-    setLoadingFindings(true);
-    // Deliberately NOT silent: this caller owns no error UI of its own, so we
-    // let request()'s default toast be the single layer and just clear +
-    // swallow here. Guard every state write on the series still being current
-    // (stale-response race).
-    getPipelineManuscriptReview(id)
-      .then((review) => { if (activeSeriesRef.current === id) setComments(Array.isArray(review?.comments) ? review.comments : []); })
-      .catch(() => { if (activeSeriesRef.current === id) setComments([]); })
-      .finally(() => {
-        if (activeSeriesRef.current === id) {
-          setLoadingFindings(false);
-          setHealthRefresh((n) => n + 1); // re-pull the health score/trend in lockstep
-        }
-      });
-  }, []);
+  // The session mute is local to the currently-shown findings: a series switch,
+  // a fresh load, or a run-completion reload resets it. This happened for free
+  // while the set lived in the triage (it unmounted during the loading state and
+  // remounted with empty local state); now that the parent owns it (#1697), reset
+  // it explicitly so a mute can't bleed across series or outlive a reload.
+  const resetMutedChecks = useCallback(() => setHiddenCheckIds((s) => (s.size ? new Set() : s)), []);
+  const loadFindings = useCallback(() => {
+    resetMutedChecks();
+    reloadFindings();
+  }, [resetMutedChecks, reloadFindings]);
+
+  // Re-pull the health score/trend in lockstep with every settled findings load.
+  useEffect(() => {
+    if (findingsState !== 'loading') setHealthRefresh((n) => n + 1);
+  }, [findingsState]);
 
   // Inline accept/dismiss from the triage list (#1598) — replace the changed
   // comment in place (reactive update) and re-pull the health score/trend so the
@@ -222,14 +221,14 @@ export default function PipelineEditorialChecks() {
 
   useEffect(() => {
     setRunActive(false);
-    if (!seriesId) { setComments([]); return; }
-    loadFindings(seriesId);
+    resetMutedChecks();
+    if (!seriesId) return undefined;
     let canceled = false;
     getEditorialChecksRunStatus(seriesId, { silent: true })
       .then((s) => { if (!canceled && s?.active) setRunActive(true); })
       .catch(() => {});
     return () => { canceled = true; };
-  }, [seriesId, loadFindings]);
+  }, [seriesId, resetMutedChecks]);
 
   // ---- SSE progress for the active run (mirrors the manuscript editor). ----
   const { latest: runLatest, closed: runClosed } = usePipelineProgress(
@@ -249,7 +248,7 @@ export default function PipelineEditorialChecks() {
     if (type !== 'complete' && type !== 'canceled' && type !== 'error') return;
     setRunActive(false);
     if (type === 'complete') {
-      loadFindings(seriesId);
+      loadFindings();
       // #1573 — a check whose run() threw produced no findings; warn instead of a
       // silent "complete" so an always-erroring check isn't mistaken for clean.
       if (runLatest.errored > 0) {
@@ -267,7 +266,7 @@ export default function PipelineEditorialChecks() {
     const t = runLatest?.type;
     if (t === 'complete' || t === 'canceled' || t === 'error') return; // handled above
     setRunActive(false);
-    loadFindings(seriesId);
+    loadFindings();
   }, [runActive, runClosed, runLatest, seriesId]);
 
   // ---- Catalog mutations (reactive local updates; the API owns the toast).
@@ -839,6 +838,8 @@ export default function PipelineEditorialChecks() {
                 <EditorialHealthPanel seriesId={seriesId} refreshKey={healthRefresh} checksById={checksById} filterableCheckIds={triageFilterableCheckIds} filterableCategories={triageFilterableCategories} />
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
+                ) : findingsState === 'error' ? (
+                  <ListLoadError what="the findings for this series" error={findingsError} onRetry={loadFindings} />
                 ) : (
                   <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} hiddenCheckIds={hiddenCheckIds} onDisableCheck={disableCheck} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} universeId={universeId} canonEntities={canonEntities} />
                 )}
