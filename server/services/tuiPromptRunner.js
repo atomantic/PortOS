@@ -95,6 +95,11 @@ import { killProcessTree } from '../lib/bufferedSpawn.js';
 const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_ONE_SHOT_IDLE_MS = 8000;
 const UNSUBMITTED_PROMPT_POLL_MS = 1000;
+// A one-shot answer can be short, quick and free of in-flight chrome (OpenCode).
+// The agent path's 30s echo window would read it as an ignored submit and hold
+// idle completion for the whole Enter budget. An ignored Enter repaints nothing,
+// so output this long after PortOS's last keystroke means the turn ran.
+const ONE_SHOT_PROMPT_WORK_EVIDENCE_MS = 2500;
 // Enough stripped screen to hold a status line plus the composer and footer
 // painted beneath it; see screenShowsInFlightChrome.
 const IN_FLIGHT_SCREEN_TAIL_CHARS = 4096;
@@ -286,7 +291,7 @@ ${prompt}`;
   const promptMarkerCount = countPasteMarkers(stripAnsi(wrappedPrompt));
   // The paste chip can render and every submit Enter still be ignored, leaving
   // the prompt sitting in the composer (#12769). Shared with the agent path.
-  const promptGate = createPromptSubmissionGate({ promptMarkerCount });
+  const promptGate = createPromptSubmissionGate({ promptMarkerCount, workEvidenceMs: ONE_SHOT_PROMPT_WORK_EVIDENCE_MS });
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +
   // CLAUDECODE strip) — see buildCliChildEnv. The PWD pin matters here because
@@ -970,7 +975,10 @@ ${prompt}`;
           // unsent. Tracked in submitEnterTimer so finish()'s cleanupTimers()
           // cancels pending retries if the run ends first.
           submitEnterTimer = scheduleSubmitEnters(
-            () => { try { ptyProcess.write(SUBMIT_KEY); } catch { /* PTY may have already exited */ } },
+            () => {
+              promptGate.noteInput(Date.now());
+              try { ptyProcess.write(SUBMIT_KEY); } catch { /* PTY may have already exited */ }
+            },
             () => finalized
           );
           promptSubmittedAt = Date.now();

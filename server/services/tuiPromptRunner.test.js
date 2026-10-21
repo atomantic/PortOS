@@ -1428,6 +1428,31 @@ describe('executeTuiRun', () => {
       expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-unsubmitted' }));
     });
 
+    it('idle-completes a quick reply with no in-flight chrome without extra Enters', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-quick-reply', provider, prompt: 'complete this task', workspacePath: TEST_WORKSPACE, timeout: 600000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('\x1b[?2004h');
+      await vi.advanceTimersByTimeAsync(300);
+      pty.emitData('❯ [Pasted text #1 +113 lines]');
+      await vi.advanceTimersByTimeAsync(5000);
+      const enters = () => pty.write.mock.calls.filter(([keys]) => keys === '\r').length;
+      const submitted = enters();
+
+      pty.emitData('\nA child rebuilds wonder in a green ruin.');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await promise;
+      expect(enters()).toBe(submitted);
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-quick-reply', success: true, extras: expect.objectContaining({ completionReason: 'idle-complete' }),
+      }));
+    });
+
     it('falls back on Claude session-limit chrome when low-priority is not enabled', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
       const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
