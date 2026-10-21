@@ -93,7 +93,7 @@ export function captureCodeAnimationPoster(id) {
   const run = tail.then(() => capture(id)).then((written) => {
     if (written) {
       console.log(`🖼️ Code animation ${id.slice(0, 8)} poster captured`);
-      emitCodeAnimationChanged(id);
+      emitCodeAnimationChanged(id, 'poster');
     } else {
       failed.add(id);
     }

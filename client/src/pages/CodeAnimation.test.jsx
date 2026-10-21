@@ -178,6 +178,8 @@ describe('Code Animation page', () => {
 
     await emitSocket('code-animation:changed', { id: 'unrelated-job' });
     expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
+    await emitSocket('code-animation:changed', { id: 'job-1', kind: 'poster' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
     getCodeAnimationJob.mockResolvedValue(completedJob);
     await emitSocket('code-animation:changed', { id: 'job-1' });
     expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);

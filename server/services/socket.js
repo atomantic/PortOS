@@ -107,8 +107,8 @@ export function getIo() {
 
 const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers];
 
-export function emitCodeAnimationChanged(id) {
-  broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', { id });
+export function emitCodeAnimationChanged(id, kind) {
+  broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', kind ? { id, kind } : { id });
 }
 
 /** Emit a `command:<id>:*` frame to sockets that sent `command:subscribe`. */
