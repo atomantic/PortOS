@@ -1367,9 +1367,11 @@ describe('analyzeAgentFailure — TUI startup gates are not lint errors', () => 
     expect(analysis.suggestedFix).not.toMatch(/idle reaper/i);
   });
 
-  it('registers both spawner-resolved startup verdicts', () => {
+  it('registers the spawner-resolved startup verdicts', () => {
     expect(COMPLETION_REASON_ANALYSES['paste-not-rendered'].category).toBe('startup-failure');
     expect(COMPLETION_REASON_ANALYSES['tui-not-ready'].category).toBe('startup-failure');
+    // Non-actionable, so the task retries (#12769).
+    expect(COMPLETION_REASON_ANALYSES['prompt-not-submitted']).toMatchObject({ category: 'startup-failure', actionable: false });
   });
 
   // Defense in depth for the case with no completion reason to lean on: the
