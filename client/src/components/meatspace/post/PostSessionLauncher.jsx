@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router';
 import { Zap, Play, Brain, Dumbbell, Timer, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, ChevronRight, Layers } from 'lucide-react';
 import { getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress, getPostBenchmarkProtocol, getMemoryItems, updatePostConfig, getPostCognitiveProgress } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import Pill from '../../ui/Pill';
+import ListLoadError from '../../ui/ListLoadError';
+import toast from '../../ui/Toast';
 import { enabledApiProviderFilter } from '../../../utils/providers';
 import useProviderModels from '../../../hooks/useProviderModels.js';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, COGNITIVE_LADDER_TYPES, computeDomainAverages, computeGoalProgress, isTopicEnabled, selectMemoryItemForDrill, resolveTopicForDrillType } from './constants';
@@ -181,6 +183,9 @@ export default function PostSessionLauncher({
   // until a skill is mastered and its review interval elapses; a load failure
   // silently degrades to a plain Quick session.
   const [reviewReps, setReviewReps] = useState([]);
+  // A failed read must not look like "no reviews due": the Quick session and the
+  // skill-review rows both depend on it.
+  const [reviewRepsError, setReviewRepsError] = useState(null);
   // Ordered "what to practice next" recommendations (issue #2100). A load
   // failure silently degrades to an empty list (the panel hides). The top
   // recommendation also biases the Quick session's drill picks.
@@ -203,8 +208,15 @@ export default function PostSessionLauncher({
   // list and fail closed until the item pool is known (issue #3254).
   const [memoryItemsState, setMemoryItemsState] = useState({ status: 'loading', items: [] });
 
+  const loadReviewReps = useCallback(() => {
+    setReviewRepsError(null);
+    getPostReviewReps(5, { silent: true })
+      .then(r => setReviewReps(r?.reps || []))
+      .catch(err => setReviewRepsError(err instanceof Error ? err : new Error('Request failed')));
+  }, []);
+
   useEffect(() => {
-    getPostReviewReps(5).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
+    loadReviewReps();
     getPostRecommendations()
       .then(r => {
         setRecommendations(r?.recommendations || []);
@@ -218,7 +230,7 @@ export default function PostSessionLauncher({
     getMemoryItems({ silent: true })
       .then(items => setMemoryItemsState({ status: 'ready', items: Array.isArray(items) ? items : [] }))
       .catch(() => setMemoryItemsState({ status: 'error', items: [] }));
-  }, []);
+  }, [loadReviewReps]);
 
   // Only fetch Morse progress when a Morse WPM goal exists — avoids an extra
   // request on the common path. Effective WPM prefers the Farnsworth setting.
@@ -624,7 +636,11 @@ export default function PostSessionLauncher({
     const skillId = rec.id.replace(/^skill-review:/, '');
     let rep = allowedReviewReps.find(r => r.skillId === skillId);
     if (!rep) {
-      const fresh = await getPostReviewReps(5).then(r => r?.reps || []).catch(() => []);
+      const fresh = await getPostReviewReps(5, { silent: true }).then(r => r?.reps || []).catch(err => {
+        toast.error(`Could not load the review rep: ${err.message}`);
+        return null;
+      });
+      if (!fresh) return;
       rep = fresh.filter(r => topicAllowed(r.type)).find(r => r.skillId === skillId);
     }
     if (!rep) return;
@@ -791,6 +807,10 @@ export default function PostSessionLauncher({
           })}
         </nav>
       </div>
+
+      {reviewRepsError && (
+        <ListLoadError what="due skill reviews" error={reviewRepsError} onRetry={loadReviewReps} />
+      )}
 
       {/* Main + sidebar: primary session flow on the left, drill summaries + history on the right */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">

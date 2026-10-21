@@ -5,6 +5,8 @@ import {BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, Save, Volume2, Setting
 import * as api from '../../../services/api';
 import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { FormField } from '../../ui/FormField';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -82,6 +84,9 @@ const STALE_JOURNAL_MAX_ATTEMPTS = 3;
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// Module-level so useListResource sees a stable fetcher; the settings panel owns the error UI.
+const fetchVaults = () => getNotesVaults({ silent: true });
+
 export default function DailyLogTab() {
   // The URL is the source of truth for the open day (?date=YYYY-MM-DD) — the
   // On This Day widget and shared links deep-link a specific past day; without
@@ -112,7 +117,7 @@ export default function DailyLogTab() {
   const [dictation, setDictation] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(null);
-  const [vaults, setVaults] = useState([]);
+  const vaultsResource = useListResource(fetchVaults);
   // Activity-digest (auto-draft) config + provider list for the picker (#2155).
   const [digestSettings, setDigestSettings] = useState(null);
   const [providers, setProviders] = useState([]);
@@ -200,14 +205,12 @@ export default function DailyLogTab() {
   }, []);
 
   const loadSettings = useCallback(async () => {
-    const [s, v, d, p] = await Promise.all([
+    const [s, d, p] = await Promise.all([
       api.getDailyLogSettings().catch(() => null),
-      getNotesVaults().catch(() => []),
       api.getActivityDigestSettings().catch(() => null),
       api.getProviders({ silent: true }).catch(() => null),
     ]);
     if (s) setSettings(s);
-    setVaults(v || []);
     if (d) setDigestSettings(d);
     setProviders(p?.providers || (Array.isArray(p) ? p : []));
   }, []);
@@ -690,18 +693,25 @@ export default function DailyLogTab() {
 
         {showSettings && (
           <div className="p-3 border-b border-port-border space-y-3">
-            <FormField label="Obsidian vault (mirror logs)" labelClassName="block text-xs text-gray-400 mb-1">
-              <select
-                value={settings?.obsidianVaultId || ''}
-                onChange={(e) => saveSettings({ obsidianVaultId: e.target.value || null })}
-                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
-              >
-                <option value="">None — PortOS only</option>
-                {vaults.map((v) => (
-                  <option key={v.id} value={v.id}>{v.name}</option>
-                ))}
-              </select>
-            </FormField>
+            {vaultsResource.state === 'error' ? (
+              <div>
+                <span className="block text-xs text-gray-400 mb-1">Obsidian vault (mirror logs)</span>
+                <ListLoadError what="Obsidian vaults" error={vaultsResource.error} onRetry={vaultsResource.retry} />
+              </div>
+            ) : (
+              <FormField label="Obsidian vault (mirror logs)" labelClassName="block text-xs text-gray-400 mb-1">
+                <select
+                  value={settings?.obsidianVaultId || ''}
+                  onChange={(e) => saveSettings({ obsidianVaultId: e.target.value || null })}
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                >
+                  <option value="">None — PortOS only</option>
+                  {vaultsResource.items.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+              </FormField>
+            )}
             <FormField label="Folder inside vault" labelClassName="block text-xs text-gray-400 mb-1">
               <input
                 type="text"

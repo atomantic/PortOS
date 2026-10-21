@@ -30,8 +30,8 @@ export const scanClinvar = () => request('/meatspace/genome/clinvar/scan', { met
 
 // MeatSpace - Epigenetic Lifestyle Tracking
 export const getEpigeneticInterventions = () => request('/meatspace/genome/epigenetic');
-export const getEpigeneticRecommendations = (categories = []) =>
-  request(`/meatspace/genome/epigenetic/recommendations${categories.length ? `?categories=${categories.join(',')}` : ''}`);
+export const getEpigeneticRecommendations = (categories = [], options = {}) =>
+  request(`/meatspace/genome/epigenetic/recommendations${categories.length ? `?categories=${categories.join(',')}` : ''}`, options);
 export const getEpigeneticCompliance = (days = 30) =>
   request(`/meatspace/genome/epigenetic/compliance?days=${days}`);
 export const addEpigeneticIntervention = (data) => request('/meatspace/genome/epigenetic', {
@@ -64,7 +64,7 @@ export const setMeatspaceBirthDate = (birthDate) => request('/meatspace/birth-da
 });
 export const getDeathClock = () => request('/meatspace/death-clock');
 export const getMeatspaceLoggingStats = (options = {}) => request('/meatspace/logging-stats', options);
-export const getAlcoholSummary = () => request('/meatspace/alcohol');
+export const getAlcoholSummary = (options = {}) => request('/meatspace/alcohol', options);
 export const getDailyAlcohol = (from, to, options = {}) => {
   const params = new URLSearchParams();
   if (from) params.set('from', from);
@@ -96,7 +96,7 @@ export const updateCustomDrink = (index, data, options = {}) => request(`/meatsp
 export const removeCustomDrink = (index) => request(`/meatspace/alcohol/custom-drinks/${index}`, {
   method: 'DELETE'
 });
-export const getNicotineSummary = () => request('/meatspace/nicotine');
+export const getNicotineSummary = (options = {}) => request('/meatspace/nicotine', options);
 export const getDailyNicotine = (from, to, options = {}) => {
   const params = new URLSearchParams();
   if (from) params.set('from', from);
@@ -160,11 +160,11 @@ export const updatePostConfig = (data, options = {}) => request('/meatspace/post
   body: JSON.stringify(data),
   ...options
 });
-export const getPostSessions = (from, to) => {
+export const getPostSessions = (from, to, options = {}) => {
   const params = new URLSearchParams();
   if (from) params.set('from', from);
   if (to) params.set('to', to);
-  return request(`/meatspace/post/sessions?${params}`);
+  return request(`/meatspace/post/sessions?${params}`, options);
 };
 export const getPostSession = (id, options = {}) => request(`/meatspace/post/sessions/${id}`, options);
 export const submitPostSession = (data, options = {}) => request('/meatspace/post/sessions', {

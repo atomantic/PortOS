@@ -202,3 +202,21 @@ describe('DraftsTab send capabilities', () => {
     expect(screen.queryByLabelText('Loading drafts…')).not.toBeInTheDocument();
   });
 });
+
+describe('DraftsTab — failed read', () => {
+  it('shows an error with Retry instead of "No drafts", then the drafts after Retry', async () => {
+    api.getMessageDrafts.mockRejectedValueOnce(new Error('drafts down'));
+    render(<DraftsTab accounts={[]} />);
+
+    expect(await screen.findByText(/Could not load drafts — drafts down/)).toBeTruthy();
+    expect(screen.queryByText('No drafts')).toBeNull();
+
+    api.getMessageDrafts.mockResolvedValueOnce([
+      { id: 'd1', status: 'draft', sendVia: 'api', subject: 'Recovered draft' },
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('Recovered draft')).toBeTruthy();
+    expect(screen.queryByText(/Could not load drafts/)).toBeNull();
+  });
+});

@@ -355,3 +355,32 @@ describe('Tribe "Linked on Beeper" block (#99)', () => {
     await waitFor(() => expect(screen.queryByText('Linked on Beeper')).toBeNull());
   });
 });
+
+describe('Tribe memory links panel — failed reads', () => {
+  beforeEach(() => {
+    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    api.getTribeMemoryLinks.mockResolvedValue({ links: [] });
+    api.getMemories.mockResolvedValue({ memories: [] });
+  });
+
+  it('shows an error with Retry instead of "No memories linked yet" when the link read fails', async () => {
+    api.getTribeMemoryLinks.mockRejectedValueOnce(new Error('links down'));
+    api.getMemories.mockRejectedValueOnce(new Error('memories down'));
+
+    renderAt('/tribe?tab=circle');
+    fireEvent.click(await screen.findByText('Example Person'));
+
+    expect(await screen.findByText(/Could not load linked memories — links down/)).toBeTruthy();
+    expect(screen.getByText(/Could not load recent memories — memories down/)).toBeTruthy();
+    expect(screen.queryByText('No memories linked yet.')).toBeNull();
+
+    api.getTribeMemoryLinks.mockResolvedValueOnce({ links: [] });
+    api.getMemories.mockResolvedValueOnce({ memories: [] });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+    expect(await screen.findByText('No memories linked yet.')).toBeTruthy();
+    expect(screen.queryByText(/Could not load/)).toBeNull();
+  });
+});

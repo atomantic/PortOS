@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 
 // ── Mock toast ────────────────────────────────────────────────────────────────
 const mockToast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
@@ -76,5 +76,25 @@ describe('TrustTab mobile header', () => {
     const filters = screen.getByText('Filter by status:').parentElement;
 
     expect(filters.className).toContain('flex-wrap');
+  });
+});
+
+describe('TrustTab failed reads', () => {
+  it('shows retryable errors, not an empty log or default settings, and offers no Edit while settings are unknown', async () => {
+    api.getBrainInbox.mockRejectedValueOnce(new Error('inbox down'));
+    api.getBrainSettings.mockRejectedValueOnce(new Error('settings down'));
+    await renderTab();
+
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(screen.queryByText('No entries found.')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Confidence Threshold/)).not.toBeInTheDocument();
+    // Saving the default-seeded form would overwrite the stored settings.
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+
+    fireEvent.click(alerts[0].querySelector('button'));
+    await act(async () => {});
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('No entries found.')).toBeInTheDocument();
   });
 });

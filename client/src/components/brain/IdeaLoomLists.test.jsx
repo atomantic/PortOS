@@ -43,7 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.getIdeaLoomLists.mockResolvedValue([]);
   api.getIdeaLoomSettings.mockResolvedValue({ enabled: false, obsidianVaultId: null, autoSync: false });
-  api.getNotesVaults.mockResolvedValue({ vaults: [{ id: 'vault-1', name: 'Example Vault' }] });
+  api.getNotesVaults.mockResolvedValue([{ id: 'vault-1', name: 'Example Vault' }]);
 });
 
 describe('IdeaLoomLists', () => {
@@ -65,6 +65,20 @@ describe('IdeaLoomLists', () => {
     fireEvent.click(autoSync);
 
     await waitFor(() => expect(api.updateIdeaLoomSettings).toHaveBeenLastCalledWith({ autoSync: true }, expect.anything()));
+  });
+
+  it('shows a retryable error instead of an empty vault picker when the vault list fails to load', async () => {
+    api.getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
+    api.getNotesVaults.mockRejectedValueOnce(new Error('vault service down'));
+    renderPanel();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load Obsidian vaults');
+    expect(screen.queryByLabelText('Vault')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    const picker = await screen.findByLabelText('Vault');
+    expect(picker).toHaveValue('vault-1');
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('offers explicit recovery only after an exchange reports a deleted note', async () => {

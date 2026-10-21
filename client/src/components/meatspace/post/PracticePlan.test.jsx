@@ -130,6 +130,17 @@ describe('PracticePlan summary (issue #3252)', () => {
 });
 
 describe('PracticePlan per-item memory control', () => {
+  it('shows a retryable error — not "No memory items yet" — when the item list fails to load', async () => {
+    getMemoryItems.mockRejectedValueOnce(new Error('boom'));
+    await renderPlan();
+    fireEvent.click(screen.getByLabelText('Expand Memory'));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load your memorized texts/);
+    expect(screen.queryByText(/No memory items yet/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(getMemoryItems).toHaveBeenCalledTimes(2);
+  });
+
   it('lists memory items under the expanded Memory topic and drops a disabled one from the count', async () => {
     await renderPlan();
     await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());

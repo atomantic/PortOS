@@ -23,7 +23,7 @@ const ingest = (videoId, ingestedAt) => ({ videoId, ingestedAt, title: `Video ${
 beforeEach(() => {
   vi.clearAllMocks();
   api.getYoutubeIngestSettings.mockResolvedValue(SETTINGS);
-  api.getNotesVaults.mockResolvedValue({ vaults: [] });
+  api.getNotesVaults.mockResolvedValue([]);
 });
 
 describe('YoutubeIngestSettings ingest history pagination (#8267)', () => {
@@ -64,6 +64,21 @@ describe('YoutubeIngestSettings ingest history pagination (#8267)', () => {
     // Not the "nothing ingested yet" silent case: the section header (and its
     // retry) render even though zero records loaded.
     expect(screen.getByText((_, el) => el.tagName === 'H4' && /Ingested \(0/.test(el.textContent))).toBeInTheDocument();
+  });
+
+  it('shows a retryable error, not "No vaults configured", when the vault list fails to load', async () => {
+    api.getYoutubeIngests.mockResolvedValue({ ingests: [] });
+    api.getYoutubeIngestSettings.mockResolvedValue({ ...SETTINGS, obsidianVaultId: 'vault-1' });
+    api.getNotesVaults.mockRejectedValueOnce(new Error('vault service down'));
+    api.getNotesVaults.mockResolvedValue([{ id: 'vault-1', name: 'Example Vault' }]);
+
+    render(<YoutubeIngestSettings />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load Obsidian vaults');
+    expect(screen.queryByText(/No vaults configured yet/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByLabelText('Obsidian Vault')).toHaveValue('vault-1'));
   });
 
   it('removes a forgotten ingest from the loaded page without refetching', async () => {
