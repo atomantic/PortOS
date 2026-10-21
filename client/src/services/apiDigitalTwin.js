@@ -170,7 +170,7 @@ export const saveEnrichmentList = (category, content, items, options = {}) => re
   body: JSON.stringify({ category, content, items }),
   ...options
 });
-export const getEnrichmentListItems = (category) => request(`/digital-twin/enrich/list-items/${category}`);
+export const getEnrichmentListItems = (category, options) => request(`/digital-twin/enrich/list-items/${category}`, options);
 
 // Digital Twin Traits & Confidence
 export const getDigitalTwinTraits = () => request('/digital-twin/traits');

@@ -66,7 +66,6 @@ const KNOWN = Object.freeze({
   'src/components/cos/tabs/JobsTab.jsx': 1,
   'src/components/cos/tabs/ProviderStatusCard.jsx': 1,
   'src/components/cos/tabs/RunsTab.jsx': 1,
-  'src/components/digital-twin/ListEnrichment.jsx': 1,
   'src/components/digital-twin/ObservedTasteEvidence.jsx': 1,
   'src/components/digital-twin/tabs/AccountsTab.jsx': 3,
   'src/components/digital-twin/tabs/AutobiographyTab.jsx': 3,
