@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import {Sparkles,
   ChevronRight,
@@ -13,6 +13,8 @@ import {Sparkles,
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
+import useProviderList from '../../../hooks/useProviderList';
 import TwinProviderPicker from '../TwinProviderPicker.jsx';
 
 import { ENRICHMENT_CATEGORIES } from '../constants';
@@ -44,8 +46,12 @@ export default function EnrichTab({ onRefresh }) {
   const [writingSamples, setWritingSamples] = useState(() => [mkSample()]);
   const [analyzingWriting, setAnalyzingWriting] = useState(false);
   const [writingAnalysis, setWritingAnalysis] = useState(null);
-  const [providers, setProviders] = useState([]);
-  const [selectedProvider, setSelectedProvider] = useState(null);
+  const providerList = useProviderList();
+  const providers = useMemo(() => providerList.items.filter(p => p.enabled), [providerList.items]);
+  // Until the user picks one, default to the first enabled provider.
+  const [pickedProvider, setSelectedProvider] = useState(null);
+  const selectedProvider = pickedProvider
+    ?? (providers[0] ? { providerId: providers[0].id, model: providers[0].defaultModel } : null);
   const [savingWritingStyle, setSavingWritingStyle] = useState(false);
 
   const loadData = useCallback(async () => {
@@ -55,19 +61,9 @@ export default function EnrichTab({ onRefresh }) {
     setLoading(false);
   }, []);
 
-  const loadProviders = useCallback(async () => {
-    const data = await api.getProviders().catch(() => ({ providers: [] }));
-    const enabled = (data.providers || []).filter(p => p.enabled);
-    setProviders(enabled);
-    if (enabled.length > 0) {
-      setSelectedProvider({ providerId: enabled[0].id, model: enabled[0].defaultModel });
-    }
-  }, []);
-
   useEffect(() => {
     loadData();
-    loadProviders();
-  }, [loadData, loadProviders]);
+  }, [loadData]);
 
   const addWritingSample = () => {
     setWritingSamples([...writingSamples, mkSample()]);
@@ -263,6 +259,8 @@ export default function EnrichTab({ onRefresh }) {
           onRefresh?.();
         }}
         providers={providers}
+        providersError={providerList.state === 'error' ? providerList.error : null}
+        onRetryProviders={providerList.retry}
         selectedProvider={selectedProvider}
         setSelectedProvider={setSelectedProvider}
       />
@@ -547,12 +545,16 @@ export default function EnrichTab({ onRefresh }) {
             </p>
 
             {/* Provider Selection */}
-            <TwinProviderPicker
-              label="Analyze with"
-              providers={providers}
-              selected={selectedProvider}
-              onChange={setSelectedProvider}
-            />
+            {providerList.state === 'error' ? (
+              <ListLoadError what="AI providers" error={providerList.error} onRetry={providerList.retry} />
+            ) : (
+              <TwinProviderPicker
+                label="Analyze with"
+                providers={providers}
+                selected={selectedProvider}
+                onChange={setSelectedProvider}
+              />
+            )}
 
             {/* Writing Samples */}
             <div className="space-y-3">

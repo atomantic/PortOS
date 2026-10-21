@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import {Archive,
   Plus,
   Trash2,
@@ -17,11 +17,16 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import FormField from '../../ui/FormField';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 import { formatBytes, formatDateTime, timeAgo } from '../../../utils/formatters';
 
+// Silent: a failed read renders <ListLoadError>, so a toast would double up.
+const fetchSnapshots = () => api.listTimeCapsuleSnapshots({ silent: true });
+
 export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
-  const [snapshots, setSnapshots] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { items: snapshots, state, error, retry, setItems: setSnapshots } = useListResource(fetchSnapshots);
+  const loading = state === 'loading';
   const [creating, setCreating] = useState(false);
 
   // Create form
@@ -41,15 +46,6 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
 
   // Delete confirmation
   const [confirmDelete, setConfirmDelete] = useState(null);
-
-  const loadSnapshots = useCallback(async () => {
-    setLoading(true);
-    const data = await api.listTimeCapsuleSnapshots().catch(() => []);
-    setSnapshots(data);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { loadSnapshots(); }, [loadSnapshots]);
 
   const handleCreate = async () => {
     if (!label.trim()) return;
@@ -108,6 +104,12 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
         <BrailleSpinner text="Loading" />
       </div>
     );
+  }
+
+  // A failed read must not read as "0 snapshots archived", and creating or
+  // comparing against a list that never loaded would show a partial archive.
+  if (state === 'error') {
+    return <ListLoadError what="time capsule snapshots" error={error} onRetry={retry} />;
   }
 
   return (

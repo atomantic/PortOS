@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Heart,
@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
+import useProviderList from '../../../hooks/useProviderList';
 import { FormField } from '../../ui/FormField';
 import TwinProviderPicker from '../TwinProviderPicker.jsx';
 
@@ -42,12 +44,19 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
   const [showValidation, setShowValidation] = useState(false);
   const [contradictions, setContradictions] = useState(null);
   const [checkingContradictions, setCheckingContradictions] = useState(false);
-  const [providers, setProviders] = useState([]);
-  const [selectedProvider, setSelectedProvider] = useState(null);
+  const providerList = useProviderList();
+  const providers = useMemo(() => providerList.items.filter(p => p.enabled), [providerList.items]);
+  // Until the user picks one, default to the first enabled provider.
+  const [pickedProvider, setSelectedProvider] = useState(null);
+  const selectedProvider = pickedProvider
+    ?? (providers[0] ? { providerId: providers[0].id, model: providers[0].defaultModel } : null);
   const [showWizard, setShowWizard] = useState(false);
   const [traits, setTraits] = useState(null);
   const [confidence, setConfidence] = useState(null);
   const [gaps, setGaps] = useState([]);
+  // A failed insights read keeps whatever loaded before and surfaces a Retry
+  // instead of rendering as an empty personality map / no gaps.
+  const [insightsError, setInsightsError] = useState(null);
 
   useEffect(() => {
     if (!showSettings) setSettingsForm(settings || {});
@@ -55,19 +64,21 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
 
   useEffect(() => {
     loadCompleteness();
-    loadProviders();
     loadTraitsAndConfidence();
   }, []);
 
   const loadTraitsAndConfidence = async () => {
-    const [traitsData, confidenceData, gapsData] = await Promise.all([
-      api.getDigitalTwinTraits().catch(() => ({ traits: null })),
-      api.getDigitalTwinConfidence().catch(() => ({ confidence: null })),
-      api.getDigitalTwinGaps().catch(() => ({ gaps: [] }))
+    setInsightsError(null);
+    const [traitsRes, confidenceRes, gapsRes] = await Promise.allSettled([
+      api.getDigitalTwinTraits({ silent: true }),
+      api.getDigitalTwinConfidence({ silent: true }),
+      api.getDigitalTwinGaps({ silent: true })
     ]);
-    setTraits(traitsData.traits);
-    setConfidence(confidenceData.confidence);
-    setGaps(gapsData.gaps || []);
+    if (traitsRes.status === 'fulfilled') setTraits(traitsRes.value.traits);
+    if (confidenceRes.status === 'fulfilled') setConfidence(confidenceRes.value.confidence);
+    if (gapsRes.status === 'fulfilled') setGaps(gapsRes.value.gaps || []);
+    const failed = [traitsRes, confidenceRes, gapsRes].find(r => r.status === 'rejected');
+    if (failed) setInsightsError(failed.reason instanceof Error ? failed.reason : new Error('Request failed'));
   };
 
   const loadCompleteness = async () => {
@@ -75,15 +86,6 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
     const data = await api.getDigitalTwinCompleteness().catch(() => null);
     setCompleteness(data);
     setLoadingCompleteness(false);
-  };
-
-  const loadProviders = async () => {
-    const data = await api.getProviders().catch(() => ({ providers: [] }));
-    const enabled = (data.providers || []).filter(p => p.enabled);
-    setProviders(enabled);
-    if (enabled.length > 0) {
-      setSelectedProvider({ providerId: enabled[0].id, model: enabled[0].defaultModel });
-    }
   };
 
   const checkContradictions = async () => {
@@ -321,6 +323,10 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
         )}
       </div>
 
+      {insightsError && (
+        <ListLoadError what="personality traits, confidence and gaps" error={insightsError} onRetry={loadTraitsAndConfidence} />
+      )}
+
       {/* Personality Traits & Confidence - New Phase 1 & 2 Components */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <PersonalityMap
@@ -435,13 +441,17 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
         </p>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 mb-4">
-          <TwinProviderPicker
-            compact
-            className="flex-1 min-w-0"
-            providers={providers}
-            selected={selectedProvider}
-            onChange={setSelectedProvider}
-          />
+          {providerList.state === 'error' ? (
+            <ListLoadError className="flex-1 min-w-0" what="AI providers" error={providerList.error} onRetry={providerList.retry} />
+          ) : (
+            <TwinProviderPicker
+              compact
+              className="flex-1 min-w-0"
+              providers={providers}
+              selected={selectedProvider}
+              onChange={setSelectedProvider}
+            />
+          )}
 
           <button
             onClick={checkContradictions}
