@@ -31,6 +31,7 @@ init-db.sql, each with a one-line reason.
 | `userActions.js` | `userActionsDdl` | Operator-action ledger — what the human did in the UI (machine-local) |
 | `reviewQueueTriage.js` | `reviewQueueTriageDdl` | Machine-local Review Hub presentation markers — snooze, optional dismissal, and delivery generation keyed by canonical action identity |
 | `cosTasks.js` | `cosTasksDdl` | The CoS task queues, one row per task (stored form, queue order, completed-at window) plus a per-queue write version |
+| `cosAgents.js` | `cosAgentsDdl` | The CoS agent working set (running + not-yet-archived), one row per agent (exact JSON text, query projections, insertion order) plus a write version |
 | `cosAgentFeedback.js` | `cosAgentFeedbackDdl` | Durable machine-local references to completed manual CoS runs awaiting a rating (agent id + archive locator only) |
 | `aiGraph.js` | `aiGraphDdl` | AI provider connection graph — connections, harness bindings, executable route bindings (machine-local) |
 | `peerExecution.js` | `peerExecutionDdl` | Receiver-local permanent execution consumption and generation floors; no grants or federation |
@@ -52,7 +53,7 @@ init-db.sql, each with a one-line reason.
 
 ### Composer (`index.js`)
 
-- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTasks` → `aiGraph` → `peerExecution`).
+- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTasks` → `cosAgents` → `aiGraph` → `peerExecution`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
   `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
   `beeper` → `audit` DDL → audit triggers → `syncFeed` DDL → sync-feed triggers).

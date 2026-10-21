@@ -229,7 +229,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
 
   it('retains merged work when durable completion policy is unreadable despite an empty owner snapshot', async () => {
     const path = await addTree('agent-policy-unreadable');
-    await writeFile(join(PATHS.cos, 'state.json'), '{');
+    // Agent records are cos_agents rows (#12738); the agent index is the durable policy input left on disk.
+    await mkdir(join(PATHS.cos, 'agents'), { recursive: true });
+    await writeFile(join(PATHS.cos, 'agents', 'index.json'), '{');
     expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(await branchExists('agent-policy-unreadable')).toBe(true);

@@ -93,8 +93,9 @@ async function prepareInstall(installRoot, appId) {
   for (const relative of ['data', 'data/cos', 'data/cos/agents', 'data/cos/reports', 'data/cos/scripts', 'data/cos/initialized-checkout-retirements']) {
     await canonicalDirectory(join(installRoot, relative));
   }
+  // Agent records live in cos_agents (#12738); state.json must still be a readable object.
   const state = await readJson(join(installRoot, 'data/cos/state.json'), 64 * 1024 * 1024);
-  if (!object(state) || !object(state.agents)) fail('recovery-ownership-unreadable');
+  if (!object(state)) fail('recovery-ownership-unreadable');
   const context = async requestedId => {
     if (requestedId !== appId) fail('recovery-app-changed');
     const apps = await readJson(join(installRoot, 'data/apps.json'), 16 * 1024 * 1024);

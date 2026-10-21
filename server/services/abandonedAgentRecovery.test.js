@@ -13,7 +13,6 @@ beforeEach(() => {
   request = { agentId: 'agent-example', runId: randomUUID(), reason: 'Operator confirms duplicate was abandoned', confirmAbandoned: true };
   fs.mkdirSync(join(data, 'cos'), { recursive: true });
   fs.mkdirSync(join(data, 'runs', request.runId), { recursive: true });
-  save(join(data, 'cos', 'state.json'), { agents: {} });
   save(join(data, 'runs', request.runId, 'metadata.json'), { id: request.runId, agentId: request.agentId,
     taskId: 'example-task', workspacePath: join(data, 'cos', 'worktrees', request.agentId), endTime: null, success: null });
   fs.writeFileSync(join(data, 'runs', request.runId, 'output.txt'), '');
@@ -24,7 +23,7 @@ beforeEach(() => {
   operation = gate.admit('agent', request.agentId);
   gate.admit('provider', 'other-work');
   hold = gate.begin({ owner: 'Operator', reason: 'Recovery' }).hold;
-  deps = { data, gate, isDead: () => true, runner: async () => [], git: async () => ({ stdout: '' }) };
+  deps = { data, gate, isDead: () => true, runner: async () => [], git: async () => ({ stdout: '' }), readAgent: async () => null };
 });
 afterEach(() => fs.rmSync(data, { recursive: true, force: true }));
 it('records abandonment, preserves unrelated work and hold, and replays without claiming success', async () => {
@@ -35,11 +34,12 @@ it('records abandonment, preserves unrelated work and hold, and replays without 
   expect(await reconcileAbandonedAgent(request, deps)).toMatchObject({ ...receipt, replayed: true });
   expect(JSON.parse(fs.readFileSync(join(data, 'runs', request.runId, 'metadata.json'))).success).toBeNull();
 });
-it.each(['live pid', 'runner owner', 'bad runner', 'agent owner', 'saved output', 'workspace', 'branch', 'bad metadata', 'bad events', 'not user-killed', 'unsettled', 'runner reservation', 'archived output', 'later live handoff'])('preserves ownership for %s and leaves the journal usable', async problem => {
+it.each(['live pid', 'runner owner', 'bad runner', 'agent owner', 'unreadable agent store', 'saved output', 'workspace', 'branch', 'bad metadata', 'bad events', 'not user-killed', 'unsettled', 'runner reservation', 'archived output', 'later live handoff'])('preserves ownership for %s and leaves the journal usable', async problem => {
   if (problem === 'live pid') deps.isDead = () => false;
   if (problem === 'runner owner') deps.runner = async () => [{ id: request.agentId }];
   if (problem === 'bad runner') deps.runner = async () => null;
-  if (problem === 'agent owner') save(join(data, 'cos', 'state.json'), { agents: { [request.agentId]: { status: 'paused' } } });
+  if (problem === 'agent owner') deps.readAgent = async id => (id === request.agentId ? { id, status: 'paused' } : null);
+  if (problem === 'unreadable agent store') deps.readAgent = async () => { throw new Error('database unavailable'); };
   if (problem === 'saved output') fs.writeFileSync(join(data, 'runs', request.runId, 'output.txt'), 'unsaved work');
   if (problem === 'workspace') fs.mkdirSync(join(data, 'cos', 'worktrees', request.agentId), { recursive: true });
   if (problem === 'branch') deps.git = async () => ({ stdout: 'preserved-branch' });

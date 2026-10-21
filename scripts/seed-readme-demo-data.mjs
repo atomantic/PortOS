@@ -8,9 +8,10 @@
  * empty directory, then overlays fake records that make the public UI pages
  * useful to inspect without exposing a real install.
  *
- * The demo's tasks are Markdown files that db-migration 018 imports, so the demo
- * server must start against a database that has not yet run it (a fresh,
- * disposable one). An already-migrated database ignores them.
+ * The demo's tasks are Markdown files that db-migration 018 imports, and its
+ * agents are a `cos/state.json` `agents` map that db-migration 020 imports, so
+ * the demo server must start against a database that has not yet run them (a
+ * fresh, disposable one). An already-migrated database ignores them.
  *
  * Usage:
  *   node scripts/seed-readme-demo-data.mjs --root /tmp/portos-readme-demo
@@ -174,8 +175,8 @@ writeJson('providers.json', {
   },
 });
 
-// Durable user config lives in its own file (#6182); state.json holds only the
-// runtime records.
+// Durable user config lives in its own file (#6182); state.json holds the
+// runtime records in their pre-migration shape (see the header).
 writeJson('cos/config.json', {
   userTasksFile,
   cosTasksFile,

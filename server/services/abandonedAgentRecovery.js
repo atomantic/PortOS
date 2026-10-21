@@ -8,6 +8,7 @@ import { PATHS } from '../lib/paths.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { execGit } from '../lib/execGit.js';
 import { getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { getStoredAgent } from './cosAgentRepository.js';
 
 const inputSchema = z.object({
   agentId: z.string().regex(/^agent-[a-zA-Z0-9-]+$/), runId: z.string().uuid(),
@@ -45,11 +46,13 @@ export async function reconcileAbandonedAgent(input, deps = {}) {
       refuse('The existing abandonment receipt does not match this request.');
     return receipt;
   };
+  // Read before the synchronous gate transaction; the maintenance hold keeps
+  // new agents from registering meanwhile. An unreadable store is not "absent".
+  const ownership = await (deps.readAgent ?? getStoredAgent)(request.agentId)
+    .then(agent => (agent === null ? 'absent' : 'present'), () => 'unreadable');
   let evidence;
   const validate = operation => {
-    const state = JSON.parse(fs.readFileSync(join(data, 'cos', 'state.json'), 'utf8'));
-    if (!state.agents || Array.isArray(state.agents) || typeof state.agents !== 'object'
-      || Object.hasOwn(state.agents, request.agentId)) refuse('Agent ownership is present or unreadable.');
+    if (ownership !== 'absent') refuse('Agent ownership is present or unreadable.');
     if (!absent(workspace) || !absent(join(data, 'cos', 'agents', request.agentId)))
       refuse('Retained agent output or workspace needs recovery.');
     const agentsDirectory = join(data, 'cos', 'agents');

@@ -47,6 +47,7 @@ vi.mock('./worktreeManager.js', () => ({
   cleanupOrphanedWorktrees: vi.fn().mockResolvedValue(0)
 }))
 
+vi.mock('./cosAgentRepository.js', () => ({ listStoredAgentStatuses: vi.fn(async () => []) }))
 vi.mock('./agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([])
 }))
@@ -76,6 +77,7 @@ import {
   initJobs
 } from './autonomousJobs.js'
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js'
+import { listStoredAgentStatuses } from './cosAgentRepository.js'
 import { cosEvents } from './cosEvents.js'
 import { checkAndPrompt } from './autobiography.js'
 import { reapMergedWorktrees, cleanupOrphanedWorktrees } from './worktreeManager.js'
@@ -1194,13 +1196,8 @@ describe('autonomousJobs', () => {
     })
 
     it('paused agent id is in the activeAgentIds set passed to reapMergedWorktrees', async () => {
-      // agentDataCleanup calls readJSONFile once — for data/cos/state.json
-      readJSONFile.mockResolvedValueOnce({
-        agents: {
-          'paused-agent-1': { status: 'paused' },
-          'running-agent-2': { status: 'running' }
-        }
-      })
+      // agentDataCleanup reads the stored agent statuses once
+      listStoredAgentStatuses.mockResolvedValueOnce([{ id: 'paused-agent-1', status: 'paused' }, { id: 'running-agent-2', status: 'running' }])
 
       await agentDataCleanup()
 
@@ -1210,12 +1207,7 @@ describe('autonomousJobs', () => {
     })
 
     it('paused agent id is in the set passed to cleanupOrphanedWorktrees', async () => {
-      readJSONFile.mockResolvedValueOnce({
-        agents: {
-          'paused-agent-1': { status: 'paused' },
-          'running-agent-2': { status: 'running' }
-        }
-      })
+      listStoredAgentStatuses.mockResolvedValueOnce([{ id: 'paused-agent-1', status: 'paused' }, { id: 'running-agent-2', status: 'running' }])
 
       await agentDataCleanup()
 
@@ -1225,7 +1217,7 @@ describe('autonomousJobs', () => {
     })
 
     it('both reap passes see an agent dispatched after the job took its snapshot', async () => {
-      readJSONFile.mockResolvedValueOnce({ agents: { 'paused-agent-1': { status: 'paused' } } })
+      listStoredAgentStatuses.mockResolvedValueOnce([{ id: 'paused-agent-1', status: 'paused' }])
       // Empty when the job starts; agent-x registers while the earlier passes run.
       getActiveAgentIds.mockReturnValueOnce([]).mockReturnValue(['agent-x'])
 
@@ -1239,13 +1231,8 @@ describe('autonomousJobs', () => {
       }
     })
 
-    it('non-paused agent is NOT added to the protect set via state.json', async () => {
-      readJSONFile.mockResolvedValueOnce({
-        agents: {
-          'paused-agent-1': { status: 'paused' },
-          'running-agent-2': { status: 'running' }
-        }
-      })
+    it('non-paused agent is NOT added to the protect set via the stored statuses', async () => {
+      listStoredAgentStatuses.mockResolvedValueOnce([{ id: 'paused-agent-1', status: 'paused' }, { id: 'running-agent-2', status: 'running' }])
 
       await agentDataCleanup()
 
@@ -1256,9 +1243,7 @@ describe('autonomousJobs', () => {
 
     it('in-memory active agents are also protected alongside paused agents', async () => {
       getActiveAgentIds.mockReturnValue(['live-agent-99'])
-      readJSONFile.mockResolvedValueOnce({
-        agents: { 'paused-agent-1': { status: 'paused' } }
-      })
+      listStoredAgentStatuses.mockResolvedValueOnce([{ id: 'paused-agent-1', status: 'paused' }])
 
       await agentDataCleanup()
 
@@ -1267,8 +1252,8 @@ describe('autonomousJobs', () => {
       expect(opts.activeAgentIds().has('live-agent-99')).toBe(true)
     })
 
-    it('handles missing cosState gracefully (null state.json)', async () => {
-      readJSONFile.mockResolvedValueOnce(null)
+    it('handles an unreadable agent store gracefully', async () => {
+      listStoredAgentStatuses.mockRejectedValueOnce(new Error('database unavailable'))
 
       await expect(agentDataCleanup()).resolves.not.toThrow()
       expect(reapMergedWorktrees).toHaveBeenCalledOnce()
