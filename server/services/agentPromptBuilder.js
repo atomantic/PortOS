@@ -573,12 +573,13 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
         discardWorktree,
         claimFlow,
         noChangeSuccess,
+        headIsDefaultBranch: worktreeInfo.headIsDefaultBranch === true,
       })
     : '';
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
 You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
-- **Branch**: \`${worktreeInfo.branchName}\`${isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : ''}
+- **Branch**: \`${worktreeInfo.branchName}\`${worktreeBranchSuffix(worktreeInfo, isWorktreeOnExistingBranch)}
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
@@ -695,6 +696,20 @@ function resolveTaskMetadataFlags(task, worktreeInfo) {
   };
 }
 
+/**
+ * The follow-up's task metadata plus what only workspace prep knows: the PR head is
+ * the default branch, so the checkout is detached and nothing may be pushed to it.
+ */
+function reviewLoopPromptMetadata(task, worktreeInfo) {
+  const metadata = task.metadata || {};
+  return worktreeInfo?.headIsDefaultBranch === true ? { ...metadata, headIsDefaultBranch: true } : metadata;
+}
+
+function worktreeBranchSuffix(worktreeInfo, isWorktreeOnExistingBranch) {
+  if (worktreeInfo.detached === true) return ' *(detached at the PR head — do not commit to or push this branch)*';
+  return isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : '';
+}
+
 /** Load independent developer context concurrently, unless this is a content-only task. */
 async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) {
   if (skipDevContext) {
@@ -784,7 +799,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     // localAgentLoopBody (the CLI-reviewer recipe) was already preloaded at the
     // top of buildAgentPrompt under the same reviewLoopFollowUp guard — reuse it
     // rather than re-reading the lib a second time.
-    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: true, rprBody, localAgentLoopBody });
+    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo), { verbose: true, rprBody, localAgentLoopBody });
     if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId);
     if (isTui) {
       const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
@@ -1161,7 +1176,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
-      contractSections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
+      contractSections.push(buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo), { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
       if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId));
       if (!isTui) return;
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
@@ -1227,11 +1242,11 @@ function buildLightTaskContextSections({
   if (worktreeInfo) {
     sections.push([
       '## Git Worktree',
-      `- **Branch**: \`${worktreeInfo.branchName}\`${isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : ''}`,
+      `- **Branch**: \`${worktreeInfo.branchName}\`${worktreeBranchSuffix(worktreeInfo, isWorktreeOnExistingBranch)}`,
       `- **Path**: \`${worktreeInfo.worktreePath}\``,
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
-      worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
+      worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess, headIsDefaultBranch: worktreeInfo.headIsDefaultBranch === true }),
       [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW, COMPLETION_MODES.CHECKOUT_RECOVERY].includes(mode)
         ? 'Follow the bundled workflow branch instructions while preserving unrelated work.'
         : 'Do NOT manually switch branches or modify the worktree configuration.',

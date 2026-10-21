@@ -751,6 +751,24 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     expect(updateTask).not.toHaveBeenCalled();
   });
 
+  // A release PR's head is the default branch, which the primary checkout holds. That
+  // checkout is never adopted or released; the worktree comes up detached on the first
+  // attempt rather than pausing on `worktree-busy` for a holder that never leaves (#12855).
+  it('never offers the primary checkout for adoption and starts the follow-up without a cooldown', async () => {
+    listWorktrees.mockResolvedValue([{ path: PATHS.root, branch: 'refs/heads/main', head: 'a'.repeat(40) }]);
+    const detached = { worktreePath: '/mock/worktrees/agent-new', branchName: 'main', baseBranch: null, existingBranch: true, detached: true, headIsDefaultBranch: true };
+    createWorktree.mockReset();
+    createWorktree.mockResolvedValue(detached);
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask({ reviewLoopPRBranch: 'main' }) });
+
+    expect(findAdoptableWorktreeForBranch).not.toHaveBeenCalled();
+    expect(adoptWorktree).not.toHaveBeenCalled();
+    expect(createWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), 'sys-rl-1', expect.objectContaining({ existingBranch: 'main' }));
+    expect(r).toMatchObject({ outcome: 'ready', worktreeInfo: detached });
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   it('checks a recovered head before adoption and consumes only its initial-launch pin before registration', async () => {
     const target = { version: 1, repoPath: PATHS.root, branch: 'cos/task-x/agent-y', headSha: 'a'.repeat(40) };
     const task = followUpTask({ cleanupReviewTarget: target });
