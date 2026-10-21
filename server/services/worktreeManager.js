@@ -84,14 +84,14 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
     if (!sourceExists) return;
     const targetStat = await lstat(targetPath).catch(() => null);
     if (targetStat) {
-      const isSymlink = typeof targetStat.isSymbolicLink === 'function' ? targetStat.isSymbolicLink() : false;
-      const isDir = typeof targetStat.isDirectory === 'function' ? targetStat.isDirectory() : !isSymlink;
+      const isSymlink = targetStat.isSymbolicLink?.() ?? false;
+      const isDir = targetStat.isDirectory?.() ?? !isSymlink;
       if (!isSymlink && isDir) {
         const entries = await readdir(targetPath).catch(() => null);
         if (entries !== null && entries.length > 0 && entries.every(name => CACHE_ENTRIES.has(name))) {
           await rm(targetPath, { recursive: true, force: true });
         } else {
-          console.log(`⚠️ linkWorktreeDependencies: skipping existing ${targetPath} (not a cache-only directory)`);
+          console.warn(`⚠️ linkWorktreeDependencies: skipping existing ${targetPath} (not a cache-only directory)`);
           return;
         }
       } else {

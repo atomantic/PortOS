@@ -83,9 +83,10 @@ describe('link-worktree-deps script', () => {
     mkdirSync(join(source, 'node_modules'), { recursive: true });
     writeFileSync(join(source, 'node_modules', 'real-pkg.txt'), 'real');
 
-    // Simulate vitest creating a cache-only node_modules before linking
+    // Simulate vitest creating cache directories before linking
     mkdirSync(join(worktree, 'node_modules', '.vite'), { recursive: true });
     mkdirSync(join(worktree, 'node_modules', '.vitest-cache'), { recursive: true });
+    mkdirSync(join(worktree, 'node_modules', '.cache'), { recursive: true });
 
     const result = runScript(source, worktree);
 
@@ -111,8 +112,9 @@ describe('link-worktree-deps script', () => {
     expect(result.status).toBe(0);
     expect(lstatSync(join(worktree, 'node_modules')).isSymbolicLink()).toBe(false);
     expect(existsSync(join(worktree, 'node_modules', 'some-package', 'index.js'))).toBe(true);
-    expect(result.stdout).toContain('⚠️');
-    expect(result.stdout).toContain(join(worktree, 'node_modules'));
+    const output = (result.stderr || '') + (result.stdout || '');
+    expect(output).toContain('⚠️');
+    expect(output).toContain(join(worktree, 'node_modules'));
     // Source checkout real node_modules is never touched
     expect(existsSync(join(source, 'node_modules', 'source-pkg.txt'))).toBe(true);
   });
