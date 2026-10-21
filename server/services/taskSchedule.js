@@ -21,6 +21,7 @@
 
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
 import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
+import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
@@ -30,7 +31,7 @@ import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
 import { DAY, safeDate } from '../lib/fileUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js';
+import { getAppById, isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -783,6 +784,32 @@ export async function recordInitializedRetirementRecovery(appId, observation) {
 export async function getBranchReconcileOutcome(appId) {
   const schedule = await loadSchedule();
   return resolveExecutionRecord(schedule, 'branch-reconcile', appId)?.branchReconcileOutcome ?? null;
+}
+
+/** Remove stored inventory rows (display data only; obligations are untouched). */
+export async function dropInventoryRows(appId, rows) {
+  return updateSchedule(async (schedule) => {
+    const outcome = ensureExecutionRecord(schedule, 'branch-reconcile', appId).branchReconcileOutcome;
+    if (!Array.isArray(outcome?.remaining)) return { result: outcome ?? null, changed: false };
+    const kept = outcome.remaining.filter(entry => !rows.some(row => sameRetirementCheckout(row, entry)));
+    if (kept.length === outcome.remaining.length) return { result: outcome, changed: false };
+    outcome.remaining = kept;
+    return { result: outcome, changed: true };
+  });
+}
+
+/**
+ * Drop stored inventory rows whose checkout or branch no longer exists, so the
+ * Schedule view never offers an action on something already cleaned up.
+ * Returns the outcome as it now stands.
+ */
+async function pruneGoneInventory(appId, outcome) {
+  if (!appId || !outcome?.remaining?.length) return outcome;
+  const app = await getAppById(appId).catch(() => null);
+  if (!app?.repoPath) return outcome;
+  const gone = await findGoneInventoryRows(app.repoPath, outcome.remaining).catch(() => []);
+  if (!gone.length) return outcome;
+  return await dropInventoryRows(appId, gone).catch(() => null) ?? outcome;
 }
 
 const RETIRED_CHECKOUTS_KEPT = 20;
@@ -1675,11 +1702,14 @@ export async function getScheduleStatus() {
     }
 
     if (taskType === 'branch-reconcile') {
-      taskStatus.reconcileOutcomes = Object.fromEntries([
+      const outcomes = [
         ...(execution.branchReconcileOutcome ? [[null, execution.branchReconcileOutcome]] : []),
         ...Object.entries(execution.perApp || {}).filter(([, record]) => record.branchReconcileOutcome)
           .map(([appId, record]) => [appId, record.branchReconcileOutcome]),
-      ]);
+      ];
+      taskStatus.reconcileOutcomes = Object.fromEntries(
+        await mapWithConcurrency(outcomes, 8, async ([appId, outcome]) => [appId, await pruneGoneInventory(appId, outcome)])
+      );
     }
     status.tasks[taskType] = taskStatus;
 
