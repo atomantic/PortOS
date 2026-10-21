@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { join } from 'path';
+import { posix } from 'path';
 import { __testing } from './nodeRuntime.js';
 
 const { getStartupStatus, resolveNvm, rewriteLaunchAgent, summarizeNodeReleases } = __testing;
@@ -67,11 +67,11 @@ describe('getStartupStatus', () => {
   it('flags a boot script that still launches an older Node and gives the sudo command', () => {
     const status = getStartupStatus({
       nodeBinary, platform: 'darwin', home: '/Users/example', user: 'example',
-      readText: (file) => (file === join('/Users/example', 'Library', 'LaunchAgents', 'pm2.example.plist')
+      readText: (file) => (file === posix.join('/Users/example', 'Library', 'LaunchAgents', 'pm2.example.plist')
         ? '<string>/Users/example/.nvm/versions/node/v24.14.1/bin</string>' : null),
     });
     expect(status).toMatchObject({ system: 'launchd', configured: true, current: false, fixable: true });
-    expect(status.command).toBe(`sudo env PATH=$PATH:${binDir} ${join(binDir, 'pm2')} startup launchd -u example --hp /Users/example`);
+    expect(status.command).toBe(`sudo env PATH=$PATH:${binDir} ${posix.join(binDir, 'pm2')} startup launchd -u example --hp /Users/example`);
   });
 
   it('repoints every nvm Node path in a LaunchAgent, and refuses what it cannot safely rewrite', () => {

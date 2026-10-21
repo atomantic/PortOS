@@ -73,7 +73,13 @@ afterEach(() => {
 
 afterAll(() => rmSync(TMP, { recursive: true, force: true }));
 
-describe('startNodeUpdate', () => {
+// nvm does not exist on Windows; there the update is refused up front.
+it.runIf(process.platform === 'win32')('refuses to update Node on Windows', async () => {
+  await expect(startNodeUpdate({ version: NEXT, io })).rejects.toMatchObject({ code: 'NODE_UPDATE_UNAVAILABLE' });
+  expect(mocks.runStreamingCommand).not.toHaveBeenCalled();
+});
+
+describe.skipIf(process.platform === 'win32')('startNodeUpdate', () => {
   it('installs with nvm, pins PortOS to the new binary and launches the restart', async () => {
     await expect(startNodeUpdate({ version: NEXT, io })).resolves.toEqual({ started: true, restart: true });
     await vi.waitFor(() => expect(mocks.startPortosSelfUpdate).toHaveBeenCalled());

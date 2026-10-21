@@ -25,7 +25,8 @@
 
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { homedir, userInfo } from 'os';
-import { dirname, join } from 'path';
+// nvm, launchd and systemd paths are POSIX-only; Windows never reaches an update.
+import { posix } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
@@ -43,6 +44,7 @@ import {
 } from '../../scripts/checkNodeVersion.js';
 
 const IS_WIN = process.platform === 'win32';
+const { dirname, join } = posix;
 const VERSION_RE = /^v\d+\.\d+\.\d+$/;
 const NODE_INDEX_URL = 'https://nodejs.org/dist/index.json';
 const PM2_LATEST_URL = 'https://registry.npmjs.org/pm2/latest';
