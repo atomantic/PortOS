@@ -3,6 +3,7 @@ import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isFalsyMeta, isTruthyMeta } from '../lib/metadataFlags.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
+import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 /**
  * Agent Management
  *
@@ -1425,6 +1426,9 @@ async function runCleanupOrphanedAgents() {
   // dead owner pid cannot belong to an agent spawned meanwhile, so no re-read is needed.
   const retired = new Set(retiredAgentIds);
   await reconcileStaleAgentReservations({ agents: agents.map(a => retired.has(a.id) ? { ...a, status: 'completed' } : a) });
+  // Same sweep, different kinds: publication residue is stamped, and only a
+  // cli-run or mind-turn whose owning record proves completion is released.
+  reconcileDeadOwnerReservations();
 
   // Consume the marker. Doing it AFTER the retry pass (not before) means a crash
   // mid-sweep leaves it in place and the next boot still classifies these agents

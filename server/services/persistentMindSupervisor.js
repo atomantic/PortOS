@@ -1,4 +1,5 @@
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 /**
  * Persistent CoS mind supervisor.
  *
@@ -1763,6 +1764,11 @@ export async function initializePersistentMindSupervisor() {
       },
     });
   }
+  // The turn record is durable now. A dead mind-turn reservation is releasable
+  // only once this recovery has cleared an orphaned active turn.
+  reconcileDeadOwnerReservations({
+    mindTurnIdle: () => recovered.state != null && recovered.state.activeTurn == null,
+  });
   if (recovered.state.enabled && recovered.state.started) {
     armWatchdog();
     await scheduleNextWake();
