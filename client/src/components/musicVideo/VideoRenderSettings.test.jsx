@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+vi.mock('../../hooks/useFederatedMediaTarget.js', () => ({ useFederatedMediaTarget: () => ({ peers: [] }) }));
 import VideoRenderSettings from './VideoRenderSettings.jsx';
 
 const base = {
   settings: { backend: 'local', generationMode: 'audioReactive', modelId: '', audioReactiveLora: '', audioReactiveScale: 1.2 },
   saving: false, models: [], modelsLoading: false, defaultModel: '', effectiveModelId: '',
   audioReactiveModels: [], audioReactiveLoras: [], detectedAudioReactiveLora: null,
-  audioReactiveReady: false, change: vi.fn(),
+  audioReactiveReady: false, audioReactiveSelected: true, change: vi.fn(),
 };
 
 describe('VideoRenderSettings catalog failure', () => {
