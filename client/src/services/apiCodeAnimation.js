@@ -95,3 +95,12 @@ export const acceptCodeAnimationOutput = (id, runId, options) => request(`/code-
 // full record carries each native move's "fits content like" examples.
 export const listFilmStyles = (options) => request('/film-styles', options);
 export const getFilmStyle = (id, options) => request(`/film-styles/${encodeURIComponent(id)}`, options);
+
+// Render a soundtrack for a finished animation with a local music engine,
+// without re-running the animation. body: { prompt, engine, modelId?,
+// instrumentalOnly } → the job's `soundtrack` record (watch `mediaJobId`).
+export const generateCodeAnimationSoundtrack = (id, body, options) => request(`/code-animation/${encodeURIComponent(id)}/soundtrack`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...options,
+});

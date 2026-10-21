@@ -23,6 +23,7 @@
 
 import { Router } from 'express';
 import { soundAssetSchema, stageProductionSoundAsset } from '../services/codeAnimation/soundAssets.js';
+import { startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtrack.js';
 import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -319,6 +320,21 @@ router.get('/:id/package', asyncHandler(async (req, res) => {
   res.attachment(`code-animation-${id}.json`);
   res.set('X-Content-Type-Options', 'nosniff');
   res.json(pkg);
+}));
+
+// Generate (or regenerate) a soundtrack for a finished animation with a local
+// music engine, without re-running the animation code. 202: the render runs on
+// the audio media lane; progress rides audio-gen:* for `mediaJobId`.
+const soundtrackSchema = z.object({
+  prompt: z.string().max(8000).refine((value) => value.trim().length > 0, 'Describe the soundtrack'),
+  engine: z.string().trim().min(1).max(80),
+  modelId: z.string().trim().min(1).max(256).optional(),
+  instrumentalOnly: z.boolean().default(true),
+}).strict();
+
+router.post('/:id/soundtrack', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.status(202).json(await startCodeAnimationSoundtrack(id, validateRequest(soundtrackSchema, req.body ?? {})));
 }));
 
 // Frame-exact export: the stored HTML renders through the HTML-composition

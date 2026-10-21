@@ -548,7 +548,8 @@ export async function getCodeAnimationJob(id) {
   let job = await reconcileJob(record);
   if (job.status !== 'completed') return { ...job, html: null };
   try {
-    return { ...job, html: await readCodeAnimationHtml(job.id) };
+    const { withGeneratedSoundtrack } = await import('./soundtrack.js');
+    return { ...await withGeneratedSoundtrack(job), html: await readCodeAnimationHtml(job.id) };
   } catch (error) {
     if (error?.code !== 'CODE_ANIMATION_OUTPUT_MISSING') throw error;
     const completedAt = new Date().toISOString();

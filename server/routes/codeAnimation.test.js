@@ -69,7 +69,21 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+vi.mock('../services/pipeline/musicGen.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  isEngineHealthy: vi.fn(async () => true),
+}));
+vi.mock('../services/musicGeneration.js', () => ({
+  queueMusicGeneration: vi.fn(async () => ({ jobId: 'media-audio', position: 1, status: 'queued' })),
+}));
+vi.mock('../services/trackAlbumMembership.js', () => ({
+  createTrackWithAlbum: vi.fn(async (input) => ({ track: { id: 'track-soundtrack', ...input } })),
+}));
+
 import { emitCodeAnimationChanged } from '../services/socket.js';
+import { isEngineHealthy } from '../services/pipeline/musicGen.js';
+import { queueMusicGeneration } from '../services/musicGeneration.js';
+import { createTrackWithAlbum } from '../services/trackAlbumMembership.js';
 import { PATHS } from '../lib/paths.js';
 import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
@@ -166,6 +180,53 @@ describe('Code Animation fast-export audio notes', () => {
       } });
     }
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/code-animation/:id/soundtrack', () => {
+  const id = '00000000-0000-4000-8000-000000000002';
+  const finished = { id, status: 'completed', title: 'Lantern', input: { soundtrack: 'none' },
+    frame: { width: 1920, height: 1080, fps: 24, durationSeconds: 120 }, audioUrl: null };
+  const body = { prompt: 'Warm analog synths', engine: 'acestep15' };
+
+  it('renders a film-length track for a finished animation, which then becomes its audio', async () => {
+    codeAnimationRecords.set(id, finished);
+    codeAnimationHtml.set(id, '<!doctype html><html><head></head><body></body></html>');
+    const app = makeApp();
+    const started = await request(app).post(`/api/code-animation/${id}/soundtrack`).send(body);
+    expect(started.status).toBe(202);
+    expect(started.body).toMatchObject({ trackId: 'track-soundtrack', mediaJobId: 'media-audio', engine: 'acestep15', durationSec: 120, instrumentalOnly: true });
+    expect(createTrackWithAlbum).toHaveBeenCalledWith({ title: 'Lantern soundtrack' }, { preserveUnassigned: true });
+    expect(queueMusicGeneration).toHaveBeenCalledWith({ trackId: 'track-soundtrack', prompt: 'Warm analog synths', instrumentalOnly: true, engine: 'acestep15', durationSec: 120 });
+    expect(codeAnimationRecords.get(id).soundtrack).toMatchObject({ trackId: 'track-soundtrack', mediaJobId: 'media-audio' });
+    expect(emitCodeAnimationChanged).toHaveBeenCalledWith(id);
+
+    // Until the render lands the original (silent) audio stands.
+    getTrack.mockResolvedValue({ id: 'track-soundtrack', title: 'Lantern soundtrack' });
+    expect((await request(app).get(`/api/code-animation/generate/${id}`)).body.audioUrl).toBeNull();
+    getTrack.mockResolvedValue({ id: 'track-soundtrack', title: 'Lantern soundtrack', audioFilename: 'take 1.wav', durationSec: 120 });
+    const read = await request(app).get(`/api/code-animation/generate/${id}`);
+    expect(read.body.audioUrl).toBe('/data/music/take%201.wav');
+    expect(read.body.input.audio).toMatchObject({ source: 'track', trackId: 'track-soundtrack' });
+
+    // Regenerating renders a new take on the same track.
+    expect((await request(app).post(`/api/code-animation/${id}/soundtrack`).send({ ...body, prompt: 'Softer' })).status).toBe(202);
+    expect(createTrackWithAlbum).toHaveBeenCalledTimes(1);
+    expect(queueMusicGeneration).toHaveBeenLastCalledWith(expect.objectContaining({ trackId: 'track-soundtrack', prompt: 'Softer' }));
+  });
+
+  it('refuses a model that cannot render the whole film, an uninstalled one, and an unfinished animation', async () => {
+    codeAnimationRecords.set(id, finished);
+    const app = makeApp();
+    const short = await request(app).post(`/api/code-animation/${id}/soundtrack`).send({ ...body, engine: 'musicgen' });
+    expect(short.status).toBe(400);
+    expect(short.body.code).toBe('CODE_ANIMATION_SOUNDTRACK_TOO_LONG');
+    expect(short.body.error).toMatch(/120s.*at most 30s/);
+    isEngineHealthy.mockResolvedValueOnce(false);
+    expect((await request(app).post(`/api/code-animation/${id}/soundtrack`).send(body)).body.code).toBe('CODE_ANIMATION_SOUNDTRACK_ENGINE_NOT_READY');
+    codeAnimationRecords.set(id, { ...finished, status: 'running' });
+    expect((await request(app).post(`/api/code-animation/${id}/soundtrack`).send(body)).status).toBe(409);
+    expect(queueMusicGeneration).not.toHaveBeenCalled();
   });
 });
 
