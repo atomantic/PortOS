@@ -993,7 +993,7 @@ ${prompt}`;
             if (!enter) return;
             try {
               ptyProcess.write(SUBMIT_KEY);
-              console.log(`⏎ TUI run ${runId} prompt still unsubmitted in the composer — pressed Enter (attempt ${enter}/${UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS})`);
+              console.log(`🔁 TUI run ${runId} prompt still unsubmitted in the composer — pressed Enter (attempt ${enter}/${UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS})`);
             } catch { /* PTY may have already exited */ }
           }, UNSUBMITTED_PROMPT_POLL_MS);
         }
