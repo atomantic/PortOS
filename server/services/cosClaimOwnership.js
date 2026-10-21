@@ -19,13 +19,13 @@
 import { resolve } from 'path';
 import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 
-import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnershipState.js';
+import { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
 const normalize = (p) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string' && normalize(a) === normalize(b);
 const branchOf = (wt) => String(wt?.branch || '').replace(/^refs\/heads\//, '');
 
-export { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnershipState.js';
+export { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason, reserveCheckoutRetirementFence, retireWithUnlockedArchive } from './cosClaimOwnershipState.js';
 
 // Match merge admission's pre-start budget, across BOTH queues. A deadline is
 // cancellation only until the state callback starts; afterwards it diagnoses
@@ -106,6 +106,10 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
     if (!agent || agent.id !== agentId) return { [done]: false, reason: 'owner-unknown' };
     const repoPath = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
+    // Binding a checkout that is mid-archive would hand it to a run that the
+    // retirement then removes; releasing a branch never needs the fence.
+    const fenced = action === 'bind' && checkoutRetirementFenceReason({ repoPath, branch });
+    if (fenced) return { [done]: false, reason: fenced };
     const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
     return withCheckoutPublication(repoPath, async () => {
       const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
@@ -160,6 +164,8 @@ export async function checkReconcileOwnership(input, deps = {}) {
     if (completionHold) return { admitted: false, reason: completionHold };
     const holder = worktrees.find((wt) => branchOf(wt) === branch) || null;
     if (worktreePath && !samePath(holder?.path, worktreePath)) return { admitted: false, reason: 'holder-changed' };
+    const fenced = checkoutRetirementFenceReason({ repoPath, branch, path: holder?.path || null });
+    if (fenced) return { admitted: false, reason: fenced };
     const others = agentId ? agents.filter((a) => a?.id !== agentId) : agents;
     const reason = resolveLiveOwnerReason({
       branch, path: holder?.path || null, locked: Boolean(holder?.locked),

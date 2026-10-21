@@ -33,6 +33,15 @@ import { hasBranchMergeEvidence, getStatus, getStatusPorcelain } from './git.js'
 import { reapMergedWorktrees, cleanupOrphanedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } from './worktreeManager.js';
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+const archiveGate = vi.hoisted(() => ({ beforeArchive: null }));
+vi.mock('./heldCheckoutRecovery.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, preserveMergedCheckout: async (...args) => {
+    await archiveGate.beforeArchive?.();
+    return actual.preserveMergedCheckout(...args);
+  } };
+});
+import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
 /**
  * Why `wantedPath` was skipped, matched separator-insensitively — `skipped[].path`
@@ -472,6 +481,30 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     const branches = (await execGit(['branch', '--format=%(refname:short)'], dir)).stdout.trim().split('\n');
     expect(branches).not.toContain('merged-br');
     expect(branches).toContain('pending-br');
+  });
+
+  // #12682: the archive ran inside the shared ownership lock and starved every
+  // claim-ownership check queued behind it.
+  it('archives with the ownership queue free while fencing only the reaped checkout', async () => {
+    const mergedPath = await addWorktree(dir, 'fenced', 'fenced-br');
+    await execGit(['merge', '--no-ff', 'fenced-br', '--no-edit'], dir);
+    let started;
+    let resume;
+    const archiving = new Promise(resolve => { started = resolve; });
+    archiveGate.beforeArchive = () => new Promise(resolve => { resume = resolve; started(); });
+    try {
+      const reaping = reapMergedWorktrees(dir, { includeClaudeTrees: true });
+      await archiving;
+      expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
+      expect(checkoutRetirementFenceReason({ repoPath: dir, branch: 'fenced-br' })).toBe('checkout-retirement-reserved');
+      expect(checkoutRetirementFenceReason({ repoPath: dir, branch: 'unrelated-br' })).toBe(null);
+      resume();
+      expect((await reaping).reaped.map(r => r.branch)).toContain('fenced-br');
+    } finally {
+      archiveGate.beforeArchive = null;
+    }
+    expect(existsSync(mergedPath)).toBe(false);
+    expect(checkoutRetirementFenceReason({ repoPath: dir, branch: 'fenced-br' })).toBe(null);
   });
 
   it('preserves a merged worktree that has uncommitted changes', async () => {

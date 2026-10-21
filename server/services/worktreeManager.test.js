@@ -1161,6 +1161,17 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       || (args[0] === 'worktree' && args[1] === 'remove'))).toBe(false);
   });
 
+  it('leaves a checkout another retirement is archiving to that retirement (#12682)', async () => {
+    const { reserveCheckoutRetirementFence } = await import('./cosClaimOwnershipState.js');
+    const release = reserveCheckoutRetirementFence({ repoPath: '/repo', path: join(PATHS.worktrees, 'agent-x'), branch: 'cos/task-1/agent-x' });
+    try {
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+      expect(result.removed).toBe(false);
+      expect(result.warnings.join(' ')).toContain('checkout-retirement-reserved');
+      expect(preserveCheckoutMock).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
+
   it.each(['present', 'missing', 'lockfile'])('retains %s checkout evidence when archival fails', async state => {
     if (state === 'missing') existsSync.mockReturnValue(false);
     if (state === 'lockfile') scriptGit({ porcelain: ' M package-lock.json' });
