@@ -212,6 +212,20 @@ async function resolveAudio(audio) {
   };
 }
 
+// The finished animation a fork extends: its HTML is sent whole, so an
+// oversized file is refused with its size rather than truncated.
+async function resolveBaseAnimation(baseJobId) {
+  if (!baseJobId) return null;
+  const job = isCodeAnimationJobId(baseJobId) ? await getCodeAnimationJobRecord(baseJobId) : null;
+  if (!job) throw new ServerError('The animation to extend was not found', { status: 400, code: 'CODE_ANIMATION_BASE_NOT_FOUND' });
+  if (job.status !== 'completed') throw new ServerError('Only a finished animation can be extended', { status: 409, code: 'CODE_ANIMATION_BASE_NOT_COMPLETED' });
+  const html = await readCodeAnimationHtml(job.id);
+  if (html.length > CODE_ANIMATION_LIMITS.baseHtmlMax) {
+    throw new ServerError(`The animation to extend is ${html.length.toLocaleString('en-US')} characters of HTML; extending sends it whole, up to ${CODE_ANIMATION_LIMITS.baseHtmlMax.toLocaleString('en-US')}.`, { status: 400, code: 'CODE_ANIMATION_BASE_TOO_LARGE' });
+  }
+  return { jobId: job.id, title: job.title || '', durationSeconds: job.frame?.durationSeconds ?? null, html };
+}
+
 /**
  * Resolve every configuration a brief references and build its prompt.
  * `delivery` decides how reference images are described to the model
@@ -244,6 +258,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
       : Math.max(0, CODE_ANIMATION_LIMITS.referenceImagesMax - videoImages.length - uploads.length - universeImages.length),
   });
   const referenceImages = [...videoImages, ...uploads, ...universeImages, ...boardImages];
+  const base = await resolveBaseAnimation(input.baseJobId);
   const promptInput = {
     title: input.title,
     concept: input.concept,
@@ -260,6 +275,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     moodBoard: board,
     referenceImages,
     referenceVideo,
+    base,
   };
   const prompt = buildCodeAnimationPrompt({ ...promptInput, delivery });
   return {
@@ -272,6 +288,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     // Absolute paths never leave the server — the client gets served URLs only.
     attachments: referenceImages.map(({ label, origin, url }) => ({ label, origin, url })),
     audioUrl: audio?.url || null,
+    base: base ? { jobId: base.jobId, title: base.title, durationSeconds: base.durationSeconds } : null,
     referencePaths: referenceImages.map((image) => image.path),
   };
 }
@@ -475,6 +492,7 @@ export async function startCodeAnimationGeneration(input) {
     prompt: built.copyPrompt,
     attachments: built.attachments,
     moodBoardId: built.moodBoardId,
+    ...(built.base ? { base: built.base } : {}),
     error: null,
     runId: null,
     createdAt: now,
