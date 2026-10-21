@@ -69,6 +69,16 @@ describe('daemonNeedsRefresh', () => {
     expect(check({ argv: [] }).needed).toBe(true);
   });
 
+  it('moves the daemon onto the pinned Node, and leaves an unpinned install alone', () => {
+    const pinned = (nodeVersion, expectedNodeVersion) => daemonNeedsRefresh({
+      report: report({ node_version: nodeVersion }), expectedEntry: OURS, expectedVersion: VERSION, expectedNodeVersion,
+    }).needed;
+    expect(pinned('26.10.0', '26.12.1')).toBe(true);
+    expect(pinned('26.12.1', '26.12.1')).toBe(false);
+    // No pin: a daemon on another Node must not cost every co-located app a restart.
+    expect(pinned('26.10.0', null)).toBe(false);
+  });
+
   it('treats a differently-spelled path to the same file as a match', () => {
     const spelled = join(FIXTURE_DIR, 'lib', '..', 'lib', 'Daemon.js');
     expect(check({ argv: ['/usr/bin/node', spelled] }).needed).toBe(false);
