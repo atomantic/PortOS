@@ -18,13 +18,14 @@
  * stays honest. The page sweeps (#12169–#12171) and the app detail tabs
  * (#12591) are done; the remaining component sites are tracked by surface in
  * #12783 (Digital Twin), #12784 (Brain/MeatSpace/Messages/Privacy/Tribe),
- * #12785 (creative panels) and #12786 (settings/sharing/CoS/providers).
+ * #12785 (creative panels), #12807 (LoRA training panel) and #12786 (settings/sharing/CoS/providers).
  *
  * ## What this guard CANNOT see
  *
  * It is a source grep, not an AST pass:
- *   - A catch whose body does more than clear the list (`{ setX([]); setLoading(false); }`)
- *     is not matched; so is a `.catch` passed a named function.
+ *   - A catch whose body does more than clear the list after its leading
+ *     statements (`{ setX([]); setLoading(false); }`) is not matched; so is a
+ *     `.catch` passed a named function.
  *   - A collapse moved into a hook or lib module is invisible (that is also where
  *     a shared, state-carrying read belongs).
  *   - A match inside a comment or string counts.
@@ -48,12 +49,18 @@ const SCAN_PREFIXES = ['src/pages/', 'src/components/'];
  * `if (!cancelled)`), the keyed-map setter `setX((m) => ({ ...m, [id]: [] }))`
  * (bare or braced), and the object-literal spelling
  * `.catch(() => ({ agents: [], summary: {} }))` (a list under a key, one level
- * of nested braces allowed). The setter must start with `set` + a capital, so
+ * of nested braces allowed; an object that also carries an `error` key is a
+ * handled failure, not a collapse). A named parameter (`err =>`) and leading
+ * statements (`console.warn(...); setX([]);`) are allowed. The setter must start with `set` + a capital, so
  * `.catch(() => reset([]))` and a non-setter call stay out.
  */
 const EMPTY_SETTER = String.raw`set[A-Z]\w*\(\s*(?:\[\]|\(\s*\w+\s*\)\s*=>\s*\(\s*\{\s*\.\.\.\w+\s*,\s*\[[^\]]+\]\s*:\s*\[\]\s*\}\s*\))\s*\)`;
+// Leading statements of a braced arm, e.g. the `console.warn(...)` in
+// `err => { console.warn(...); setX([]); }`. None may call a setter: a catch
+// that also records the failure (`setLoadError(err)`) is a handled read.
+const LEADING_STATEMENTS = String.raw`(?:(?:(?!\bset[A-Z])(?:[^{};]|\$\{[^{}]*\}))*;\s*)*`;
 export const LIST_COLLAPSE = new RegExp(
-  String.raw`\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\s*(?:if\s*\([^()]*\)\s*)?${EMPTY_SETTER}\s*;?\s*\}|${EMPTY_SETTER}|\(\s*\{(?:[^{}]|\{[^{}]*\})*?\b\w+\s*:\s*\[\](?:[^{}]|\{[^{}]*\})*\}\s*\))\s*\)`,
+  String.raw`\.catch\(\s*(?:\(\s*\)|\(\s*\w+\s*\)|\w+)\s*=>\s*(?:\[\]|\{\s*${LEADING_STATEMENTS}(?:if\s*\([^()]*\)\s*)?${EMPTY_SETTER}\s*;?\s*\}|${EMPTY_SETTER}|\(\s*\{(?!(?:[^{}]|\{[^{}]*\})*\berror\b)(?:[^{}]|\{[^{}]*\})*?\b\w+\s*:\s*\[\](?:[^{}]|\{[^{}]*\})*\}\s*\))\s*\)`,
   'g',
 );
 
@@ -63,6 +70,9 @@ export const LIST_COLLAPSE = new RegExp(
  */
 const KNOWN = Object.freeze({
   'src/components/privacy/PrivacyOrgsTab.jsx': 2,
+  // Named-parameter, multi-statement spelling (#12807); migrated under #12819.
+  'src/components/loraTraining/CharacterLoraChip.jsx': 1,
+  'src/components/meatspace/post/MemoryPractice.jsx': 1,
   // Spellings the widened pattern (#12790) newly sees; migrated under #12804.
   'src/components/CmdKSearch.jsx': 1,
   'src/components/TagPicker.jsx': 1,
@@ -123,6 +133,9 @@ describe('page list fetches keep a failed read distinct from an empty list', () 
       'getBranches(p).catch(() => ({ summary: {}, branches: [] }))',
       'getJiraBoards(i).catch(() => { if (!cancelled) setBoards([]); })',
       'listShareInbox(id).catch(() => setInboxByBucket((m) => ({ ...m, [bucketId]: [] })))',
+      'getUniverses().catch(err => { console.warn(`⚠️ Failed: ${err.message}`); setUniverses([]); })',
+      'getChunks().catch(err => {\n        console.warn(\'x: \' + err.message);\n        if (active) setChunkMastery([]);\n      })',
+      'listCheckpoints(id).catch((e) => setCheckpoints([]))',
       'listShareActivity(id).catch(() => { setActivityByBucket((m) => ({ ...m, [id]: [] })); })',
     ]) expect(countIn(sample), sample).toBe(1);
     for (const sample of [
@@ -132,6 +145,10 @@ describe('page list fetches keep a failed read distinct from an empty list', () 
       'getAppTaskTypes(id).catch(() => ({ taskTypeOverrides: {} }))',
       'load().catch(() => { if (!cancelled) { setRows([]); setFailed(true); } })',
       'load().catch(() => setInboxByBucket((m) => ({ ...m, [bucketId]: m[bucketId] })))',
+      'load().catch(err => { console.warn(err.message); setRows([]); setLoadError(err); })',
+      'load().catch(err => { setLoadError(err); setRows([]); })',
+      'load().catch(error => ({ key, data: [], error }))',
+      'load().catch((err) => ({ error: err.message, posts: [] }))',
       'load().catch(() => ({ providers: [], error: true }))'.replace('[], error', 'x, error'),
     ]) expect(countIn(sample), sample).toBe(0);
   });

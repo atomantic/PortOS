@@ -12,6 +12,8 @@
 
 import { useState, useCallback } from 'react';
 import useMounted from '../../hooks/useMounted';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 import { Layers, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -21,25 +23,25 @@ import {
 
 export default function CheckpointPicker({ run, onPromoted }) {
   const [expanded, setExpanded] = useState(false);
-  const [checkpoints, setCheckpoints] = useState(null);
-  const [loading, setLoading] = useState(false);
+  // Stays true after the first expand so collapsing does not drop a loaded (or
+  // failed, retryable) list back to a refetch.
+  const [opened, setOpened] = useState(false);
   const [promotingStep, setPromotingStep] = useState(null);
   // Guards the background preview-poll setTimeout chain from firing after the
   // component unmounts (deferred-work-respects-unmount rule).
   const mountedRef = useMounted();
 
-  const load = useCallback(() => {
-    setLoading(true);
-    listLoraTrainingCheckpoints(run.id)
-      .then((res) => setCheckpoints(Array.isArray(res?.checkpoints) ? res.checkpoints : []))
-      .catch(err => { console.warn('⚠️ Failed to load checkpoints: ' + err.message); setCheckpoints([]); })
-      .finally(() => setLoading(false));
-  }, [run.id]);
+  const fetchCheckpoints = useCallback(
+    () => listLoraTrainingCheckpoints(run.id, { silent: true }).then((res) => (Array.isArray(res?.checkpoints) ? res.checkpoints : [])),
+    [run.id],
+  );
+  const { items: checkpoints, state, error, retry, setItems: setCheckpoints } = useListResource(fetchCheckpoints, { enabled: opened });
+  const loading = state === 'loading';
 
   const toggle = () => {
     const next = !expanded;
     setExpanded(next);
-    if (next && checkpoints === null) load();
+    if (next) setOpened(true);
   };
 
   const promote = async (step) => {
@@ -48,14 +50,14 @@ export default function CheckpointPicker({ run, onPromoted }) {
     // background (its step wasn't on the sample cadence — e.g. the final step).
     // That render takes minutes, so poll a few times to surface it once ready
     // without a full page reload. (No socket event for this; bounded polling.)
-    const lacksPreview = !checkpoints?.find((c) => c.step === step)?.hasPreview;
+    const lacksPreview = !checkpoints.find((c) => c.step === step)?.hasPreview;
     try {
       await promoteLoraTrainingCheckpoint(run.id, step, { silent: true });
       toast.success(`Promoted checkpoint @ step ${step}`);
       // Reactive: mark the chosen step deployed locally, then refetch + bubble
       // up so the parent's run record (loraFilename, selected step) refreshes.
-      setCheckpoints((prev) => prev?.map((c) => ({ ...c, deployed: c.step === step })) ?? prev);
-      load();
+      setCheckpoints((prev) => prev.map((c) => ({ ...c, deployed: c.step === step })));
+      retry();
       onPromoted?.();
       if (lacksPreview) {
         // Backstop poll for the background-rendered preview (~5 min on 9B).
@@ -64,7 +66,7 @@ export default function CheckpointPicker({ run, onPromoted }) {
         const tick = () => {
           if (!mountedRef.current) return;
           attempts += 1;
-          listLoraTrainingCheckpoints(run.id)
+          listLoraTrainingCheckpoints(run.id, { silent: true })
             .then((res) => {
               if (!mountedRef.current) return;
               const list = Array.isArray(res?.checkpoints) ? res.checkpoints : [];
@@ -94,7 +96,7 @@ export default function CheckpointPicker({ run, onPromoted }) {
         aria-expanded={expanded}
       >
         <Layers className="w-3.5 h-3.5 text-port-accent" />
-        Checkpoints{checkpoints ? ` (${checkpoints.length})` : ''}
+        Checkpoints{state === 'ready' ? ` (${checkpoints.length})` : ''}
         <span className="text-gray-500">{expanded ? '▲' : '▼'}</span>
       </button>
 
@@ -112,10 +114,11 @@ export default function CheckpointPicker({ run, onPromoted }) {
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading checkpoints…
             </div>
           )}
-          {!loading && checkpoints?.length === 0 && (
+          {state === 'error' && <ListLoadError what="checkpoints" error={error} onRetry={retry} />}
+          {state === 'ready' && checkpoints.length === 0 && (
             <div className="text-xs text-gray-500">No checkpoints recorded for this run.</div>
           )}
-          {!loading && !!checkpoints?.length && (
+          {!loading && checkpoints.length > 0 && (
             <>
               <div className="text-[11px] text-gray-500 mb-1.5">
                 Pick by the preview — loss is shown but is not a quality ranking.
