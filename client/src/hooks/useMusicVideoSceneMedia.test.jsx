@@ -26,6 +26,8 @@ const generateImage = vi.fn(async () => ({ status: 'queued', jobId: 'new-job' })
 vi.mock('../services/apiSystem.js', () => ({ generateImage: (...a) => generateImage(...a) }));
 vi.mock('../services/apiImageVideo.js', () => ({ generateVideo: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+const listCatalogIngredientMedia = vi.fn();
+vi.mock('../services/apiCatalog.js', () => ({ listCatalogIngredientMedia: (...a) => listCatalogIngredientMedia(...a) }));
 
 const useMusicVideoSceneMedia = (await import('./useMusicVideoSceneMedia.js')).default;
 
@@ -79,5 +81,35 @@ describe('useMusicVideoSceneMedia in-flight restore and failure chip (#10154)', 
     // A landed frame's attach event carries lastFailure: null and clears the chip.
     act(() => handlers.get('music-video:scene-image')({ projectId: 'p1', sceneId: 's1', referenceImageId: 'f.png', takes: [], lastFailure: null }));
     expect(applyScenePatch).toHaveBeenLastCalledWith('p1', 's1', { referenceImageId: 'f.png', takes: [], lastFailure: null });
+  });
+});
+
+describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
+  beforeEach(() => { handlers.clear(); generateImage.mockClear(); getMusicVideoSceneJobs.mockReset(); getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] }); });
+  afterEach(cleanup);
+
+  // Uniquely catches a board render sent without the shot's cast guides, before or after they load.
+  it('refuses a frame render until the cast member\'s media loads, then sends the matching guide first', async () => {
+    let resolveMedia;
+    listCatalogIngredientMedia.mockReturnValue(new Promise((resolve) => { resolveMedia = resolve; }));
+    const cast = {
+      id: 'p2',
+      concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Example Lead', ingredientId: 'cat-chr-x' }] },
+      scenes: [{ sceneId: 's1', order: 0, label: 'Intro', prompt: 'a lighthouse', referenceImageId: null, takes: [], characterVariant: { ingredientId: 'cat-chr-x', age: 7 } }],
+    };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
+    expect(listCatalogIngredientMedia).toHaveBeenCalledWith('cat-chr-x', { silent: true });
+
+    let outcome;
+    await act(async () => { outcome = await result.current.generateFrame(cast.scenes[0]); });
+    expect(outcome).toEqual({ ok: false });
+    expect(generateImage).not.toHaveBeenCalled();
+
+    await act(async () => { resolveMedia([
+      { mediaKey: 'adult.png', kind: 'reference', library: { variant: { age: 30 }, guide: true } },
+      { mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } },
+    ]); });
+    await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
+    expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png', 'adult.png']);
   });
 });

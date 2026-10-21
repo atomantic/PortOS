@@ -61,7 +61,8 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
   if (!Array.isArray(media)) return [];
   const name = (project?.concept?.subjects || []).find((s) => s?.ingredientId === variant.ingredientId)?.name || 'Cast guide';
   return pickGuideMedia(media, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES)
-    .filter((m) => m.mediaKey)
+    // Frame renders name references by basename (routes/imageGen.js), so a nested key cannot be sent.
+    .filter((m) => typeof m.mediaKey === 'string' && m.mediaKey && !/[/\\]/.test(m.mediaKey))
     .map((m) => {
       const v = m.library?.variant || {};
       const detail = v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || '');

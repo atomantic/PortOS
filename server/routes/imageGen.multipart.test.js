@@ -311,6 +311,20 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     expect(params.referenceImageFiles).toBeUndefined();
   });
 
+  // Uniquely catches a Casting guide stored outside the gallery failing a board frame render.
+  it('resolves a named reference from the other image-input roots after the gallery', async () => {
+    mockedSettings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
+    await writeFile(join(refsSandbox, 'cast-guide.png'), PNG_FIXTURE);
+
+    const res = await postJson(app, '/api/image-gen/generate', {
+      prompt: 'the lead at age seven',
+      referenceImageFiles: ['cast-guide.png'],
+    });
+
+    expect(res.status).toBe(200);
+    expect(enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths).toEqual([join(refsSandbox, 'cast-guide.png')]);
+  });
+
   it('returns the stable missing-reference code for a gallery image that no longer exists', async () => {
     mockedSettings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
 
