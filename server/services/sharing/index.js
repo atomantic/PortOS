@@ -9,7 +9,7 @@
 
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { join } from 'path';
-import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
+import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, quiesceAllWatchersForExit, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
 import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers, syncCosHistoryWithAllPeers, syncCosTasksWithAllPeers, syncEidoverseFoundationsWithAllPeers } from './peerSync.js';
@@ -173,11 +173,28 @@ export async function initSharing({ io: socketIo } = {}) {
 }
 
 // Resolves once tracked peer-sync background work (peer:online walks, debounced
-// pushes) has settled. Call after shutdownSharing() and before closing the DB pool.
+// pushes) has settled. Call after shutdownSharing() or quiesceSharingForExit() and
+// before closing the DB pool.
 export { drainBackgroundOperations as drainPeerSyncOperations } from './peerSubscriptions.js';
 
 export async function shutdownSharing() {
   await shutdownAllWatchers();
+  releaseSharingRuntime();
+}
+
+/**
+ * Process-exit form of shutdownSharing(): the same admission stop and listener
+ * teardown, without closing the share-bucket watchers, whose close blocks the
+ * main thread for seconds on macOS (#12853). process.exit releases them. No
+ * convergence walk can start afterwards, so the DB pool still closes after
+ * peer sync stops (#12585). Keep shutdownSharing() for re-init and tests.
+ */
+export function quiesceSharingForExit() {
+  quiesceAllWatchersForExit();
+  releaseSharingRuntime();
+}
+
+function releaseSharingRuntime() {
   stopMediaLibrarySweep();
   sharingEvents.removeAllListeners();
   // Detach the recordEvents + instanceEvents listeners that

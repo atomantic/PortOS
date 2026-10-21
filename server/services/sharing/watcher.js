@@ -27,6 +27,8 @@ const backlogQueues = new Map(); // bucketId → { running: Promise, queued: Pro
 const queueLifecycle = createFileWriteQueue();
 let shutdownAdmitted = false;
 let shutdownGeneration = 0;
+// Terminal: set only on the way to process.exit (quiesceAllWatchersForExit).
+let exitQuiesced = false;
 
 /**
  * Coalesce backlog-scan requests per bucket. A flood of records/ or assets/
@@ -93,11 +95,13 @@ async function attachWatcherNow(bucketId) {
   // A path under assets/ or records/ is bundle-side sync we should retry on,
   // not a manifest to process. Manifests live in manifests/ (always *.json).
   const isBundleSync = (p) => p.startsWith(`${assetsDir}${sep}`) || p.startsWith(`${recordsDir}${sep}`);
+  // Handles left open for process exit still deliver events; drop them.
+  const live = (handler) => async (path) => { if (!exitQuiesced) await handler(path); };
 
   // try/catch around async event handlers — see AGENTS.md "PTY/child-process
   // /setTimeout/setInterval callbacks" rule (chokidar events fire outside the
   // request lifecycle, no Express middleware to bubble the throw to).
-  w.on('add', async (path) => {
+  w.on('add', live(async (path) => {
     try {
       if (isBundleSync(path)) { await queueBacklog(bucketId); return; }
       const file = basename(path);
@@ -106,8 +110,8 @@ async function attachWatcherNow(bucketId) {
     } catch (err) {
       console.error(`❌ sharing.watcher: processManifest threw for ${basename(path)}: ${err?.message || err}`);
     }
-  });
-  w.on('change', async (path) => {
+  }));
+  w.on('change', live(async (path) => {
     try {
       if (isBundleSync(path)) { await queueBacklog(bucketId); return; }
       // A manifest *changing* after first write is unusual (atomicWrite
@@ -119,8 +123,8 @@ async function attachWatcherNow(bucketId) {
     } catch (err) {
       console.error(`❌ sharing.watcher: processManifest threw on change ${basename(path)}: ${err?.message || err}`);
     }
-  });
-  w.on('unlink', async (path) => {
+  }));
+  w.on('unlink', live(async (path) => {
     // Only manifest deletions are unshare signals. Record/asset unlinks are
     // expected during cloud-sync churn and not actionable here.
     if (!path.startsWith(`${manifestsDir}${sep}`)) return;
@@ -135,7 +139,7 @@ async function attachWatcherNow(bucketId) {
     } catch (err) {
       console.error(`❌ sharing.watcher: handleUnshare threw for ${file}: ${err?.message || err}`);
     }
-  });
+  }));
   w.on('error', (err) => {
     console.error(`❌ sharing.watcher: bucket=${bucket.name} ${err?.message || err}`);
   });
@@ -205,6 +209,19 @@ export async function shutdownAllWatchers() {
     const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
     if (errors.length) throw new AggregateError(errors, 'Failed to close share bucket watchers');
   });
+}
+
+/**
+ * Process-exit teardown: stop admission and drop further events, but leave the
+ * handles open for process.exit to release. Closing a chokidar watcher stops
+ * its macOS FSEvents streams synchronously on the main thread — several seconds
+ * per bucket on a live install (#12853), long enough to starve every shutdown
+ * timer behind it. Use shutdownAllWatchers() when the process keeps running.
+ */
+export function quiesceAllWatchersForExit() {
+  shutdownAdmitted = true;
+  shutdownGeneration++;
+  exitQuiesced = true;
 }
 
 export function listAttachedWatchers() {
