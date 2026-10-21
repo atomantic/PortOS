@@ -20,13 +20,17 @@ function isRunning(pid) {
 
 const grant = { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
 
-// Keep the former vi.waitFor default budget. A missing marker must distinguish
+// The deadline only bounds a hung supervisor. It was 1s (the former vi.waitFor
+// default), which a loaded machine exceeds just spawning the Git supervisor
+// (#12791), so it is generous; the deadline contract test drives it by fake time.
+// A missing marker must distinguish
 // pending preparation from an already-settled request or an exited supervisor.
 // No paths, PIDs, child output, exception messages or environment enter errors.
 // #11528's historical timing cause is still unknown. Set
 // PORTOS_PROFILE_SCANNER_PREPARATION=1 on the capped broader plan to retain the
 // same fixed state/phase timings on success as well as failure; a quiet pass is
 // not evidence that the missing-marker failure is resolved.
+const MARKER_DEADLINE_MS = 30_000;
 function observeGitPreparation(markerName = 'git-worker') {
   const started = performance.now();
   const state = { settlement: 'pending', status: null, spawned: false, pidAssigned: false,
@@ -113,7 +117,7 @@ function observeGitPreparation(markerName = 'git-worker') {
     },
     wait(run) {
       if (!settled) {
-        timer = setTimeout(() => finish('marker-deadline'), 1000);
+        timer = setTimeout(() => finish('marker-deadline'), MARKER_DEADLINE_MS);
         poll();
       }
       run.then(result => {
@@ -142,9 +146,14 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   for (const manager of managers.splice(0)) await manager.stop('agent-fixture').catch(() => {});
-  const owner = await readFile(join(root, 'agents/agent-fixture/security-scan-process.json'), 'utf8').then(JSON.parse).catch(() => null);
-  await cleanupSecurityScanGroup(owner);
-  await rm(root, { recursive: true, force: true });
+  // Always remove the temp root, even when owner cleanup throws, so a failing
+  // test cannot leak scanner-snapshot-test-* directories (#12791).
+  try {
+    const owner = await readFile(join(root, 'agents/agent-fixture/security-scan-process.json'), 'utf8').then(JSON.parse).catch(() => null);
+    await cleanupSecurityScanGroup(owner);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 async function setup(options = {}) {
@@ -291,7 +300,7 @@ describe.skipIf(process.platform === 'win32')('scanner committed snapshot bounda
       const failed = expect(ready).rejects.toMatchObject({ reason: 'marker-deadline', diagnostics: {
         settlement: 'pending', spawned: false, pidAssigned: false, prepareSent: false, reply: null,
       } });
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(MARKER_DEADLINE_MS);
       await failed;
       expect(vi.getTimerCount()).toBe(0);
     } finally { preparation.dispose(); vi.useRealTimers(); }
