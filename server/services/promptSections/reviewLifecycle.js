@@ -1284,7 +1284,7 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
  */
 export const DEFAULT_BRANCH_HEAD_GUIDANCE = 'This checkout is DETACHED at the PR head commit because the PR\'s head branch is the repository\'s default branch. Do NOT commit to it and NEVER push to the head branch. Read, test and gate the exact reviewed commit; if a fix is required, cut a new branch from it, push that branch and open its own PR against the default branch.';
 
-export function buildDefaultBranchHeadInstructions(branch, headIsDefaultBranch) {
+function buildDefaultBranchHeadInstructions(branch, headIsDefaultBranch) {
   if (!headIsDefaultBranch || !branch) return '';
   return `Head branch \`${branch}\` is the default branch: ${DEFAULT_BRANCH_HEAD_GUIDANCE} A release PR is otherwise gated on CI and merged as-is, so the merge steps below still apply to the PR itself.\n\n`;
 }
