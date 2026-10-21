@@ -120,7 +120,7 @@ export default function SceneCard({
   scene, index, shotNumber = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
-  project = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
+  project = null, castMedia = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
@@ -451,7 +451,7 @@ export default function SceneCard({
         <div className="grid gap-3 @3xl:grid-cols-2">
         {/* Frames: the still this shot starts from and, optionally, the one it ends on (#11173),
             each with its prompt and Render under it, then the tapped frame's takes. */}
-        <SceneFrames project={project} scene={scene} index={index} endFrames={endFrames} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
+        <SceneFrames project={project} castMedia={castMedia} scene={scene} index={index} endFrames={endFrames} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
           onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onEditLocal={onEditLocal} onSave={onSave}
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}

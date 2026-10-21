@@ -33,6 +33,7 @@ import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runw
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
+import { loadSceneCastMedia } from './castGuideMedia.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -54,7 +55,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
   const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes });
   if (!prompt) throw unprompted(scene, 'frame');
-  const referenceImagePaths = conditioningReferences(project, scene)
+  const referenceImagePaths = conditioningReferences(project, scene, await loadSceneCastMedia(scene))
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),

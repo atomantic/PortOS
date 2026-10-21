@@ -2,10 +2,11 @@ import { shotActionContractProblem } from '../../../server/lib/musicVideoActionC
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { addMusicVideoSceneTake, getMusicVideoSceneJobs } from '../services/apiMusicVideo.js';
+import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneBatch from './useSceneBatch.js';
@@ -157,6 +158,20 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
     return () => { live = false; };
   }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs]);
+  // The Casting media of every cast member a shot names in its `characterVariant`
+  // (#12763), keyed by ingredient id. A shot's frames lead with that member's
+  // guides; until a load lands (or when it fails) the shot uses the automatic set.
+  const castIds = [...new Set((project?.scenes || []).map((scene) => scene?.characterVariant?.ingredientId).filter(Boolean))].sort().join(',');
+  const [castMedia, setCastMedia] = useState({});
+  useEffect(() => {
+    if (!castIds) return undefined;
+    let active = true;
+    Promise.all(castIds.split(',').map((id) => listCatalogIngredientMedia(id, { silent: true })
+      .then((media) => (Array.isArray(media) ? [id, media] : null), () => null)))
+      .then((entries) => { if (active) setCastMedia(Object.fromEntries(entries.filter(Boolean))); });
+    return () => { active = false; };
+  }, [castIds]);
+
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
   const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
@@ -192,7 +207,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     // The shot's references (the card's References row) ride along on every frame render, a refine included.
-    const conditioning = conditioningReferences(project, scene);
+    const conditioning = conditioningReferences(project, scene, castMedia);
     const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     // The director's text (or a refine's instruction); the server composes the still's
@@ -261,7 +276,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
     // The frame it renders from leads, then the shot's references (the card's References row).
-    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene));
+    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene, castMedia));
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
       // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
@@ -503,6 +518,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     frameBatch,
     videoBatch,
     conditioning,
+    castMedia,
     generateFrame,
     generateEndFrame,
     generateSceneVideo,

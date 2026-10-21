@@ -57,6 +57,7 @@ import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicV
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
+import { CAST_ERAS } from './catalogMediaLibrary.js';
 import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
@@ -636,11 +637,21 @@ export const musicVideoSceneCameraSchema = z.object({
   reason: z.string().trim().max(300).optional(),
 }).strict();
 
+// #12763: the Casting cast member a shot features and the variant (age, era, look) its
+// frames should show. Conditioning leads with that member's render guides; null clears it.
+export const musicVideoSceneCharacterVariantSchema = z.object({
+  ingredientId: z.string().min(1).max(128),
+  age: z.number().int().min(0).max(150).optional(),
+  era: z.enum(CAST_ERAS).optional(),
+  wardrobeId: z.string().trim().min(1).max(59).optional(),
+}).strict();
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
   // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
   frameReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES).nullable().optional(),
+  characterVariant: musicVideoSceneCharacterVariantSchema.nullable().optional(),
   camera: musicVideoSceneCameraSchema.nullable().optional(),
   visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
