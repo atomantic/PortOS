@@ -61,6 +61,7 @@ jobs:
       prompt_history: ${{ steps.plan.outputs.prompt_history }}
       linux_containment: ${{ steps.plan.outputs.linux_containment }}
       supercollider_live: ${{ steps.plan.outputs.supercollider_live }}
+      docker_containment_live: ${{ steps.plan.outputs.docker_containment_live }}
       windows: ${{ steps.plan.outputs.windows }}
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
@@ -168,6 +169,7 @@ jobs:
           PROMPT_HISTORY_MODE: ${{ steps.plan.outputs.prompt_history }}
           LINUX_CONTAINMENT_MODE: ${{ steps.plan.outputs.linux_containment }}
           SUPERCOLLIDER_LIVE_MODE: ${{ steps.plan.outputs.supercollider_live }}
+          DOCKER_CONTAINMENT_LIVE_MODE: ${{ steps.plan.outputs.docker_containment_live }}
           NODE_MINIMUM_MODE: ${{ steps.node-minimum.outputs.run }}
           WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
           WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
@@ -192,6 +194,7 @@ jobs:
             echo "- Shipped prompt history: \`${PROMPT_HISTORY_MODE}\`"
             echo "- Linux worker containment: \`${LINUX_CONTAINMENT_MODE}\`"
             echo "- SuperCollider live containment: \`${SUPERCOLLIDER_LIVE_MODE}\`"
+            echo "- Docker containment live: \`${DOCKER_CONTAINMENT_LIVE_MODE}\`"
             echo "- Node minimum compatibility: \`${NODE_MINIMUM_MODE}\`"
             echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
@@ -1222,6 +1225,37 @@ jobs:
         # the job is gated on those files' import closure.
         run: npm test --prefix server -- --run ../autofixer/sandbox.verify.test.js lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
 
+  docker-containment-live:
+    name: Docker containment live
+    needs: impact
+    # Path-gated by the impact planner's static import closure of the live
+    # suite (DOCKER_CONTAINMENT_LIVE_ENTRIES), and part of CI Gate.
+    if: needs.impact.outputs.docker_containment_live == 'true'
+    # Native Docker Engine on a hosted runner. Docker Desktop on macOS is
+    # verified manually (docs/CONTAINMENT.md); CI has no macOS Docker.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require maintainer release for Dependabot
+        run: node scripts/ci-dependabot-admission.js
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.x
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix server
+      - name: Prove the profile under a real engine
+        working-directory: server
+        env:
+          PORTOS_DOCKER_CONTAINMENT_LIVE: '1'
+        run: npx --no-install vitest run services/dockerContainment.live.test.js
+
   supercollider-live:
     name: SuperCollider native ${{ matrix.arch }}
     needs: impact
@@ -1346,7 +1380,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment, supercollider-live]
+    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment, docker-containment-live, supercollider-live]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # READ only: the reporter lists this run's jobs to name the one whose STEP
@@ -1387,6 +1421,7 @@ jobs:
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
           CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}
           CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}
+          CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}
           CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}
         run: node scripts/ci-gate-report.js
 

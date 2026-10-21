@@ -4,6 +4,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import RiggingRuntimeCard from './RiggingRuntimeCard';
+import DockerContainmentCard from './DockerContainmentCard';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import { isGitHubRepoUrl, parseGitHubUrl } from '../../lib/repoUrl.js';
 import { getPrimaryLaunchUrl } from '../../services/appUrls.js';
@@ -250,6 +251,7 @@ export function InstanceFeaturesTab() {
               generic "no <label> instance is configured" hint would talk about
               an integration this feature does not have. */}
           {isRigging && <RiggingRuntimeCard />}
+          {feature.id === 'docker-containment' && feature.enabled && <DockerContainmentCard />}
           {isEidoverse && (
             <div className="mt-3 space-y-1 text-xs text-gray-400">
               {needsInstall && <p>

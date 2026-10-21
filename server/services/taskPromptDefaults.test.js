@@ -563,6 +563,14 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(5);
   });
 
+  it('dependency-updates routes installs and validation through Docker containment when ready', () => {
+    const current = DEFAULT_TASK_PROMPTS['dependency-updates'];
+    expect(current).toContain('"{portosRoot}/scripts/contained-run.js" --phase install --apply-patch');
+    expect(current).toContain('"{portosRoot}/scripts/contained-run.js" --phase validate');
+    expect(current).toContain('ran\nUNCONTAINED');
+    expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(8);
+  });
+
   it('keeps dependency installs inside scheduled worktrees', () => {
     const current = DEFAULT_TASK_PROMPTS['dependency-updates'];
     expect(current).toContain('intentionally private to that worktree');

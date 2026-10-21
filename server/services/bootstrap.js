@@ -456,6 +456,15 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
     })
     .catch(err => logBootstrapFailure('⚠️ Eidoverse startup deferred', err));
 
+  // Docker containment (#12844): sweep containers/volumes a crash or restart
+  // left behind — only when the user turned the feature on, so a fresh install
+  // makes no Docker call at boot.
+  Promise.all([import('./instanceFeatures.js'), import('./dockerContainment.js')])
+    .then(async ([{ isInstanceFeatureEnabled }, { reconcileDockerContainment }]) => {
+      if (await isInstanceFeatureEnabled('docker-containment')) await reconcileDockerContainment({ enabled: true, reason: 'boot' });
+    })
+    .catch(err => logBootstrapFailure('⚠️ Docker containment boot reconcile deferred', err));
+
   // Initialize agent automation scheduler and action executor
   automationScheduler.init().catch(err => logBootstrapFailure('❌ Agent scheduler init failed', err));
   // agentActionExecutor.init() is synchronous — guard with try/catch so a thrown

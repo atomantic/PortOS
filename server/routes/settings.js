@@ -29,6 +29,7 @@ import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
 import { filmLookSavedPresetsSchema } from '../lib/filmLookValidation.js';
+import { dockerContainmentSettingsSchema } from '../lib/dockerContainmentValidation.js';
 
 const router = Router();
 
@@ -342,6 +343,17 @@ async function reconcileItermOnToggle() {
     .catch((err) => console.error(`❌ iTerm2 bridge reconcile (feature-toggle) failed: ${err.message}`));
 }
 
+// Docker containment owns a shared egress network and per-run containers,
+// networks and volumes (#12844): turning it on verifies the engine and sweeps
+// orphans, turning it off cancels live runs and removes everything — now, not
+// at the next restart. Same persisted-flag rule as above.
+async function reconcileDockerContainmentOnToggle(result) {
+  const enabled = result.features.find((feature) => feature.id === 'docker-containment')?.enabled === true;
+  const { reconcileDockerContainment } = await import('../services/dockerContainment.js');
+  await reconcileDockerContainment({ enabled, reason: 'feature-toggle' })
+    .catch((err) => console.error(`❌ Docker containment reconcile (feature-toggle) failed: ${err.message}`));
+}
+
 // An interval-only Beeper save (no `enabled` flip) used to take effect only
 // at the next process restart: the registered event's `intervalMs` is read
 // once, at `schedule()` time (`createSettingsGatedSyncScheduler.js`), and
@@ -366,6 +378,7 @@ router.put('/features/:featureId', asyncHandler(async (req, res) => {
   const result = await updateInstanceFeature(featureId, enabled);
   if (featureId === 'beeper') await reconcileBeeperArming('feature-toggle');
   if (featureId === 'iterm') await reconcileItermOnToggle();
+  if (featureId === 'docker-containment') await reconcileDockerContainmentOnToggle(result);
   res.json(result);
 }));
 
@@ -550,6 +563,9 @@ const validateSettingsPatch = async (body) => {
   // disk (the registry would then silently treat it as its default).
   if (body?.apiAccess !== undefined) {
     validateRequest(apiAccessSettingsSchema.partial(), body.apiAccess);
+  }
+  if (body?.dockerContainment !== undefined) {
+    validateRequest(dockerContainmentSettingsSchema, body.dockerContainment);
   }
   if (body?.instanceFeatures !== undefined) {
     validateRequest(instanceFeatureSettingsSchema, body.instanceFeatures);

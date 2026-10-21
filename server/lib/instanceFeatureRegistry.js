@@ -121,6 +121,13 @@ export const INSTANCE_FEATURES = Object.freeze([
     defaultEnabled: false,
   }),
   Object.freeze({
+    id: 'docker-containment',
+    label: 'Docker containment',
+    description: 'Run untrusted dependency installs, tests and autofix verification in a throwaway Linux container with no credentials and registry-only network. Needs Docker Desktop or Docker Engine on this machine.',
+    // No detector: a fresh install makes no Docker call until the user turns it on.
+    defaultEnabled: false,
+  }),
+  Object.freeze({
     id: 'facetime',
     label: 'FaceTime Audio',
     description: 'Machine-local FaceTime Audio call controls and setup checks.',
