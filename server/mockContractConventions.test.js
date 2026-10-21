@@ -45,6 +45,7 @@ describe('vi.mock factory contract conventions', () => {
       'export default Panel;',
     ].join('\n');
     expect(mask(src)).toContain('export default Panel');
+    expect(mask('export const a = <i>the default\'s value</i>;\nexport const b = 1;')).toContain('export const b');
     expect(mask('export const a = <i>Zoë\'s</i>;\nexport const b = 1;')).toContain('export const b');
     expect(mask("export const a = 'x';\nexport const b = 1;")).toContain('export const b');
     expect(mask("export const c = 'don\\'t';")).not.toContain('don');
