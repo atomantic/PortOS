@@ -73,7 +73,10 @@ describe('local making-of compilation', () => {
   beforeAll(async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 160 90"><text x="8" y="15" font-size="12">S</text></svg>';
     await sharp(Buffer.from(svg)).png().toBuffer();
-  });
+    // The cold start is a native fontconfig cache build whose cost depends on the
+    // runner (a loaded windows-latest shard overran the default 30s hook deadline,
+    // #12701), so this one-time warm-up gets its own explicit budget.
+  }, 120_000);
 
   it('keeps multiline entity-encoded image captions inert in exported Markdown', async () => {
     const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#227766' } }).png().toBuffer();
