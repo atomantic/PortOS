@@ -520,7 +520,7 @@ contract; the parts that are not obvious:
   own restore-keys, and stays warm across a lockfile bump that misses here.
 - **The key pins the Node major, not the resolved patch.**
   `NODE_MODULE_VERSION` is stable across patch releases, so keying on
-  `steps.node.outputs.node-version` would discard the entry on every Node 24.x
+  `steps.node.outputs.node-version` would discard the entry on every Node 26.x
   release for no ABI benefit; the mark carries the exact ABI as a backstop. A
   test compares the literal against the job's own `node-version:` pin.
   `server/package.json` is in the hash alongside the lockfile so that skipping
