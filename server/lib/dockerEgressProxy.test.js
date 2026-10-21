@@ -6,7 +6,7 @@ import { DOCKER_EGRESS_PROXY_READY, DOCKER_EGRESS_PROXY_SOURCE, decideEgressConn
 
 describe('egress proxy decisions', () => {
   it.each([
-    '127.0.0.1', '10.1.2.3', '172.17.0.1', '192.168.1.5', '100.100.1.1', '169.254.169.254', '0.0.0.0', '224.0.0.1',
+    '127.0.0.1', '10.1.2.3', '172.17.0.1', '192.168.1.5', '100.64.0.1', '169.254.169.254', '0.0.0.0', '224.0.0.1',
     '::1', 'fd7a:115c:a1e0::1', 'fe80::1', '::ffff:192.168.1.5',
   ])('treats %s as non-public', (address) => expect(isNonPublicAddress(address)).toBe(true));
 
