@@ -39,7 +39,7 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
     };
 
     state.stats.agentsSpawned++;
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
 
     cosEvents.emit('agent:spawned', state.agents[agentId]);
     return state.agents[agentId];
@@ -80,7 +80,7 @@ export async function updateAgent(agentId, updates) {
     } else {
       state.agents[agentId] = { ...state.agents[agentId], ...updates };
     }
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
 
     // Completion writes the archive before later completion hooks enrich an
     // agent's metadata (task summaries, scan reports, etc.). Mirror those
@@ -238,7 +238,7 @@ async function updateCompletionReceipt(agentId, update) {
       const { output: _output, ...record } = updated;
       await atomicWrite(join(getAgentDir(agentId, date), 'metadata.json'), record);
     }
-    if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state); }
+    if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state, { changedAgentIds: [agentId] }); }
     return true;
   }));
 }
@@ -323,7 +323,7 @@ export async function completeAgent(agentId, result = {}) {
       state.stats.errors = (state.stats.errors || 0) + 1;
     }
 
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
     // `agent:completed` is intentionally emitted later, after the domain-usage
     // ledger is updated (see the recordDomainUsage block below, #1683). Do NOT
     // move it back here. `agent:updated` carries no scheduling side effect, so it
@@ -385,7 +385,7 @@ export async function appendAgentOutput(agentId, line) {
       state.agents[agentId].output = state.agents[agentId].output.slice(-1000);
     }
 
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
     return state.agents[agentId];
   });
 
@@ -412,7 +412,7 @@ export async function appendAgentOutputLines(agentId, lines) {
     if (state.agents[agentId].output.length > 1000) {
       state.agents[agentId].output = state.agents[agentId].output.slice(-1000);
     }
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
     return state.agents[agentId];
   });
 
@@ -766,7 +766,7 @@ export async function sendBtwToAgent(agentId, message) {
     if (state.agents[agentId].btwMessages.length > 50) {
       state.agents[agentId].btwMessages = state.agents[agentId].btwMessages.slice(-50);
     }
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
   });
 
   cosEvents.emit('agent:btw', { agentId, message, timestamp });
@@ -880,7 +880,7 @@ export async function cleanupZombieAgents() {
     }
 
     if (cleaned.length > 0) {
-      await saveState(state);
+      await saveState(state, { changedAgentIds: cleaned });
 
       // Persist zombie-cleaned agents to date-bucketed dirs and update index
       const idx = await loadAgentIndex();
@@ -945,7 +945,7 @@ export async function deleteAgent(agentId) {
 
     const wasRunning = state.agents[agentId]?.status === 'running';
     delete state.agents[agentId];
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
 
     // Persist reference removal before deleting bytes. Failed index writes
     // retain both the disk tree and its cached lookup for a safe retry.

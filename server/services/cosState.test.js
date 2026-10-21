@@ -578,6 +578,81 @@ describe('agent records in cos_agents', () => {
     expect(Object.keys((await store.loadState()).agents)).toEqual([agent(2).id]);
   });
 
+  it('serializes only hinted records on saveState with changedAgentIds', async () => {
+    const store = await freshModule();
+    const agents = Object.fromEntries(Array.from({ length: 5 }, (_, n) => [agent(n).id, agent(n)]));
+    await seedAgents(agents);
+    const state = await store.loadState();
+    await store.saveState(state);
+
+    state.agents[agent(2).id] = { ...state.agents[agent(2).id], output: ['hinted-line'] };
+    const stringifySpy = vi.spyOn(JSON, 'stringify');
+
+    try {
+      await store.saveState(state, { changedAgentIds: [agent(2).id] });
+      const serializedAgentIds = stringifySpy.mock.calls
+        .map(([arg]) => arg?.id)
+        .filter((id) => typeof id === 'string' && id.startsWith('agent-example-'));
+      expect(serializedAgentIds).toEqual([agent(2).id]);
+    } finally {
+      stringifySpy.mockRestore();
+    }
+
+    const stored = await storedAgents();
+    expect(stored[agent(2).id].output).toEqual(['hinted-line']);
+  });
+
+  it('preserves an omitted changed agent across a hinted save so the next unhinted save detects it', async () => {
+    const store = await freshModule();
+    await seedAgents({ [agent(1).id]: agent(1), [agent(2).id]: agent(2) });
+    const state = await store.loadState();
+    await store.saveState(state);
+
+    // Both are modified in memory
+    state.agents[agent(1).id] = { ...state.agents[agent(1).id], status: 'completed' };
+    state.agents[agent(2).id] = { ...state.agents[agent(2).id], status: 'failed' };
+
+    // Hinted save omits agent(2)
+    await store.saveState(state, { changedAgentIds: [agent(1).id] });
+    let stored = await storedAgents();
+    expect(stored[agent(1).id].status).toBe('completed');
+    expect(stored[agent(2).id].status).toBe('running'); // not saved yet!
+
+    // Next save runs unhinted: detects the previously omitted agent(2) change
+    await store.saveState(state);
+    stored = await storedAgents();
+    expect(stored[agent(2).id].status).toBe('failed');
+  });
+
+  it('scales efficiently with a synthetic 219-agent fixture: serializes only the hinted record', async () => {
+    const store = await freshModule();
+    const agents = Object.fromEntries(Array.from({ length: 219 }, (_, n) => [
+      agent(n).id,
+      agent(n, { output: Array.from({ length: 50 }, (_, i) => `line ${i} for agent ${n} with padding text`) }),
+    ]));
+    await seedAgents(agents);
+    const state = await store.loadState();
+    await store.saveState(state);
+
+    const targetId = agent(42).id;
+    state.agents[targetId] = { ...state.agents[targetId], output: ['new output line'] };
+
+    const stringifySpy = vi.spyOn(JSON, 'stringify');
+    try {
+      await store.saveState(state, { changedAgentIds: [targetId] });
+      const serializedAgentIds = stringifySpy.mock.calls
+        .map(([arg]) => arg?.id)
+        .filter((id) => typeof id === 'string' && id.startsWith('agent-example-'));
+      // Only the single hinted agent was serialized, NOT all 219 agents
+      expect(serializedAgentIds).toEqual([targetId]);
+    } finally {
+      stringifySpy.mockRestore();
+    }
+
+    const stored = await storedAgents();
+    expect(stored[targetId].output).toEqual(['new output line']);
+  });
+
   it('sweeps stale state.json temp files from other processes, never its own or a fresh one', async () => {
     const uuid = '0123abcd-0123-4567-89ab-0123456789ab';
     const names = {

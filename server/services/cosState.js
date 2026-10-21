@@ -675,8 +675,11 @@ export async function readAgentsStateForSafetyCheck() {
  *
  * `onStage` is called as each persistence stage begins (`prepare`, `serialize`,
  * `write`, `replace`, `dirSync`) for a caller's own slow-operation diagnostics.
+ *
+ * `changedAgentIds` optionally hints which agent records were modified, avoiding
+ * serializing untouched agents in the working set (#12749).
  */
-export async function saveState(state, { onStage } = {}) {
+export async function saveState(state, { onStage, changedAgentIds } = {}) {
   assertCurrentGeneration(state, stateRecovery);
   stampGeneration(state, stateRecovery);
   const span = stateLagProbe.begin('prepare');
@@ -693,7 +696,11 @@ export async function saveState(state, { onStage } = {}) {
     // Agent records are rows: write only those whose serialization changed, so
     // one agent's update never rewrites another's (#12738).
     stage('agents');
-    const plan = planAgentSave({ persisted: agentStore.persisted, next: isPlainObject(state.agents) ? state.agents : {} });
+    const plan = planAgentSave({
+      persisted: agentStore.persisted,
+      next: isPlainObject(state.agents) ? state.agents : {},
+      changedAgentIds,
+    });
     if (plan.upserts.length > 0 || plan.deletes.length > 0) {
       agentStore = { version: await applyAgentSave(plan, agentStore.version), persisted: plan.persisted };
       bytes += plan.upserts.reduce((sum, row) => sum + Buffer.byteLength(row.body), 0);
