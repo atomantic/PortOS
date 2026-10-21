@@ -584,3 +584,34 @@ describe('CmdKSearch catalog lookup failure', () => {
     vi.useRealTimers();
   });
 });
+
+describe('CmdKSearch knowledge search failure', () => {
+  it('shows a failure row instead of stale results when search() rejects, and clears on the next query', async () => {
+    vi.useFakeTimers();
+    search
+      .mockResolvedValueOnce({ sources: [{ id: 'brain', label: 'Brain', icon: 'brain', results: [{ id: 'r1', title: 'Stale result', url: '/brain/r1' }] }] })
+      .mockRejectedValueOnce(new Error('search down'))
+      .mockResolvedValueOnce({ sources: [] });
+    render(
+      <MemoryRouter initialEntries={['/current']}>
+        <CmdKSearch />
+      </MemoryRouter>,
+    );
+    await act(async () => { fireEvent.keyDown(document, { key: 'k', metaKey: true }); });
+    const input = screen.getByPlaceholderText(/Go to page/);
+
+    await act(async () => { fireEvent.change(input, { target: { value: 'aaaa' } }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(screen.getByText('Stale result')).toBeInTheDocument();
+
+    await act(async () => { fireEvent.change(input, { target: { value: 'bbbb' } }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(screen.getByRole('alert')).toHaveTextContent(/search failed/i);
+    expect(screen.queryByText('Stale result')).not.toBeInTheDocument();
+
+    await act(async () => { fireEvent.change(input, { target: { value: 'cccc' } }); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    vi.useRealTimers();
+  });
+});

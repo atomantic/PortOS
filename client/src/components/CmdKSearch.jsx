@@ -84,6 +84,8 @@ export default function CmdKSearch() {
   const [catalogResults, setCatalogResults] = useState([]);
   // A failed catalog lookup must not read as "No results" for the query.
   const [catalogFailed, setCatalogFailed] = useState(false);
+  // Same contract for the knowledge search: a rejected request must not leave the previous query's results on screen.
+  const [searchFailed, setSearchFailed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [expandedSources, setExpandedSources] = useState(new Set());
@@ -184,6 +186,7 @@ export default function CmdKSearch() {
   }, [open]);
 
   useEffect(() => {
+    setSearchFailed(false);
     if (query.length < 2) {
       setSearchResults([]);
       setLoading(false);
@@ -197,6 +200,11 @@ export default function CmdKSearch() {
     const timer = setTimeout(() => {
       search(query)
         .then((data) => { if (!cancelled) setSearchResults(data?.sources ?? []); })
+        .catch(() => {
+          if (cancelled) return;
+          setSearchResults([]);
+          setSearchFailed(true);
+        })
         .finally(() => { if (!cancelled) setLoading(false); });
     }, 300);
     return () => { cancelled = true; clearTimeout(timer); };
@@ -613,6 +621,9 @@ export default function CmdKSearch() {
               <div className="text-center text-sm text-gray-500 py-8">
                 No results for &ldquo;{query}&rdquo;
               </div>
+            )}
+            {searchFailed && (
+              <div role="alert" className="px-4 py-2 text-center text-xs text-port-error">Search failed, so results may be missing.</div>
             )}
             {catalogFailed && (
               <div role="alert" className="px-4 py-2 text-center text-xs text-port-error">Catalog search failed, so catalog matches may be missing.</div>
