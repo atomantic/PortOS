@@ -88,6 +88,10 @@ describe('reconcileDeadOwnerReservations', () => {
     })).toEqual({ marked: 0, released: 2 });
     const resources = admission.operations().map(op => op.resource).sort();
     expect(resources).toEqual(['fixture-render', 'fixture-run-live', 'fixture-run-open', 'fixture-source']);
+    expect(admission.operations().find(op => op.id === liveRun.id)).toMatchObject({
+      resource: 'fixture-run-live',
+      pid: process.pid,
+    });
   });
 
   it('keeps a dead mind-turn while a turn is still active, and an unsettled cli-run even after it ended', () => {
