@@ -79,6 +79,9 @@ export function isUntrustedContentProvider(provider, source) {
 
 const PROVIDER_UNAVAILABLE = Object.freeze({ code: 'untrusted-content-provider-unavailable', message: 'Configure an enabled text API provider in Models > LLMs > Abuse Guard. Private messages require a local API endpoint. CLI agents and provider fallback are disabled for external content.' });
 
+/** Smallest window automatic selection treats as able to hold a real PR. */
+export const MIN_VIABLE_CONTEXT_TOKENS = 16384;
+
 /**
  * Resolve the provider and model an untrusted-content analysis will use.
  *
@@ -94,8 +97,6 @@ const PROVIDER_UNAVAILABLE = Object.freeze({ code: 'untrusted-content-provider-u
  * at 4096 never shadows a provider that can hold a real PR. If none qualifies
  * the first candidate is kept: single-provider installs behave as before.
  */
-export const MIN_VIABLE_CONTEXT_TOKENS = 16384;
-
 export function selectUntrustedContentProvider({ providers, policy, source, provider = null, model = null, windowOf = null }) {
   if (provider || policy.providerId) {
     const selected = provider || (providers || []).find(item => item.id === policy.providerId);
