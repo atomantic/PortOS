@@ -89,6 +89,15 @@ describe('getStartupStatus', () => {
     expect(missing).toMatchObject({ configured: false, current: null });
   });
 
+  it('names Homebrew’s global pm2, not the Cellar keg, for a Homebrew node', () => {
+    const status = getStartupStatus({
+      nodeBinary: '/opt/homebrew/Cellar/node/26.0.0/bin/node', platform: 'darwin', home: '/Users/example', user: 'example',
+      readText: () => '<string>/opt/homebrew/bin/pm2</string>',
+    });
+    expect(status.current).toBe(true);
+    expect(status.command).toContain(' /opt/homebrew/bin/pm2 startup launchd');
+  });
+
   it('stays silent where PortOS cannot generate a boot script', () => {
     expect(getStartupStatus({ nodeBinary, platform: 'win32', user: 'example' })).toBeNull();
   });

@@ -214,7 +214,7 @@ router.post('/node-runtime', asyncHandler(async (req, res) => {
 // POST /api/update/node-runtime/startup — repoint the macOS pm2 LaunchAgent at
 // PortOS's Node. No restart; launchd reads it at the next login.
 router.post('/node-runtime/startup', asyncHandler(async (req, res) => {
-  const fixed = await repairStartup();
+  const fixed = Boolean(await repairStartup());
   if (!fixed) {
     throw new ServerError('Start-on-boot can\'t be updated from PortOS here. Run the command shown instead.', { status: 409, code: 'STARTUP_NOT_FIXABLE' });
   }

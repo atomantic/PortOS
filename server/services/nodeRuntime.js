@@ -185,10 +185,20 @@ function readPackageVersion(packageJsonPath) {
 /** The pm2 PortOS ships (its pinned root dependency). */
 const shippedPm2Version = () => readPackageVersion(join(PATHS.root, 'node_modules', 'pm2', 'package.json'));
 
-/** The global pm2 CLI installed under a node binary's prefix, or null. */
+/**
+ * npm's global prefix for a node binary. Homebrew runs node from its Cellar
+ * keg (`<brew>/Cellar/node/<v>/bin/node`) while globals live under `<brew>`;
+ * nvm and official installs keep them beside the binary's own `bin/`.
+ */
+function nodeGlobalPrefix(nodeBinary) {
+  const cellar = nodeBinary.indexOf('/Cellar/');
+  return cellar > 0 ? nodeBinary.slice(0, cellar) : dirname(dirname(nodeBinary));
+}
+
+/** The global pm2 CLI installed for a node binary, or null. */
 function globalPm2Version(nodeBinary) {
   if (!nodeBinary || IS_WIN) return null;
-  return readPackageVersion(join(dirname(dirname(nodeBinary)), 'lib', 'node_modules', 'pm2', 'package.json'));
+  return readPackageVersion(join(nodeGlobalPrefix(nodeBinary), 'lib', 'node_modules', 'pm2', 'package.json'));
 }
 
 const NVM_BIN_SEGMENT = /(\/\.nvm\/versions\/node\/)v\d+\.\d+\.\d+(\/bin)/g;
@@ -222,31 +232,34 @@ function getStartupStatus({ nodeBinary, platform = process.platform, home = home
   const system = platform === 'darwin' ? 'launchd' : platform === 'linux' ? 'systemd' : null;
   if (!system || !nodeBinary || !user) return null;
   const binDir = dirname(nodeBinary);
+  const globalBin = join(nodeGlobalPrefix(nodeBinary), 'bin');
   const contents = readText(startupFileFor(system, home, user));
-  const current = contents === null ? null : contents.includes(binDir);
+  const current = contents === null ? null : contents.includes(binDir) || contents.includes(globalBin);
   return {
     system,
     configured: contents !== null,
     current,
     fixable: system === 'launchd' && current === false && rewriteLaunchAgent(contents, binDir) !== null,
-    command: `sudo env PATH=$PATH:${binDir} ${join(binDir, 'pm2')} startup ${system} -u ${user} --hp ${home}`,
+    command: `sudo env PATH=$PATH:${binDir} ${join(globalBin, 'pm2')} startup ${system} -u ${user} --hp ${home}`,
   };
 }
 
 /**
  * Repoint the LaunchAgent at `nodeBinary`'s nvm version. Takes effect at the
  * next login; nothing is restarted.
- * @returns {Promise<boolean>} whether the file was rewritten
+ * @returns {Promise<(() => Promise<void>)|null>} an undo that writes the
+ *   previous agent back, or null when nothing was rewritten
  */
 export async function repairStartup(nodeBinary = resolvePinnedNodeInterpreter() || process.execPath) {
   const user = safeUserName();
   const status = getStartupStatus({ nodeBinary, user });
-  if (!status?.fixable) return false;
+  if (!status?.fixable) return null;
   const file = startupFileFor(status.system, homedir(), user);
-  const next = rewriteLaunchAgent(readTextOrNull(file), dirname(nodeBinary));
-  if (next === null) return false;
+  const previous = readTextOrNull(file);
+  const next = rewriteLaunchAgent(previous, dirname(nodeBinary));
+  if (next === null) return null;
   await atomicWrite(file, next);
-  return true;
+  return () => atomicWrite(file, previous);
 }
 
 function safeUserName() {
@@ -397,15 +410,20 @@ async function pinAndRestart({ io, emit, nodeBinary }) {
     emit('node-pin', 'running', 'Pinning PortOS to the new Node…');
     await upsertPortosEnvLine(NODE_INTERPRETER_ENV_KEY, nodeBinary);
     emit('node-pin', 'done', `PortOS will run ${nodeBinary}`);
-    // Best effort: a stale boot script only matters at the next login, and the
-    // panel still shows the command when this could not fix it.
-    await repairStartup(nodeBinary)
-      .then((fixed) => { if (fixed) emit('pm2-startup', 'done', 'Start-on-boot now uses the new Node'); })
-      .catch((error) => console.warn(`⚠️ Could not update the pm2 LaunchAgent: ${error.message}`));
   }
+  // Best effort: a stale boot script only matters at the next login, and the
+  // panel still shows the command when this could not fix it.
+  const undoStartup = nodeBinary
+    ? await repairStartup(nodeBinary)
+      .then((undo) => { if (undo) emit('pm2-startup', 'done', 'Start-on-boot now uses the new Node'); return undo; })
+      .catch((error) => { console.warn(`⚠️ Could not update the pm2 LaunchAgent: ${error.message}`); return null; })
+    : null;
   const { startPortosSelfUpdate } = await import('./portosSelfUpdate.js');
+  // A refused launch puts the pin and the boot script back together, so boot
+  // never starts a Node PortOS is not running on.
   await startPortosSelfUpdate({ io, acknowledgeFork: true, preflightAlreadyRun: true, mode: 'refresh' }).catch(async (error) => {
     if (nodeBinary) await upsertPortosEnvLine(NODE_INTERPRETER_ENV_KEY, previous ?? '');
+    await undoStartup?.().catch((undoError) => console.warn(`⚠️ Could not restore the pm2 LaunchAgent: ${undoError.message}`));
     throw error;
   });
 }
