@@ -13,7 +13,14 @@ export default function SceneCastVariant({ project, scene, castMedia = null, onE
   if (!cast.length) return null;
   const variant = scene.characterVariant || null;
   const id = (name) => `mv-scene-${scene.sceneId}-cast-${name}`;
-  const save = (next) => { onEditLocal(scene.sceneId, { characterVariant: next }); onSave(scene.sceneId, { characterVariant: next }); };
+  // A shot's hand-picked references keep their guide ids only for the variant that picked them.
+  const save = (next) => {
+    const patch = Array.isArray(scene.frameReferenceIds)
+      ? { characterVariant: next, frameReferenceIds: scene.frameReferenceIds.filter((refId) => !refId.startsWith('mvr-guide-')) }
+      : { characterVariant: next };
+    onEditLocal(scene.sceneId, patch);
+    onSave(scene.sceneId, patch);
+  };
   const withField = (key, value) => {
     const next = { ...variant, [key]: value };
     if (value === undefined) delete next[key];

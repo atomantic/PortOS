@@ -33,6 +33,14 @@ describe('a shot\'s Cast guides picker', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: null });
   });
 
+  // Uniquely catches hand-picked guide ids from the previous variant surviving a variant change.
+  it('drops the previous variant guide ids from hand-picked references', () => {
+    const onSave = vi.fn();
+    render(<SceneCastVariant project={project} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-x' }, frameReferenceIds: ['r1', 'mvr-guide-a.png'] }} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.change(screen.getByLabelText('Era'), { target: { value: 'teen' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: { ingredientId: 'cat-chr-x', era: 'teen' }, frameReferenceIds: ['r1'] });
+  });
+
   it('renders nothing when no subject is saved to Casting', () => {
     const { container } = render(<SceneCastVariant project={{ concept: { subjects: [project.concept.subjects[1]] } }} scene={{ sceneId: 's1' }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
     expect(container.firstChild).toBeNull();
