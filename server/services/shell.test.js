@@ -758,6 +758,7 @@ describe('pasteToSession', () => {
     shell.writeToSession(id, '\x1b[I');
     shell.writeToSession(id, '\x1b[12;40R');
     shell.writeToSession(id, '\x1b[?62;4c');
+    shell.writeToSession(id, '\x1b[>0;276;0c');
     vi.advanceTimersByTime(1400);
 
     expect(pty.write.mock.calls.filter(([data]) => data === '\r')).toHaveLength(3);
