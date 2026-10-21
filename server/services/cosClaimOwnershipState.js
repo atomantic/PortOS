@@ -33,14 +33,15 @@ export function checkoutRetirementFenceReason({ repoPath, path = null, branch = 
 }
 
 /**
- * Fence one checkout while it is archived outside the lock. Call while holding
+ * Fence one checkout (or, with no `path`, one checkout-less branch) while it is
+ * archived outside the lock. Call while holding
  * `withClaimOwnershipLock`, after the ownership checks pass, and call the returned
  * release under the lock once removal settles (it is idempotent, so a `finally`
  * may repeat it). Returns null when the checkout is already fenced.
  */
 export function reserveCheckoutRetirementFence({ repoPath, path, branch = null }) {
   if (checkoutRetirementFenceReason({ repoPath, path, branch })) return null;
-  const fence = { repo: fencePath(repoPath), path: fencePath(path), branch: fenceBranch(branch) };
+  const fence = { repo: fencePath(repoPath), path: path ? fencePath(path) : null, branch: fenceBranch(branch) };
   retirementFences.add(fence);
   return () => { retirementFences.delete(fence); };
 }

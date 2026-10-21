@@ -1272,7 +1272,9 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *   `prepare` runs after every gate has passed and before the first irreversible
  *   step, and aborts the retirement by resolving to `{ error }`. That is the only
  *   place work like "write a recoverable backup" belongs: earlier it is paid for
- *   branches that are then refused, later it is too late to matter.
+ *   branches that are then refused, later it is too late to matter. It runs
+ *   with the claim-ownership lock released and the branch fenced, and removal
+ *   then refuses a worktree whose dirty paths no longer match `b.dirtyPaths`.
  *
  *   `requireCleanWorktree` (default true) is the caller's answer to "could this
  *   tree hold work that is not accounted for?". For `cleanupMerged` it can, so a
@@ -1328,15 +1330,19 @@ async function retireBranch(repoPath, b, opts) {
         allowLiveClaim: true,
       });
       if (gated.result) return gated;
-      if (!gated.archiveTree) return { result: await finishBranchRetirement(repoPath, gated, null) };
-      return { fence: { repoPath, path: gated.archiveTree.path, branch: gated.b.branch }, gated };
+      if (!gated.archiveTree && !gated.prepare) return { result: await finishBranchRetirement(repoPath, gated) };
+      return { fence: { repoPath, path: gated.archiveTree?.path ?? gated.b.worktreePath, branch: gated.b.branch }, gated };
     },
+    // The superseded backup copies dirty files, so it takes this window too (#12748).
     archive: async ({ gated }) => {
+      const prepared = gated.prepare ? await gated.prepare() : null;
+      if (prepared?.error) return { result: { ok: false, reason: prepared.error } };
+      if (!gated.archiveTree) return { archive: { prepared } };
       const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
-      return preserveMergedCheckout(repoPath, gated.archiveTree, gated.mergeTarget).then(archive => ({ archive }),
+      return preserveMergedCheckout(repoPath, gated.archiveTree, gated.mergeTarget).then(preservation => ({ archive: { prepared, preservation } }),
         error => ({ result: { ok: false, reason: 'archive-failed', detail: error.message } }));
     },
-    finish: ({ gated }, preservation) => finishBranchRetirement(repoPath, gated, preservation),
+    finish: ({ gated }, { prepared, preservation }) => finishBranchRetirement(repoPath, gated, { prepared, preservation }),
   });
 }
 
@@ -1411,10 +1417,11 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
   return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement };
 }
 
-/** Removal and branch deletion; `preservation` is the archive taken after admission, if any. */
-async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement }, preservation) {
-  const prepared = prepare ? await prepare() : null;
-  if (prepared?.error) return { ok: false, reason: prepared.error };
+/**
+ * Removal and branch deletion. `preservation` is the archive and `prepared` the
+ * `prepare` backup, each taken after admission with the ownership lock released.
+ */
+async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement }, { prepared = null, preservation = null } = {}) {
   if (b.worktreePath) {
     const verifyRemoval = async (holder) => {
       if (!holder || holder.branch !== `refs/heads/${b.branch}` || holder.head !== expectedHead) return 'worktree-holder-changed';
@@ -1433,9 +1440,11 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
           repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
         })) return 'claim-completion-unverified';
       }
-      const dirty = await isWorktreeDirty(b.worktreePath);
-      if (dirty === null) return 'worktree-status-unavailable';
-      if (requireCleanWorktree && dirty) return 'worktree-dirty';
+      const dirtyPaths = await worktreeDirtyPaths(b.worktreePath);
+      if (dirtyPaths === null) return 'worktree-status-unavailable';
+      if (requireCleanWorktree && dirtyPaths.length) return 'worktree-dirty';
+      // The backup ran unlocked; a tree whose change set moved since is not what it holds.
+      if (prepared && !sameDirtyPaths(b.dirtyPaths, dirtyPaths)) return 'worktree-changed-since-backup';
       if (mergedRetirement && !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return 'not-merged-on-recheck';
       return preservation ? preservation.verify(holder) : null;
     };
