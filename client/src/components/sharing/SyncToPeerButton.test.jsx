@@ -198,4 +198,27 @@ describe('SyncToPeerButton', () => {
     // Focus returns to the trigger after Escape.
     expect(document.activeElement).toBe(trigger);
   });
+
+  it('shows an error row with Retry when the peer read fails, not "No peers configured"', async () => {
+    const user = userEvent.setup();
+    api.getInstances.mockRejectedValueOnce(new Error('instances 500'));
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
+    await user.click(screen.getByRole('button', { name: /Sync/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load peers — instances 500');
+    expect(screen.queryByText(/No peers configured/)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Peer A')).toBeTruthy();
+  });
+
+  it('does not render unchecked rows when the subscription read fails', async () => {
+    const user = userEvent.setup();
+    api.listPeerSubscriptions.mockRejectedValueOnce(new Error('subs 500'));
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
+    await user.click(screen.getByRole('button', { name: /Sync/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load subscriptions — subs 500');
+    expect(screen.queryByText('Peer A')).toBeNull();
+  });
 });

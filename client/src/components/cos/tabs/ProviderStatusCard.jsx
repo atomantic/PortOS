@@ -63,10 +63,12 @@ export default function ProviderStatusCard() {
     setLoading(true);
     const [statusData, providerData] = await Promise.all([
       api.getProviderStatuses().catch(() => null),
-      api.getProviders().catch(() => ({ providers: [] }))
+      api.getProviders({ silent: true }).catch(() => null)
     ]);
-    setStatuses(statusData);
-    setProviders(providerData.providers || []);
+    // Without the provider list "All Available" would be vacuous, so a failed
+    // provider read fails the whole card into its Retry state.
+    setStatuses(providerData ? statusData : null);
+    setProviders(providerData?.providers || []);
     setLoading(false);
   };
 

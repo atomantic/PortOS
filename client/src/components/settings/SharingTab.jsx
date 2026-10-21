@@ -2,7 +2,14 @@ import { useEffect, useState } from 'react';
 import { Save, Loader2, Users, ShieldCheck, Network } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import { getAuthStatus, getMediaShareCandidates, getSettings, listMusicEngines, updateSettings } from '../../services/api';
+
+// Engine health probes may spawn local Python checks on a cold cache, so this
+// loads independently of the sharing controls.
+const fetchMusicEngines = () => listMusicEngines({ silent: true })
+  .then((music) => (Array.isArray(music?.engines) ? music.engines : []));
 
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const modelKey = ({ engine, modelId }) => `${engine}\u0000${modelId}`;
@@ -62,7 +69,7 @@ export function SharingTab() {
   // only `mediaProvider` and `strictPullAuthorization`, and patches those
   // sub-keys alone (the server merges the slice per sub-key, #4703).
   const [authEnabled, setAuthEnabled] = useState(false);
-  const [musicEngines, setMusicEngines] = useState([]);
+  const { items: musicEngines, state: musicEnginesState, error: musicEnginesError, retry: retryMusicEngines } = useListResource(fetchMusicEngines);
   const [providerSettings, setProviderSettings] = useState({});
   const [providerEnabled, setProviderEnabled] = useState(false);
   const [providerMaxQueuedJobs, setProviderMaxQueuedJobs] = useState(2);
@@ -80,12 +87,6 @@ export function SharingTab() {
   const [providerSaving, setProviderSaving] = useState(false);
 
   useEffect(() => {
-    // Engine health probes may spawn local Python checks on a cold cache. Load
-    // them independently so the existing sharing controls do not wait on that
-    // optional provider catalog.
-    listMusicEngines({ silent: true })
-      .then((music) => setMusicEngines(Array.isArray(music?.engines) ? music.engines : []))
-      .catch(() => setMusicEngines([]));
     // Same rationale as the engine probe above: readiness inspection can touch
     // the model cache, so keep it off the critical path for the other controls.
     getMediaShareCandidates({ silent: true })
@@ -402,7 +403,11 @@ export function SharingTab() {
 
           <fieldset>
             <legend className="block text-xs uppercase tracking-wider text-gray-500 mb-2">Allowed audio models</legend>
-            {musicEngines.length === 0 ? (
+            {musicEnginesState === 'error' ? (
+              <ListLoadError what="the local music engine catalog" error={musicEnginesError} onRetry={retryMusicEngines} />
+            ) : musicEnginesState === 'loading' ? (
+              <p className="text-sm text-gray-500">Loading the local music engine catalog…</p>
+            ) : musicEngines.length === 0 ? (
               <p className="text-sm text-gray-500">The local music engine catalog is not available to configure.</p>
             ) : (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

@@ -131,4 +131,16 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     await waitFor(() => expect(screen.getByText('Test Job')).toBeInTheDocument());
     expect(screen.queryByText('Due')).not.toBeInTheDocument();
   });
+
+  it('shows an error row with Retry when the apps read fails, and recovers on retry', async () => {
+    api.getApps.mockRejectedValueOnce(new Error('apps 500'));
+    render(<JobsTab apps={[]} providers={[]} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load apps for the job scope pickers — apps 500');
+
+    api.getApps.mockResolvedValue([{ id: 'app-1', name: 'Example App' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(api.getApps).toHaveBeenCalledTimes(2);
+  });
 });

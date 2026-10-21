@@ -2473,4 +2473,50 @@ describe('AIProviders list resources (#12171)', () => {
     });
     expect(await screen.findByLabelText('Known PortOS peer')).toBeInTheDocument();
   });
+
+  it('shows error row with Retry when orchestration profiles fail to load, not an empty profile select', async () => {
+    vi.clearAllMocks();
+    api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'P1', type: 'api', enabled: true }], activeProvider: 'p1' });
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('profiles offline'));
+
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run Prompt' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load orchestration profiles — profiles offline');
+    expect(screen.queryByLabelText('Orchestration profile')).not.toBeInTheDocument();
+
+    api.getOrchestrationProfiles.mockResolvedValueOnce({ profiles: [{ id: 'deep-research', name: 'Deep Research' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    const profileSelect = await screen.findByLabelText('Orchestration profile');
+    expect(within(profileSelect).getByRole('option', { name: 'Deep Research' })).toBeInTheDocument();
+  });
+
+  it('shows error row with Retry when sample providers fail to load, not "all samples already added"', async () => {
+    vi.clearAllMocks();
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getSampleProviders.mockRejectedValueOnce(new Error('samples offline'));
+
+    await renderPage();
+    await clickLoadSamples();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load sample providers — samples offline');
+    expect(screen.queryByText(/All sample providers are already in your configuration/)).not.toBeInTheDocument();
+
+    api.getSampleProviders.mockResolvedValueOnce({
+      providers: [{ id: 'sample-1', name: 'Sample AI', type: 'api', enabled: true, endpoint: 'https://api.example.com', models: ['m1'] }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('Sample AI')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

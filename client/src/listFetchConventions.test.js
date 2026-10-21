@@ -56,18 +56,12 @@ export const LIST_COLLAPSE = /\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{?\s*set[A-Z]\
  * site is migrated to `useListResource`; never raise one.
  */
 const KNOWN = Object.freeze({
-  'src/components/FeatureProviderPicker.jsx': 1,
-  'src/components/QuickTaskWidget.jsx': 2,
-  'src/components/apps/JiraConfigPanel.jsx': 1,
   'src/components/brain/IdeaLoomLists.jsx': 1,
   'src/components/brain/YoutubeIngestSettings.jsx': 1,
   'src/components/brain/tabs/ConfigTab.jsx': 1,
   'src/components/brain/tabs/DailyLogTab.jsx': 1,
   'src/components/brain/tabs/FeedsTab.jsx': 1,
   'src/components/brain/tabs/TrustTab.jsx': 1,
-  'src/components/cos/tabs/JobsTab.jsx': 1,
-  'src/components/cos/tabs/ProviderStatusCard.jsx': 1,
-  'src/components/cos/tabs/RunsTab.jsx': 1,
   'src/components/digital-twin/ObservedTasteEvidence.jsx': 1,
   'src/components/digital-twin/tabs/AccountsTab.jsx': 3,
   'src/components/digital-twin/tabs/AutobiographyTab.jsx': 3,
@@ -101,22 +95,28 @@ const KNOWN = Object.freeze({
   'src/components/pipeline/stages/ComicScriptStage.jsx': 1,
   'src/components/pipeline/stages/NounsStage.jsx': 1,
   'src/components/privacy/PrivacyOrgsTab.jsx': 2,
-  'src/components/settings/SharingTab.jsx': 1,
-  'src/components/settings/VoiceTab.jsx': 1,
-  'src/components/sharing/ShareToButton.jsx': 2,
-  'src/components/sharing/SyncToPeerButton.jsx': 1,
   'src/components/sprites/ImportPanel.jsx': 1,
   'src/components/writers-room/AnalysisHistory.jsx': 1,
   'src/components/writers-room/ExercisePanel.jsx': 1,
   'src/components/writers-room/PolishPanel.jsx': 1,
   'src/components/writers-room/StoryboardPanel.jsx': 3,
-  'src/pages/AIProviders.jsx': 2,
   'src/pages/PipelineEditorialChecks.jsx': 1,
   'src/pages/PipelineManuscriptEditor.jsx': 1,
-  'src/pages/PromptManager.jsx': 1,
-  'src/pages/Sharing.jsx': 1,
   'src/pages/Tribe.jsx': 2,
 });
+
+/**
+ * Sites that match on purpose, each with the reason it is not a list collapse.
+ * They are not ratcheted down: the count is the number of intentional matches.
+ */
+const EXEMPT = Object.freeze({
+  // `canDelete: true` on a failed usage read lets the server's own
+  // SYSTEM_STAGE_PROTECTED guard answer. The empty `usedBy`/`referencedBy` feed
+  // a delete-confirm prompt, not a library listing, so no "you have none" copy.
+  'src/pages/PromptManager.jsx': 1,
+});
+
+const allowedIn = (file) => (KNOWN[file] || 0) + (EXEMPT[file] || 0);
 
 const countIn = (source) => (source.match(LIST_COLLAPSE) || []).length;
 
@@ -152,16 +152,16 @@ describe('page list fetches keep a failed read distinct from an empty list', () 
       if (count > 0) found[file] = count;
     }
     const added = Object.entries(found)
-      .filter(([file, count]) => count > (KNOWN[file] || 0))
-      .map(([file, count]) => `${file}: ${count} (known ${KNOWN[file] || 0})`);
+      .filter(([file, count]) => count > allowedIn(file))
+      .map(([file, count]) => `${file}: ${count} (known ${allowedIn(file)})`);
     expect(added, [
       'These list fetches render a failed read as an empty list. Read the list through',
       '`useListResource(fetcher)` and render `<ListLoadError onRetry={retry}>` on `state === "error"`,',
       'keeping the empty copy for `state === "ready"`; never `.catch(() => [])` / `setX([])`.',
     ].join('\n')).toEqual([]);
-    const stale = Object.entries(KNOWN)
-      .filter(([file, count]) => (found[file] || 0) < count)
-      .map(([file, count]) => `${file}: now ${found[file] || 0} (known ${count})`);
+    const stale = Object.keys({ ...KNOWN, ...EXEMPT })
+      .filter((file) => (found[file] || 0) < allowedIn(file))
+      .map((file) => `${file}: now ${found[file] || 0} (known ${allowedIn(file)})`);
     expect(stale, 'A migrated site: lower or remove its KNOWN row so the ratchet holds.').toEqual([]);
   });
 });

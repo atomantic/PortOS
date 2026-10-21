@@ -95,4 +95,27 @@ describe('ShareToButton', () => {
       { silent: true },
     ));
   });
+
+  it('shows an error row with Retry when the bucket read fails, not "No buckets yet"', async () => {
+    const user = userEvent.setup();
+    api.listShareBuckets.mockRejectedValueOnce(new Error('buckets 500'));
+    render(<ShareToButton kind="series" ids={['s1']} />);
+    await user.click(screen.getByRole('button', { name: /Share/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load buckets — buckets 500');
+    expect(screen.queryByText(/No buckets yet/)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Bucket A')).toBeTruthy();
+  });
+
+  it('does not render unchecked rows when the subscription read fails', async () => {
+    const user = userEvent.setup();
+    api.listShareSubscriptions.mockRejectedValueOnce(new Error('subs 500'));
+    render(<ShareToButton kind="series" ids={['s1']} />);
+    await user.click(screen.getByRole('button', { name: /Share/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load subscriptions — subs 500');
+    expect(screen.queryByText('Bucket A')).toBeNull();
+  });
 });

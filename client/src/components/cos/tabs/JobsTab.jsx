@@ -16,6 +16,10 @@ import JobCard, {
 } from '../JobCard';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import TaskDataInputs from '../TaskDataInputs';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
+
+const fetchApps = () => api.getApps({ silent: true }).then(data => data?.apps || data || []);
 
 // Blank create-form state — shared by the initial useState and the post-create
 // reset so the two can't drift (a field added to one but not the other would
@@ -48,7 +52,7 @@ export default function JobsTab() {
   const [jobs, setJobs] = useState([]);
   // The job whose trigger is in flight, so its card can disable Run now.
   const [triggering, setTriggering] = useState(null);
-  const [apps, setApps] = useState([]);
+  const { items: apps, state: appsState, error: appsError, retry: retryApps } = useListResource(fetchApps);
   const [rawProviders, setRawProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState('');
   const [stats, setStats] = useState(null);
@@ -71,10 +75,6 @@ export default function JobsTab() {
   }, []);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
-
-  useEffect(() => {
-    api.getApps().then(data => setApps(data?.apps || data || [])).catch(() => setApps([]));
-  }, []);
 
   useEffect(() => {
     api.getProviders({ silent: true }).then(data => {
@@ -223,6 +223,10 @@ export default function JobsTab() {
         </div>
       )}
 
+      {appsState === 'error' && (
+        <ListLoadError what="apps for the job scope pickers" error={appsError} onRetry={retryApps} />
+      )}
+
       {showCreate && (
         <div className="bg-port-card border border-port-accent/50 rounded-lg p-4">
           <div className="space-y-3">
@@ -274,6 +278,7 @@ export default function JobsTab() {
                   aria-label="App scope"
                   value={newJob.appId || ''}
                   onChange={e => setNewJob(j => ({ ...j, appId: e.target.value }))}
+                  disabled={appsState === 'error'}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 >
                   <option value="">Global (PortOS)</option>

@@ -22,10 +22,12 @@
  *   compact?: boolean
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Cloud, Circle, CheckCircle2, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource.js';
 import useClickOutside from '../../hooks/useClickOutside.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import {
@@ -37,6 +39,12 @@ import {
 
 const MENU_WIDTH = 288; // w-72
 
+// Only show enabled, online-or-connectable peers — Tailnet peers that are
+// marked enabled but currently offline are still listed so the user can
+// create the subscription now and let the push pipeline retry on reconnect.
+const fetchPeers = () => getInstances({ silent: true })
+  .then((instances) => (instances?.peers || []).filter((p) => p.enabled && p.instanceId));
+
 export default function SyncToPeerButton({
   recordKind,
   recordId,
@@ -45,11 +53,26 @@ export default function SyncToPeerButton({
   className = '',
 }) {
   const [open, setOpen] = useState(false);
-  const [peers, setPeers] = useState([]);
-  const [subscriptions, setSubscriptions] = useState([]); // [{id, peerId, ...}]
-  const [loading, setLoading] = useState(false);
   const [busyPeerId, setBusyPeerId] = useState(null);
   const wrapperRef = useRef(null);
+  // Peers + subscriptions reload on every open. A failed read of either is an
+  // error row, never "no peers" / "not subscribed" — an unchecked row would let
+  // a click create a duplicate subscription.
+  const fetchSubscriptions = useCallback(
+    () => listPeerSubscriptions({ recordKind, recordId }, { silent: true }).then((r) => r?.subscriptions || []),
+    [recordKind, recordId],
+  );
+  const peersList = useListResource(fetchPeers, { enabled: open });
+  const subscriptionsList = useListResource(fetchSubscriptions, { enabled: open });
+  const peers = peersList.items;
+  const subscriptions = subscriptionsList.items; // [{id, peerId, ...}]
+  const setSubscriptions = subscriptionsList.setItems;
+  const loading = peersList.state === 'loading' || subscriptionsList.state === 'loading';
+  const loadFailed = peersList.state === 'error' ? peersList : subscriptionsList.state === 'error' ? subscriptionsList : null;
+  const retryLoad = () => {
+    if (peersList.state === 'error') peersList.retry();
+    if (subscriptionsList.state === 'error') subscriptionsList.retry();
+  };
   // The dropdown is portaled to <body> so it escapes each series/universe
   // card's stacking context (the cards have their own compositing layer, so an
   // in-card `absolute z-30` popover is painted UNDER the next card).
@@ -63,25 +86,8 @@ export default function SyncToPeerButton({
     minWidth: 220,
     gap: 4,
     position: 'below',
-    contentDeps: [loading, peers.length, subscriptions.length]
+    contentDeps: [loading, loadFailed, peers.length, subscriptions.length]
   });
-
-  const refresh = async () => {
-    setLoading(true);
-    const [instances, subs] = await Promise.all([
-      getInstances({ silent: true }).catch(() => null),
-      listPeerSubscriptions({ recordKind, recordId }, { silent: true })
-        .then((r) => r?.subscriptions || [])
-        .catch(() => []),
-    ]);
-    // Only show enabled, online-or-connectable peers — Tailnet peers that are
-    // marked enabled but currently offline are still listed so the user can
-    // create the subscription now and let the push pipeline retry on reconnect.
-    const visiblePeers = (instances?.peers || []).filter((p) => p.enabled && p.instanceId);
-    setPeers(visiblePeers);
-    setSubscriptions(subs);
-    setLoading(false);
-  };
 
   // Per-record subscribability — mirrors server-side guards in peerSync.js
   // (peerAllowsOutbound + peerHasCategory). Without this triple gate the
@@ -106,10 +112,6 @@ export default function SyncToPeerButton({
     const cats = peer.syncCategories;
     return !!cats && typeof cats === 'object' && cats[requiredCategory] === true;
   };
-
-  useEffect(() => {
-    if (open) refresh();
-  }, [open]);
 
   // Close on Escape and return focus to the trigger so keyboard users don't
   // have to Tab back through the popover content.
@@ -202,6 +204,8 @@ export default function SyncToPeerButton({
             <div className="px-3 py-3 text-xs text-gray-500 flex items-center gap-2">
               <Loader2 size={12} className="animate-spin" /> Loading peers…
             </div>
+          ) : loadFailed ? (
+            <ListLoadError what={loadFailed === peersList ? 'peers' : 'subscriptions'} error={loadFailed.error} onRetry={retryLoad} className="m-2" />
           ) : peers.length === 0 ? (
             <div className="px-3 py-3 text-xs text-gray-500">
               No peers configured. <a href="/instances" className="text-port-accent hover:underline">Add one</a>.

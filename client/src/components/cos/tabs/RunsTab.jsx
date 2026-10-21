@@ -5,6 +5,8 @@ import * as api from '../../../services/api';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 import ProcessLogModal from '../../ui/ProcessLogModal';
 import { writeClipboardSilently } from '../../../lib/clipboard';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
@@ -20,8 +22,6 @@ export default function RunsTab() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const deepLinkRunId = searchParams.get('run');
-  const [runs, setRuns] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   const [expandedDetails, setExpandedDetails] = useState({});
   const [sourceFilter, setSourceFilter] = useState('all');
@@ -30,16 +30,12 @@ export default function RunsTab() {
   // The failed run whose system logs are open in the log modal, or null.
   const [logModalRun, setLogModalRun] = useState(null);
 
-  const loadRuns = useCallback(async () => {
-    setLoading(true);
-    const data = await api.getRuns(100, 0, sourceFilter).catch(() => ({ runs: [] }));
-    setRuns(data.runs || []);
-    setLoading(false);
-  }, [sourceFilter]);
-
-  useEffect(() => {
-    loadRuns();
-  }, [loadRuns]);
+  const fetchRuns = useCallback(
+    () => api.getRuns(100, 0, sourceFilter, { silent: true }).then(data => data?.runs || []),
+    [sourceFilter]
+  );
+  const { items: runs, state: runsState, error: runsError, retry: loadRuns, setItems: setRuns } = useListResource(fetchRuns);
+  const loading = runsState === 'loading';
 
   // Filter runs by source and status
   const filteredRuns = runs.filter(run => {
@@ -261,7 +257,9 @@ export default function RunsTab() {
 
       {/* Runs List */}
       <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl overflow-hidden">
-        {filteredRuns.length === 0 ? (
+        {runsState === 'error' ? (
+          <ListLoadError what="runs" error={runsError} onRetry={loadRuns} className="m-3" />
+        ) : filteredRuns.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             {runs.length === 0 ? 'No AI runs yet' : 'No runs match the selected filters'}
           </div>

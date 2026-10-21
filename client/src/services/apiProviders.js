@@ -87,7 +87,7 @@ export const addProviderTuiMode = (id, options = {}) => request(`/providers/${id
   method: 'POST',
   ...options,
 }).then(invalidateAfter);
-export const getSampleProviders = () => request('/providers/samples');
+export const getSampleProviders = (options) => request('/providers/samples', options);
 // The composition catalog (#7564/#7566): harnesses with enablement, service
 // instances, bootstrap apps, per-harness (and per-model) effort ladders, the
 // harness/service compatibility map, and the sanitized presets — everything

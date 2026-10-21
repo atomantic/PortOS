@@ -1,8 +1,8 @@
 import { request } from './apiCore.js';
 
 // Runs
-export const getRuns = (limit = 50, offset = 0, source = 'all') =>
-  request(`/runs?limit=${limit}&offset=${offset}&source=${source}`);
+export const getRuns = (limit = 50, offset = 0, source = 'all', options) =>
+  request(`/runs?limit=${limit}&offset=${offset}&source=${source}`, options);
 export const createRun = (data, options) => request('/runs', {
   method: 'POST',
   body: JSON.stringify(data),

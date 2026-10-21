@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from './ui/Toast';
 import ProviderModelSelector from './ProviderModelSelector';
+import ListLoadError from './ui/ListLoadError';
 import { getProviders, getSettings, updateSettings } from '../services/api';
 import { filterSelectableModels } from '../utils/providers';
 
@@ -21,13 +22,19 @@ export default function FeatureProviderPicker({ featureKey, fallbackId = 'claude
   const [providerId, setProviderId] = useState('');
   const [model, setModel] = useState('');
   const [loaded, setLoaded] = useState(false);
+  // A failed read must not resolve to "no providers" (and a fallback selection)
+  // — the picker fails into an error row with Retry instead.
+  const [loadError, setLoadError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setLoaded(false);
+    setLoadError(null);
     Promise.all([
-      getProviders().catch(() => ({ providers: [] })),
-      getSettings({ silent: true }).catch(() => ({})),
+      getProviders({ silent: true }),
+      getSettings({ silent: true }),
     ]).then(([p, settings]) => {
       if (cancelled) return;
       // Match the server resolver's default-true semantics (pickCliProvider
@@ -48,9 +55,11 @@ export default function FeatureProviderPicker({ featureKey, fallbackId = 'claude
       setProviderId(resolved?.id || '');
       setModel(cfg.model && offered.includes(cfg.model) ? cfg.model : (resolved?.defaultModel || ''));
       setLoaded(true);
+    }).catch((err) => {
+      if (!cancelled) setLoadError(err instanceof Error ? err : new Error('Request failed'));
     });
     return () => { cancelled = true; };
-  }, [featureKey, fallbackId]);
+  }, [featureKey, fallbackId, attempt]);
 
   const availableModels = useMemo(() => {
     const p = providers.find((pr) => pr.id === providerId);
@@ -74,6 +83,9 @@ export default function FeatureProviderPicker({ featureKey, fallbackId = 'claude
     toast.success('Saved');
   };
 
+  if (loadError) {
+    return <ListLoadError what="AI providers" error={loadError} onRetry={() => setAttempt((n) => n + 1)} />;
+  }
   if (!loaded) return null;
   if (providers.length === 0) {
     return (

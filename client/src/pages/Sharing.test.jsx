@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { createMemoryRouter } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
 
@@ -122,6 +122,49 @@ describe('Sharing bucket detail tab (URL-derived)', () => {
     // Forward → Settings tab again.
     await act(async () => { await router.navigate(1); });
     await waitFor(() => expect(screen.getByText('Import mode')).toBeInTheDocument());
+  });
+});
+
+describe('Sharing list and settings reads', () => {
+  const routes = [
+    { path: '/sharing', element: <Sharing /> },
+    { path: '/sharing/:section', element: <Sharing /> },
+    { path: '/sharing/:section/:bucketId', element: <Sharing /> },
+  ];
+  const renderAt = (path) => render(<RouterProvider router={createMemoryRouter(routes, { initialEntries: [path] })} />);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getSettings.mockResolvedValue({ sharingDisplayName: 'Alice', sharingBio: '' });
+    api.listShareInbox.mockResolvedValue({ items: [] });
+    api.listShareActivity.mockResolvedValue({ manifests: [] });
+  });
+
+  it('shows an error row with Retry when the bucket read fails, not "No buckets yet"', async () => {
+    api.listShareBuckets.mockRejectedValueOnce(new Error('buckets 500'));
+    renderAt('/sharing');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load buckets — buckets 500');
+    expect(screen.queryByText(/No buckets yet/)).not.toBeInTheDocument();
+
+    api.listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect((await screen.findAllByText('Bucket One')).length).toBeGreaterThan(0);
+  });
+
+  it('locks the display-name editor when the settings read fails so a save cannot replace stored values', async () => {
+    api.listShareBuckets.mockResolvedValue({ buckets: [] });
+    api.getSettings.mockRejectedValueOnce(new Error('settings 500'));
+    renderAt('/sharing');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your display name — settings 500');
+    const nameInput = screen.getByLabelText('Your display name');
+    expect(nameInput).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Save/ })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(nameInput).toHaveValue('Alice'));
+    expect(nameInput).not.toBeDisabled();
   });
 });
 
