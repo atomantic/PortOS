@@ -12,9 +12,7 @@ vi.mock('./StoryboardScenesTab', () => ({ default: () => null }));
 vi.mock('./StoryboardBoardsTab', () => ({
   default: ({ scenes }) => <div data-testid="boards-tab">{scenes.length} scenes</div>,
 }));
-vi.mock('./StoryboardConfigTab', () => ({
-  default: ({ models }) => <div data-testid="config-tab">{models.length} models</div>,
-}));
+vi.mock('./StagePromptModelPicker', () => ({ default: () => null }));
 
 const listWritersRoomAnalyses = vi.fn();
 const getWritersRoomAnalysis = vi.fn();
@@ -78,7 +76,7 @@ describe('StoryboardPanel failed reads', () => {
 
     listImageModels.mockResolvedValueOnce([{ id: 'model-a', name: 'Model A' }]);
     await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]); });
-    expect(screen.getByTestId('config-tab')).toHaveTextContent('1 models');
     expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load style presets');
   });
 });
