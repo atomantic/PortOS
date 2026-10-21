@@ -97,8 +97,6 @@ const ALLOWED = {
     'setLoading(false) is a load-finished latch, not a response written into state',
   'src/components/codeAnimation/CodeAnimationGallery.jsx':
     'deps are [items] of one fixed gallery query; each poster answer is applied by its own job id, so none can land under another record',
-  'src/components/sprites/ImportPanel.jsx':
-    'deps are [open] only — a drawer preload with no record identity to switch',
   'src/components/voice/VoiceWidget.jsx':
     'deps are [enabled, navigate] — a session toggle, not a record identity',
   'src/hooks/useImageGenPageRuntime.js':

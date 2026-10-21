@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from 'react';
 import { Loader2, AlertTriangle } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import { getVisionModels, getSettings, patchSettingsSlice } from '../../services/api';
 
@@ -21,12 +22,19 @@ export default function CaptionModelPicker({ onChange }) {
   const [models, setModels] = useState(null); // null = loading; [] = none installed
   const [value, setValue] = useState(AUTO);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
+  // The model list and the saved choice seed the select together; if either
+  // read fails the picker shows a Retry instead of a select that would read
+  // "none installed" and report Auto for a saved model.
   useEffect(() => {
     let alive = true;
+    setModels(null);
+    setLoadError(null);
     Promise.all([
-      getVisionModels({ silent: true }).catch(() => ({ models: [] })),
-      getSettings({ silent: true }).catch(() => ({})),
+      getVisionModels({ silent: true }),
+      getSettings({ silent: true }),
     ]).then(([vm, settings]) => {
       if (!alive) return;
       const list = vm?.models || [];
@@ -43,10 +51,13 @@ export default function CaptionModelPicker({ onChange }) {
         setValue(AUTO);
         onChange?.({ providerId: null, model: null });
       }
+    }).catch((error) => {
+      if (!alive) return;
+      setLoadError(error instanceof Error ? error : new Error('Request failed'));
     });
     return () => { alive = false; };
-    // onChange is a stable setter from the parent; intentionally run once.
-  }, []);
+    // onChange is a stable setter from the parent; reload only on retry.
+  }, [attempt]);
 
   const handleChange = async (next) => {
     setValue(next);
@@ -67,6 +78,10 @@ export default function CaptionModelPicker({ onChange }) {
       setSaving(false);
     }
   };
+
+  if (loadError) {
+    return <ListLoadError what="vision models" error={loadError} onRetry={() => setAttempt((n) => n + 1)} />;
+  }
 
   if (models === null) {
     return (

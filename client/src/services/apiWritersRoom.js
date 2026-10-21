@@ -64,8 +64,8 @@ export const setWritersRoomActiveDraft = (id, draftId, options = {}) => request(
 });
 
 // Analysis (AI passes — evaluate / format / script)
-export const listWritersRoomAnalyses = (workId) =>
-  request(`/writers-room/works/${enc(workId)}/analysis`);
+export const listWritersRoomAnalyses = (workId, options = {}) =>
+  request(`/writers-room/works/${enc(workId)}/analysis`, options);
 export const runWritersRoomAnalysis = (workId, data, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/analysis`, {
     method: 'POST',
@@ -89,8 +89,8 @@ export const cancelWritersRoomPolish = (workId) =>
   request(`/writers-room/works/${enc(workId)}/polish/cancel`, { method: 'POST' });
 export const getWritersRoomPolishStatus = (workId) =>
   request(`/writers-room/works/${enc(workId)}/polish/status`);
-export const listWritersRoomPolishSnapshots = (workId) =>
-  request(`/writers-room/works/${enc(workId)}/polish/snapshots`);
+export const listWritersRoomPolishSnapshots = (workId, options = {}) =>
+  request(`/writers-room/works/${enc(workId)}/polish/snapshots`, options);
 export const revertWritersRoomPolishSnapshot = (workId, snapshotId, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/polish/revert`, {
     method: 'POST',
@@ -245,9 +245,9 @@ export const deleteWritersRoomObject = (workId, objectId, options = {}) =>
   });
 
 // Exercises
-export const listWritersRoomExercises = (workId) => {
+export const listWritersRoomExercises = (workId, options = {}) => {
   const qs = workId ? `?workId=${enc(workId)}` : '';
-  return request(`/writers-room/exercises${qs}`);
+  return request(`/writers-room/exercises${qs}`, options);
 };
 export const createWritersRoomExercise = (data, options = {}) => request('/writers-room/exercises', {
   method: 'POST',

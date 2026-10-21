@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { formatManuscript } from '../lib/manuscriptFormat';
 import toast from '../components/ui/Toast';
+import ListLoadError from '../components/ui/ListLoadError';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -113,6 +114,9 @@ function SeriesManuscriptEditor() {
   const [pinnedPrimary, setPinnedPrimary] = useState(null);
   const [availableTypes, setAvailableTypes] = useState([]);
   const [comments, setComments] = useState([]);
+  // Set when the editorial-review read failed, so the empty comment index is
+  // not mistaken for "no findings"; cleared by any successful review read.
+  const [reviewError, setReviewError] = useState(null);
   const [reviewMeta, setReviewMeta] = useState(null);
   const [freshReview, setFreshReview] = useState(false);
   // "Generate edits for every finding" — pre-builds each comment's fix during the
@@ -221,7 +225,7 @@ function SeriesManuscriptEditor() {
     Promise.all([
       getPipelineSeries(seriesId, { silent: true }),
       getPipelineManuscript(seriesId, undefined, { silent: true }),
-      getPipelineManuscriptReview(seriesId).catch(() => ({ comments: [] })),
+      getPipelineManuscriptReview(seriesId, { silent: true }).catch((err) => ({ loadFailed: err })),
     ])
       .then(([s, manuscript, review]) => {
         if (canceled) return;
@@ -233,6 +237,7 @@ function SeriesManuscriptEditor() {
         setPinnedPrimary(manuscript?.pinnedPrimary || null);
         setAvailableTypes(Array.isArray(manuscript?.availableTypes) ? manuscript.availableTypes : []);
         setComments(Array.isArray(review?.comments) ? review.comments : []);
+        setReviewError(review?.loadFailed || null);
       })
       .catch((err) => {
         if (canceled) return;
@@ -349,6 +354,7 @@ function SeriesManuscriptEditor() {
         if (!ownsView()) return;
         const next = Array.isArray(review?.comments) ? review.comments : [];
         setComments(next);
+        setReviewError(null);
         if (meta) setReviewMeta({ chunked: !!meta.chunked, chunkCount: meta.chunkCount || 1 });
         if (recovered) {
           toast('Editorial review stream ended — refreshed notes from the server');
@@ -360,6 +366,16 @@ function SeriesManuscriptEditor() {
           : `Editorial review complete — ${pluralize(openCount, 'open note')} with drafted edits`);
       })
       .catch((err) => { if (ownsView()) toast.error(err.message || 'Failed to load review'); });
+
+  const retryReview = () => {
+    setReviewError(null);
+    getPipelineManuscriptReview(seriesId, { silent: true })
+      .then((review) => {
+        if (!ownsView()) return;
+        setComments(Array.isArray(review?.comments) ? review.comments : []);
+      })
+      .catch((err) => { if (ownsView()) setReviewError(err instanceof Error ? err : new Error('Request failed')); });
+  };
 
   // Terminal-frame handler for the streamed run: refresh comments + toast, then
   // tear the subscription down. Per-chunk frames only drive the button label.
@@ -964,6 +980,10 @@ function SeriesManuscriptEditor() {
               )}
             </div>
           </header>
+
+          {reviewError && (
+            <ListLoadError what="editorial notes" error={reviewError} onRetry={retryReview} />
+          )}
 
           {sections.length === 0 ? (
             <p className="text-sm text-gray-500 italic">

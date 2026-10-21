@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Wand2, Play, Square, Disc3, Gamepad2 } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels';
 import useMounted from '../../hooks/useMounted';
@@ -42,6 +43,7 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePromp
   const [playing, setPlaying] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [apps, setApps] = useState([]);
+  const [appsError, setAppsError] = useState(null);
   const [publishAppId, setPublishAppId] = useState('');
   const [publishSubdir, setPublishSubdir] = useState(DEFAULT_SUBDIR);
   const [publishSlug, setPublishSlug] = useState('');
@@ -227,21 +229,30 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePromp
     }
   };
 
+  // A failed read leaves `apps` empty and sets `appsError`, so the panel shows
+  // a Retry instead of the "no managed apps" copy it reserves for a real empty list.
+  const loadPublishTargets = async () => {
+    setAppsError(null);
+    const list = await getApps({ silent: true }).catch((err) => {
+      if (mountedRef.current) setAppsError(err instanceof Error ? err : new Error('Request failed'));
+      return null;
+    });
+    if (!mountedRef.current || !list) return;
+    // Publishable targets are managed apps with a repo on disk — PortOS
+    // itself is excluded (its repo is not a game asset destination); the
+    // server enforces the same policy.
+    const publishable = (Array.isArray(list) ? list : []).filter((a) => a.repoPath && a.id !== 'portos-default' && !a.archived);
+    setApps(publishable);
+    // A remembered target that is no longer publishable (deleted/archived/
+    // repo-less) would leave the select showing nothing while Publish sends
+    // the stale id — clear it so the user picks a live target.
+    setPublishAppId((id) => (id && !publishable.some((a) => a.id === id) ? '' : id));
+  };
+
   const openPublish = async () => {
     setPublishedFiles(null);
-    if (!publishOpen && apps.length === 0) {
-      const list = await getApps({ silent: true }).catch(() => []);
-      if (!mountedRef.current) return;
-      // Publishable targets are managed apps with a repo on disk — PortOS
-      // itself is excluded (its repo is not a game asset destination); the
-      // server enforces the same policy.
-      const publishable = (Array.isArray(list) ? list : []).filter((a) => a.repoPath && a.id !== 'portos-default' && !a.archived);
-      setApps(publishable);
-      // A remembered target that is no longer publishable (deleted/archived/
-      // repo-less) would leave the select showing nothing while Publish sends
-      // the stale id — clear it so the user picks a live target.
-      setPublishAppId((id) => (id && !publishable.some((a) => a.id === id) ? '' : id));
-    }
+    if (!publishOpen && apps.length === 0) await loadPublishTargets();
+    if (!mountedRef.current) return;
     setPublishOpen((o) => !o);
   };
 
@@ -375,7 +386,9 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePromp
 
           {publishOpen ? (
             <div className="space-y-2 border border-port-border rounded-lg p-2 bg-port-bg">
-              {apps.length === 0 ? (
+              {appsError ? (
+                <ListLoadError what="managed apps" error={appsError} onRetry={loadPublishTargets} />
+              ) : apps.length === 0 ? (
                 <p className="text-xs text-gray-500">No managed apps with a repo path — add the game app under Apps first.</p>
               ) : (
                 <>

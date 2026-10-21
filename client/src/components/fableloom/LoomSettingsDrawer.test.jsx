@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 
@@ -13,7 +13,7 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [
 vi.mock('../ProviderModelSelector', () => ({ default: () => null }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
-import { reformatLoomEpisode, updateLoom } from '../../services/api';
+import { listVideoModels, reformatLoomEpisode, updateLoom } from '../../services/api';
 import toast from '../ui/Toast';
 import LoomSettingsDrawer from './LoomSettingsDrawer';
 
@@ -34,7 +34,9 @@ const twoEpisodes = () => makeLoom([
   { id: 'ep-2', title: 'Second', nodes: [scene('s3')] },
 ]);
 
-const renderDrawer = (loom, props = {}) => {
+// Settles the model-catalog reads the drawer starts on mount, so their state
+// update lands inside act().
+const renderDrawer = async (loom, props = {}) => {
   const onLoomUpdate = vi.fn();
   const onRewritten = vi.fn();
   render(
@@ -49,6 +51,7 @@ const renderDrawer = (loom, props = {}) => {
       />
     </MemoryRouter>,
   );
+  await act(async () => {});
   return { onLoomUpdate, onRewritten };
 };
 
@@ -63,7 +66,7 @@ describe('LoomSettingsDrawer rewrite', () => {
     reformatLoomEpisode
       .mockResolvedValueOnce({ loom, rewritten: 2, episodeRemaining: 0, remaining: 1, capped: false })
       .mockResolvedValueOnce({ loom, rewritten: 1, episodeRemaining: 0, remaining: 0, capped: false });
-    const { onLoomUpdate } = renderDrawer(loom);
+    const { onLoomUpdate } = await renderDrawer(loom);
 
     // The count is the scenes that still need converting, not every scene.
     expect(screen.getByRole('button', { name: 'Rewrite 3 scenes as teleplay' })).toBeInTheDocument();
@@ -84,7 +87,7 @@ describe('LoomSettingsDrawer rewrite', () => {
     // observable rather than a frame that flashes past.
     const release = [];
     reformatLoomEpisode.mockImplementation(() => new Promise((resolve) => { release.push(resolve); }));
-    renderDrawer(loom);
+    await renderDrawer(loom);
     await clickRewrite(user);
 
     expect(await screen.findByText('Rewriting episode 1 of 2 — Pilot…')).toBeInTheDocument();
@@ -101,7 +104,7 @@ describe('LoomSettingsDrawer rewrite', () => {
     const loom = makeLoom([{ id: 'ep-1', title: 'Pilot', nodes: [scene('s1')] }]);
     const release = [];
     reformatLoomEpisode.mockImplementation(() => new Promise((resolve) => { release.push(resolve); }));
-    renderDrawer(loom);
+    await renderDrawer(loom);
     await clickRewrite(user);
 
     expect(await screen.findByText('Rewriting episode 1 of 1 — Pilot…')).toBeInTheDocument();
@@ -117,7 +120,7 @@ describe('LoomSettingsDrawer rewrite', () => {
     reformatLoomEpisode
       .mockResolvedValueOnce({ loom, rewritten: 20, episodeRemaining: 5, remaining: 5, capped: true })
       .mockResolvedValueOnce({ loom, rewritten: 5, episodeRemaining: 0, remaining: 0, capped: false });
-    renderDrawer(loom);
+    await renderDrawer(loom);
     await clickRewrite(user);
 
     await waitFor(() => expect(reformatLoomEpisode).toHaveBeenCalledTimes(2));
@@ -131,7 +134,7 @@ describe('LoomSettingsDrawer rewrite', () => {
     // Not capped: nothing went unsent, so asking again would only re-send a
     // refusal. The leftover rides the toast instead.
     reformatLoomEpisode.mockResolvedValue({ loom, rewritten: 1, episodeRemaining: 1, remaining: 1, capped: false });
-    renderDrawer(loom);
+    await renderDrawer(loom);
     await clickRewrite(user);
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
@@ -146,7 +149,7 @@ describe('LoomSettingsDrawer rewrite', () => {
     reformatLoomEpisode
       .mockResolvedValueOnce({ loom, rewritten: 2, episodeRemaining: 0, remaining: 1, capped: false })
       .mockRejectedValueOnce(new Error('provider unreachable'));
-    const { onRewritten } = renderDrawer(loom);
+    const { onRewritten } = await renderDrawer(loom);
     await clickRewrite(user);
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('provider unreachable'));
@@ -158,8 +161,8 @@ describe('LoomSettingsDrawer rewrite', () => {
     expect(screen.queryByText(/Rewriting episode/)).not.toBeInTheDocument();
   });
 
-  it('offers no rewrite at all once every scene is already in the target format', () => {
-    renderDrawer(makeLoom([{ id: 'ep-1', title: 'Pilot', nodes: [scene('s1', 'teleplay')] }]));
+  it('offers no rewrite at all once every scene is already in the target format', async () => {
+    await renderDrawer(makeLoom([{ id: 'ep-1', title: 'Pilot', nodes: [scene('s1', 'teleplay')] }]));
     expect(screen.queryByRole('button', { name: /^Rewrite/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Every scene you have is already written as teleplay/)).toBeInTheDocument();
   });
@@ -173,7 +176,7 @@ describe('LoomSettingsDrawer audience participation', () => {
       audienceCommunicationMedium: 'A silver mirror.',
     });
     const user = userEvent.setup();
-    renderDrawer({ ...makeLoom([]), participationMode: 'protagonist' });
+    await renderDrawer({ ...makeLoom([]), participationMode: 'protagonist' });
 
     await user.selectOptions(screen.getByLabelText('Audience role'), 'helper');
     expect(screen.getByText(/need a communication medium before the role can be saved/i)).toBeInTheDocument();
@@ -196,11 +199,13 @@ describe('LoomSettingsDrawer audience participation', () => {
       onRewritten: vi.fn(),
     };
     const { rerender } = render(<LoomSettingsDrawer open {...props} />);
+    await act(async () => {});
 
     await user.selectOptions(screen.getByLabelText('Audience role'), 'helper');
     expect(updateLoom).not.toHaveBeenCalled();
     rerender(<LoomSettingsDrawer open={false} {...props} />);
     rerender(<LoomSettingsDrawer open {...props} />);
+    await act(async () => {});
 
     expect(screen.getByLabelText('Audience role')).toHaveValue('protagonist');
   });
@@ -216,7 +221,7 @@ describe('LoomSettingsDrawer character continuity', () => {
       protagonistWardrobeId: 'coat',
       protagonistWardrobeLocked: true,
     });
-    renderDrawer(loom, {
+    await renderDrawer(loom, {
       universe: {
         id: 'universe-1',
         characters: [{
@@ -242,9 +247,23 @@ describe('LoomSettingsDrawer character continuity', () => {
   });
 });
 
+describe('LoomSettingsDrawer model catalogs', () => {
+  it('shows a load error with Retry when the video model read fails, instead of an empty model picker', async () => {
+    listVideoModels.mockRejectedValueOnce(new Error('Models unavailable'));
+    await renderDrawer(makeLoom([]));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load video models — Models unavailable');
+
+    listVideoModels.mockResolvedValueOnce([{ id: 'video-model-a', name: 'Video Model A' }]);
+    await act(async () => { screen.getByRole('button', { name: 'Retry' }).click(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('option', { name: 'Video Model A' })).toBeInTheDocument();
+  });
+});
+
 describe('LoomSettingsDrawer rendering defaults', () => {
-  it('shows the saved aspect ratio, renderers, models, and effort', () => {
-    renderDrawer({
+  it('shows the saved aspect ratio, renderers, models, and effort', async () => {
+    await renderDrawer({
       ...makeLoom([]),
       renderSettings: {
         formatId: 'portrait-9-16',
@@ -266,7 +285,7 @@ describe('LoomSettingsDrawer rendering defaults', () => {
 
   it('saves rendering defaults as one story-level pin', async () => {
     const user = userEvent.setup();
-    renderDrawer(makeLoom([]));
+    await renderDrawer(makeLoom([]));
 
     await user.selectOptions(screen.getByLabelText('Aspect ratio'), 'square-1-1');
 

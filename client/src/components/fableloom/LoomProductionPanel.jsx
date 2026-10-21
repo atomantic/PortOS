@@ -23,7 +23,9 @@ import {
 } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useFableLoomRun } from '../../hooks/useFableLoomRun';
+import useListResource from '../../hooks/useListResource';
 import BackendChipStrip from '../media/BackendChipStrip';
+import ListLoadError from '../ui/ListLoadError';
 import {
   cancelLoomEpisodeProductionBatch,
   getLoomEpisodeProductionBatchStatus,
@@ -55,6 +57,9 @@ const VIDEO_BACKENDS = [
   { id: 'grok', label: 'Grok', icon: Cloud },
 ];
 
+const fetchImageModels = () => listImageModels({ silent: true });
+const fetchVideoModels = () => listVideoModels({ silent: true });
+
 const modelOptions = (models, selected) => {
   const options = (Array.isArray(models) ? models : [])
     .filter((model) => model?.id)
@@ -84,8 +89,10 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   const [videoMode, setVideoMode] = useState(savedRender.videoMode);
   const [videoModel, setVideoModel] = useState(savedRender.videoModel);
   const [effort, setEffort] = useState(savedRender.effort);
-  const [imageModels, setImageModels] = useState([]);
-  const [videoModels, setVideoModels] = useState([]);
+  const imageModelList = useListResource(fetchImageModels);
+  const videoModelList = useListResource(fetchVideoModels);
+  const imageModels = imageModelList.items;
+  const videoModels = videoModelList.items;
   const renderFormat = asFableLoomRenderSettings(loom.renderSettings);
   const productionIdentity = `${loom.id}:${episode.id}`;
   const productionIdentityRef = useRef(productionIdentity);
@@ -143,19 +150,6 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
     const updated = await updateLoom(loom.id, { renderSettings: { formatId } }, { silent: true });
     onLoomUpdate?.(updated);
   }, { errorMessage: 'Saving output format failed' });
-
-  useEffect(() => {
-    const load = (loader) => (typeof loader === 'function'
-      ? Promise.resolve().then(() => loader({ silent: true })).catch(() => [])
-      : Promise.resolve([]));
-    let mounted = true;
-    Promise.all([load(listImageModels), load(listVideoModels)]).then(([images, videos]) => {
-      if (!mounted) return;
-      setImageModels(images);
-      setVideoModels(videos);
-    });
-    return () => { mounted = false; };
-  }, []);
 
   // Story settings are durable defaults; keep the per-run controls in sync
   // when those defaults change while this panel remains mounted. A one-off
@@ -417,6 +411,9 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
                       ))}
                     </select>
                   )}
+                  {imageModelList.state === 'error' && (
+                    <ListLoadError className="basis-full" what="image models" error={imageModelList.error} onRetry={imageModelList.retry} />
+                  )}
                 </div>
                 {assetScope === 'all' && (
                   <div className="flex flex-wrap items-center gap-2">
@@ -447,6 +444,9 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
                           <option key={modelOption.id} value={modelOption.id}>{modelOption.label}</option>
                         ))}
                       </select>
+                    )}
+                    {videoModelList.state === 'error' && (
+                      <ListLoadError className="basis-full" what="video models" error={videoModelList.error} onRetry={videoModelList.retry} />
                     )}
                   </div>
                 )}

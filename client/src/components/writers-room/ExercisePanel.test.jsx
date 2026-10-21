@@ -104,4 +104,16 @@ describe('ExercisePanel promote-to-draft button (#5300)', () => {
     expect(onWorkChange).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledWith('Could not add to draft: Exercise already promoted');
   });
+
+  it('shows a load error with Retry — not "No sessions yet" — when the history read fails', async () => {
+    listWritersRoomExercises.mockRejectedValueOnce(new Error('Server unavailable'));
+    await renderPanel();
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load sessions — Server unavailable');
+    expect(screen.queryByText('No sessions yet')).toBeNull();
+
+    listWritersRoomExercises.mockResolvedValueOnce([exercise({ id: 'wr-ex-2', status: 'discarded' })]);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('No sessions yet')).toBeNull();
+  });
 });
