@@ -156,7 +156,7 @@ export async function mergeIngredients(input) {
     }
     for (const row of mediaCopies.values()) {
       await client.query(`INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption, metadata, created_at, library)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb)
         ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE SET deleted = false, deleted_at = NULL`,
       [survivorId, row.media_key, row.kind, row.role, row.caption, JSON.stringify(row.metadata), row.created_at, JSON.stringify(row.library || {})]);
     }
