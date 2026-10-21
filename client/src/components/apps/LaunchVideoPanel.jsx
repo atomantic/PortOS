@@ -74,7 +74,6 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const [referenceUploading, setReferenceUploading] = useState(false);
-  const [error, setError] = useState('');
   const submitting = useRef(false);
   const picker = useRunWithPicker();
 
@@ -126,7 +125,6 @@ function LaunchVideoForm({ appId, onQueued }) {
   });
 
   return <form className="space-y-4" onSubmit={event => { event.preventDefault(); submit(); }}>
-    {error && <p role="alert" className="text-port-error">{error}</p>}
     <section className="space-y-2">
       <div className="text-xs uppercase tracking-wide text-gray-500">Agent</div>
       <ProviderModelSelector {...picker.selectorProps} />
