@@ -39,6 +39,10 @@ vi.mock('../services/codeAnimation/stages.js', () => ({
   startProductionStageRun: vi.fn(async () => ({ run: { status: 'running' } })),
   cancelProductionStageRun: vi.fn(() => ({ cancelled: true })),
 }));
+vi.mock('../services/codeAnimation/soundtrack.js', () => ({
+  startCodeAnimationSoundtrack: vi.fn(async () => ({ mediaJobId: 'example-media' })),
+  ensureCodeAnimationSoundtrackTrack: vi.fn(async () => ({ trackId: 'example-track' })),
+}));
 vi.mock('../services/codeAnimation/export.js', () => ({
   startCodeAnimationExport: vi.fn(async () => ({ status: 'queued' })),
 }));
@@ -150,6 +154,7 @@ import { startProductionStageRun } from '../services/codeAnimation/stages.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
 import { drawWaveSketch, drawWaveSketchForTrack } from '../services/musicWaveform.js';
 import { writeMusicCode } from '../services/musicCode.js';
+import { startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtrack.js';
 import { startAutonomousVideo, resumeAutonomousVideo } from '../services/musicVideo/autonomousService.js';
 
 import { createSession, revokeSessionById } from '../services/auth.js';
@@ -171,6 +176,7 @@ const authoring = [
   ['/api/code-animation/brief', { seedIdea: 'Example scene', ...picker }, generateCodeAnimationBrief, 200],
   ['/api/code-animation/generate', { concept: 'Example scene', ...picker }, startCodeAnimationGeneration, 202],
   [`/api/code-animation/projects/${id}/stage-runs`, {}, startProductionStageRun, 202],
+  [`/api/code-animation/${id}/soundtrack`, { prompt: 'Example score', engine: 'example-engine' }, startCodeAnimationSoundtrack, 202],
   ['/api/music/describe', { concept: 'Example song', ...picker }, describeMusic, 200],
   ['/api/music/lyrics', { description: 'Example song', ...picker }, writeLyrics, 200],
   ['/api/music/waveform', { description: 'Example song', ...picker }, drawWaveSketch, 200],

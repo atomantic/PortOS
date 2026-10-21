@@ -5,6 +5,7 @@ import * as api from '../../services/api';
 
 vi.mock('../../services/api', () => ({
   writeMusicCode: vi.fn(),
+  previewMusicCode: vi.fn(async () => ({ sentPrompt: 'Example prompt', promptAdditions: [] })),
   renderTrackCode: vi.fn(),
   getSuperColliderStatus: vi.fn(),
   setupSuperCollider: vi.fn(),
@@ -167,6 +168,30 @@ describe('<CodePanel>', () => {
     expect(form.get('track').type).toBe('audio/wav');
     expect(form.get('prompt')).toBe('neon synthwave drive');
     expect(form.get('title')).toBe('Night Drive');
+  });
+
+  it('scores an animation at the film length, creating its soundtrack track on the first save', async () => {
+    const resolveTrackId = vi.fn(async () => 'soundtrack-track');
+    await mountReady({ trackId: null, draftKey: 'code-animation:job-1', resolveTrackId, description: '', title: '', scene: 'Boot sequence', fixedLengthSec: 20 });
+    expect(screen.queryByLabelText('Take length (sec)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Write the code/ }));
+    await waitFor(() => expect(screen.getByLabelText('Strudel code')).toHaveValue(CODE));
+    expect(api.writeMusicCode.mock.calls[0][0]).toMatchObject({ scene: 'Boot sequence', durationSec: 20 });
+    expect(api.writeMusicCode.mock.calls[0][0]).not.toHaveProperty('description');
+
+    fireEvent.click(screen.getByRole('button', { name: /Save as take/ }));
+    await waitFor(() => expect(posted).toHaveBeenLastCalledWith({ type: 'record', code: CODE, seconds: 20 }, '*'));
+    await fromFrame({ type: 'recorded', wav: new ArrayBuffer(64), durationSec: 20 });
+    await waitFor(() => expect(api.renderTrackCode).toHaveBeenCalled());
+    expect(resolveTrackId).toHaveBeenCalledTimes(1);
+    expect(api.renderTrackCode.mock.calls[0][0]).toBe('soundtrack-track');
+  });
+
+  it('refuses to record a film longer than coded audio can render', async () => {
+    window.localStorage.setItem('portos.musicDesigner.strudelCode', JSON.stringify({ trackId: 'job-2', code: CODE }));
+    await mountReady({ trackId: null, draftKey: 'job-2', resolveTrackId: vi.fn(), scene: 'Long film', fixedLengthSec: 150 });
+    expect(screen.getByRole('alert').textContent).toContain('The film is 150s; coded audio renders at most 120s');
+    expect(screen.getByRole('button', { name: /Save as take/ })).toBeDisabled();
   });
 
   it('lets Stop cancel a recording that is waiting on the audio unlock', async () => {

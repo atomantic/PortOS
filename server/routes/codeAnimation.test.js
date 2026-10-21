@@ -228,6 +228,19 @@ describe('POST /api/code-animation/:id/soundtrack', () => {
     expect((await request(app).post(`/api/code-animation/${id}/soundtrack`).send(body)).status).toBe(409);
     expect(queueMusicGeneration).not.toHaveBeenCalled();
   });
+
+  it('gives a coded score one soundtrack track, created on first use and reused after', async () => {
+    codeAnimationRecords.set(id, finished);
+    const app = makeApp();
+    const first = await request(app).post(`/api/code-animation/${id}/soundtrack/track`);
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual({ trackId: 'track-soundtrack' });
+    expect(codeAnimationRecords.get(id).soundtrack).toMatchObject({ trackId: 'track-soundtrack', mediaJobId: null });
+    getTrack.mockResolvedValue({ id: 'track-soundtrack', title: 'Lantern soundtrack' });
+    expect((await request(app).post(`/api/code-animation/${id}/soundtrack/track`)).body).toEqual({ trackId: 'track-soundtrack' });
+    expect(createTrackWithAlbum).toHaveBeenCalledTimes(1);
+    expect(queueMusicGeneration).not.toHaveBeenCalled();
+  });
 });
 
 describe('Code Animation portable packages', () => {

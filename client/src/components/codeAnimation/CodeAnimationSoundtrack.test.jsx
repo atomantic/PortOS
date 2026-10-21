@@ -7,11 +7,28 @@ vi.mock('../../services/api', () => ({
   listMusicEngines: vi.fn(),
   previewMusicPrompt: vi.fn(async ({ prompt }) => ({ sentPrompt: prompt, promptAdditions: [] })),
   generateCodeAnimationSoundtrack: vi.fn(),
+  writeMusicCode: vi.fn(),
+  previewMusicCode: vi.fn(async () => ({ sentPrompt: 'Example prompt', promptAdditions: [] })),
+  ensureCodeAnimationSoundtrackTrack: vi.fn(),
+  renderTrackCode: vi.fn(),
 }));
 vi.mock('../../hooks/useMediaJobProgress', () => ({ default: vi.fn(() => progress.current) }));
+const providerHook = vi.hoisted(() => ({ setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }));
+vi.mock('../../hooks/useProviderModels', () => ({
+  default: () => ({
+    providers: [{ id: 'other', models: ['o'] }, { id: 'job-provider', models: ['m1', 'm2'] }],
+    selectedProviderId: 'job-provider', selectedModel: 'm2', availableModels: ['m1', 'm2'], loading: false,
+    ...providerHook,
+  }),
+}));
+vi.mock('../ProviderModelSelector', () => ({ default: () => <div data-testid="provider-picker" /> }));
+vi.mock('../music/strudelFrame', () => ({
+  CODE_FRAME_SOURCE: 'portos-code-frame', STRUDEL_VERSION: '0', TONE_VERSION: '0',
+  buildStrudelFrameDoc: () => '<!doctype html><title>stub</title>', buildToneFrameDoc: () => '<!doctype html><title>stub</title>',
+}));
 
 import CodeAnimationSoundtrack, { SOUNDTRACK_CHOICE_KEY } from './CodeAnimationSoundtrack';
-import { generateCodeAnimationSoundtrack, listMusicEngines } from '../../services/api';
+import { generateCodeAnimationSoundtrack, listMusicEngines, writeMusicCode } from '../../services/api';
 
 const ENGINES = [
   { id: 'musicgen', name: 'MusicGen', ready: true, maxDurationSec: 30, models: [{ id: 'mg', name: 'MG' }], defaultModelId: 'mg' },
@@ -80,5 +97,30 @@ describe('CodeAnimationSoundtrack', () => {
     await waitFor(() => expect(button.disabled).toBe(false));
     expect(screen.getByLabelText('Describe the music').disabled).toBe(false);
     expect(screen.queryByLabelText('Generated soundtrack')).toBeNull();
+  });
+
+  it('writes the audio as code from the animation script, remembering the choice', async () => {
+    const user = userEvent.setup();
+    writeMusicCode.mockResolvedValue({ language: 'strudel', code: 'silence', llm: {} });
+    const job = {
+      id: JOB_ID, title: 'Boot', providerId: 'job-provider', model: 'm2',
+      input: { title: 'Station boot', concept: 'Panels light up one by one', onScreenText: 'SYSTEM ONLINE' },
+    };
+    render(<CodeAnimationSoundtrack job={job} jobId={JOB_ID} durationSeconds={20} />);
+    await user.click(screen.getByRole('button', { name: 'Coding model' }));
+    expect(JSON.parse(localStorage.getItem(SOUNDTRACK_CHOICE_KEY))).toMatchObject({ mode: 'code' });
+    expect(screen.queryByLabelText('Music model')).toBeNull();
+    // The animation's own words, editable before they are sent.
+    expect(screen.getByLabelText(/Animation script/).value).toBe('Station boot\n\nPanels light up one by one\n\nOn-screen text:\nSYSTEM ONLINE');
+    // Opens on the provider that made the animation.
+    expect(providerHook.setSelectedProviderId).toHaveBeenCalledWith('job-provider');
+    expect(providerHook.setSelectedModel).toHaveBeenCalledWith('m2');
+
+    await user.type(screen.getByLabelText('Describe the sound (optional)'), 'Whirrs and blips');
+    await user.click(screen.getByRole('button', { name: /Write the code/ }));
+    await waitFor(() => expect(writeMusicCode).toHaveBeenCalled());
+    expect(writeMusicCode.mock.calls[0][0]).toMatchObject({
+      description: 'Whirrs and blips', scene: expect.stringContaining('Panels light up'), durationSec: 20, providerId: 'job-provider', model: 'm2',
+    });
   });
 });

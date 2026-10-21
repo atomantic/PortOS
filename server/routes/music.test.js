@@ -408,6 +408,24 @@ describe('music routes', () => {
       expect(args.prompt).toContain('124 BPM');
     });
 
+    it('scores an animation script at its length, and previews the exact prompt with labeled additions', async () => {
+      promptRunner.runPromptThroughProvider.mockResolvedValue({ text: 'silence', model: 'fake-model' });
+      const brief = { scene: 'A space station boots up', durationSec: 20, providerId: 'fake-provider' };
+      const r = await request(app).post('/api/music/code').send(brief);
+      expect(r.status).toBe(200);
+      const sent = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
+      expect(sent).toContain('A space station boots up');
+      expect(sent).toContain('exactly 20 seconds');
+
+      const preview = await request(app).post('/api/music/code/preview').send(brief);
+      expect(preview.status).toBe(200);
+      expect(preview.body.sentPrompt).toBe(sent);
+      expect(preview.body.promptAdditions.map((item) => item.label)).toEqual(['Strudel writing rules', 'Animation script', 'Length']);
+      expect(promptRunner.runPromptThroughProvider).toHaveBeenCalledTimes(1);
+
+      expect((await request(app).post('/api/music/code').send({ providerId: 'fake-provider' })).status).toBe(400);
+    });
+
     it('writes Tone.js code with its own prompt contract when language is tonejs', async () => {
       promptRunner.runPromptThroughProvider.mockResolvedValue({
         text: 'const synth = new Tone.Synth().toDestination();\nTone.getTransport().start();',

@@ -104,3 +104,8 @@ export const generateCodeAnimationSoundtrack = (id, body, options) => request(`/
   body: JSON.stringify(body),
   ...options,
 });
+// The soundtrack track a coded score saves its take onto (created on first use).
+export const ensureCodeAnimationSoundtrackTrack = (id, options) => request(`/code-animation/${encodeURIComponent(id)}/soundtrack/track`, {
+  method: 'POST',
+  ...options,
+});
