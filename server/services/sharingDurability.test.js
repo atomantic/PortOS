@@ -62,7 +62,7 @@ beforeEach(async () => {
   await mkdir(bucketPath, { recursive: true });
   bucket = await buckets.createBucket({ name: 'Bucket', path: bucketPath, mode: 'inbox' });
   await seed(join(bucketPath, 'manifests', 'incoming.json'), incoming);
-  await seed(join(bucketPath, 'records', 'media', 'job-new.json'), { id: 'job-new', status: 'completed' });
+  await seed(join(bucketPath, 'records', 'media', 'job-new.json'), { id: 'job-new', kind: 'image', status: 'completed' });
   await seed(join(bucketPath, 'assets', 'images', 'note.png'), 'image');
   await seed(join(bucketPath, 'assets', 'images', 'new.png'), 'image');
 });

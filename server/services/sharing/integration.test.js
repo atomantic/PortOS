@@ -338,7 +338,57 @@ describe('sharing round-trip', () => {
       id: 'example-manifest', senderInstanceId: 'example-peer', kind: 'media', recordIds: [incoming.id], assetRefs: [],
     }));
     expect((await importer.processManifest(bucket.id, 'example-media.json')).processed).toBe(true);
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ jobs: [local, incoming], videoHolds, futureEnvelopeField: 'preserved' });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ jobs: [local, { ...incoming, owner: null, completedAt: null, result: null }],
+      videoHolds, futureEnvelopeField: 'preserved' });
+  });
+
+  it('merges bundled media-job records only as completed re-render metadata under the id they were read by', async () => {
+    const bucket = await buckets.createBucket({ name: 'Example Bucket', path: tempBucket, mode: 'inbox' });
+    const file = join(tempData, 'media-jobs.json');
+    writeFileSync(file, JSON.stringify({ jobs: [] }));
+    const id = (n) => `00000000-0000-4000-8000-00000000001${n}`;
+    // The queue replays a persisted `queued` record at boot; a bucket record
+    // must never schedule work here, rename itself, or pick a non-media kind.
+    const records = {
+      [id(1)]: { id: id(1), kind: 'image', status: 'queued', params: { mode: 'codex', prompt: 'example' } },
+      [id(2)]: { id: '../../escaped', kind: 'image', status: 'completed', params: {} },
+      [id(3)]: { id: id(3), kind: 'training', status: 'completed', params: { runId: 'example' } },
+      [id(4)]: { id: id(4), kind: 'image', status: 'completed', completedAt: '2026-09-05T00:00:00.000Z',
+        durabilityPending: { status: 'completed' }, cancelRequested: true,
+        params: { prompt: 'example' }, result: { filename: `${id(4)}.png` } },
+    };
+    mkdirSync(join(tempBucket, 'records', 'media'), { recursive: true });
+    for (const [recordId, record] of Object.entries(records)) {
+      writeFileSync(join(tempBucket, 'records', 'media', `${recordId}.json`), JSON.stringify(record));
+    }
+    writeFileSync(join(tempBucket, 'manifests', 'example-media.json'), JSON.stringify({
+      id: 'example-manifest', senderInstanceId: 'example-peer', kind: 'media', recordIds: Object.keys(records), assetRefs: [],
+    }));
+    await importer.processManifest(bucket.id, 'example-media.json');
+    expect(JSON.parse(readFileSync(file, 'utf8')).jobs).toEqual([{
+      id: id(4), kind: 'image', owner: null, status: 'completed', completedAt: '2026-09-05T00:00:00.000Z',
+      params: { prompt: 'example' }, result: { filename: `${id(4)}.png` },
+    }]);
+  });
+
+  it('names an exported media record by its job id, never by an imported sidecar id', async () => {
+    const bucket = await buckets.createBucket({ name: 'Example Bucket', path: tempBucket, mode: 'auto-merge' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const mediaCollections = await import('../mediaCollections.js');
+    const u = await universeBuilder.createUniverse({ name: 'Example Universe' });
+    // Sidecars land in data/images verbatim from bucket imports and peer pulls.
+    writeFileSync(join(tempData, 'images', 'shared-job.png'), pngBytes('SHARED'));
+    writeFileSync(join(tempData, 'images', 'shared-job.metadata.json'), JSON.stringify({
+      id: '../../../escaped-record', prompt: 'example', filename: 'shared-job.png',
+    }));
+    const collection = await mediaCollections.findOrCreateCollectionByName({
+      name: `Universe: ${u.name}`, description: 'Linked', universeId: u.id,
+    });
+    await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'shared-job.png' });
+    await exporter.exportUniverse(u.id, bucket.id);
+    expect(existsSync(join(tempBucket, '..', 'escaped-record.json'))).toBe(false);
+    const record = JSON.parse(readFileSync(join(tempBucket, 'records', 'media', 'shared-job.json'), 'utf8'));
+    expect(record).toMatchObject({ id: 'shared-job', params: { prompt: 'example' } });
   });
 
   it('exports a series, processes the manifest as inbox, then promotes — id + origin preserved', async () => {
