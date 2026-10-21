@@ -350,7 +350,9 @@ function FastCodeAnimation() {
     namespace: 'code-animation',
     events: JOB_EVENTS,
     resourceKey: jobId,
-    matchesEvent: (payload) => !!jobId && payload?.id === jobId,
+    // A poster event changes only the gallery; re-reading the job would hand the
+    // preview a new frame object and restart a session the user is watching.
+    matchesEvent: (payload) => !!jobId && payload?.id === jobId && payload.kind !== 'poster',
   });
 
   useEffect(() => {

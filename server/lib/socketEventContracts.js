@@ -416,8 +416,8 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'code-animation:changed': {
     direction: 'server-to-client',
-    summary: 'Invalidate bounded Code Animation job/project galleries and matching details after a durable change.',
-    payloadSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+    summary: 'Invalidate bounded Code Animation job/project galleries and matching details after a durable change; kind "poster" means only the gallery thumbnail changed.',
+    payloadSchema: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string', enum: ['poster'] } }, required: ['id'], additionalProperties: false },
 
   },
   'mood-board:analyze': {
