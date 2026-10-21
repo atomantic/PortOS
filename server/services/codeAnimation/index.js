@@ -426,7 +426,11 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
     // Every provider that can read images gets them as attachments; a
     // non-vision CLI keeps only the on-disk paths written into the prompt.
     screenshots: canAttachImages(provider) ? referencePaths : [],
-    timeout: Math.max(provider.timeout || 0, 15 * 60 * 1000),
+    // Authoring a whole animation can legitimately run for hours, so no
+    // wall-clock cap (0 = unbounded, as for the persistent mind): a cap here
+    // failed long runs over and benched a healthy provider for everyone.
+    timeout: 0,
+    absoluteTimeoutMs: 0,
   });
   // A fallback to a non-vision provider must not silently drop the references.
   if (referencePaths.length && canAttachImages(provider)) promptRunner.assertVisionRunUsedImages(result, provider);
