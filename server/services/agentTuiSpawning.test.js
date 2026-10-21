@@ -2268,12 +2268,17 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
     expect(shellService.pasteToSession).toHaveBeenCalledWith(
       SESSION_ID,
-      expect.stringContaining('Finish what you can and then write the completion sentinel.'),
+      expect.stringContaining('Continue the task from where you stopped.'),
       expect.objectContaining({ label: expect.stringContaining("stalled") }),
     );
     // Assert what the recovery boundary actually sends, independently of the
     // shared constant, so reverting it to a generic "continue" is caught here.
     const recoveryText = vi.mocked(shellService.pasteToSession).mock.calls[0][1];
+    // A session parked on its own background CI watch must keep driving it,
+    // not read the nudge as permission to write INCOMPLETE and quit.
+    expect(recoveryText).toContain('a pending or failed check is a step to handle, not a reason to stop');
+    expect(recoveryText).toContain('Write the completion sentinel once the task is done');
+    expect(recoveryText).not.toContain('Finish what you can');
     expect(recoveryText).toContain('File GitHub issues for anything that is too big for this session.');
     expect(recoveryText).toContain('original task scope, permissions, and safety limits');
     expect(recoveryText).toContain('do not bypass a refusal or permission block');
