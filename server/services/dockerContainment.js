@@ -117,7 +117,7 @@ function runDocker(cli, args, { timeoutMs = 0, signal, onLine, onTerminate, maxB
     let truncated = false;
     let terminated = null;
     let settled = false;
-    const child = spawnImpl(cli.bin, [...(cli.globalArgs ?? []), ...args], { env: cli.env ?? process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawnImpl(cli.bin, [...(cli.globalArgs ?? []), ...args], { env: cli.env ?? process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     const finish = (exitCode, error = null) => {
       if (settled) return;
       settled = true;
