@@ -87,8 +87,16 @@ const PROVIDER_UNAVAILABLE = Object.freeze({ code: 'untrusted-content-provider-u
  * provider without a default model never shadows a usable one. This is an
  * eligibility rule at selection time, not a fallback after a failed call: a
  * pinned or explicit provider that cannot resolve a model fails closed.
+ *
+ * When the caller supplies `windowOf(provider, model)` (the same budget ladder
+ * the analysis uses), automatic selection also prefers a candidate whose window
+ * reaches MIN_VIABLE_CONTEXT_TOKENS, so an unconfigured local endpoint floored
+ * at 4096 never shadows a provider that can hold a real PR. If none qualifies
+ * the first candidate is kept: single-provider installs behave as before.
  */
-export function selectUntrustedContentProvider({ providers, policy, source, provider = null, model = null }) {
+export const MIN_VIABLE_CONTEXT_TOKENS = 16384;
+
+export function selectUntrustedContentProvider({ providers, policy, source, provider = null, model = null, windowOf = null }) {
   if (provider || policy.providerId) {
     const selected = provider || (providers || []).find(item => item.id === policy.providerId);
     if (!isUntrustedContentProvider(selected, source)) return PROVIDER_UNAVAILABLE;
@@ -99,9 +107,13 @@ export function selectUntrustedContentProvider({ providers, policy, source, prov
   }
   const eligible = (providers || []).filter(item => isUntrustedContentProvider(item, source));
   if (!eligible.length) return PROVIDER_UNAVAILABLE;
+  const candidates = [];
   for (const candidate of eligible) {
     const effectiveModel = model || policy.model || candidate.defaultModel;
-    if (effectiveModel) return { provider: candidate, model: effectiveModel };
+    if (effectiveModel) candidates.push({ provider: candidate, model: effectiveModel });
+  }
+  if (candidates.length) {
+    return (windowOf && candidates.find(item => windowOf(item.provider, item.model) >= MIN_VIABLE_CONTEXT_TOKENS)) || candidates[0];
   }
   return { code: 'untrusted-content-model-required', message: 'No eligible API provider has a default model. Select an installed text model in Models > LLMs > Abuse Guard.' };
 }

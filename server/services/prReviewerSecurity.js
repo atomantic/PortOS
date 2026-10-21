@@ -430,7 +430,7 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
       ? { screening: structuralVerdict(structural) }
       : await screenUntrustedContent({ content, source: 'github-pr' });
     const verdict = screened.screening || screened;
-    if (!verdict.ok) return failure(verdict.code || 'security-scan-verdict-unavailable', { reviewedPrs, scanKey });
+    if (!verdict.ok) return failure(verdict.code || 'security-scan-verdict-unavailable', { reviewedPrs, scanKey, ...(typeof verdict.message === 'string' ? { message: verdict.message } : {}) });
     guardModel = verdict.model || guardModel;
     guardRevision = verdict.revision ?? null;
 

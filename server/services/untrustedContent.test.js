@@ -5,7 +5,7 @@ vi.mock('./modelAbuseGuard.js', () => ({ runModelAbuseScan: mocks.scan }));
 vi.mock('./settings.js', () => ({ readSettingsStrict: mocks.read }));
 vi.mock('./providers.js', () => ({ getAllProviders: mocks.providers }));
 vi.mock('./providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: async () => ({ success: true }) }));
-import { getContributionAssessmentReadiness, runUntrustedContentAnalysis, screenUntrustedContent } from './untrustedContent.js';
+import { getContributionAssessmentFingerprint, getContributionAssessmentReadiness, runUntrustedContentAnalysis, screenUntrustedContent } from './untrustedContent.js';
 const local = { id: 'local', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'example-text' };
 const cloud = { ...local, id: 'cloud', contextWindow: 32768, endpoint: 'https://api.example.com/v1' };
 const args = { content: 'Example sender asks about a meeting.', prompt: 'Return {"action":"review"}.', source: 'messages', responseSchema: z.object({ action: z.literal('review') }).strict() };
@@ -235,5 +235,32 @@ describe('automatic provider selection requires a resolvable model', () => {
       .toMatchObject({ ok: false, code: 'untrusted-content-model-required' });
     expect(mocks.fetch).not.toHaveBeenCalled();
     expect(await getContributionAssessmentReadiness()).toMatchObject({ ready: false, code: 'untrusted-content-model-required' });
+  });
+  describe('window-aware automatic selection', () => {
+    const floored = { ...local, id: 'floored', defaultModel: 'example-floored' };
+    const roomy = { ...cloud, id: 'roomy', defaultModel: 'example-roomy' };
+    const pr = { source: 'github-pr', content: 'x'.repeat(6000) };
+    it('prefers a candidate with a viable window over an earlier 4096-floored one', async () => {
+      mocks.providers.mockResolvedValue({ providers: [floored, roomy] });
+      expect(await getContributionAssessmentReadiness()).toMatchObject({ sources: { 'github-pr': { ready: true, providerId: 'roomy' } } });
+      const both = await getContributionAssessmentFingerprint();
+      mocks.providers.mockResolvedValue({ providers: [roomy] });
+      expect(await getContributionAssessmentFingerprint()).toBe(both);
+      mocks.providers.mockResolvedValue({ providers: [floored, roomy] });
+      const run = await runUntrustedContentAnalysis({ ...args, ...pr });
+      expect(run).toMatchObject({ ok: true, providerId: 'roomy' });
+    });
+    it('keeps the first candidate when none qualifies and names provider, model and window on refusal', async () => {
+      mocks.providers.mockResolvedValue({ providers: [floored] });
+      const result = await runUntrustedContentAnalysis({ ...args, ...pr });
+      expect(result).toMatchObject({ ok: false, code: 'untrusted-content-context-too-small' });
+      expect(result.message).toMatch(/floored \/ example-floored.*4096 tokens.*numCtx.*Abuse Guard/);
+      expect(mocks.fetch).not.toHaveBeenCalled();
+    });
+    it('does not reselect when a provider is pinned', async () => {
+      mocks.providers.mockResolvedValue({ providers: [floored, roomy] });
+      mocks.read.mockResolvedValue({ corrupt: false, settings: { untrustedContent: { defaults: { providerId: 'floored' } } } });
+      expect(await runUntrustedContentAnalysis({ ...args, ...pr })).toMatchObject({ ok: false, code: 'untrusted-content-context-too-small' });
+    });
   });
 });
