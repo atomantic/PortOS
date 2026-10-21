@@ -72,23 +72,33 @@ export const registerVoiceOutputCandidate = (socket) => {
   candidates.add(socket);
 };
 
-// Make `socket` the sole proactive-output recipient. The user's active tab
-// calls this (via the `voice:output:claim` socket event) on focus / visibility
-// / explicit request. The previous primary is told it lost the binding so its
-// UI can reflect the change; the new primary is told it now owns output.
 // Stamp claim recency so a later election or promotion picks the
-// most-recently-focused tab (not merely the newest connection), without making
-// it primary. Used directly while voice is disabled so focus history survives
-// until voice is enabled.
-export const noteVoiceOutputFocus = (socket) => {
-  if (!socket) return;
+// most-recently-focused tab, not merely the newest connection.
+const stampFocus = (socket) => {
   candidates.add(socket);
   claimSeq.set(socket, ++claimCounter);
 };
 
+// Record a focus claim while voice is disabled: stamp recency without electing a
+// primary (and without logging). A primary held by another tab is cleared so the
+// first election after voice is re-enabled follows focus instead of keeping a
+// tab the user has since left.
+export const noteVoiceOutputFocus = (socket) => {
+  if (!socket) return;
+  stampFocus(socket);
+  if (!primary || primary === socket) return;
+  const prev = primary;
+  primary = null;
+  if (isLive(prev)) prev.emit('voice:output:detached', { reason: 'claimed-elsewhere' });
+};
+
+// Make `socket` the sole proactive-output recipient. The user's active tab
+// calls this (via the `voice:output:claim` socket event) on focus / visibility
+// / explicit request. The previous primary is told it lost the binding so its
+// UI can reflect the change; the new primary is told it now owns output.
 export const claimVoiceOutput = (socket) => {
   if (!socket) return null;
-  noteVoiceOutputFocus(socket);
+  stampFocus(socket);
   if (primary === socket) return socket;
   const prev = primary;
   primary = socket;

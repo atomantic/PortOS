@@ -353,6 +353,26 @@ describe('voice:output single-recipient wiring', () => {
     expect(getVoiceOutputSocket()).toBe(focused);
   });
 
+  it('a claim while voice is disabled releases a stale primary held by another tab', async () => {
+    const a = makeFakeSocket();
+    const b = makeFakeSocket();
+    registerVoiceHandlers(a);
+    registerVoiceHandlers(b);
+    a.fire('voice:output:available');
+    b.fire('voice:output:available');
+    a.fire('voice:output:claim');
+    await flush();
+    expect(getVoiceOutputSocket()).toBe(a);
+
+    // Voice disabled, user moves to b, then re-enables voice without refocusing.
+    getVoiceConfig.mockResolvedValue({ enabled: false });
+    b.fire('voice:output:claim');
+    await flush();
+    expect(a.emitted.some((e) => e.event === 'voice:output:detached')).toBe(true);
+    getVoiceConfig.mockResolvedValue({ enabled: true });
+    expect(getVoiceOutputSocket()).toBe(b);
+  });
+
   it('drops a claim from a tab that disconnected while the config was read', async () => {
     const a = makeFakeSocket();
     registerVoiceHandlers(a);
