@@ -751,7 +751,8 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const leaveOpen = isTruthyMeta(metadata.reviewLoopLeaveOpen);
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
-  const forkNote = buildForkBranchInstructions(prBranch, metadata.forkHead);
+  const forkNote = buildForkBranchInstructions(prBranch, metadata.forkHead)
+    + buildDefaultBranchHeadInstructions(prBranch, isTruthyMeta(metadata.headIsDefaultBranch));
   const prNumber = metadata.reviewLoopPRNumber ?? '';
   const prOwner = metadata.reviewLoopPROwner ?? '';
   const prRepo = metadata.reviewLoopPRRepo ?? '';
@@ -1274,6 +1275,18 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
     '**Hard stop:** if CI is still red after 5 fix rounds, or a conflict needs a product decision you can\'t make, post a PR comment summarising exactly what is blocking the merge and exit with the PR left open. Do not force a merge over red CI.',
     ...prDetails,
   ].join('\n');
+}
+
+/**
+ * The checkout is detached at the reviewed head because the PR's head branch IS the
+ * default branch (a release PR). Review fixes pushed straight to it would skip the
+ * normal PR flow, so the only way to change that head is a new branch and PR.
+ */
+export const DEFAULT_BRANCH_HEAD_GUIDANCE = 'This checkout is DETACHED at the PR head commit because the PR\'s head branch is the repository\'s default branch. Do NOT commit to it and NEVER push to the head branch. Read, test and gate the exact reviewed commit; if a fix is required, cut a new branch from it, push that branch and open its own PR against the default branch.';
+
+export function buildDefaultBranchHeadInstructions(branch, headIsDefaultBranch) {
+  if (!headIsDefaultBranch || !branch) return '';
+  return `Head branch \`${branch}\` is the default branch: ${DEFAULT_BRANCH_HEAD_GUIDANCE} A release PR is otherwise gated on CI and merged as-is, so the merge steps below still apply to the PR itself.\n\n`;
 }
 
 /** Explicit pushes preserve fork destinations without changing repository-wide Git defaults. */

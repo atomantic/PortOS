@@ -26,7 +26,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * the inline code did.
  */
 
-import { basename, join } from 'path';
+import { basename, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import { execGit } from '../lib/execGit.js';
 import { emitLog } from './cosEvents.js';
@@ -122,6 +122,9 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
   });
   if (!Array.isArray(agents)) return { refused: 'ownership-unreadable' };
   const worktrees = await listWorktrees(workspacePath).catch(() => null);
+  // A branch the primary checkout holds is never adopted, released or waited out:
+  // `createWorktree` attaches detached at its head instead.
+  if (worktrees?.some(wt => resolve(wt.path) === resolve(workspacePath) && wt.branch?.replace(/^refs\/heads\//, '') === branchName)) return null;
   const admission = claimBranchAdmission({
     branchName, preferredPath: allowLiveClaim ? preferredPath : null,
     agentId, sourceWorkspace: workspacePath, agents, worktrees,
