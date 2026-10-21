@@ -36,7 +36,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch } from '../lib/taskTargetBranch.js';
@@ -162,6 +162,28 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
 }
 
 /**
+ * Free the branch from an ownerless foreign worktree so `createWorktree` can
+ * attach. Fails closed: an unreadable agent list is "somebody may own it".
+ * @returns {Promise<boolean>} true when the holder was released
+ */
+async function releaseOwnerlessForeignHolderForTask({ workspacePath, branchName, agentId, taskId }) {
+  const { getAgents } = await import('./cos.js');
+  const agents = await getAgents().catch(() => null);
+  if (!Array.isArray(agents)) return false;
+  const activeIds = protectedAgentIds(agents);
+  const released = await releaseOwnerlessForeignHolder(workspacePath, branchName, {
+    agents,
+    requestingAgentId: agentId,
+    activeWorkspacePaths: agents.filter(a => activeIds.has(a.id)).map(a => a.workspacePath || a.metadata?.workspacePath),
+  }).catch(err => {
+    emitLog('warn', `🌳 Could not release ${branchName} from its foreign worktree for task ${taskId}: ${err.message}`, { taskId });
+    return null;
+  });
+  if (released) emitLog('info', `🌳 Released ${branchName} from ownerless worktree ${released.path} for task ${taskId}`, { taskId, branch: branchName });
+  return Boolean(released);
+}
+
+/**
  * The commit a task's branch attach is pinned to, '' when the task needs a pin
  * but carries none, null when it is unpinned. A PR remediation agent runs the
  * PR's own tests, so it may only attach at the head PortOS screened.
@@ -277,7 +299,7 @@ async function prepareRequestedWorktree({
 
   // The failure reason decides whether the task is unrunnable or merely early.
   let worktreeError = null;
-  const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
+  const create = () => createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
     ...(baseCommit ? { baseCommit } : {}),
     existingBranch: resolveTaskRemoteBranch(task.metadata) || undefined,
@@ -287,11 +309,25 @@ async function prepareRequestedWorktree({
     expectedHeadSha: pinnedHead || reviewTarget?.headSha || undefined,
     planId: task.metadata?.planId || undefined,
     linkDependencies: !isolateDependencies,
-  }).catch(err => {
+  });
+  let worktreeInfo = takeover?.worktreeInfo || await create().catch(err => {
     worktreeError = err;
-    emitLog('warn', `🌳 Worktree creation failed for task ${task.id}: ${err.message}`, { taskId: task.id });
     return null;
   });
+  // A foreign checkout (a terminal session's own worktree) that holds the branch
+  // is never reaped by anything, so waiting out the cooldown cannot free it. If it
+  // is ownerless, clean and fully pushed, detach it in place and retry at once.
+  if (!worktreeInfo && existingBranch && isBranchCheckedOutElsewhereError(worktreeError?.message)
+    && await releaseOwnerlessForeignHolderForTask({ workspacePath, branchName: existingBranch, agentId, taskId: task.id })) {
+    worktreeError = null;
+    worktreeInfo = await create().catch(err => {
+      worktreeError = err;
+      return null;
+    });
+  }
+  if (worktreeError) {
+    emitLog('warn', `🌳 Worktree creation failed for task ${task.id}: ${worktreeError.message}`, { taskId: task.id });
+  }
 
   if (worktreeInfo) {
     const nextWorkspacePath = worktreeInfo.worktreePath;

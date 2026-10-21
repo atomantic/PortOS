@@ -657,6 +657,7 @@ export * from './db.js';
 export * from './pgTimestamp.js';
 export * from './pgTools.js';
 export * from './platform.js';
+export * from './processCwdProbe.js';
 export * from './systemCapabilities.js';
 export * from './ports.js';
 export * from './portosUrls.js';

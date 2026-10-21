@@ -57,6 +57,7 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   unlinkWorktreeDependencies: vi.fn().mockResolvedValue(undefined),
   findAdoptableWorktreeForBranch: vi.fn().mockResolvedValue(null),
   releaseIdleSiblingNextHolder: vi.fn().mockResolvedValue(null),
+  releaseOwnerlessForeignHolder: vi.fn().mockResolvedValue(null),
   listWorktrees: vi.fn().mockResolvedValue([]),
   mergeBaseIntoFeatureWorktree: vi.fn(),
 }));
@@ -87,7 +88,7 @@ import { ensureLatest, isRepo, fetchOrigin } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
-import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
@@ -1013,6 +1014,57 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     // The git error rides along — "worktree creation failed" alone said nothing
     // about which branch was held, or by what.
     expect(patch.metadata.blockedReason).toContain('already used by worktree');
+  });
+
+  // A terminal session's own worktree holds the branch for good: nothing PortOS
+  // runs ever reaps it, so the cooldown can only burn the retry budget (#12845).
+  describe('an ownerless foreign holder', () => {
+    const READY = { worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/task-x/agent-y', baseBranch: null, existingBranch: true };
+
+    it('is released and the branch attached within the same attempt', async () => {
+      createWorktree.mockRejectedValueOnce(BUSY).mockResolvedValueOnce(READY);
+      releaseOwnerlessForeignHolder.mockResolvedValue({ path: '/scratch/wt-portos' });
+      getAgents.mockResolvedValue([
+        { id: 'agent-live', status: 'running', workspacePath: '/mock/worktrees/agent-live' },
+        { id: 'agent-done', status: 'completed', workspacePath: '/mock/worktrees/agent-done' },
+      ]);
+
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+      expect(r.outcome).toBe('ready');
+      expect(createWorktree).toHaveBeenCalledTimes(2);
+      expect(releaseOwnerlessForeignHolder).toHaveBeenCalledWith(expect.any(String), 'cos/task-x/agent-y', expect.objectContaining({
+        requestingAgentId: 'agent-new',
+        activeWorkspacePaths: ['/mock/worktrees/agent-live'],
+      }));
+      expect(updateTask).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['refuses to release', () => releaseOwnerlessForeignHolder.mockResolvedValue(null)],
+      ['throws while releasing', () => releaseOwnerlessForeignHolder.mockRejectedValue(new Error('git exploded'))],
+      ['finds the agent list unreadable at release time', () => getAgents.mockResolvedValueOnce([]).mockRejectedValue(new Error('state unreadable'))],
+    ])('keeps the timed worktree-busy pause when the holder %s', async (_label, arrange) => {
+      arrange();
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+      expect(r.outcome).toBe('blocked');
+      expect(createWorktree).toHaveBeenCalledTimes(1);
+      expect(updateTask.mock.calls.at(-1)[1].metadata.blockedCategory).toBe('worktree-busy');
+    });
+
+    it('pauses when the branch is still busy after a release', async () => {
+      releaseOwnerlessForeignHolder.mockResolvedValue({ path: '/scratch/wt-portos' });
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+      expect(r.outcome).toBe('blocked');
+      expect(createWorktree).toHaveBeenCalledTimes(2);
+      expect(updateTask.mock.calls.at(-1)[1].metadata.blockedCategory).toBe('worktree-busy');
+    });
+
+    it('is not sought for a failure that is not a busy branch', async () => {
+      createWorktree.mockRejectedValue(new Error("fatal: '/mock/worktrees/agent-new' already exists"));
+      await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+      expect(releaseOwnerlessForeignHolder).not.toHaveBeenCalled();
+    });
   });
 
   it('does NOT pause for a permanent worktree failure', async () => {
