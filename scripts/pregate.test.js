@@ -446,6 +446,18 @@ describe('pregate hidden-content invocation', () => {
     expect(result.stderr).toContain('Stage "hidden-content scan" exited with processes still running in its group; killed them.');
   });
 
+  // #12833: a stage's exit status is its only verdict; a failing provisioning
+  // command must never be recorded as `passed` in the receipt.
+  it('records a stage that exits non-zero as failed and ends with its status', () => {
+    write('scripts/scan-diff-hidden-content.js', "console.error('fixture provisioning failure'); process.exit(3);\n");
+    const result = run('--skip-lint');
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain('hidden-content scan failed after');
+    expect(result.stdout).not.toContain('Pregate passed');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'failed', exitCode: 3 });
+  });
+
   it.skipIf(process.platform === 'win32')('reports a stage child signal as incomplete rather than an ordinary assertion failure', () => {
     write('scripts/scan-diff-hidden-content.js', "process.kill(process.pid, 'SIGTERM');\n");
     const result = run('--skip-lint');
