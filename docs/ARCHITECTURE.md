@@ -202,10 +202,19 @@ Server Event → Socket.IO → socket.js → React Component State Update
 1. portos-autofixer daemon starts, reads registered apps from data/apps.json
 2. Every 15 minutes, polls PM2 (pm2 jlist) for crashed processes
 3. For each errored process (with 30min cooldown):
-   a. Fetch last 100 lines of error logs + 50 lines of output logs
-   b. Build prompt with crash context and app info
-   c. Spawn Claude CLI in app's repo directory to diagnose and fix
-   d. Save session (prompt.txt, output.txt, metadata.json) to data/autofixer/sessions/
+   a. Fetch last 100 lines of error logs + 50 lines of output logs (UNTRUSTED)
+   b. Build a prompt that fences the logs as data, not instructions
+   c. Cut a disposable detached git worktree; refuse a non-git app
+   d. Run a restricted CLI provider there (claude without shell/network tools,
+      or codex in its network-denied workspace-write sandbox) with an
+      allowlisted environment
+   e. Validate the diff (size, paths, no secrets)
+   f. Optionally run the configured verify command, contained: bubblewrap on
+      Linux, else the opt-in Docker containment profile (always on macOS);
+      no containment => verify refused => nothing promoted
+   g. Promote (git apply + pm2 restart) only when settings.autofixer.autoPromote
+      is on; otherwise stage the patch beside the session
+   h. Save session (prompt.txt, output.txt, metadata.json, fix.patch) to data/autofixer/sessions/
 4. portos-autofixer-ui (:5560) serves standalone dashboard:
    - SSE endpoint for real-time log streaming
    - Fix history viewer with success/failure status
@@ -286,8 +295,9 @@ Server Event → Socket.IO → socket.js → React Component State Update
 - **Daemon** (:5559): Polls PM2 every 15 minutes for errored processes
 - Reads `data/apps.json` to know which processes to monitor
 - 30-minute cooldown per process to prevent fix loops
-- Spawns Claude CLI with crash context (error logs + app info) to auto-repair
-- Stores fix sessions in `data/autofixer/sessions/` (prompt, output, metadata)
+- Repairs in a disposable worktree with a restricted CLI provider (`autofixer/sandbox.js`), never the live checkout
+- Verifies under containment ([CONTAINMENT.md](./CONTAINMENT.md)) and promotes only a validated, verified diff when `autoPromote` is on
+- Stores fix sessions in `data/autofixer/sessions/` (prompt, output, metadata, patch)
 - **UI** (:5560): Standalone Express server with SSE real-time log streaming
   - Serves HTTPS with the shared Tailscale cert (`data/certs/`) when one is present, plain HTTP otherwise — matching the scheme the sidebar's `//<host>:5560` link inherits from the main app
 - Fix history viewer, process status dashboard
@@ -326,11 +336,15 @@ Error severity levels:
 
 ## Security Model
 
-1. **Network Security**: Relies on Tailscale for access control
-2. **Command Allowlist**: Shell execution restricted to approved commands
-3. **No Shell Interpolation**: Uses `spawn()` with argument arrays
-4. **Zod Validation**: All API inputs validated
-5. **Path Traversal Prevention**: Filename sanitization on uploads
+The authoritative statement is "Security Model" in the root `AGENTS.md`; in brief:
+
+1. **Network Security**: A private network behind Tailscale; PortOS is never exposed to the public internet
+2. **Optional authentication**: An instance password (off by default) gates `/api/*` and `/data/*`; spawned agents carry a loopback `PORTOS_API_TOKEN`; host-control routes (`server/lib/hostControlRoutes.js`) need operator authority
+3. **Command Allowlist**: Shell execution restricted to approved commands (`server/lib/commandSecurity.js`)
+4. **No Shell Interpolation**: Uses `spawn()` with argument arrays
+5. **Zod Validation**: All API inputs validated
+6. **Path Traversal Prevention**: Filename sanitization on uploads
+7. **Containment for untrusted code**: Code Animation workers, autofix verification, SuperCollider renders and opt-in Docker-contained installs/tests run under the profiles in [CONTAINMENT.md](./CONTAINMENT.md), refusing rather than running on the host when their mechanism is unavailable
 
 ## PM2 Process Map
 

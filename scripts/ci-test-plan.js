@@ -656,6 +656,18 @@ export const SUPERCOLLIDER_LIVE_ENTRIES = [
 // The recipe directory and the dependency manifests the job installs from are
 // not modules, so the closure cannot see them.
 export const SUPERCOLLIDER_LIVE_PATH_RE = /^(?:docker\/supercollider\/|server\/package(?:-lock)?\.json|package(?:-lock)?\.json|\.github\/workflows\/ci\.yml$)/;
+// The `docker-containment-live` job runs the opt-in live suite of the Docker
+// containment profile (#12844) against the runner's native Docker Engine. The
+// suite reaches the profile, the executor, the egress proxy and the engine
+// resolver through static imports, so the closure selects the job.
+export const DOCKER_CONTAINMENT_LIVE_ENTRIES = [
+  'server/services/dockerContainment.live.test.js',
+  'server/vitest.config.js',
+  'server/vitest.setup.js',
+  'scripts/vitestTempRootSetup.js',
+];
+// The job installs server dependencies from these before running anything.
+export const DOCKER_CONTAINMENT_LIVE_PATH_RE = /^(?:server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -694,6 +706,9 @@ export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONT
 
 /** Static closure of the SuperCollider live suite, its setup script and their Vitest harness. */
 export const collectSuperColliderLiveInputs = (cwd) => staticClosureOf(SUPERCOLLIDER_LIVE_ENTRIES, cwd);
+
+/** Static closure of the Docker containment live suite and its Vitest harness. */
+export const collectDockerContainmentLiveInputs = (cwd) => staticClosureOf(DOCKER_CONTAINMENT_LIVE_ENTRIES, cwd);
 
 /** True when the diff reaches a gated job's inputs; null inputs fail open to running it. */
 const touchesJobInputs = (changed, inputs, pattern) => inputs === null
@@ -997,7 +1012,8 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
  */
 /**
  * The CI plan for a diff: the test-suite selection plus whether each
- * path-gated job (prompt history, Linux containment, SuperCollider live) runs.
+ * path-gated job (prompt history, Linux containment, SuperCollider live,
+ * Docker containment live) runs.
  *
  * `promptHistoryInputs` / `linuxContainmentInputs` / `supercolliderLiveInputs` are the jobs' static
  * import closures from collectPlanInputs(); null (the default) runs the job.
@@ -1005,7 +1021,8 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
 export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
   const {
-    forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, supercolliderLiveInputs = null, serverReach = null,
+    forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, supercolliderLiveInputs = null,
+    dockerContainmentLiveInputs = null, serverReach = null,
   } = options;
   // Informational: names the changed source behind a large related selection
   // (#12285). It never changes what runs.
@@ -1018,6 +1035,8 @@ export function buildCiTestPlan(changedFiles, options = {}) {
       || touchesJobInputs(plan.changedFiles, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE),
     supercolliderLive: forceFull
       || touchesJobInputs(plan.changedFiles, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE),
+    dockerContainmentLive: forceFull
+      || touchesJobInputs(plan.changedFiles, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE),
   };
 }
 
@@ -1443,6 +1462,7 @@ export function emitGitHubPlan(plan) {
     prompt_history: plan.promptHistory,
     linux_containment: plan.linuxContainment,
     supercollider_live: plan.supercolliderLive,
+    docker_containment_live: plan.dockerContainmentLive,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
@@ -1675,10 +1695,11 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(dependencyFiles, cwd);
   const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
   const supercolliderLiveInputs = forceFull ? null : collectSuperColliderLiveInputs(cwd);
+  const dockerContainmentLiveInputs = forceFull ? null : collectDockerContainmentLiveInputs(cwd);
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
     clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
-    serverReach };
+    dockerContainmentLiveInputs, serverReach };
 }
 
 // ---------------------------------------------------------------------------
@@ -1950,7 +1971,7 @@ function main() {
   }
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies,
-    dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, serverReach,
+    dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
   } = collectPlanInputs({
     baseSha: base,
     forceFull,
@@ -1969,6 +1990,7 @@ function main() {
     promptHistoryInputs,
     linuxContainmentInputs,
     supercolliderLiveInputs,
+    dockerContainmentLiveInputs,
     serverReach,
   });
   // Last, over the finished plan: the attestation only ever removes work.

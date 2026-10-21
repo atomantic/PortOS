@@ -165,6 +165,27 @@ describe('Autofixer daemon repair input boundary', () => {
       verify: { ok: false, contained: false, exitCode: -1 } });
   });
 
+  it('promotes a fix the Docker-contained verifier passed, and only when the operator opted in', async () => {
+    harness.settings = {
+      autofixer: { autoPromote: true, verifyCommand: 'npm test' },
+      instanceFeatures: { 'docker-containment': { enabled: true } },
+      dockerContainment: { limits: { cpus: 1 } },
+    };
+    harness.provider.mockResolvedValue({ text: 'repaired', partial: false, exitCode: 0 });
+    harness.validate.mockReturnValue({ ok: true, files: ['a.js'] });
+    harness.verify.mockResolvedValue({ ok: true, contained: true, code: 0, output: 'ok', mechanism: 'docker' });
+    harness.apply.mockResolvedValue({ ok: true });
+    await start();
+    expect(harness.verify.mock.calls[0][2]).toMatchObject({ docker: { enabled: true, settings: { limits: { cpus: 1 } } } });
+    expect(harness.apply).toHaveBeenCalledOnce();
+
+    harness.settings = { autofixer: { verifyCommand: 'npm test' } };
+    harness.verify.mockClear();
+    vi.resetModules();
+    await start();
+    expect(harness.verify.mock.calls[0][2].docker).toEqual({ enabled: false, settings: {} });
+  });
+
   it('still cools the process down when persisting the session fails', async () => {
     harness.provider.mockResolvedValue({ exitCode: 0, partial: false });
     harness.validate.mockReturnValue({ ok: true, files: ['a.js'] });

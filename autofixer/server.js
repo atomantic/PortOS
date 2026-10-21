@@ -363,7 +363,12 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   let verify = null;
   if (validation.ok && verifyCommand) {
     console.log(`🧪 [Autofixer] Verifying ${processName} fix: ${verifyCommand}`);
-    verify = await runVerifyCommand(verifyCommand, worktreePath, { dataDir: DATA_DIR });
+    verify = await runVerifyCommand(verifyCommand, worktreePath, {
+      dataDir: DATA_DIR,
+      // Settings > Features > Docker containment: the verify container used when
+      // bubblewrap is unavailable (always on macOS). An explicit opt-in only.
+      docker: { enabled: settings.instanceFeatures?.['docker-containment']?.enabled === true, settings: settings.dockerContainment ?? {} },
+    });
     if (!verify.contained) console.warn(`🛑 [Autofixer] ${verify.output}`);
     outputBuffer.push(`\n[VERIFY exit ${verify.code}]\n${verify.output}`);
   }

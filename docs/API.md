@@ -813,6 +813,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/universe-builder` | Universe Builder |
 | `/api/authors`, `/api/artists`, `/api/albums`, `/api/tracks`, `/api/music` | Music/creator catalogs |
 | `/api/music/supercollider` | Contained SuperCollider runtime status, setup and offline renders ([SUPERCOLLIDER.md](./SUPERCOLLIDER.md)) |
+| `/api/docker-containment` | Opt-in Docker containment: engine status, explicit image pull, contained install/validate runs over a worktree ([CONTAINMENT.md](./CONTAINMENT.md)) |
 | `/api/pipeline` | Series/comic pipeline |
 | `/api/conflict-journal` | Sync conflict journal |
 | `/api/importer` | Story importer |

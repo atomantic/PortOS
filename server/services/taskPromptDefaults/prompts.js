@@ -530,6 +530,21 @@ intentionally private to that worktree. If validation needs installed packages,
 use the repository's documented package manager from the worktree so installs
 and lockfile regeneration stay isolated from the source checkout.
 
+Freshly bumped packages run lifecycle scripts and test code nobody has reviewed,
+so run installs and validation CONTAINED when this machine can. From the
+checkout you are validating, probe once:
+\`node "{portosRoot}/scripts/contained-run.js" --phase validate -- true\`.
+Exit 0 means Docker containment is ready; then run every install and validation
+step through it instead of on the host:
+- install or lockfile regeneration: \`node "{portosRoot}/scripts/contained-run.js" --phase install --apply-patch -- <install command>\`
+  (registry-only network; \`--apply-patch\` brings back tracked-file changes such as a
+  regenerated lockfile — review them in \`git diff\` before committing);
+- lint, typecheck, test, build: \`node "{portosRoot}/scripts/contained-run.js" --phase validate -- "<command>"\`
+  (no network; it reuses the node_modules the install left in its container volume).
+Exit 2 means containment is unavailable and nothing ran: proceed with the host
+commands as before and state in your summary that dependency validation ran
+UNCONTAINED, with the refusal reason. A refusal is never a passing check.
+
 Inventory security alerts first, then resolve open automated dependency PRs before
 making your own bumps. A Dependabot/Renovate PR is a bump already
 proposed and already isolated to one package — redoing it yourself conflicts with the bot

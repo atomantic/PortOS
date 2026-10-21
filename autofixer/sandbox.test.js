@@ -269,6 +269,44 @@ describe('runVerifyCommand — contained, credential-free verify', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  const noBubblewrap = async () => ({ id: null, supported: false, reason: 'bubblewrap is unavailable on this host' });
+
+  it('runs the Docker validate phase when bubblewrap is unavailable and the operator enabled it', async () => {
+    const run = vi.fn(async () => ({ status: 'completed', exitCode: 0, log: 'tests passed', contained: true }));
+    const result = await runVerifyCommand('npm test', '/example/worktree', {
+      dataDir: '/example/data', timeoutMs: 5000, probe: noBubblewrap, docker: { enabled: true, settings: { limits: { cpus: 1 } }, run },
+    });
+    expect(result).toEqual({ ok: true, code: 0, output: 'tests passed', contained: true, mechanism: 'docker' });
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      worktree: '/example/worktree', phase: 'validate', command: 'npm test', dataDir: '/example/data', timeoutMs: 5000, settings: { limits: { cpus: 1 } },
+    }));
+    const failed = await runVerifyCommand('npm test', '/example/worktree', {
+      probe: noBubblewrap, docker: { enabled: true, run: async () => ({ status: 'terminated', reason: 'timeout', exitCode: null, log: 'partial' }) }, timeoutMs: 10,
+    });
+    expect(failed).toMatchObject({ ok: false, code: -1, contained: true, output: 'partial\n[verify] timed out after 10ms' });
+  });
+
+  it('refuses with the Docker resolver reason, executing nothing, when Docker is stopped or absent', async () => {
+    const { runContained } = await import('../server/services/dockerContainment.js');
+    const { evaluateDockerEngine } = await import('../server/services/dockerEngine.js');
+    for (const engine of [
+      evaluateDockerEngine({ installed: false }),
+      evaluateDockerEngine({ installed: true, candidates: [{ name: 'default', current: true, endpoint: 'unix:///var/run/docker.sock' }],
+        probes: [{ candidate: { name: 'default' }, docker: { running: false, error: 'Cannot connect to the Docker daemon' } }] }),
+    ]) {
+      const result = await runVerifyCommand('npm test', '/example/worktree', {
+        probe: noBubblewrap, docker: { enabled: true, run: (opts) => runContained({ ...opts, deps: { engine } }) },
+      });
+      expect(result).toMatchObject({ ok: false, code: -1, contained: false });
+      expect(result.output).toContain(engine.message);
+    }
+    expect(spawnMock).not.toHaveBeenCalled();
+    // Feature off: refused exactly as before, Docker never consulted.
+    expect(await runVerifyCommand('npm test', '/example/worktree', { probe: noBubblewrap, docker: { enabled: false, run: spawnMock } }))
+      .toMatchObject({ ok: false, contained: false });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('launches under bubblewrap with an environment built from nothing', async () => {
     const worktree = await mkdtemp(join(tmpdir(), 'autofix-verify-test-'));
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-example-secret');

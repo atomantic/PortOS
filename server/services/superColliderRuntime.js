@@ -14,16 +14,15 @@
  * restored onto another machine reads as stale there rather than as ready.
  */
 
-import { existsSync } from 'fs';
 import { lstat, mkdir, readdir, readFile, rm, writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../lib/paths.js';
 import { atomicWrite } from '../lib/fileCore.js';
 import { readJSONFile } from '../lib/jsonIo.js';
-import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
+import { spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
-import { whichFirst } from '../lib/processEnv.js';
+import { clipDiagnostic, probeDocker, resolveDockerCli as resolveSharedDockerCli } from './dockerEngine.js';
 import { measureWavAudio } from '../lib/wavAudioFile.js';
 import {
   SUPERCOLLIDER_CONTAINER_LIMITS,
@@ -42,47 +41,21 @@ import {
   evaluateSuperColliderStatus,
   hashSuperColliderRecipe,
   parseDockerImage,
-  parseDockerVersion,
   superColliderContainerUser,
   superColliderSmokeFailure,
 } from '../lib/superColliderRuntime.js';
 
-const DOCKER_PROBE_TIMEOUT_MS = 15_000;
 const DOCKER_RM_TIMEOUT_MS = 30_000;
 const BUILD_TIMEOUT_MS = 90 * 60_000;
-const MAX_DIAGNOSTIC_CHARS = 600;
 const EVIDENCE_SCHEMA = 1;
 
-// Docker Desktop's CLI is not always on a PM2-launched server's PATH.
-const DOCKER_FALLBACK_PATHS = [
-  '/usr/local/bin/docker',
-  '/opt/homebrew/bin/docker',
-  '/Applications/Docker.app/Contents/Resources/bin/docker',
-];
-
-/** Keep diagnostics bounded: one line, at most MAX_DIAGNOSTIC_CHARS, tail-preferring. */
-function clipDiagnostic(text) {
-  const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
-  return flat.length > MAX_DIAGNOSTIC_CHARS ? `…${flat.slice(-MAX_DIAGNOSTIC_CHARS)}` : flat;
-}
-
 /**
- * The docker CLI adapter every function here talks through: `capture` runs a
- * short command and buffers its output; `stream` runs a long one line by line
- * with timeout/cancel. Tests pass a fake with the same two methods.
+ * The local docker CLI (discovery is shared with the containment profile in
+ * `dockerEngine.js`), with the long-running `stream` adapter builds and
+ * renders use, or null when it is not installed.
  */
-function createDockerCli(bin) {
-  return {
-    bin,
-    capture: (args, { timeoutMs = DOCKER_PROBE_TIMEOUT_MS } = {}) => bufferedSpawn(bin, args, { timeoutMs, killGraceMs: 2_000, shell: false }),
-    stream: (args, onLine, options = {}) => runStreamingCommand(bin, args, onLine, options),
-  };
-}
-
-/** The local docker CLI, or null when it is not installed. */
 export async function resolveDockerCli() {
-  const bin = await whichFirst('docker') || DOCKER_FALLBACK_PATHS.find((path) => existsSync(path)) || null;
-  return bin ? createDockerCli(bin) : null;
+  return resolveSharedDockerCli({ stream: runStreamingCommand });
 }
 
 function resolveDeps({ docker, dataDir = PATHS.data, codeRoot = PATHS.root } = {}) {
@@ -91,22 +64,6 @@ function resolveDeps({ docker, dataDir = PATHS.data, codeRoot = PATHS.root } = {
 
 async function dockerFor(deps) {
   return deps.docker === undefined ? resolveDockerCli() : deps.docker;
-}
-
-/** `{ installed, running, clientVersion, serverVersion, os, arch, error }` for a docker CLI (null = not installed). */
-async function probeDocker(cli) {
-  if (!cli) return { installed: false, running: false, clientVersion: null, serverVersion: null, os: null, arch: null, error: null };
-  const result = await cli.capture(['version', '--format', '{{json .}}']);
-  // The client prints its half even when the engine is down, so the server
-  // version — not the exit code alone — is what proves the engine answered.
-  const version = parseDockerVersion(result.stdout);
-  const running = Boolean(version.serverVersion);
-  return {
-    installed: true,
-    running,
-    ...version,
-    error: running ? null : clipDiagnostic(result.timedOut ? 'docker did not answer in time' : spawnFailureDetail(result, 'docker engine not reachable')),
-  };
 }
 
 /** The managed image's metadata, or null when it is not built. */
