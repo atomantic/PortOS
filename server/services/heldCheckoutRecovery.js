@@ -18,6 +18,7 @@
  * failure leaves the checkout, its lock and its branch exactly as found.
  */
 
+import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { createReadStream, realpathSync } from 'node:fs';
 import { lstat, stat, readlink, readdir, readFile, chmod } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
@@ -641,6 +642,15 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   if (!outcome?.remaining?.some?.(entry => sameRelease(entry, release))) return { ok: false, reason: 'release-not-in-inventory' };
   const inventoryCurrent = async () => (await taskSchedule.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
   const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null });
+  // The row was stale: something else already removed the checkout. That is the
+  // outcome the operator asked for, so settle the row instead of refusing it.
+  if (!result.ok && result.reason === 'checkout-not-found') {
+    const gone = await findGoneInventoryRows(app.repoPath, [release]).catch(() => []);
+    if (gone.length) {
+      await taskSchedule.dropInventoryRows(appId, gone);
+      return { ok: true, alreadyRetired: true };
+    }
+  }
   if (result.ok) {
     await taskSchedule.recordHeldCheckoutRetirement(appId, {
       path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted, archiveDir: result.archiveDir,

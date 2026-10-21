@@ -65,6 +65,7 @@ vi.mock('./apps.js', () => ({
   getAppTaskTypeInterval: vi.fn().mockResolvedValue(null),
   getAppTaskTypeIntervalMs: vi.fn().mockResolvedValue(null),
   getActiveApps: vi.fn().mockResolvedValue([]),
+  getAppById: vi.fn().mockResolvedValue(null),
   getAppTaskTypeOverrides: vi.fn().mockResolvedValue({}),
   clearAllPrWatcherState: vi.fn().mockResolvedValue({ changed: false }),
   clearAllIssueWatcherState: vi.fn().mockResolvedValue({ changed: false })

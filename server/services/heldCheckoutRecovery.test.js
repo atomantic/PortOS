@@ -317,6 +317,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: result.archiveDir });
   });
 
+  it('settles a stale inventory row whose checkout was already removed instead of refusing it', async () => {
+    const { path, release } = await heldCheckout('already-gone');
+    await recordBranchReconcileOutcome('app-1', {
+      status: 'incomplete', remaining: [{ ...release, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
+    });
+    await execGit(['worktree', 'unlock', path], repo);
+    await execGit(['worktree', 'remove', '--force', path], repo);
+
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners }))
+      .toEqual({ ok: true, alreadyRetired: true });
+    expect((await getBranchReconcileOutcome('app-1')).remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
+  });
+
   it('refuses a release that does not name a row of the last inventory', async () => {
     const { path, release } = await heldCheckout('not-inventoried');
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, lockReason: 'older lock text' }] });
