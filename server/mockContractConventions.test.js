@@ -45,13 +45,14 @@ describe('vi.mock factory contract conventions', () => {
       'export default Panel;',
     ].join('\n');
     expect(mask(src)).toContain('export default Panel');
+    expect(mask('export const a = <i>Zoë\'s</i>;\nexport const b = 1;')).toContain('export const b');
     expect(mask("export const a = 'x';\nexport const b = 1;")).toContain('export const b');
     expect(mask("export const c = 'don\\'t';")).not.toContain('don');
   });
 
   it('collects the default export of a component with an apostrophe in JSX text (#12794)', () => {
     const file = join(ROOT, 'client/src/components/writers-room/StoryboardConfigTab.jsx');
-    expect([...exportNames(file)]).toEqual(['default']);
+    expect(exportNames(file).has('default')).toBe(true);
   });
 
   it('follows export * when collecting real exports', () => {

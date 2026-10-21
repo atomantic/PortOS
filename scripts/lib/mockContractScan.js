@@ -30,7 +30,7 @@ const KEYWORD_BEFORE_STRING = /(?:^|[^\w$.])(?:return|case|typeof|in|of|yield|aw
  * is JSX text or prose (`scene's`), not code. Keywords legitimately precede strings.
  */
 function isTextApostrophe(source, at) {
-  if (!/[\w$]/.test(source[at - 1] ?? '')) return false;
+  if (!/[\p{L}\p{N}_$]/u.test(source[at - 1] ?? '')) return false;
   return !KEYWORD_BEFORE_STRING.test(source.slice(Math.max(0, at - 12), at));
 }
 
