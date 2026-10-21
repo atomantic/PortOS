@@ -997,7 +997,13 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // `universe-bible-images`: hold canon entries that have no description yet
   // out of the render batch, so image quota isn't spent on a name with nothing
   // behind it. See services/scheduledHandlers/universeBibleImages.js.
-  'requireDescribed'
+  'requireDescribed',
+  // Whether PortOS pastes its stall nudge into a TUI session that has sat quiet
+  // for STALL_NUDGE_IDLE_MS (lib/tuiHandshake.js). ON unless explicitly `false`.
+  // A task that legitimately waits a long time on work it started — do-release
+  // parking on its release PR's CI watch — turns it off, because the nudge lands
+  // mid-wait and reads as "wrap up now".
+  'stallNudge'
 ];
 
 // The params bag for the PROGRAMMATIC scheduled handlers

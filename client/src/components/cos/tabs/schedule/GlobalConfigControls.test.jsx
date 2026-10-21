@@ -300,6 +300,22 @@ describe('GlobalConfigControls — release options', () => {
   });
 });
 
+describe('GlobalConfigControls — stall nudge', () => {
+  it('shows the nudge ON for a task that never set it and writes an explicit false when turned off', () => {
+    const onUpdate = renderControls({ taskMetadata: { useWorktree: true } });
+    expect(screen.getByRole('button', { name: 'Disable stall nudge' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Disable stall nudge' }));
+    expect(onUpdate).toHaveBeenCalledWith('feature-ideas', { taskMetadata: { useWorktree: true, stallNudge: false } });
+  });
+
+  it('shows do-release with the nudge off and turns it back on', () => {
+    const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { slashdoCommand: 'release', stallNudge: false } });
+    expect(screen.getByRole('button', { name: 'Enable stall nudge' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Enable stall nudge' }));
+    expect(onUpdate).toHaveBeenCalledWith('do-release', { taskMetadata: { slashdoCommand: 'release', stallNudge: true } });
+  });
+});
+
 describe('GlobalConfigControls — file issues only', () => {
   it('is hidden for non-audit tasks', () => {
     renderControls();

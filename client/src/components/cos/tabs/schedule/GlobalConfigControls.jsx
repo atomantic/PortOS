@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { RotateCcw, AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, STALL_NUDGE_OPTION, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
@@ -205,6 +205,20 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
   // Release options are ON unless explicitly false, so the toggle writes an
   // explicit boolean either way.
+  // ON unless explicitly false, like the release options — so it reads from
+  // the same rule the server's nudge gate applies (sessionController.js).
+  const stallNudgeEnabled = config.taskMetadata?.stallNudge !== false;
+  const handleStallNudgeToggle = async () => {
+    setUpdating(true);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: { ...(config.taskMetadata || {}), stallNudge: !stallNudgeEnabled }
+      });
+    } finally {
+      setUpdating(false);
+    }
+  };
+
   const handleReleaseOptionToggle = async (field) => {
     setUpdating(true);
     try {
@@ -797,6 +811,20 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               </button>
             );
           })}
+          <button
+            type="button"
+            disabled={updating}
+            aria-pressed={stallNudgeEnabled}
+            aria-label={`${stallNudgeEnabled ? 'Disable' : 'Enable'} ${STALL_NUDGE_OPTION.label.toLowerCase()}`}
+            className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
+            onClick={handleStallNudgeToggle}
+          >
+            <div className="min-w-0 flex-1">
+              <span className="text-sm text-white">{STALL_NUDGE_OPTION.label}</span>
+              <p className="text-xs text-gray-500">{STALL_NUDGE_OPTION.description}</p>
+            </div>
+            <ToggleSwitch enabled={stallNudgeEnabled} disabled={updating} decorative />
+          </button>
         </div>
         {(config.taskMetadata?.openPR || claimFlow) && (
           <FormField label="After opening PR" className="mt-3" labelClassName="text-sm text-gray-400 block mb-2">

@@ -439,6 +439,14 @@ export const RELEASE_OPTIONS = [
   { field: 'autoDecide', label: 'Make decisions', description: 'Make routine design and preference decisions and list them for your review, instead of stopping to ask' },
 ];
 
+// The idle stall nudge (taskMetadata.stallNudge), ON unless explicitly false.
+// Shown for every scheduled task; do-release ships with it off because its
+// long quiet stretch is waiting on its own release PR's CI.
+export const STALL_NUDGE_OPTION = {
+  label: 'Stall nudge',
+  description: 'After 10 quiet minutes, paste a reminder into the agent session to keep working. Turn off for tasks that wait a long time on work they started, such as CI on a release PR.',
+};
+
 // better-dependency-freedom's removal bar — the slashdo `/do:depfree` modes.
 // Values mirror DEPFREE_MODES in server/lib/cosValidation.js; the server drops
 // anything else, and an absent key means the default bar.

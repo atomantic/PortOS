@@ -975,6 +975,11 @@ describe('validation.js', () => {
   });
 
   describe('sanitizeTaskMetadata', () => {
+    it('keeps the stall-nudge toggle only as a boolean', () => {
+      expect(sanitizeTaskMetadata({ stallNudge: false })).toEqual({ stallNudge: false });
+      expect(sanitizeTaskMetadata({ stallNudge: 'off' })).toBeNull();
+    });
+
     it('should return null for null/undefined/non-object input', () => {
       expect(sanitizeTaskMetadata(null)).toBeNull();
       expect(sanitizeTaskMetadata(undefined)).toBeNull();

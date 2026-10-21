@@ -2249,6 +2249,38 @@ describe('spawnTuiAgent runtime', () => {
     expect(agentLifecycle.finalizeAgent).toHaveBeenCalledOnce();
   });
 
+  // A schedule can turn the stall nudge off (taskMetadata.stallNudge: false) for a
+  // task whose long quiet stretch is a wait it owns. do-release ships that way:
+  // agent-0f4189d3 parked on its release PR's background CI watch, took the nudge
+  // as "wrap up" and wrote INCOMPLETE with the PR still open.
+  it.each([
+    { stallNudge: false, nudges: false },
+    { stallNudge: 'false', nudges: false },
+    { stallNudge: true, nudges: true },
+    { stallNudge: undefined, nudges: true },
+  ])('honors taskMetadata.stallNudge=$stallNudge once the prompt has started a turn', async ({ stallNudge, nudges }) => {
+    runSpawn({ task: { id: 'task-1', description: 'do the thing', metadata: stallNudge === undefined ? {} : { stallNudge } } });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(pasteCount()).toBe(1);
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await vi.advanceTimersByTimeAsync(4000);
+    // Output well after the submit is the run's own work, not an echo — the
+    // prompt has started a turn, which is when the opt-out takes over.
+    await vi.advanceTimersByTimeAsync(PROMPT_WORK_EVIDENCE_MS);
+    await capturedOnData(Buffer.from('Opened the release PR; waiting on its CI in the background.\n'));
+    vi.mocked(shellService.pasteToSession).mockClear();
+    await vi.advanceTimersByTimeAsync(nudges ? STALL_NUDGE_IDLE_MS + SIGNAL_POLL_MS : 2 * 60 * 60 * 1000);
+    if (nudges) {
+      expect(shellService.pasteToSession).toHaveBeenCalledWith(SESSION_ID, STALL_NUDGE_TEXT, expect.anything());
+    } else {
+      expect(shellService.pasteToSession).not.toHaveBeenCalled();
+      expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalledWith('agent-1', { metadata: { phase: 'stalled' } });
+    }
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
   // ── Stalled session: the turn just ended, with the task unfinished ─────────
   // agent-bb3061af (2026-09-17): the run finished its /simplify pass, printed
   // "Next: /do:pr", ended its turn and sat at an idle composer. Nothing was on
