@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   GitBranch,
   Camera,
@@ -28,7 +28,9 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import useListResource from '../../../hooks/useListResource';
 
 // Platform icon mapping
 const PLATFORM_ICONS = {
@@ -97,38 +99,44 @@ const EMPTY_FORM = {
   notes: ''
 };
 
+const fetchAccounts = () => api.getSocialAccounts({}, { silent: true }).then((data) => data?.accounts ?? []);
+const fetchPlatforms = () => api.getSocialAccountPlatforms({ silent: true }).then((data) => data?.platforms ?? []);
+const fetchOrgLinks = () => api.getSocialAccountOrgLinks({ silent: true });
+
 export default function AccountsTab() {
-  const [accounts, setAccounts] = useState([]);
-  const [platforms, setPlatforms] = useState([]);
+  const accountsResource = useListResource(fetchAccounts);
+  const platformsResource = useListResource(fetchPlatforms);
+  const orgLinksResource = useListResource(fetchOrgLinks);
+  const { items: accounts, setItems: setAccounts, retry: retryAccounts } = accountsResource;
+  const { items: platforms, retry: retryPlatforms } = platformsResource;
+  const { items: orgLinkRows, setItems: setOrgLinkRows, retry: retryOrgLinks } = orgLinksResource;
   const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(null);
   // Map socialAccountId → { orgId, orgName } for the "in org registry" badge (#2147).
-  const [orgLinks, setOrgLinks] = useState({});
+  const orgLinks = useMemo(() => Object.fromEntries(orgLinkRows.map(l => [l.socialAccountId, l])), [orgLinkRows]);
+  // Without the link list an account that IS in the registry would offer "Add to
+  // org registry" and create a duplicate org, so the action waits for a good read.
+  const orgLinksReady = orgLinksResource.state === 'ready';
   const [linkingId, setLinkingId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
-  useEffect(() => {
-    loadData();
+  const loadStats = useCallback(async () => {
+    setStats(await api.getSocialAccountStats().catch(() => null));
   }, []);
 
-  const loadData = async () => {
-    const [accountsData, platformsData, statsData, linksData] = await Promise.all([
-      api.getSocialAccounts().catch(() => ({ accounts: [] })),
-      api.getSocialAccountPlatforms().catch(() => ({ platforms: [] })),
-      api.getSocialAccountStats().catch(() => null),
-      // Degrades to no badges if Privacy Center isn't provisioned yet.
-      api.getSocialAccountOrgLinks({ silent: true }).catch(() => [])
-    ]);
-    setAccounts(accountsData.accounts || []);
-    setPlatforms(platformsData.platforms || []);
-    setStats(statsData);
-    setOrgLinks(Object.fromEntries((linksData || []).map(l => [l.socialAccountId, l])));
-    setLoading(false);
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  const reloadAll = () => {
+    retryAccounts();
+    retryPlatforms();
+    retryOrgLinks();
+    loadStats();
   };
 
   // "Add to org registry": create a platform-category org linked to this account.
@@ -143,7 +151,7 @@ export default function AccountsTab() {
     }).catch(() => null);
     if (created) {
       // Reactive update — no full refetch.
-      setOrgLinks(prev => ({ ...prev, [account.id]: { socialAccountId: account.id, orgId: created.id, orgName: created.name } }));
+      setOrgLinkRows(prev => [...prev, { socialAccountId: account.id, orgId: created.id, orgName: created.name }]);
       toast.success(`Added ${created.name} to org registry`);
     }
     setLinkingId(null);
@@ -162,18 +170,20 @@ export default function AccountsTab() {
       if (updated) {
         toast.success(`Updated ${form.platform} account`);
         setEditingId(null);
+        setAccounts(prev => prev.map(a => (a.id === updated.id ? updated : a)));
       }
     } else {
       const created = await api.createSocialAccount(form).catch(() => null);
       if (created) {
         toast.success(`Added ${form.platform} account`);
+        setAccounts(prev => [...prev, created]);
       }
     }
 
     setSaving(false);
     setShowForm(false);
     setForm(EMPTY_FORM);
-    loadData();
+    loadStats();
   };
 
   const handleEdit = (account) => {
@@ -194,7 +204,8 @@ export default function AccountsTab() {
     const success = await api.deleteSocialAccount(id).catch(() => false);
     if (success !== false) {
       toast.success('Account removed');
-      loadData();
+      setAccounts(prev => prev.filter(a => a.id !== id));
+      loadStats();
     }
     setDeleting(null);
   };
@@ -216,7 +227,16 @@ export default function AccountsTab() {
     groupedAccounts[category].push(account);
   }
 
-  if (loading) {
+  const loadError = [accountsResource, platformsResource].find((resource) => resource.state === 'error');
+  if (loadError) {
+    return (
+      <div className="p-4">
+        <ListLoadError what={loadError === accountsResource ? 'social accounts' : 'social platforms'} error={loadError.error} onRetry={reloadAll} />
+      </div>
+    );
+  }
+
+  if (accountsResource.state === 'loading' || platformsResource.state === 'loading') {
     return (
       <div className="flex items-center justify-center py-12">
         <BrailleSpinner text="Loading" />
@@ -236,7 +256,7 @@ export default function AccountsTab() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={loadData}
+            onClick={reloadAll}
             className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-card transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
             title="Refresh" aria-label="Refresh"
           >
@@ -251,6 +271,10 @@ export default function AccountsTab() {
           </button>
         </div>
       </div>
+
+      {orgLinksResource.state === 'error' && (
+        <ListLoadError what="org registry links" error={orgLinksResource.error} onRetry={retryOrgLinks} />
+      )}
 
       {/* Stats Summary */}
       {stats && stats.total > 0 && (
@@ -479,7 +503,7 @@ export default function AccountsTab() {
                           <Building2 className="w-3 h-3" />
                           In org registry
                         </span>
-                      ) : (
+                      ) : orgLinksReady && (
                         <button
                           onClick={() => handleAddToOrgRegistry(account)}
                           disabled={linkingId === account.id}

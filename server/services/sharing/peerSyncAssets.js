@@ -40,6 +40,7 @@ import { isStr } from '../../lib/textUtils.js';
 import { detectMediaManifest } from '../../lib/mimeTypes.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { ASSET_PULL_MAX_BYTES } from './assetLimits.js';
 
 // Bound file hashing to avoid starving unrelated filesystem work when a
 // large record (especially a deck) advertises hundreds of images.
@@ -862,7 +863,6 @@ const ASSET_KIND_TO_URL_PREFIX = Object.freeze({
 });
 
 export const ASSET_PULL_TIMEOUT_MS = 60000;
-const ASSET_PULL_MAX_BYTES = 100 * 1024 * 1024; // 100MB hard cap per asset
 
 // In-flight pull dedup. A peer can push multiple records that reference the
 // same asset in quick succession (universe edit → child collection re-link

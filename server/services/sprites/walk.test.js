@@ -11,12 +11,13 @@ import { spriteEvents } from './events.js';
  * Excluded from `npm run test:fast` (`VITEST_FAST=1`).
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it as vitestIt, expect, vi, beforeEach, afterAll } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { createHash } from 'crypto';
+import { ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 import {
   capSharpThreads, lockAllAnchors, lockAllAnchorsReal, expectCarriesCorrection, normalizeManifestForComparison,
   writeCandidatePng,
@@ -25,6 +26,11 @@ import {
 const restoreSharpThreads = capSharpThreads();
 afterAll(restoreSharpThreads);
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-walk-test-'));
+// Fail-fast cancellation (--bail from another worker) settles a test's wrapper
+// while its body keeps writing into TEST_ROOT; teardown drains the bodies first
+// so the root is not removed under them and recreated by their next write.
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -437,7 +443,13 @@ beforeEach(() => {
   probeVideoDuration.mockResolvedValue(null);
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
-afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
+afterAll(async () => {
+  try {
+    await owned.drain();
+  } finally {
+    rmSync(TEST_ROOT, { recursive: true, force: true });
+  }
+});
 
 describe('startWalkGeneration', () => {
   it('409s when the direction anchor is not locked', async () => {
@@ -518,13 +530,15 @@ describe('startWalkGeneration', () => {
   // for it regardless (#3022), so the prompt must ask for 6 — putting a number
   // in it that the tool silently ignores is what made the old picker a lie.
   // (The full fallback table is unit-tested in lib/grokVideoClip.test.js.)
-  it.each([2, 5])('asks grok for 6s when %ss is requested, since %ss is not deliverable', async (duration) => {
-    const id = await characterWithLockedAnchors(newId(), ['east']);
-    const result = await startWalkGeneration(id, { direction: 'east', duration });
-    expect(result.duration).toBe(6);
-    expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 6 seconds');
-    expect(executeTuiRun.mock.calls[0][0].prompt).not.toContain(`for ${duration} seconds`);
-  });
+  for (const duration of [2, 5]) {
+    it(`asks grok for 6s when ${duration}s is requested, since ${duration}s is not deliverable`, async () => {
+      const id = await characterWithLockedAnchors(newId(), ['east']);
+      const result = await startWalkGeneration(id, { direction: 'east', duration });
+      expect(result.duration).toBe(6);
+      expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 6 seconds');
+      expect(executeTuiRun.mock.calls[0][0].prompt).not.toContain(`for ${duration} seconds`);
+    });
+  }
 
   // Own completion through the persisted invalidation stream, not waitFor's
   // one-second polling budget. Subscribe before releasing the fake TUI so a

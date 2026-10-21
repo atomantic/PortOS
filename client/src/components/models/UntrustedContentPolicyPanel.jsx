@@ -45,6 +45,23 @@ export default function UntrustedContentPolicyPanel() {
   const effectiveValue = name => effective[name];
   const inheritanceName = isPrivate && source !== 'messages' ? 'message defaults' : 'shared defaults';
   const selectedProvider = providers.find(provider => provider.id === effectiveValue('providerId'));
+  // Mirrors selectUntrustedContentProvider (server/lib/untrustedContent.js):
+  // a pinned provider is used as-is; Automatic takes the first eligible
+  // provider that resolves a model, never one that cannot.
+  const eligibleProvider = provider => provider.enabled !== false && (isPrivate ? localApiProvider : apiProvider)(provider);
+  const resolution = (() => {
+    const pinned = effectiveValue('providerId');
+    const candidates = pinned ? providers.filter(provider => provider.id === pinned) : providers;
+    const usable = candidates.filter(eligibleProvider);
+    for (const provider of usable) {
+      const model = effectiveValue('model') || provider.defaultModel;
+      if (model) return { provider, model };
+    }
+    if (!usable.length) return { problem: pinned ? 'The pinned provider is not available for this source.' : 'No eligible API provider is available for this source.' };
+    return { problem: pinned
+      ? 'The pinned provider has no default model; pick an installed model.'
+      : 'No eligible API provider has a default model; pick an installed model.' };
+  })();
   const patch = fields => setConfig(current => source === 'defaults'
     ? { ...current, defaults: { ...current?.defaults, ...fields } }
     : { ...current, sources: { ...current?.sources, [source]: { ...current?.sources?.[source], ...fields } } });
@@ -145,6 +162,9 @@ export default function UntrustedContentPolicyPanel() {
                 emptyModelOption="Provider default model"
                 alwaysShowModel
               />
+              {!loading && (resolution.problem
+                ? <p role="status" className="text-xs text-port-warning">Analysis is not ready for {source === 'defaults' ? 'sources that use shared defaults' : 'this source'}: {resolution.problem}</p>
+                : <p className="text-xs text-gray-400">Resolves to {resolution.provider.name || resolution.provider.id} with model {resolution.model}.</p>)}
               <p className="text-xs text-gray-500">{isPrivate ? 'Only local API endpoints are eligible for private messages. Cloud APIs, CLI agents, and provider fallback are blocked.' : 'Choose an API provider for text analysis. Automatic selection uses an eligible API provider; a failed provider never falls back. Cloud APIs may receive public sources.'} <a href="/ai" className="text-port-accent hover:underline">Configure providers</a></p>
             </div>
             <details className="rounded-lg border border-port-border p-3">

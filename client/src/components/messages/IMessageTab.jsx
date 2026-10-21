@@ -7,6 +7,7 @@ import {
 import BrailleSpinner from '../BrailleSpinner';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
 import * as api from '../../services/api';
 import { formatClockTime, formatCount, timeAgo, formatDateNumeric } from '../../utils/formatters';
 import useDrawerTab from '../../hooks/useDrawerTab';
@@ -391,13 +392,24 @@ function ConversationDetail({
 function BlocklistPanel({ onChanged }) {
   const [handles, setHandles] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let active = true;
+    setLoading(true);
     api.getImessageBlocklist({ silent: true })
-      .then((res) => setHandles(res?.handles || []))
-      .catch(() => setHandles([]))
-      .finally(() => setLoading(false));
-  }, []);
+      .then((res) => {
+        if (!active) return;
+        setHandles(res?.handles || []);
+        setLoadError(null);
+      })
+      .catch((err) => {
+        if (active) setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [attempt]);
 
   const unblock = async (handle) => {
     const res = await api.removeImessageBlocklist(handle, { silent: true }).catch(() => null);
@@ -410,6 +422,10 @@ function BlocklistPanel({ onChanged }) {
     onChanged?.();
   };
 
+  // A failed read must not look like "nobody is blocked".
+  if (loadError) {
+    return <ListLoadError what="blocked handles" error={loadError} onRetry={() => setAttempt((n) => n + 1)} retrying={loading} className="shrink-0" />;
+  }
   if (loading || handles.length === 0) return null;
 
   return (

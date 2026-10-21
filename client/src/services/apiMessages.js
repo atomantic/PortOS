@@ -21,12 +21,12 @@ export const getMessageInbox = (params = {}, options = {}) => {
 };
 export const getMessageDetail = (accountId, messageId, options = {}) => request(`/messages/${accountId}/${messageId}`, options);
 export const getMessageThread = (accountId, threadId) => request(`/messages/thread/${accountId}/${threadId}`);
-export const getMessageDrafts = (params = {}) => {
+export const getMessageDrafts = (params = {}, options = {}) => {
   const qs = new URLSearchParams();
   if (params.accountId) qs.set('accountId', params.accountId);
   if (params.status) qs.set('status', params.status);
   const str = qs.toString();
-  return request(`/messages/drafts${str ? `?${str}` : ''}`);
+  return request(`/messages/drafts${str ? `?${str}` : ''}`, options);
 };
 export const createMessageDraft = (data) => request('/messages/drafts', { method: 'POST', body: JSON.stringify(data) });
 export const generateMessageDraft = (data) => request('/messages/drafts/generate', { method: 'POST', body: JSON.stringify(data) });

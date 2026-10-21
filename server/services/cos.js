@@ -4,7 +4,7 @@ import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.j
 /**
  * Chief of Staff (CoS) Service
  *
- * Manages the autonomous agent manager that watches TASKS.md,
+ * Manages the autonomous agent manager that works the task queues,
  * spawns sub-agents, and orchestrates task completion.
  *
  * Decomposed modules:
@@ -88,7 +88,7 @@ export { generateReport, getReport, getTodayReport, listReports, listBriefings, 
 import { runHealthCheck, getHealthStatus } from './cosHealthMonitor.js';
 export { runHealthCheck, getHealthStatus };
 
-// Task store: CRUD + queue persistence (TASKS.md / COS-TASKS.md). Imported for
+// Task store: CRUD + queue persistence (the `cos_tasks` queues). Imported for
 // internal use by evaluateTasks/dequeueNextTask/generators and re-exported for
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
@@ -562,6 +562,20 @@ async function bootDaemon(state) {
   // set to `execute` and the daemon is not paused.
   // The handoff follow-up poll (prWatcher.followUpHandoffReceipt) shares the
   // gate and is cancelled with the daemon.
+  // Existing retirement journals must recover even when branch-reconcile is
+  // disabled or every agent slot is occupied. The service reuses its exact cut;
+  // it never goes through normal agent/worktree admission.
+  const { INITIALIZED_RECOVERY_INTERVAL_MS, sweepInitializedCheckoutRecoveries } = await import('./initializedCheckoutRecoverySweep.js');
+  scheduleEvent({
+    id: 'cos-initialized-retirement-recovery',
+    type: 'interval',
+    intervalMs: INITIALIZED_RECOVERY_INTERVAL_MS,
+    handler: async () => {
+      await sweepInitializedCheckoutRecoveries(pendingMergeSweepBlocked)
+        .catch(error => console.warn(`⚠️ Initialized retirement recovery deferred: ${error.message}`));
+    },
+    metadata: { description: 'Resume verified initialized retirement journals' },
+  });
   const { PENDING_MERGE_SWEEP_INTERVAL_MS, setHandoffFollowUpGate } = await import('./prWatcher.js');
   setHandoffFollowUpGate(pendingMergeSweepBlocked);
   scheduleEvent({
@@ -661,6 +675,7 @@ async function teardownDaemon() {
   cancelEvent('cos-rehabilitation-check');
   cancelEvent('cos-improvement-check');
   cancelEvent('cos-pending-merge-sweep');
+  cancelEvent('cos-initialized-retirement-recovery');
   (await import('./prWatcher.js')).cancelHandoffFollowUps();
   await unregisterJobSchedules();
 
@@ -959,13 +974,8 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
     }
   };
 
-  if (userTaskData.exists) {
-    await processOrphanedTasks(userTaskData.grouped.in_progress || []);
-  }
-
-  if (cosTaskData.exists) {
-    await processOrphanedTasks(cosTaskData.grouped.in_progress || []);
-  }
+  await processOrphanedTasks(userTaskData.grouped.in_progress || []);
+  await processOrphanedTasks(cosTaskData.grouped.in_progress || []);
 }
 
 /**
@@ -1220,7 +1230,7 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
 /**
  * Event-driven task dequeue — the primary way tasks get spawned.
  *
- * Triggered by: agent:completed, tasks:user:added, tasks:cos:added, status:resumed
+ * Triggered by: agent:completed, tasks:changed, status:resumed
  * Thin orchestrator: computes per-cycle capacity, then threads a shared `ctx`
  * through the priority tiers in order (same tiers/numbering as evaluateTasks;
  * evaluateTasks' queue-regeneration step is
@@ -1674,10 +1684,6 @@ export async function init() {
       .catch(err => console.error(`❌ Critical-health recovery check failed: ${err.message}`));
   });
 
-  cosEvents.on('tasks:user:added', () => {
-    if (isDaemonRunning()) scheduleDequeue();
-  });
-
   // Changing the investigation override can make an already-queued held task
   // eligible. Re-run the normal dequeue so autonomy, budgets, leases, and
   // capacity remain the same as for every other system task.
@@ -1689,10 +1695,6 @@ export async function init() {
       import('./developmentWatchdog.js').then(({ runDevelopmentWatchdog }) => runDevelopmentWatchdog({ source: 'configuration' }))
         .catch(err => console.error(`❌ Development watchdog configuration reconciliation failed: ${err.message}`));
     }
-  });
-
-  cosEvents.on('tasks:cos:added', () => {
-    if (isDaemonRunning()) scheduleDequeue();
   });
 
   cosEvents.on('task:on-demand-requested', () => {

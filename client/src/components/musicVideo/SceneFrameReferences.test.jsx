@@ -47,3 +47,41 @@ describe('a shot\'s References row', () => {
     expect(screen.queryByRole('figure')).toBeNull();
   });
 });
+
+describe('a shot that names a Casting cast member', () => {
+  // Uniquely catches the References row hiding the Casting guides a frame render sends, or removing one dropping the rest.
+  it('leads with the variant\'s guides and keeps them when another reference is taken off', () => {
+    const cast = { ...project, concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Example Lead', ingredientId: 'cat-chr-x' }] } };
+    const castMedia = { 'cat-chr-x': [
+      { mediaKey: 'adult.png', kind: 'reference', library: { variant: { age: 30 }, guide: true } },
+      { mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } },
+    ] };
+    const onSave = vi.fn();
+    render(<SceneFrameReferences project={cast} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-x', age: 7 } }} castMedia={castMedia} onEditLocal={vi.fn()} onSave={onSave} />);
+    expect(screen.getAllByRole('listitem').map((li) => li.getAttribute('title')).filter(Boolean)).toEqual(['Example Lead · age 7', 'Example Lead · age 30', expect.stringMatching(/^Lead/)]);
+    fireEvent.click(screen.getByRole('button', { name: /Don't send Lead/ }));
+    expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['mvr-guide-child.png', 'mvr-guide-adult.png'] });
+  });
+});
+
+describe('a shot whose Casting guides are still loading', () => {
+  // Uniquely catches an edit made before the guides load saving the shot's references without them.
+  it('locks the row until the cast member\'s media arrives', () => {
+    const scene = { sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-x' }, frameReferenceIds: ['r1', 'mvr-guide-child.png'] };
+    const { rerender } = render(<SceneFrameReferences project={project} scene={scene} castMedia={{}} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /Don't send Lead/ }).disabled).toBe(true);
+    rerender(<SceneFrameReferences project={project} scene={scene} castMedia={{ 'cat-chr-x': null }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /Don't send Lead/ }).disabled).toBe(false);
+  });
+});
+
+describe('a shot whose Casting guides failed to load', () => {
+  // Uniquely catches an edit made while guides are unresolved permanently dropping the saved guide ids.
+  it('keeps saved guide ids that do not resolve when another reference is taken off', () => {
+    const onSave = vi.fn();
+    const scene = { sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-x' }, frameReferenceIds: ['r1', 'r2', 'mvr-guide-child.png'] };
+    render(<SceneFrameReferences project={project} scene={scene} castMedia={{ 'cat-chr-x': null }} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: /Don't send Lead/ }));
+    expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['r2', 'mvr-guide-child.png'] });
+  });
+});

@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
+import SceneCastVariant from './SceneCastVariant.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
@@ -63,7 +64,7 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
  * The References row above them picks the character and set references every frame render sends.
  */
 export default function SceneFrames({
-  project = null, scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
+  project = null, castMedia = null, scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, onSwapFrames = null, assetMarks = null, onMarkTake = null,
 }) {
@@ -186,7 +187,8 @@ export default function SceneFrames({
   return (
     <section aria-label="Still" className="@container min-w-0 space-y-2">
       <h4 className="text-xs font-medium">{endFrames ? 'Frames' : 'Still'}</h4>
-      <SceneFrameReferences project={project} scene={scene} onEditLocal={onEditLocal} onSave={onSave} />
+      <SceneCastVariant project={project} scene={scene} castMedia={castMedia} onEditLocal={onEditLocal} onSave={onSave} />
+      <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} onEditLocal={onEditLocal} onSave={onSave} />
       {endFrames ? (
         <div role="group" aria-label="Start and end frames" className="grid gap-3 @sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {column('start')}

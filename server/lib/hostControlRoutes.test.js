@@ -621,6 +621,7 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/production-runs/:runId/resume',
       'POST /api/music-video/:id/auto-reviews',
       'POST /api/music-video/:id/auto-reviews/:runId/resume',
+      'POST /api/music-video/:id/composition/document/directory',
       'POST /api/music-video/:id/render',
       'POST /api/music-video/:id/shots/:sceneId/render',
       'POST /api/music-video/:id/shot-renders/preview',
@@ -640,7 +641,6 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/production-runs/:runId/cancel',
       'POST /api/music-video/:id/auto-reviews/:runId/stop',
       'POST /api/music-video/:id/auto-reviews/:runId/cancel',
-      'POST /api/music-video/:id/composition/document/directory',
       'GET /api/music-video/:id/composition/document',
       'POST /api/music-video/:id/publish/:target/prepare',
     ]) {

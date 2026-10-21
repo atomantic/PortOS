@@ -170,6 +170,71 @@ describe('createOnDemandDaemon', () => {
     expect(probe).toHaveBeenCalledWith('http://127.0.0.1:9200/v1');
   });
 
+  // A second concurrent wake used to call `start` too; its `pm2 delete` killed
+  // the first launch and both callers failed with "exited while loading".
+  it('shares one start between concurrent wakes and starts again after the wake settles', async () => {
+    let finish;
+    const start = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    const { onDemand } = makeOnDemand({ start });
+
+    const first = onDemand.ensureRunning();
+    const second = onDemand.ensureRunning();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    finish({ online: false, error: new Error('port bind failed') });
+
+    expect(await first).toEqual({ ready: false, reason: 'port bind failed' });
+    expect(await second).toEqual({ ready: false, reason: 'port bind failed' });
+    expect(start).toHaveBeenCalledTimes(1);
+
+    const third = onDemand.ensureRunning();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    finish({ online: true });
+    expect(await third).toEqual({ ready: true, reason: null });
+  });
+
+  // #12723: a user-clicked Start used to `pm2 delete` a wake's still-loading
+  // process. It must queue, not join: its launch config can differ.
+  it('runs an explicit start only after an in-flight wake settles', async () => {
+    let loading = false;
+    let finishWake;
+    const start = vi.fn(() => {
+      loading = true;
+      return new Promise((resolve) => { finishWake = (value) => { loading = false; resolve(value); }; });
+    });
+    const { onDemand, stop } = makeOnDemand({ start });
+
+    const wake = onDemand.ensureRunning();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    const stoppedWhileLoading = [];
+    const queued = onDemand.runStart(async () => {
+      stoppedWhileLoading.push(loading);
+      await stop();
+      return 'restarted';
+    });
+
+    finishWake({ online: true });
+    expect(await wake).toEqual({ ready: true, reason: null });
+    expect(await queued).toBe('restarted');
+    expect(stoppedWhileLoading).toEqual([false]);
+  });
+
+  it('makes a wake issued during an explicit relaunch wait for it, then find the daemon online', async () => {
+    const { onDemand, start, setStatus } = makeOnDemand();
+    const order = [];
+    let finishRelaunch;
+    const relaunch = onDemand.runStart(() => new Promise((resolve) => {
+      finishRelaunch = () => { order.push('relaunch'); resolve('relaunched'); };
+    }));
+    const wake = onDemand.ensureRunning().then((result) => { order.push('wake'); return result; });
+
+    setStatus({ status: 'online' });
+    finishRelaunch();
+    expect(await relaunch).toBe('relaunched');
+    expect(await wake).toEqual({ ready: true, reason: null });
+    expect(order).toEqual(['relaunch', 'wake']);
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it('waitForReady reports the shared exit-tail diagnosis when the process dies before answering', async () => {
     const { onDemand, setStatus } = makeOnDemand({
       start: vi.fn(async () => ({ online: false, endpoint: 'http://127.0.0.1:9000/v1' })),

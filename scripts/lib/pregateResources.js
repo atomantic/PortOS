@@ -110,5 +110,11 @@ export async function probeBrowserPrerequisites(files, { repoRoot, env = process
   };
   if (files.includes(H264_SUITE)) prerequisites['Chrome with H.264'] = await chromeWithH264(chrome);
   const reason = browserSuiteBlockReason(prerequisites);
-  return reason === null ? { ok: true, chrome } : { ok: false, reason };
+  if (reason === null) return { ok: true, chrome };
+  // A probe that ran and failed (timeout, teardown) says nothing about whether the tool is installed.
+  const found = Object.values(prerequisites);
+  const probeFailed = found.some((entry) => entry?.probeFailure);
+  const missing = found.some((entry) => !entry);
+  const category = probeFailed && missing ? 'missing-and-probe-failed' : probeFailed ? 'probe-failed' : 'missing';
+  return { ok: false, reason, category };
 }

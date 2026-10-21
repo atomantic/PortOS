@@ -35,7 +35,7 @@ import { join } from 'path';
 import { Writable } from 'stream';
 import { PATHS, getMimeType, ensureDir, createWriteStreamGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { isTopLevelEntryName } from '../lib/pathSafety.js';
-import { parseZip, collectZipEntry, MAX_ZIP_MEMBER_BYTES } from '../lib/zipStream.js';
+import { parseZip, collectZipEntry, createZipBudget, MAX_ZIP_MEMBER_BYTES } from '../lib/zipStream.js';
 import { parseExport, importConversations, assetPointerId } from './chatgptImport.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -152,28 +152,37 @@ const UNSAFE_MEMBER_WARNING = '⚠️ ChatGPT import: skipped a ZIP member with 
 // the whole file (peak RAM is one chunk). Enforces the per-member size cap.
 // Resolves with the sniffed extension (or null when the magic bytes aren't
 // recognized — the caller then falls back to the friendly name / `.bin`).
-const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject) => {
+const streamAssetToFile = (entry, filePath, max, budget) => new Promise((resolve, reject) => {
   const outPromise = createWriteStreamGuarded(filePath);
-  let out = null;
   const head = [];
   let headLen = 0;
   let size = 0;
   let done = false;
-  const fail = (err) => { if (done) return; done = true; out?.destroy(); reject(err); };
+  // Reject only after the write stream has CLOSED. The caller unlinks the
+  // `.part` once this task settles; rejecting first lets the async open land
+  // after that unlink (re-creating the file) or leaves the fd open so Windows
+  // still lists the file (#12701).
+  const fail = (err) => {
+    if (done) return;
+    done = true;
+    outPromise
+      .then((stream) => {
+        if (stream.closed) return undefined;
+        return new Promise((closed) => { stream.once('close', closed); stream.destroy(); });
+      })
+      .catch(() => {})
+      .then(() => reject(err));
+  };
   outPromise.then((stream) => {
-    // `sink` can already have failed (and destroyed `out`, which was still
-    // null at that point) before this resolves — the fd it just opened would
-    // otherwise never be closed. Destroy it immediately rather than wiring it
-    // into a promise that already settled.
-    if (done) { stream.destroy(); return; }
-    out = stream;
-    out.on('error', fail);
-    out.on('finish', () => { if (done) return; done = true; resolve(sniffExtension(Buffer.concat(head))); });
+    if (done) return;
+    stream.on('error', fail);
+    stream.on('finish', () => { if (done) return; done = true; resolve(sniffExtension(Buffer.concat(head))); });
   }).catch(fail);
   const sink = new Writable({
     async write(chunk, _enc, cb) {
       size += chunk.length;
-      if (size > max) { cb(new Error(`ZIP member exceeds ${max} byte limit`)); return; }
+      if (size > max) { cb(new ServerError(`ZIP member exceeds ${max} byte limit`, { status: 413 })); return; }
+      try { budget.addBytes(chunk.length); } catch (err) { cb(err); return; }
       if (headLen < SNIFF_BYTES) {
         // Keep only the bytes still needed to reach SNIFF_BYTES, so `head` holds
         // at most SNIFF_BYTES regardless of how the producer chunks the asset.
@@ -216,9 +225,12 @@ const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject
  * Assets are written to `data/brain/imports/assets/<assetId><ext>` and surfaced
  * at `/data/brain-imports/<assetId><ext>`.
  */
-export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportAssets } = {}) {
+export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportAssets, maxTotalBytes, maxEntries, maxAssetBytes = 20 * 1024 ** 3 } = {}) {
   await ensureDir(assetDir);
 
+  const assetBudget = createZipBudget({ maxTotalBytes: maxAssetBytes });
+  const jsonBudget = createZipBudget({ maxTotalBytes, maxEntries });
+  const archiveBudget = createZipBudget({ maxEntries });
   const convoBuffers = [];          // { path, buffer }
   let assetNameMap = {};
   // assetId -> { datPath, tempPath, sniffedExt } recorded as each `.dat` streams
@@ -256,20 +268,26 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       .on('error', onErr)
       .pipe(parser)
       .on('entry', (entry) => {
+        // An entry the parser emits after the failure would start a task the
+        // cleanup's `allSettled(inFlight)` snapshot never waits for.
+        if (settled) { entry.autodrain(); return; }
         const { path } = entry;
+        if (IS_ASSET_NAME_MAP(path) || IS_CONVO_JSON(path) || (IS_DAT(path) && isSafeDatMember(path))) {
+          try { archiveBudget.addEntry(); } catch (err) { onErr(err); return; }
+        }
         if (IS_ASSET_NAME_MAP(path)) {
-          inFlight.push(collectZipEntry(entry, MAX_MEMBER_BYTES)
+          inFlight.push(collectZipEntry(entry, { maxBytes: MAX_MEMBER_BYTES, budget: jsonBudget })
             .then((buf) => { assetNameMap = JSON.parse(buf.toString('utf8')); })
             .catch(onErr));
         } else if (IS_CONVO_JSON(path)) {
-          inFlight.push(collectZipEntry(entry, MAX_MEMBER_BYTES)
+          inFlight.push(collectZipEntry(entry, { maxBytes: MAX_MEMBER_BYTES, budget: jsonBudget })
             .then((buf) => { convoBuffers.push({ path, buffer: buf }); })
             .catch(onErr));
         } else if (IS_DAT(path)) {
           // Stream the asset straight to a temp file, holding only its leading
           // bytes to sniff the extension. Peak RAM is one chunk regardless of
-          // asset size, so there is no aggregate ceiling and a multi-GB export
-          // imports without OOM risk. Renamed to its final served name below.
+          // asset size. A separate aggregate disk ceiling permits multi-GB
+          // exports while bounding expansion. Renamed to its served name below.
           // Refuse any member whose name isn't a plain filename BEFORE the temp
           // file is opened. Skip the member rather than failing the whole
           // import: one malformed member in a multi-GB export shouldn't cost the
@@ -283,7 +301,7 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
           const assetId = datAssetId(path);
           const tempPath = join(assetDir, `${assetId}.part`);
           tempPaths.add(tempPath);
-          inFlight.push(streamAssetToFile(entry, tempPath, MAX_MEMBER_BYTES)
+          inFlight.push(streamAssetToFile(entry, tempPath, MAX_MEMBER_BYTES, assetBudget)
             .then((sniffedExt) => { pendingAssets.set(assetId, { datPath: path, tempPath, sniffedExt }); })
             .catch(onErr));
         } else {

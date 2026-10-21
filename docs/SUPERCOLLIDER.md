@@ -173,7 +173,7 @@ Re-rendering the same source with the same seed and settings reproduces the take
 
 The recipe targets Linux `amd64` and `arm64` Docker engines. Readiness is per machine: a host is `ready` only after the probe has passed on that host's engine with the current image. The probe result records the engine version, OS and architecture, so the evidence names the platform it was proven on. Any other configuration stays visibly unavailable.
 
-The [native Docker workflow](../.github/workflows/supercollider-live.yml) builds the shipped recipe, runs setup twice, and executes the opt-in live suite on both architectures. On 2026-10-02, runtime `3.14.1-portos.1` with containment policy `1` passed on these fresh GitHub-hosted runners at commit `1e2b89bfb5a65941d9ed6a38cbf806182b79b36e`:
+The `supercollider-live` job in [`ci.yml`](../.github/workflows/ci.yml) (gated by the impact planner and part of `CI Gate`; see [GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)) builds the shipped recipe, runs setup twice, and executes the opt-in live suite on both architectures. On 2026-10-02, runtime `3.14.1-portos.1` with containment policy `1` passed on these fresh GitHub-hosted runners at commit `1e2b89bfb5a65941d9ed6a38cbf806182b79b36e`:
 
 | Host OS | Docker Engine | Native architecture | Evidence |
 | --- | --- | --- | --- |
@@ -184,7 +184,9 @@ Both first setup runs built the image and passed the stock-synth probe. Both sec
 
 ## Troubleshooting
 
-- **Build fails fetching packages**: `snapshot.debian.org` is occasionally slow or rate-limited. Apt retries five times. Re-run setup; Docker reuses completed layers.
+On an image build failure, setup retains and prints the trailing build lines (such as compiler or package download errors) directly in the CLI and CI failure log so the failure is diagnosable without re-running. If needed, re-run with `--verbose` for the full build log from the start.
+
+- **Build fails fetching packages**: `snapshot.debian.org` is occasionally slow or rate-limited. Apt retries five times. On build failure, setup prints the failing package lines (`E: ...`) directly in the error output. Re-run setup; Docker reuses completed layers.
 - **Build fails downloading the SuperCollider source, or the checksum fails**: the GitHub release asset was unreachable or altered. The build stops at the checksum rather than compiling unverified source.
 - **`smoke-failed`**: read `smoke.error`, then try `npm run setup:supercollider -- --yes --rebuild`, which rebuilds without the layer cache.
 - **`docker-stopped` right after starting Docker Desktop**: the engine can take a minute to come up. Re-run once it reports running.

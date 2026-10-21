@@ -1,5 +1,6 @@
 import { getMemoryStats } from './memoryStats.js';
 import { localEndpointPort } from './localEndpoint.js';
+import { createSingleFlight } from './singleFlight.js';
 
 /**
  * Shared plumbing for a local daemon PortOS runs as an optional PM2 process
@@ -344,10 +345,41 @@ export function createOnDemandDaemon({
    * Resolves `{ ready, reason }` rather than throwing: a caller in front of an
    * inference request wants to report "could not be started" alongside its own
    * error, not have a lazy start unwind its stack.
+   *
+   * Single-flight: concurrent callers (two CoS agents, an agent plus a voice
+   * turn) share one wake. Without it each saw the daemon offline and called
+   * `start`, whose `pm2 delete` killed the sibling launch, so both failed with
+   * "exited while loading". Joining is safe because the launch line comes from
+   * live/saved state, not from the caller. The slot clears on settle, so a later
+   * wake after another stop starts the daemon again.
+   *
+   * The slot is exclusive and shared with `runStart` (#12723): an explicit start
+   * or a tuning relaunch would otherwise `pm2 delete` an in-flight wake's
+   * process, the same race between a different pair of callers. A wake that
+   * arrives during one waits for it, then finds the daemon online.
    */
+  const starts = createSingleFlight({ exclusive: true });
+
   const ensureRunning = async () => {
     markUsed();
+    return starts.run('wake', wake);
+  };
 
+  /**
+   * Run an explicit start/stop sequence (a user-clicked Start, a tuning
+   * relaunch) in the daemon's exclusive start slot. Each call gets its own key,
+   * so it queues behind an in-flight wake or start rather than joining it: its
+   * launch config can differ from the one being loaded. `fn` must call the
+   * manager's raw start, never `ensureRunning` or `runStart` — either would
+   * wait on the slot `fn` itself holds.
+   *
+   * @template T
+   * @param {() => Promise<T>} fn
+   * @returns {Promise<T>}
+   */
+  const runStart = (fn) => starts.run(Symbol('start'), fn);
+
+  const wake = async () => {
     const pm2Status = await getStatusStrict();
     if (pm2Status?.status === 'online') return { ready: true, reason: null };
 
@@ -381,6 +413,7 @@ export function createOnDemandDaemon({
 
   return {
     ensureRunning,
+    runStart,
     markUsed,
     registerIdle,
     waitForReady,

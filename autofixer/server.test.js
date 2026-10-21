@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFile, rename } from 'node:fs/promises';
 
 const harness = vi.hoisted(() => ({
-  apps: vi.fn(), sweep: vi.fn(), validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
+  apps: vi.fn(), sweep: vi.fn(), index: null, metadataExists: false, validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
   settings: {}, verify: vi.fn(), apply: vi.fn(),
 }));
 vi.mock('./shared.js', () => ({
@@ -10,8 +10,10 @@ vi.mock('./shared.js', () => ({
   loadApps: harness.apps, execPm2: harness.pm2, listProcessesStrict: harness.list,
 }));
 vi.mock('node:fs/promises', () => ({
-  readFile: vi.fn(async file => file.endsWith('index.json') ? '[]' : file.endsWith('settings.json') ? JSON.stringify(harness.settings) : '{}'),
-  writeFile: vi.fn(async () => {}), mkdir: vi.fn(async () => {}), access: vi.fn(async () => {}),
+  readFile: vi.fn(async file => file.endsWith('index.json') ? (harness.index ?? '[]') : file.endsWith('settings.json') ? JSON.stringify(harness.settings) : '{}'),
+  writeFile: vi.fn(async () => {}), mkdir: vi.fn(async () => {}),
+  // Session metadata exists only when a test marks it recorded (shutdown ran first).
+  access: vi.fn(async file => { if (String(file).endsWith('metadata.json') && !harness.metadataExists) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); }),
   rename: vi.fn(async () => {}),
 }));
 vi.mock('../server/lib/agentGuard/index.js', () => ({ agentGuardEnv: () => ({}) }));
@@ -45,6 +47,8 @@ beforeEach(() => {
   harness.pm2.mockReset().mockResolvedValue({ stdout: '' });
   harness.provider.mockReset().mockResolvedValue({ error: 'Example agent stopped', exitCode: 1 });
   harness.settings = {};
+  harness.index = null;
+  harness.metadataExists = false;
   harness.verify.mockReset();
   harness.apply.mockReset();
 });
@@ -102,6 +106,29 @@ describe('Autofixer daemon repair input boundary', () => {
     await start();
     const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json'));
     expect(JSON.parse(meta[1])).toMatchObject({ processName: 'example-process', interrupted: true, success: false });
+  });
+
+  it('keeps the shutdown record when the boot sweep finds the same worktree', async () => {
+    const sessionId = 'autofixer_example-process_1700000000000_abc123';
+    harness.apps.mockResolvedValue([]);
+    harness.sweep.mockResolvedValue([sessionId]);
+    harness.metadataExists = true;
+    await start();
+    const sessionWrites = writeFile.mock.calls.filter(([f]) => String(f).includes(sessionId));
+    expect(sessionWrites).toEqual([]);
+  });
+
+  it('records a crashed repair once and leaves a single history row for its session', async () => {
+    const sessionId = 'autofixer_example-process_1700000000000_abc123';
+    harness.apps.mockResolvedValue([]);
+    harness.sweep.mockResolvedValue([sessionId]);
+    harness.index = JSON.stringify([{ sessionId, startTime: '2023-11-14T22:13:20.000Z' }]);
+    await start();
+    const tmpWrite = writeFile.mock.calls.find(([f]) => f === '/example/index.json.tmp');
+    const rows = JSON.parse(tmpWrite[1]).filter(row => row.sessionId === sessionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ success: false, processName: 'example-process' });
+    expect(Date.parse(rows[0].startTime)).toBeGreaterThan(Date.parse('2023-11-14T22:13:20.000Z'));
   });
 
   it('writes the history index via temp file + rename', async () => {

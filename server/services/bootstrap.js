@@ -68,6 +68,7 @@ import { recordCompletedRunUsage } from './usageReconciler.js';
 import { setAIToolkit as setProvidersToolkit } from './providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
 import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed } from './runner.js';
+import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { setAIToolkit as setPromptsToolkit } from './promptService.js';
 import { executeTuiRun as executeTuiRunFixed } from './tuiPromptRunner.js';
 import { initAutoFixer } from './autoFixer.js';
@@ -76,6 +77,7 @@ import { initSpawner } from './subAgentSpawner.js';
 import { initCertRenewer } from './certRenewer.js';
 
 import * as cos from './cos.js';
+import { markCosAgentMigrationsSettled } from './cosState.js';
 // Side-effect-free shared state module — importing it here does NOT pull in the
 // agent-lifecycle orchestrator graph (that's why activeAgents lives in its own
 // leaf module), so the shutdown handler can read the live agent set cheaply.
@@ -144,7 +146,7 @@ import { initSyncOrchestrator } from './syncOrchestrator.js';
 import { initMediaJobQueue, resumeMediaJobCompletions, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
-import { initSharing } from './sharing/index.js';
+import { initSharing, shutdownSharing, drainPeerSyncOperations } from './sharing/index.js';
 import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './catalogImageAttachHook.js';
@@ -418,6 +420,11 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
  * server from listening; each logs its own failure and the boot continues.
  */
 const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
+  // A crashed process leaks settled reservations that finish() never reached.
+  // Stamp uncertain publications before later boot steps read the journal.
+  // Sync and non-throwing; CoS may be off. Smoke boot skips this whole function.
+  reconcileDeadOwnerReservations();
+
   // Keep the opt-in agent API key file current (Settings > Security). A no-op
   // beyond one settings read while the key is off. Disabled under smoke boot
   // with the rest of this function, so a smoke run never writes to $HOME.
@@ -517,7 +524,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Initialize Privacy Center opt-out recheck scheduler — OFF by default; only
   // re-runs the broker scan + opt-out pass when the user opts in via
   // Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
-  startPrivacyRecheckScheduler().catch(err => logBootstrapFailure('❌ Privacy recheck scheduler init failed', err));
+  startPrivacyRecheckScheduler({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ Privacy recheck scheduler init failed', err));
   // Quota-burn loop — ONE install-level loop that spends subscription quota that
   // would otherwise expire. OFF by default: the tick returns before touching a
   // provider unless the user enabled it on the Quota Burn page, where the
@@ -785,6 +792,8 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     return { dbReady, ensureSchema };
   },
 
+  // Releases CoS reads that wait on the agent-record migrations (020/021) once the
+  // runner has had its turn — a failed migration exits the process instead.
   migrate: ({ dbReady, ensureSchema }) => runDbAndCatalogMigrations({
     dbReady,
     ensureSchema,
@@ -814,7 +823,7 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     // Bytes + sidecars + video-history.json stay authoritative; this builds a
     // queryable index over them. Idempotent, safe to run every boot.
     initMediaAssetIndex: async () => (await import('./mediaAssetIndex/index.js')).initMediaAssetIndex()
-  }),
+  }).finally(markCosAgentMigrationsSettled),
 
   warmStores: () => warmMandatoryStores({
     // Universe Builder PG warm (#1014): listIds() is the cheapest call that
@@ -1091,8 +1100,12 @@ const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10000;
 // How long an already-accepted ordinary API request may keep running after the
 // signal (#8323). Measured from the signal, so it overlaps the teardown steps
 // before the HTTP close rather than adding to them: the drain (5s) + HTTP close
-// grace (1s) + DB pool grace (3s) stays under the ceiling above.
+// grace (1s) + peer sync stop (1s) + DB pool grace (2.5s) stays under the ceiling above.
 const HTTP_DRAIN_WINDOW_MS = 5000;
+
+// Bound on stopping peer sync and settling its in-flight pushes before the DB
+// pool closes; drain + HTTP close + this + DB pool grace stay under the ceiling.
+const PEER_SYNC_STOP_GRACE_MS = 1000;
 
 /**
  * Wire SIGTERM/SIGINT to the graceful-shutdown state machine. Idempotent per
@@ -1254,12 +1267,21 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       else console.error(`❌ Media job queue flush failed: ${outcome.error}`);
     });
 
+    // Stop peer sync before the pool ends: a peer:online convergence walk still
+    // running would otherwise log one pool-ended stack per remaining subscription.
+    // Abandoning it is safe — the next boot's peer:online pass repeats it (#11750).
+    await withGrace('Peer sync', PEER_SYNC_STOP_GRACE_MS, ({ finish, finishWithError }) =>
+      shutdownSharing().then(() => drainPeerSyncOperations()).then(
+        () => finish(),
+        (err) => finishWithError('⚠️ Peer sync shutdown failed', err),
+      ));
+
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
       // Bound the DB pool close: pool.end() waits for every checked-out client to
       // be released, so one hung/leaked connection (e.g. a LISTEN channel) would
       // otherwise stall shutdown until the force-exit timer.
-      await withGrace('DB pool', 3000, ({ finish, finishWithError }) =>
+      await withGrace('DB pool', 2500, ({ finish, finishWithError }) =>
         close().then(() => finish('✅ DB pool closed'), (err) => finishWithError('⚠️ DB pool close failed', err)));
     } else {
       console.warn('ℹ️ DB pool close not available; skipping DB shutdown');

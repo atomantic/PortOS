@@ -103,7 +103,7 @@ async function mutateLocked(id, transform) {
 async function mutateProjectRecordUnqueued(id, transform) {
   const { project, result } = await withLockedProject(id, async (current) => {
     const outcome = await transform(current);
-    return { project: outcome.project, result: outcome };
+    return { project: outcome.project, result: outcome, skipPersist: outcome.skipPersist === true };
   });
   return { ...result, project };
 }

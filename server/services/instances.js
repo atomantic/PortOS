@@ -46,15 +46,50 @@ const INITIAL_PROBE_DELAY_MS = 2000;
 const TAILSCALE_RECHECK_MS = 60_000;
 
 // Backoff tiers for consecutive probe failures (in ms)
-// 30s → 1m → 5m → 15m → 1h → 24h
-const BACKOFF_TIERS_MS = [
+// 30s → 1m → 5m → 15m → 1h (max)
+export const BACKOFF_TIERS_MS = [
   30_000,      // tier 0: normal (1 failure)
   60_000,      // tier 1: 1 minute
   300_000,     // tier 2: 5 minutes
   900_000,     // tier 3: 15 minutes
-  3_600_000,   // tier 4: 1 hour
-  86_400_000   // tier 5: 24 hours (max)
+  3_600_000    // tier 4: 1 hour (max)
 ];
+
+export const PEER_WAKE_RATE_LIMIT_MS = 30_000;
+const lastWakeAtByPeerId = new Map();
+
+function shouldWakePeer(peerId, now = Date.now()) {
+  if (!peerId) return false;
+  const lastWake = lastWakeAtByPeerId.get(peerId) || 0;
+  if (now - lastWake < PEER_WAKE_RATE_LIMIT_MS) return false;
+  lastWakeAtByPeerId.set(peerId, now);
+  return true;
+}
+
+export function __resetPeerWakesForTests() {
+  lastWakeAtByPeerId.clear();
+}
+
+export function wakePeerProbe(peer) {
+  if (!peer?.id || peer.enabled === false) return false;
+  if (peer.status !== 'offline' && !peer.nextProbeAt) return false;
+  if (!shouldWakePeer(peer.id)) return false;
+
+  withData(async (data) => {
+    const entry = data.peers.find((p) => p.id === peer.id);
+    if (entry && entry.nextProbeAt) {
+      entry.nextProbeAt = null;
+    }
+  }).catch((err) => {
+    console.error(`❌ Failed to clear nextProbeAt on peer wake: ${err.message}`);
+  });
+
+  probePeer(peer).catch((err) => {
+    console.log(`⚠️ Wake probe failed for ${peer.name || peer.id}: ${err.message}`);
+  });
+
+  return true;
+}
 
 let pollTimer = null;
 // Set while we're waiting for Tailscale to connect before starting the real
@@ -638,7 +673,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         // When sameAuth was true (credential unchanged), authChanged is still
         // false. If the peer is stuck in authRequired+backoff the user is
         // explicitly asking for a retry — clear backoff so the immediate probe
-        // below fires instead of waiting up to 24h.
+        // below fires instead of waiting up to 1h.
         if (!authChanged && normalizedAuth !== null && peer.authRequired) {
           peer.consecutiveFailures = 0;
           peer.nextProbeAt = null;
@@ -691,7 +726,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
   // writes no longer disrupt an already-healthy connection.
   if (updates.enabled === false || hostChanged || authChanged) disconnectFromPeer(id);
   // A credential edit is almost always the fix for a 401, but the peer may be
-  // deep in exponential probe backoff (up to 24h) from those failures — so the
+  // deep in exponential probe backoff (up to 1h) from those failures — so the
   // regular poll loop would skip it for hours. Retry immediately: probePeer
   // bypasses the nextProbeAt gate and, on success, resets backoff + reconnects
   // the relay with the new credential. Fire-and-forget; failure just re-arms
@@ -1154,6 +1189,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
   // Set only when this announce marked the peer online (not the forged-address
   // branch, which records a sighting without trusting it).
   let markedOnlinePeer = null;
+  let peerToWake = null;
   const result = await withData(async (data) => {
     // Check for existing peer by instanceId
     let existing = data.peers.find(p => p.instanceId === instanceId);
@@ -1167,6 +1203,14 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     if (!existing) {
       existing = data.peers.find(p => p.address === address && p.port === port);
       matchedByAddress = true;
+    }
+
+    const instanceIdMatches = !existing || !existing.instanceId || existing.instanceId === instanceId;
+    if (existing && existing.enabled !== false && instanceIdMatches) {
+      if (shouldWakePeer(existing.id)) {
+        if (existing.nextProbeAt) existing.nextProbeAt = null;
+        peerToWake = existing;
+      }
     }
 
     const normalizedHost = announcedHost(host);
@@ -1192,6 +1236,8 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     if (existing) {
       existing.lastSeen = new Date().toISOString();
       existing.status = 'online';
+      existing.nextProbeAt = null;
+      existing.consecutiveFailures = 0;
       markedOnlinePeer = existing;
       existing.instanceId = instanceId;
       // A managed forward uses local coordinates, not the remote listen port.
@@ -1259,6 +1305,10 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
   if (result.created) {
     probePeer(result.peer).catch(err => {
       console.log(`⚠️ Initial probe failed for announced peer ${result.peer.name}: ${err.message}`);
+    });
+  } else if (peerToWake) {
+    probePeer(peerToWake).catch(err => {
+      console.log(`⚠️ Wake probe failed for ${peerToWake.name || peerToWake.id}: ${err.message}`);
     });
   }
 

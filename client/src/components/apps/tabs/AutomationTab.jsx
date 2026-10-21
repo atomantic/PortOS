@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router';
-import { RefreshCw, Play, PauseCircle, Sparkles, AlertTriangle } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router';
+import { RefreshCw, Play, PauseCircle, Sparkles, AlertTriangle, Search } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource.js';
 import CronInput from '../../CronInput';
 import ToggleSwitch from '../../ToggleSwitch';
 import AppProviderPin from '../../cos/AppProviderPin';
@@ -21,11 +23,26 @@ const INTERVAL_OPTIONS = [
   { value: 'cron', label: 'Scheduled' }
 ];
 
+// Order the catalogue with this app's switched-on tasks first, then alphabetical.
+const orderTaskTypes = (taskTypes, overrides) => [...taskTypes].sort((a, b) => {
+  const onA = overrides[a]?.enabled === true;
+  const onB = overrides[b]?.enabled === true;
+  return onA === onB ? a.localeCompare(b) : onA ? -1 : 1;
+});
+
 export default function AutomationTab({ appId, appName }) {
   const navigate = useNavigate();
-  const [overrides, setOverrides] = useState({});
-  const [schedule, setSchedule] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const showParam = searchParams.get('show');
+  const query = searchParams.get('q') || '';
+  const updateParam = (key, value, defaultValue = '') => {
+    const params = new URLSearchParams(searchParams);
+    if (!value || value === defaultValue) params.delete(key);
+    else params.set(key, value);
+    setSearchParams(params, { replace: true });
+  };
   const [providers, setProviders] = useState([]);
+  const [providersError, setProvidersError] = useState(null);
   const [providerCatalog, setProviderCatalog] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState('');
   const [paused, setPaused] = useState(false);
@@ -38,16 +55,32 @@ export default function AutomationTab({ appId, appName }) {
   // the behavior config on the Edit App → Intelligence tab).
   const [expandedTaskType, setExpandedTaskType] = useState(null);
 
+  // The overrides and the schedule are separate resources: a failed overrides
+  // read must never render as every switch off, and a failed schedule read must
+  // not render as an empty catalogue. Each is a one-element list so the shared
+  // useListResource state machine (loading/ready/error + retry) applies.
+  const fetchOverrides = useCallback(
+    () => api.getAppTaskTypes(appId, { silent: true }).then(d => [d?.taskTypeOverrides || {}]),
+    [appId],
+  );
+  const fetchSchedule = useCallback(() => api.getCosSchedule({ silent: true }).then(d => [d || {}]), []);
+  const overridesResource = useListResource(fetchOverrides);
+  const scheduleResource = useListResource(fetchSchedule);
+  const overrides = overridesResource.items[0] || {};
+  const schedule = scheduleResource.items[0] || null;
+  const setOverrides = (update) => overridesResource.setItems(prev => [update(prev[0] || {})]);
+  const overridesReady = overridesResource.state === 'ready';
+  const scheduleReady = scheduleResource.state === 'ready';
+
   const fetchData = useCallback(async () => {
-    const [taskTypesData, scheduleData, statusData, providersData] = await Promise.all([
-      api.getAppTaskTypes(appId).catch(() => ({ taskTypeOverrides: {} })),
-      api.getCosSchedule().catch(() => null),
+    const [statusData, providersData] = await Promise.all([
       api.getCosStatus().catch(() => null),
-      api.getProviders({ silent: true }).catch(() => ({ providers: [] }))
+      api.getProviders({ silent: true }).catch((error) => ({ error }))
     ]);
-    setOverrides(taskTypesData.taskTypeOverrides || {});
-    setSchedule(scheduleData);
     setPaused(statusData?.paused === true);
+    // A failed provider read keeps the last good catalogue and shows a retry row.
+    setProvidersError(providersData?.error || null);
+    if (providersData?.error) { setLoading(false); return; }
     // Every ENABLED provider of a runnable type (cli/tui/api) — handler-backed
     // tasks dispatch on provider.type, so any of them is a valid override.
     setProviderCatalog(providersData?.providers || []);
@@ -140,11 +173,34 @@ export default function AutomationTab({ appId, appName }) {
     return result?.success ? result : null;
   };
 
+  const refreshAll = () => {
+    overridesResource.retry();
+    scheduleResource.retry();
+    fetchData();
+  };
+
   if (loading) {
     return <BrailleSpinner text="Loading automation settings" />;
   }
 
   const taskTypes = schedule?.tasks ? Object.keys(schedule.tasks).sort() : [];
+  const enabledCount = taskTypes.filter(t => overrides[t]?.enabled === true).length;
+  // A configured app opens on its live automation; an unconfigured one on the full catalogue.
+  const defaultShow = enabledCount > 0 ? 'on' : 'all';
+  const show = showParam === 'on' || showParam === 'all' ? showParam : defaultShow;
+  const needle = query.trim().toLowerCase();
+  const visibleTaskTypes = orderTaskTypes(taskTypes, overrides).filter(t => {
+    if (show === 'on' && overrides[t]?.enabled !== true) return false;
+    if (!needle) return true;
+    return `${t} ${schedule.tasks[t]?.description || ''}`.toLowerCase().includes(needle);
+  });
+  const clearFilters = () => {
+    const params = new URLSearchParams(searchParams);
+    params.delete('q');
+    params.set('show', 'all');
+    if (defaultShow === 'all') params.delete('show');
+    setSearchParams(params, { replace: true });
+  };
   const allEnabled = taskTypes.length > 0 && taskTypes.every(t => (overrides[t] || {}).enabled === true);
 
   const handleToggleAll = async () => {
@@ -181,7 +237,7 @@ export default function AutomationTab({ appId, appName }) {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-port-warning">Scheduled automation is globally paused</p>
             <p className="text-xs text-gray-400 mt-0.5">
-              Scheduled and autonomous tasks won&apos;t run until resumed. You can still trigger an enabled task manually with <span className="text-gray-300">Run</span>.
+              Scheduled and autonomous tasks won&apos;t run until resumed. Any task can still be run once with <span className="text-gray-300">Run Now</span>.
             </p>
           </div>
           <button
@@ -203,10 +259,10 @@ export default function AutomationTab({ appId, appName }) {
               leave one on <em>Inherit</em> and it follows the global schedule defaults.
             </p>
           </div>
-          <ToggleSwitch enabled={allEnabled} onChange={handleToggleAll} size="sm" activeColor="bg-port-success" disabled={saving} ariaLabel={allEnabled ? 'Disable every scheduled task for this app' : 'Enable every scheduled task for this app'} />
+          {overridesReady && scheduleReady && <ToggleSwitch enabled={allEnabled} onChange={handleToggleAll} size="sm" activeColor="bg-port-success" disabled={saving} ariaLabel={allEnabled ? 'Disable every scheduled task for this app' : 'Enable every scheduled task for this app'} />}
         </div>
         <button
-          onClick={fetchData}
+          onClick={refreshAll}
           disabled={saving}
           className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
         >
@@ -214,13 +270,63 @@ export default function AutomationTab({ appId, appName }) {
         </button>
       </div>
 
-      {taskTypes.length === 0 ? (
+      {providersError && (
+        <ListLoadError what="the provider list" error={providersError} onRetry={fetchData} />
+      )}
+      {overridesResource.state === 'error' && (
+        <ListLoadError what="this app's automation settings" error={overridesResource.error} onRetry={overridesResource.retry} />
+      )}
+      {scheduleResource.state === 'error' && (
+        <ListLoadError what="the task schedule" error={scheduleResource.error} onRetry={scheduleResource.retry} />
+      )}
+      {(overridesResource.state === 'loading' || scheduleResource.state === 'loading') && (
+        <BrailleSpinner text="Loading automation settings" />
+      )}
+
+      {!overridesReady || !scheduleReady ? null : taskTypes.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
           No task types configured in the schedule
         </div>
       ) : (
+        <>
+        <div className="flex flex-wrap items-center gap-3">
+          <div role="group" aria-label="Task visibility" className="inline-flex rounded-lg border border-port-border overflow-hidden">
+            {[['on', `On for this app (${enabledCount})`], ['all', `All (${taskTypes.length})`]].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={show === value}
+                onClick={() => updateParam('show', value, defaultShow)}
+                className={`px-3 py-1.5 text-xs font-medium ${show === value ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="relative flex-1 min-w-[12rem] max-w-md">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Search tasks"
+              value={query}
+              onChange={e => updateParam('q', e.target.value)}
+              placeholder="Search task id or description…"
+              className="w-full pl-8 pr-3 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
+            />
+          </div>
+        </div>
+        {visibleTaskTypes.length === 0 && (
+          <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500 space-y-2">
+            <p>
+              No tasks match {show === 'on' ? '“On for this app”' : 'all tasks'}{needle ? ` and “${query.trim()}”` : ''}.
+            </p>
+            <button type="button" onClick={clearFilters} className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs">
+              Show all tasks
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 items-start">
-          {taskTypes.map(taskType => {
+          {visibleTaskTypes.map(taskType => {
             const override = overrides[taskType] || {};
             const globalConfig = schedule.tasks[taskType] || {};
             const isEnabled = override.enabled === true;
@@ -386,6 +492,7 @@ export default function AutomationTab({ appId, appName }) {
             );
           })}
         </div>
+        </>
       )}
 
 

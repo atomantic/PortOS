@@ -23,6 +23,7 @@ import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
+import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
   return withStateLock(async () => {
@@ -38,7 +39,7 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
     };
 
     state.stats.agentsSpawned++;
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
 
     cosEvents.emit('agent:spawned', state.agents[agentId]);
     return state.agents[agentId];
@@ -79,7 +80,7 @@ export async function updateAgent(agentId, updates) {
     } else {
       state.agents[agentId] = { ...state.agents[agentId], ...updates };
     }
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
 
     // Completion writes the archive before later completion hooks enrich an
     // agent's metadata (task summaries, scan reports, etc.). Mirror those
@@ -146,7 +147,67 @@ async function archiveCompletedAgent(agentId, agent) {
  * lock serializes live updates and archive rewrites; no transcript is loaded.
  */
 export function recordRepoStateVerification(agentId, verification) {
-  return updateCompletionReceipt(agentId, metadata => ({ ...metadata, repoStateVerification: verification }));
+  return updateCompletionReceipt(agentId, metadata => ({ ...metadata, repoStateVerification: { ...metadata.repoStateVerification, ...verification } }));
+}
+
+/** Reserve a cognitive recovery once per exact observation on its original run.
+ * Persist before dispatch: an interrupted publication stays held, never launches
+ * another agent just because the old task completed or the server restarted.
+ */
+export async function reserveRepoCleanupRecovery(agentId, branch, observation) {
+  let reservation = null;
+  const saved = await updateCompletionReceipt(agentId, async metadata => {
+    const prior = metadata.repoCleanupRecoveries?.[branch];
+    const history = prior?.observations || (prior?.observation ? [prior.observation] : []);
+    const refuse = reason => { reservation = { ...prior, admitted: false, reason }; return metadata; };
+    // A changed observation never steals an active/uncertain successor's work.
+    if (prior?.phase === 'reserved' && !prior.taskId) return refuse('cleanup-publication-unverified');
+    if (prior?.taskId) {
+      const { getTaskById } = await import('./cosTaskStore.js');
+      const task = await getTaskById(prior.taskId).catch(() => null);
+      if (!task || task.status !== 'completed') return refuse('cleanup-successor-owned');
+    }
+    if (history.includes(observation)) return refuse('cleanup-observation-already-attempted');
+    // Three meaningful observations on the same original run/branch are enough
+    // to establish a persistent issue. Further scans retain the evidence gap.
+    if ((prior?.attempt || 0) >= 3) return refuse('cleanup-cognitive-budget-exhausted');
+    const attempt = (prior?.attempt || 0) + 1;
+    const entry = { observation, observations: [...history, observation], attempt, phase: 'reserved', at: new Date().toISOString() };
+    reservation = { admitted: true, ...entry };
+    return { ...metadata, repoCleanupRecoveries: { ...metadata.repoCleanupRecoveries, [branch]: entry } };
+  });
+  return saved ? reservation : null;
+}
+
+export async function recordRepoCleanupRecovery(agentId, branch, observation, patch) {
+  return updateCompletionReceipt(agentId, metadata => {
+    const prior = metadata.repoCleanupRecoveries?.[branch];
+    if (prior?.observation !== observation) return metadata;
+    // A definitive refusal before publication did not spend cognitive work.
+    // Release only this reserved observation, retaining every actual attempt.
+    const deferred = prior.phase === 'reserved' && !prior.taskId
+      && patch.phase === 'blocked-before-dispatch' && patch.taskId === null;
+    const entry = { ...prior, ...patch, observation, attempt: deferred ? Math.max(0, prior.attempt - 1) : prior.attempt,
+      ...(deferred ? { observations: (prior.observations || []).filter(value => value !== observation) } : {}) };
+    return { ...metadata, repoCleanupRecoveries: { ...metadata.repoCleanupRecoveries, [branch]: entry } };
+  });
+}
+
+/** Domain outcome is independent of whether the provider process exited cleanly. */
+export function recordCleanupOutcome(agentId, outcome) {
+  return updateCompletionReceipt(agentId, metadata => {
+    const key = JSON.stringify([outcome.branch || null, outcome.path || null]);
+    const prior = { ...metadata.cleanupOutcomes };
+    // A branch-only hold is provisional, not a separate checkout. Resolving
+    // its original path replaces that placeholder, never another known path.
+    if (outcome.branch && outcome.path) delete prior[JSON.stringify([outcome.branch, null])];
+    const cleanupOutcomes = { ...prior, [key]: { ...outcome, observedAt: new Date().toISOString() } };
+    const rows = Object.values(cleanupOutcomes);
+    const incomplete = rows.filter(row => row.status !== 'verified');
+    const aggregate = incomplete.find(row => row.status === 'blocked') || incomplete[0] || rows[0];
+    return { ...metadata, cleanupOutcomes, cleanupOutcome: { ...aggregate,
+      status: incomplete.length ? aggregate.status : 'verified', total: rows.length, unresolved: incomplete.length } };
+  });
 }
 
 /** Server-only recovery backlink; works after the parent leaves live retention. */
@@ -167,14 +228,17 @@ async function updateCompletionReceipt(agentId, update) {
       agent = JSON.parse(content);
     }
     if (!agent || (agent.id || agent.agentId) !== agentId || agent.status !== 'completed') return false;
-    const updated = { ...agent, metadata: update(agent.metadata || {}) };
+    const metadata = agent.metadata || {};
+    const nextMetadata = await update(metadata);
+    if (nextMetadata === metadata) return true;
+    const updated = { ...agent, metadata: nextMetadata };
     // Never synthesize a bucket before archiveCompletedAgent moved the flat
     // directory: its retry treats an existing bucket as the completed move.
     if (date && (!state.agents[agentId] || await tryReadFile(join(getAgentDir(agentId, date), 'metadata.json')))) {
       const { output: _output, ...record } = updated;
       await atomicWrite(join(getAgentDir(agentId, date), 'metadata.json'), record);
     }
-    if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state); }
+    if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state, { changedAgentIds: [agentId] }); }
     return true;
   }));
 }
@@ -222,7 +286,7 @@ export async function completeAgent(agentId, result = {}) {
     // A later audit must never turn an old branch name into checkout authority.
     const agent = state.agents[agentId];
     let completedCheckouts;
-    if (agent.metadata?.claimPicksOwnBranch) {
+    if (agent.metadata?.claimPicksOwnBranch || agent.metadata?.isWorktree) {
       completedCheckouts = [];
       if (result.success === true) {
         const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
@@ -259,7 +323,7 @@ export async function completeAgent(agentId, result = {}) {
       state.stats.errors = (state.stats.errors || 0) + 1;
     }
 
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
     // `agent:completed` is intentionally emitted later, after the domain-usage
     // ledger is updated (see the recordDomainUsage block below, #1683). Do NOT
     // move it back here. `agent:updated` carries no scheduling side effect, so it
@@ -279,9 +343,9 @@ export async function completeAgent(agentId, result = {}) {
     return completed;
   }
 
-  // Daily CoS budget accounting (#711): count only AUTONOMOUS runs (non-user
-  // tasks) — the same set the CoS auto-run gate withholds when over budget —
-  // toward the domain's actions/minutes ledger. Recorded outside the state lock
+  // Daily CoS budget accounting (#711): all non-user runs, including on-demand
+  // work that bypasses the auto-run mode gate and pause, count toward the
+  // domain's actions/minutes ledger. Recorded outside the state lock
   // (separate ledger file + write tail) so it never serializes against state.json.
   //
   // This MUST land before the `agent:completed` emit below: that event's handler
@@ -321,7 +385,7 @@ export async function appendAgentOutput(agentId, line) {
       state.agents[agentId].output = state.agents[agentId].output.slice(-1000);
     }
 
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
     return state.agents[agentId];
   });
 
@@ -348,7 +412,7 @@ export async function appendAgentOutputLines(agentId, lines) {
     if (state.agents[agentId].output.length > 1000) {
       state.agents[agentId].output = state.agents[agentId].output.slice(-1000);
     }
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
     return state.agents[agentId];
   });
 
@@ -702,7 +766,7 @@ export async function sendBtwToAgent(agentId, message) {
     if (state.agents[agentId].btwMessages.length > 50) {
       state.agents[agentId].btwMessages = state.agents[agentId].btwMessages.slice(-50);
     }
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
   });
 
   cosEvents.emit('agent:btw', { agentId, message, timestamp });
@@ -816,7 +880,7 @@ export async function cleanupZombieAgents() {
     }
 
     if (cleaned.length > 0) {
-      await saveState(state);
+      await saveState(state, { changedAgentIds: cleaned });
 
       // Persist zombie-cleaned agents to date-bucketed dirs and update index
       const idx = await loadAgentIndex();
@@ -861,6 +925,8 @@ export async function cleanupZombieAgents() {
   for (const agent of finalized) {
     cosEvents.emit('agent:completed', agent);
   }
+  for (const agentId of summary.cleaned) await releaseAgentReservation(agentId);
+  await reconcileStaleAgentReservations({ agents: await getAgents() });
 
   return summary;
 }
@@ -877,8 +943,9 @@ export async function deleteAgent(agentId) {
       throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
     }
 
+    const wasRunning = state.agents[agentId]?.status === 'running';
     delete state.agents[agentId];
-    await saveState(state);
+    await saveState(state, { changedAgentIds: [agentId] });
 
     // Persist reference removal before deleting bytes. Failed index writes
     // retain both the disk tree and its cached lookup for a safe retry.
@@ -892,6 +959,8 @@ export async function deleteAgent(agentId) {
     }
 
     cosEvents.emit('agents:changed', { action: 'deleted', agentId });
+    // A purged record can never settle its own reservation; a live run keeps its hold.
+    if (!wasRunning) await releaseAgentReservation(agentId);
     return { success: true, agentId };
   }));
 }

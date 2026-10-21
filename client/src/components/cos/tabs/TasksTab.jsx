@@ -272,7 +272,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
         ) : pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="USER" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
-            No user tasks. Add one above or edit TASKS.md directly.
+            No user tasks. Add one above.
           </div>
         ) : (
           <div className="space-y-3">
@@ -370,7 +370,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
 
       {/* System Tasks */}
       <div>
-        <h3 className="text-lg font-semibold text-white mb-3">System Tasks (COS-TASKS.md)</h3>
+        <h3 className="text-lg font-semibold text-white mb-3">System Tasks</h3>
 
         {/* System Tasks Sections */}
         {isCosLoading ? (

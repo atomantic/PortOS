@@ -22,6 +22,8 @@ import { timeAgo, formatDateShort } from '../../../utils/formatters';
 import { filterGenerationModels } from '../../../utils/providers.js';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import SettingsLoadError from '../../ui/SettingsLoadError';
+import ListLoadError from '../../ui/ListLoadError';
+import useProviderList from '../../../hooks/useProviderList';
 
 // Pure helpers are exported for unit tests (PersonalityTab.test.jsx).
 
@@ -178,9 +180,11 @@ function RunDetail({ run }) {
 }
 
 export default function PersonalityTab() {
-  const [providers, setProviders] = useState([]);
+  const providersResource = useProviderList();
+  const providers = useMemo(() => providersResource.items.filter((p) => p.enabled), [providersResource.items]);
   const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const loading = historyLoading || providersResource.state === 'loading';
 
   // Run configuration
   const [selectedProviders, setSelectedProviders] = useState([]);
@@ -222,15 +226,13 @@ export default function PersonalityTab() {
   }, []);
 
   const loadData = async () => {
-    setLoading(true);
-    const [providersData, historyData, settingsData] = await Promise.all([
-      api.getProviders({ silent: true }).catch(() => ({ providers: [] })),
+    setHistoryLoading(true);
+    const [historyData, settingsData] = await Promise.all([
       // No limit — fetch the full retained history (server-capped) so every
       // kept record is reachable for compare/delete.
       api.getModelPersonalityHistory(undefined, { silent: true }).catch(() => null),
       api.getModelPersonalitySettings({ silent: true }).catch(() => null)
     ]);
-    setProviders((providersData.providers || []).filter((p) => p.enabled));
     setHistoryError(!Array.isArray(historyData));
     setSettingsError(!settingsData);
     if (Array.isArray(historyData)) setHistory(historyData);
@@ -241,7 +243,7 @@ export default function PersonalityTab() {
       setScorerModel(settingsData.scorerModel || '');
       setHistoryCap(settingsData.historyCap ?? 200);
     }
-    setLoading(false);
+    setHistoryLoading(false);
   };
 
   const toggleProvider = (providerId, model) => {
@@ -354,7 +356,10 @@ export default function PersonalityTab() {
       <div className="bg-port-card rounded-lg border border-port-border p-4">
         <h3 className="font-semibold text-white mb-4">Select Providers & Models</h3>
         <div className="space-y-3 max-h-64 overflow-y-auto">
-          {providers.length === 0 && (
+          {providersResource.state === 'error' && (
+            <ListLoadError what="AI providers" error={providersResource.error} onRetry={providersResource.retry} />
+          )}
+          {providersResource.state === 'ready' && providers.length === 0 && (
             <p className="text-sm text-gray-500">No enabled AI providers. Configure one in Settings → AI Providers.</p>
           )}
           {providers.map((provider) => (
@@ -429,6 +434,9 @@ export default function PersonalityTab() {
         <div className="bg-port-card rounded-lg border border-port-border p-4 space-y-4">
           <h3 className="font-semibold text-white">Options</h3>
           {settingsError && <SettingsLoadError onRetry={loadData} />}
+          {providersResource.state === 'error' && (
+            <ListLoadError what="AI providers" error={providersResource.error} onRetry={providersResource.retry} />
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <ProviderModelSelector
               label="Alignment scorer provider"

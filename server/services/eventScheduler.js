@@ -19,6 +19,31 @@ import { matchesCronField } from '../lib/cronFields.js'
 // Maximum safe setTimeout value (2^31 - 1 ms, ~24.8 days)
 const MAX_TIMEOUT = 2147483647
 
+// Boot grace period for overdue interval schedules across restarts (#12624)
+const BOOT_GRACE_MS = 2 * 60 * 1000 // 2 minutes
+
+function parseTimestamp(value) {
+  if (value == null) return null
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : null
+  }
+  if (value instanceof Date) {
+    const ms = value.getTime()
+    return Number.isFinite(ms) && ms > 0 ? ms : null
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (/^\d+$/.test(trimmed)) {
+      const num = Number(trimmed)
+      return Number.isFinite(num) && num > 0 ? num : null
+    }
+    const ms = Date.parse(trimmed)
+    return Number.isFinite(ms) && ms > 0 ? ms : null
+  }
+  return null
+}
+
 // Scheduled events storage
 const scheduledEvents = new Map()
 
@@ -366,7 +391,7 @@ function createSafeTimer(callback, delayMs, eventId) {
  * @returns {Object} - Scheduled event
  */
 function schedule(config) {
-  const { id, type, cron, recurrence, timezone, intervalMs, delayMs, handler, metadata = {} } = config
+  const { id, type, cron, recurrence, timezone, intervalMs, delayMs, handler, metadata = {}, lastRunAt = null } = config
 
   if (!id || !type || !handler) {
     throw new Error('Event requires id, type, and handler')
@@ -376,6 +401,8 @@ function schedule(config) {
   if (scheduledEvents.has(id)) {
     cancel(id)
   }
+
+  const parsedLastRunAt = parseTimestamp(lastRunAt)
 
   const event = {
     id,
@@ -389,7 +416,7 @@ function schedule(config) {
     metadata,
     createdAt: Date.now(),
     nextRunAt: null,
-    lastRunAt: null,
+    lastRunAt: parsedLastRunAt,
     runCount: 0,
     active: true,
     lastRunSucceeded: null,
@@ -417,7 +444,11 @@ function schedule(config) {
 
     case 'interval':
       if (!intervalMs) throw new Error('Interval type requires intervalMs')
-      event.nextRunAt = Date.now() + intervalMs
+      if (parsedLastRunAt !== null) {
+        event.nextRunAt = Math.max(parsedLastRunAt + intervalMs, Date.now() + BOOT_GRACE_MS)
+      } else {
+        event.nextRunAt = Date.now() + intervalMs
+      }
       break
 
     case 'once':
@@ -882,5 +913,6 @@ export {
   parseRecurrenceToNextRun,
   isValidCron,
   isValidRecurrence,
-  MAX_TIMEOUT
+  MAX_TIMEOUT,
+  BOOT_GRACE_MS
 }

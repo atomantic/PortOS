@@ -188,7 +188,7 @@ and an obsolete scope label cannot remain after upstream changes. The former
 The prefix is spelled with a hyphen rather than `better:` because a task type is
 interpolated into the CoS task id, which becomes a git branch name
 (`cos/<taskId>/<agentId>`) and a worktree directory. Git refs reject a colon,
-Windows paths reject a colon, and the `TASKS.md` id pattern accepts only word
+Windows paths reject a colon, and the task id pattern accepts only word
 characters and hyphens.
 
 ## Filing and mode

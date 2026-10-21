@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock3, Copy, FileCode2, Film, Globe, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Copy, FileCode2, Film, Globe, Images, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -9,20 +9,16 @@ import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPrevi
 import FilmStylePicker from '../components/codeAnimation/FilmStylePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import ProductionProjects from '../components/codeAnimation/ProductionProjects';
+import CodeAnimationGallery from '../components/codeAnimation/CodeAnimationGallery';
 import UniverseMoodBoardPicker, { BOARD_FOLLOW_UNIVERSE, BOARD_NONE, useStyleSourceLists } from '../components/media/UniverseMoodBoardPicker';
-import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import useProviderModels from '../hooks/useProviderModels';
-import { usePagedCollection } from '../hooks/usePagedCollection';
-import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { useSocketResource } from '../hooks/useSocketResource';
-import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import {
   buildCodeAnimationPrompt,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   getCodeAnimationOptions,
-  listCodeAnimationJobPage,
   listTracks,
   startCodeAnimationGeneration,
   uploadFile,
@@ -31,7 +27,6 @@ import { copyToClipboard } from '../lib/clipboard';
 import { pluralize } from '../lib/textUtils';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../lib/safeStorage';
 import { UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../utils/fileUpload';
-import { formatCount, timeAgo } from '../utils/formatters';
 
 const DRAFT_KEY = 'portos.codeAnimation.draft';
 const JOB_EVENTS = ['code-animation:changed'];
@@ -239,20 +234,6 @@ function draftFromJob(job) {
   };
 }
 
-function galleryJob(job) {
-  return {
-    id: job.id,
-    status: job.status,
-    title: job.title,
-    providerId: job.providerId,
-    model: job.model,
-    error: job.error,
-    createdAt: job.createdAt,
-    startedAt: job.startedAt,
-    completedAt: job.completedAt,
-  };
-}
-
 const readAudioDuration = (file) => new Promise((resolve) => {
   const url = URL.createObjectURL(file);
   const audio = new Audio();
@@ -296,7 +277,6 @@ function FastCodeAnimation() {
   const [built, setBuilt] = useState(null);
   const [starting, setStarting] = useState(false);
   const [job, setJob] = useState(null);
-  const [galleryCounts, setGalleryCounts] = useState({ running: 0, completed: 0 });
   const [effort, setEffort] = useState('');
   const [briefEffort, setBriefEffort] = useState('');
   const [pastedHtml, setPastedHtml] = useState('');
@@ -326,21 +306,6 @@ function FastCodeAnimation() {
   const onStyleGrammarChange = useCallback((styleGrammarId) => setDraft((prev) => ({ ...prev, styleGrammarId })), []);
   const updateFormat = (patch) => setDraft((prev) => ({ ...prev, format: { ...prev.format, ...patch } }));
 
-  const fetchGalleryPage = useCallback(async ({ cursor, signal }) => {
-    const page = await listCodeAnimationJobPage({ cursor, signal });
-    if (!signal.aborted) setGalleryCounts(page.counts);
-    return page;
-  }, []);
-  const gallery = usePagedCollection(fetchGalleryPage);
-  const savedJobs = gallery.items;
-  const setSavedJobs = gallery.setItems;
-  useSocketSubscription('code-animation', { onResubscribe: gallery.refreshFirst });
-  useEffect(() => {
-    const refresh = () => gallery.refreshFirst();
-    socket.on('code-animation:changed', refresh);
-    return () => socket.off('code-animation:changed', refresh);
-  }, [gallery.refreshFirst]);
-
   useEffect(() => { safeWriteJsonStorage(DRAFT_KEY, draft); }, [draft]);
 
   useEffect(() => {
@@ -365,8 +330,6 @@ function FastCodeAnimation() {
   // blank-slate idea generator.
   const briefSeeds = !!(draft.universeId || draft.seedIdea.trim() || draft.concept.trim() || draft.title.trim());
   const canWriteBrief = briefSeeds && !writingBrief;
-  const inProgressCount = galleryCounts.running;
-  const completedCount = galleryCounts.completed;
 
   // Clear route-specific output before applying the newly selected resource.
   useEffect(() => {
@@ -387,7 +350,9 @@ function FastCodeAnimation() {
     namespace: 'code-animation',
     events: JOB_EVENTS,
     resourceKey: jobId,
-    matchesEvent: (payload) => !!jobId && payload?.id === jobId,
+    // A poster event changes only the gallery; re-reading the job would hand the
+    // preview a new frame object and restart a session the user is watching.
+    matchesEvent: (payload) => !!jobId && payload?.id === jobId && payload.kind !== 'poster',
   });
 
   useEffect(() => {
@@ -397,10 +362,6 @@ function FastCodeAnimation() {
     setJob(next);
     if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame, jobId: next.id });
     else setPreview(null);
-    if (next.status !== 'missing') {
-      setSavedJobs((previous) => [galleryJob(next), ...previous.filter((item) => item.id !== requested)]
-        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
-    }
     if (locallyStartedJobIdRef.current !== requested
       && hydratedJobIdRef.current !== requested
       && next.input) {
@@ -539,7 +500,6 @@ function FastCodeAnimation() {
     setBuilt({ prompt: started.prompt, attachments: started.attachments, frame: started.frame, audioUrl: started.audioUrl, moodBoardId: started.moodBoardId, briefKey });
     setJob(started);
     setPreview(null);
-    setSavedJobs((previous) => [galleryJob(started), ...previous.filter((item) => item.id !== started.id)]);
     navigate(`/code-animation/${encodeURIComponent(started.id)}`);
   };
 
@@ -552,59 +512,6 @@ function FastCodeAnimation() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-4">
-      <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-gallery-heading">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 id="ca-gallery-heading" className="text-sm font-semibold text-white">Animation gallery</h2>
-            <p className="mt-1 text-xs text-gray-500">
-              {formatCount(inProgressCount)} in progress · {formatCount(completedCount)} completed
-            </p>
-          </div>
-          <Link to="/code-animation" className={buttonSecondary}>
-            <Sparkles className="h-4 w-4" /> New animation
-          </Link>
-        </div>
-        {!gallery.loaded && <p className="text-xs text-gray-500">Loading animations…</p>}
-        {gallery.loaded && savedJobs.length === 0 && !gallery.error && (
-          <p className="text-xs text-gray-500">Generated animations will appear here so you can reopen them later.</p>
-        )}
-        {savedJobs.length > 0 && (
-          <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
-            {savedJobs.map((item) => {
-              const StatusIcon = item.status === 'running'
-                ? Clock3
-                : item.status === 'completed'
-                  ? CheckCircle2
-                  : AlertTriangle;
-              const statusLabel = item.status === 'running'
-                ? 'In progress'
-                : item.status === 'completed'
-                  ? 'Completed'
-                  : 'Failed';
-              return (
-                <Link
-                  key={item.id}
-                  to={`/code-animation/${encodeURIComponent(item.id)}`}
-                  aria-current={jobId === item.id ? 'page' : undefined}
-                  className={`min-w-0 rounded-lg border p-3 transition-colors hover:border-port-accent ${jobId === item.id ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-bg/60'}`}
-                >
-                  <div className="flex items-center gap-2">
-                    <StatusIcon className={`h-4 w-4 shrink-0 ${item.status === 'failed' ? 'text-port-error' : item.status === 'completed' ? 'text-port-success' : 'text-port-accent'}`} />
-                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{item.title || 'Untitled animation'}</p>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between gap-2 text-xs text-gray-500">
-                    <span>{statusLabel}{item.model ? ` · ${item.model}` : ''}</span>
-                    <span className="shrink-0">{timeAgo(item.createdAt)}</span>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-        <InfiniteScrollFooter hasMore={gallery.hasMore} loading={gallery.loading} error={gallery.error}
-          onLoadMore={gallery.loadMore} autoLoad={false} label="Load older animations" />
-      </section>
-
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-style-heading">
@@ -901,7 +808,9 @@ function FastCodeAnimation() {
 // Route-mounted lanes keep inactive galleries and provider calls idle.
 export default function CodeAnimation() {
   const { pathname } = useLocation();
-  const production = pathname.startsWith('/code-animation/production');
+  const mode = pathname.startsWith('/code-animation/production')
+    ? 'production'
+    : pathname === '/code-animation/gallery' || pathname.startsWith('/code-animation/gallery/') ? 'gallery' : 'fast';
   return <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         icon={FileCode2}
@@ -911,15 +820,16 @@ export default function CodeAnimation() {
 
     <RouteTabsHeader
       ariaLabel="Animation mode"
-      activeTab={production ? 'production' : 'fast'}
+      activeTab={mode}
       tabs={[
         { id: 'fast', label: 'Fast HTML', to: '/code-animation', icon: FileCode2 },
+        { id: 'gallery', label: 'Gallery', to: '/code-animation/gallery', icon: Images },
         { id: 'production', label: 'Production', to: '/code-animation/production', icon: Film },
       ]}
     />
     <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
       <div className="mx-auto max-w-7xl">
-        {production ? <ProductionProjects /> : <FastCodeAnimation />}
+        {mode === 'production' ? <ProductionProjects /> : mode === 'gallery' ? <CodeAnimationGallery /> : <FastCodeAnimation />}
       </div>
     </div>
   </div>;

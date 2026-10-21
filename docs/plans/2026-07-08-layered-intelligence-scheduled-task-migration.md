@@ -24,7 +24,7 @@ like the other scheduled tasks.** Drop the cross-app sweep entirely.
 ## Key finding — the scheduled-task system can't run a deterministic handler
 
 The `taskSchedule.js` / `SELF_IMPROVEMENT_TASK_TYPES` system is **hardwired to
-spawn one coding agent per fire.** `generateManagedAppImprovementTaskForType`
+spawn one coding agent per fire.** `prepareManagedAppImprovementTask`
 (`cosTaskGenerator.js:1540`) always terminates by emitting an agent prompt
 (`taskType:'internal'`); deterministic per-type work (e.g. `branch-reconcile`,
 `reference-watch`) exists only as *pre-steps that prepare the agent prompt*, never

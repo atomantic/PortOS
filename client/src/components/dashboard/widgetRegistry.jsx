@@ -36,7 +36,11 @@ const postFeatureEnabled = (state) => state?.instanceFeatures?.features?.some(
   (feature) => feature.id === 'post' && feature.enabled === true
 ) === true;
 
-// Each entry: { id, label, Component, width, defaultH?, gate? }.
+// Each entry: { id, label, Component, width, defaultH?, needs?, gate? }.
+// `needs` names the dashboardState streams the widget (or its gate) reads; the
+// page fetches only the streams a layout's widgets need and passes
+// `dashboardState` only to widgets that declare one, so a self-fetching widget
+// is not re-rendered as each unrelated stream lands.
 // `gate(state) => bool` skips the widget when it has nothing useful to show.
 // The Apps tile waits for its first read before rendering so a slow response
 // cannot flash the empty-state CTA over an existing installation. It still
@@ -51,30 +55,30 @@ export const WIDGETS = [
   { id: 'daily-actions',      label: 'Today\'s Actions',        Component: DailyActionsWidget,      width: 'full',    defaultH: 4 },
   // Daily Driver self-hides once the day is handled — gated on the per-day
   // first-visit/handled state so a handled day reserves no grid cell (#2666).
-  { id: 'daily-driver',      label: 'Daily Driver',          Component: DailyDriverWidget,      width: 'third',   defaultH: 6, gate: (s) => !!s.dailyDriver && !s.dailyDriver.handledToday },
+  { id: 'daily-driver',      label: 'Daily Driver',          Component: DailyDriverWidget,      width: 'third',   needs: ['dailyDriver'], defaultH: 6, gate: (s) => !!s.dailyDriver && !s.dailyDriver.handledToday },
   { id: 'quick-brain',       label: 'Quick Brain Capture',   Component: QuickBrainCapture,      width: 'half',    defaultH: 4 },
   { id: 'quick-idea',        label: 'Quick Idea (Catalog)',  Component: QuickIdeaCapture,       width: 'half',    defaultH: 4 },
   { id: 'quick-image',       label: 'Quick Image Prompt',    Component: QuickImagePrompt,       width: 'half',    defaultH: 6 },
   { id: 'quick-task',        label: 'Quick Task',            Component: QuickTaskWidget,        width: 'half',    defaultH: 5 },
-  { id: 'apps',              label: 'Apps Grid',             Component: AppsGridWidget,         width: 'full',    defaultH: 5, gate: (s) => s.appsLoading === false },
+  { id: 'apps',              label: 'Apps Grid',             Component: AppsGridWidget,         width: 'full',    needs: ['apps'], defaultH: 5, gate: (s) => s.appsLoading === false },
   { id: 'cos',               label: 'Chief of Staff',        Component: CosDashboardWidget,     width: 'third',   defaultH: 6 },
   { id: 'goal-progress',     label: 'Goal Progress',         Component: GoalProgressWidget,     width: 'third',   defaultH: 5 },
   { id: 'upcoming-tasks',    label: 'Upcoming Tasks',        Component: UpcomingTasksWidget,    width: 'third',   defaultH: 5 },
   { id: 'proactive-alerts',  label: 'Proactive Alerts',      Component: ProactiveAlertsWidget,  width: 'quarter', defaultH: 4 },
   { id: 'review-hub',        label: 'Review Hub',            Component: ReviewHubCard,          width: 'quarter', defaultH: 4 },
   { id: 'while-away',        label: 'While You Were Away',   Component: WhileAwayWidget,        width: 'third',   defaultH: 5 },
-  { id: 'system-health',     label: 'System Health',         Component: SystemHealthWidget,     width: 'quarter', defaultH: 8 },
+  { id: 'system-health',     label: 'System Health',         Component: SystemHealthWidget,     width: 'quarter', needs: ['health'], defaultH: 8 },
   { id: 'network-exposure',  label: 'Network Exposure',      Component: NetworkExposureWidget,  width: 'quarter', defaultH: 5 },
   { id: 'backup',            label: 'Backup',                Component: BackupWidget,           width: 'quarter', defaultH: 5 },
   { id: 'death-clock',       label: 'Meatspace Time Remaining', Component: DeathClockWidget,    width: 'quarter', defaultH: 4 },
   { id: 'daily-post',        label: 'Daily POST',            Component: DailyPostWidget,        width: 'quarter', defaultH: 3, gate: postFeatureEnabled },
-  { id: 'tribe-care',        label: 'Tribe Care',            Component: TribeCareWidget,        width: 'quarter', defaultH: 4, gate: (s) => !!s.tribeCare?.hasPeople },
-  { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', defaultH: 3, gate: (s) => s.apps.length > 0 },
+  { id: 'tribe-care',        label: 'Tribe Care',            Component: TribeCareWidget,        width: 'quarter', needs: ['tribeCare'], defaultH: 4, gate: (s) => !!s.tribeCare?.hasPeople },
+  { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', needs: ['apps'], defaultH: 3, gate: (s) => s.apps.length > 0 },
   { id: 'decision-log',      label: 'Decision Log',          Component: DecisionLogWidget,      width: 'quarter', defaultH: 4 },
-  { id: 'feeds',             label: 'Feeds Digest',          Component: FeedsWidget,            width: 'quarter', defaultH: 4, gate: (s) => (s.feeds?.totalFeeds ?? 0) > 0 },
-  { id: 'meatspace-streak',  label: 'Health Logging Streak', Component: MeatSpaceStreakWidget,  width: 'third',   defaultH: 4, gate: (s) => (s.meatspaceLogging?.totalLogged ?? 0) > 0 },
-  { id: 'today-agenda',      label: 'Today\'s Agenda',       Component: TodayAgendaWidget,      width: 'third',   defaultH: 4, gate: (s) => (s.calendarAgenda?.accountCount ?? 0) > 0 },
-  { id: 'on-this-day',       label: 'On This Day',           Component: OnThisDayWidget,        width: 'third',   defaultH: 4, gate: (s) => (s.brainOnThisDay?.total ?? 0) > 0 },
+  { id: 'feeds',             label: 'Feeds Digest',          Component: FeedsWidget,            width: 'quarter', needs: ['feeds'], defaultH: 4, gate: (s) => (s.feeds?.totalFeeds ?? 0) > 0 },
+  { id: 'meatspace-streak',  label: 'Health Logging Streak', Component: MeatSpaceStreakWidget,  width: 'third',   needs: ['meatspaceLogging'], defaultH: 4, gate: (s) => (s.meatspaceLogging?.totalLogged ?? 0) > 0 },
+  { id: 'today-agenda',      label: 'Today\'s Agenda',       Component: TodayAgendaWidget,      width: 'third',   needs: ['calendarAgenda'], defaultH: 4, gate: (s) => (s.calendarAgenda?.accountCount ?? 0) > 0 },
+  { id: 'on-this-day',       label: 'On This Day',           Component: OnThisDayWidget,        width: 'third',   needs: ['brainOnThisDay'], defaultH: 4, gate: (s) => (s.brainOnThisDay?.total ?? 0) > 0 },
   { id: 'open-threads',      label: 'Open Threads',          Component: OpenThreadsWidget,      width: 'third',   defaultH: 4 },
   { id: 'autofix-metrics',   label: 'Auto-Fix Telemetry',    Component: AutoFixMetricsWidget,   width: 'quarter', defaultH: 5 },
   { id: 'active-processing', label: 'Active Processing',     Component: ActiveProcessingWidget, width: 'half',    defaultH: 5 },

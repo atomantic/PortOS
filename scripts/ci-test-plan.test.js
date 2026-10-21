@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,7 @@ import {
   classifyDependencyChange,
   WINDOWS_INSTALLED_WORKSPACES,
   collectPlanInputs,
+  collectSuperColliderLiveInputs,
   emitGitHubPlan,
   forceFullReasonFor,
   FULL_SUITE_SHARDS,
@@ -35,6 +36,7 @@ import {
   sourceReferencePattern,
   splitByRunner,
   structuralTestsFor,
+  SUPERCOLLIDER_LIVE_ENTRIES,
   WINDOWS_CONTRACT_TESTS,
   WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
@@ -1002,6 +1004,48 @@ describe('CI test impact planner', () => {
       expect(missingOwner.reason).toMatch(/fixture owner not tracked/);
     });
 
+    it('scopes a requirements-pin change to the installer contract', () => {
+      const requirements = [
+        'scripts/requirements-ltx25-cuda.txt',
+        'scripts/requirements-minimax-h3-cuda.txt',
+        'scripts/requirements-minimax-h3-mlx.lock.txt',
+        'scripts/requirements-wan22-cuda.txt',
+      ];
+      const owners = [
+        'scripts/setup-image-video.test.js',
+        'server/lib/pythonSetup.install.test.js',
+        'server/lib/pythonSetup.test.js',
+      ];
+      const plan = buildCiTestPlan(requirements, { trackedFiles: [...TRACKED, ...requirements, ...owners] });
+
+      expect(plan.full).toBe(false);
+      expect(plan.reason).toBe('text fixture owners');
+      expect(plan.server).toMatchObject({ mode: 'files', sources: [] });
+      expect(plan.server.files).toEqual([
+        ...owners,
+        'server/services/taskPromptDefaults.test.js',
+      ].sort());
+      expect(plan.client).toMatchObject({ mode: 'skip' });
+      expect(plan).toMatchObject({ db: false, build: false, smoke: false, windows: false });
+    });
+
+    it('still widens CI for an unmapped text artifact', () => {
+      const owners = [
+        'scripts/setup-image-video.test.js',
+        'server/lib/pythonSetup.test.js',
+      ];
+      const unmapped = buildCiTestPlan(['scripts/notes.txt'], {
+        trackedFiles: [...TRACKED, ...owners, 'scripts/notes.txt'],
+      });
+      expect(unmapped.full).toBe(true);
+      expect(unmapped.reason).toMatch(/unclassified changed file: scripts\/notes\.txt/);
+
+      // The pin pattern is one filename shape, not every requirements text file.
+      const bare = buildCiTestPlan(['scripts/requirements.txt'], { trackedFiles: TRACKED });
+      expect(bare.full).toBe(true);
+      expect(bare.reason).toMatch(/unclassified/);
+    });
+
     it('keeps an independent lockfile full-CI trigger authoritative', () => {
       const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT, 'server/package-lock.json'], {
         trackedFiles: [...REVIEW_LOOP_TRACKED, ...WINDOWS_CONTRACT_TESTS],
@@ -1090,6 +1134,15 @@ describe('CI test impact planner', () => {
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
     const docsOnly = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED });
     expect(docsOnly.shards).toEqual({ server: [1], client: [1], windows: [1] });
+  });
+
+  it('never selects a model-capability fixture sandbox as a suite on a feature-name match', () => {
+    const source = 'client/src/components/models/Panel.jsx';
+    const fixture = 'server/fixtures/model-tests/sandbox/cart-totals/cart-totals.test.mjs';
+    const real = 'client/src/components/models/Panel.test.jsx';
+    const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, real, fixture] });
+    expect(plan.client.files).toContain(real);
+    expect(plan.server.files).not.toContain(fixture);
   });
 
   describe('scoped fan-out instead of a full plan (#11871)', () => {
@@ -1911,21 +1964,61 @@ describe('path-gated single-purpose jobs', () => {
   let staticInputs;
   const realPlan = (changedFiles) => {
     staticInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd: repo });
-    const { promptHistoryInputs, linuxContainmentInputs } = staticInputs;
-    return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs });
+    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs } = staticInputs;
+    return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs });
   };
-  const gates = (plan) => ({ promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment });
+  const gates = (plan) => ({
+    promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
+  });
 
   it('runs each job only when the real diff reaches its inputs', () => {
-    expect(gates(realPlan(['docs/README.md']))).toEqual({ promptHistory: false, linuxContainment: false });
+    expect(gates(realPlan(['docs/README.md'])))
+      .toEqual({ promptHistory: false, linuxContainment: false, supercolliderLive: false });
     // Reached only through the hash-declaring migrations' import closure.
-    expect(gates(realPlan(['server/lib/fileUtils.js']))).toEqual({ promptHistory: true, linuxContainment: true });
+    expect(gates(realPlan(['server/lib/fileUtils.js']))).toMatchObject({ promptHistory: true, linuxContainment: true });
     expect(gates(realPlan(['server/lib/codeAnimationContainment.js'])))
-      .toEqual({ promptHistory: false, linuxContainment: true });
+      .toEqual({ promptHistory: false, linuxContainment: true, supercolliderLive: false });
     expect(gates(realPlan(['data.reference/prompts/stages/example.md'])))
-      .toEqual({ promptHistory: true, linuxContainment: false });
-    expect(gates(realPlan(['server/package-lock.json'])).linuxContainment).toBe(true);
-    expect(gates(realPlan(['.github/workflows/ci.yml']))).toEqual({ promptHistory: true, linuxContainment: true });
+      .toEqual({ promptHistory: true, linuxContainment: false, supercolliderLive: false });
+    expect(gates(realPlan(['server/package-lock.json']))).toMatchObject({ linuxContainment: true, supercolliderLive: true });
+    expect(gates(realPlan(['.github/workflows/ci.yml'])))
+      .toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+  });
+
+  it('selects the SuperCollider live job for the spawn plumbing its containment cases depend on, not for unrelated files (#12612)', () => {
+    // Transitive dependencies of the live suite that the old hand-kept path
+    // list never named.
+    for (const file of ['server/lib/bufferedSpawn.js', 'server/lib/streamingSpawn.js', 'server/lib/processEnv.js']) {
+      expect(realPlan([file]).supercolliderLive, file).toBe(true);
+    }
+    for (const file of ['docker/supercollider/Dockerfile', 'scripts/setup-supercollider.js']) {
+      expect(realPlan([file]).supercolliderLive, file).toBe(true);
+    }
+    expect(realPlan(['client/src/App.jsx']).supercolliderLive).toBe(false);
+    expect(realPlan(['docs/SUPERCOLLIDER.md']).supercolliderLive).toBe(false);
+  });
+
+  it('covers a module newly imported by the SuperCollider runtime without editing any list (#12612)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ci-plan-supercollider-'));
+    try {
+      const write = (path, text) => {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), text);
+      };
+      write('server/services/superColliderRender.live.test.js', "import '../lib/superColliderRuntime.js';\n");
+      write('server/lib/superColliderRuntime.js', "import './brandNewHelper.js';\n");
+      write('server/lib/brandNewHelper.js', 'export const x = 1;\n');
+      write('server/lib/unrelated.js', 'export const y = 1;\n');
+      const inputs = collectSuperColliderLiveInputs(root);
+      expect(inputs).toContain('server/lib/brandNewHelper.js');
+      expect(inputs).not.toContain('server/lib/unrelated.js');
+      // Every entry is an input even when absent, so deleting one still runs the job.
+      for (const entry of SUPERCOLLIDER_LIVE_ENTRIES) expect(inputs).toContain(entry);
+      expect(buildCiTestPlan(['server/lib/brandNewHelper.js'], { supercolliderLiveInputs: inputs }).supercolliderLive).toBe(true);
+      expect(buildCiTestPlan(['server/lib/unrelated.js'], { supercolliderLiveInputs: inputs }).supercolliderLive).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('gates linux-containment on the whole closure of the tests the job runs', () => {
@@ -1939,13 +2032,15 @@ describe('path-gated single-purpose jobs', () => {
     }
   });
 
-  it('runs both jobs when forced full or when an input walk is inconclusive', () => {
+  it('runs every gated job when forced full or when an input walk is inconclusive', () => {
     expect(gates(buildCiTestPlan(['docs/README.md'], { forceFull: true })))
-      .toEqual({ promptHistory: true, linuxContainment: true });
-    expect(gates(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: null, linuxContainmentInputs: null })))
-      .toEqual({ promptHistory: true, linuxContainment: true });
-    expect(gates(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [] })))
-      .toEqual({ promptHistory: false, linuxContainment: false });
+      .toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+    expect(gates(buildCiTestPlan(['docs/README.md'], {
+      promptHistoryInputs: null, linuxContainmentInputs: null, supercolliderLiveInputs: null,
+    }))).toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+    expect(gates(buildCiTestPlan(['docs/README.md'], {
+      promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
+    }))).toEqual({ promptHistory: false, linuxContainment: false, supercolliderLive: false });
   });
 
   it('still runs a job when the diff deletes one of its entry points', () => {
@@ -1964,9 +2059,11 @@ describe('path-gated single-purpose jobs', () => {
   it('emits both decisions and ci.yml gates the jobs on them', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      emitGitHubPlan(buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [] }));
+      emitGitHubPlan(buildCiTestPlan(['docs/README.md'], {
+        promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
+      }));
       const outputs = JSON.parse(log.mock.calls.at(-1)[0]);
-      expect(outputs).toMatchObject({ prompt_history: false, linux_containment: false });
+      expect(outputs).toMatchObject({ prompt_history: false, linux_containment: false, supercollider_live: false });
     } finally {
       log.mockRestore();
     }
@@ -1983,6 +2080,16 @@ describe('path-gated single-purpose jobs', () => {
     // A skipped gated job still reports to CI Gate, which treats skipped as passing.
     expect(jobs.gate).toContain('CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}');
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}');
+
+    // The native SuperCollider matrix lives in ci.yml, is planner-gated, and a
+    // red run fails CI Gate (#12612). No second workflow may run it on a PR.
+    expect(jobs.impact).toContain('supercollider_live: ${{ steps.plan.outputs.supercollider_live }}');
+    expect(jobs['supercollider-live']).toContain('needs: impact');
+    expect(jobs['supercollider-live']).toContain("if: needs.impact.outputs.supercollider_live == 'true'");
+    expect(jobs['supercollider-live']).toContain('runs-on: ${{ matrix.runner }}');
+    expect(jobs.gate).toMatch(/needs: \[[^\]]*\bsupercollider-live\]/);
+    expect(jobs.gate).toContain('CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}');
+    expect(existsSync(join(repo, '.github/workflows/supercollider-live.yml'))).toBe(false);
   });
 });
 

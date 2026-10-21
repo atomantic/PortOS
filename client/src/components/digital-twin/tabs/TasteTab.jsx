@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {Palette,
   Film,
   Music,
@@ -25,6 +25,8 @@ import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
+import ListLoadError from '../../ui/ListLoadError';
+import useProviderList from '../../../hooks/useProviderList';
 import MarkdownOutput from '../../cos/MarkdownOutput';
 import { isApiProvider } from '../../../utils/providers';
 import TwinProviderPicker from '../TwinProviderPicker.jsx';
@@ -97,13 +99,23 @@ export default function TasteTab({ onRefresh }) {
 
   // Summary generation
   const [generatingSummary, setGeneratingSummary] = useState(false);
-  const [providers, setProviders] = useState([]);
+  const providersResource = useProviderList();
+  // Taste summaries / personalized questions need a chat-completions endpoint —
+  // CLI providers (Claude Code, Codex, Antigravity CLI) can't run them. Filter the
+  // picker so the user can't accidentally select an incompatible default.
+  const providers = useMemo(
+    () => providersResource.items.filter(p => p.enabled && isApiProvider(p)),
+    [providersResource.items]
+  );
   const [selectedProvider, setSelectedProvider] = useState(null);
 
   // Review mode
   const [reviewSection, setReviewSection] = useState(null);
   const [reviewResponses, setReviewResponses] = useState([]);
   const [loadingReview, setLoadingReview] = useState(false);
+  const [reviewError, setReviewError] = useState(null);
+  // Newest review request wins: a late answer for a section the user already left is dropped.
+  const reviewRequestRef = useRef(0);
 
   // Personalized question state
   const [_personalizedQuestion, setPersonalizedQuestion] = useState(null);
@@ -121,22 +133,17 @@ export default function TasteTab({ onRefresh }) {
     setLoading(false);
   }, []);
 
-  const loadProviders = useCallback(async () => {
-    const data = await api.getProviders().catch(() => ({ providers: [] }));
-    // Taste summaries / personalized questions need a chat-completions endpoint —
-    // CLI providers (Claude Code, Codex, Antigravity CLI) can't run them. Filter the
-    // picker so the user can't accidentally select an incompatible default.
-    const apiProviders = (data.providers || []).filter(p => p.enabled && isApiProvider(p));
-    setProviders(apiProviders);
-    if (apiProviders.length > 0) {
-      setSelectedProvider({ providerId: apiProviders[0].id, model: apiProviders[0].defaultModel });
+  // Seed the default model once the provider list is read; a later re-read never
+  // overrides a choice the user already made.
+  useEffect(() => {
+    if (providers.length > 0) {
+      setSelectedProvider(prev => prev || { providerId: providers[0].id, model: providers[0].defaultModel });
     }
-  }, []);
+  }, [providers]);
 
   useEffect(() => {
     loadProfile();
-    loadProviders();
-  }, [loadProfile, loadProviders]);
+  }, [loadProfile]);
 
   const startSection = async (sectionId) => {
     setActiveSection(sectionId);
@@ -240,10 +247,18 @@ export default function TasteTab({ onRefresh }) {
   };
 
   const handleReviewSection = async (sectionId) => {
+    reviewRequestRef.current += 1;
+    const request = reviewRequestRef.current;
     setReviewSection(sectionId);
     setLoadingReview(true);
-    const responses = await api.getTasteSectionResponses(sectionId).catch(() => []);
-    setReviewResponses(responses);
+    setReviewError(null);
+    setReviewResponses([]);
+    const outcome = await api.getTasteSectionResponses(sectionId, { silent: true })
+      .then(data => ({ responses: Array.isArray(data) ? data : [], error: null }))
+      .catch(err => ({ responses: [], error: err instanceof Error ? err : new Error('Request failed') }));
+    if (reviewRequestRef.current !== request) return;
+    setReviewResponses(outcome.responses);
+    setReviewError(outcome.error);
     setLoadingReview(false);
   };
 
@@ -344,7 +359,9 @@ export default function TasteTab({ onRefresh }) {
             </div>
             <div>
               <h2 className="text-xl font-semibold text-white">{section?.label} — Responses</h2>
-              <p className="text-sm text-gray-400">{reviewResponses.length} responses recorded</p>
+              {!loadingReview && !reviewError && (
+                <p className="text-sm text-gray-400">{reviewResponses.length} responses recorded</p>
+              )}
             </div>
           </div>
         </div>
@@ -353,6 +370,10 @@ export default function TasteTab({ onRefresh }) {
           <div className="flex items-center justify-center h-48">
             <BrailleSpinner text="Loading" />
           </div>
+        ) : reviewError ? (
+          // A failed read must not look like "0 responses recorded", and the
+          // summary / reset actions below act on responses the user never saw.
+          <ListLoadError what="your responses" error={reviewError} onRetry={() => handleReviewSection(reviewSection)} />
         ) : (
           <div className="space-y-4">
             {reviewResponses.map((r, i) => (
@@ -466,7 +487,10 @@ export default function TasteTab({ onRefresh }) {
               <div className="text-sm"><MarkdownOutput content={section.summary} /></div>
             </div>
           )}
-          {!selectedProvider && (
+          {providersResource.state === 'error' && (
+            <ListLoadError className="mb-4" what="AI providers" error={providersResource.error} onRetry={providersResource.retry} />
+          )}
+          {!selectedProvider && providersResource.state === 'ready' && (
             <Banner tone="warning" size="lg" className="mb-4">
               No API-based provider configured — Go Deeper and Generate Summary need one.{' '}
               <a href="/ai" className="underline hover:text-yellow-300">
@@ -784,6 +808,9 @@ export default function TasteTab({ onRefresh }) {
             </p>
           </div>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+            {providersResource.state === 'error' && (
+              <ListLoadError what="AI providers" error={providersResource.error} onRetry={providersResource.retry} />
+            )}
             <TwinProviderPicker
               compact
               className="flex-1 min-w-0"

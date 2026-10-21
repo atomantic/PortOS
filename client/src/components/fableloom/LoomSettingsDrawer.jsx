@@ -26,9 +26,11 @@ import Drawer from '../Drawer';
 import BackendChipStrip from '../media/BackendChipStrip';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { FormField } from '../ui/FormField.jsx';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import useListResource from '../../hooks/useListResource';
 import { CODEX_EFFORT_LEVELS, effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
 import { listImageModels, listVideoModels, reformatLoomEpisode, updateLoom } from '../../services/api';
 import { fieldClass, labelClass } from './fieldStyles';
@@ -67,13 +69,8 @@ const modelOptions = (models, selected) => {
   return options;
 };
 
-const replaceModelList = (setModels, nextModels) => setModels((currentModels) => {
-  const unchanged = currentModels.length === nextModels.length
-    && currentModels.every((model, index) => (
-      model?.id === nextModels[index]?.id && model?.name === nextModels[index]?.name
-    ));
-  return unchanged ? currentModels : nextModels;
-});
+const fetchImageModels = () => listImageModels({ silent: true });
+const fetchVideoModels = () => listVideoModels({ silent: true });
 
 /**
  * The one line of feedback a multi-minute rewrite gives. Built as a single
@@ -108,8 +105,10 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
   const [videoMode, setVideoMode] = useState(savedRender.videoMode);
   const [videoModel, setVideoModel] = useState(savedRender.videoModel);
   const [renderEffort, setRenderEffort] = useState(savedRender.effort);
-  const [imageModels, setImageModels] = useState([]);
-  const [videoModels, setVideoModels] = useState([]);
+  const imageModelList = useListResource(fetchImageModels, { enabled: open });
+  const videoModelList = useListResource(fetchVideoModels, { enabled: open });
+  const imageModels = imageModelList.items;
+  const videoModels = videoModelList.items;
   useEffect(() => {
     if (open) return;
     setParticipationMode(loom.participationMode || 'protagonist');
@@ -150,20 +149,6 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
     async (body) => onLoomUpdate(await updateLoom(loom.id, body, { silent: true })),
     { errorMessage: 'Save failed' },
   );
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const load = (loader) => Promise.resolve()
-      .then(() => loader({ silent: true }))
-      .catch(() => []);
-    let mounted = true;
-    Promise.all([load(listImageModels), load(listVideoModels)]).then(([images, videos]) => {
-      if (!mounted) return;
-      replaceModelList(setImageModels, images);
-      replaceModelList(setVideoModels, videos);
-    });
-    return () => { mounted = false; };
-  }, [open]);
 
   const pendingRender = useRef(null);
   if (!pendingRender.current || !saving) {
@@ -580,6 +565,9 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
                     <option key={option.id} value={option.id}>{option.label}</option>
                   ))}
                 </select>
+                {imageModelList.state === 'error' && (
+                  <ListLoadError className="mt-1" what="image models" error={imageModelList.error} onRetry={imageModelList.retry} />
+                )}
               </FormField>
             )}
           </div>
@@ -616,6 +604,9 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
                     <option key={option.id} value={option.id}>{option.label}</option>
                   ))}
                 </select>
+                {videoModelList.state === 'error' && (
+                  <ListLoadError className="mt-1" what="video models" error={videoModelList.error} onRetry={videoModelList.retry} />
+                )}
               </FormField>
             )}
           </div>

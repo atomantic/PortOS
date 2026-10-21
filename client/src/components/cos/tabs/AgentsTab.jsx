@@ -7,6 +7,7 @@ import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
 import RelaunchAgentModal from './RelaunchAgentModal';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
+import useMounted from '../../../hooks/useMounted';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import socket from '../../../services/socket';
@@ -40,6 +41,8 @@ const FEEDBACK_EVENTS = ['cos:agent:feedback', 'cos:agent:completed'];
 
 export default function AgentsTab({ agentsLoaded = true, agentsError = null, onRetryAgents, completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
   const { agentId } = useParams();
+  const mounted = useMounted();
+  const [deletedIds, setDeletedIds] = useState(() => new Set());
   const [focusedAgent, setFocusedAgent] = useState(null);
   const [focusLoading, setFocusLoading] = useState(false);
   useEffect(() => {
@@ -108,10 +111,14 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
 
   const handleDelete = useCallback(async (agentId) => {
     const result = await api.deleteCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
-    if (!result) return;
+    if (!result || !mounted.current) return;
+    // Keep the loaded history and card instances intact. Remember confirmed
+    // removals across stale parent snapshots and delayed focused-agent reads.
+    setDeletedIds(previous => new Set([...previous, agentId]));
+    history.removeItem(agentId);
+    pendingFeedback.refetch();
     toast.success('Agent removed');
-    refresh();
-  }, [refresh]);
+  }, [history.removeItem, pendingFeedback.refetch, mounted]);
 
   // ResumeAgentModal builds a NEW task prompt out of `metadata.taskDescription`,
   // and the listing carries a bounded copy of it (server/lib/cosAgentListProjection.js).
@@ -186,8 +193,8 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   };
 
   // Running agents come from props (real-time via parent socket updates)
-  const runningAgents = agents.filter(a => a.status === 'running');
-  const pausedAgents = agents.filter(a => a.status === 'paused');
+  const runningAgents = agents.filter(a => a.status === 'running' && !deletedIds.has(a.id));
+  const pausedAgents = agents.filter(a => a.status === 'paused' && !deletedIds.has(a.id));
   // Completed agents still in state (recently completed, not yet archived)
   const recentCompleted = agents.filter(a => a.status === 'completed');
   // Merge recent completed (from state) with loaded (from disk), deduplicate
@@ -195,7 +202,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     const seen = new Set();
     const merged = [];
     const addAgent = (agent) => {
-      if (seen.has(agent.id)) return;
+      if (seen.has(agent.id) || deletedIds.has(agent.id)) return;
       seen.add(agent.id);
       const feedback = feedbackUpdates[agent.id];
       merged.push(feedback ? { ...agent, feedback } : agent);
@@ -206,7 +213,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     for (const agent of loadedAgents) addAgent(agent);
 
     return merged.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
-  }, [recentCompleted, loadedAgents, feedbackUpdates]);
+  }, [recentCompleted, loadedAgents, feedbackUpdates, deletedIds]);
 
   const totalCount = history.total ?? allCompleted.length;
 
@@ -236,7 +243,8 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     ? locallyVisibleNeedsFeedback
     : Math.max(pendingFeedbackCount, locallyVisibleNeedsFeedback);
 
-  const selectedRecord = agents.find(agent => agent.id === agentId) || (focusedAgent?.id === agentId ? focusedAgent : null);
+  const selectedRecord = deletedIds.has(agentId) ? null
+    : agents.find(agent => agent.id === agentId) || (focusedAgent?.id === agentId ? focusedAgent : null);
   const selectedAgent = selectedRecord && feedbackUpdates[agentId]
     ? { ...selectedRecord, feedback: feedbackUpdates[agentId] } : selectedRecord;
 
@@ -323,7 +331,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
             </h3>
             <button
               onClick={() => setConfirmingClear(true)}
-              className="flex items-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors"
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors sm:min-h-0 sm:min-w-0"
               aria-label="Clear all completed agents"
             >
               <Trash2 size={14} aria-hidden="true" />

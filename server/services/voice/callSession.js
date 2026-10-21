@@ -266,10 +266,19 @@ export async function pollCall() {
   // The probe can outlast the interval; the call may have ended meanwhile.
   if (!publicState().active) return publicState();
   if (observed?.state === 'ended' || observed?.state === 'idle') return endCall('remote-hangup', { disconnectObserved: true });
-  if (observed?.state === 'connected' && session.state === 'dialing') setState('listening');
+  if (observed?.state === 'connected' && session.state === 'dialing') {
+    // Ringback is not the caller. Start the silence clock at pickup so a
+    // long ring neither expires the call while it is still dialing nor
+    // hangs up on the same tick the far end answers.
+    session.lastVoiceAt = deps.now();
+    setState('listening');
+  }
 
   const now = deps.now();
-  if (now - (session.lastVoiceAt ?? session.startedAt) >= SILENCE_HANGUP_MS) return endCall('caller-silent');
+  if (session.state !== 'dialing'
+    && now - (session.lastVoiceAt ?? session.startedAt) >= SILENCE_HANGUP_MS) {
+    return endCall('caller-silent');
+  }
   if (now - session.startedAt >= await maxCallMs()) return endCall('max-duration');
   return publicState();
 }
@@ -500,8 +509,16 @@ export function noteCallerSpeech() {
   return publicState();
 }
 
-export const markSpeaking = () => (publicState().active ? setState('speaking') : publicState());
-export const markListening = () => (publicState().active ? setState('listening') : publicState());
+// `dialing` is active, but ringback is not a turn, so these must not promote
+// it. pollCall leaves dialing when the helper reports the far end connected
+// (or when the ring ends / the duration cap hits). `connected` stays eligible
+// so the opening line can still move the answered handoff into speaking.
+const inLiveTurn = () => session.state === 'connected'
+  || session.state === 'listening'
+  || session.state === 'speaking';
+
+export const markSpeaking = () => (inLiveTurn() ? setState('speaking') : publicState());
+export const markListening = () => (inLiveTurn() ? setState('listening') : publicState());
 
 const renderTranscript = (transcript) => transcript
   .map((turn) => `${turn.speaker === 'assistant' ? 'PortOS' : 'Caller'}: ${turn.text}`)

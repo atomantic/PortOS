@@ -3,7 +3,16 @@ import { join } from 'path';
 import { readdir } from 'fs/promises';
 import { estimateTokens, estimateTokensFromChars } from '../lib/contextBudget.js';
 import { readJSONFile, tryReadFile } from '../lib/fileUtils.js';
-import { mergeUsageClaims, reconcileRunUsage, snapshotUsageClaims, transcriptFamily } from './usageReconciler.js';
+import {
+  mergeUsageClaims,
+  readMeasuredUsage,
+  reconcileRunUsage,
+  resolveFamilyProvider,
+  snapshotUsageClaims,
+  TRANSCRIPT_FAMILIES,
+  transcriptFamily,
+  WINDOW_SLACK_MS
+} from './usageReconciler.js';
 
 const listRunIds = async (runsDir) => readdir(runsDir, { withFileTypes: true })
   .then((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name))
@@ -23,6 +32,80 @@ const asList = (records) => (Array.isArray(records) ? records.flat(Infinity) : [
  */
 const isWorthRecording = (records, siblings) => siblings.length > 0
   || records.some((entry) => entry?.source === 'measured' || entry?.source === 'mixed');
+
+const runWindow = (metadata) => ({
+  from: Date.parse(metadata.startTime) - WINDOW_SLACK_MS,
+  to: Date.parse(metadata.endTime) + WINDOW_SLACK_MS
+});
+
+// Transcript readers match a cwd or any subdirectory of it, so runs whose
+// workspaces nest inside one another can read the same session.
+const workspaceAncestors = (path) => {
+  const ancestors = [];
+  for (let cut = path.lastIndexOf('/'); cut > 0; cut = path.lastIndexOf('/', cut - 1)) {
+    ancestors.push(path.slice(0, cut));
+  }
+  return ancestors;
+};
+
+/**
+ * Re-claim what settled runs already billed, before any pending run is read.
+ *
+ * Every message inside a settled pass's window was billed — by that run or by
+ * an earlier overlapping one — so re-reading the window and discarding the
+ * counts claims exactly what is already on the books. The live ledger handed
+ * over in `claimsSeed` cannot carry that alone: it is empty after a restart
+ * and prunes claims past its retention bound, while this scan reaches runs of
+ * any age. Only settled runs that can overlap a pending one are re-read, and
+ * only for the families each settled pass actually covered. Each re-read stops
+ * at the moment that pass was reconciled: a message written later (inside the
+ * trailing slack) was never seen, so it still belongs to whichever run owns it.
+ * A run marked only in usage.json carries no such moment and is re-read whole.
+ */
+async function claimSettledUsage(runs, candidates, { home, providers }) {
+  const below = new Map();
+  const at = new Map();
+  const index = (map, key, window) => {
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(window);
+  };
+  for (const { metadata } of candidates) {
+    const window = runWindow(metadata);
+    index(at, metadata.workspacePath, window);
+    index(below, metadata.workspacePath, window);
+    for (const ancestor of workspaceAncestors(metadata.workspacePath)) index(below, ancestor, window);
+  }
+  const canScanSiblings = Array.isArray(providers) && providers.length > 0;
+  for (const { metadata, parentSettled, siblingSettled } of runs) {
+    const { workspacePath } = metadata;
+    const window = runWindow(metadata);
+    const pending = [
+      ...(below.get(workspacePath) || []),
+      ...workspaceAncestors(workspacePath).flatMap((ancestor) => at.get(ancestor) || [])
+    ];
+    if (!pending.some((other) => other.from <= window.to && window.from <= other.to)) continue;
+    const parentFamily = transcriptFamily(metadata);
+    const reads = parentSettled && parentFamily
+      ? [{ family: parentFamily, seenUntil: metadata.usageReconciledAt }]
+      : [];
+    if (siblingSettled && canScanSiblings) {
+      const seenUntil = metadata.usageSiblingsReconciledAt ?? metadata.usageReconciledAt;
+      for (const family of TRANSCRIPT_FAMILIES) {
+        if (family !== parentFamily && resolveFamilyProvider(providers, family)) reads.push({ family, seenUntil });
+      }
+    }
+    for (const { family, seenUntil } of reads) {
+      await readMeasuredUsage({
+        workspacePath,
+        startTime: metadata.startTime,
+        endTime: metadata.endTime,
+        family,
+        home,
+        seenUntil: typeof seenUntil === 'string' ? seenUntil : null
+      }).catch(() => null);
+    }
+  }
+}
 
 /**
  * Read historical run artifacts and produce estimate→measurement corrections.
@@ -65,11 +148,12 @@ export async function scanHistoricalUsage({
   const siblingReconciled = new Set(siblingReconciledRunIds);
   const canScanSiblings = Array.isArray(providers) && providers.length > 0;
   const candidates = [];
+  const settled = [];
 
   for (const runId of await listRunIds(runsDir)) {
     const metadataPath = join(runsDir, runId, 'metadata.json');
     const metadata = await readJSONFile(metadataPath, null);
-    if (!metadata || !metadata.providerId || !metadata.workspacePath
+    if (!metadata || !metadata.providerId || typeof metadata.workspacePath !== 'string' || !metadata.workspacePath
       || typeof metadata.startTime !== 'string' || typeof metadata.endTime !== 'string'
       || !Number.isFinite(Date.parse(metadata.startTime)) || !Number.isFinite(Date.parse(metadata.endTime))) continue;
     const parentPending = !reconciled.has(runId) && !metadata.usageReconciled
@@ -79,9 +163,13 @@ export async function scanHistoricalUsage({
     // no transcript of its own.
     const siblingPending = canScanSiblings
       && !siblingReconciled.has(runId) && !metadata.usageSiblingsReconciled;
+    const parentSettled = reconciled.has(runId) || metadata.usageReconciled === true;
+    const siblingSettled = siblingReconciled.has(runId) || metadata.usageSiblingsReconciled === true;
+    if (parentSettled || siblingSettled) settled.push({ metadata, parentSettled, siblingSettled });
     if (!parentPending && !siblingPending) continue;
     candidates.push({ runId, metadataPath, metadata, parentPending, siblingPending });
   }
+  if (candidates.length) await claimSettledUsage(settled, candidates, { home, providers });
   candidates.sort((a, b) => Date.parse(a.metadata.startTime) - Date.parse(b.metadata.startTime));
 
   const corrections = [];

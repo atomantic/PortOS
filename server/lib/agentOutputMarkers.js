@@ -116,6 +116,7 @@ export const LIFECYCLE_LINES = Object.freeze({
   truncationNudged: lifecycleLine`🔁 Response was truncated before completion — nudged the session to continue (attempt ${'attempt'}/${'max'})`,
   stallNudged: lifecycleLine`🔁 Session idle with the task unfinished — nudged it to continue (attempt ${'attempt'}/${'max'}, ${'sent'}/${'total'} this run)`,
   stallGaveUp: lifecycleLine`🛑 Session still idle after ${'nudges'} nudges — it is not finishing; open the Shell tab to take it over`,
+  unsubmittedPromptEntered: lifecycleLine`⏎ Prompt still unsubmitted in the composer — pressed Enter (attempt ${'attempt'}/${'max'})`,
   // Completion and interruption
   mergeGateReprompted: lifecycleLine`🔁 Merge Gate not finished (PR still OPEN, no blocker stated) — re-prompted the session (1 nudge only)`,
   hostRestarted: lifecycleLine`🛑 PortOS restarted while this agent was running — the run was interrupted, not completed. Its worktree is preserved and the task will resume.`,

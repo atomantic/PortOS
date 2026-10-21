@@ -70,7 +70,7 @@ export const REPO_STATE_SKIPS = Object.freeze({
  * The two skips worth spelling out:
  *
  * - **A failed run is never audited.** Its branch and worktree are PRESERVED on
- *   purpose (`preserveBranchWithCommits`, `resolveResumePointer`) so the task's
+ *   purpose by merge-evidence retention and `resolveResumePointer` so the task's
  *   retry resumes rather than restarts. Auditing it would report the resume
  *   pointer as a leak.
  * - **A pending owner defers the audit.** A review-loop follow-up or a pr-watcher

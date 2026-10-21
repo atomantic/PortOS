@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('./cosAgentLifecycle.js', () => ({ recordCleanupOutcome: vi.fn(async () => true), recordRepoCleanupRecovery: vi.fn(async () => true) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn() }));
 vi.mock('./agentState.js', () => ({ getActiveAgentIds: vi.fn(() => new Set(['active'])) }));
@@ -10,6 +11,7 @@ vi.mock('./branchReconcile.js', async (importOriginal) => ({
 vi.mock('./taskSchedule.js', () => ({ getBranchReconcileOutcome: vi.fn(), recordBranchReconcileOutcome: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn(() => [{ prBranch: 'claim/queued' }]) }));
+import { recordCleanupOutcome, recordRepoCleanupRecovery } from './cosAgentLifecycle.js';
 import { getAppById } from './apps.js';
 import { getTaskById } from './cosTaskStore.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
@@ -18,12 +20,12 @@ import { emitLog } from './cosEvents.js';
 import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './taskSchedule.js';
 import { settleBranchReconcileRun, settleRetirementReviewRun } from './branchReconcileCompletion.js';
 
-const agent = { taskId: 'task-example', metadata: { taskAnalysisType: 'branch-reconcile', taskApp: 'example' } };
+const agent = { id: 'agent-reconcile', taskId: 'task-example', metadata: { taskAnalysisType: 'branch-reconcile', taskApp: 'example' } };
 describe('branch reconciliation completion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getBranchReconcileOutcome.mockResolvedValue(null);
-    getTaskById.mockResolvedValue({ metadata: { perpetual: false } });
+    getTaskById.mockResolvedValue({ id: 'task-example', metadata: { perpetual: false } });
     getAppById.mockResolvedValue({ id: 'example', repoPath: '/example/repo', forgeAccount: 'example-account' });
     readClaimOwnershipAgents.mockResolvedValue([]);
     reconcile.mockResolvedValue({ cleaned: ['merged'], reapedSuperseded: ['superseded'], inFlight: [], skipped: [], worktreeInventory: [], orphanRemotes: { reported: [] } });
@@ -37,7 +39,7 @@ describe('branch reconciliation completion', () => {
   });
   it('requires an exact persisted archive receipt after the review task reports success', async () => {
     const release = { branch: 'claim/issue-42', path: '/example/checkout', head: 'a'.repeat(40) };
-    getTaskById.mockResolvedValue({ metadata: { reconcileRetirements: [{ release, createdAt: '2026-10-20T00:00:00Z', prUrl: 'https://github.com/example/repo/pull/42' }] } });
+    getTaskById.mockResolvedValue({ id: 'task-example', metadata: { reconcileRetirements: [{ release, cognition: { ownerAgentId: 'original-owner', observation: 'exact-observation' }, createdAt: '2026-10-20T00:00:00Z', prUrl: 'https://github.com/example/repo/pull/42' }] } });
     getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true }] });
     await settleBranchReconcileRun({ ...agent, result: { success: true } });
     expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('example', expect.objectContaining({ status: 'incomplete', reason: 'retirement-receipt-unverified' }));
@@ -46,6 +48,7 @@ describe('branch reconciliation completion', () => {
     getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt: '2026-10-20T00:01:00Z' }] });
     await settleBranchReconcileRun({ ...agent, result: { success: true } });
     expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
+    expect(recordRepoCleanupRecovery).toHaveBeenCalledWith('original-owner', release.branch, 'exact-observation', { phase: 'completed', taskId: 'task-example' });
   });
 
   it('reports inventory-only protected and detached worktrees plus retained claims', async () => {
@@ -140,7 +143,8 @@ describe('scoped retirement recovery completion', () => {
     expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: true });
     expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
     getTaskById.mockResolvedValue({ metadata: {} });
-    expect(await settleRetirementReviewRun(recovery)).toBeNull();
+    expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith(recovery.id, expect.objectContaining({ status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' }));
     expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
   });
 });

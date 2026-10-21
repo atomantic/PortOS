@@ -19,7 +19,7 @@ async function filesystemIdentity(path, type) {
   return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
 }
 
-async function readCheckoutIdentity({ repoPath, branch, path, head }) {
+export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head }) {
   const { listWorktrees } = await import('./worktreeManager.js');
   const repository = await realpath(repoPath);
   const checkout = await realpath(path);
@@ -49,19 +49,25 @@ async function readCheckoutIdentity({ repoPath, branch, path, head }) {
 export async function captureCompletedCheckouts(agent, { success } = {}) {
   const meta = agent?.metadata;
   if (success !== true || !['running', 'paused'].includes(agent?.status) || !agent.id
-    || !Number.isFinite(Date.parse(agent.startedAt)) || !isTruthyMeta(meta?.claimPicksOwnBranch)
-    || typeof meta.sourceWorkspace !== 'string' || !Array.isArray(meta.claimBranches)) return [];
+    || !Number.isFinite(Date.parse(agent.startedAt)) || typeof meta?.sourceWorkspace !== 'string') return [];
+  const claim = isTruthyMeta(meta.claimPicksOwnBranch);
+  const branches = claim ? meta.claimBranches : meta.isWorktree === true && meta.worktreeBranch ? [meta.worktreeBranch] : null;
+  if (!Array.isArray(branches)) return [];
   const { listWorktrees } = await import('./worktreeManager.js');
   const trees = await listWorktrees(meta.sourceWorkspace).catch(() => null);
   if (!trees) return [];
   const receipts = [];
-  for (const branch of new Set(meta.claimBranches)) {
+  for (const branch of new Set(branches)) {
     if (typeof branch !== 'string' || !branch) continue;
     const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
     if (holders.length !== 1) continue;
+    if (!claim) {
+      const recordedPath = typeof meta.workspacePath === 'string' ? await realpath(meta.workspacePath).catch(() => null) : null;
+      if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) continue;
+    }
     const target = { repoPath: meta.sourceWorkspace, branch, path: holders[0].path, head: holders[0].head };
-    const first = await readCheckoutIdentity(target).catch(() => null);
-    if (!first || !same(first, await readCheckoutIdentity(target).catch(() => null))) continue;
+    const first = await readCompletedCheckoutIdentity(target).catch(() => null);
+    if (!first || !same(first, await readCompletedCheckoutIdentity(target).catch(() => null))) continue;
     receipts.push({ version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), ...first });
   }
   return receipts;
@@ -72,7 +78,7 @@ export async function captureCompletedCheckouts(agent, { success } = {}) {
  */
 export async function hasCompletedCheckoutEvidence(records, target) {
   if (!Array.isArray(records)) return false;
-  const current = await readCheckoutIdentity(target).catch(() => null);
+  const current = await readCompletedCheckoutIdentity(target).catch(() => null);
   if (!current) return false;
   const scoped = (await Promise.all(records.map(async agent => {
     const meta = agent?.metadata;

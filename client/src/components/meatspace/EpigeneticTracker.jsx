@@ -4,6 +4,8 @@ import {Plus, Trash2, ChevronDown, ChevronRight,
   Activity, Pill, Heart, CheckCircle, Calendar, FlameKindling} from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import * as api from '../../services/api';
 
@@ -21,7 +23,6 @@ const EVIDENCE_COLORS = {
 
 export default function EpigeneticTracker({ markerCategories = [] }) {
   const [interventions, setInterventions] = useState({});
-  const [recommendations, setRecommendations] = useState([]);
   const [compliance, setCompliance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -37,16 +38,22 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
   });
 
   const fetchData = useCallback(async () => {
-    const [intData, recData, compData] = await Promise.all([
+    const [intData, compData] = await Promise.all([
       api.getEpigeneticInterventions().catch(() => ({ interventions: {} })),
-      api.getEpigeneticRecommendations(markerCategories).catch(() => ({ recommendations: [] })),
       api.getEpigeneticCompliance(30).catch(() => null)
     ]);
     setInterventions(intData.interventions || {});
-    setRecommendations(recData.recommendations || []);
     setCompliance(compData);
     setLoading(false);
-  }, [markerCategories]);
+  }, []);
+
+  // Recommendations are read-only suggestions; a failed read gets its own error row
+  // instead of reading as "nothing recommended".
+  const fetchRecommendations = useCallback(
+    () => api.getEpigeneticRecommendations(markerCategories, { silent: true }).then((data) => data?.recommendations || []),
+    [markerCategories]
+  );
+  const { items: recommendations, state: recState, error: recError, retry: retryRecs } = useListResource(fetchRecommendations);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -343,6 +350,9 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
       )}
 
       {/* Recommended Interventions (not yet tracked) */}
+      {recState === 'error' && (
+        <ListLoadError what="recommended interventions" error={recError} onRetry={retryRecs} />
+      )}
       {untrackedRecs.length > 0 && (
         <div className="space-y-2">
           <h4 className="text-sm font-medium text-gray-400 uppercase tracking-wider">

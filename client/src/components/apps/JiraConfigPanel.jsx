@@ -4,11 +4,16 @@ import { Save, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import { INPUT_CLASS } from './constants';
 
 // A JIRA issue key like PROJ-1553 — used to tell "user typed a key to validate"
 // from "user is searching an epic by name" in the epic field.
 const EPIC_KEY_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+
+const fetchJiraInstances = () => api.getJiraInstances({ silent: true })
+  .then(data => (data?.instances ? Object.values(data.instances) : []));
 
 /** Flatten the app record's stored `jira` object into flat form fields. */
 const toForm = (jira) => ({
@@ -37,7 +42,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
   const [form, setForm] = useState(() => toForm(app.jira));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-  const [instances, setInstances] = useState([]);
+  const { items: instances, state: instancesState, error: instancesError, retry: retryInstances } = useListResource(fetchJiraInstances);
   const [projects, setProjects] = useState([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [projectSearch, setProjectSearch] = useState('');
@@ -48,12 +53,6 @@ export default function JiraConfigPanel({ app, onSaved }) {
   const [epicResults, setEpicResults] = useState([]);
   const [epicDropdownOpen, setEpicDropdownOpen] = useState(false);
   const [epicValidation, setEpicValidation] = useState({ state: 'idle' });
-
-  useEffect(() => {
-    api.getJiraInstances()
-      .then(data => setInstances(data?.instances ? Object.values(data.instances) : []))
-      .catch(() => setInstances([]));
-  }, []);
 
   useEffect(() => {
     if (!form.instanceId) {
@@ -224,7 +223,11 @@ export default function JiraConfigPanel({ app, onSaved }) {
       </label>
 
       {form.enabled && (
-        instances.length === 0 ? (
+        instancesState === 'loading' ? (
+          <p className="text-sm text-gray-500">Loading JIRA instances…</p>
+        ) : instancesState === 'error' ? (
+          <ListLoadError what="JIRA instances" error={instancesError} onRetry={retryInstances} />
+        ) : instances.length === 0 ? (
           <Banner tone="warning" size="md">
             No JIRA instances configured. <Link to="/devtools/jira" className="underline hover:text-white">Configure JIRA</Link> first.
           </Banner>

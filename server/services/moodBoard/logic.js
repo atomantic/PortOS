@@ -306,6 +306,29 @@ function replaceItem(board, items, idx, item) {
 // earlier render's job is still queued/running; a dead one may be replaced. A
 // claim that never got its job id (the process died mid-enqueue) expires.
 const RENDER_CLAIM_TTL_MS = 10 * 60 * 1000;
+const INTERRUPTED_RENDER_ERROR = 'interrupted by restart';
+
+// A restart archives the media job without telling the note, and replaying that
+// failure at boot would run every other terminal listener. Project the same
+// outcome when the board is read: a queued note whose job is gone fails, and a
+// claim that never received a job id keeps the claim TTL above. `updatedAt`
+// is wall-clock so the healed record wins LWW; `now` is only the TTL clock.
+export function projectInterruptedNoteRenders(board, { isLive = () => false, now = nowIso() } = {}) {
+  if (!board || !Array.isArray(board.items)) return { board, changed: false };
+  let changed = false;
+  const items = board.items.map((item) => {
+    const render = item?.render;
+    if (!item || item.type !== 'text' || render?.status !== 'queued') return item;
+    const live = render.jobId
+      ? Boolean(isLive(render.jobId))
+      : Date.parse(now) - Date.parse(render.queuedAt) < RENDER_CLAIM_TTL_MS;
+    if (live) return item;
+    changed = true;
+    return { ...item, render: { ...render, status: 'failed', error: INTERRUPTED_RENDER_ERROR } };
+  });
+  if (!changed) return { board, changed: false };
+  return { board: { ...board, items, updatedAt: nowIso() }, changed: true };
+}
 
 export function claimItemRender(board, itemId, { isLive = () => false, now = nowIso(), options } = {}) {
   const { items, idx } = findItemIndex(board, itemId);

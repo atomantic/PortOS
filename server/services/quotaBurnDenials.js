@@ -185,14 +185,19 @@ export async function recordQuotaBurnDenial({
   const signal = parseQuotaDenial(output, { now: at, errorAnalysis });
   if (!signal.denied) return null;
   const stated = signal.resetsAt ?? (Number.isFinite(limitingResetAt) && limitingResetAt > at ? limitingResetAt : null);
-  const ledger = await writeLedger((current) => ({
-    ...current,
-    [familyId]: {
-      at,
-      until: stated ?? current[familyId]?.until ?? null,
-      reason: errorAnalysis?.message || 'the provider refused the run as out of quota',
-    },
-  }));
+  const ledger = await writeLedger((current) => {
+    // A lapsed prior reset is not carried forward: isObservedBlockActive trusts
+    // a present `until`, so it would hide this fresh refusal instead of TTL-bounding it.
+    const prior = current[familyId]?.until;
+    return {
+      ...current,
+      [familyId]: {
+        at,
+        until: stated ?? (Number.isFinite(prior) && prior > at ? prior : null),
+        reason: errorAnalysis?.message || 'the provider refused the run as out of quota',
+      },
+    };
+  });
   const entry = ledger?.[familyId] || null;
   if (entry) {
     console.log(`🛑 Quota-burn ${familyId} denied by the provider — blocked until ${entry.until ? new Date(entry.until).toISOString() : `+${UNKNOWN_BLOCK_TTL_MS / 3_600_000}h`}`);

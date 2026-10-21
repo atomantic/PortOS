@@ -10,6 +10,7 @@ import { ThemeProvider } from './components/ThemeContext';
 import { isStaleChunkError, reloadOnceForStaleChunk } from './utils/staleChunkReload';
 import { reportClientError } from './lib/clientErrorReporter';
 import { registerServiceWorker } from './lib/registerServiceWorker';
+import { installActionFeedback } from './services/actionFeedback';
 import DownloadManager from './components/DownloadManager';
 import App from './App';
 import './index.css';
@@ -17,6 +18,9 @@ import './index.css';
 // Offline app-shell + low-bandwidth asset caching (production, secure-context
 // only — no-op in dev and over plain-HTTP Tailnet). See lib/registerServiceWorker.
 registerServiceWorker();
+
+// Tapped buttons show a busy state while the request they started is in flight.
+installActionFeedback();
 
 // Start checking for a newer build as soon as a chunk preload fails. Vite also
 // emits this for module evaluation errors, so the recovery helper reloads only

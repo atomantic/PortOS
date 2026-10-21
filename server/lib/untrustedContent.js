@@ -76,3 +76,32 @@ export function isUntrustedContentProvider(provider, source) {
   return !PRIVATE_UNTRUSTED_CONTENT_SOURCES.includes(source)
     || ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname.toLowerCase());
 }
+
+const PROVIDER_UNAVAILABLE = Object.freeze({ code: 'untrusted-content-provider-unavailable', message: 'Configure an enabled text API provider in Models > LLMs > Abuse Guard. Private messages require a local API endpoint. CLI agents and provider fallback are disabled for external content.' });
+
+/**
+ * Resolve the provider and model an untrusted-content analysis will use.
+ *
+ * Automatic selection (no explicit provider, no pinned `policy.providerId`)
+ * only considers providers that can also resolve a model, so an eligible
+ * provider without a default model never shadows a usable one. This is an
+ * eligibility rule at selection time, not a fallback after a failed call: a
+ * pinned or explicit provider that cannot resolve a model fails closed.
+ */
+export function selectUntrustedContentProvider({ providers, policy, source, provider = null, model = null }) {
+  if (provider || policy.providerId) {
+    const selected = provider || (providers || []).find(item => item.id === policy.providerId);
+    if (!isUntrustedContentProvider(selected, source)) return PROVIDER_UNAVAILABLE;
+    const effectiveModel = model || (provider && provider.id !== policy.providerId ? null : policy.model) || selected.defaultModel;
+    return effectiveModel
+      ? { provider: selected, model: effectiveModel }
+      : { code: 'untrusted-content-model-required', message: 'Select an installed text model in Models > LLMs > Abuse Guard.' };
+  }
+  const eligible = (providers || []).filter(item => isUntrustedContentProvider(item, source));
+  if (!eligible.length) return PROVIDER_UNAVAILABLE;
+  for (const candidate of eligible) {
+    const effectiveModel = model || policy.model || candidate.defaultModel;
+    if (effectiveModel) return { provider: candidate, model: effectiveModel };
+  }
+  return { code: 'untrusted-content-model-required', message: 'No eligible API provider has a default model. Select an installed text model in Models > LLMs > Abuse Guard.' };
+}

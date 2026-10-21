@@ -126,8 +126,8 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
       )}
 
       {appContext && (
-        <div className="flex items-center gap-2 px-4 pb-3">
-          <span className="text-xs text-gray-400">Enabled</span>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-3">
+          <span className="text-xs text-gray-400">Runs on schedule for this app</span>
           <ToggleSwitch
             enabled={appContext.enabled}
             onChange={appContext.onToggle}
@@ -135,6 +135,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
             size="sm"
             ariaLabel={`${taskType} enabled for this app: ${appContext.enabled ? 'on' : 'off'}`}
           />
+          <span className="text-xs text-gray-500">Run Now runs it once, whatever this is set to.</span>
         </div>
       )}
       {children && <fieldset disabled={appContext?.saving} className="min-w-0 px-4 pb-3 space-y-3">{children}</fieldset>}
@@ -159,7 +160,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
               onTrigger={onTrigger}
               installWide={!appContext && config.installWide}
               programmatic={config.programmatic}
-              disabledReason={appContext?.saving ? SAVING_TITLE : appContext && !appContext.enabled ? 'Enable this task for this app first' : improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (pins.saving ? SAVING_TITLE : '')}
+              disabledReason={appContext?.saving ? SAVING_TITLE : improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (pins.saving ? SAVING_TITLE : '')}
             />
             {appContext && (
               <button

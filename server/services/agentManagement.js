@@ -2,6 +2,8 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isFalsyMeta, isTruthyMeta } from '../lib/metadataFlags.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
+import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 /**
  * Agent Management
  *
@@ -98,6 +100,7 @@ async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReas
     // flushRunnerOutputBatcher is a no-op if no batcher exists.
     await flushRunnerOutputBatcher(agentId);
     await completeAgent(agentId, { success: false, error: errorMessage });
+    await releaseAgentReservation(agentId);
     const task = agentInfo?.task;
     if (task) {
       await updateTask(task.id, {
@@ -1180,6 +1183,10 @@ async function runCleanupOrphanedAgents() {
   const agents = await getAgents();
   let cleanedCount = 0;
   const orphanedTaskIds = [];
+  // Agents retired by this sweep, with or without a task: each still holds the
+  // maintenance reservation its original spawn took, and retireDeadAgent does
+  // not release it.
+  const retiredAgentIds = [];
 
   // Agents the PREVIOUS process owned when it was signalled down (#3202). Their
   // processes died because PortOS restarted, not because they failed — so they
@@ -1356,6 +1363,7 @@ async function runCleanupOrphanedAgents() {
         agentResultExtra: { interruptedByRestart: interrupted },
       });
       cleanedCount++;
+      retiredAgentIds.push(agent.id);
 
       if (agent.taskId) {
         // Carry the agent's metadata forward rather than re-reading the record
@@ -1406,6 +1414,21 @@ async function runCleanupOrphanedAgents() {
       interrupted: interruptedByRestart.has(agentId) || null,
     });
   }
+
+  // Same release order as a normal completion (agentLifecycle): only after the
+  // run is retired, its worktree cleaned and its task settled. Without it the
+  // reservation outlives the process and every later status read parses it.
+  // finishResource reads the journal synchronously and throws while it needs
+  // recovery; that must not abort the marker clear and stranded-agent sweep below.
+  for (const agentId of retiredAgentIds) await releaseAgentReservation(agentId);
+  // Backstop for reservations a previous process leaked on any other exit path.
+  // Sweep-start snapshot plus what this sweep retired: `completed` is terminal and a
+  // dead owner pid cannot belong to an agent spawned meanwhile, so no re-read is needed.
+  const retired = new Set(retiredAgentIds);
+  await reconcileStaleAgentReservations({ agents: agents.map(a => retired.has(a.id) ? { ...a, status: 'completed' } : a) });
+  // Same sweep, different kinds: publication residue is stamped, and only a
+  // cli-run or mind-turn whose owning record proves completion is released.
+  reconcileDeadOwnerReservations();
 
   // Consume the marker. Doing it AFTER the retry pass (not before) means a crash
   // mid-sweep leaves it in place and the next boot still classifies these agents

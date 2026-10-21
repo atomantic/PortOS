@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createDefaultPersistentMindState, normalizePersistentMindState, PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
 import { buildPersistentMindCallDenial } from '../lib/persistentMindTrajectory.js';
 import { PROVIDER_USAGE_LIMIT_PAUSE_REASON } from '../lib/persistentMindUsageLimit.js';
@@ -210,6 +212,37 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind).toMatchObject({ enabled: true, started: true, status: 'waiting' });
     expect(prepare).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('releases a dead mind-turn after restart recovery and leaves an unproved provider', async () => {
+    const deadPid = 2147483646;
+    const turn = maintenance.admit('mind-turn', 'persistent-mind');
+    const live = maintenance.admit('mind-turn', 'persistent-mind');
+    const provider = maintenance.admit('provider', 'fixture-source');
+    const file = join(maintenance.directory, 'state.json');
+    const journal = JSON.parse(readFileSync(file, 'utf8'));
+    for (const id of [turn.id, provider.id]) journal.operations.find(op => op.id === id).pid = deadPid;
+    writeFileSync(file, JSON.stringify(journal));
+    mock.root.persistentMind = {
+      ...createDefaultPersistentMindState(),
+      enabled: true,
+      started: true,
+      status: 'thinking',
+      activeTurn: {
+        id: 'fixture-turn',
+        wake: { kind: 'message', message: { id: 'fixture-message', text: 'Ordinary.', createdAt: new Date(1).toISOString() } },
+        startedAt: new Date(1).toISOString(),
+      },
+    };
+    try {
+      const recovered = await supervisor.initializePersistentMindSupervisor();
+      expect(recovered.activeTurn).toBeNull();
+      const left = maintenance.operations().filter(op => [turn.id, live.id, provider.id].includes(op.id));
+      expect(left.map(op => op.id).sort()).toEqual([live.id, provider.id].sort());
+    } finally {
+      await maintenance.finishResource('mind-turn', 'persistent-mind');
+      await maintenance.finishResource('provider', 'fixture-source');
+    }
   });
 
   afterEach(() => vi.useRealTimers());

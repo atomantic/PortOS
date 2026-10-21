@@ -9,21 +9,13 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync,
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  encryptValue, decryptValue, ensureVaultKey as ensureVaultKeyImpl, isVaultKeyConfigured, maskValue,
+  encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
   __setVaultEnvPathForTests,
 } from './vaultCrypto.js';
 
 // Fixed 32-byte test key (hex). Never a real key.
 const HEX_KEY = 'a'.repeat(64);
 const originalKey = process.env.PRIVACY_VAULT_KEY;
-const vaultRoots = new Set();
-let pendingKeyWrites = 0;
-let removedVaultRoots = 0;
-async function ensureVaultKey(options) {
-  pendingKeyWrites += 1;
-  try { return await ensureVaultKeyImpl(options); }
-  finally { pendingKeyWrites -= 1; }
-}
 
 // Point the module's .env fallback at a nonexistent file so "key not
 // configured" tests can't be satisfied by (or write into) the real install's
@@ -32,9 +24,6 @@ const NO_ENV = join(tmpdir(), 'vault-crypto-no-such-dir', '.env');
 beforeAll(() => __setVaultEnvPathForTests(NO_ENV));
 
 afterAll(() => {
-  const remaining = [...vaultRoots].filter(root => existsSync(root)).length;
-  const log = remaining || pendingKeyWrites ? console.error : console.log;
-  log(`🧭 Vault cleanup allocated=${vaultRoots.size},removed=${removedVaultRoots},remaining=${remaining},pendingKeyWrites=${pendingKeyWrites}`);
   __setVaultEnvPathForTests(null);
   if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
   else process.env.PRIVACY_VAULT_KEY = originalKey;
@@ -142,7 +131,6 @@ describe('ensureVaultKey', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'vault-crypto-'));
-    vaultRoots.add(dir);
     envPath = join(dir, '.env');
     delete process.env.PRIVACY_VAULT_KEY;
   });
@@ -241,10 +229,7 @@ describe('ensureVaultKey', () => {
     expect(process.env.PRIVACY_VAULT_KEY).toBeUndefined();
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-    removedVaultRoots += 1;
-  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
 });
 
 describe('maskValue', () => {

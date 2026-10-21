@@ -54,6 +54,7 @@ const {
 const { transcribe } = await import('../services/voice/stt.js');
 const { synthesize } = await import('../services/voice/tts.js');
 const { runTurn } = await import('../services/voice/pipeline.js');
+const { getVoiceConfig } = await import('../services/voice/config.js');
 const {
   attachHost: attachCallHost,
   __resetCallSession,
@@ -273,6 +274,7 @@ describe('voice:text turn recovery', () => {
 });
 
 describe('voice:output single-recipient wiring', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
   beforeEach(() => __resetVoiceOutput());
 
   it('registers a candidate only after the tab announces voice:output:available', () => {
@@ -301,7 +303,7 @@ describe('voice:output single-recipient wiring', () => {
     expect(tab.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
 
-  it('claiming routes proactive output to the claiming tab, not another', () => {
+  it('claiming routes proactive output to the claiming tab, not another', async () => {
     const a = makeFakeSocket();
     const b = makeFakeSocket();
     registerVoiceHandlers(a);
@@ -310,6 +312,7 @@ describe('voice:output single-recipient wiring', () => {
     b.fire('voice:output:available');
     // b is the active tab and claims output.
     b.fire('voice:output:claim');
+    await flush();
 
     const io = { emit: () => { throw new Error('must not broadcast'); } };
     emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
@@ -317,7 +320,7 @@ describe('voice:output single-recipient wiring', () => {
     expect(b.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
 
-  it('disconnecting the primary promotes another announced tab', () => {
+  it('disconnecting the primary promotes another announced tab', async () => {
     const a = makeFakeSocket();
     const b = makeFakeSocket();
     registerVoiceHandlers(a);
@@ -325,10 +328,71 @@ describe('voice:output single-recipient wiring', () => {
     a.fire('voice:output:available');
     b.fire('voice:output:available');
     a.fire('voice:output:claim');
+    await flush();
     expect(getVoiceOutputSocket()).toBe(a);
 
     a.fire('disconnect');
     expect(getVoiceOutputSocket()).toBe(b);
+  });
+
+  it('does not elect a primary while voice is disabled, but remembers focus for later', async () => {
+    getVoiceConfig.mockResolvedValue({ enabled: false });
+    const focused = makeFakeSocket();
+    const background = makeFakeSocket();
+    registerVoiceHandlers(focused);
+    registerVoiceHandlers(background);
+    focused.fire('voice:output:available');
+    background.fire('voice:output:available');
+    focused.fire('voice:output:claim');
+    await flush();
+    expect(focused.emitted.filter((e) => e.event === 'voice:output:primary')).toHaveLength(0);
+
+    // Voice enabled with no further focus change: the first election picks the
+    // tab the user focused, not the later-connected background tab.
+    getVoiceConfig.mockResolvedValue({ enabled: true });
+    expect(getVoiceOutputSocket()).toBe(focused);
+  });
+
+  it('a claim while voice is disabled releases a stale primary held by another tab', async () => {
+    const a = makeFakeSocket();
+    const b = makeFakeSocket();
+    registerVoiceHandlers(a);
+    registerVoiceHandlers(b);
+    a.fire('voice:output:available');
+    b.fire('voice:output:available');
+    a.fire('voice:output:claim');
+    await flush();
+    expect(getVoiceOutputSocket()).toBe(a);
+
+    // Voice disabled, user moves to b, then re-enables voice without refocusing.
+    getVoiceConfig.mockResolvedValue({ enabled: false });
+    b.fire('voice:output:claim');
+    await flush();
+    expect(a.emitted.some((e) => e.event === 'voice:output:detached')).toBe(true);
+    getVoiceConfig.mockResolvedValue({ enabled: true });
+    expect(getVoiceOutputSocket()).toBe(b);
+  });
+
+  it('drops a claim from a tab that disconnected while the config was read', async () => {
+    const a = makeFakeSocket();
+    registerVoiceHandlers(a);
+    a.fire('voice:output:claim');
+    a.connected = false;
+    await flush();
+    expect(a.emitted.filter((e) => e.event === 'voice:output:primary')).toHaveLength(0);
+    expect(getVoiceOutputSocket()).toBe(null);
+  });
+
+  it('survives a config read failure without electing a primary', async () => {
+    getVoiceConfig.mockRejectedValueOnce(new Error('settings unreadable'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const a = makeFakeSocket();
+    registerVoiceHandlers(a);
+    a.fire('voice:output:claim');
+    await flush();
+    expect(a.emitted.filter((e) => e.event === 'voice:output:primary')).toHaveLength(0);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('settings unreadable'));
+    errSpy.mockRestore();
   });
 });
 
@@ -677,6 +741,18 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
     await socket.fire('voice:call:attach');
+    // Idle and dialing frames never start a turn. Barge-in is a property of
+    // an in-flight reply, so the call has to be listening first.
+    __setCallSessionDeps({
+      probe: vi.fn(async () => ({ state: 'connected' })),
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+    await startCall();
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
 
     let capturedSignal;
     let releaseFirstTurn;
@@ -700,10 +776,53 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     await flushMicrotasks();
 
     expect(capturedSignal.aborted).toBe(true);
-    expect(socket.emitted.some((e) => e.event === 'voice:interrupt' && e.payload.reason === 'barge-in')).toBe(true);
+    expect(socket.emitted.some((e) => e.event === 'voice:tts:cancel' && e.payload.reason === 'barge-in')).toBe(true);
+    expect(socket.emitted.some((e) => e.event === 'voice:interrupt')).toBe(false);
 
     releaseFirstTurn({});
     await flushMicrotasks();
+  });
+
+  it('caller-speech onset after runTurn has resolved emits voice:tts:cancel on speaking edge only', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:call:attach');
+    // Idle frames are dropped, so the onset edge is only observable once the
+    // call is listening — the same connected phase the in-flight barge-in uses.
+    __setCallSessionDeps({
+      probe: vi.fn(async () => ({ state: 'connected' })),
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+    await startCall();
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+
+    runTurn.mockResolvedValueOnce({ text: 'Hello there' });
+
+    // Complete a turn so call.busy returns to false
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(runTurn).toHaveBeenCalledTimes(1);
+
+    socket.emitted.length = 0;
+
+    // Caller begins speaking again while call.busy is false:
+    socket.fire('voice:call:audio', { pcm: loudFrame() });
+    await flushMicrotasks();
+
+    const cancels = socket.emitted.filter((e) => e.event === 'voice:tts:cancel' && e.payload?.reason === 'barge-in');
+    expect(cancels).toHaveLength(1);
+    expect(socket.emitted.some((e) => e.event === 'voice:interrupt')).toBe(false);
+
+    // Subsequent loud frame during the same utterance must not emit another cancel (onset edge only)
+    socket.fire('voice:call:audio', { pcm: loudFrame() });
+    await flushMicrotasks();
+    const cancelsAfterSecondFrame = socket.emitted.filter((e) => e.event === 'voice:tts:cancel' && e.payload?.reason === 'barge-in');
+    expect(cancelsAfterSecondFrame).toHaveLength(1);
   });
 });
 
@@ -744,6 +863,17 @@ describe('voice:call:audio frame alignment', () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
     await socket.fire('voice:call:attach');
+    // The handler drops frames unless the call is listening or speaking, so
+    // alignment has to be observed on a live call — an idle push never happens.
+    __setCallSessionDeps({
+      probe: vi.fn(async () => ({ state: 'connected' })),
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+    await startCall();
+    await pollCall();
     return socket;
   };
 
@@ -802,5 +932,95 @@ describe('voice:call:audio frame alignment', () => {
 
     expect(pushed).toHaveLength(1);
     expect(Array.from(pushed[0])).toEqual(Array.from(sourceSamples()));
+  });
+});
+
+describe('voice:call:audio does not run a turn unless the call is up', () => {
+  // Same frame contract as the capture tests: ~20 ms at 16 kHz, loud enough
+  // to clear RMS 0.015, and long enough over 14 frames to clear the 250 ms
+  // minimum. 36 silent frames clear the 700 ms trailing-silence endpoint.
+  const FRAME_SAMPLES = 320;
+  const loudFrame = () => {
+    const frame = new Int16Array(FRAME_SAMPLES);
+    for (let i = 0; i < FRAME_SAMPLES; i += 1) frame[i] = Math.round(Math.sin(i / 8) * 20000);
+    return frame;
+  };
+  const silentFrame = () => new Int16Array(FRAME_SAMPLES);
+  const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
+
+  const burst = (socket) => {
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+  };
+
+  let probe;
+
+  beforeEach(() => {
+    __resetCallSession();
+    runTurn.mockClear();
+    probe = vi.fn(async () => ({ state: 'dialing' }));
+    __setCallSessionDeps({
+      probe,
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+  });
+
+  afterEach(() => __resetCallSession());
+
+  const attach = async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:call:attach');
+    return socket;
+  };
+
+  it('never calls runTurn for speech while a host is attached and no call is up', async () => {
+    const socket = await attach();
+    expect(getCallState().state).toBe('idle');
+
+    burst(socket);
+    await flushMicrotasks();
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(getCallState().state).toBe('idle');
+
+    // Audio buffered while idle must not complete once the far end connects.
+    await startCall();
+    probe.mockResolvedValue({ state: 'connected' });
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
+  it('never calls runTurn while dialing, and stays dialing until the probe sees a connect', async () => {
+    const socket = await attach();
+    await startCall();
+    expect(getCallState().state).toBe('dialing');
+
+    burst(socket);
+    await flushMicrotasks();
+    await pollCall();
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(getCallState().state).toBe('dialing');
+
+    probe.mockResolvedValue({ state: 'connected' });
+    await pollCall();
+    expect(getCallState().state).toBe('listening');
+
+    // Silence alone must not finish speech that arrived while the line was ringing.
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(runTurn).not.toHaveBeenCalled();
+
+    burst(socket);
+    await flushMicrotasks();
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(getCallState().state).toBe('listening');
   });
 });

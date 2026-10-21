@@ -141,7 +141,13 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT) {
     console.warn(`⚠️ stage fixture ${index + 1}: ${describeStageFixtureRoot(join(root, name), observations.get(name), state)}`);
   }
   if (stages.length > 8) console.warn(`⚠️ stage fixture provenance capped: ${stages.length - 8} additional entries`);
-  if (entries.length) process.exitCode = 1;
+  if (entries.length) {
+    // This runs in vitest.onClose, after the reporter's exit-code snapshot, and
+    // is the only place a run whose every assertion passed is made to fail.
+    // Name it so the nonzero exit never reads as unexplained (#12536).
+    console.error(`❌ test temp leak guard: failing the run with exit code 1 for ${entries.length} leaked ${entries.length === 1 ? 'entry' : 'entries'} under the run temp root`);
+    process.exitCode = 1;
+  }
 
   try {
     rmSync(root, { recursive: true, force: true });

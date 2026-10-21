@@ -159,12 +159,12 @@ async function auditMergeGate(agentId, originalTask) {
 // still governed by success/skipMerge even for stand-down: the existing local
 // cleanup contract is independent of who opened the PR.
 const WORKTREE_DISPOSITIONS = Object.freeze({
-  'not-a-worktree': Object.freeze({ merge: false, preserveBranch: false }),
-  discard: Object.freeze({ merge: false, preserveBranch: false }),
-  'open-pr': Object.freeze({ merge: false, preserveBranch: false }),
-  'stand-down': Object.freeze({ preserveBranch: false }),
-  'stand-down-uncertain': Object.freeze({ preserveBranch: true }),
-  'stranded-pr-handoff': Object.freeze({ preserveBranch: true }),
+  'not-a-worktree': Object.freeze({ merge: false }),
+  discard: Object.freeze({ merge: false }),
+  'open-pr': Object.freeze({ merge: false }),
+  'stand-down': Object.freeze({}),
+  'stand-down-uncertain': Object.freeze({}),
+  'stranded-pr-handoff': Object.freeze({}),
   'merge-or-preserve': Object.freeze({}),
 });
 
@@ -185,7 +185,6 @@ export function resolveWorktreeDisposition({ isWorktree, success, prCreation, di
   return {
     disposition: name,
     merge: success && !skipMerge,
-    preserveBranch: !success,
     ...WORKTREE_DISPOSITIONS[name],
   };
 }
@@ -587,14 +586,11 @@ async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranc
     agentId, branchName: worktreeBranch, merge: shouldMerge
   });
 
+  // Cleanup retains branches without merge evidence, including failed runs and
+  // successful runs whose PR could not be confirmed. Their retry can resume
+  // from the preserved work through resolveResumeBranch below.
   const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, {
     merge: shouldMerge,
-    // A FAILED agent's branch is the only record of what it got done. Keep it when
-    // it holds commits so the task's retry can attach to it and resume rather than
-    // redo the work (see resolveResumeBranch below + removeWorktree's flag docs).
-    // Same reasoning for a SUCCESSFUL run whose PR we could not confirm: we chose
-    // not to push it, so the local branch is the only copy.
-    preserveBranchWithCommits: disposition.preserveBranch,
   }).catch(err => {
     emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
     return { cleanupIncomplete: true, warnings: [`Worktree cleanup failed: ${err.message}`] };
@@ -931,7 +927,7 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * spawn mode (#3368, #3373).
  *
  * A failed agent whose branch — or whole worktree — survived cleanup leaves real
- * work behind (see `preserveBranchWithCommits` above; a dirty tree aborts removal
+ * work behind (cleanup requires merge evidence; a dirty tree aborts removal
  * outright). Recording where it lives on the TASK is what makes its retry RESUME
  * rather than restart from scratch — the behavior the agent-d2ae0352 incident
  * exposed, where a run reaped 30s after its PR merged was re-dispatched to a fresh
@@ -1103,15 +1099,23 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
  * whether an agent actually started or the task is still waiting (no slots,
  * daemon stopped, …) rather than guessing.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue' }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null }) {
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
+
+  if (reviewTarget) {
+    const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
+    if (reviewTarget.prUrl !== prUrl || reviewTarget.branch !== prBranch
+      || reviewTarget.ownerTaskId !== originalTask?.id || reviewTarget.ownerId !== originalAgentId) return { blocked: 'Review recovery identity changed' };
+    const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: sourceWorkspace });
+    if (refused) return { blocked: refused };
+  }
 
   // Recovery belongs to the same durable task. A fresh sys-rl task resets the
   // spawn budget on every CI/conflict handoff and recursively nests its title.
   // The id hint also recovers receipts written before the marker was retained.
   if (isTruthyMeta(originalTask?.metadata?.reviewLoopFollowUp) || originalTask?.id?.startsWith('sys-rl-')) {
-    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch);
+    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget);
   }
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
@@ -1254,6 +1258,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       simplify: false,
       // Marker flags consumed by the agent prompt + completion handler
       reviewLoopFollowUp: true,
+      ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}),
       prCompletion,
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
       reviewLoopMergeOnly: mergeOnly,
@@ -1346,7 +1351,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   return { ...followUpTask, dispatch: { started: true, reason: null } };
 }
 
-async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch) {
+async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null) {
   const { getTaskById } = await import('./cos.js');
   const task = await getTaskById(taskId);
   if (!task || task.taskType !== 'internal' || !isTruthyMeta(task.metadata?.reviewLoopFollowUp)
@@ -1376,12 +1381,13 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch) {
   }
   const result = await updateTask(taskId, {
     status: 'pending',
-    metadata: { reviewLoopRecoveryReason: 'The handed-off PR needs fresh validation, review or conflict resolution' },
+    metadata: { reviewLoopRecoveryReason: 'The handed-off PR needs fresh validation, review or conflict resolution',
+      ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}) },
   }, 'internal', {
     expectedStatus: 'completed',
     expectedMetadata: Object.fromEntries([
       'totalSpawnCount', 'reviewLoopFollowUp', 'reviewLoopPRUrl', 'reviewLoopPRBranch',
-      'prCompletion', 'reviewLoopLeaveOpen', 'readOnly', 'jiraTicketId', 'analysisType',
+      'prCompletion', 'reviewLoopLeaveOpen', 'readOnly', 'jiraTicketId', 'analysisType', 'updatedAt',
     ].map(key => [key, task.metadata[key]])),
   });
   if (result?.error) throw new Error(result.error);

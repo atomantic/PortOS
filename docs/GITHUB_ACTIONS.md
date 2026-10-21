@@ -7,15 +7,14 @@ publish until the complete CI suite has passed on the exact tree being released.
 
 Dependabot pull requests start with a small checkout/admission check only.
 `Plan test impact` fails with a maintainer-release message before dependency
-installation or tests, so the required `CI Gate` remains red. The optional
-SuperCollider workflow uses the same check before installing or building.
+installation or tests, so the required `CI Gate` remains red. The SuperCollider
+job inside `ci.yml` repeats the check before installing or building.
 Other pull requests, scheduled checks, releases and manual dispatches retain
 their existing behavior. No schedule or repository security setting changes.
 
 After reviewing the dependency diff, open the **current commit's** CI workflow
 run and choose **Re-run all jobs**, or run `gh run rerun RUN_ID`. GitHub permits
-reruns only to repository writers. If SuperCollider also ran, release that
-workflow's current run separately. Re-running failed jobs also reruns their
+reruns only to repository writers. Re-running failed jobs also reruns their
 dependents; re-running only CI Gate cannot release a failed impact check.
 Tests still have to pass before merging.
 
@@ -652,6 +651,22 @@ The selected work is split across parallel jobs:
   head tree on every run, so a new dependency is gated without a list edit.
   Non-PR runs and pull requests into `release` always run it. Pregate reports
   it as CI-only.
+- **SuperCollider native containment** — builds `docker/supercollider/`, runs
+  `npm run setup:supercollider` twice and executes the opt-in live suite
+  (`server/services/superColliderRender.live.test.js`) against real Docker on
+  native amd64 and arm64 runners. It is the only run of the container boundary
+  for untrusted generated `sclang` source, and it is part of `CI Gate`: a red
+  run blocks the merge, a skipped one passes. On a pull request it runs only
+  when the `supercollider_live` output is true: the diff touches the static
+  import closure of the live test, `scripts/setup-supercollider.js` and the
+  server Vitest harness (so the spawn, kill and child-environment helpers it
+  depends on select it), `docker/supercollider/`, a `package.json` or
+  `package-lock.json`, or `ci.yml` (`SUPERCOLLIDER_LIVE_ENTRIES`,
+  `SUPERCOLLIDER_LIVE_PATH_RE` and `collectSuperColliderLiveInputs()` in
+  `scripts/ci-test-plan.js`). The closure is recomputed from the head tree on
+  every run, so a new import is covered without a list edit. Non-PR runs
+  (nightly) and pull requests into `release` always run it; `workflow_dispatch`
+  of `CI` is the manual evidence run. Pregate reports it as CI-only.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
@@ -681,7 +696,7 @@ existing `gh` authentication. It runs the registered fidelity cases, keeps a
 local receipt, and publishes an exact-commit status for the PR head. That
 status is informational: no required check reads it. Software WebGL results do
 not certify physical-GPU performance, and Mac-local results cannot replace
-Windows compatibility or Linux containment.
+Windows compatibility, Linux containment or the SuperCollider live suite.
 
 ### Full-suite sharding
 
@@ -921,8 +936,9 @@ gets two content-addressed keys (`scripts/lib/testMemo.js`):
 Both keys also cover: every non-JS file a member names through a literal path
 anchored at `import.meta.url`, `__dirname`, `process.cwd()` or an identifier
 bound to one of those (a literal directory contributes its whole tree, up to
-400 files; snapshot files and the planner's `FIXTURE_OWNERS` directories are
-added for the test itself); the installed version of every package the
+400 files; snapshot files and each `FIXTURE_OWNERS` directory — or only
+its direct children when the owner sets `fileRe` — are added for the test
+itself); the installed version of every package the
 members reach (so a lockfile bump invalidates exactly the suites that reach
 the bumped packages); a Python sidecar's resolvable sibling imports; the
 version of an external program a member reaches (`TEST_MEMO_TOOLS`: the

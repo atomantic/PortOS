@@ -5,6 +5,11 @@ import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useUrlParams from '../../hooks/useUrlParams';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
+
+// Module-level so useListResource sees a stable fetcher. The row owns the error UI; the route returns a bare array.
+const fetchVaults = () => api.getNotesVaults({ silent: true });
 
 const emptyList = () => ({ title: '', prompt: '', category: '', help: '', status: 'draft', ideas: [] });
 
@@ -57,7 +62,7 @@ export default function IdeaLoomLists() {
   const [ideaText, setIdeaText] = useState('');
   const [exchangeBusy, setExchangeBusy] = useState(false);
   const [exchangeResult, setExchangeResult] = useState(null);
-  const [vaults, setVaults] = useState([]);
+  const vaultsResource = useListResource(fetchVaults);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const select = useCallback((id) => updateParams({ list: id }), [updateParams]);
@@ -71,10 +76,6 @@ export default function IdeaLoomLists() {
       toast.error(error.message || 'Failed to load IdeaLoom lists');
       return [[], null];
     });
-    // The vault list only names existing vaults to choose between; a failure
-    // here leaves the picker empty rather than blocking local list editing.
-    const vaultData = await api.getNotesVaults().catch(() => ({ vaults: [] }));
-    setVaults(vaultData?.vaults || []);
     setLists(Array.isArray(nextLists?.lists) ? nextLists.lists : (Array.isArray(nextLists) ? nextLists : []));
     setSettings(nextSettings?.settings || nextSettings);
     setLoading(false);
@@ -178,10 +179,11 @@ export default function IdeaLoomLists() {
             <input id="idealoom-enabled" type="checkbox" checked={Boolean(settings.enabled)} onChange={(event) => patchSettings({ enabled: event.target.checked })} />
             Sync with an Obsidian vault
           </label>
-          {settings.enabled && <label className="block text-xs text-gray-300" htmlFor="idealoom-vault">Vault
+          {settings.enabled && vaultsResource.state === 'error' && <ListLoadError what="Obsidian vaults" error={vaultsResource.error} onRetry={vaultsResource.retry} />}
+          {settings.enabled && vaultsResource.state !== 'error' && <label className="block text-xs text-gray-300" htmlFor="idealoom-vault">Vault
             <select id="idealoom-vault" value={settings.obsidianVaultId || ''} onChange={(event) => patchSettings({ obsidianVaultId: event.target.value || null })} className="mt-1 block min-h-[44px] w-full rounded border border-port-border bg-port-bg px-3 text-sm text-white">
               <option value="">Choose a vault…</option>
-              {vaults.map((vault) => <option key={vault.id} value={vault.id}>{vault.name}</option>)}
+              {vaultsResource.items.map((vault) => <option key={vault.id} value={vault.id}>{vault.name}</option>)}
             </select>
           </label>}
           {settings.enabled && settings.obsidianVaultId && <label className="flex items-start gap-2 text-xs text-gray-300" htmlFor="idealoom-autosync">

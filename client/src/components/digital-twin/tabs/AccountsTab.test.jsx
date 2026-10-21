@@ -168,4 +168,38 @@ describe('AccountsTab', () => {
     expect(screen.getByText(/Add your social media accounts to build your digital identity profile and reference your profiles across platforms\./i)).toBeInTheDocument();
     expect(screen.queryByText(/content learning/i)).not.toBeInTheDocument();
   });
+
+  it('fails into a retry instead of "No social accounts yet" when the account read fails', async () => {
+    api.getSocialAccounts.mockRejectedValueOnce(new Error('boom'));
+    const user = userEvent.setup();
+    render(<AccountsTab />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load social accounts');
+    expect(screen.queryByText('No social accounts yet')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('@octocat')).toBeInTheDocument();
+  });
+
+  it('fails into a retry when the platform list read fails', async () => {
+    api.getSocialAccountPlatforms.mockRejectedValueOnce(new Error('boom'));
+    render(<AccountsTab />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load social platforms');
+  });
+
+  it('withholds "Add to org registry" while the link read is failed, so an already-linked account is not duplicated', async () => {
+    api.getSocialAccountOrgLinks.mockRejectedValueOnce(new Error('privacy down'));
+    const user = userEvent.setup();
+    render(<AccountsTab />);
+
+    expect(await screen.findByText('@octocat')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load org registry links');
+    expect(screen.queryByRole('button', { name: /Add to org registry/ })).not.toBeInTheDocument();
+
+    api.getSocialAccountOrgLinks.mockResolvedValueOnce([{ socialAccountId: 'acc-1', orgId: 'org-1', orgName: 'Example Org' }]);
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('In org registry')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Add to org registry/ })).toHaveLength(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

@@ -11,7 +11,10 @@
  * This sweep prunes a tombstone only when BOTH conditions hold:
  *   1. Every peer currently subscribed to the record's kind has acked a
  *      deletedAt at least as recent as the tombstone (so we know every
- *      subscriber has received and applied this specific deletion).
+ *      subscriber has received and applied this specific deletion). A
+ *      paused peer stays in that cohort: it receives nothing until resume,
+ *      and pruning a delete it never got lets the record come back. Removing
+ *      the peer (unsubscribe + drop from the registry) is what releases it.
  *   2. At least `graceMs` has elapsed since the tombstone was created — a
  *      buffer for transient replay / disconnect cases that haven't shown
  *      up in the ack water-mark yet. The orchestrator path uses the 24h
@@ -182,17 +185,17 @@ function makeRecordIdResolver(listers) {
 
 const GRACE_MS = 24 * 60 * 60 * 1000;
 
-// `peer_subscriptions.json` rows outlive peer removal (no cleanup hook on
-// instance delete), and disabled / globally-silenced peers never advance
-// their ack cursor. Filtering against this set keeps a stale sub from
-// freezing the GC water-mark at peer-removal time.
+// `peer_subscriptions.json` rows can outlive peer removal. The cohort is
+// every registry peer with an instanceId, paused or not (`enabled: false`
+// and `syncEnabled: false` still owe deliveries they will receive on resume).
+// A removed peer is absent here, so a leftover subscription row cannot freeze
+// the water-mark after `unsubscribeAllForPeer` drops it from the registry.
 function eligiblePeerIdSet(peers) {
-  return new Set(
-    peers
-      .filter((p) => p?.enabled && p.syncEnabled !== false)
-      .map((p) => p.instanceId)
-      .filter(Boolean),
-  );
+  return new Set(peers.map((p) => p?.instanceId).filter(Boolean));
+}
+
+function peerIsPaused(peer) {
+  return Boolean(peer?.instanceId) && (peer.enabled === false || peer.syncEnabled === false);
 }
 
 // #1922: a musicVideoProject subscription is also a delivery vehicle for its
@@ -324,27 +327,56 @@ function snapshotCategoryForKind(recordKind) {
   return null;
 }
 
-// Peers that can resurrect a pruned tombstone via the 60s snapshot loop.
-// The snapshot path has no per-peer ack water-mark, so any peer in this set
-// that's NOT also covered by a per-record subscription makes pruning unsafe.
-// Legacy peers without `syncCategories` fall back to brain+memory only
+// Peers that can resurrect a pruned tombstone via the snapshot loop, including
+// paused ones. The snapshot path has no per-peer ack water-mark, so any peer
+// in this set that is NOT also covered by a per-record subscription makes
+// pruning unsafe. A paused peer receives nothing until resume, and the next
+// snapshot can still insert a live copy once the tombstone is gone. Legacy
+// peers without `syncCategories` fall back to brain+memory only
 // (syncOrchestrator.getEffectiveCategories), so they're excluded.
 function snapshotPeerIdsForKind(peers, recordKind) {
   const category = snapshotCategoryForKind(recordKind);
   if (!category) return [];
   return peers
     .filter((p) => {
-      if (!p?.enabled) return false;
-      if (p.syncEnabled === false) return false;
+      if (!p?.instanceId) return false;
       // A full-sync peer mirrors every category, so it can resurrect a pruned
-      // tombstone for ANY kind via its snapshot loop — it must count here even
+      // tombstone for ANY kind via its snapshot loop — paused or not, and even
       // when its stored syncCategories map doesn't list this category.
       if (p.fullSync === true) return true;
       const cats = p.syncCategories;
       return !!cats && typeof cats === 'object' && cats[category] === true;
     })
-    .map((p) => p.instanceId)
-    .filter(Boolean);
+    .map((p) => p.instanceId);
+}
+
+// Kinds whose deletes a paused peer is holding: a cohort subscription (its
+// confirm floor clamps the cutoff, and issue rides series) or an uncovered
+// snapshot category (the prune is refused). Active peers are omitted — the
+// manual sweep names only who resume-or-remove will release.
+function kindsHeldByPausedPeer(peer, subs) {
+  const subbed = new Set(
+    subs.filter((s) => s.peerId === peer.instanceId).map((s) => s.recordKind),
+  );
+  const kinds = [];
+  for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+    const coveredBySub = cohortKindsFor(kind).some((k) => subbed.has(k));
+    const holds = coveredBySub || snapshotPeerIdsForKind([peer], kind).includes(peer.instanceId);
+    if (!holds) continue;
+    kinds.push(kind);
+    if (kind === 'series') kinds.push('issue');
+  }
+  return kinds;
+}
+
+function pausedPeersHoldingKinds(peers, subs) {
+  const held = [];
+  for (const peer of peers) {
+    if (!peerIsPaused(peer)) continue;
+    const kinds = kindsHeldByPausedPeer(peer, subs);
+    if (kinds.length > 0) held.push({ instanceId: peer.instanceId, kinds });
+  }
+  return held;
 }
 
 // Returns null when ANY snapshot-mode peer for this kind isn't covered by
@@ -530,8 +562,10 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
 }
 
 // Dry-run companion to `sweepTombstones` — returns the refused kinds
-// without pruning. Refusal is independent of graceMs (only snapshot
-// coverage matters), so this hardcodes graceMs:0 internally.
+// without pruning, plus `heldByPausedPeers` so the manual sweep can name
+// which paused peer is holding deletes. Resume or remove that peer to
+// release them; pausing does not. Refusal is independent of graceMs (only
+// snapshot coverage matters), so this hardcodes graceMs:0 internally.
 export async function getSweepStatus({ now = Date.now() } = {}) {
   const { peers, subs } = await loadState();
   const [universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff] = await Promise.all([
@@ -553,7 +587,10 @@ export async function getSweepStatus({ now = Date.now() } = {}) {
     cutoffForKind('creativeCommission', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('deck', { peers, subs, now, graceMs: 0 }),
   ]);
-  return { refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff }) };
+  return {
+    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff }),
+    heldByPausedPeers: pausedPeersHoldingKinds(peers, subs),
+  };
 }
 
 export const TOMBSTONE_GRACE_MS = GRACE_MS;

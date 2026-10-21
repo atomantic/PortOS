@@ -5,7 +5,7 @@ import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintain
  * Shared state management for Chief of Staff services.
  */
 
-import { readFile, readdir, rm, rename } from 'fs/promises';
+import { readFile, readdir, rm, rename, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -24,6 +24,9 @@ import {
   normalizePersistentMindThinkingPresets,
 } from '../lib/persistentMindThinkingPresets.js';
 import { cosEvents } from './cosEvents.js';
+import { planAgentSave } from '../lib/cosAgentRows.js';
+import { applyAgentSave, loadAgentRows } from './cosAgentRepository.js';
+import { isFileBackend } from '../lib/pgFileFacade.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_ALWAYS_APPROVE_KINDS } from './taskLearning/safetyKind.js';
 
@@ -90,8 +93,6 @@ export function withStateLock(fn) {
 export const withConfigLock = createFileWriteQueue();
 
 export const DEFAULT_CONFIG = {
-  userTasksFile: 'data/TASKS.md',
-  cosTasksFile: 'data/COS-TASKS.md',
   goalsFile: 'GOALS.md',
   healthCheckIntervalMs: 900000,
   maxConcurrentAgents: 3,
@@ -451,6 +452,85 @@ export async function saveConfig(config) {
 // In-memory state cache — avoids re-reading state.json from disk on every call.
 // All mutations go through withStateLock, so the cache stays consistent.
 let stateCache = null;
+// What `cos_agents` holds for the cached `state.agents` (#12738): the store
+// version and each record's stored JSON text, so a save writes only the rows
+// whose serialization changed. `lastStatePayload` is the last state.json body
+// written, so an agent-only save does not rewrite the file at all.
+let agentStore = null;
+let lastStatePayload = null;
+let warnedLegacyAgents = false;
+
+// db-migrations 020/021 move a legacy state.json `agents` map into cos_agents,
+// but boot starts CoS before the database phase runs them. A read of a file that
+// still carries the map would cache an empty agent set, and its next save would
+// drop the map before 020 could import it. So that read waits for the boot to
+// report the migrations settled (bounded, so an early awaited caller fails
+// loudly instead of deadlocking the boot). Steady state never waits: the map is
+// gone once 021 has run.
+const AGENT_MIGRATION_WAIT_MS = 120_000;
+let settleAgentMigrations;
+let agentMigrationsSettled = false;
+const agentMigrations = new Promise((resolve) => { settleAgentMigrations = resolve; });
+
+/** Called by the boot once the DB migrations have run (or were skipped by the escape hatch). */
+export function markCosAgentMigrationsSettled() {
+  agentMigrationsSettled = true;
+  settleAgentMigrations();
+}
+
+async function awaitAgentMigrations() {
+  if (agentMigrationsSettled || isFileBackend()) return;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new ServerError('CoS agent records are still being migrated into the database. Retry once startup finishes.', {
+      status: 503, code: 'COS_AGENTS_MIGRATING',
+    })), AGENT_MIGRATION_WAIT_MS);
+    timer.unref?.();
+  });
+  try {
+    await Promise.race([agentMigrations, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function dropRuntimeCaches() {
+  stateCache = null;
+  agentStore = null;
+  lastStatePayload = null;
+}
+
+async function loadAgentStore() {
+  const { version, rows } = await loadAgentRows();
+  const persisted = new Map(rows.map((row) => [row.id, row.body]));
+  const agents = Object.fromEntries(rows.map((row) => [row.id, JSON.parse(row.body)]));
+  return { store: { version, persisted }, agents };
+}
+
+// atomicWrite's temp name is `<file>.<pid>.<ms>.<uuid>.tmp`; a process killed
+// mid-write leaves one behind. Sweep once per process, never this process's own
+// (it may be mid-write) and never one younger than a minute.
+const STATE_TEMP = /^state\.json\.(\d+)\.(\d+)\.[0-9a-f-]{36}\.tmp$/;
+const STATE_TEMP_MIN_AGE_MS = 60_000;
+let stateTempSweep = null;
+function sweepStaleStateTempFiles() {
+  stateTempSweep ??= (async () => {
+    const now = Date.now();
+    const names = await readdir(PATHS.cos).catch(() => []);
+    let removed = 0;
+    for (const name of names) {
+      const match = STATE_TEMP.exec(name);
+      if (!match || Number(match[1]) === process.pid) continue;
+      const path = join(PATHS.cos, name);
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile() || now - info.mtimeMs < STATE_TEMP_MIN_AGE_MS) continue;
+      if (await rm(path).then(() => true, () => false)) removed += 1;
+    }
+    if (removed > 0) console.log(`🧹 Removed ${removed} stale CoS state temp file(s) left by interrupted writes`);
+    return removed;
+  })();
+  return stateTempSweep;
+}
 
 // Master "Improve" flag with backward compat for the legacy split self/app flags.
 // Falls through only when improvementEnabled is null/undefined — explicit `false` wins.
@@ -488,6 +568,7 @@ export async function loadState() {
   const generation = stateRecovery.generation;
   const restored = restoreGeneration;
   await ensureDirectories();
+  await sweepStaleStateTempFiles();
   let state;
   if (stateRecovery.required) {
     state = await readRecoveryFile(STATE_FILE);
@@ -495,9 +576,23 @@ export async function loadState() {
     const content = await readFile(STATE_FILE, 'utf-8');
     state = parseStateFile(content) ?? await recoverFromUnreadableState(content);
   }
-  // A concurrent read/write or restore may have superseded this disk read.
+  if (state && Object.hasOwn(state, 'agents') && !agentMigrationsSettled && !isFileBackend()) {
+    await awaitAgentMigrations();
+    return loadState();
+  }
+  const { store, agents } = await loadAgentStore();
+  // A concurrent read/write or restore may have superseded this read.
   if (stateCache || generation !== stateRecovery.generation || restored !== restoreGeneration) return loadState();
 
+  // Agent records live in cos_agents (db-migrations 020/021 moved them). A
+  // state.json that still carries the map (a restored pre-migration file) is not
+  // read: the database is the only source, and the next save drops the key.
+  if (state && Object.hasOwn(state, 'agents') && !warnedLegacyAgents) {
+    warnedLegacyAgents = true;
+    console.warn(`⚠️ ${STATE_FILE} carries a legacy agents map; ignoring it — agent records are stored in cos_agents`);
+  }
+  agentStore = store;
+  lastStatePayload = null;
   stateCache = state ? {
     ...DEFAULT_STATE,
     ...state,
@@ -505,8 +600,8 @@ export async function loadState() {
     config,
     stats: { ...DEFAULT_STATE.stats, ...state.stats },
     persistentMind: normalizePersistentMindState(state.persistentMind),
-    agents: state.agents ?? {}
-  } : Object.assign(structuredClone(DEFAULT_STATE), { config });
+    agents
+  } : Object.assign(structuredClone(DEFAULT_STATE), { config, agents });
   stateRecovery.required = false;
   return stampGeneration(stateCache, stateRecovery);
 }
@@ -528,12 +623,29 @@ async function readStateForSafetyCheck({ onStage } = {}) {
   return { trusted: true, state };
 }
 
+// The stored agent records, read from cos_agents rather than the cache. A store
+// that cannot be read is `trusted: false`, never an empty map.
+async function readStoredAgentsForSafetyCheck({ onStage } = {}) {
+  onStage?.('agents');
+  try {
+    return { trusted: true, agents: (await loadAgentStore()).agents };
+  } catch (error) {
+    console.warn(`⚠️ CoS agent records could not be read for a safety check: ${error.message}`);
+    return { trusted: false, agents: null };
+  }
+}
+
 // Merge admission shares the runtime ownership store and its write queue.
 // Missing leases are legacy empty state; malformed leases are never defaulted.
-// `onStage('read'|'parse')` marks each stage for slow-admission diagnostics.
+// `onStage('read'|'parse'|'agents')` marks each stage for slow-admission diagnostics.
 export async function readMergeAdmissionStateForSafetyCheck({ onStage } = {}) {
   const { trusted, state } = await readStateForSafetyCheck({ onStage });
-  return { trusted, agents: state?.agents ?? null, mergeAdmissions: state && Object.hasOwn(state, 'mergeAdmissions') ? state.mergeAdmissions : {} };
+  const stored = await readStoredAgentsForSafetyCheck({ onStage });
+  return {
+    trusted: trusted && stored.trusted,
+    agents: stored.agents,
+    mergeAdmissions: state && Object.hasOwn(state, 'mergeAdmissions') ? state.mergeAdmissions : {},
+  };
 }
 
 // The Persistent Mind slice, for the update route's image-work gate.
@@ -547,12 +659,7 @@ export async function readPersistentMindStateForSafetyCheck() {
 // must read as "an agent may be running", not as "no agents are running" —
 // getting that backwards restarts PortOS out from under a live agent.
 export async function readAgentsStateForSafetyCheck() {
-  const { trusted, state } = await readStateForSafetyCheck();
-  const agents = state?.agents;
-  return {
-    trusted,
-    agents: trusted && isPlainObject(agents) ? agents : null,
-  };
+  return readStoredAgentsForSafetyCheck();
 }
 
 /**
@@ -568,8 +675,11 @@ export async function readAgentsStateForSafetyCheck() {
  *
  * `onStage` is called as each persistence stage begins (`prepare`, `serialize`,
  * `write`, `replace`, `dirSync`) for a caller's own slow-operation diagnostics.
+ *
+ * `changedAgentIds` optionally hints which agent records were modified, avoiding
+ * serializing untouched agents in the working set (#12749).
  */
-export async function saveState(state, { onStage } = {}) {
+export async function saveState(state, { onStage, changedAgentIds } = {}) {
   assertCurrentGeneration(state, stateRecovery);
   stampGeneration(state, stateRecovery);
   const span = stateLagProbe.begin('prepare');
@@ -580,23 +690,43 @@ export async function saveState(state, { onStage } = {}) {
   try {
     await ensureDirectories();
     state.config = await loadConfig();
-    // Config lives in its own file; never re-serialize it onto the hot path.
+    // A save with no cached read behind it goes through loadState first, so it
+    // waits out a pending agent migration (and loads the store) like any read.
+    if (!agentStore) await loadState();
+    // Agent records are rows: write only those whose serialization changed, so
+    // one agent's update never rewrites another's (#12738).
+    stage('agents');
+    const plan = planAgentSave({
+      persisted: agentStore.persisted,
+      next: isPlainObject(state.agents) ? state.agents : {},
+      changedAgentIds,
+    });
+    if (plan.upserts.length > 0 || plan.deletes.length > 0) {
+      agentStore = { version: await applyAgentSave(plan, agentStore.version), persisted: plan.persisted };
+      bytes += plan.upserts.reduce((sum, row) => sum + Buffer.byteLength(row.body), 0);
+    }
+    // Config lives in its own file and agents in cos_agents; never re-serialize
+    // either onto the hot path. An unchanged remainder is not rewritten.
     const persisted = { ...state };
     delete persisted.config;
+    delete persisted.agents;
     stage('serialize');
     const payload = JSON.stringify(persisted, null, 2);
-    bytes = Buffer.byteLength(payload);
-    await atomicWrite(STATE_FILE, payload, { onStage: stage });
+    if (payload !== lastStatePayload) {
+      bytes += Buffer.byteLength(payload);
+      await atomicWrite(STATE_FILE, payload, { onStage: stage });
+      lastStatePayload = payload;
+    }
     outcome = 'saved';
   } catch (error) {
-    stateCache = null;
+    dropRuntimeCaches();
     invalidateFailedWrite(stateRecovery);
     throw error;
   } finally {
     const summary = span.end();
     if (summary.totalMs >= SLOW_STATE_OPERATION_MS) {
       const ms = (name) => summary.phases[name]?.ms ?? 0;
-      console.warn(`🐢 CoS state write slow outcome=${outcome} totalMs=${summary.totalMs} prepareMs=${ms('prepare')} serializeMs=${ms('serialize')} writeMs=${ms('write')} replaceMs=${ms('replace')} dirSyncMs=${ms('dirSync')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} sizeKiB=${Math.round(bytes / 1024)}`);
+      console.warn(`🐢 CoS state write slow outcome=${outcome} totalMs=${summary.totalMs} prepareMs=${ms('prepare')} agentsMs=${ms('agents')} serializeMs=${ms('serialize')} writeMs=${ms('write')} replaceMs=${ms('replace')} dirSyncMs=${ms('dirSync')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} sizeKiB=${Math.round(bytes / 1024)}`);
     }
   }
   stateCache = stampGeneration(state, stateRecovery);
@@ -635,11 +765,12 @@ async function supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig) {
 export function withLiveCosRestore(transfer, { snapshotLegacyConfig = null } = {}) {
   return withConfigLock(() => withStateLock(async () => {
     const persisted = await readStateForSafetyCheck();
+    const stored = await readStoredAgentsForSafetyCheck();
     const states = [stateCache, persisted.state].filter(Boolean);
-    const unsafe = !persisted.trusted || isDaemonRunning() || states.some(state =>
-      state.running || state.persistentMind?.started || state.persistentMind?.activeTurn
-      || (state.agents != null && !isPlainObject(state.agents))
-      || Object.values(state.agents ?? {}).some(agent =>
+    const agentMaps = [stateCache?.agents, stored.agents].filter((agents) => agents != null);
+    const unsafe = !persisted.trusted || !stored.trusted || isDaemonRunning() || states.some(state =>
+      state.running || state.persistentMind?.started || state.persistentMind?.activeTurn)
+      || agentMaps.some(agents => !isPlainObject(agents) || Object.values(agents).some(agent =>
         !['completed', 'failed', 'cancelled'].includes(agent?.status)));
     if (unsafe) {
       throw new ServerError('Stop the CoS daemon and Persistent Mind, and finish or stop active agents before restoring CoS files. Repair unreadable CoS state before retrying.', {
@@ -650,7 +781,7 @@ export function withLiveCosRestore(transfer, { snapshotLegacyConfig = null } = {
     const [result] = await Promise.allSettled([Promise.resolve().then(transfer)]);
     restoreGeneration += 1;
     configCache = null;
-    stateCache = null;
+    dropRuntimeCaches();
     const [reload] = await Promise.allSettled([(async () => {
       if (snapshotLegacyConfig && result.status === 'fulfilled') await supersedeConfigForRestoredLegacySlice(snapshotLegacyConfig);
       const { reloadAgentIndexAfterRestore } = await import('./cosAgentIndex.js');

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { musicVideoConditioningReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
@@ -14,18 +14,19 @@ const nameOf = (ref) => ref.label || ref.role || 'Reference';
  * end and both refines), shown as chips. Until the director changes them it is
  * the automatic set (the main character, the section's set and anyone the
  * prompt names); a change is kept on the shot (`frameReferenceIds`), and Auto
- * puts the automatic set back.
+ * puts the automatic set back. A shot naming a Casting cast member
+ * (`characterVariant`, #12763) leads with that member's guides, from `castMedia`.
  */
-export default function SceneFrameReferences({ project, scene, onEditLocal, onSave, disabled = false }) {
+export default function SceneFrameReferences({ project, scene, castMedia = null, onEditLocal, onSave, disabled = false }) {
   const [adding, setAdding] = useState(false);
   // The reference shown large: hovering a chip with a mouse, or long-pressing it on a phone.
   const [preview, setPreview] = useState(null);
   const pressTimer = useRef(null);
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
-  const choices = musicVideoReferenceChoices(project);
+  const choices = [...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
   if (!choices.length) return null;
-  const chosen = musicVideoConditioningReferences(project, scene);
+  const chosen = musicVideoConditioningReferences(project, scene, castMedia);
   const ids = chosen.map((ref) => ref.id);
   const others = choices.filter((ref) => !ids.includes(ref.id));
   const auto = !Array.isArray(scene.frameReferenceIds);
@@ -52,14 +53,23 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
     if (longPressed.current) { longPressed.current = false; return; }
     action();
   };
-  const set = (next) => { onEditLocal(scene.sceneId, { frameReferenceIds: next }); onSave(scene.sceneId, { frameReferenceIds: next }); };
+  // Until the cast member's guides load, an edit would save the row without them.
+  const variantId = scene.characterVariant?.ingredientId;
+  const locked = disabled || Boolean(castMedia && variantId && castMedia[variantId] === undefined);
+  // A saved guide id that does not resolve now (its media failed to load) is kept, so an edit cannot drop it.
+  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => refId.startsWith('mvr-guide-') && !ids.includes(refId));
+  const set = (picked) => {
+    const next = picked && [...picked, ...unresolvedGuides].slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+    onEditLocal(scene.sceneId, { frameReferenceIds: next });
+    onSave(scene.sceneId, { frameReferenceIds: next });
+  };
 
   return (
     <div role="group" aria-label="References sent with the frames" className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-port-text-muted">
         <span className="font-medium text-port-text">References</span>
         {auto ? <span>Auto: from the prompt</span> : (
-          <button type="button" onClick={() => set(null)} disabled={disabled} className="min-h-[44px] underline sm:min-h-0">Back to auto</button>
+          <button type="button" onClick={() => set(null)} disabled={locked} className="min-h-[44px] underline sm:min-h-0">Back to auto</button>
         )}
       </div>
       <ul className="flex flex-wrap gap-1">
@@ -67,7 +77,7 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
           <li key={ref.id} className={CHIP} {...previewProps(ref)}>
             {thumb(ref)}
             <span className="min-w-0 max-w-[10rem] truncate">{nameOf(ref)}</span>
-            <button type="button" onClick={unlessLongPress(() => { set(ids.filter((id) => id !== ref.id)); setPreview((shown) => (shown?.id === ref.id ? null : shown)); })} disabled={disabled} aria-label={`Don't send ${nameOf(ref)}`}
+            <button type="button" onClick={unlessLongPress(() => { set(ids.filter((id) => id !== ref.id)); setPreview((shown) => (shown?.id === ref.id ? null : shown)); })} disabled={locked} aria-label={`Don't send ${nameOf(ref)}`}
               className="inline-flex min-h-[40px] min-w-[32px] items-center justify-center rounded hover:bg-port-border disabled:opacity-50 sm:min-h-[28px] sm:min-w-[24px]">
               <X size={12} aria-hidden="true" />
             </button>
@@ -75,7 +85,7 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
         ))}
         {others.length > 0 && (
           <li>
-            <button type="button" onClick={() => setAdding((open) => !open)} disabled={disabled || full} aria-expanded={adding}
+            <button type="button" onClick={() => setAdding((open) => !open)} disabled={locked || full} aria-expanded={adding}
               title={full ? `Up to ${MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES} references` : 'Send another character or set'}
               className={`${CHIP} px-2 disabled:opacity-50`}>
               <Plus size={12} aria-hidden="true" /> Add
@@ -89,7 +99,7 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
         <ul aria-label="References to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-4">
           {others.map((ref) => (
             <li key={ref.id} className="min-w-0">
-              <button type="button" onClick={unlessLongPress(() => { set([...ids, ref.id]); setAdding(false); setPreview(null); })} disabled={disabled} {...previewProps(ref)}
+              <button type="button" onClick={unlessLongPress(() => { set([...ids, ref.id]); setAdding(false); setPreview(null); })} disabled={locked} {...previewProps(ref)}
                 className={`${CHIP} w-full text-left hover:bg-port-border/40`}>
                 {thumb(ref)}<span className="min-w-0 truncate">{nameOf(ref)}</span>
               </button>

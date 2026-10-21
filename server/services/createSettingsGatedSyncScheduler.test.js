@@ -30,7 +30,7 @@ afterEach(() => {
   settingsEvents.removeAllListeners();
 });
 
-const build = (getConfig, runSync = vi.fn()) => ({
+const build = (getConfig, runSync = vi.fn(), getLastRunAt = undefined) => ({
   start: createSyncScheduler({
     id: 'demo-sync',
     label: 'Demo',
@@ -38,6 +38,7 @@ const build = (getConfig, runSync = vi.fn()) => ({
     source: 'demoScheduler',
     getConfig,
     runSync,
+    getLastRunAt,
   }),
   runSync,
 });
@@ -147,5 +148,36 @@ describe('createSyncScheduler', () => {
     await start();
 
     await expect(scheduleMock.mock.calls[0][0].handler()).resolves.toBeUndefined();
+  });
+
+  it('passes getLastRunAt reader result to schedule() (#12624)', async () => {
+    const lastRunAt = '2026-10-20T12:00:00.000Z';
+    const getLastRunAt = vi.fn(async () => lastRunAt);
+    const { start } = build(
+      vi.fn(async () => ({ enabled: true, intervalMinutes: 25 })),
+      vi.fn(),
+      getLastRunAt
+    );
+
+    await start();
+
+    expect(getLastRunAt).toHaveBeenCalledTimes(1);
+    expect(scheduleMock).toHaveBeenCalledTimes(1);
+    expect(scheduleMock.mock.calls[0][0].lastRunAt).toBe(lastRunAt);
+  });
+
+  it('handles failing getLastRunAt gracefully by scheduling with null lastRunAt (#12624)', async () => {
+    const getLastRunAt = vi.fn(async () => { throw new Error('disk read failed'); });
+    const { start } = build(
+      vi.fn(async () => ({ enabled: true, intervalMinutes: 25 })),
+      vi.fn(),
+      getLastRunAt
+    );
+
+    await start();
+
+    expect(getLastRunAt).toHaveBeenCalledTimes(1);
+    expect(scheduleMock).toHaveBeenCalledTimes(1);
+    expect(scheduleMock.mock.calls[0][0].lastRunAt).toBeNull();
   });
 });

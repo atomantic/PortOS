@@ -79,6 +79,7 @@ import {
   stepPriceUsd,
   sceneRequirement,
 } from './productionPool.js';
+import { loadSceneCastMedia } from './castGuideMedia.js';
 
 // One id per server process: a run records the process that may dispatch for it.
 const PROCESS_ID = `proc-${randomUUID()}`;
@@ -291,7 +292,7 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
     run = findProductionRun(project, runId);
     scene = project.scenes.find((entry) => entry.sceneId === sceneId);
   }
-  const requirement = sceneRequirement(project, scene, stepKind);
+  const requirement = sceneRequirement(project, scene, stepKind, stepKind === 'frame' ? await loadSceneCastMedia(scene) : null);
   const env = await deps.loadEnv();
   const choice = await deps.chooseRoute(run, requirement, env);
   if (!choice?.route) {

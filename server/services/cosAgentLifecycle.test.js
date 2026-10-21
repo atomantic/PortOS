@@ -25,6 +25,9 @@ vi.mock('./cosState.js', () => ({
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: mockCosState.state?.agents ?? {} })),
 }));
 
+const recoveryTasks = vi.hoisted(() => new Map());
+vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn(async id => recoveryTasks.get(id) || null) }));
+
 vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {})
 }));
@@ -90,11 +93,12 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordRepoStateVerification, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
 import { persistAgentSecurityScan } from './agentSecurityScan.js';
 import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
@@ -114,6 +118,71 @@ describe('cosAgentLifecycle', () => {
 
   afterEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('bounds original-parent recoveries across 70 scans, evidence cycles, active ownership and restart', async () => {
+    const id = 'agent-recovery-history';
+    mockCosState.state.agents[id] = { id, status: 'completed', completedAt: '2026-01-01T00:00:00Z', metadata: {} };
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'A')).toMatchObject({ admitted: true, attempt: 1 });
+    for (let i = 0; i < 70; i++) expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'B')).toMatchObject({ admitted: false, reason: 'cleanup-publication-unverified' });
+    await recordRepoCleanupRecovery(id, 'claim/one', 'A', { phase: 'dispatched', taskId: 'successor-1' });
+    recoveryTasks.set('successor-1', { status: 'in_progress' });
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'B')).toMatchObject({ admitted: false, reason: 'cleanup-successor-owned' });
+    recoveryTasks.set('successor-1', { status: 'completed' });
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'B')).toMatchObject({ admitted: true, attempt: 2 });
+    await recordRepoCleanupRecovery(id, 'claim/one', 'B', { phase: 'dispatched', taskId: 'successor-2' });
+    recoveryTasks.set('successor-2', { status: 'completed' });
+    // Reconstruct persisted state; neither the old parent's empty recoveryOrigin
+    // nor a process restart resets this history or the total attempt budget.
+    mockCosState.state = JSON.parse(JSON.stringify(mockCosState.state));
+    for (let i = 0; i < 70; i++) expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'A')).toMatchObject({ admitted: false, reason: 'cleanup-observation-already-attempted' });
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'C')).toMatchObject({ admitted: true, attempt: 3 });
+    await recordRepoCleanupRecovery(id, 'claim/one', 'C', { phase: 'dispatched', taskId: 'successor-3' });
+    recoveryTasks.set('successor-3', { status: 'completed' });
+    expect(await reserveRepoCleanupRecovery(id, 'claim/one', 'D')).toMatchObject({ admitted: false, reason: 'cleanup-cognitive-budget-exhausted' });
+    expect(mockCosState.state.agents[id].metadata.repoCleanupRecoveries['claim/one'].observations).toEqual(['A', 'B', 'C']);
+  });
+
+  it.each(['automatic-retirement-paused', 'review-obligation-changed'])('resumes known-unexecuted %s deferrals without resetting real attempts', async reason => {
+    const id = 'agent-deferred-review';
+    mockCosState.state.agents[id] = { id, status: 'completed', metadata: {} };
+    expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'prior')).toMatchObject({ admitted: true, attempt: 1 });
+    await recordRepoCleanupRecovery(id, 'fix/work', 'prior', { phase: 'dispatched', taskId: 'completed-review' });
+    recoveryTasks.set('completed-review', { status: 'completed' });
+    for (let i = 0; i < 70; i++) {
+      expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'current')).toMatchObject({ admitted: true, attempt: 2 });
+      await recordRepoCleanupRecovery(id, 'fix/work', 'current', { phase: 'blocked-before-dispatch', taskId: null, reason });
+      mockCosState.state = JSON.parse(JSON.stringify(mockCosState.state));
+    }
+    expect(mockCosState.state.agents[id].metadata.repoCleanupRecoveries['fix/work']).toMatchObject({ attempt: 1, observations: ['prior'] });
+    expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'prior')).toMatchObject({ admitted: false, reason: 'cleanup-observation-already-attempted' });
+    expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'current')).toMatchObject({ admitted: true, attempt: 2 });
+    await recordRepoCleanupRecovery(id, 'fix/work', 'current', { phase: 'dispatched', taskId: 'active-review' });
+    recoveryTasks.set('active-review', { status: 'in_progress' });
+    expect(await reserveRepoCleanupRecovery(id, 'fix/work', 'changed')).toMatchObject({ admitted: false, reason: 'cleanup-successor-owned' });
+  });
+
+  it('replaces provisional owner holds when the original checkout completes without hiding other paths', async () => {
+    const id = 'agent-owner-completion';
+    mockCosState.state.agents[id] = { id, status: 'completed', metadata: {} };
+    await recordCleanupOutcome(id, { branch: 'claim/one', status: 'blocked', reason: 'owner-active' });
+    await recordCleanupOutcome(id, { branch: 'claim/other', path: '/example/other', status: 'blocked', reason: 'archive-unavailable' });
+    await recordCleanupOutcome(id, { branch: 'claim/one', path: '/example/original', status: 'verified', reason: 'retirement-receipt-verified' });
+    expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'blocked', total: 2, unresolved: 1, branch: 'claim/other' });
+    await recordCleanupOutcome(id, { branch: 'claim/other', path: '/example/new-incarnation', status: 'verified', reason: 'retirement-receipt-verified' });
+    expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'blocked', total: 3, unresolved: 1 });
+    await recordCleanupOutcome(id, { branch: 'claim/other', path: '/example/other', status: 'verified', reason: 'retirement-receipt-verified' });
+    expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'verified', unresolved: 0 });
+  });
+
+  it.each([true, false])('aggregates every branch outcome independently of update order (%s)', async reversed => {
+    const id = 'agent-swarm-outcome';
+    mockCosState.state.agents[id] = { id, status: 'completed', metadata: {} };
+    const rows = [{ branch: 'claim/blocked', path: '/example/blocked', status: 'blocked', reason: 'checkout-incarnation-changed' },
+      { branch: 'claim/verified', path: '/example/verified', status: 'verified', reason: 'retirement-receipt-verified' }];
+    for (const row of reversed ? rows.reverse() : rows) await recordCleanupOutcome(id, row);
+    expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'blocked', unresolved: 1, total: 2 });
+    expect(Object.values(mockCosState.state.agents[id].metadata.cleanupOutcomes)).toHaveLength(2);
   });
 
   it('archives interrupted audit findings before removing their workspace and reloads them after live retention', async () => {
@@ -357,7 +426,10 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     cosEvents.removeAllListeners('agent:completed');
   });
 
-  it('records the autonomous action usage BEFORE emitting agent:completed', async () => {
+  it.each([
+    ['scheduled', { taskType: 'scheduled' }],
+    ['on-demand', { taskType: 'internal', onDemand: true }],
+  ])('records %s action usage BEFORE emitting agent:completed', async (_kind, metadata) => {
     // The agent:completed handler schedules dequeueNextTask(), whose daily
     // action-budget gate reads the usage ledger. If the emit beats the ledger
     // write, the gate counts stale usage and can admit one spawn past the cap.
@@ -369,7 +441,7 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     mockCosState.state.agents[agentId] = {
       id: agentId,
       status: 'running',
-      metadata: { taskType: 'scheduled' }
+      metadata
     };
 
     await completeAgent(agentId, { success: true, duration: 1200 });
@@ -1020,5 +1092,44 @@ describe('deleteAgent directory cleanup (#11446)', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe('agent maintenance reservations on terminal transitions (#12737)', () => {
+  const reserved = (agentId) => maintenance.status().blockers.some(b => b.kind === 'agent' && b.resource === agentId);
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+    mockCosState.state = { agents: {} };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
+    activeAgents.clear();
+    runnerAgents.clear();
+    spawningTasks.clear();
+  });
+  afterEach(async () => {
+    for (const id of ['agent-zombie', 'agent-purged', 'agent-live']) await maintenance.finishResource('agent', id);
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('releases the reservation of a reaped zombie', async () => {
+    maintenance.admit('agent', 'agent-zombie');
+    mockCosState.state.agents['agent-zombie'] = {
+      id: 'agent-zombie', status: 'running', pid: 2147483646,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-zombie']);
+    expect(reserved('agent-zombie')).toBe(false);
+  });
+
+  it('releases the reservation of a purged completed agent but keeps a running one', async () => {
+    maintenance.admit('agent', 'agent-purged');
+    maintenance.admit('agent', 'agent-live');
+    mockCosState.state.agents['agent-purged'] = { id: 'agent-purged', status: 'completed' };
+    mockCosState.state.agents['agent-live'] = { id: 'agent-live', status: 'running' };
+    await deleteAgent('agent-purged');
+    await deleteAgent('agent-live');
+    expect(reserved('agent-purged')).toBe(false);
+    expect(reserved('agent-live')).toBe(true);
   });
 });

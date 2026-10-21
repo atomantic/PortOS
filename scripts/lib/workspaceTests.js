@@ -27,8 +27,9 @@ import { DB_TEST_INCLUDE } from './dbTestFiles.js';
 const SKIP_DIRS = new Set(['node_modules', '.git']);
 
 /**
- * The server runner covers server, scripts/migrations, lib, autofixer and the
- * doc-parity guards. The client owns `client/src` (see each config for why).
+ * The server runner covers server, scripts/migrations, lib, autofixer, the
+ * doc-parity guards, and the browser supervisor beside `browser/server.js`.
+ * The client owns `client/src` (see each config for why).
  */
 export const SERVER_TEST_INCLUDE = Object.freeze([
   '**/*.test.js',
@@ -36,6 +37,7 @@ export const SERVER_TEST_INCLUDE = Object.freeze([
   '../lib/**/*.test.js',
   '../autofixer/**/*.test.js',
   '../docs/**/*.test.js',
+  '../browser/**/*.test.js',
 ]);
 
 /** The slashdo submodule ships node:test suites; DB suites run only under vitest.config.db.js. */

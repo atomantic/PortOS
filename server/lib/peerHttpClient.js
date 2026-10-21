@@ -74,6 +74,8 @@ function peerCredentialHeaders(peer, selfInstanceId) {
 }
 
 // Our own federation instance id, memoized after the first successful read.
+// A restore that installs instances.json drops it (resetSelfInstanceIdCache,
+// #12596), so the restored id applies without a restart.
 // Resolved through a dynamic import of the identity leaf (#6836): harmless to
 // static-import now (services/instanceIdentity.js is a leaf with no edge back
 // to this module — the old cycle ran through services/instances.js, which
@@ -91,8 +93,8 @@ async function selfInstanceId() {
   return cachedSelfInstanceId;
 }
 
-/** Test-support: drop the memoized instance id. */
-export function __resetSelfInstanceIdForTests() {
+/** Drop the memoized instance id; the next hop re-reads the identity leaf. */
+export function resetSelfInstanceIdCache() {
   cachedSelfInstanceId = null;
 }
 

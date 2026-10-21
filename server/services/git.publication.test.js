@@ -90,6 +90,8 @@ describe('Git service publication fencing', () => {
         for (const writer of writers) {
           await expect(writer(dir)).rejects.toMatchObject({ code: 'CHECKOUT_RETIREMENT_RESERVED' });
         }
+        const branches = await getRemoteBranches(dir);
+        expect(branches).toHaveProperty('branches');
       }
       expect(await Promise.all([fixture.repo, linked].map(checkoutState))).toEqual(before);
     } finally {

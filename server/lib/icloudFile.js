@@ -264,6 +264,14 @@ const pendingDownloads = new Map();
 // later reads pick up where this one stopped.
 const MAX_PENDING_DOWNLOADS = 4;
 
+// `brctl download` exits 0 within ~100ms of QUEUEING the download, so the in-flight
+// dedupe above clears almost immediately while the file stays evicted for seconds
+// to minutes. Without a cooldown every read (several per second from polling
+// callers) re-spawned brctl and logged a "download requested" line. Re-requesting
+// the same path inside this window cannot speed materialization up.
+const REQUEST_COOLDOWN_MS = 30_000;
+const lastRequestAt = new Map();
+
 // Every background download gets a deadline. `brctl` is exactly what hangs when
 // iCloud is wedged — the very condition this module exists for — and without a
 // deadline four hung children would hold all MAX_PENDING_DOWNLOADS slots for the
@@ -315,6 +323,8 @@ export function requestMaterialization(path, options = {}) {
   if (retryAfterExit) {
     if (pendingDownloads.has(path)) return false;
     if (pendingDownloads.size >= MAX_PENDING_DOWNLOADS) return false;
+    const last = lastRequestAt.get(path);
+    if (last !== undefined && Date.now() - last < REQUEST_COOLDOWN_MS) return false;
   }
 
   // try/catch at a child-process boundary (permitted by the repo's no-try/catch
@@ -334,7 +344,13 @@ export function requestMaterialization(path, options = {}) {
   }
   // `spawn` is synchronous, so no other read can interleave between the size
   // check above and this reservation.
-  if (retryAfterExit) pendingDownloads.set(path, child);
+  if (retryAfterExit) {
+    pendingDownloads.set(path, child);
+    const now = Date.now();
+    // Sweep expired entries so a vault walk over many distinct paths can't grow the map unbounded.
+    for (const [p, at] of lastRequestAt) if (now - at >= REQUEST_COOLDOWN_MS) lastRequestAt.delete(p);
+    lastRequestAt.set(path, now);
+  }
   // Release only the entry THIS child owns (see the map's comment above). A no-op
   // for an untracked (pin) request, which was never added to the set.
   const release = () => {
@@ -522,6 +538,7 @@ async function guardedRead(path, options) {
 export function _resetICloudFileStateForTest() {
   brctlMissingWarned = false;
   pendingDownloads.clear();
+  lastRequestAt.clear();
   readFlight = createSingleFlight();
   dirCloudCache.clear();
 }

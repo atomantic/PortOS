@@ -126,9 +126,15 @@ describe('settings.js', () => {
       // Hold the cold read's disk load open until we release it, so we can slip a
       // save() in while getSettings() is awaiting loadRaw().
       let releaseRead;
-      tryReadFile.mockReturnValue(new Promise((resolve) => { releaseRead = resolve; }));
+      let readStarted;
+      const started = new Promise(resolve => { readStarted = resolve; });
+      tryReadFile.mockImplementation(() => new Promise(resolve => {
+        releaseRead = resolve;
+        readStarted();
+      }));
 
-      const inflight = getSettings(); // cold — now awaiting the disk read
+      const inflight = getSettings();
+      await started;
       // A save completes mid-flight and populates the cache with fresh settings.
       settingsEvents.emit('settings:updated', { theme: 'fresh' });
       // Only now does the older on-disk snapshot resolve.

@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const mockedSettings = { current: {}, writes: Promise.resolve() }
 vi.mock('./settings.js', () => ({
   getSettings: () => Promise.resolve(mockedSettings.current),
+  refreshSettingsIfChangedOnDisk: vi.fn(),
   updateSettingsWith: vi.fn((mutate) => {
     const write = mockedSettings.writes.then(async () => {
       mockedSettings.current = await mutate(mockedSettings.current)
@@ -40,6 +41,13 @@ vi.mock('./ollamaManager.js', () => ({
 // test controls per-binary results without touching the real PATH.
 const commandExistsMock = { impl: async () => true }
 vi.mock('../lib/commandExists.js', () => ({ commandExists: (...args) => commandExistsMock.impl(...args) }))
+
+// Vitest 5 clears mock call histories before each case by default.
+vi.mock('./providerStatus.js', () => ({
+  markProviderUsageLimit: vi.fn(),
+  markProviderUnavailable: vi.fn(),
+}))
+import { markProviderUsageLimit } from './providerStatus.js'
 
 import { mockJsonResponse, mockTextResponse } from '../lib/testHelper.js'
 import {
@@ -474,6 +482,69 @@ describe('codeReview helpers', () => {
       expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
     })
 
+    it.each([
+      { error: 'Reviewer stopped after a 4290-byte diff' },
+      { message: 'Reviewer stopped after a 4020-byte diff' },
+      { error: 'The reviewer process exhausted its memory capacity and credit allowance: resource exhausted' },
+      { error: 'Reviewer process failed', text: 'Review: credit, capacity, quota and rate limit handling changed' },
+      { error: 'Reviewer process failed', output: 'HTTP 429: out of credits' },
+    ])('keeps non-quota failures transient despite byte counts or model prose: %j', async (failure) => {
+      const reviewer = 'provider:example-cli'
+      mockedSettings.current = { codeReview: { reviewerFallbackGroups: [[reviewer], ['claude']] } }
+      await reportReviewerFailure(reviewer, failure, 1000)
+      await vi.dynamicImportSettled()
+      expect(mockedSettings.current.codeReview.reviewerHealth[reviewer]).toMatchObject({
+        reason: 'provider_error', failureCount: 1,
+      })
+      expect(mockedSettings.current.codeReview.reviewerHealth[reviewer].pausedUntil).toBeUndefined()
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 1000)).toEqual([reviewer])
+      expect(markProviderUsageLimit).not.toHaveBeenCalled()
+    })
+
+    it('gives timeouts precedence over quota-like diagnostics without marking provider usage', async () => {
+      const failure = {
+        error: 'ollama reviewer process did not finish — timed out after 300000ms for a 5 KiB (4290 bytes) diff.',
+        stderr: 'HTTP 429 quota exhausted',
+      }
+      mockedSettings.current = { codeReview: {} }
+      expect(await reportReviewerFailure('ollama', failure, 1000)).toBe(false)
+      expect(mockedSettings.current.codeReview.reviewerHealth).toBeUndefined()
+      await reportReviewerFailure('provider:example-cli', failure, 1000)
+      await vi.dynamicImportSettled()
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:example-cli']).toMatchObject({
+        reason: 'provider_error', failureCount: 1,
+      })
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:example-cli'].pausedUntil).toBeUndefined()
+      expect(markProviderUsageLimit).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      { error: 'HTTP 429' },
+      { error: 'HTTP/1.1 429' },
+      { error: 'Your credit balance is too low' },
+      { message: 'status 402' },
+      { stderr: 'statusCode: 429' },
+      { stderr: 'status_code=402' },
+      { stderr: '429 Too Many Requests' },
+      { error: 'insufficient_quota' },
+      { error: "You've hit your usage limit" },
+      { error: 'out of credits' },
+      { status: 429 },
+      { statusCode: 402 },
+      { code: 'rate_limit_exceeded' },
+      { error: { code: 'insufficient_quota' } },
+      { reason: 'quota', error: 'Reviewer timed out after 300000ms' },
+    ])('preserves provider quota evidence and explicit quota reports: %j', async (failure) => {
+      const reviewer = 'provider:example-cli'
+      mockedSettings.current = { codeReview: {} }
+      await reportReviewerFailure(reviewer, failure, 1000)
+      await vi.dynamicImportSettled()
+      expect(mockedSettings.current.codeReview.reviewerHealth[reviewer]).toMatchObject({
+        reason: 'quota', pausedUntil: 1000 + REVIEWER_PAUSE_MS,
+      })
+      expect(markProviderUsageLimit).toHaveBeenCalledWith('example-cli', expect.any(Object))
+    })
+
     it('preserves another reviewer failure arriving while a success clears its warning', async () => {
       mockedSettings.current = { codeReview: {
         reviewerHealth: { opencode: { code: 'REVIEWER_ACCESS_DENIED', reason: 'configuration', lastFailureAt: 100 } },
@@ -627,6 +698,12 @@ describe('codeReview helpers', () => {
   })
 
   describe('resolveReviewLoopOptions', () => {
+    it('uses the reviewer config normalizer by default', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['copilot'] } }
+      const out = await resolveReviewLoopOptions({ reviewers: ['grok'] })
+      expect(out.reviewers).toEqual(['grok'])
+    })
+
     // Reviewers inspecting public PR content are advisory only — the follow-up
     // must never hand an untrusted diff to a second process with write authority.
     // Pinned on the resolver itself because this is the one place the rule lives:

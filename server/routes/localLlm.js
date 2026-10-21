@@ -252,8 +252,16 @@ router.get('/catalog', asyncHandler(async (req, res) => {
 
 // The model-abuse guard has its own lifecycle: it is a pinned, offline
 // classifier and must never be installed through the general chat-model path.
+// `ready` covers only the Prompt Guard classifier. GitHub contribution
+// assessment also needs a provider and model, reported separately so a green
+// guard cannot hide a coordinator that can never assess a pull request.
 router.get('/security-guard/status', asyncHandler(async (_req, res) => {
-  res.json(await getModelAbuseGuardStatus())
+  const { getContributionAssessmentReadiness } = await import('../services/untrustedContent.js')
+  const [status, contributionAssessment] = await Promise.all([
+    getModelAbuseGuardStatus(),
+    getContributionAssessmentReadiness(),
+  ])
+  res.json({ ...status, contributionAssessment })
 }))
 
 router.post('/security-guard/install', asyncHandler(async (req, res) => {

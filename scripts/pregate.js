@@ -51,6 +51,7 @@
 import { spawn, spawnSync } from 'child_process';
 import { writeSync } from 'fs';
 import { constants } from 'os';
+import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -78,7 +79,11 @@ export const UNCOVERED_SUITES = Object.freeze({
   smoke: 'npm run smoke',
   windows: 'CI is the only proof',
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
+  supercolliderLive: 'a native amd64/arm64 Linux Docker engine: npm run setup:supercollider -- --yes, then PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js from server/',
 });
+
+/** Remedy when a prerequisite probe ran but failed (timeout, teardown): nothing indicates a missing install. */
+const PROBE_FAILED_REMEDY = 'the prerequisite probe itself failed, which does not show anything is missing; rerun `npm run pregate`, and if it repeats diagnose Chrome startup/teardown before reinstalling anything';
 
 /** Does the plan select this suite at all? `browser` is a file list, the rest flags. */
 export function suiteSelected(plan, suite) {
@@ -101,7 +106,14 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
     let reason = null;
     if (flags[suite]) reason = `skipped by --skip-${suite}`;
     else if (downgraded) reason = 'full plan downgraded; pass --full to run it';
-    else if (prerequisites[suite]?.ok === false) reason = `prerequisite missing: ${prerequisites[suite].reason}`;
+    else if (prerequisites[suite]?.ok === false) {
+      const { reason: detail, category } = prerequisites[suite];
+      const probeOnly = category === 'probe-failed';
+      reason = probeOnly ? `probe failed: ${detail}` : `prerequisite missing: ${detail}`;
+      // Only the probe-failed category swaps the remedy: a genuinely absent tool keeps its install advice.
+      uncovered.push({ suite, reason, ...(category ? { category } : {}), remedy: probeOnly ? PROBE_FAILED_REMEDY : UNCOVERED_SUITES[suite] });
+      continue;
+    }
     if (reason) uncovered.push({ suite, reason, remedy: UNCOVERED_SUITES[suite] });
   }
   if (suiteSelected(plan, 'windows')) {
@@ -109,6 +121,9 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
   }
   if (suiteSelected(plan, 'linuxContainment')) {
     uncovered.push({ suite: 'linuxContainment', reason: 'needs a Linux host with bubblewrap namespaces', remedy: UNCOVERED_SUITES.linuxContainment });
+  }
+  if (suiteSelected(plan, 'supercolliderLive')) {
+    uncovered.push({ suite: 'supercolliderLive', reason: 'needs a native Linux Docker engine on amd64 and arm64', remedy: UNCOVERED_SUITES.supercolliderLive });
   }
   return uncovered;
 }
@@ -143,9 +158,13 @@ export function pregateWorkerEnv(env) {
  * The child environment for one stage. A stage value of `undefined` REMOVES
  * the variable (the DB stages drop `TEST_DB_OK` this way), which is the only
  * way an inherited escape hatch can be kept away from a runner.
+ *
+ * `ownsGroup` (POSIX, where each stage gets its own process group) tells
+ * run-ci-tests.js to keep npm and Vitest in that group instead of detaching
+ * them, so cancelling the stage group reaches every test process (#12641).
  */
-export function stageSpawnEnv(baseEnv, stageEnv) {
-  const env = { ...pregateWorkerEnv(baseEnv) };
+export function stageSpawnEnv(baseEnv, stageEnv, { ownsGroup = !IS_WIN32 } = {}) {
+  const env = { ...pregateWorkerEnv(baseEnv), ...(ownsGroup ? { PORTOS_CI_TEST_SUPERVISED_GROUP: '1' } : {}) };
   for (const [name, value] of Object.entries(stageEnv)) {
     if (value === undefined) delete env[name];
     else env[name] = value;
@@ -400,47 +419,121 @@ function stageSpawn(stage, env) {
   return prepareWindowsSafeSpawn(resolveWindowsExecutable('npm', IS_WIN32, env) || 'npm', stage.npm, IS_WIN32);
 }
 
-/** Wait asynchronously so owner signals can be attributed during a stage. */
-function runStage(stage) {
-  return new Promise((resolve) => {
-    const env = stageSpawnEnv(process.env, stage.env);
-    const { command, args } = stageSpawn(stage, env);
-    const child = spawn(command, args, {
-      cwd: REPO_ROOT,
-      stdio: 'inherit',
-      env,
-      // A separate group lets cancellation reach only this stage's descendants.
-      detached: !IS_WIN32,
-    });
-    const handlers = new Map();
-    const cleanup = () => {
-      for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+/** How long a cancelled stage may wind down before its whole group is killed. Exceeds run-ci-tests.js's own 2s npm escalation. */
+const STAGE_CANCEL_GRACE_MS = 5000;
+/** Bound on proving a killed stage group empty; past it the cancellation is reported unverified. */
+const STAGE_SETTLE_MS = 5000;
+
+/**
+ * Owner signal handling for the whole stage loop. A Ctrl-C reaches pregate
+ * twice — from the terminal's process group and again forwarded by `npm run`.
+ * A handler that removed itself on the first restored the default action, so
+ * the duplicate killed pregate before it signalled the stage group and the
+ * detached runner kept testing (#12641). These handlers stay installed,
+ * absorb duplicates, and are released only after every owned group settled.
+ */
+function installOwnerCancellation() {
+  const owner = { signal: null, onSignal: null };
+  const handlers = ['SIGINT', 'SIGTERM'].map((signal) => {
+    const handler = () => {
+      if (owner.signal) return;
+      owner.signal = signal;
+      owner.onSignal?.(signal);
     };
-    for (const signal of ['SIGINT', 'SIGTERM']) {
-      const handler = () => {
-        // Flush before restoring the signal's default termination behavior.
-        writeSync(2, `❌ Pregate incomplete: stage="${stage.name}" owner_pid=${process.pid} child_pid=${child.pid ?? 'unavailable'} received_signal=${signal}.\n`);
-        cleanup();
-        try {
-          if (IS_WIN32) child.kill(signal);
-          else if (child.pid) process.kill(-child.pid, signal);
-        } catch (error) {
-          if (error.code !== 'ESRCH') writeSync(2, `❌ Stage cancellation failed: ${error.code ?? 'unknown'}.\n`);
-        }
-        process.kill(process.pid, signal);
-      };
-      handlers.set(signal, handler);
-      process.once(signal, handler);
-    }
-    child.once('error', (error) => {
-      cleanup();
-      resolve({ error });
-    });
-    child.once('close', (status, signal) => {
-      cleanup();
-      resolve({ status, signal, pid: child.pid });
-    });
+    process.on(signal, handler);
+    return [signal, handler];
   });
+  owner.release = () => {
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+  };
+  return owner;
+}
+
+function signalStage(child, signal) {
+  try {
+    if (IS_WIN32) child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch (error) {
+    if (error.code !== 'ESRCH') writeSync(2, `❌ Stage cancellation failed: ${error.code ?? 'unknown'}.\n`);
+  }
+}
+
+const within = (promise, ms) => {
+  let timer;
+  return Promise.race([
+    promise.then(() => true),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); }),
+  ]).finally(() => clearTimeout(timer));
+};
+
+/**
+ * Stop a stage and everything in its process group before pregate finishes:
+ * forward the owner's signal, give the stage its grace to report, kill the
+ * group if it is still running, then kill any member that outlived the
+ * leader until the group no longer exists. Resolves `{ settled, reason? }`.
+ */
+async function cancelStage(stage, child, closed, signal) {
+  writeSync(2, `❌ Pregate incomplete: stage="${stage.name}" owner_pid=${process.pid} child_pid=${child.pid ?? 'unavailable'} received_signal=${signal}.\n`);
+  if (!child.pid) return { settled: true };
+  signalStage(child, signal);
+  if (!await within(closed, STAGE_CANCEL_GRACE_MS)) {
+    writeSync(2, `⚠️ Stage "${stage.name}" outlived its ${STAGE_CANCEL_GRACE_MS / 1000}s cancellation grace; killing its process group.\n`);
+    signalStage(child, 'SIGKILL');
+    if (!await within(closed, STAGE_SETTLE_MS)) return { settled: false, reason: 'stage process did not exit after SIGKILL' };
+  }
+  return IS_WIN32 ? { settled: true } : sweepStageGroup(child.pid);
+}
+
+/**
+ * Kill whatever is still in a stage's process group once its leader exited:
+ * a descendant that ignored a signal or outlived its launcher keeps running
+ * (and writing to inherited descriptors) into the next stage or past pregate.
+ * ESRCH is the proof the group is empty. POSIX only. Resolves
+ * `{ settled, lingered?, reason? }`.
+ */
+async function sweepStageGroup(pgid) {
+  const deadline = Date.now() + STAGE_SETTLE_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      process.kill(-pgid, 'SIGKILL');
+    } catch (error) {
+      return error.code === 'ESRCH'
+        ? { settled: true, lingered: attempt > 0 }
+        : { settled: false, reason: `group kill failed (${error.code ?? 'unknown'})` };
+    }
+    if (Date.now() >= deadline) return { settled: false, reason: 'group members remained after SIGKILL' };
+    await delay(25);
+  }
+}
+
+/** Run one stage; an owner signal during it resolves only after the stage group settled. */
+async function runStage(stage, owner) {
+  const env = stageSpawnEnv(process.env, stage.env);
+  const { command, args } = stageSpawn(stage, env);
+  const child = spawn(command, args, {
+    cwd: REPO_ROOT,
+    stdio: 'inherit',
+    env,
+    // A separate group lets cancellation reach only this stage's descendants.
+    detached: !IS_WIN32,
+  });
+  const closed = new Promise((resolve) => {
+    child.once('error', (error) => resolve({ error }));
+    child.once('close', (status, signal) => resolve({ status, signal }));
+  });
+  let cancellation = null;
+  let interrupted = null;
+  owner.onSignal = (signal) => {
+    interrupted = signal;
+    cancellation = cancelStage(stage, child, closed, signal);
+  };
+  const outcome = await closed;
+  owner.onSignal = null;
+  if (cancellation) return { ...outcome, pid: child.pid, interrupted, ...await cancellation };
+  if (IS_WIN32 || !child.pid) return { ...outcome, pid: child.pid };
+  const sweep = await sweepStageGroup(child.pid);
+  if (sweep.lingered) writeSync(2, `⚠️ Stage "${stage.name}" exited with processes still running in its group; killed them.\n`);
+  return { ...outcome, pid: child.pid, ...(sweep.settled ? {} : { unsettled: sweep.reason }) };
 }
 
 const formatDuration = (ms) => (ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m` : `${(ms / 1000).toFixed(1)}s`);
@@ -552,6 +645,7 @@ async function main() {
     smoke: raw.smoke,
     promptHistory: raw.prompt_history,
     linuxContainment: raw.linux_containment,
+    supercolliderLive: raw.supercollider_live,
     suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
   };
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
@@ -582,12 +676,27 @@ async function main() {
 
   const dependencyProblems = dependencyConsistencyProblems(REPO_ROOT);
   if (dependencyProblems.length > 0) {
+    let primaryCheckout = null;
+    try {
+      const gitCommonDir = git(['rev-parse', '--git-common-dir']);
+      const gitDir = git(['rev-parse', '--git-dir']);
+      if (resolve(REPO_ROOT, gitCommonDir) !== resolve(REPO_ROOT, gitDir)) {
+        primaryCheckout = resolve(REPO_ROOT, gitCommonDir, '..');
+      }
+    } catch {
+      // ignore git error
+    }
+
     console.error('❌ Dependency consistency preflight failed; lint/tests have not run.');
     for (const { label, linked, owner, issues } of dependencyProblems) {
       console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
-      console.error(linked
-        ? `    Reconcile dependencies in the owning source checkout (${owner}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
-        : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci --include=dev in the owning workspace), then rerun pregate.`);
+      if (primaryCheckout && (linked || issues.some(i => i.includes('missing') || i.includes('unreadable')))) {
+        console.error(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout} ${REPO_ROOT}`);
+      } else {
+        console.error(linked
+          ? `    Reconcile dependencies in the owning source checkout (${owner}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
+          : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci --include=dev in the owning workspace), then rerun pregate.`);
+      }
     }
     process.exit(1);
   }
@@ -612,8 +721,9 @@ async function main() {
   const results = stages.map((stage) => ({ ...stage, command: describeStageCommand(stage), status: 'not-run', durationMs: 0 }));
   let exitCode = 0;
   let failure = null;
+  const owner = installOwnerCancellation();
   for (const result of results) {
-    if (failure) break;
+    if (failure || owner.signal) break;
     if (result.suite !== 'scan') {
       try {
         hashTree();
@@ -625,9 +735,20 @@ async function main() {
     }
     console.log(`▶️ ${result.name}`);
     const started = Date.now();
-    const outcome = await runStage(result);
+    const outcome = await runStage(result, owner);
     result.durationMs = Date.now() - started;
-    if (outcome.error) {
+    if (outcome.interrupted) {
+      result.status = 'failed';
+      result.signal = outcome.interrupted;
+      failure = outcome.settled
+        ? `❌ Pregate incomplete: stage="${result.name}" cancelled by ${outcome.interrupted}; its process group has exited.`
+        : `❌ Pregate incomplete: stage="${result.name}" cancelled by ${outcome.interrupted}; owned process group settlement unverified (${outcome.reason}).`;
+      exitCode = 128 + constants.signals[outcome.interrupted];
+    } else if (outcome.unsettled) {
+      result.status = 'failed';
+      failure = `❌ ${result.name} left processes in its group that could not be stopped (${outcome.unsettled}).`;
+      exitCode = 1;
+    } else if (outcome.error) {
       result.status = 'failed';
       failure = `❌ ${result.name} could not start: ${outcome.error.message}`;
       exitCode = 1;
@@ -646,6 +767,14 @@ async function main() {
       result.exitCode = 0;
       console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);
     }
+  }
+
+  // A signal after the last stage ran (e.g. during its group sweep) leaves the
+  // completed run's receipt; it is reported below and still ends the process.
+  if (owner.signal && !failure && results.some((stage) => stage.status === 'not-run')) {
+    writeSync(2, `❌ Pregate incomplete: owner_pid=${process.pid} received_signal=${owner.signal} between stages.\n`);
+    failure = `❌ Pregate incomplete: cancelled by ${owner.signal} before every stage ran.`;
+    exitCode = 128 + constants.signals[owner.signal];
   }
 
   let treeAfterRun = null;
@@ -671,15 +800,19 @@ async function main() {
     finishedAt: new Date().toISOString(),
   });
   writePregateReport(REPO_ROOT, report);
+  // Synchronous: a piped stderr is written asynchronously, and the self-signal
+  // below would drop these lines before they flush.
   if (tree !== null && !report.treeStable) {
-    console.warn(`⚠️ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); the receipt covers the tree it started with.`);
+    writeSync(2, `⚠️ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); the receipt covers the tree it started with.\n`);
   }
+  if (failure) writeSync(2, `${failure}\n📄 Receipt: ${PREGATE_REPORT_PATH}\n`);
+  else if (owner.signal) writeSync(2, `⚠️ Received ${owner.signal} after every stage passed; the receipt records that completed run.\n`);
 
-  if (failure) {
-    console.error(failure);
-    console.error(`📄 Receipt: ${PREGATE_REPORT_PATH}`);
-    process.exit(exitCode);
-  }
+  owner.release();
+  // Every owned group has settled and the receipt is written; end the way the
+  // caller's signal asked.
+  if (owner.signal) process.kill(process.pid, owner.signal);
+  if (failure) process.exit(exitCode);
 
   const ran = results.map((stage) => stage.name).join(', ');
   console.log(`✅ Pregate passed: ${ran}.`);

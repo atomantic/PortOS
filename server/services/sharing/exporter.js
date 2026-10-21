@@ -38,6 +38,7 @@ import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { listSheetPointers } from '../../lib/storyBible.js';
 import { resolveBucketSourceName as resolveSourceName } from './annotationIdentity.js';
 import { isStr } from '../../lib/textUtils.js';
+import { isSafeRecordId } from '../../lib/validation.js';
 
 /**
  * Best-effort cap on the bucket's manifest directory after each export.
@@ -186,7 +187,9 @@ async function jobFromSidecar(jobId) {
   // for local renders too (without this, local-render shares lost both fields
   // once the in-memory job queue aged out and re-render fell back to defaults).
   return {
-    id: sc.id || jobId,
+    // The sidecar arrives from buckets and peers verbatim; its own `id` must
+    // not rename the record written into the bucket (a `../` id escapes it).
+    id: jobId,
     kind: 'image',
     owner: null,
     status: 'completed',
@@ -214,7 +217,9 @@ async function jobFromSidecar(jobId) {
  * Returns the asset refs (image filenames) discovered.
  */
 async function exportMediaJobAndAsset(jobId, bucketPath, cache) {
-  if (!jobId || !isStr(jobId)) return [];
+  // jobId comes from shared records (imageJobId) and names the bucket record
+  // file; archives imported before ids were checked may still hold a `../` id.
+  if (!isSafeRecordId(jobId)) return [];
   const job = getJob(jobId) || await jobFromSidecar(jobId);
   if (!job) {
     console.log(`⚠️ sharing.exporter: imageJobId ${jobId} not found in live queue, archive, or sidecar`);

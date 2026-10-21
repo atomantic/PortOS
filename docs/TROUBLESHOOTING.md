@@ -90,7 +90,7 @@ npm run pm2:restart
 
 `setup:data` (`scripts/setup-data.js`) creates `data/` from `data.reference/` when it is absent. Otherwise it copies only the missing files, adds new starter entries to `providers.json` and the prompt configs without touching yours, and expands `__PORTOS_ROOT__` in `apps.json`. It also skips any path a migration derives from your own records (`scripts/lib/migrationOwnedPaths.js`). Pending migrations run when the server boots.
 
-**Never copy `data.reference/` over `data/` by hand** (`cp -r data.reference/* data/`). The seed tree includes `settings.json`, `apps.json`, `providers.json`, `cos/state.json`, `TASKS.md`, Brain settings (`brain/meta.json`), the digital-twin documents and every prompt template. Copying it overwrites your copies of all of them with shipped defaults, and nothing reports what was lost.
+**Never copy `data.reference/` over `data/` by hand** (`cp -r data.reference/* data/`). The seed tree includes `settings.json`, `apps.json`, `providers.json`, `cos/state.json`, Brain settings (`brain/meta.json`), the digital-twin documents and every prompt template. Copying it overwrites your copies of all of them with shipped defaults, and nothing reports what was lost.
 
 ### Dynamic import callback missing after profiling
 
@@ -351,17 +351,39 @@ use the workspace binaries from the primary checkout
 `dependency-updates` scheduled task is the exception: its managed worktree gets
 no dependency symlinks, and any package-manager install stays in that worktree.
 
+### Worktree Tests Fail on a Clean Tree in a Workspace-Link Repo (Stale Workspace Packages)
+
+**Symptom**: In a managed repo that uses npm workspaces (`node_modules/@scope/pkg
+-> ../../packages/pkg`), a fresh CoS or claim worktree fails tests that import a
+workspace package — a `TypeError` on a field the branch just added, or a path
+assertion naming the primary checkout — even though the branch is untouched.
+
+**Cause**: a plain `worktree/node_modules -> primary/node_modules` symlink
+resolves the workspace links against the PRIMARY checkout. When the primary's
+checked-out branch is behind the worktree's base, `require('@scope/pkg')` loads
+the primary's stale `packages/pkg`. The branch is fine; the environment is not.
+
+**Fix**: `scripts/link-worktree-deps.js` (and `worktreeManager`'s dependency
+linking) now detects workspace links in the source's `node_modules` and builds a
+REAL `node_modules` directory in the worktree. Every entry is symlinked to the
+primary except the workspace links, which are recreated with the same relative
+targets so they resolve inside the worktree. Provisioning refuses a link that
+would resolve outside the worktree (`server/lib/worktreeNodeModules.js`). The
+directory carries a `.portos-worktree-links` marker so cleanup removes only what
+it created.
+
+**Existing worktrees** keep whatever they were given (provisioning never replaces
+an existing path). To repair one, delete the `node_modules` symlink in the
+worktree and rerun `node scripts/link-worktree-deps.js <primary> <worktree>`.
+Still never run `npm install` in a worktree.
+
 ### Tasks Not Being Picked Up
 
-**Symptom**: Added tasks to TASKS.md but CoS ignores them.
+**Symptom**: Added a task but CoS ignores it.
 
 **Solution**:
-1. Verify task format matches expected syntax:
-   ```markdown
-   ## Pending
-   - [ ] #task-001 | HIGH | Task description
-   ```
-2. Check file path in CoS config matches your TASKS.md location
+1. Add tasks through the UI or `POST /api/cos/tasks`; the queues are database rows (`cos_tasks`), and editing `data/TASKS.md` no longer does anything. After an update the old files are kept as `data/*.md.imported`.
+2. Check the task's status and approval flag in the Tasks tab (a task awaiting approval does not run).
 3. Trigger manual evaluation via UI
 
 ### Agent Writes Files Into the PortOS Folder Instead of My App
@@ -571,13 +593,13 @@ CoS runtime records share one serialized state queue (`withStateLock` in `server
 |------|------|
 | `🚦 Merge admission operation=… status=settled …` | a settled admission transaction that took 1 s or more |
 | `🚦 Merge admission … status=queue-timeout\|pending\|failed …` | always |
-| `🐢 CoS state write slow outcome=… totalMs=… prepareMs serializeMs writeMs replaceMs dirSyncMs loopLagMs loopLagMaxMs sizeKiB` | any `saveState` of 1 s or more |
+| `🐢 CoS state write slow outcome=… totalMs=… prepareMs agentsMs serializeMs writeMs replaceMs dirSyncMs loopLagMs loopLagMaxMs sizeKiB` | any `saveState` of 1 s or more |
 | `🐢 CoS state queue slow hold heldMs=… waitMs=… loopLagMs=… loopLagMaxMs=…` | any operation that held the queue for 1 s or more |
 
 Elapsed time inside an awaited phase is asynchronous wait plus delayed scheduling. While an instrumented operation is open, a 100 ms tick measures how long timers sat overdue (`server/lib/eventLoopLagProbe.js`) and charges that to the current phase as `…LagMs`. Read each slow phase as lag versus the rest:
 
 - **`queueMs` high, `queueLagMs` near 0** — the state queue was held by other operations while the loop stayed responsive. Look for `🐢 CoS state queue slow hold` lines in the same window.
-- **`persistenceMs` (or `trustedStateMs`) high, its `…LagMs` near 0** — asynchronous I/O wait: storage or fsync latency, or libuv threadpool queueing behind other file work. `writeMs` (temp write + file flush), `replaceMs` (rename) and `dirSyncMs` (directory flush) locate it; `readMs`/`parseMs` split the ownership read.
+- **`persistenceMs` (or `trustedStateMs`) high, its `…LagMs` near 0** — asynchronous I/O wait: storage or fsync latency, or libuv threadpool queueing behind other file work. `agentsMs` (the changed `cos_agents` rows, written in one transaction), `writeMs` (temp write + file flush), `replaceMs` (rename) and `dirSyncMs` (directory flush) locate it; `readMs`/`parseMs` split the ownership read.
 - **`…LagMs` close to the phase time, or `timerLateMs` well above 0** — the event loop could not run: blocking JavaScript, garbage collection, host CPU starvation or process suspension. These numbers do not tell those apart; capture a CPU profile ([safely](#dynamic-import-callback-missing-after-profiling)) and host load at the time.
 
 Lag resolves to about one tick: the first 100 ms of a stall and any overdue stretch of 20 ms or less are not counted. `timerLateMs` is how late the 15 s admission deadline fired; anything beyond a few milliseconds of timer jitter proves scheduling delay on its own.

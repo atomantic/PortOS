@@ -2,11 +2,6 @@ import { request } from './apiCore.js';
 
 export const getDashboardLayouts = () => request('/dashboard/layouts');
 
-// Deterministic product-engagement actions for the dashboard and global
-// reminder toast. The server returns explicit unavailable sentinels inside
-// `metrics`; callers must not turn those into zero-count activity.
-export const getDailyActions = (options = {}) => request('/dashboard/daily-actions', { silent: true, ...options });
-
 // All mutations of dashboard-layouts.json are serialized through a single
 // module-level promise tail so concurrent callers (Dashboard auto-window,
 // Dashboard manual pick, ⌘K palette pick, LayoutEditor save) hit the server

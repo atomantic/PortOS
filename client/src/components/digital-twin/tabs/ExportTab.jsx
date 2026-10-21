@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import {Download,
   Copy,
   Check,
@@ -14,13 +14,22 @@ import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { downloadBlob } from '../../../lib/downloadBlob';
 import { formatCount } from '../../../utils/formatters';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 
+const fetchDocuments = () => api.getDigitalTwinDocuments({ silent: true });
+const fetchFormats = () => api.getDigitalTwinExportFormats({ silent: true });
+
 export default function ExportTab({ onRefresh: _onRefresh }) {
-  const [documents, setDocuments] = useState([]);
-  const [formats, setFormats] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const documentsResource = useListResource(fetchDocuments);
+  const formatsResource = useListResource(fetchFormats);
+  const { items: documents, retry: retryDocuments } = documentsResource;
+  const { items: formats, retry: retryFormats } = formatsResource;
+  const loadError = [documentsResource, formatsResource].find((resource) => resource.state === 'error') || null;
+  const loading = !loadError && (documentsResource.state === 'loading' || formatsResource.state === 'loading');
+  const retryLoad = useCallback(() => { retryDocuments(); retryFormats(); }, [retryDocuments, retryFormats]);
   const [exporting, setExporting] = useState(false);
 
   // Export configuration
@@ -32,24 +41,13 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
   const [exportResult, setExportResult] = useState(null);
   const [copied, setCopied] = useState(false);
 
+  // Default: select all enabled documents once the library has loaded. An empty
+  // selection exports EVERYTHING (see handleExport), so it must never be seeded
+  // from a failed read — the whole tab fails into a retry instead.
   useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
-    setLoading(true);
-    const [docsData, formatsData] = await Promise.all([
-      api.getDigitalTwinDocuments().catch(() => []),
-      api.getDigitalTwinExportFormats().catch(() => [])
-    ]);
-    setDocuments(docsData);
-    setFormats(formatsData);
-
-    // Default: select all enabled documents
-    setSelectedDocs(docsData.filter(d => d.enabled).map(d => d.id));
-
-    setLoading(false);
-  };
+    if (documentsResource.state !== 'ready') return;
+    setSelectedDocs(documents.filter(d => d.enabled).map(d => d.id));
+  }, [documentsResource.state, documents]);
 
   const toggleDocument = (docId) => {
     setSelectedDocs(prev =>
@@ -129,6 +127,10 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
         <BrailleSpinner text="Loading" />
       </div>
     );
+  }
+
+  if (loadError) {
+    return <ListLoadError what="export options" error={loadError.error} onRetry={retryLoad} />;
   }
 
   return (

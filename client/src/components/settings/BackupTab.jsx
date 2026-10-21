@@ -769,7 +769,9 @@ export function BackupTab() {
                           <span className="min-w-0">
                             <span className="block text-gray-300 truncate">{snap.id}</span>
                             <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
-                            {snap.failed && (
+                            {snap.interrupted ? (
+                              <span className="block text-port-warning">Interrupted</span>
+                            ) : snap.failed && (
                               <span className="block text-port-error">Backup failed — download only</span>
                             )}
                             {snap.incomplete && (
@@ -779,8 +781,10 @@ export function BackupTab() {
                           <span className="flex shrink-0 items-center gap-1.5">
                             <button
                               onClick={() => handleRestoreDb(snap)}
-                              disabled={snap.failed || snap.incomplete}
-                              title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
+                              disabled={snap.failed || snap.incomplete || snap.interrupted}
+                              title={snap.interrupted
+                                ? 'An interrupted backup snapshot cannot be restored'
+                                : snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
                               className="px-2 py-2 min-h-[40px] bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               Restore DB

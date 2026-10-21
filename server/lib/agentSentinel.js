@@ -98,7 +98,7 @@ export function doneSentinelAgentId(name) {
   return name.startsWith(prefix) && name.length > prefix.length ? name.slice(prefix.length) : null;
 }
 
-const STARTUP_SENTINEL_REASONS = new Set(['paste-not-rendered', 'tui-not-ready', 'command-not-found']);
+const STARTUP_SENTINEL_REASONS = new Set(['paste-not-rendered', 'tui-not-ready', 'command-not-found', 'prompt-not-submitted']);
 
 /**
  * The operator line for a TUI that ended without its completion sentinel.

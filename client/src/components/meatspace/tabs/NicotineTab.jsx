@@ -3,6 +3,7 @@ import { Cigarette, Plus, Trash2, Pencil, Check, X, Settings } from 'lucide-reac
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { FormField } from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -17,6 +18,7 @@ export default function NicotineTab() {
   const [summary, setSummary] = useState(null);
   const [allEntries, setAllEntries] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [logging, setLogging] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [visibleDays, setVisibleDays] = useState(DAYS_PER_PAGE);
@@ -50,12 +52,15 @@ export default function NicotineTab() {
   }, []);
 
   const fetchData = useCallback(async () => {
-    const [summaryData, entries] = await Promise.all([
-      api.getNicotineSummary().catch(() => null),
-      api.getDailyNicotine().catch(() => [])
+    const [summaryResult, entriesResult] = await Promise.allSettled([
+      api.getNicotineSummary({ silent: true }),
+      api.getDailyNicotine(undefined, undefined, { silent: true })
     ]);
-    setSummary(summaryData);
-    setAllEntries(entries);
+    // A rejected read keeps what is already shown and raises the notice, so a
+    // transient failure never renders as an empty history.
+    if (summaryResult.status === 'fulfilled') setSummary(summaryResult.value);
+    if (entriesResult.status === 'fulfilled') setAllEntries(entriesResult.value);
+    setLoadFailed(summaryResult.status === 'rejected' || entriesResult.status === 'rejected');
     setLoading(false);
   }, []);
 
@@ -204,6 +209,9 @@ export default function NicotineTab() {
 
   return (
     <div className="space-y-4">
+      {loadFailed && (
+        <LoadFailureNotice message="Could not load nicotine history." onRetry={fetchData} />
+      )}
       {/* Compact Summary Stats Bar */}
       {summary && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2 bg-port-card border border-port-border rounded-lg">

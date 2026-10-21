@@ -44,6 +44,7 @@ vi.mock('../../../services/api', () => api);
 vi.mock('../../../services/apiNotes', () => ({ getNotesVaults: vi.fn(async () => []) }));
 
 const DailyLogTab = (await import('./DailyLogTab')).default;
+const { getNotesVaults } = await import('../../../services/apiNotes');
 
 const TODAY = '2026-07-17';
 const YESTERDAY = '2026-07-16';
@@ -163,6 +164,26 @@ describe('DailyLogTab deep linking', () => {
   it('ignores a malformed ?date= param and falls back to today', async () => {
     await renderTab(['/?date=not-a-date']);
     expect(editor().value).toBe('existing');
+  });
+});
+
+describe('DailyLogTab vault picker', () => {
+  it('shows a retryable error instead of an empty vault list when the vault read fails', async () => {
+    getNotesVaults.mockRejectedValueOnce(new Error('vault service down'));
+    getNotesVaults.mockResolvedValueOnce([{ id: 'vault-1', name: 'Example Vault' }]);
+    api.getDailyLogSettings.mockResolvedValue({ obsidianVaultId: 'vault-1' });
+    await renderTab();
+
+    // Fake timers are armed (see renderTab), so flush microtasks explicitly.
+    const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(screen.getByRole('button', { name: 'Daily log settings' }));
+    await flush();
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load Obsidian vaults');
+    expect(screen.queryByLabelText('Obsidian vault (mirror logs)')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await flush();
+    expect(screen.getByLabelText('Obsidian vault (mirror logs)')).toHaveValue('vault-1');
   });
 });
 

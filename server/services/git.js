@@ -3,7 +3,7 @@ import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, join, resolve } from 'path';
 import { safeJSONParse, PATHS, sleep, rmGuarded } from '../lib/fileUtils.js';
-import { isGitLockError, listWorktrees, reapMergedWorktrees } from './worktreeManager.js';
+import { isGitLockError, listWorktrees } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { resolveForgeForRepo } from './forgeAuth.js';
@@ -1346,7 +1346,7 @@ export async function getRemoteBranches(dir, { force = false } = {}) {
   // Fetch latest refs if forced or not fresh within window
   if (force || !isFetchFresh(dir)) {
     const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-    await withCheckoutPublication(dir, async () => {
+    const freshen = () => withCheckoutPublication(dir, async () => {
       if (activeFetches.has(dir)) {
         await activeFetches.get(dir);
       } else {
@@ -1364,6 +1364,14 @@ export async function getRemoteBranches(dir, { force = false } = {}) {
         await fetchPromise;
       }
     });
+    if (force) {
+      await freshen();
+    } else {
+      await freshen().catch(error => {
+        if (error?.code === 'CHECKOUT_RETIREMENT_RESERVED' || error?.message === 'checkout-retirement-reserved') return null;
+        throw error;
+      });
+    }
   }
 
   // Detect default branch

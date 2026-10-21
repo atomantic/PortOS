@@ -834,4 +834,32 @@ describe('read-only browser observation', () => {
     expect(pm2.execPm2).not.toHaveBeenCalled();
     expect(probe.mock.calls.every(([url]) => /\/(health|json\/list|json\/version)$/.test(url))).toBe(true);
   });
+
+  it('passes a relaunching health body through as the reason Chrome is down', async () => {
+    probe.mockImplementation(async (url) => new Response(JSON.stringify(
+      url.endsWith('/health')
+        ? {
+          status: 'relaunching',
+          attempt: 3,
+          lastError: 'download directory unavailable',
+          cdpPort: 5556,
+          cdpHost: '127.0.0.1',
+          headless: true,
+        }
+        : url.endsWith('/json/list') ? [] : { Browser: 'Example browser' }
+    ), {
+      status: url.endsWith('/health') ? 503 : 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const service = await import('./browserService.js');
+    const status = await service.getFullStatus({ strict: true });
+    expect(status).toMatchObject({
+      connected: false,
+      status: 'relaunching',
+      attempt: 3,
+      error: 'download directory unavailable',
+      process: { status: 'online' },
+      pages: [],
+    });
+  });
 });

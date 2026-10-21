@@ -14,6 +14,7 @@ import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
 import { normalizeUrl } from '../../../utils/urlNormalize';
 import LoadFailedState from '../../ui/LoadFailedState';
+import ListLoadError from '../../ui/ListLoadError';
 
 export default function FeedsTab({ onRefresh }) {
   const [inputUrl, setInputUrl] = useState('');
@@ -22,6 +23,7 @@ export default function FeedsTab({ onRefresh }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [feedsFailed, setFeedsFailed] = useState(false);
+  const [itemsError, setItemsError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedFeedId, setSelectedFeedId] = useState(null);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -41,11 +43,13 @@ export default function FeedsTab({ onRefresh }) {
   }, []);
 
   const fetchItems = useCallback(async () => {
-    const data = await api.getFeedItems({
-      feedId: selectedFeedId,
-      unreadOnly
-    }).catch(() => []);
-    setItems(data);
+    try {
+      const data = await api.getFeedItems({ feedId: selectedFeedId, unreadOnly });
+      setItems(data || []);
+      setItemsError(null);
+    } catch (error) {
+      setItemsError(error instanceof Error ? error : new Error('Request failed'));
+    }
   }, [selectedFeedId, unreadOnly]);
 
   useEffect(() => {
@@ -302,7 +306,9 @@ export default function FeedsTab({ onRefresh }) {
 
           {/* Items list */}
           <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
-            {items.length === 0 ? (
+            {itemsError ? (
+              <ListLoadError what="feed items" error={itemsError} onRetry={fetchItems} />
+            ) : items.length === 0 ? (
               <div className="text-center py-8 text-gray-500 text-sm">
                 {unreadOnly ? 'No unread items' : 'No items yet — try refreshing your feeds'}
               </div>

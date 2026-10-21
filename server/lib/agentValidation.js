@@ -148,7 +148,8 @@ export const scheduleTimingSchema = z.object({
   randomWindow: z.object({
     minMs: z.number().int().min(1000),
     maxMs: z.number().int().min(1000)
-  }).optional()
+  }).optional(),
+  rolledIntervalMs: z.number().nullable().optional()
 }).refine(
   (data) => {
     if (data.type === 'cron') return !!data.cron;
@@ -170,7 +171,8 @@ export const automationScheduleSchema = z.object({
   action: scheduleActionSchema,
   schedule: scheduleTimingSchema,
   rateLimit: scheduleRateLimitSchema,
-  enabled: z.boolean().default(true)
+  enabled: z.boolean().default(true),
+  rolledIntervalMs: z.number().nullable().optional()
 });
 
 export const automationScheduleUpdateSchema = partialWithoutDefaults(automationScheduleSchema);

@@ -27,10 +27,12 @@ import { settingsEvents } from './settings.js';
  * @param {() => Promise<{ enabled: boolean, intervalMinutes: number }>} options.getConfig
  *   Reads the domain's current settings at reconciliation and on every tick.
  * @param {() => Promise<unknown>} options.runSync - The domain's incremental ingestion.
+ * @param {(() => Promise<string | number | null> | string | number | null)} [options.getLastRunAt]
+ *   Optional reader for the domain's persisted lastRunAt time (#12624).
  * @param {boolean} [options.listenForSettings=true] - False when another arming gate owns reconciliation.
  * @returns {() => Promise<void>} Reconcile function, also called at boot.
  */
-export function createSyncScheduler({ id, label, icon, source, getConfig, runSync, listenForSettings = true }) {
+export function createSyncScheduler({ id, label, icon, source, getConfig, runSync, getLastRunAt, listenForSettings = true }) {
   let registeredInterval = null;
   let reconciliation = Promise.resolve();
 
@@ -48,10 +50,20 @@ export function createSyncScheduler({ id, label, icon, source, getConfig, runSyn
       }
       if (registeredInterval === intervalMinutes && getEvent(id)) return;
 
+      let lastRunAt = null;
+      if (typeof getLastRunAt === 'function') {
+        try {
+          lastRunAt = await getLastRunAt();
+        } catch (err) {
+          console.warn(`${icon} ${label} sync scheduler: failed to read lastRunAt: ${err.message}`);
+        }
+      }
+
       schedule({
         id,
         type: 'interval',
         intervalMs: intervalMinutes * 60 * 1000,
+        lastRunAt,
         handler: async () => {
           // A disable during an in-flight tick still prevents the sync.
           const current = await getConfig();

@@ -7,7 +7,6 @@ import { z } from 'zod';
 import { existsSync } from 'fs';
 import { isRepo, notGitRepoMessage } from '../services/git.js';
 import * as cos from '../services/cos.js';
-import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
@@ -170,7 +169,9 @@ const router = Router();
 // With no params it returns a bounded `{ user, cos }` projection: all non-completed
 // tasks plus grouped/derived lists, and only the first page of completed history
 // (+ `completedCount`/`completedNextCursor`; page on with `view=completed`).
-// `view=full` returns the raw unbounded store. When a client passes
+// `view=full` returns everything the task files hold (open queue + the recent completed
+// window); older completed tasks live in the archive and page through `view=completed`.
+// When a client passes
 // `limit`/`offset`, each source is reduced to a *genuinely bounded* shape: the
 // windowed `tasks` slice plus scalar metadata only. The full-set derived
 // collections (`grouped`, `autoApproved`, `awaitingApproval`) are dropped from
@@ -252,12 +253,6 @@ router.get('/tasks/:id', asyncHandler(async (req, res) => {
   const found = await cos.findTaskWithSource(req.params.id);
   if (!found) throw new ServerError('Task not found', { status: 404, code: 'NOT_FOUND' });
   res.json(found);
-}));
-
-// POST /api/cos/tasks/refresh - Force refresh tasks
-router.post('/tasks/refresh', asyncHandler(async (req, res) => {
-  const tasks = await taskWatcher.refreshTasks();
-  res.json(tasks);
 }));
 
 // POST /api/cos/tasks/reorder - Reorder tasks

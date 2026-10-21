@@ -505,9 +505,11 @@ export async function unblockExpiredCooldowns(userTaskData, cosTaskData) {
  * many autonomous admissions the autonomous tiers may add this cycle.
  *
  * Off/dry-run withhold all AUTOMATIC internal spawns (auto-approved system
- * tasks, feature-agent, idle-review); user and on-demand tasks are
- * unaffected. Usage is tallied in completeAgent for autonomous runs only, so a
- * pure dry-run never accrues; user/on-demand spawns are already past this gate.
+ * tasks, feature-agent, idle-review). User and on-demand tasks bypass this mode
+ * gate; on-demand tasks also bypass the global pause. All non-user runs,
+ * including on-demand work, count toward the daily actions/minutes ledger in
+ * completeAgent and the in-flight action allowance here. A pure dry-run never
+ * accrues usage.
  *
  * @returns {Promise<{ cosAutonomyMode: string, autonomousActionsRemaining: number }>}
  */
@@ -578,8 +580,6 @@ export async function admitAutoApprovedSystemTasks(ctx, adapter) {
     instanceId,
   } = ctx;
   const { canSpawn, trackSpawn, emitSpawn, isOwned = () => false, onDefer = async () => {} } = adapter;
-
-  if (!cosTaskData.exists) return [];
 
   // A task already spawning or admitted this cycle is not a candidate: letting
   // it reach the gates would record a capacity/cooldown deferral for work that
@@ -706,11 +706,12 @@ export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, ad
 }
 
 /**
- * Priority 0: On-demand task requests (highest priority — user explicitly
- * requested these). Reads the live schedule's `onDemandRequests`, clears each
+ * Priority 0: On-demand task requests, including user, refill and quota-burn
+ * origins. Reads the live schedule's `onDemandRequests`, clears each
  * as it is processed, and admits any produced task (deduped) through the
- * cycle's shared `spawnAdapter`. Runs against the global slot cap — on-demand
- * work never counts against the autonomous action budget.
+ * cycle's shared `spawnAdapter`. On-demand work bypasses the auto-run mode gate
+ * and global pause, but uses global slots and counts toward the daily budget
+ * like other non-user runs.
  *
  * Returns the schedule the drain loaded so `evaluateTasks` can hand it to
  * Priority 2 explicitly (its disabled-analysis-type gate) instead of a second
@@ -882,6 +883,14 @@ export async function evaluateTasks(options) {
   // meters agent RUNS — a deterministic merge spawns nothing and consumes none
   // of it — while the mode is the user's "may PortOS act on its own" switch.
   if (!paused && getDomainMode(state.config, 'cos') === 'execute') {
+    const { sweepInitializedCheckoutRecoveries } = await import('./initializedCheckoutRecoverySweep.js');
+    // This drain has its own cadence/single-flight guard and rechecks autonomy
+    // between stages, including after native archive verification.
+    void sweepInitializedCheckoutRecoveries(async () => {
+      if (!isDaemonRunning()) return 'daemon-stopped';
+      const current = await loadState();
+      return current.paused ? 'daemon-paused' : getDomainMode(current.config, 'cos') !== 'execute' ? 'autonomy-not-execute' : null;
+    }).catch(error => console.warn(`⚠️ Initialized retirement recovery deferred: ${error.message}`));
     const prWatcher = await import('./prWatcher.js');
     const sweep = await prWatcher.sweepPendingMergePrs();
     if (sweep.merged || sweep.escalated || sweep.timedOut) {
@@ -998,11 +1007,12 @@ export async function evaluateTasks(options) {
     // Priority 1 spends against the global slot cap.
     await spawnPriority1UserTasks(ctx);
 
-    // Ceiling for AUTONOMOUS admissions this cycle (#711). On-demand + user tasks
-    // are already in `tasksToSpawn` and never count against the CoS action budget,
-    // so the autonomous sections below may add at most `autonomousActionsRemaining`
-    // more. With no action cap this equals `availableSlots`, so the default path is
-    // unchanged. The autonomous tiers use this in place of `availableSlots`.
+    // Ceiling for AUTOMATIC admissions this cycle (#711). User and on-demand
+    // tasks already bypassed the mode gate; on-demand also bypasses pause. The
+    // automatic tiers may add at most `autonomousActionsRemaining` more tasks.
+    // On-demand runs still count as non-user work in the completion ledger and
+    // subsequent in-flight allowance; only user tasks are exempt. With no action
+    // cap this equals `availableSlots`.
     const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
 
     // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
@@ -1041,7 +1051,7 @@ export async function evaluateTasks(options) {
   }
 
   // Emit awaiting approval count if any
-  if (cosTaskData.exists && cosTaskData.awaitingApproval?.length > 0) {
+  if (cosTaskData.awaitingApproval?.length > 0) {
     emitLog('info', `${cosTaskData.awaitingApproval.length} tasks awaiting approval`);
     cosEvents.emit('evaluation', {
       message: 'Tasks awaiting approval',
@@ -1106,7 +1116,6 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
         await saveState(s);
       });
 
-      emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
       const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
       // Only bind the active marker once a real task exists.
       if (idleTask) {
@@ -1209,7 +1218,7 @@ export async function queueDueInstallWideImprovementTasks({
     const taskKey = taskType;
     if (existingTaskTypes.has(taskKey)) {
       if (blockedTaskTypes.has(taskKey)) {
-        emitLog('info', `⛔ Skipping install-wide ${taskType}: blocked task ${blockedTaskTypes.get(taskKey)} already exists — resolve or delete it to resume`, { analysisType: taskType });
+        emitLog('warn', `⛔ Skipping install-wide ${taskType}: blocked task ${blockedTaskTypes.get(taskKey)} already exists — resolve or delete it to resume`, { analysisType: taskType });
       } else {
         emitLog('debug', `Install-wide improvement task ${taskType} already queued`);
       }
@@ -1240,9 +1249,13 @@ export async function queueDueInstallWideImprovementTasks({
 }
 
 /**
- * Queue eligible self-improvement and app improvement tasks as system tasks
- * Called during every evaluation to ensure system tasks are queued even when user tasks exist
- * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
+ * Queue eligible self-improvement and app improvement tasks as system tasks.
+ * Called by evaluation (`maybeQueueImprovementTasks`) only when no user tasks
+ * are pending and COS auto-run is `execute`, by `runImprovementCheckOnce`, by
+ * the post-startup queue in `cos.js`, and by `refillPerpetualForCompletedAgent`.
+ * The latter three gate on `canQueueImprovementTasks` before allowing this
+ * COS-TASKS.md write.
+ * Tasks are picked up in Priority 2.
  */
 export async function queueEligibleImprovementTasks(state, cosTaskData, {
   ignoreTaskId = null, wakeAfterRecord = true, perpetualContinuation = null,
@@ -1315,7 +1328,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
     const appBusy = appsWithPendingImprovement.has(app.id);
     if (appBusy && cronTasks.length === 0) {
       if (appsWithBlockedImprovement.has(app.id)) {
-        emitLog('info', `⛔ Skipping improvement queue for ${app.name}: failure-blocked improvement task ${appsWithBlockedImprovement.get(app.id)} occupies the app slot — resolve or delete it to resume`, { appId: app.id });
+        emitLog('warn', `⛔ Skipping improvement queue for ${app.name}: failure-blocked improvement task ${appsWithBlockedImprovement.get(app.id)} occupies the app slot — resolve or delete it to resume`, { appId: app.id });
       } else {
         emitLog('debug', `App ${app.name} already has a pending improvement task — skipping queue`);
       }
@@ -1361,7 +1374,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       const taskKey = `app:${app.id}:${nextType}`;
       if (existingTaskTypes.has(taskKey)) {
         if (blockedTaskTypes.has(taskKey)) {
-          emitLog('info', `⛔ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
+          emitLog('warn', `⛔ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
         } else {
           emitLog('debug', `Improvement task ${nextType} for ${app.name} already queued`);
         }
@@ -1765,7 +1778,6 @@ export function applyAppWorktreeDefault(metadata, app) {
 }
 
 async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = null } = {}) {
-  const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
 
   // First, check for any on-demand task requests for this app
@@ -1826,24 +1838,14 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     selectionReason = nextTypeResult.reason;
   }
 
-  // Record execution in the schedule service
-  await taskSchedule.recordExecution(`task:${nextType}`, app.id);
-
-  // Update app activity with new type
-  await updateAppActivity(app.id, {
-    lastImprovementType: nextType
-  });
-
-  emitLog('info', `Generating improvement task for ${app.name}: ${nextType} (${selectionReason})`, { appId: app.id, analysisType: nextType });
-
   // Delegate the actual task build to the per-type generator so the dynamic
   // blocks run on the idle-review path too: pr-watcher's PR poll +
   // {prData}/{repoFullName}/{defaultBranch} injection, and reference-watch's
   // {referenceData} injection. Without delegation this path replaced only the
   // generic placeholders, so a watcher type selected here would spawn a prompt
   // with the literal {prData}/{referenceData} markers and never poll. The
-  // recordExecution + activity bump above already accounted for the idle
-  // spawn; the per-type generator does not record execution itself.
+  // preparer owns skip cadence and success activity/logging; this caller
+  // records execution only when preparation produces a task.
   const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
     ignoreTaskId,
     targetPullRequest,
@@ -1856,6 +1858,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     preflightCardId: stolenCardId
   });
   const { task, pendingPerpetualDispatch } = prepared;
+  if (task) await taskSchedule.recordExecution(`task:${nextType}`, app.id);
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
   if (stolenRequest) {
@@ -1868,15 +1871,6 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };
 }
 
-/**
- * Generate a managed app improvement task for a specific type
- * Used by on-demand task processing and can be called directly
- *
- * @param {string} taskType - The type of improvement task (e.g., 'security-audit', 'code-quality')
- * @param {Object} app - The managed app object
- * @param {Object} state - Current CoS state
- * @returns {Object} Generated task
- */
 // How many CONSECUTIVE transient skips (across evaluations) applyPerpetualWorkGate
 // tolerates at `debug` before escalating to `warn` — see noteTransientProbe's
 // return value.
@@ -2505,10 +2499,9 @@ const skipped = (gate, { reason = null, cli = null, remedy = null, detail = null
  * that is returned as `pendingPerpetualDispatch` (`null`, or
  * `{ taskType, appId, signature }`) alongside the task, so the caller can
  * record it (via `recordDeferredPerpetualDispatch`) at whatever point the
- * task's admission is certain. `generateManagedAppImprovementTaskForType`
- * below is the thin direct-caller wrapper that records immediately; the
- * queue, on-demand, and idle-review paths call this function directly and
- * defer the record until their own spawn-engine admission succeeds (#6871).
+ * task's admission is certain. The queue, on-demand, and idle-review paths call
+ * this function directly and defer the record until their own spawn-engine
+ * admission succeeds (#6871).
  *
  * Always resolves to ONE shape, `{ task, pendingPerpetualDispatch, skip }`:
  * `skip` is `null` when a task was built, otherwise
@@ -2834,31 +2827,4 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
     : null;
 
   return { task, pendingPerpetualDispatch, skip: null };
-}
-
-/**
- * Generate a managed app improvement task for a specific type.
- * Used by on-demand task processing and can be called directly.
- *
- * Thin wrapper over `prepareManagedAppImprovementTask` (above) that records
- * any deferred perpetual-dispatch signature immediately — the shape every
- * direct caller got before the queue, on-demand, and idle-review paths needed
- * to defer that record until their own admission gate passes. Those three
- * callers use `prepareManagedAppImprovementTask` directly instead (see
- * `queueEligibleImprovementTasks`, `onDemandDrain.js`, `generateIdleReviewTask`).
- *
- * @param {string} taskType - The type of improvement task (e.g., 'security-audit', 'code-quality')
- * @param {Object} app - The managed app object
- * @param {Object} state - Current CoS state
- * @returns {Promise<Object|null>} Generated task, or null when nothing is eligible.
- */
-export async function generateManagedAppImprovementTaskForType(taskType, app, state, opts = {}) {
-  const taskSchedule = await import('./taskSchedule.js');
-  const prepared = await prepareManagedAppImprovementTask(taskType, app, state, opts);
-  // Guard on `prepared.task`, matching every other caller of prepare — task
-  // and pendingPerpetualDispatch are always constructed together, but this
-  // keeps the guard from silently drifting if that ever changes.
-  if (!prepared.task) return null;
-  await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, taskSchedule);
-  return prepared.task;
 }

@@ -31,6 +31,9 @@ vi.mock('fs/promises', () => ({
   readlink: vi.fn().mockResolvedValue(''),
   symlink: vi.fn().mockResolvedValue(undefined),
   unlink: vi.fn().mockResolvedValue(undefined),
+  // lib/worktreeNodeModules.js (workspace-link farm); its behavior has a real-filesystem suite.
+  rmdir: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn().mockResolvedValue(undefined),
   // adoptWorktree ensures the worktrees root exists before moving a tree into it.
   mkdir: vi.fn().mockResolvedValue(undefined),
 }));
@@ -50,6 +53,7 @@ vi.mock('./git.js', () => ({
 const {
   shouldRefuseDefaultBranchMerge,
   deleteCompletedLocalBranch,
+  forceRemoveWorktreeDir,
   isHumanClaimWorktree,
   classifyWorktreeDirt,
   isGitLockError,
@@ -86,6 +90,48 @@ describe('completed branch archival boundary', () => {
   afterEach(() => {
     preserveBranchMock.mockReset().mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => true });
   });
+  it('runs the trusted receiver guard after archival verification and preserves its refusal reason without pushing', async () => {
+    let ready = false;
+    preserveBranchMock.mockResolvedValue({ verify: async () => { ready = true; return true; } });
+    const beforeMutation = vi.fn(async () => {
+      expect(ready).toBe(true);
+      throw new Error('daemon-paused');
+    });
+    await expect(deleteCompletedLocalBranch('/repo', 'done', head, { beforeMutation })).rejects.toThrow('daemon-paused');
+    expect(beforeMutation).toHaveBeenCalledOnce();
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push')).toBe(false);
+  });
+  it('checks automatic permission after final registration refresh before checkout removal', async () => {
+    let reads = 0, verified = false;
+    execGitMock.mockImplementation(async args => {
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        reads++;
+        return { stdout: `worktree /checkout\nHEAD ${head}\nbranch refs/heads/done\n\n`, exitCode: 0 };
+      }
+      return { stdout: '', exitCode: 0 };
+    });
+    const beforeMutation = vi.fn(async () => {
+      expect(verified).toBe(true); expect(reads).toBe(2);
+      throw new Error('daemon-paused');
+    });
+    expect(await forceRemoveWorktreeDir('/repo', '/checkout', {
+      verifyRemoval: async () => { verified = true; return null; }, beforeMutation,
+    })).toMatchObject({ removed: false, reason: 'daemon-paused' });
+    expect(beforeMutation).toHaveBeenCalledOnce();
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree' && ['remove', 'prune'].includes(args[1]))).toBe(false);
+  });
+  it('rechecks automatic permission before pruning an already absent checkout after a failed removal', async () => {
+    execGitMock.mockImplementation(async args => {
+      if (args[0] === 'worktree' && args[1] === 'remove') throw new Error('remove interrupted');
+      return { stdout: '', exitCode: 0 };
+    });
+    lstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    const beforeMutation = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('daemon-stopped'));
+    expect(await forceRemoveWorktreeDir('/repo', '/checkout', { verifyRemoval: async () => null, beforeMutation }))
+      .toMatchObject({ removed: false, reason: 'daemon-stopped' });
+    expect(beforeMutation).toHaveBeenCalledTimes(2);
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'prune')).toBe(false);
+  });
   it.each(['archive failure', 'archive verification failure'])('never sends the deletion when there is an %s', async failure => {
     if (failure === 'archive failure') preserveBranchMock.mockRejectedValue(new Error('archive disk full'));
     else preserveBranchMock.mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => false });
@@ -106,7 +152,8 @@ describe('Worktree dependency preparation', () => {
     symlink.mockClear();
     unlink.mockClear();
     existsSync.mockImplementation(path => normalize(path) === '/repo/nested/.git');
-    readdir.mockResolvedValue([
+    // The source's node_modules holds no workspace links, so the plain directory symlink applies.
+    readdir.mockImplementation(async path => normalize(path).endsWith('/repo/node_modules') ? [] : [
       ...directories.map(name => ({ name, isDirectory: () => true })),
       { name: 'linked-package', isDirectory: () => false },
     ]);
@@ -193,6 +240,19 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
     expect(r.lockfilePaths).toEqual(['package-lock.json', 'client/package-lock.json']);
   });
 
+  it('decodes Git-quoted paths before lockfile and scratch classification', () => {
+    const lockfile = classifyWorktreeDirt(' M "my app/package-lock.json"\n');
+    expect(lockfile.lockfileOnly).toBe(true);
+    expect(lockfile.lockfilePaths).toEqual(['my app/package-lock.json']);
+    const emojiPath = classifyWorktreeDirt(' M "my 😀 app/package-lock.json"');
+    expect(emojiPath.lockfilePaths).toEqual(['my 😀 app/package-lock.json']);
+
+    expect(classifyWorktreeDirt('?? ".portos-public-review/"').clean).toBe(true);
+    expect(classifyWorktreeDirt('?? "PORTOS_PUBLIC_REVIEW_INPUT.json"').clean).toBe(true);
+    expect(classifyWorktreeDirt('?? "caf\\303\\251/package-lock.json"').lockfilePaths)
+      .toEqual(['café/package-lock.json']);
+  });
+
   it('treats mixed lockfile + real changes as real changes', () => {
     const r = classifyWorktreeDirt(' M package-lock.json\n M src/app.js');
     expect(r.lockfileOnly).toBe(false);
@@ -206,6 +266,11 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
     const r = classifyWorktreeDirt(' M package-lock.json\n M src/app.js\n?? src/new.js\nR  src/old.js -> src/renamed.js');
     expect(r.realChangePaths).toEqual(['src/app.js', 'src/new.js', 'src/renamed.js']);
     expect(r.realChangePaths).not.toContain('package-lock.json');
+  });
+
+  it('splits quoted rename paths without treating a literal arrow as the separator', () => {
+    const r = classifyWorktreeDirt('R  "a -> b/x" -> "a b/y"');
+    expect(r.realChangePaths).toEqual(['a b/y']);
   });
 
   it('handles a trimmed first line (no leading status space)', () => {
@@ -1096,6 +1161,17 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       || (args[0] === 'worktree' && args[1] === 'remove'))).toBe(false);
   });
 
+  it('leaves a checkout another retirement is archiving to that retirement (#12682)', async () => {
+    const { reserveCheckoutRetirementFence } = await import('./cosClaimOwnershipState.js');
+    const release = reserveCheckoutRetirementFence({ repoPath: '/repo', path: join(PATHS.worktrees, 'agent-x'), branch: 'cos/task-1/agent-x' });
+    try {
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+      expect(result.removed).toBe(false);
+      expect(result.warnings.join(' ')).toContain('checkout-retirement-reserved');
+      expect(preserveCheckoutMock).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
+
   it.each(['present', 'missing', 'lockfile'])('retains %s checkout evidence when archival fails', async state => {
     if (state === 'missing') existsSync.mockReturnValue(false);
     if (state === 'lockfile') scriptGit({ porcelain: ' M package-lock.json' });
@@ -1106,6 +1182,72 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'checkout' || args[0] === 'push'
       || (args[0] === 'worktree' && ['remove', 'prune'].includes(args[1])))).toBe(false);
     expect(rm).not.toHaveBeenCalled();
+  });
+
+  // #12748: every agent completion archived its checkout inside the shared
+  // claim-ownership lock, starving each bind/release/reserve queued behind it.
+  it.each(['present', 'missing', 'lockfile'])('archives a %s checkout with the ownership queue free and only it fenced', async state => {
+    if (state === 'missing') existsSync.mockReturnValue(false);
+    if (state === 'lockfile') scriptGit({ porcelain: ' M package-lock.json' });
+    const { withClaimOwnershipLock, checkoutRetirementFenceReason } = await import('./cosClaimOwnershipState.js');
+    const fenced = { repoPath: '/repo', path: join(PATHS.worktrees, 'agent-x') };
+    let started;
+    let finish;
+    const archiving = new Promise(resolve => { started = resolve; });
+    preserveCheckoutMock.mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => resolve({ archiveDir: '/archive', verify: async () => null });
+      started();
+    }));
+    const pending = removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+    await archiving;
+    expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
+    expect(checkoutRetirementFenceReason(fenced)).toBe('checkout-retirement-reserved');
+    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: 'cos/task-1/agent-x' })).toBe('checkout-retirement-reserved');
+    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: 'cos/task-2/agent-y', path: join(PATHS.worktrees, 'agent-y') })).toBe(null);
+    finish();
+    expect((await pending).removed).toBe(true);
+    expect(checkoutRetirementFenceReason(fenced)).toBe(null);
+  });
+
+  // #12764: resolveMergeTarget's `git fetch origin --prune` still ran inside the
+  // second critical section (completionHold via verifyRemoval, and the branch
+  // cleanup), so a hung fetch could starve every claim bind queued behind the lock.
+  it.each(['present', 'missing'])('fetches the merge target with the ownership queue free for a %s checkout', async state => {
+    if (state === 'missing') existsSync.mockReturnValue(false);
+    const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+    const scripted = execGitMock.getMockImplementation();
+    const fetches = [];
+    execGitMock.mockImplementation(async (args, ...rest) => {
+      if (args[0] === 'fetch') {
+        const probe = withClaimOwnershipLock(() => 'free');
+        fetches.push(await Promise.race([probe, new Promise(resolve => setTimeout(() => resolve('held'), 25))]));
+      }
+      return scripted(args, ...rest);
+    });
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+    expect(result.removed).toBe(true);
+    expect(fetches.length).toBeGreaterThan(0);
+    expect(fetches.every(outcome => outcome === 'free')).toBe(true);
+    // One refresh serves the pre-removal check, the post-removal verify and the branch cleanup.
+    expect(fetches).toHaveLength(1);
+  });
+
+  it('keeps a lockfile-only checkout that changed while its pre-cleanup snapshot was archived', async () => {
+    scriptGit({ porcelain: ' M package-lock.json' });
+    const scripted = execGitMock.getMockImplementation();
+    let archived = false;
+    execGitMock.mockImplementation((args, ...rest) => (archived && args[0] === 'status'
+      ? Promise.resolve({ stdout: ' M package-lock.json\n?? notes.md', stderr: '', exitCode: 0 })
+      : scripted(args, ...rest)));
+    preserveCheckoutMock.mockImplementationOnce(async () => {
+      archived = true;
+      return { archiveDir: '/archive', verify: async () => null };
+    });
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain('changed while its pre-cleanup snapshot was archived');
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'checkout' || args[0] === 'push'
+      || (args[0] === 'worktree' && args[1] === 'remove'))).toBe(false);
   });
 
   it('retains checkout and ref when preserved bytes change before removal', async () => {

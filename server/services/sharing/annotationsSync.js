@@ -19,7 +19,12 @@ import { resolveBucketSourceName } from './annotationIdentity.js';
 import { onLocalAnnotationChange, listLocalAuthorAnnotations } from '../mediaAnnotations.js';
 
 const DEBOUNCE_MS = 2000;
+// Retry delays after a failed bucket export (unmounted/unreachable folder);
+// the last entry repeats until an export succeeds or a local change resets it.
+const RETRY_BACKOFF_MS = [60_000, 300_000, 900_000];
 let pendingTimer = null;
+let retryTimer = null;
+let retryAttempt = 0;
 let installed = false;
 
 /**
@@ -110,9 +115,30 @@ async function listBucketAssetKeys(bucketPath) {
   return new Set([...manifestKeys, ...legacyKeys]);
 }
 
+/** Test hook — drop listener-installed state and pending timers. */
+export function __resetAnnotationsSyncForTests() {
+  installed = false;
+  if (pendingTimer) clearTimeout(pendingTimer);
+  pendingTimer = null;
+  clearRetry();
+}
+
 /** Test hook — reset the per-bucket manifest-keys cache between cases. */
 export function __resetBucketAssetKeysCache() {
   manifestKeysCache.clear();
+}
+
+function isSameAnnotationSet(a, b) {
+  const keysA = Object.keys(a).sort();
+  const keysB = Object.keys(b).sort();
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every((key, i) => key === keysB[i] && JSON.stringify(sortedEntry(a[key])) === JSON.stringify(sortedEntry(b[key])));
+}
+
+function sortedEntry(entry) {
+  return entry && typeof entry === 'object'
+    ? Object.fromEntries(Object.entries(entry).sort(([x], [y]) => (x < y ? -1 : 1)))
+    : entry;
 }
 
 export async function exportAnnotationsToBucket(bucket, localAnnotations, senderInstanceId) {
@@ -154,6 +180,13 @@ export async function exportAnnotationsToBucket(bucket, localAnnotations, sender
     : [];
   for (const key of priorKeys) {
     if (filtered[key]) continue;
+    // Keep an already-published tombstone verbatim so an unchanged state
+    // compares equal below instead of being rewritten with a fresh timestamp.
+    const priorEntry = prior.annotations[key];
+    if (priorEntry && priorEntry.starred === false && priorEntry.note === '' && assetKeys.has(key)) {
+      filtered[key] = priorEntry;
+      continue;
+    }
     // Only tombstone keys whose assets are still in this bucket — pruning a
     // key whose asset has been removed from the bucket would tell peers to
     // delete the note even though they may still hold the asset.
@@ -166,6 +199,14 @@ export async function exportAnnotationsToBucket(bucket, localAnnotations, sender
   // doesn't fan an empty record into every unrelated auto-merge bucket.
   if (Object.keys(filtered).length === 0 && priorKeys.length === 0) {
     return { skipped: true, reason: 'no-annotations-for-bucket' };
+  }
+
+  // Idempotent re-export: boot and retry flushes must not rewrite a manifest
+  // whose content peers already hold. The record is written before the
+  // manifest, so a missing manifest means a previous export died midway.
+  if (prior && prior.annotations && isSameAnnotationSet(prior.annotations, filtered)
+    && existsSync(join(bucket.path, 'manifests', annotationManifestFilename(senderInstanceId)))) {
+    return { skipped: true, reason: 'unchanged' };
   }
 
   const record = {
@@ -213,21 +254,53 @@ async function flushAll() {
     // A failed source read is not a deletion: abort before tombstone synthesis.
     listLocalAuthorAnnotations(),
   ]);
-  if (!senderInstanceId || senderInstanceId === UNKNOWN_INSTANCE_ID) return;
+  if (!senderInstanceId || senderInstanceId === UNKNOWN_INSTANCE_ID) return true;
   const autoMerge = buckets.filter((b) => b.mode === 'auto-merge');
-  if (autoMerge.length === 0) return;
+  if (autoMerge.length === 0) return true;
+  let allOk = true;
   await Promise.all(autoMerge.map(async (bucket) => {
     const res = await exportAnnotationsToBucket(bucket, localAnnotations, senderInstanceId).catch((err) => {
       console.error(`⚠️ sharing.annotations: export to bucket=${bucket.name} failed: ${err.message}`);
+      allOk = false;
       return null;
     });
     if (res && !res.skipped) {
       console.log(`📤 sharing.annotations: bucket=${bucket.name} wrote ${res.entryCount} annotation(s) (${res.filename})`);
     }
   }));
+  return allOk;
+}
+
+function clearRetry() {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+  retryAttempt = 0;
+}
+
+function scheduleRetry() {
+  if (retryTimer) return;
+  const delay = RETRY_BACKOFF_MS[Math.min(retryAttempt, RETRY_BACKOFF_MS.length - 1)];
+  retryAttempt += 1;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    runFlush();
+  }, delay);
+  retryTimer.unref?.();
+}
+
+function runFlush() {
+  return flushAll().then((ok) => {
+    if (ok) clearRetry();
+    else scheduleRetry();
+  }).catch((err) => {
+    console.error(`⚠️ sharing.annotations: flushAll failed: ${err.message}`);
+    scheduleRetry();
+  });
 }
 
 function scheduleFlush() {
+  // A new local change supersedes any pending retry and resets its backoff.
+  clearRetry();
   // True debounce: restart the timer on every call so a burst of rapid edits
   // collapses into one flush 2s after the LAST change. The previous
   // "if (pendingTimer) return" was a throttle — the first edit started the
@@ -237,9 +310,7 @@ function scheduleFlush() {
   if (pendingTimer) clearTimeout(pendingTimer);
   pendingTimer = setTimeout(() => {
     pendingTimer = null;
-    flushAll().catch((err) => {
-      console.error(`⚠️ sharing.annotations: flushAll failed: ${err.message}`);
-    });
+    runFlush();
   }, DEBOUNCE_MS);
   pendingTimer.unref?.();
 }
@@ -249,4 +320,7 @@ export function initAnnotationsSync() {
   if (installed) return;
   installed = true;
   onLocalAnnotationChange(() => scheduleFlush());
+  // An edit made just before a restart (or during a failed export) never
+  // reached the bucket; the export is idempotent so a boot flush is cheap.
+  scheduleFlush();
 }

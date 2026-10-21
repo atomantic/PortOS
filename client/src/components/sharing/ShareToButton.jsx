@@ -22,10 +22,12 @@
  *   compact?: boolean
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Share2, Check, Circle, CheckCircle2, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource.js';
 import useClickOutside from '../../hooks/useClickOutside.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import {
@@ -39,6 +41,8 @@ import {
 const SUBSCRIBABLE_KINDS = new Set(['series', 'universe']);
 const MENU_WIDTH = 288; // w-72
 
+const fetchBuckets = () => listShareBuckets({ silent: true }).then((r) => r?.buckets || []);
+
 function renderRowIcon({ busy, subscribable, subscribed }) {
   if (busy) return <Loader2 size={14} className="animate-spin text-port-accent" />;
   if (!subscribable) return <Check size={14} className="text-gray-600" />;
@@ -49,11 +53,32 @@ function renderRowIcon({ busy, subscribable, subscribed }) {
 
 export default function ShareToButton({ kind, ids, items, label = 'Share', compact = false, className = '' }) {
   const [open, setOpen] = useState(false);
-  const [buckets, setBuckets] = useState([]);
-  const [subscriptions, setSubscriptions] = useState([]); // [{id, bucketId, ...}]
-  const [loading, setLoading] = useState(false);
   const [busyBucketId, setBusyBucketId] = useState(null);
   const wrapperRef = useRef(null);
+  const isSubscribable = SUBSCRIBABLE_KINDS.has(kind);
+  const recordId = isSubscribable && Array.isArray(ids) && ids.length > 0 ? ids[0] : null;
+  // Buckets + subscriptions reload on every open. Subscriptions are scoped to
+  // the (kind, recordId) being viewed so the "checked" indicator reflects this
+  // record specifically, not the bucket's universe of subscriptions. A failed
+  // read of either is an error row, never "no buckets" / "not subscribed" —
+  // an unchecked row would let a click create a duplicate subscription.
+  const fetchSubscriptions = useCallback(
+    () => (isSubscribable && recordId
+      ? listShareSubscriptions({ recordKind: kind, recordId }, { silent: true }).then((r) => r?.subscriptions || [])
+      : Promise.resolve([])),
+    [isSubscribable, kind, recordId],
+  );
+  const bucketsList = useListResource(fetchBuckets, { enabled: open });
+  const subscriptionsList = useListResource(fetchSubscriptions, { enabled: open });
+  const buckets = bucketsList.items;
+  const subscriptions = subscriptionsList.items;
+  const setSubscriptions = subscriptionsList.setItems;
+  const loading = bucketsList.state === 'loading' || subscriptionsList.state === 'loading';
+  const loadFailed = bucketsList.state === 'error' ? bucketsList : subscriptionsList.state === 'error' ? subscriptionsList : null;
+  const retryLoad = () => {
+    if (bucketsList.state === 'error') bucketsList.retry();
+    if (subscriptionsList.state === 'error') subscriptionsList.retry();
+  };
   // Portal the dropdown to <body> so it escapes each card's stacking context
   // (an in-card `absolute z-30` popover is otherwise painted under the next
   // card). `usePopoverPosition` owns the fixed placement: it anchors to the
@@ -67,38 +92,8 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
     minWidth: 220,
     gap: 4,
     position: 'below',
-    contentDeps: [loading, buckets.length, subscriptions.length]
+    contentDeps: [loading, loadFailed, buckets.length, subscriptions.length]
   });
-
-  const isSubscribable = SUBSCRIBABLE_KINDS.has(kind);
-  const recordId = isSubscribable && Array.isArray(ids) && ids.length > 0 ? ids[0] : null;
-
-  // Refresh buckets + subscriptions on open. Subscriptions are scoped to the
-  // (kind, recordId) being viewed so the "checked" indicator reflects this
-  // record specifically, not the bucket's universe of subscriptions.
-  const refresh = async () => {
-    setLoading(true);
-    const tasks = [
-      listShareBuckets({ silent: true }).then((r) => r?.buckets || []).catch(() => []),
-    ];
-    if (isSubscribable && recordId) {
-      tasks.push(
-        listShareSubscriptions({ recordKind: kind, recordId }, { silent: true })
-          .then((r) => r?.subscriptions || [])
-          .catch(() => []),
-      );
-    } else {
-      tasks.push(Promise.resolve([]));
-    }
-    const [b, s] = await Promise.all(tasks);
-    setBuckets(b);
-    setSubscriptions(s);
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    if (open) refresh();
-  }, [open]);
 
   // Close on Escape and return focus to the trigger so keyboard users don't
   // have to Tab back through the popover content.
@@ -182,7 +177,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
         disabled={nothingToShare}
         aria-expanded={open}
         aria-haspopup="true"
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${compact ? 'p-1.5' : ''}`}
+        className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors sm:min-h-0 sm:min-w-0 ${compact ? 'p-1.5' : ''}`}
         title={nothingToShare ? 'Nothing selected to share' : 'Share to a bucket'}
       >
         <Share2 size={12} />
@@ -208,6 +203,8 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
             <div className="px-3 py-3 text-xs text-gray-500 flex items-center gap-2">
               <Loader2 size={12} className="animate-spin" /> Loading buckets…
             </div>
+          ) : loadFailed ? (
+            <ListLoadError what={loadFailed === bucketsList ? 'buckets' : 'subscriptions'} error={loadFailed.error} onRetry={retryLoad} className="m-2" />
           ) : buckets.length === 0 ? (
             <div className="px-3 py-3 text-xs text-gray-500">
               No buckets yet. <a href="/sharing" className="text-port-accent hover:underline">Add one</a>.

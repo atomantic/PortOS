@@ -144,18 +144,17 @@ function getSuccessRateStyle(rate) {
 }
 
 export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
-  // System tasks are persisted in COS-TASKS.md. Every task
-  // mutation must name that source; otherwise the API's user-queue default
-  // searches TASKS.md and reports the system task as missing.
+  // System tasks live in the internal queue. Every task mutation must name that
+  // source; otherwise the API's user-queue default searches the user queue and
+  // reports the system task as missing.
   const taskSource = isSystem ? 'internal' : 'user';
   // A spawning task is still persisted as 'pending' but is already running —
   // show the running glyph, not the queued clock. See spawnAgentForTask's
   // registration ordering for why the two disagree.
   const displayStatus = spawning ? 'in_progress' : task.status;
   const idScope = isSystem ? 'sys' : 'user';
-  // Either queue. A USER row can hold too: a row the parser had to RECOVER is
-  // withheld from the unattended spawn and persists that hold in TASKS.md
-  // (#7300, #7367). Gating the button on `isSystem` would leave it pending with
+  // Either queue. A USER row can hold too: a row the importer had to RECOVER is
+  // withheld from the unattended spawn and keeps that hold (#7300, #7367). Gating the button on `isSystem` would leave it pending with
   // no way for the human it is waiting on to release it.
   const requiresApproval = Boolean(task.approvalRequired);
   // Name the hold's reason on the APPROVE button so "why is this one waiting on

@@ -21,6 +21,7 @@ import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import Field from '../ui/FormField';
+import ListLoadError from '../ui/ListLoadError';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatBytes, formatTimecode } from '../../utils/formatters';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
@@ -71,6 +72,8 @@ export default function TracksManager() {
   const { id } = useParams();
   const [tracks, setTracks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [openingDesigner, setOpeningDesigner] = useState(false);
@@ -101,26 +104,37 @@ export default function TracksManager() {
   // with another track's result).
   const selectedIdRef = useRef(null);
 
+  // Tracks, albums and MIDI sources seed the list, the album select and the
+  // read-through together; any one failing is an error with Retry, never an
+  // empty list (and never a "not found" for the open track).
   useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setLoadError(null);
     Promise.all([
-      listTracks({ silent: true }).catch((err) => { toast.error(err.message || 'Failed to load tracks'); return []; }),
-      listAlbums({ silent: true }).catch(() => []),
-      listMusicVideoMidiSources({ silent: true }).catch(() => []),
+      listTracks({ silent: true }),
+      listAlbums({ silent: true }),
+      listMusicVideoMidiSources({ silent: true }),
     ])
       .then(([trackList, albumList, mvList]) => {
+        if (!active) return;
         setTracks(Array.isArray(trackList) ? trackList : []);
         setAlbums(Array.isArray(albumList) ? albumList : []);
         setMvProjects(Array.isArray(mvList) ? mvList : []);
       })
-      .finally(() => setLoading(false));
-  }, []);
+      .catch((err) => {
+        if (active) setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [loadAttempt]);
 
   const isCreate = id === 'new';
   const selected = useMemo(
     () => (isCreate || !id ? null : tracks.find((t) => t.id === id) || null),
     [tracks, id, isCreate],
   );
-  const notFound = !isCreate && !!id && !loading && !selected;
+  const notFound = !isCreate && !!id && !loading && !loadError && !selected;
   // The persisted track (for gen metadata + the audio player, which need a saved id).
   const persisted = selected;
 
@@ -156,7 +170,7 @@ export default function TracksManager() {
   const justCreatedIdRef = useRef(null);
   const selectionKey = id ?? null;
   useEffect(() => {
-    if (loading) return;
+    if (loading || loadError) return;
     if (hydratedRef.current === selectionKey) return;
     hydratedRef.current = selectionKey;
     selectedIdRef.current = selectionKey;
@@ -174,7 +188,7 @@ export default function TracksManager() {
       if (justCreatedIdRef.current === selectionKey) justCreatedIdRef.current = null;
       else setGenMode(initialGenMode(selected));
     }
-  }, [selectionKey, isCreate, selected, loading]);
+  }, [selectionKey, isCreate, selected, loading, loadError]);
 
   const upsertLocal = (track) => {
     setTracks((prev) => {
@@ -452,6 +466,8 @@ export default function TracksManager() {
         <div className="bg-port-card border border-port-border rounded-lg p-2">
           {loading ? (
             <div className="text-sm p-2"><BrailleSpinner text="Loading…" /></div>
+          ) : loadError ? (
+            <ListLoadError what="tracks" error={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} />
           ) : tracks.length === 0 ? (
             <div className="text-gray-500 text-sm p-2">
               No tracks yet.{' '}

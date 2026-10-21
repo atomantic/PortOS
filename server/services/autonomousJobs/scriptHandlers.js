@@ -10,7 +10,7 @@ import { readdir, stat } from 'fs/promises'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
-import { spawn } from '../../lib/childProcess.js';import { DAY, PATHS, readJSONFile, rmGuarded } from '../../lib/fileUtils.js'
+import { spawn } from '../../lib/childProcess.js';import { DAY, PATHS, rmGuarded } from '../../lib/fileUtils.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.js'
 import { runGoalCheckIn } from '../goalCheckIn.js'
 import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
@@ -31,14 +31,18 @@ async function eidoverseProjection(options = {}) {
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
  * Returns a summary object when the script exits.
  */
-function runMoltworldExploration() {
+async function runMoltworldExploration() {
   const scriptPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'moltworld-explore.mjs')
   const durationMinutes = process.env.MOLTWORLD_DURATION_MINUTES || '30'
+
+  // Lazy: agentApiAuth pulls in the session/auth stack, which this registry must not load at import time.
+  const { resolveAgentApiEnv } = await import('../agentApiAuth.js');
+  const apiEnv = await resolveAgentApiEnv();
 
   return new Promise((resolve, reject) => {
     const child = spawn('node', [scriptPath, durationMinutes], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: { ...process.env, ...apiEnv },
     })
 
     const output = []
@@ -87,10 +91,17 @@ async function agentDataCleanup() {
   // worktree + data dir as resume context, but a paused agent is removed from
   // the in-memory active/runner maps (so `getActiveAgentIds()` omits it) and —
   // critically — those maps are empty after a server restart while the agent's
-  // `status: 'paused'` survives in state.json. Read the persisted status so a
-  // paused agent's worktree/transcript is never reaped or rm'd out from under a
-  // later resume. (readJSONFile keeps this off the subAgentSpawner import path.)
-  const cosState = await readJSONFile(join(PATHS.cos, 'state.json'), null)
+  // `status: 'paused'` survives in the stored record. Read the persisted status
+  // (ids and statuses only, never the record bodies) so a paused agent's
+  // worktree/transcript is never reaped or rm'd out from under a later resume.
+  // Lazy, and the repository rather than cosState, to stay off the
+  // subAgentSpawner import path.
+  const storedStatuses = await import('../cosAgentRepository.js')
+    .then(m => m.listStoredAgentStatuses())
+    .catch((err) => {
+      console.warn(`⚠️ Sentinel sweep could not read stored agent statuses: ${err.message}`)
+      return null
+    })
   // Every agent record that has not reached an outcome yet. A superset of
   // `activeIds`: it re-adds the paused agents the in-memory maps drop, and —
   // after a restart — the interrupted runs still recorded `running`, whose
@@ -100,11 +111,9 @@ async function agentDataCleanup() {
   // record left behind by a dead process is precisely what they exist to collect.
   const unfinishedIds = new Set(activeIds)
   const pausedIds = new Set()
-  if (cosState?.agents && typeof cosState.agents === 'object') {
-    for (const [id, agent] of Object.entries(cosState.agents)) {
-      if (agent?.status === 'paused') pausedIds.add(id)
-      if (agent?.status !== 'completed' && agent?.status !== 'failed') unfinishedIds.add(id)
-    }
+  for (const { id, status } of storedStatuses ?? []) {
+    if (status === 'paused') pausedIds.add(id)
+    if (status !== 'completed' && status !== 'failed') unfinishedIds.add(id)
   }
   for (const id of pausedIds) activeIds.add(id)
   // The worktree reaps run tens of seconds after the snapshot above, after the
@@ -123,16 +132,24 @@ async function agentDataCleanup() {
     console.warn(`⚠️ Sentinel sweep could not list apps: ${err.message}`)
     return []
   })
-  // `null` when state.json could not be read: without it `unfinishedIds` is just
+  // `null` when the stored statuses could not be read: without them `unfinishedIds` is just
   // the in-memory map, which is EMPTY after a restart — sweeping on that would
   // delete the resume signal of every paused and interrupted run.
   const sentinelsRemoved = await sweepStaleDoneSentinels(
     [PATHS.root, ...apps.map(app => app?.repoPath)],
-    cosState?.agents ? unfinishedIds : null
+    storedStatuses ? unfinishedIds : null
   ).catch((err) => {
     console.warn(`⚠️ Stale sentinel sweep failed: ${err.message}`)
     return 0
   })
+
+  // Without the stored statuses a paused agent is indistinguishable from an
+  // orphan, so everything below that deletes on "not live" waits for a run that
+  // can read them.
+  if (!storedStatuses) {
+    console.warn('⚠️ Agent data cleanup: stored agent statuses unavailable — skipping agent dir and worktree reaping')
+    return { cleaned: 0, sentinelsRemoved, mergedReaped: 0, worktreesReaped: 0, removalFailures: 0 }
+  }
 
   const agentsDir = join(PATHS.cos, 'agents')
   let cleaned = 0

@@ -34,6 +34,7 @@ import { todayInTimezone, localDayRangeUtc } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getSettings } from './settings.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
+import { withYoutubeTab } from './youtubeBrowserLock.js';
 import { shortSummary } from './humanActivity.js';
 import { youtubeVideoIdFromUrl } from '../lib/youtubeUrl.js';
 
@@ -321,7 +322,7 @@ export async function checkSetup() {
 let syncInFlight = null;
 export async function runSync() {
   if (syncInFlight) return syncInFlight;
-  syncInFlight = doRunSync().finally(() => { syncInFlight = null; });
+  syncInFlight = withYoutubeTab(doRunSync).finally(() => { syncInFlight = null; });
   return syncInFlight;
 }
 

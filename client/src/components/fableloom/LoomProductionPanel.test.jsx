@@ -77,6 +77,18 @@ describe('LoomProductionPanel', () => {
     });
   });
 
+  it('shows a model-catalog error with Retry when the image model read fails, instead of an empty model picker', async () => {
+    api.listImageModels.mockRejectedValueOnce(new Error('Models unavailable'));
+    render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load image models — Models unavailable');
+
+    api.listImageModels.mockResolvedValueOnce([{ id: 'image-model-a', name: 'Image Model A' }]);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('option', { name: 'Image Model A' })).toBeInTheDocument();
+  });
+
   it('renders plan summary and allows switching mode', async () => {
     render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
 

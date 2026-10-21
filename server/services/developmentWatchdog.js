@@ -6,11 +6,13 @@ import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabi
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { DEVELOPMENT_ACTIVE_STATUSES, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
 import { safeJSONParse } from '../lib/jsonIo.js';
+import { isUpstreamOwner, UPSTREAM_OWNER } from '../lib/gitRemote.js';
 
 let scanTail = Promise.resolve();
 const tasksFrom = data => [...data.user.tasks, ...data.cos.tasks];
 const ownershipTask = (app, pr) => ({ metadata: { app: app.id, reviewLoopPRUrl: pr.url } });
 const parseGithubJson = value => safeJSONParse(value, null, { allowArray: false });
+const forgeAccountFor = (target, app) => isUpstreamOwner(target?.fullName) ? UPSTREAM_OWNER : app.forgeAccount;
 
 function reviewFollowUpPrNumber(task, target) {
   const metadata = task?.metadata || {};
@@ -98,11 +100,11 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   };
   // Other forge support remains explicit rather than silently using GitHub semantics.
   if (tracker !== 'github' || !target?.repoSpec) { row.blockers.push('unsupported-forge'); return row; }
-  const account = target.fullName?.split('/')[0]?.toLowerCase() === 'atomantic' ? 'atomantic' : app.forgeAccount;
-  if (account === 'atomantic' && app.forgeAccount && app.forgeAccount !== 'atomantic') { row.blockers.push('conflicting-forge-account-pin'); return row; }
+  const account = forgeAccountFor(target, app);
+  if (account === UPSTREAM_OWNER && app.forgeAccount && app.forgeAccount !== UPSTREAM_OWNER) { row.blockers.push('conflicting-forge-account-pin'); return row; }
   const exec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: account });
   const login = (await execGh(['api', 'user', '--hostname', target.apiHost, '--jq', '.login'], undefined, exec)).trim();
-  if (account === 'atomantic' && login !== 'atomantic') { row.blockers.push('required-forge-account-unavailable'); return row; }
+  if (account === UPSTREAM_OWNER && login !== UPSTREAM_OWNER) { row.blockers.push('required-forge-account-unavailable'); return row; }
   // Every downstream resolver receives the same explicit account pin.
   const pinned = { ...app, forgeAccount: account };
   const { metadata: preview } = await resolveClaimWorkMetadata(pinned, 'claim-issue');
@@ -260,7 +262,7 @@ async function dispatch(app, decision) {
   const { resolveAppForgeTarget } = await import('../lib/workTracker.js');
   const { target } = await resolveAppForgeTarget(app);
   const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
-  const exec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: target.fullName.startsWith('atomantic/') ? 'atomantic' : app.forgeAccount });
+  const exec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: forgeAccountFor(target, app) });
   const { execGh } = await import('./github.js');
   const { parseBlockingIssueNumbers } = await import('./blockedIssueReconcile.js');
   const body = await execGh([decision.kind === 'pr' ? 'pr' : 'issue', 'view', String(item.number), '--repo', target.repoSpec, '--json', 'body'], undefined, exec)
@@ -275,9 +277,8 @@ async function dispatch(app, decision) {
   const finalState = await loadState();
   if (authorityLost(finalState, app.id)) return { reason: 'authority-changed' };
   const { resolveReviewLoopOptions } = await import('./codeReview.js');
-  const { normalizeReviewers, claimSafeReviewers } = await import('../lib/reviewerConfig.js');
-  const { isTruthyMeta } = await import('./agentState.js');
-  const options = await resolveReviewLoopOptions({}, { normalize: normalizeReviewers, isTruthyMeta });
+  const { claimSafeReviewers } = await import('../lib/reviewerConfig.js');
+  const options = await resolveReviewLoopOptions({});
   const reviewers = claimSafeReviewers(options.reviewers);
   const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
   const task = await spawnReviewLoopFollowUp({ originalAgentId: null,

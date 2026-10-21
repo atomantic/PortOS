@@ -25,6 +25,9 @@ afterAll(async () => {
 const reconcileEidoverseRuntime = vi.hoisted(() => vi.fn(async () => ({ running: true })));
 vi.mock('../services/eidoverseRuntime.js', () => ({ reconcileEidoverseRuntime }));
 
+const clearPendingMergeAssessmentHolds = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('../services/prWatcher.js', () => ({ clearPendingMergeAssessmentHolds }));
+
 // In-memory settings store backing the mocked service.
 let store = {};
 
@@ -35,6 +38,7 @@ vi.mock('../services/settings.js', async () => {
   const settingsEvents = new EventEmitter();
   return {
     settingsEvents,
+    refreshSettingsIfChangedOnDisk: vi.fn(),
     getSettings: vi.fn(async () => ({ ...store })),
     getSettingsWithStatus: vi.fn(async () => ({ corrupt: false, settings: { ...store } })),
     updateSettings: vi.fn(async (patch) => {
@@ -192,6 +196,7 @@ describe('Settings routes — untrusted-content policy', () => {
     const saved = await request(buildApp()).put('/api/settings').send({ untrustedContent: policy });
     expect(saved.status).toBe(200);
     expect(store.untrustedContent).toEqual(policy);
+    expect(clearPendingMergeAssessmentHolds).toHaveBeenCalledTimes(1);
     const read = await request(buildApp()).get('/api/settings');
     expect(read.body.untrustedContent.sources).toEqual(policy.sources);
   });
@@ -210,6 +215,7 @@ describe('Settings routes — untrusted-content policy', () => {
       expect(store).toEqual(previous);
     }
     expect(updateSettingsWith).not.toHaveBeenCalled();
+    expect(clearPendingMergeAssessmentHolds).not.toHaveBeenCalled();
   });
 });
 

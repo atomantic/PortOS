@@ -103,7 +103,7 @@ describe('shutdown handler — request drain ordering (#8323)', () => {
     const constant = (name) => Number(SRC.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
     const closeGrace = Number(SRC.match(/const closeServer = \(server, label, graceMs = (\d+)\)/)?.[1]);
     const dbGrace = Number(code.match(/withGrace\('DB pool', (\d+)/)?.[1]);
-    expect(constant('HTTP_DRAIN_WINDOW_MS') + closeGrace + dbGrace)
+    expect(constant('HTTP_DRAIN_WINDOW_MS') + closeGrace + constant('PEER_SYNC_STOP_GRACE_MS') + dbGrace)
       .toBeLessThan(constant('GRACEFUL_SHUTDOWN_TIMEOUT_MS'));
   });
 });
@@ -129,6 +129,22 @@ describe('shutdown handler — IdeaLoom auto-sync flush (#11756)', () => {
     const flushGrace = Number(code.match(/withGrace\('IdeaLoom auto-sync flush', (\d+)/)?.[1]);
     const dbGrace = Number(code.match(/withGrace\('DB pool', (\d+)/)?.[1]);
     expect(flushGrace).toBeLessThanOrEqual(dbGrace);
+  });
+});
+
+// Issue #12585: a peer:online convergence walk still running when the pool ends
+// logs a pool-ended stack per remaining subscription, so sharing stops (and its
+// background work settles, bounded) after the servers close and before the pool.
+describe('shutdown handler — peer sync stops before the DB pool closes (#12585)', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('calls shutdownSharing() then drains, under a grace, between the HTTP close and the DB pool close', () => {
+    const stopAt = code.indexOf('shutdownSharing()');
+    expect(stopAt, 'shutdownSharing() is not called in shutdown()').toBeGreaterThan(-1);
+    expect(code).toMatch(/withGrace\('Peer sync', PEER_SYNC_STOP_GRACE_MS,/);
+    expect(code.indexOf('drainPeerSyncOperations()')).toBeGreaterThan(stopAt);
+    expect(stopAt).toBeGreaterThan(code.indexOf('closeServer('));
+    expect(stopAt).toBeLessThan(code.indexOf("withGrace('DB pool'"));
   });
 });
 

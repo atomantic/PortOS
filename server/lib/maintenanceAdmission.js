@@ -59,9 +59,26 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       return schema.parse(JSON.parse(io.readFileSync(file, 'utf8')));
     } catch { throw unavailable(); }
   };
+  // status()/held() are polled several times a second (media drain loop, spawn
+  // gates); re-parsing a journal that carries every settled operation allocated
+  // ~400 KB per call. Writers publish by renaming a new file into place, so any
+  // change gives it a new identity; the stat is taken before the read, so a
+  // racing publish can only cost a re-parse. Read-only: transactions mutate the
+  // state they read and must keep calling read() for a private copy.
+  let statusCache = null;
+  const readForStatus = () => {
+    if (uncertain) throw unavailable();
+    let stats;
+    try { stats = io.lstatSync(file); }
+    catch (err) { if (err.code === 'ENOENT') return empty(); throw unavailable(); }
+    if (!stats.isFile()) throw unavailable();
+    const key = `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
+    if (statusCache?.key !== key) statusCache = { key, state: read() };
+    return statusCache.state;
+  };
   const project = state => ({
     state: state.hold ? (state.operations.length || state.exclusive ? 'draining' : 'ready') : 'normal',
-    revision: state.revision, hold: state.hold,
+    revision: state.revision, hold: state.hold && { ...state.hold },
     blockers: [...state.operations.map(({ kind, resource, startedAt, pid, unsettled }) => ({ kind, resource, startedAt, pid, unsettled })),
       ...(state.exclusive ? [{ kind: 'exclusive-maintenance', resource: state.exclusive.operation.operationId,
         startedAt: state.exclusive.claimedAt, unsettled: state.exclusive.phase === 'uncertain' }] : [])],
@@ -70,7 +87,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const status = () => {
     try {
       if (exists(lock)) throw unavailable();
-      return project(read());
+      return project(readForStatus());
     } catch {
       return { state: 'unavailable', revision: null, hold: null, blockers: [],
         error: 'Maintenance state needs recovery. New work is held; readiness is unknown.' };
@@ -282,6 +299,32 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     });
     return status();
   };
+  // Cached read-only snapshot for trusted reconcilers (runs on every zombie sweep); releaseOperations re-verifies under the lock.
+  const operations = () => readForStatus().operations.map(op => ({ ...op }));
+  // Removes only settled records still identical to what the caller inspected;
+  // anything that changed (or settled elsewhere) since then is left alone.
+  const releaseOperations = expected => transaction(state => {
+    const before = state.operations.length;
+    state.operations = state.operations.filter(op => op.unsettled
+      || !expected.some(seen => seen.id === op.id && seen.kind === op.kind
+        && seen.resource === op.resource && seen.pid === op.pid && seen.startedAt === op.startedAt));
+    return before - state.operations.length;
+  });
+  // Fail-closed stamp for records the caller already inspected. Already-unsettled
+  // rows keep their stamp: rotating it would invalidate an operator receipt in flight.
+  const markOperationsUncertain = expected => transaction(state => {
+    let marked = 0;
+    for (const op of state.operations) {
+      if (op.unsettled) continue;
+      const seen = expected.some(item => item.id === op.id && item.kind === op.kind
+        && item.resource === op.resource && item.pid === op.pid && item.startedAt === op.startedAt);
+      if (!seen) continue;
+      op.unsettled = true;
+      op.uncertaintyStamp = randomUUID();
+      marked += 1;
+    }
+    return marked;
+  });
   // Owning-service recovery only. Validation and durable receipt publication
   // run under the same journal lock as the exact reservation removal.
   const reconcileAbandonedAgent = ({ hold, agentId, validate, publish, replay }) => transaction(state => {
@@ -298,7 +341,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return receipt;
   });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 

@@ -88,7 +88,6 @@ vi.mock('../services/api', () => ({
   getApps: vi.fn(() => Promise.resolve([])),
   listPipelineSeriesNames: vi.fn(() => Promise.resolve([])),
   listUniverseNames: vi.fn(() => Promise.resolve([])),
-  getDailyActions: vi.fn(() => Promise.resolve({ actions: [] })),
   getReviewQueue: vi.fn(() => new Promise(() => {})),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));

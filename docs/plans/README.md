@@ -15,6 +15,11 @@ Index of plans other docs point at:
   the CI/test latency audit and the six changes behind the test memo, the
   resource suites in pregate, and the pregate attestation CI honors.
 
+- [2026-10-20 — CoS task queue to PostgreSQL](./2026-10-20-cos-task-queue-to-postgres.md):
+  why `TASKS.md` / `COS-TASKS.md` outgrew their files, the single `cos_tasks`
+  table that replaced them (and the interim archive), and the migrations that
+  bring existing installs to it.
+
 These are point-in-time design records, not living docs — they are not updated
 to track implementation drift. For current behavior, see the code, `CLAUDE.md`,
 and the topic docs elsewhere under `docs/`.

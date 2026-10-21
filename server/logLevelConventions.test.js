@@ -59,7 +59,8 @@
  * There is none for the failure-stream rule, on purpose. Every site in the tree passes; a new violation is
  * a bug to fix, not an entry to add. If you are reading this because the scan
  * just failed, change `console.log` to `console.error` (or `console.warn` for a
- * refusal) on the named line.
+ * refusal) on the named line. An `emitLog` hit is the level argument, not the
+ * wrapper: `'error'` for a failure, `'warn'` for a refusal or skip (#12576).
  *
  * ## What this guard CANNOT see
  *
@@ -76,6 +77,9 @@
  *     fix produces on purpose, so the guard cannot distinguish the fix from an
  *     evasion — it is a convention backstop, not a sandbox.
  *   - An aliased logger (`const log = console.log; log(…)`) is invisible.
+ *   - `emitLog` with a non-literal level, or a message built before the call,
+ *     is invisible. A literal `info` / `debug` / `success` message is scanned
+ *     (#12576); `warn` and `error` are the routed fix, not violations.
  *   - A failure phrased without a marker emoji is invisible. The markers are
  *     the repo's own single-line-logging convention (root `AGENTS.md`), so they
  *     are the signal available to a text scan.
@@ -139,6 +143,51 @@ export function findMislabeledFailureLogs(src) {
     .map(({ line, args }) => `line ${line}: ${args.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
 }
 
+// info and success always reach console.log; debug does too when it is printed
+// (COS_LOG_LEVEL=debug). warn and error already use console.warn / console.error.
+// Only a literal level is visible. Only the message argument is scanned: that
+// is the text emitLog writes, and the issue's rule is the message, not data.
+const EMIT_LOG_OPEN = /\bemitLog\s*\(/g;
+const QUIET_EMIT_LEVEL = /^\s*(['"`])(info|debug|success)\1\s*$/;
+
+function splitCallArgs(blanked, codeOnly, open, close) {
+  const end = close - 1;
+  const args = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let i = open + 1; i < end; i++) {
+    const c = blanked[i];
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    else if (c === ',' && depth === 0) {
+      args.push(codeOnly.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  const last = codeOnly.slice(start, end).trim();
+  if (last) args.push(last);
+  return args;
+}
+
+/** `line N: <excerpt>` for every quiet emitLog whose message carries a failure marker. */
+export function findMislabeledEmitLogs(src) {
+  const blanked = blankLiterals(src);
+  const codeOnly = blankCommentBodies(src);
+  const hits = [];
+  for (const match of blanked.matchAll(EMIT_LOG_OPEN)) {
+    const open = blanked.indexOf('(', match.index);
+    const close = matchBracket(blanked, open);
+    if (close === -1) continue;
+    const args = splitCallArgs(blanked, codeOnly, open, close);
+    if (!QUIET_EMIT_LEVEL.test(args[0] ?? '')) continue;
+    const message = args[1] ?? '';
+    if (!FAILURE_MARKERS.some((marker) => message.includes(marker))) continue;
+    const line = src.slice(0, match.index).split('\n').length;
+    hits.push(`line ${line}: ${message.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
+  }
+  return hits;
+}
+
 const CONSOLE_CALL_OPEN = /\bconsole\s*\.\s*(log|warn|error|info|debug)\s*\(/g;
 const BARE_ERROR_ARG = /^(?:err|error|e|ex|reason)$/;
 // Shown to the reader of a failing marker scan — only literals whose first
@@ -159,22 +208,11 @@ export function consoleCalls(src) {
     const open = blanked.indexOf('(', match.index);
     const close = matchBracket(blanked, open);
     if (close === -1) continue;
-    const end = close - 1;
-    const args = [];
-    let depth = 0;
-    let start = open + 1;
-    for (let i = open + 1; i < end; i++) {
-      const c = blanked[i];
-      if ('([{'.includes(c)) depth++;
-      else if (')]}'.includes(c)) depth--;
-      else if (c === ',' && depth === 0) {
-        args.push(codeOnly.slice(start, i).trim());
-        start = i + 1;
-      }
-    }
-    const last = codeOnly.slice(start, end).trim();
-    if (last) args.push(last);
-    calls.push({ line: src.slice(0, match.index).split('\n').length, method: match[1], args });
+    calls.push({
+      line: src.slice(0, match.index).split('\n').length,
+      method: match[1],
+      args: splitCallArgs(blanked, codeOnly, open, close),
+    });
   }
   return calls;
 }
@@ -240,6 +278,23 @@ describe('failure lines log at error level (#7945)', () => {
       return CONSOLE_LOG_SHAPE.test(src) && consoleLogCalls(src).length > 0;
     });
     expect(withLogs.length).toBeGreaterThan(100);
+  });
+
+  it('has no emitLog at a non-failure level carrying a failure marker', () => {
+    const violations = [];
+    for (const file of trackedServerSources()) {
+      const src = readFileSync(join(REPO_ROOT, file), 'utf8');
+      if (!/\bemitLog\s*\(/.test(src)) continue;
+      if (!FAILURE_MARKERS.some((marker) => src.includes(marker))) continue;
+      for (const hit of findMislabeledEmitLogs(src)) violations.push(`${file} ${hit}`);
+    }
+    expect(
+      violations,
+      'emitLog routes info/debug/success to console.log, so a failure-marked line there is '
+      + 'invisible to stderr monitors. Fix: emitLog(\'warn\', …) for a refusal/skip, '
+      + 'emitLog(\'error\', …) for a failure.\n'
+      + `Offenders:\n  ${violations.join('\n  ')}`,
+    ).toEqual([]);
   });
 
   it('has no console.log carrying a failure marker', () => {
@@ -327,6 +382,41 @@ describe('the failure-log recognizer', () => {
       .toEqual([`line 1: \`${CROSS_MARK} build failed\``]);
     expect(findMislabeledFailureLogs(log(`${NO_ENTRY} refused: no consent`)))
       .toEqual([`line 1: \`${NO_ENTRY} refused: no consent\``]);
+  });
+
+  it('flags a failure marker on a quiet emitLog level', () => {
+    expect(findMislabeledEmitLogs(`emitLog('info', \`${CROSS_MARK} blocked\`, { id: 1 });`))
+      .toHaveLength(1);
+    expect(findMislabeledEmitLogs(`emitLog('debug', \`${CROSS_MARK} blocked\`);`))
+      .toHaveLength(1);
+    expect(findMislabeledEmitLogs(`emitLog("success", \`${NO_ENTRY} skipping\`);`))
+      .toHaveLength(1);
+    // The marker may sit anywhere in the message, not only as its first character.
+    expect(findMislabeledEmitLogs(`emitLog('info', \`queued ${NO_ENTRY}\`);`)).toHaveLength(1);
+    expect(findMislabeledEmitLogs(`
+      emitLog(
+        'info',
+        \`${NO_ENTRY} Skipping install-wide \${taskType}\`,
+      );
+    `)).toHaveLength(1);
+    // warn and error are the routed sinks. A variable level is not judged.
+    expect(findMislabeledEmitLogs(`emitLog('warn', \`${NO_ENTRY} skipping\`);`)).toEqual([]);
+    expect(findMislabeledEmitLogs(`emitLog('error', \`${CROSS_MARK} failed\`);`)).toEqual([]);
+    expect(findMislabeledEmitLogs(`emitLog(level, \`${CROSS_MARK} failed\`);`)).toEqual([]);
+    expect(findMislabeledEmitLogs(`emitLog('info', 'started');`)).toEqual([]);
+    // A marker in a comment, the data object, or the prefix is not the message.
+    expect(findMislabeledEmitLogs(`emitLog('info', /* ${NO_ENTRY} */ 'started');`)).toEqual([]);
+    expect(findMislabeledEmitLogs(`emitLog('info', 'started', { note: '${NO_ENTRY}' });`)).toEqual([]);
+    expect(findMislabeledEmitLogs(`emitLog('info', 'started', {}, '${NO_ENTRY}');`)).toEqual([]);
+  });
+
+  it('would flag a restored quiet emitLog in cosTaskGenerator.js', () => {
+    const src = readFileSync(join(SERVER_ROOT, 'services/cosTaskGenerator.js'), 'utf8');
+    expect(findMislabeledEmitLogs(src)).toEqual([]);
+    const quiet = "emitLog('warn', `" + NO_ENTRY + ' Skipping install-wide';
+    const regressed = src.replace(quiet, quiet.replace("'warn'", "'info'"));
+    expect(regressed).not.toBe(src);
+    expect(findMislabeledEmitLogs(regressed)).toHaveLength(1);
   });
 
   it('flags a marker reached only through a ternary', () => {

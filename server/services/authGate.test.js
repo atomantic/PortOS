@@ -1318,6 +1318,41 @@ describe('paired peer credential (#8356)', () => {
     expect(await handshake(headers)).toBeUndefined();
     expect((await handshake({ ...headers, 'x-portos-peer-auth': 'f'.repeat(64) }))?.data).toEqual({ code: 'AUTH_REQUIRED' });
   });
+
+  it('wakes probe on inbound peer-authenticated request at most once per 30 s per peer (#12621)', async () => {
+    const instances = await import('./instances.js');
+    instances.__resetPeerWakesForTests();
+    const wakeSpy = vi.spyOn(instances, 'wakePeerProbe');
+
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    const peerRecord = pairedPeer({ status: 'offline', nextProbeAt: new Date(Date.now() + 3_600_000).toISOString() });
+    writePeers([peerRecord]);
+    const app = await buildApp();
+    const headers = await peerHeaders();
+
+    // 1st inbound request: wakes probe
+    const res1 = await withHeaders(request(app).get('/api/peer-sync/manifest'), headers);
+    expect(res1.status).toBe(200);
+    expect(res1.body.auth.method).toBe('peer');
+    await vi.waitFor(() => expect(wakeSpy).toHaveBeenCalledTimes(1));
+    expect(wakeSpy).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'peer-record' }));
+
+    // 2nd inbound request immediately: auth succeeds, calls wakePeerProbe which rate-limits
+    const res2 = await withHeaders(request(app).get('/api/peer-sync/manifest'), headers);
+    expect(res2.status).toBe(200);
+    expect(res2.body.auth.method).toBe('peer');
+    await vi.waitFor(() => expect(wakeSpy).toHaveBeenCalledTimes(2));
+
+    // Verify rate limiter directly rejects duplicate wake within 30s
+    expect(instances.wakePeerProbe(peerRecord)).toBe(false);
+
+    // After 30s window (simulated by resetting wake timer), wake is allowed again
+    instances.__resetPeerWakesForTests();
+    expect(instances.wakePeerProbe(peerRecord)).toBe(true);
+
+    wakeSpy.mockRestore();
+  });
 });
 
 // #8707: without a password, the browser-relay guard is the only thing between

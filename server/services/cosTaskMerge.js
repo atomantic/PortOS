@@ -2,8 +2,8 @@
  * CoS Task Merge — claim-aware per-task LWW for cross-peer federation (#1712)
  *
  * The second half of #1650: where the completed-agent HISTORY federates as pure
- * append-only byte replication, the live task files (data/COS-TASKS.md /
- * data/TASKS.md) are the opposite — BOTH full-sync peers mutate them, and each
+ * append-only byte replication, the live task queues (`cos_tasks`, both
+ * sources) are the opposite — BOTH full-sync peers mutate them, and each
  * task carries claim/lease metadata (`claimedBy`/`claimedAt`/`leaseExpiresAt`
  * from #1563). A naive whole-file last-writer-wins would clobber a peer's fresh
  * claim and re-introduce the exact double-spawn hazard the lease exists to

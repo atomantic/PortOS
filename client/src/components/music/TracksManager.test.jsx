@@ -103,6 +103,37 @@ describe('<TracksManager> MIDI transcription read-through', () => {
   });
 });
 
+describe('<TracksManager> failed load', () => {
+  beforeEach(() => {
+    listAlbums.mockResolvedValue([]);
+    listMusicVideoMidiSources.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('shows a load error with Retry instead of an empty list or a "not found" track, then hydrates the open track', async () => {
+    listTracks.mockRejectedValueOnce(new Error('Server unavailable'));
+    renderAt('track-1');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load tracks — Server unavailable');
+    expect(screen.queryByText('No tracks yet.')).toBeNull();
+    expect(screen.queryByText(/could not be found/)).toBeNull();
+
+    listTracks.mockResolvedValue([TRACK]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByDisplayValue('Example Song')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('fails the whole load when a secondary read (albums) fails, rather than rendering an album-less editor', async () => {
+    listTracks.mockResolvedValue([TRACK]);
+    listAlbums.mockRejectedValueOnce(new Error('Albums unavailable'));
+    renderAt('track-1');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Albums unavailable');
+  });
+});
+
 // #3264: the generator toggle used to live INSIDE the `persisted ?` gate, so a
 // brand-new track rendered nothing at all where the generators belong and there
 // was no way to learn the two modes existed until after the first save.

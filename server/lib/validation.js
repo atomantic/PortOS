@@ -1178,7 +1178,9 @@ export const restoreRequestSchema = z.object({
   snapshotId: z.string().min(1),
   source: snapshotSourceSchema.optional(),
   subdirFilter: subdirFilterSchema.optional().nullable(),
-  dryRun: z.boolean().optional().default(true)
+  dryRun: z.boolean().optional().default(true),
+  // Install a snapshot's different federation identity over this machine's (#12596).
+  adoptIdentity: z.boolean().optional().default(false)
 });
 
 export const restoreDbRequestSchema = z.object({
@@ -2886,6 +2888,9 @@ export const initializedCheckoutMetadataRestoreSchema = initializedCheckoutResto
   review: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
 }).strict();
 export const initializedCheckoutFinalizationSchema = initializedCheckoutMetadataRestoreSchema;
+export const initializedCheckoutQuarantineResumptionSchema = initializedCheckoutRestoreSchema.extend({
+  review: z.object({ digest: z.string().regex(/^[a-f0-9]{64}$/), acceptSuperseded: z.boolean().optional() }).strict(),
+}).strict();
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });

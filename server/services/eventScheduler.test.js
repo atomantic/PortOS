@@ -15,6 +15,7 @@ import {
   isValidCron,
   parseRecurrenceToNextRun,
   isValidRecurrence,
+  BOOT_GRACE_MS,
 } from './eventScheduler.js';
 import { cosEvents } from './cosEvents.js';
 
@@ -290,6 +291,64 @@ describe('schedule() lifecycle with fake timers', () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(handler).toHaveBeenCalledTimes(2);
     expect(getEvent('iv-1').runCount).toBe(2);
+  });
+
+  it('first fires BOOT_GRACE_MS after registration when interval is overdue (#12624)', async () => {
+    const handler = vi.fn();
+    const intervalMs = 60 * 60 * 1000; // 1 hour
+    // Last run 2 hours ago (overdue)
+    const lastRunAt = FIXED_NOW.getTime() - 2 * 60 * 60 * 1000;
+
+    schedule({ id: 'iv-overdue', type: 'interval', intervalMs, lastRunAt, handler });
+    const event = getEvent('iv-overdue');
+    expect(event.nextRunAt).toBe(FIXED_NOW.getTime() + BOOT_GRACE_MS);
+
+    // Advancing just before BOOT_GRACE_MS should not fire
+    await vi.advanceTimersByTimeAsync(BOOT_GRACE_MS - 1);
+    expect(handler).not.toHaveBeenCalled();
+
+    // Reaching BOOT_GRACE_MS fires the first run
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // Subsequent runs fire at intervalMs cadence
+    await vi.advanceTimersByTimeAsync(intervalMs);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('first fires at lastRunAt + intervalMs when last run was recent (#12624)', async () => {
+    const handler = vi.fn();
+    const intervalMs = 60 * 60 * 1000; // 1 hour
+    // Last run 10 minutes ago
+    const lastRunAt = FIXED_NOW.getTime() - 10 * 60 * 1000;
+
+    schedule({ id: 'iv-recent', type: 'interval', intervalMs, lastRunAt, handler });
+    const event = getEvent('iv-recent');
+    // Expected first fire: lastRunAt + 60min = FIXED_NOW + 50min
+    expect(event.nextRunAt).toBe(lastRunAt + intervalMs);
+
+    await vi.advanceTimersByTimeAsync(50 * 60 * 1000 - 1);
+    expect(handler).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts ISO string, ms number, Date instance for lastRunAt and falls back on invalid (#12624)', () => {
+    const handler = vi.fn();
+    const intervalMs = 60 * 60 * 1000;
+    const pastMs = FIXED_NOW.getTime() - 10 * 60 * 1000;
+    const isoString = new Date(pastMs).toISOString();
+
+    const e1 = schedule({ id: 'iv-iso', type: 'interval', intervalMs, lastRunAt: isoString, handler });
+    expect(e1.nextRunAt).toBe(pastMs + intervalMs);
+
+    const e2 = schedule({ id: 'iv-date', type: 'interval', intervalMs, lastRunAt: new Date(pastMs), handler });
+    expect(e2.nextRunAt).toBe(pastMs + intervalMs);
+
+    const e3 = schedule({ id: 'iv-invalid', type: 'interval', intervalMs, lastRunAt: 'not-a-date', handler });
+    expect(e3.nextRunAt).toBe(FIXED_NOW.getTime() + intervalMs);
+    expect(e3.lastRunAt).toBeNull();
   });
 
   it('fires a once event exactly once and then deactivates it', async () => {

@@ -60,7 +60,6 @@ vi.mock('../services/cos.js', () => ({
   reviveBlockedTask: vi.fn(),
   forceSpawnTask: vi.fn(),
 }));
-vi.mock('../services/taskWatcher.js', () => ({ refreshTasks: vi.fn() }));
 vi.mock('../services/taskEnhancer.js', () => ({ enhanceTaskPrompt: vi.fn() }));
 vi.mock('../services/cosTaskClaimWork.js', () => ({
   buildClaimWorkTask: vi.fn(),

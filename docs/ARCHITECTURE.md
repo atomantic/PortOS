@@ -84,7 +84,7 @@ PortOS/
 │   ├── lib/                   # Shared utilities
 │   │   ├── errorHandler.js    # Error normalization
 │   │   ├── validation.js      # Zod schemas
-│   │   └── taskParser.js      # TASKS.md parser
+│   │   └── taskParser.js      # Task stored-form parser (and migration 018's input reader)
 │   └── cos-runner/            # Isolated agent runner
 │       └── index.js           # Standalone Express server
 │
@@ -101,8 +101,6 @@ PortOS/
 │   ├── providers.json         # AI provider configs
 │   ├── history.jsonl          # Action history (JSON Lines)
 │   ├── browser-config.json    # Browser CDP/health configuration
-│   ├── TASKS.md               # User task file
-│   ├── COS-TASKS.md           # System task file
 │   ├── cos/                   # CoS state and agents
 │   │   ├── state.json         # Daemon state
 │   │   └── agents/            # Agent outputs
@@ -175,8 +173,7 @@ Server Event → Socket.IO → socket.js → React Component State Update
 ### Chief of Staff Flow
 
 ```
-1. Task Watcher monitors TASKS.md for changes
-2. CoS Service evaluates tasks on interval
+1. Task writes emit `tasks:changed`; the CoS Service evaluates tasks on that event and on an interval
 3. For each pending task:
    a. Select appropriate AI model based on task complexity
    b. Build prompt with context and memory injection

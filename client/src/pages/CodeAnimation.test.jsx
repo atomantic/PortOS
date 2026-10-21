@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 
 const socketHarness = vi.hoisted(() => ({ handlers: new Map(), emit: vi.fn() }));
 
@@ -38,6 +38,8 @@ vi.mock('../services/api', () => ({
   getFilmStyle: vi.fn(),
   listFilmStyles: vi.fn(),
   listCodeAnimationJobPage: vi.fn().mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null }),
+  codeAnimationPosterUrl: (id, version) => `/posters/${id}.jpg?v=${version}`,
+  requestCodeAnimationPoster: vi.fn(),
   listMoodBoardNames: vi.fn(),
   listTracks: vi.fn().mockResolvedValue([]),
   listUniverseNames: vi.fn(),
@@ -69,6 +71,7 @@ import {
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   listCodeAnimationJobPage,
+  requestCodeAnimationPoster,
   getCodeAnimationOptions,
   getFilmStyle,
   listFilmStyles,
@@ -97,11 +100,13 @@ const BLUEPRINT = {
   nativeMoves: [{ name: 'Exploded assembly', how: 'Pull apart.', fitsContentLike: ['product anatomy', 'teardowns'] }],
 };
 
-const renderPage = async (initialEntry = '/code-animation') => {
+const renderPage = async (initialEntry = '/code-animation', navLinks = []) => {
   const result = render(
     <MemoryRouter initialEntries={[initialEntry]}>
+      {navLinks.map((to) => <Link key={to} to={to}>Open {to}</Link>)}
       <Routes>
         <Route path="/code-animation" element={<CodeAnimation />} />
+        <Route path="/code-animation/gallery" element={<CodeAnimation />} />
         <Route path="/code-animation/:jobId" element={<CodeAnimation />} />
       </Routes>
     </MemoryRouter>,
@@ -173,11 +178,12 @@ describe('Code Animation page', () => {
 
     await emitSocket('code-animation:changed', { id: 'unrelated-job' });
     expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
+    await emitSocket('code-animation:changed', { id: 'job-1', kind: 'poster' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
     getCodeAnimationJob.mockResolvedValue(completedJob);
     await emitSocket('code-animation:changed', { id: 'job-1' });
     expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
     expect(await screen.findByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Example animation/ })).toHaveTextContent('Completed');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Preview without audio' }));
     const frame = await screen.findByTitle('Code animation preview');
     expect(frame.tagName).toBe('IMG');
@@ -230,10 +236,8 @@ describe('Code Animation page', () => {
     getCodeAnimationJob.mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
       .mockResolvedValue({ ...runningJob, id: 'job-2', title: 'Second animation',
         input: { title: 'Second animation', concept: 'Another scene' } });
-    listCodeAnimationJobPage.mockResolvedValue({ items: [{ ...runningJob, id: 'job-2', title: 'Second animation' }],
-      total: 1, counts: { running: 1, completed: 0 }, nextCursor: null });
-    const view = await renderPage('/code-animation/job-1');
-    await userEvent.setup().click(screen.getByRole('link', { name: /Second animation/ }));
+    const view = await renderPage('/code-animation/job-1', ['/code-animation/job-2']);
+    await userEvent.setup().click(screen.getByRole('link', { name: 'Open /code-animation/job-2' }));
     await waitFor(() => expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation'));
     await act(async () => resolveFirst(completedJob));
     expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation');
@@ -260,16 +264,51 @@ describe('Code Animation page', () => {
     expect(screen.getByText('Reference images (0/8)')).toBeInTheDocument();
   });
 
+  it('keeps the job list off Fast HTML and opens it as the Gallery tab', async () => {
+    await renderPage();
+    expect(listCodeAnimationJobPage).not.toHaveBeenCalled();
+    await userEvent.setup().click(screen.getByRole('tab', { name: /Gallery/ }));
+    expect(await screen.findByText('Animations you generate in Fast HTML appear here.')).toBeInTheDocument();
+    expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows saved posters, draws missing ones once each and one at a time, and labels unfinished jobs', async () => {
+    listCodeAnimationJobPage.mockResolvedValue({ items: [
+      { id: 'job-a', status: 'completed', title: 'With poster', posterVersion: 11, createdAt: '2026-01-03T00:00:00.000Z' },
+      { id: 'job-b', status: 'completed', title: 'Needs poster', createdAt: '2026-01-02T00:00:00.000Z' },
+      { id: 'job-d', status: 'completed', title: 'Also needs poster', createdAt: '2026-01-02T00:00:00.000Z' },
+      { id: 'job-c', status: 'running', title: 'Still going', createdAt: '2026-01-01T00:00:00.000Z' },
+    ], total: 4, counts: { running: 1, completed: 3 }, nextCursor: null });
+    const draws = [];
+    requestCodeAnimationPoster.mockImplementation(() => new Promise((resolve) => { draws.push(resolve); }));
+    const { container } = await renderPage('/code-animation/gallery');
+    await waitFor(() => expect(screen.getByRole('link', { name: /With poster/ })).toHaveAttribute('href', '/code-animation/job-a'));
+    expect(container.querySelector('img[src="/posters/job-a.jpg?v=11"]')).not.toBeNull();
+    expect(screen.getAllByText('Drawing thumbnail…')).toHaveLength(2);
+    expect(screen.getAllByText('In progress').length).toBeGreaterThan(0);
+    await waitFor(() => expect(requestCodeAnimationPoster).toHaveBeenCalledTimes(1));
+    expect(requestCodeAnimationPoster).toHaveBeenCalledWith('job-b', { silent: true });
+    await act(async () => draws[0]({ posterVersion: 22 }));
+    expect(container.querySelector('img[src="/posters/job-b.jpg?v=22"]')).not.toBeNull();
+    await waitFor(() => expect(requestCodeAnimationPoster).toHaveBeenCalledTimes(2));
+    expect(requestCodeAnimationPoster).toHaveBeenLastCalledWith('job-d', { silent: true });
+    await act(async () => draws[1]({ posterVersion: null }));
+    expect(screen.queryByText('Drawing thumbnail…')).not.toBeInTheDocument();
+    await emitSocket('code-animation:changed', { id: 'job-c' });
+    expect(requestCodeAnimationPoster).toHaveBeenCalledTimes(2);
+  });
+
   it('loads one compact page, stays idle, and refreshes on durable changes and reconnect', async () => {
     const jobs = Array.from({ length: 50 }, (_, n) => ({
       id: `job-${n}`, status: 'completed', title: `Animation ${n}`, createdAt: '2026-01-01T00:00:00.000Z',
     }));
     listCodeAnimationJobPage.mockResolvedValue({ items: jobs, total: 1000,
       counts: { running: 0, completed: 1000 }, nextCursor: 'next-page' });
-    await renderPage();
+    requestCodeAnimationPoster.mockResolvedValue({ posterVersion: null });
+    await renderPage('/code-animation/gallery');
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Animation \d+/ })).toHaveLength(50));
     expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('0 in progress · 1,000 completed')).toBeInTheDocument();
+    expect(screen.getByText('1,000 completed · 0 in progress')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Load older animations' })).toBeInTheDocument();
     vi.useFakeTimers();
     await act(async () => { vi.advanceTimersByTime(60_000); });

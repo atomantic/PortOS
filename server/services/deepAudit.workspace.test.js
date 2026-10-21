@@ -72,7 +72,9 @@ beforeEach(async () => {
   await git(['remote', 'add', 'origin', join(root, 'remote.git')]);
   await git(['push', '-u', 'origin', 'main']);
 });
-afterEach(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }); await rm(paths.worktrees, { recursive: true, force: true }); });
+// Retry EBUSY: on Windows a git handle outliving a timed-out test would otherwise add a second, misleading failure.
+const rmTree = (p) => rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+afterEach(async () => { vi.unstubAllEnvs(); await rmTree(root); await rmTree(paths.worktrees); });
 
 it('keeps accepted coverage on a fresh resume after remote main advances; Quick still follows main', async () => {
   const first = await createWorktree('agent-first', repo, task.id, { baseBranch: 'main', linkDependencies: false });
@@ -142,4 +144,5 @@ it('expands a fresh submodule at its gitlink and refuses to reset retained submo
   await rm(join(nested, 'untracked.txt'));
   await writeFile(join(nested, 'nested.js'), 'export const nested = false;\n'); await commit(nested);
   await expect(adoptWorktree('agent-committed-child', repo, replacement.worktreePath, worktree.branchName, { deepResume: true })).rejects.toThrow('preserve it');
-});
+// Windows runners take 5-17s here (41s outlier, 2026-10-19 nightly); the suite-wide 30s leaves ~2x headroom.
+}, 60_000);

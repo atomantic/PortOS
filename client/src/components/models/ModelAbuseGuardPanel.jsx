@@ -103,6 +103,7 @@ export default function ModelAbuseGuardPanel() {
   });
   const currentStageId = installingStage || (installing ? stages.find((stage) => !stage.ready)?.id : null);
   const overallReady = guardStatus?.ready === true;
+  const contributionBlocked = guardStatus?.contributionAssessment?.ready === false;
   const incomplete = guardStatus?.setupState === 'incomplete' || (!overallReady && (guardStatus?.modelCached || guardStatus?.venvReady));
 
   return (
@@ -121,7 +122,9 @@ export default function ModelAbuseGuardPanel() {
             <p className="text-xs text-port-accent mt-0.5">Required by default · local classifier</p>
           </div>
         </div>
-        {overallReady ? (
+        {contributionBlocked && overallReady ? (
+          <span className="text-xs px-2 py-1 rounded border border-port-warning/40 text-port-warning">Not ready</span>
+        ) : overallReady ? (
           <span className="text-xs px-2 py-1 rounded border border-port-success/40 text-port-success">Ready</span>
         ) : guardStatus ? (
           <span className="text-xs px-2 py-1 rounded border border-port-warning/40 text-port-warning">{incomplete ? 'Setup incomplete' : 'Not installed'}</span>
@@ -135,6 +138,11 @@ export default function ModelAbuseGuardPanel() {
         Screens external issues, pull requests, and messages before analysis. Runs locally on CPU; no GPU required.
         Required screening blocks analysis when it fails or cannot finish.
       </p>
+      {guardStatus?.contributionAssessment?.ready === false && (
+        <p role="status" className="text-xs text-port-warning max-w-2xl">
+          GitHub pull request and issue assessment is not ready ({guardStatus.contributionAssessment.code}), so the pending-merge coordinator cannot merge.{guardStatus.contributionAssessment.code === 'untrusted-content-model-required' ? ' Pick a provider and model in Content safety policies below.' : ''}
+        </p>
+      )}
       <details className="text-sm rounded-lg border border-port-border p-3">
         <summary className="cursor-pointer text-port-accent">How screening works and its limits</summary>
         <div className="mt-3 space-y-2 text-xs leading-relaxed text-gray-400 max-w-2xl">

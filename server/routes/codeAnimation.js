@@ -8,6 +8,8 @@
  *   POST /api/code-animation/prompt         resolve configurations → { prompt, attachments, frame }
  *   POST /api/code-animation/generate       start a provider run → 202 job
  *   GET  /api/code-animation/jobs           list saved jobs for the gallery
+ *   GET  /api/code-animation/jobs/:id/poster   a completed job's gallery poster (JPEG)
+ *   POST /api/code-animation/jobs/:id/poster   capture a missing poster → { posterVersion } (null when it could not be drawn)
  *   GET  /api/code-animation/generate/:id   poll a job (html once completed)
  *   POST /api/code-animation/:id/export     queue a frame-exact MP4 render → 202 media job
  *   GET  /api/code-animation/:id/package    download a portable source package
@@ -31,6 +33,8 @@ import { filmStyleIdSchema } from '../lib/filmStyleGrammarValidation.js';
 import { getFilmStyleGrammar } from '../lib/filmStyleGrammars.js';
 import {
   buildCodeAnimationRequest,
+  captureCodeAnimationJobPoster,
+  codeAnimationPosterPath,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   listCodeAnimationJobs,
@@ -196,13 +200,27 @@ router.get('/jobs', asyncHandler(async (req, res) => {
     : await pageCodeAnimationJobs(validateRequest(jobsPageSchema, req.query)));
 }));
 
+const exportParamsSchema = z.object({ id: z.string().uuid() }).strict();
+
+router.get('/jobs/:id/poster', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  // The gallery requests it with ?v=<poster mtime>, so a recapture is a new URL.
+  // The header rides only a sent file, so a missing poster's 404 is not cached.
+  res.sendFile(codeAnimationPosterPath(id), { headers: { 'Cache-Control': 'private, max-age=31536000, immutable' } }, (error) => {
+    if (error && !res.headersSent) res.status(404).json({ error: 'Poster not found', code: 'NOT_FOUND' });
+  });
+}));
+
+router.post('/jobs/:id/poster', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await captureCodeAnimationJobPoster(id));
+}));
+
 router.get('/generate/:id', asyncHandler(async (req, res) => {
   const job = await getCodeAnimationJob(req.params.id);
   if (!job) throw new ServerError('Generation job not found', { status: 404, code: 'NOT_FOUND' });
   res.json(job);
 }));
-
-const exportParamsSchema = z.object({ id: z.string().uuid() }).strict();
 
 const projectPageSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),

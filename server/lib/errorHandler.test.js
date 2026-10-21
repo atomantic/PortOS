@@ -597,6 +597,51 @@ describe('errorHandler.js', () => {
       expect(stack).toContain('syntheticServiceFunction');
       expect(stack).not.toContain('normalizeError');
     });
+
+    // --- regression tests for #12586: structured details must render as JSON ---
+    it('renders nested object/array details as readable JSON, not [object Object]', async () => {
+      const { req, res } = makeReqRes(null);
+      const details = {
+        ahead: [{ universe: 'core', version: 13 }],
+        behind: [],
+        senderPortosVersion: '12.4.1',
+      };
+
+      await asyncHandler(async () => {
+        throw new ServerError('schema version conflict', {
+          status: 409,
+          code: 'CONFLICT',
+          context: { details },
+        });
+      })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      const line = errorSpy.mock.calls[0][0];
+      expect(line).not.toContain('[object Object]');
+      expect(line).toContain('ahead=[{"universe":"core","version":13}]');
+      expect(line).toContain('behind=[]');
+      expect(line).toContain('senderPortosVersion=12.4.1');
+    });
+
+    it('renders a cyclic details value as a bounded placeholder without throwing', async () => {
+      const { req, res } = makeReqRes(null);
+      const cyclic = {};
+      cyclic.self = cyclic;
+      const details = { bad: cyclic };
+
+      await asyncHandler(async () => {
+        throw new ServerError('cyclic context', {
+          status: 409,
+          code: 'CONFLICT',
+          context: { details },
+        });
+      })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const line = errorSpy.mock.calls[0][0];
+      expect(line).toContain('bad=[unserializable]');
+    });
   });
 
   describe('sendErrorResponse', () => {

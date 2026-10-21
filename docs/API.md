@@ -269,7 +269,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | POST | `/cos/tools/call` | Execute one schema-validated semantic tool with server-derived authority and idempotency |
 | GET | `/cos/tools/calls/:requestId` | Read a retained normalized tool result |
 | PUT | `/cos/config` | Update configuration |
-| GET | `/cos/tasks` | Bounded task list: all non-completed tasks plus the first 25 completed (`completedCount`, `completedNextCursor`); `view=queue`, `view=completed` (paged), `view=full` (raw unbounded store) |
+| GET | `/cos/tasks` | Bounded task list: all non-completed tasks plus the first 25 completed (`completedCount`, `completedNextCursor`); `view=queue`, `view=completed` (paged), `view=full` (the working set: the open queue plus completed tasks from the last 3 days and the newest 100; older completed history pages through `view=completed`); `limit`/`offset` window the working set |
 | GET | `/cos/tasks/:id` | One task as stored plus the queue it lives in: `{ task, source: 'user' \| 'internal' }`; 404 when unknown |
 | POST | `/cos/evaluate` | Force task evaluation |
 | GET | `/cos/health` | Get health status |
@@ -828,7 +828,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/sprites` | Sprite catalog / export; `POST /import` is host control (it names a host source tree to copy from) |
 | `/api/threejs-models` | Procedural Three.js models |
 | `/api/film-styles` | Read-only film style grammar catalog: picker list (`GET /`), full grammar record (`GET /:id`) and rendered prompt-section preview (`GET /:id/prompt?parts=motion,camera`) |
-| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), the vendored three.js modules the `three` renderer's preview inlines (`GET /vendor/three`; the export stages the same files, hashed, beside the page), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
+| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery with poster thumbnails (`GET`/`POST /jobs/:id/poster`; captured in the jailed preview browser), generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), the vendored three.js modules the `three` renderer's preview inlines (`GET /vendor/three`; the export stages the same files, hashed, beside the page), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
 | `/api/code-animation/execution` | Code Animation contained production execution: platform sandbox and lane readiness (`GET /`), operator-owned tool paths (`PUT /tools`, host control) and the on-demand adversarial containment check (`POST /probe`, host control) ([contract](CODE_ANIMATION_PACKAGES.md#contained-production-execution)) |
 | `/api/image-to-3d` | Image-to-3D conversion |
 | `/api/rigging` | Auto-skin rigging and animation retargeting for image-to-3D models |

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 const api = vi.hoisted(() => ({
   checkImessageSetup: vi.fn(),
+  getImessageBlocklist: vi.fn(),
   getImessageConversationEvents: vi.fn(),
   getImessageConversations: vi.fn(),
   getImessageStats: vi.fn(),
@@ -36,6 +37,7 @@ function renderTab(route = '/messages/imessage') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.getImessageBlocklist.mockResolvedValue({ handles: [] });
   api.getImessageStats.mockResolvedValue({ eventCount: 2, conversationCount: 1, blockedCount: 0 });
   api.getImessageConversations.mockResolvedValue({ conversations: [] });
   api.getImessageConversationEvents.mockResolvedValue({ events: [], identity: null });
@@ -85,5 +87,21 @@ describe('IMessageTab — settings drawer', () => {
     await waitFor(() => {
       expect(api.getImessageConversations.mock.calls.length).toBeGreaterThan(listCalls);
     });
+  });
+});
+
+describe('IMessageTab — blocked handles read', () => {
+  it('shows an error with Retry when the blocklist read fails, then the handles after Retry', async () => {
+    api.getImessageStats.mockResolvedValue({ eventCount: 2, conversationCount: 1, blockedCount: 1 });
+    api.getImessageBlocklist.mockRejectedValueOnce(new Error('blocklist down'));
+    renderTab();
+
+    expect(await screen.findByText(/Could not load blocked handles — blocklist down/)).toBeTruthy();
+
+    api.getImessageBlocklist.mockResolvedValueOnce({ handles: ['+15550100'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('button', { name: 'Unblock +15550100' })).toBeTruthy();
+    expect(screen.queryByText(/Could not load blocked handles/)).toBeNull();
   });
 });

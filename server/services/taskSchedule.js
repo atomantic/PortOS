@@ -762,6 +762,24 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
   });
 }
 
+/** Observations are diagnostic only; journals and fresh service proofs own recovery. */
+export async function recordInitializedRetirementRecovery(appId, observation) {
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const previous = record.branchReconcileOutcome || {};
+    const rows = previous.initializedRetirements || [];
+    const index = rows.findIndex(row => row.transactionId === observation.transactionId);
+    if (index < 0 && rows.length >= 1000) throw new Error('retirement-observation-budget-exceeded');
+    const prior = index < 0 ? null : rows[index];
+    if (prior && Object.entries(observation).every(([key, value]) => prior[key] === value)) return { result: prior, changed: false };
+    const next = [...rows];
+    const row = { ...observation, observedAt: new Date().toISOString() };
+    if (index < 0) next.push(row); else next[index] = row;
+    record.branchReconcileOutcome = { ...previous, initializedRetirements: next };
+    return { result: row, changed: true };
+  });
+}
+
 export async function getBranchReconcileOutcome(appId) {
   const schedule = await loadSchedule();
   return resolveExecutionRecord(schedule, 'branch-reconcile', appId)?.branchReconcileOutcome ?? null;

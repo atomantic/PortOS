@@ -6,7 +6,6 @@ import { describe, it, expect, vi } from 'vitest';
 // under test here.
 vi.mock('../services/cos.js', () => ({}));
 vi.mock('../services/domainUsage.js', () => ({ getAllDomainUsageToday: vi.fn() }));
-vi.mock('../services/taskWatcher.js', () => ({}));
 vi.mock('../services/memoryEmbeddings.js', () => ({ reinitialize: vi.fn() }));
 
 import { cosConfigSchema } from './cosStatusRoutes.js';

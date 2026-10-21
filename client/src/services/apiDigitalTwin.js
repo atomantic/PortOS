@@ -19,7 +19,7 @@ export const updateDigitalTwinDocument = (id, data, options = {}) => request(`/d
 const deleteDigitalTwinDocument = (id) => request(`/digital-twin/documents/${id}`, { method: 'DELETE' });
 
 // Digital Twin - Testing
-export const getDigitalTwinTests = () => request('/digital-twin/tests');
+export const getDigitalTwinTests = (options) => request('/digital-twin/tests', options);
 const runDigitalTwinTests = (providerId, model, testIds = null, personaId = null) => request('/digital-twin/tests/run', {
   method: 'POST',
   body: JSON.stringify({ providerId, model, testIds, personaId })
@@ -28,7 +28,7 @@ const runDigitalTwinMultiTests = (providers, testIds = null, personaId = null, r
   method: 'POST',
   body: JSON.stringify({ providers, testIds, personaId, requestId })
 });
-export const getDigitalTwinTestHistory = (limit = 10) => request(`/digital-twin/tests/history?limit=${limit}`);
+export const getDigitalTwinTestHistory = (limit = 10, options) => request(`/digital-twin/tests/history?limit=${limit}`, options);
 
 // Digital Twin - Values-Alignment Testing (M34 P6)
 export const getValuesAlignmentTests = (options = {}) => request('/digital-twin/values-tests', options);
@@ -68,7 +68,7 @@ const submitDigitalTwinEnrichAnswer = (data, options = {}) => request('/digital-
 });
 
 // Digital Twin - Export
-export const getDigitalTwinExportFormats = () => request('/digital-twin/export/formats');
+export const getDigitalTwinExportFormats = (options = {}) => request('/digital-twin/export/formats', options);
 const exportDigitalTwin = (format, documentIds = null, includeDisabled = false) => request('/digital-twin/export', {
   method: 'POST',
   body: JSON.stringify({ format, documentIds, includeDisabled })
@@ -170,10 +170,10 @@ export const saveEnrichmentList = (category, content, items, options = {}) => re
   body: JSON.stringify({ category, content, items }),
   ...options
 });
-export const getEnrichmentListItems = (category) => request(`/digital-twin/enrich/list-items/${category}`);
+export const getEnrichmentListItems = (category, options) => request(`/digital-twin/enrich/list-items/${category}`, options);
 
 // Digital Twin Traits & Confidence
-export const getDigitalTwinTraits = () => request('/digital-twin/traits');
+export const getDigitalTwinTraits = (options) => request('/digital-twin/traits', options);
 export const analyzeDigitalTwinTraits = (providerId, model, forceReanalyze = false, options = {}) => request('/digital-twin/traits/analyze', {
   method: 'POST',
   body: JSON.stringify({ providerId, model, forceReanalyze }),
@@ -184,16 +184,16 @@ export const updateDigitalTwinTraits = (updates, options = {}) => request('/digi
   body: JSON.stringify(updates),
   ...options
 });
-export const getDigitalTwinConfidence = () => request('/digital-twin/confidence');
+export const getDigitalTwinConfidence = (options) => request('/digital-twin/confidence', options);
 export const calculateDigitalTwinConfidence = (providerId, model, options = {}) => request('/digital-twin/confidence/calculate', {
   method: 'POST',
   body: JSON.stringify({ providerId, model }),
   ...options
 });
-export const getDigitalTwinGaps = () => request('/digital-twin/gaps');
+export const getDigitalTwinGaps = (options) => request('/digital-twin/gaps', options);
 
 // Digital Twin External Import
-export const getDigitalTwinImportSources = () => request('/digital-twin/import/sources');
+export const getDigitalTwinImportSources = (options = {}) => request('/digital-twin/import/sources', options);
 export const openDigitalTwinSpotifyBrowser = (options = {}) => request('/digital-twin/import/spotify/browser/open', {
   method: 'POST',
   ...options
@@ -230,7 +230,7 @@ export const submitTasteAnswer = (section, questionId, answer, meta = {}, option
   body: JSON.stringify({ section, questionId, answer, ...meta }),
   ...options
 });
-export const getTasteSectionResponses = (section) => request(`/digital-twin/taste/${section}/responses`);
+export const getTasteSectionResponses = (section, options) => request(`/digital-twin/taste/${section}/responses`, options);
 export const generateTasteSummary = (providerId, model, section) => request('/digital-twin/taste/summary', {
   method: 'POST',
   body: JSON.stringify({ providerId, model, ...(section ? { section } : {}) })
@@ -253,14 +253,14 @@ export const updateAutobiographyConfig = (config, options = {}) => request('/dig
   body: JSON.stringify(config),
   ...options
 });
-export const getAutobiographyThemes = () => request('/digital-twin/autobiography/themes');
+export const getAutobiographyThemes = (options = {}) => request('/digital-twin/autobiography/themes', options);
 export const getAutobiographyPrompt = (exclude, options = {}) =>
   request(`/digital-twin/autobiography/prompt${exclude ? `?exclude=${exclude}` : ''}`, options);
 export const getAutobiographyPromptById = (id) => request(`/digital-twin/autobiography/prompt/${id}`);
 export const getAutobiographySuggestions = (options = {}) =>
   request('/digital-twin/autobiography/suggestions', options);
-export const getAutobiographyStories = (theme = null) =>
-  request(`/digital-twin/autobiography/stories${theme ? `?theme=${theme}` : ''}`);
+export const getAutobiographyStories = (theme = null, options = {}) =>
+  request(`/digital-twin/autobiography/stories${theme ? `?theme=${theme}` : ''}`, options);
 export const saveAutobiographyStory = (promptId, content, { parentStoryId, customPromptText } = {}, options = {}) =>
   request('/digital-twin/autobiography/stories', {
     method: 'POST',
@@ -303,11 +303,11 @@ export const analyzeAssessment = (content, providerId, model, options = {}) =>
   });
 
 // Digital Twin - Social Accounts
-export const getSocialAccounts = (params = {}) => {
+export const getSocialAccounts = (params = {}, options = {}) => {
   const qs = new URLSearchParams(params).toString();
-  return request(`/digital-twin/social-accounts${qs ? `?${qs}` : ''}`);
+  return request(`/digital-twin/social-accounts${qs ? `?${qs}` : ''}`, options);
 };
-export const getSocialAccountPlatforms = () => request('/digital-twin/social-accounts/platforms');
+export const getSocialAccountPlatforms = (options = {}) => request('/digital-twin/social-accounts/platforms', options);
 export const getSocialAccountStats = () => request('/digital-twin/social-accounts/stats');
 export const createSocialAccount = (data) => request('/digital-twin/social-accounts', {
   method: 'POST',
@@ -322,7 +322,7 @@ export const deleteSocialAccount = (id) => request(`/digital-twin/social-account
 });
 
 // Digital Twin - Time Capsule Snapshots
-export const listTimeCapsuleSnapshots = () => request('/digital-twin/snapshots');
+export const listTimeCapsuleSnapshots = (options) => request('/digital-twin/snapshots', options);
 export const createTimeCapsuleSnapshot = (label, description = '') => request('/digital-twin/snapshots', {
   method: 'POST',
   body: JSON.stringify({ label, description })

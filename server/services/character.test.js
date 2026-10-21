@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const store = vi.hoisted(() => ({
   value: null, birthDate: null, readable: true, beforeWrite: null,
   jira: { instances: {}, projects: [], tickets: [], beforeTickets: null },
-  tasks: { user: { tasks: [] }, cos: { tasks: [] }, before: null },
+  tasks: { completed: [], before: null },
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -48,12 +48,12 @@ vi.mock('./jira.js', () => ({
     return store.jira.tickets;
   }),
 }));
-// character.js reaches cosTaskStore for the one symbol it uses (getAllTasks); syncTaskXP
-// is not exercised here, so the stub only has to satisfy the static import.
-vi.mock('./cosTaskStore.js', () => ({
-  getAllTasks: async () => {
+// character.js reads completed-task summaries from the task repository; syncTaskXP
+// the stub feeds the fixture each test sets on `store.tasks.completed`.
+vi.mock('./cosTaskRepository.js', () => ({
+  listCompletedTaskSummaries: async () => {
     await store.tasks.before?.();
-    return { user: store.tasks.user, cos: store.tasks.cos };
+    return store.tasks.completed;
   },
 }));
 vi.mock('./characterSkills.js', () => ({
@@ -570,7 +570,7 @@ describe('Character mutation queue (#9817)', () => {
     store.birthDate = null;
     store.beforeWrite = null;
     store.jira = { instances: {}, projects: [], tickets: [], beforeTickets: null };
-    store.tasks = { user: { tasks: [] }, cos: { tasks: [] }, before: null };
+    store.tasks = { completed: [], before: null };
   });
 
   afterEach(() => { store.beforeWrite = null; });
@@ -697,7 +697,7 @@ describe('Character mutation queue (#9817)', () => {
 
   describe('imports re-check deduplication after slow discovery', () => {
     it('syncTaskXP does not double-grant a task another writer synced during discovery', async () => {
-      store.tasks.user = { tasks: [{ id: 't1', status: 'completed', title: 'One' }, { id: 't2', status: 'completed', title: 'Two' }] };
+      store.tasks.completed = [{ source: 'user', id: 't1', description: 'One' }, { source: 'user', id: 't2', description: 'Two' }];
       store.tasks.before = async () => {
         // A concurrent writer (e.g. a federation merge) records t1 while discovery is in flight.
         await characterService.applyRemoteSnapshot({
@@ -710,6 +710,22 @@ describe('Character mutation queue (#9817)', () => {
       expect(result.totalXP).toBe(25);
       expect(store.value.syncedTaskIds.sort()).toEqual(['t1', 't2']);
       expect(store.value.xp).toBe(125);
+    });
+
+    it('syncTaskXP grants XP once per completed task, including old ones, and skips ones already synced', async () => {
+      store.tasks.completed = [
+        { source: 'user', id: 't0', description: 'Old and already synced' },
+        { source: 'user', id: 't1', description: 'Recent' },
+        { source: 'internal', id: 't1', description: 'Same id in the other queue' },
+        { source: 'user', id: 't9', description: 'Old and unsynced' },
+      ];
+      store.value.syncedTaskIds = ['t0'];
+      const result = await characterService.syncTaskXP();
+
+      // t0 was already synced; t1 appears in both queues but is granted once.
+      expect(result.taskCount).toBe(2);
+      expect(store.value.syncedTaskIds.sort()).toEqual(['t0', 't1', 't9']);
+      expect((await characterService.syncTaskXP()).taskCount).toBe(0);
     });
 
     it('syncJiraXP does not double-grant a ticket synced during discovery, and keeps a racing edit', async () => {

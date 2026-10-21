@@ -28,6 +28,15 @@ describe('completed claim checkout evidence', () => {
   });
   afterEach(async () => { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
 
+  it('captures the exact ordinary checkout before completion without granting claim authority', async () => {
+    agent.metadata = { isWorktree: true, sourceWorkspace: repoPath, workspacePath: path, worktreeBranch: branch };
+    const receipts = await captureCompletedCheckouts(agent, { success: true });
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ branch, head, incarnation: { pointer: { ino: expect.any(String) } } });
+    expect(await hasCompletedCheckoutEvidence([completed(receipts)], target())).toBe(false);
+    expect(await captureCompletedCheckouts({ ...agent, metadata: { ...agent.metadata, workspacePath: repoPath } }, { success: true })).toEqual([]);
+  });
+
   it('rejects a new checkout reusing the completed branch, path and exact head', async () => {
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toHaveLength(1);

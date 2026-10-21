@@ -1,21 +1,31 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { listMoodBoardNames, listUniverseNames, listUniverseStyles } from '../../services/api';
+import ListLoadError from '../ui/ListLoadError';
 import { BOARD_FOLLOW_UNIVERSE, BOARD_NONE } from '../../lib/styleSourceChoice.js';
 
 export { BOARD_FOLLOW_UNIVERSE, BOARD_NONE };
 
 const rowsOf = (rows) => (Array.isArray(rows) ? rows : []);
 
-/** Load the universes, their style tokens (keyed by id), and the mood boards once. */
+const EMPTY_LISTS = { universes: [], universeStyles: {}, boards: [], loaded: false, error: null };
+
+/**
+ * Load the universes, their style tokens (keyed by id), and the mood boards.
+ * `loaded` is true only after all three reads succeed; a failed read sets
+ * `error` (with `retry`) instead, so the picker never reports "no mood boards"
+ * for a list it could not read.
+ */
 export function useStyleSourceLists() {
-  const [lists, setLists] = useState({ universes: [], universeStyles: {}, boards: [], loaded: false });
+  const [lists, setLists] = useState(EMPTY_LISTS);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
+    setLists(EMPTY_LISTS);
     Promise.all([
-      listUniverseNames({ silent: true }).catch(() => []),
-      listUniverseStyles({ silent: true }).catch(() => []),
-      listMoodBoardNames({ silent: true }).catch(() => []),
+      listUniverseNames({ silent: true }),
+      listUniverseStyles({ silent: true }),
+      listMoodBoardNames({ silent: true }),
     ]).then(([universes, styles, boards]) => {
       if (!active) return;
       setLists({
@@ -23,11 +33,16 @@ export function useStyleSourceLists() {
         universeStyles: Object.fromEntries(rowsOf(styles).map((row) => [row.id, row])),
         boards: rowsOf(boards),
         loaded: true,
+        error: null,
       });
+    }).catch((error) => {
+      if (!active) return;
+      setLists({ ...EMPTY_LISTS, error: error instanceof Error ? error : new Error('Request failed') });
     });
     return () => { active = false; };
-  }, []);
-  return lists;
+  }, [attempt]);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  return { ...lists, retry };
 }
 
 /**
@@ -39,7 +54,7 @@ export default function UniverseMoodBoardPicker({
   lists, universeId, moodBoardChoice, onUniverseChange, onBoardChoiceChange,
   idPrefix, labelClass, inputClass, universeLabel = 'Universe',
 }) {
-  const { universes, universeStyles, boards, loaded } = lists;
+  const { universes, universeStyles, boards, loaded, error, retry } = lists;
   const activeStyle = universeId ? universeStyles[universeId] : null;
   const embrace = activeStyle?.influences?.embrace || [];
   const avoid = activeStyle?.influences?.avoid || [];
@@ -51,6 +66,7 @@ export default function UniverseMoodBoardPicker({
 
   return (
     <>
+      {error && <ListLoadError what="universes and mood boards" error={error} onRetry={retry} />}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label htmlFor={`${idPrefix}-universe`} className={labelClass}>{universeLabel}</label>

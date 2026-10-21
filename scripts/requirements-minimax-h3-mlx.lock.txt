@@ -11,7 +11,7 @@
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.14.2
-certifi==2026.7.22
+certifi==2026.10.19
 cffi==2.1.1
 charset-normalizer==3.4.9
 click==8.4.2
@@ -38,7 +38,7 @@ mlx-vlm==0.6.10
 numpy==2.4.6
 opencv-python==5.0.0.93
 packaging==26.3
-pillow==12.3.0
+pillow==13.0.0
 protobuf==7.35.1
 pycparser==3.0
 pydantic==2.13.4

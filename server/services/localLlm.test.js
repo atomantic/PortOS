@@ -155,7 +155,7 @@ const mocks = vi.hoisted(() => ({
     evictDownloadedQuant: vi.fn(async (id) => ({ success: true, modelId: id })),
     getModelsDir: vi.fn(async () => '/tmp/portos-lmstudio-models'),
     downloadModel: vi.fn(async (id) => ({ success: true, modelId: id })),
-    getStatus: vi.fn(async () => ({ available: false, baseUrl: 'y', loadedModels: 0 })),
+    getStatus: vi.fn(async () => ({ available: true, baseUrl: 'y', loadedModels: 0 })),
     resetCache: vi.fn(),
     isAppInstalled: vi.fn(() => false),
     getLastListError: vi.fn(() => null),
@@ -662,6 +662,21 @@ describe('localLlm', () => {
       expect(r.results.find((x) => x.target === 'llama3.2')).toMatchObject({ status: 'failed' });
       expect(r.results.find((x) => x.target !== 'llama3.2').status).toBe('installed');
       expect(r.results).toHaveLength(2);
+    });
+
+    it('fails when the source backend is down', async () => {
+      // Source lmstudio is down: empty models, getLastListError is null, getStatus reports unavailable
+      mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([]);
+      mocks.lmstudio.getStatus.mockResolvedValueOnce({ available: false });
+
+      const events = [];
+      const r = await svc.migrateBackend('ollama', { onProgress: (e) => events.push(e) });
+
+      expect(r.success).toBe(false);
+      expect(r.error).toBe('LM Studio is unavailable');
+      expect(events.at(-1)).toEqual({ event: 'error', message: 'LM Studio is unavailable' });
+      expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
+      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
     });
 
     it('returns success with no results when the source backend has no models', async () => {
@@ -1428,14 +1443,25 @@ describe('listManagedBackendModels', () => {
     expect(await svc.listManagedBackendModels('ollama')).toEqual({ models: [], error: null });
   });
 
-  // The failed read still surfaces the empty array the manager is holding — the
-  // `error` is what separates it from the genuinely-empty case above, so a
-  // caller keying on `models.length` alone would still get this wrong.
-  it('separates an unreadable list from an empty one', async () => {
+  // When LM Studio is unreachable, getAvailableModels returns [] and sets
+  // lastListError = null (the status card reads available separately).
+  // listManagedBackendModels consults the availability probe to surface
+  // 'LM Studio is unavailable' so callers do not mistake an outage for an
+  // empty model catalog.
+  it('separates an unreadable LM Studio list from an empty one when probe reports unavailable', async () => {
     mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([]);
-    mocks.lmstudio.getLastListError.mockReturnValueOnce('LM Studio is unavailable');
+    mocks.lmstudio.getLastListError.mockReturnValueOnce(null);
+    mocks.lmstudio.getStatus.mockResolvedValueOnce({ available: false });
     expect(await svc.listManagedBackendModels('lmstudio'))
       .toEqual({ models: [], error: 'LM Studio is unavailable' });
+  });
+
+  it('reports a reachable LM Studio backend with no models as a genuinely empty list', async () => {
+    mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([]);
+    mocks.lmstudio.getLastListError.mockReturnValueOnce(null);
+    mocks.lmstudio.getStatus.mockResolvedValueOnce({ available: true });
+    expect(await svc.listManagedBackendModels('lmstudio'))
+      .toEqual({ models: [], error: null });
   });
 
   it('reports a listing that threw outright, with no models', async () => {

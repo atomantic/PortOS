@@ -24,25 +24,35 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join as joinPath } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // runBackup persists state to PATHS.data/backup/state.json. Re-root PATHS at
 // a temp tree so the suite can never write into the live install's data dir.
+// PATHS.data is <install>/data, as in production: a restore runs frozen file
+// migrations, which take the install root and join `data/` themselves.
 var TEST_DATA_ROOT;
 function testDataRoot() {
-  if (!TEST_DATA_ROOT) TEST_DATA_ROOT = mkdtempSync(joinPath(tmpdir(), 'portos-backup-data-'));
+  if (!TEST_DATA_ROOT) {
+    TEST_DATA_ROOT = joinPath(mkdtempSync(joinPath(tmpdir(), 'portos-backup-install-')), 'data');
+    mkdirSync(TEST_DATA_ROOT);
+  }
   return TEST_DATA_ROOT;
 }
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return makePathsProxy(actual, { dataRoot: testDataRoot, overrides: { atomicWrite: vi.fn(actual.atomicWrite) } });
+  // dataPath is overridden too: instanceIdentity.js resolves instances.json
+  // through it, and the restore identity tests read that file (#12596).
+  return makePathsProxy(actual, { dataRoot: testDataRoot, overrides: {
+    atomicWrite: vi.fn(actual.atomicWrite),
+    dataPath: (...segments) => joinPath(testDataRoot(), ...segments),
+  } });
 });
 
 afterAll(() => {
-  if (TEST_DATA_ROOT) rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+  if (TEST_DATA_ROOT) rmSync(dirname(TEST_DATA_ROOT), { recursive: true, force: true });
 });
 
 
@@ -184,6 +194,7 @@ beforeEach(async () => {
   const actual = await vi.importActual('fs/promises');
   fs.readdir.mockImplementation(actual.readdir);
   fs.access.mockImplementation(actual.access);
+  fs.readFile.mockImplementation(actual.readFile);
   fs.unlink.mockImplementation(actual.unlink);
   fs.writeFile.mockImplementation(actual.writeFile);
 });
@@ -651,11 +662,11 @@ describe('deleteSnapshot', () => {
     await fs.rm(destRoot, { recursive: true, force: true });
   });
 
-  async function makeSnapshot(source, id, { marker } = {}) {
+  async function makeSnapshot(source, id, { marker, markerContent = '' } = {}) {
     const dir = joinPath(destRoot, 'snapshots', source, id);
     await fs.mkdir(joinPath(dir, 'data'), { recursive: true });
     await fs.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt: '2026-01-01T00:00:00Z', fileCount: 0 }));
-    if (marker) await fs.writeFile(joinPath(dir, marker), '');
+    if (marker) await fs.writeFile(joinPath(dir, marker), markerContent);
     return dir;
   }
 
@@ -681,9 +692,32 @@ describe('deleteSnapshot', () => {
       .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
   });
 
-  it('refuses a snapshot that is still being written (409 SNAPSHOT_INCOMPLETE), leaving it on disk', async () => {
-    const dir = await makeSnapshot(machineHost, '2026-06-08T15-18-34', { marker: '.in-progress' });
-    await expect(deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: machineHost }))
+  // Only the server process runs runBackup, so in this machine's namespace an
+  // in-progress marker another process wrote (or the legacy empty one) is a
+  // run that a restart killed (#12618).
+  it.each([
+    ['the legacy empty marker', ''],
+    ['another process token', 'previous-process-token'],
+  ])('reports a dead run left by %s as interrupted: never restorable or downloadable, but deletable', async (_label, markerContent) => {
+    const id = '2026-06-08T15-18-34';
+    const dir = await makeSnapshot(machineHost, id, { marker: '.in-progress', markerContent });
+
+    const [snapshot] = await listSnapshots(destRoot);
+    expect(snapshot).toMatchObject({ id, incomplete: false, failed: false, interrupted: true });
+    await expect(openSnapshotStream(destRoot, id, { source: machineHost }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INTERRUPTED' });
+    await expect(restoreSnapshot(destRoot, id, { source: machineHost, dryRun: true }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INTERRUPTED' });
+
+    await deleteSnapshot(destRoot, id, { source: machineHost });
+    await expect(fs.stat(dir)).rejects.toThrow();
+  });
+
+  it("keeps another machine's in-progress snapshot incomplete (409 SNAPSHOT_INCOMPLETE), leaving it on disk", async () => {
+    const dir = await makeSnapshot('previous-machine', '2026-06-08T15-18-34', { marker: '.in-progress' });
+    const [snapshot] = await listSnapshots(destRoot);
+    expect(snapshot).toMatchObject({ incomplete: true, interrupted: false });
+    await expect(deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: 'previous-machine' }))
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
     await expect(fs.stat(dir)).resolves.toBeDefined();
   });
@@ -730,12 +764,14 @@ describe('openSnapshotStream', () => {
     return proc;
   }
 
-  // Same directory, but a marker left behind by a crashed run.
-  function crashedSnapshot() {
+  // Same directory, but an in-progress marker whose owner cannot be read: it
+  // is never presumed dead, so it stays incomplete.
+  function unreadableMarkerSnapshot() {
     fs.stat.mockResolvedValue({ isDirectory: () => true });
     fs.access.mockImplementation((path) => String(path).endsWith('.failed')
       ? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
       : Promise.resolve());                             // .in-progress present
+    fs.readFile.mockRejectedValue(Object.assign(new Error('unreadable'), { code: 'EIO' }));
   }
 
   const ended = (stream) => new Promise((resolveEnd) => stream.once('end', resolveEnd));
@@ -777,10 +813,8 @@ describe('openSnapshotStream', () => {
     }
   });
 
-  it('refuses a snapshot whose .in-progress marker survived a crash', async () => {
-    // activeSnapshotId is module state and resets on restart; the marker is what
-    // still says "this tree was never finished" after PM2 restarts mid-backup.
-    crashedSnapshot();
+  it('refuses a snapshot whose .in-progress marker owner cannot be read', async () => {
+    unreadableMarkerSnapshot();
 
     await expect(openSnapshotStream('/dest', 'snap-1'))
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
@@ -2405,6 +2439,87 @@ describe('restoreSnapshot manifest verification', () => {
     expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotLegacyConfig: expected });
   });
 
+  describe('snapshot from before a store split (#12626)', () => {
+    const legacyPeople = JSON.stringify({ records: {
+      'p-1': { name: 'Example Person', updatedAt: '2026-01-01T00:00:00.000Z' },
+      'p-2': { _deleted: true, updatedAt: '2026-01-02T00:00:00.000Z', deletedAt: '2026-01-02T00:00:00.000Z' },
+    } });
+    const live = (...parts) => joinPath(PATHS.data, ...parts);
+    const readLive = async (...parts) => JSON.parse(await realFs.readFile(live(...parts), 'utf8'));
+
+    beforeEach(async () => {
+      // An upgraded install: split layout at v1 with a record of its own.
+      await realFs.mkdir(live('brain', 'people', 'live-1'), { recursive: true });
+      await realFs.writeFile(live('brain', 'people', 'index.json'), JSON.stringify({ schemaVersion: 1, type: 'people', config: {} }));
+      await realFs.writeFile(live('brain', 'people', 'live-1', 'index.json'), JSON.stringify({ name: 'Live Person' }));
+      invalidateBrainCaches.mockClear();
+    });
+
+    afterEach(async () => {
+      await realFs.rm(live('brain'), { recursive: true, force: true });
+    });
+
+    async function seedSnapshot(files) {
+      const manifest = {};
+      for (const [path, body] of Object.entries(files)) manifest[path] = await writeSnapshotFile(path, body);
+      await writeManifest(manifest);
+    }
+
+    it.each([undefined, 'brain', 'brain/people.json'])('converts a restored legacy Brain store and parks the live one (scope %s)', async (subdirFilter) => {
+      await seedSnapshot({ 'brain/people.json': legacyPeople });
+
+      const preview = await finishRestore({ dryRun: true, subdirFilter });
+      expect(preview.restoredLegacyStores).toEqual([{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'pending', parkedAs: null }]);
+      expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+
+      // rsync is faked, so stand in for its transfer of the snapshot monolith.
+      await realFs.writeFile(live('brain', 'people.json'), legacyPeople);
+      spawn.mockReset();
+      const result = await finishRestore({ dryRun: false, subdirFilter });
+
+      const [converted] = result.restoredLegacyStores;
+      expect(converted).toMatchObject({ store: 'brain/people', status: 'converted', parkedAs: expect.stringMatching(/^brain\/people\.pre-restore-/) });
+      expect(await readLive('brain', 'people', 'p-1', 'index.json')).toMatchObject({ name: 'Example Person' });
+      expect(await readLive('brain', 'people', 'p-2', 'index.json')).toMatchObject({ _deleted: true });
+      expect(existsSync(live('brain', 'people', 'live-1'))).toBe(false);
+      expect(await readLive(converted.parkedAs, 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+      expect(existsSync(live('brain', 'people.json.bak-200'))).toBe(true);
+      expect(invalidateBrainCaches).toHaveBeenCalled();
+    });
+
+    it('treats a split snapshot with a stray re-seeded monolith as current', async () => {
+      await seedSnapshot({
+        'brain/people.json': legacyPeople,
+        'brain/people/index.json': JSON.stringify({ schemaVersion: 1, type: 'people', config: {} }),
+      });
+      await realFs.writeFile(live('brain', 'people.json'), legacyPeople);
+
+      const result = await finishRestore({ dryRun: false });
+      expect(result).not.toHaveProperty('restoredLegacyStores');
+      expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+      expect(existsSync(live('brain', 'people', 'p-1'))).toBe(false);
+    });
+
+    it('leaves Brain alone when the restore scope excludes it', async () => {
+      await seedSnapshot({ 'brain/people.json': legacyPeople, 'cos/example.json': '{}' });
+
+      const result = await finishRestore({ dryRun: false, subdirFilter: 'cos' });
+      expect(result).not.toHaveProperty('restoredLegacyStores');
+      expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+      await realFs.rm(live('cos', 'example.json'), { force: true });
+    });
+
+    it('never parks the live store for a monolith the split would refuse', async () => {
+      const malformed = JSON.stringify({ records: [{ id: 'p-1' }] });
+      await seedSnapshot({ 'brain/people.json': malformed });
+      await realFs.writeFile(live('brain', 'people.json'), malformed);
+
+      const result = await finishRestore({ dryRun: false });
+      expect(result.restoredLegacyStores).toEqual([{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'unreadable', parkedAs: null }]);
+      expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
+    });
+  });
+
   describe('folder restore of an older snapshot (#12355)', () => {
     const liveLedgerPath = () => joinPath(PATHS.data, 'migrations.applied.json');
     const liveQuotaBurnPath = () => joinPath(PATHS.cos, 'quota-burn.json');
@@ -2447,6 +2562,90 @@ describe('restoreSnapshot manifest verification', () => {
       await seedSnapshot({ ledger: ['001-example.js'] });
       await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
       expect(await finishRestore({ dryRun: true })).not.toHaveProperty('ledgerGap');
+    });
+
+    // Snapshots from before migrations moved out of data/ (May 2026) carry the
+    // ledger at migrations/.applied.json. rsync lands it beside the live
+    // migrations.applied.json, which the runner then keeps, so without adoption
+    // a full restore would re-run nothing over the restored records.
+    describe('snapshot with the pre-May-2026 ledger location', () => {
+      const liveLegacyLedgerPath = () => joinPath(PATHS.data, 'migrations', '.applied.json');
+      const parkedLedgers = async () => (await realFs.readdir(PATHS.data)).filter(name => name.startsWith('migrations.applied.json.pre-restore-'));
+
+      afterEach(async () => {
+        await realFs.rm(joinPath(PATHS.data, 'migrations'), { recursive: true, force: true });
+        for (const name of await parkedLedgers()) await realFs.rm(joinPath(PATHS.data, name), { force: true });
+      });
+
+      async function seedLegacySnapshot({ alsoCurrent = false } = {}) {
+        const manifest = { 'migrations/.applied.json': await writeSnapshotFile('migrations/.applied.json', JSON.stringify(['001-example.js'])) };
+        if (alsoCurrent) manifest['migrations.applied.json'] = await writeSnapshotFile('migrations.applied.json', JSON.stringify(['001-example.js']));
+        await writeManifest(manifest);
+      }
+
+      it('announces the adoption in a preview without touching the live ledger', async () => {
+        await seedLegacySnapshot();
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+
+        await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'pending', parkedAs: null } });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js', '359-example.js']);
+      });
+
+      it('installs the restored legacy ledger as the live one and parks the previous ledger', async () => {
+        await seedLegacySnapshot();
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+        // rsync is faked, so stand in for its transfer of the snapshot ledger.
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), JSON.stringify(['001-example.js']));
+
+        const result = await finishRestore({ dryRun: false });
+
+        expect(result.restoredLegacyLedger).toEqual({ status: 'adopted', parkedAs: expect.stringMatching(/^migrations\.applied\.json\.pre-restore-/) });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js']);
+        expect(JSON.parse(await realFs.readFile(joinPath(PATHS.data, result.restoredLegacyLedger.parkedAs), 'utf8'))).toEqual(['001-example.js', '359-example.js']);
+        expect(existsSync(liveLegacyLedgerPath())).toBe(false);
+      });
+
+      it('adopts the ledger on an install that had none, parking nothing', async () => {
+        await seedLegacySnapshot();
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), JSON.stringify(['001-example.js']));
+
+        await expect(finishRestore({ dryRun: false })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'adopted', parkedAs: null } });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js']);
+        expect(await parkedLedgers()).toEqual([]);
+      });
+
+      it('reports an unreadable legacy ledger and keeps the live ledger', async () => {
+        await writeManifest({ 'migrations/.applied.json': await writeSnapshotFile('migrations/.applied.json', '{ not a ledger') });
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), '{ not a ledger');
+
+        await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'unreadable', parkedAs: null } });
+        spawn.mockReset();
+        await expect(finishRestore({ dryRun: false })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'unreadable', parkedAs: null } });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js', '359-example.js']);
+        expect(await parkedLedgers()).toEqual([]);
+      });
+
+      it('leaves a snapshot that also carries a current-path ledger to rsync', async () => {
+        await seedLegacySnapshot({ alsoCurrent: true });
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+
+        const result = await finishRestore({ dryRun: false });
+        expect(result).not.toHaveProperty('restoredLegacyLedger');
+        expect(await parkedLedgers()).toEqual([]);
+      });
+
+      it('keeps the live ledger on a folder restore and reads the legacy ledger for the gap', async () => {
+        await seedLegacySnapshot();
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+
+        const result = await finishRestore({ dryRun: true, subdirFilter: 'cos' });
+        expect(result).not.toHaveProperty('restoredLegacyLedger');
+        expect(result.ledgerGap).toEqual({ count: 1, names: ['359-example.js'] });
+      });
     });
 
     it('converts a restored legacy quota-burn plan to task references, once', async () => {
@@ -2799,20 +2998,150 @@ describe('restoreSnapshot manifest verification', () => {
       }
     }
 
-    it('invalidates execution grants before restoring instance identity bytes', async context => {
+    it.for([
+      { name: 'a never-federated install', live: null },
+      { name: 'this machine\'s own older snapshot', live: '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[{"id":"newer-peer"}]}' },
+    ])('installs instance identity bytes for $name, invalidating execution grants first', async ({ live }, context) => {
       await withRealRsync(context, async () => {
         const { createPeerExecutionAuthority } = await import('../lib/peerExecutionAuthority.js');
         const path = joinPath(PATHS.data, 'peer-execution-authority.json');
+        const identityPath = joinPath(PATHS.data, 'instances.json');
         await realFs.rm(path, { force: true });
-        const authority = createPeerExecutionAuthority(PATHS.data);
-        const before = authority.initialize();
-        const identity = '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[]}';
-        const hash = await writeSnapshotFile('instances.json', identity);
-        await writeManifest({ 'instances.json': hash });
-        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'instances.json' });
-        expect(authority.read().epoch).not.toBe(before.epoch);
-        expect(await realFs.readFile(joinPath(PATHS.data, 'instances.json'), 'utf8')).toBe(identity);
-        await realFs.rm(path, { force: true });
+        await realFs.rm(identityPath, { force: true });
+        if (live) await realFs.writeFile(identityPath, live);
+        try {
+          const authority = createPeerExecutionAuthority(PATHS.data);
+          const before = authority.initialize();
+          const identity = '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[]}';
+          const hash = await writeSnapshotFile('instances.json', identity);
+          await writeManifest({ 'instances.json': hash });
+          const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'instances.json' });
+          expect(result).not.toHaveProperty('identityPreserved');
+          expect(authority.read().epoch).not.toBe(before.epoch);
+          expect(await realFs.readFile(identityPath, 'utf8')).toBe(identity);
+        } finally {
+          await realFs.rm(path, { force: true });
+          await realFs.rm(identityPath, { force: true });
+        }
+      });
+    });
+
+    // #12596: a shared destination lists every machine's snapshots. Installing
+    // another machine's instances.json would give two live installs one
+    // federation identity, so a restore keeps the live one unless adopted.
+    describe('federation identity (#12596)', () => {
+      const LIVE_ID = '00000000-0000-4000-8000-00000000000a';
+      const OTHER_ID = '00000000-0000-4000-8000-00000000000b';
+      const LIVE_IDENTITY = JSON.stringify({ self: { instanceId: LIVE_ID }, peers: [{ id: 'live-peer' }] });
+      const OTHER_IDENTITY = JSON.stringify({ self: { instanceId: OTHER_ID }, peers: [{ id: 'other-peer' }] });
+      const identityPath = () => joinPath(PATHS.data, 'instances.json');
+
+      async function seedOtherMachine({ live = LIVE_IDENTITY } = {}) {
+        // A wrong manifest hash for instances.json proves a preserved identity
+        // is neither verified nor transferred, like the other preserved files.
+        await writeSnapshotFile('instances.json', OTHER_IDENTITY);
+        const neighbor = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+        await writeManifest({ 'instances.json': '0'.repeat(64), [RECORD]: neighbor });
+        await realFs.rm(joinPath(PATHS.data, RECORD), { force: true });
+        await realFs.writeFile(identityPath(), live);
+      }
+
+      afterEach(async () => {
+        await realFs.rm(identityPath(), { force: true });
+        await realFs.rm(joinPath(PATHS.data, 'peer-execution-authority.json'), { force: true });
+        const { resetInstanceIdCache } = await import('./instanceIdentity.js');
+        resetInstanceIdCache();
+      });
+
+      it.for([
+        { name: 'full restore', options: {} },
+        { name: 'folder restore of instances.json', options: { subdirFilter: 'instances.json' } },
+      ])('a $name keeps a different live identity byte-for-byte and reports it in preview and execution', async ({ options }, context) => {
+        await withRealRsync(context, async () => {
+          await seedOtherMachine();
+          const { getInstanceId } = await import('./instanceIdentity.js');
+          expect(await getInstanceId()).toBe(LIVE_ID);
+          const identityPreserved = { liveInstanceId: LIVE_ID, snapshotInstanceId: OTHER_ID };
+
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, ...options });
+          expect(preview).toMatchObject({ identityPreserved, verification: { status: 'verified' } });
+          expect(preview.changedFiles.some(line => line.includes('instances.json'))).toBe(false);
+
+          const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, ...options });
+          expect(result).toMatchObject({ identityPreserved });
+          expect(await realFs.readFile(identityPath(), 'utf8')).toBe(LIVE_IDENTITY);
+          expect(await getInstanceId()).toBe(LIVE_ID);
+          expect(existsSync(joinPath(PATHS.data, RECORD))).toBe(!options.subdirFilter);
+        });
+      });
+
+      it('keeps an unreadable live identity rather than guessing whose it was', async context => {
+        await withRealRsync(context, async () => {
+          await seedOtherMachine({ live: '{ not json' });
+          const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+          expect(result.identityPreserved).toEqual({ liveInstanceId: null, snapshotInstanceId: OTHER_ID });
+          expect(await realFs.readFile(identityPath(), 'utf8')).toBe('{ not json');
+        });
+      });
+
+      it('refuses, before writing, when a live identity appears after the restore was checked', async context => {
+        await withRealRsync(context, async () => {
+          await seedOtherMachine();
+          await writeManifest({
+            'instances.json': createHash('sha256').update(OTHER_IDENTITY).digest('hex'),
+            [RECORD]: createHash('sha256').update('{"value":"snapshot"}').digest('hex'),
+          });
+          // Never federated when checked; paired while verification runs.
+          await realFs.rm(identityPath(), { force: true });
+          fs.readFile.mockImplementation(async (path, ...rest) => {
+            if (String(path).endsWith('manifest.json')) await realFs.writeFile(identityPath(), LIVE_IDENTITY);
+            return realFs.readFile(path, ...rest);
+          });
+
+          await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+            .rejects.toMatchObject({ status: 409, code: 'BACKUP_RESTORE_IDENTITY_CHANGED' });
+          expect(await realFs.readFile(identityPath(), 'utf8')).toBe(LIVE_IDENTITY);
+          expect(existsSync(joinPath(PATHS.data, RECORD))).toBe(false);
+        });
+      });
+
+      it('never installs a snapshot identity that appeared after the check', async context => {
+        await withRealRsync(context, async () => {
+          // A legacy snapshot (no manifest) without instances.json when checked.
+          await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+          await realFs.writeFile(identityPath(), LIVE_IDENTITY);
+          fs.readFile.mockImplementation(async (path, ...rest) => {
+            if (String(path).endsWith('manifest.json')) await writeSnapshotFile('instances.json', OTHER_IDENTITY);
+            return realFs.readFile(path, ...rest);
+          });
+
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+          expect(await realFs.readFile(identityPath(), 'utf8')).toBe(LIVE_IDENTITY);
+          expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+        });
+      });
+
+      it('installs an adopted identity and serves it without a restart', async context => {
+        await withRealRsync(context, async () => {
+          await seedOtherMachine();
+          await writeManifest({
+            'instances.json': createHash('sha256').update(OTHER_IDENTITY).digest('hex'),
+            [RECORD]: createHash('sha256').update('{"value":"snapshot"}').digest('hex'),
+          });
+          const { getInstanceId } = await import('./instanceIdentity.js');
+          expect(await getInstanceId()).toBe(LIVE_ID);
+          const identityAdopted = { liveInstanceId: LIVE_ID, snapshotInstanceId: OTHER_ID };
+
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, adoptIdentity: true });
+          expect(preview).toMatchObject({ identityAdopted });
+          expect(preview).not.toHaveProperty('identityPreserved');
+          expect(preview.changedFiles.some(line => line.includes('instances.json'))).toBe(true);
+
+          const result = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, adoptIdentity: true });
+          expect(result).toMatchObject({ identityAdopted });
+          expect(await realFs.readFile(identityPath(), 'utf8')).toBe(OTHER_IDENTITY);
+          expect(await getInstanceId()).toBe(OTHER_ID);
+        });
       });
     });
 
@@ -3498,6 +3827,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
+        // No snapshot instances.json was approved for install (#12596).
+        '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
         '--dry-run',
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
@@ -3532,6 +3863,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
+        // No snapshot instances.json was approved for install (#12596).
+        '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
       ]);
     });
 
@@ -4027,6 +4360,19 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(reloadSettings).toHaveBeenCalledTimes(1);
       expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     });
+
+    it('names the nested cause when the media index rebuild cannot reach Postgres', async () => {
+      reconcileMediaAssets.mockRejectedValueOnce(
+        new AggregateError([Object.assign(new Error(''), { code: 'ECONNREFUSED' })], ''),
+      );
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.emit('close', 0);
+
+      await expect(pending).rejects.toThrow(/media index rebuild: ECONNREFUSED\)/);
+    });
   });
 });
 
@@ -4151,8 +4497,10 @@ describe('runBackup lifecycle', () => {
       expect(await pending).toBeInstanceOf(Error);
       if (state !== 'reservation') expect(await fsp.readFile(joinPath(oldDir, 'portos-db.sql'), 'utf8')).toBe('old dump');
       if (state === 'failed') expect(await fsp.readFile(joinPath(oldDir, '.failed'), 'utf8')).toBe('old failure');
-      if (state === 'interrupted' || state === 'reservation') expect(await fsp.readFile(guard, 'utf8')).toBe('other reservation');
+      if (state === 'reservation') expect(await fsp.readFile(guard, 'utf8')).toBe('other reservation');
       else await expect(fsp.access(guard)).rejects.toThrow();
+      // The new run converged the dead run's snapshot to a durable failure.
+      if (state === 'interrupted') expect(await fsp.readFile(joinPath(oldDir, '.failed'), 'utf8')).toBe('interrupted by restart');
     } finally {
       vi.useRealTimers();
     }
@@ -4604,6 +4952,9 @@ describe('runBackup lifecycle', () => {
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
     await expect(restore(destRoot, snapshotId, { dryRun: true }))
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    const { deleteSnapshot: remove } = await import('./backup.js');
+    await expect(remove(destRoot, snapshotId))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
     // Only the rsync — neither guard reached tar or a second rsync.
     expect(spawn).toHaveBeenCalledTimes(1);
 
@@ -4735,11 +5086,12 @@ describe('runBackup lifecycle', () => {
     expect(io.emit.mock.calls.some(([event]) => event === 'backup:completed')).toBe(false);
     await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
       .resolves.toBeUndefined();
-    // The on-disk guard, not process state, must block restore after restart.
+    // The on-disk guard, not process state, must block restore after restart,
+    // where the dead process's token makes the snapshot interrupted.
     vi.resetModules();
     const { restoreSnapshot: restoreAfterRestart } = await import('./backup.js');
     await expect(restoreAfterRestart(destRoot, snapshotId, { dryRun: true }))
-      .rejects.toMatchObject({ code: 'SNAPSHOT_INCOMPLETE' });
+      .rejects.toMatchObject({ code: 'SNAPSHOT_INTERRUPTED' });
   });
 
   it('retains incomplete guards when the failed marker cannot be written while releasing the process lock', async () => {
@@ -4966,29 +5318,53 @@ describe('runBackup lifecycle', () => {
 
   // -----------------------------------------------------------------------
   // Retention pruning (#8334) — after a dump-successful run, the oldest COMPLETED
-  // snapshots on THIS machine beyond retentionCount are deleted. Failed,
-  // in-progress, and other-source snapshots must never be touched, and
-  // retentionCount null/undefined must never prune anything (an existing
-  // install with no stored value keeps everything — see backupConfig.js).
+  // snapshots on THIS machine beyond retentionCount are deleted. Failed and
+  // other-source snapshots must never be touched, and retentionCount
+  // null/undefined must never prune a completed snapshot (an existing install
+  // with no stored value keeps everything — see backupConfig.js). Interrupted
+  // snapshots older than the newest completed one are always pruned (#12618).
   // -----------------------------------------------------------------------
   describe('retention pruning', () => {
-    async function seedSnapshot(source, id, { generatedAt, marker } = {}) {
+    async function seedSnapshot(source, id, { generatedAt, marker, markerContent = '' } = {}) {
       const fsp = await actualFs();
       const dir = joinPath(destRoot, 'snapshots', source, id);
       await fsp.mkdir(joinPath(dir, 'data'), { recursive: true });
       if (generatedAt) {
         await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: 0, files: {} }));
       }
-      if (marker) await fsp.writeFile(joinPath(dir, marker), '');
+      if (marker) await fsp.writeFile(joinPath(dir, marker), markerContent);
       return dir;
     }
 
-    it('prunes only the oldest completed snapshots in the current machine namespace, keeping failed/in-progress/other-source snapshots', async () => {
+    async function completeRun(options) {
+      const rsync = fakeProc();
+      spawn.mockReturnValue(rsync);
+      const pending = runBackup(destRoot, null, options);
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+      return pending;
+    }
+
+    it('prunes interrupted snapshots older than the new completed one even under unlimited retention', async () => {
+      const fsp = await actualFs();
+      const completed = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const interrupted = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { marker: '.in-progress', markerContent: 'previous-process-token' });
+      const otherMachine = await seedSnapshot('previous-machine', '2020-01-02T00-00-00', { marker: '.in-progress' });
+
+      const result = await completeRun({ retentionCount: null });
+
+      expect(result).toMatchObject({ status: 'ok', prunedSnapshots: 1 });
+      await expect(fsp.stat(interrupted)).rejects.toThrow();
+      await expect(fsp.stat(completed)).resolves.toBeDefined();
+      await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
+    });
+
+    it('prunes only the oldest completed snapshots in the current machine namespace, keeping failed/other-source snapshots', async () => {
       const fsp = await actualFs();
       const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
       const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
       const old3 = await seedSnapshot(machineHost, '2020-01-03T00-00-00', { generatedAt: '2020-01-03T00:00:00.000Z' });
-      const incomplete = await seedSnapshot(machineHost, '2020-01-04T00-00-00', { marker: '.in-progress' });
+      const interrupted = await seedSnapshot(machineHost, '2020-01-04T00-00-00', { marker: '.in-progress' });
       const failed = await seedSnapshot(machineHost, '2020-01-05T00-00-00', { generatedAt: '2020-01-05T00:00:00.000Z', marker: '.failed' });
       const otherMachine = await seedSnapshot('previous-machine', '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
 
@@ -5006,18 +5382,19 @@ describe('runBackup lifecycle', () => {
       await fsp.writeFile(dumpPath, 'CREATE TABLE example (id integer);');
       pgDump.emit('close', 0);
       const result = await pending;
-      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 2 });
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 3 });
 
       // Keeps the newest 2 completed snapshots on this machine: the run just
-      // created and old3. old1 and old2 are pruned.
+      // created and old3. old1 and old2 are pruned, and the interrupted one
+      // goes without spending the budget.
       await expect(fsp.stat(old1)).rejects.toThrow();
       await expect(fsp.stat(old2)).rejects.toThrow();
       await expect(fsp.stat(old3)).resolves.toBeDefined();
       const newSnapshotDir = joinPath(destRoot, 'snapshots', machineHost, result.snapshotId);
       await expect(fsp.stat(newSnapshotDir)).resolves.toBeDefined();
 
-      // Never touched: still-being-written, failed, and another machine's namespace.
-      await expect(fsp.stat(incomplete)).resolves.toBeDefined();
+      await expect(fsp.stat(interrupted)).rejects.toThrow();
+      // Never touched: failed, and another machine's namespace.
       await expect(fsp.stat(failed)).resolves.toBeDefined();
       await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
     });

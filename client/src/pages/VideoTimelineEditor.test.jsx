@@ -389,7 +389,8 @@ describe('workspace layout — mobile library regression (#5424)', () => {
 
     fireEvent.click(showLibrary);
 
-    const library = screen.getByRole('tablist', { name: 'Clip library' }).parentElement;
+    // The scroll bar sits between the tablist and the panel the page sizes.
+    const library = screen.getByRole('tablist', { name: 'Clip library' }).closest('#timeline-library');
     expect(screen.getByRole('button', { name: 'Hide library' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hide library' })).toHaveAttribute('aria-expanded', 'true');
     expect(workspace?.parentElement).toHaveClass('lg:grid-cols-[260px_1fr_240px]');
@@ -405,13 +406,13 @@ describe('workspace layout — mobile library regression (#5424)', () => {
     const mountedLibrary = library;
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
     fireEvent(window, new Event('resize'));
-    expect(screen.getByRole('tablist', { name: 'Clip library' }).parentElement).toBe(mountedLibrary);
+    expect(screen.getByRole('tablist', { name: 'Clip library' }).closest('#timeline-library')).toBe(mountedLibrary);
   });
 
   it('keeps the desktop library visible in the original left-rail grid position', async () => {
     await renderEditor();
 
-    const library = screen.getByRole('tablist', { name: 'Clip library' }).parentElement;
+    const library = screen.getByRole('tablist', { name: 'Clip library' }).closest('#timeline-library');
     const workspace = screen.getByRole('button', { name: 'Play' }).parentElement?.parentElement;
     expect(screen.getByRole('button', { name: 'Hide library' })).toBeInTheDocument();
     expect(workspace?.parentElement).toHaveClass('lg:grid-cols-[260px_1fr_240px]');

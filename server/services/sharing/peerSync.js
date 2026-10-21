@@ -57,7 +57,18 @@ import {
   peerHasCategory,
   findPeerById,
 } from './peerSyncShared.js';
-import { pushRecordToPeer, buildPushPayload } from './peerSyncPush.js';
+import {
+  pushRecordToPeer,
+  buildPushPayload,
+  beginPushRetryWalk,
+  finishPushRetryWalk,
+  clearPushRetryDue,
+  retainPushRetryDue,
+  isPushRetryDue,
+  listPushRetryDue,
+  registerPushRetryScheduler,
+  resetPushRetryBookkeeping,
+} from './peerSyncPush.js';
 import { applyIncomingPush } from './peerSyncReceive.js';
 import {
   pendingTimers,
@@ -575,42 +586,135 @@ async function getIssueSeriesId(issueId) {
  * set. The unconditional retry + hash short-circuit covers both the
  * "initial push" and "out-of-band drift" cases with the same code path.
  *
- * Failures stay non-fatal — the next `peer:online` (or the user's next
- * edit) gets another attempt.
+ * Failures stay non-fatal. A retryable outcome schedules this walk again
+ * (60s, then 5 min, 15 min, 30 min cap). A refusal or a settled walk waits
+ * for the next `peer:online` or a later edit.
  */
-export async function retryPendingPushesForPeer(peerId) {
-  if (!isNonBlankStr(peerId)) return { walked: 0, pushed: 0 };
-  const subs = await listPeerSubscriptions({ peerId });
-  if (subs.length === 0) return { walked: 0, pushed: 0 };
-  // Separate counter for the log line — only count subs that were never
-  // pushed (genuine retries) so steady-state convergence runs stay quiet.
-  const neverPushedCount = subs.filter(s => !s.lastPushedAt).length;
-  if (neverPushedCount > 0) {
-    console.log(`🔄 peerSync: retrying ${neverPushedCount} pending push${neverPushedCount === 1 ? '' : 'es'} → ${peerId}`);
+// First failure waits a minute; continued failures back off to a 30 min cap
+// so a peer that stays up but keeps 5xx-ing does not get a push storm.
+const PUSH_RETRY_DELAYS_MS = Object.freeze([60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000]);
+const pushRetryState = new Map(); // peerId → { step, timer, consumeAdvance }
+const retryWalksInFlight = new Set();
+
+function armPushRetry(peerId) {
+  if (stopping || !isNonBlankStr(peerId)) return;
+  let state = pushRetryState.get(peerId);
+  if (!state) {
+    state = { step: 0, timer: null, consumeAdvance: false };
+    pushRetryState.set(peerId, state);
   }
-  // Track `walked` (subs we iterated) and `pushed` (HTTP call landed)
-  // separately. `walked === pushed` would be misleading at steady state
-  // because the lastPushedHash short-circuit inside pushRecordToPeer skips
-  // the network call for any sub whose content is unchanged — we still
-  // "walked" the sub but never pushed it.
+  if (state.timer) return;
+  const delay = PUSH_RETRY_DELAYS_MS[Math.min(state.step, PUSH_RETRY_DELAYS_MS.length - 1)];
+  const timer = setTimeout(() => {
+    if (state.timer === timer) state.timer = null;
+    trackBackgroundOperation(runScheduledPushRetry(peerId).catch((err) => {
+      console.error(`❌ peerSync: scheduled push retry failed for ${peerId}: ${err?.message || err}`);
+    }));
+  }, delay);
+  if (typeof timer.unref === 'function') timer.unref();
+  state.timer = timer;
+}
+
+function cancelPushRetry(peerId) {
+  const state = pushRetryState.get(peerId);
+  if (state?.timer) clearTimeout(state.timer);
+  pushRetryState.delete(peerId);
+}
+
+function cancelAllPushRetries() {
+  for (const peerId of [...pushRetryState.keys()]) cancelPushRetry(peerId);
+  resetPushRetryBookkeeping({ keepWalks: retryWalksInFlight.size > 0 });
+}
+
+function scheduleNextPushRetry(peerId) {
+  if (stopping || !isNonBlankStr(peerId)) return;
+  let state = pushRetryState.get(peerId);
+  if (!state) {
+    state = { step: 0, timer: null, consumeAdvance: false };
+    pushRetryState.set(peerId, state);
+  }
+  // The tick that entered this walk consumed its delay. A peer:online walk
+  // does not, so the first failure still waits 60s instead of skipping to 5 min.
+  if (state.consumeAdvance) {
+    state.step = Math.min(state.step + 1, PUSH_RETRY_DELAYS_MS.length - 1);
+    state.consumeAdvance = false;
+  }
+  retainPushRetryDue(peerId);
+  if (!state.timer) armPushRetry(peerId);
+}
+
+async function runScheduledPushRetry(peerId) {
+  if (stopping || !isPushRetryDue(peerId)) return;
+  const peer = await findPeerById(peerId);
+  if (stopping || !isPushRetryDue(peerId)) return;
+  // An offline peer is the probe's problem: `peer:online` runs the walk on
+  // the transition. Rescheduling here would only duplicate that, and a tick
+  // that finds a walk already running must not count as a failed attempt.
+  if (peer?.status !== 'online') return;
+  if (retryWalksInFlight.has(peerId)) return;
+  const state = pushRetryState.get(peerId);
+  if (!state || state.timer) return;
+  state.consumeAdvance = true;
+  await retryPendingPushesForPeer(peerId);
+}
+
+export async function retryPendingPushesForPeer(peerId) {
+  if (!isNonBlankStr(peerId) || stopping) return { walked: 0, pushed: 0 };
+  if (retryWalksInFlight.has(peerId)) return { walked: 0, pushed: 0, skipped: 'in-flight' };
+  let started = false;
+  let walked = 0;
   let pushed = 0;
-  // Coalesce the per-push base-hash flushes: this loop pushes every subscribed
-  // record in sequence, and each push would otherwise rewrite
-  // sync_base_hashes.json once. The flush batch defers them into a single
-  // terminal write covering all N records' stamps.
-  await withBaseHashFlushBatch(async () => {
-    for (const sub of subs) {
-      // peer:online fired — re-probe schema-blocked subs immediately (peer
-      // may have upgraded since the last 409). Edit-triggered pushes still
-      // respect the cooldown.
-      const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
-        logFailureWithStack(`⚠️ peerSync: retry push failed for ${sub.id}`, err);
-        return null;
-      });
-      if (result?.pushed) pushed += 1;
+  let walkFailed = false;
+  try {
+    retryWalksInFlight.add(peerId);
+    beginPushRetryWalk(peerId);
+    started = true;
+    const subs = await listPeerSubscriptions({ peerId });
+    if (subs.length === 0 || stopping) return { walked: 0, pushed: 0 };
+    // Separate counter for the log line — only count subs that were never
+    // pushed (genuine retries) so steady-state convergence runs stay quiet.
+    const neverPushedCount = subs.filter(s => !s.lastPushedAt).length;
+    if (neverPushedCount > 0) {
+      console.log(`🔄 peerSync: retrying ${neverPushedCount} pending push${neverPushedCount === 1 ? '' : 'es'} → ${peerId}`);
     }
-  });
-  return { walked: subs.length, pushed };
+    // Track `walked` (subs we iterated) and `pushed` (HTTP call landed)
+    // separately. `walked === pushed` would be misleading at steady state
+    // because the lastPushedHash short-circuit inside pushRecordToPeer skips
+    // the network call for any sub whose content is unchanged — we still
+    // "walked" the sub but never pushed it.
+    // Coalesce the per-push base-hash flushes: this loop pushes every subscribed
+    // record in sequence, and each push would otherwise rewrite
+    // sync_base_hashes.json once. The flush batch defers them into a single
+    // terminal write covering all N records' stamps.
+    await withBaseHashFlushBatch(async () => {
+      for (const sub of subs) {
+        if (stopping) break;
+        // peer:online fired — re-probe schema-blocked subs immediately (peer
+        // may have upgraded since the last 409). Edit-triggered pushes still
+        // respect the cooldown.
+        const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
+          logFailureWithStack(`⚠️ peerSync: retry push failed for ${sub.id}`, err);
+          return null;
+        });
+        if (result?.pushed) pushed += 1;
+      }
+    });
+    walked = subs.length;
+    return { walked, pushed };
+  } catch (err) {
+    walkFailed = true;
+    throw err;
+  } finally {
+    if (started) {
+      retryWalksInFlight.delete(peerId);
+      const retryable = finishPushRetryWalk(peerId);
+      // A thrown walk did not finish its pushes; keep the chain armed.
+      // Otherwise a clean pass cancels it — including a pass that only
+      // short-circuited — and a retryable pass takes the next backoff step.
+      if (!stopping && (retryable || walkFailed)) scheduleNextPushRetry(peerId);
+      else if (!stopping) clearPushRetryDue(peerId);
+    }
+  }
 }
 
 /**
@@ -750,10 +854,15 @@ export async function syncNowForPeer(peerId) {
 let onUpdated = null;
 let onDeleted = null;
 let onPeerOnline = null;
+// Set by uninstallPeerSyncListener (shutdown). Convergence walks poll it so they
+// stop quietly instead of pushing into a closing DB pool; the next boot's
+// peer:online pass repeats whatever was abandoned (#11750).
+let stopping = false;
 
 /** Attach the `recordEvents` + `peer:online` listeners — call once during sharing init. */
 export function installPeerSyncListener() {
   if (onUpdated) return;
+  stopping = false;
   onUpdated = ({ recordKind, recordId }) => {
     trackBackgroundOperation(triggerPushForRecord(recordKind, recordId).catch((err) => {
       logFailureWithStack(`⚠️ peerSync: listener error for ${recordKind}/${recordId}`, err);
@@ -804,6 +913,7 @@ export function installPeerSyncListener() {
       // peerHasCategory owns the (kind → category) mapping and the fullSync
       // short-circuit, so iterate the kinds and let it decide.
       for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+        if (stopping) return;
         // peerHasCategory short-circuits true for a full-sync peer, so a peer
         // that came online with its category bits off (or a freshly-added
         // full-sync peer whose instanceId we only just learned) still back-
@@ -814,7 +924,9 @@ export function installPeerSyncListener() {
           });
         }
       }
+      if (stopping) return;
       await retryPendingPushesForPeer(peer.instanceId).catch(() => {});
+      if (stopping) return;
       // A full-sync peer added (via defaultPeerFullSync) or toggled before its
       // instanceId was known couldn't be reciprocated by updatePeer — no identity
       // yet. peer:online is the first point we know it, so request the mutual
@@ -827,6 +939,9 @@ export function installPeerSyncListener() {
     })().catch(() => {}));
   };
   instanceEvents.on('peer:online', onPeerOnline);
+  // A failure that landed while stopping (or before this listener existed)
+  // left the due set without a timer. Arm it now that walks are allowed.
+  for (const peerId of listPushRetryDue()) armPushRetry(peerId);
 }
 
 /**
@@ -837,8 +952,13 @@ export function installPeerSyncListener() {
  * test teardown when a follow-up test re-creates events).
  */
 export function uninstallPeerSyncListener() {
+  stopping = true;
   for (const t of pendingTimers.values()) clearTimeout(t);
   pendingTimers.clear();
+  // shutdownSharing and test reset both come through here. Drop the retry
+  // chain so a timer cannot fire into a closing DB pool; an in-flight walk
+  // keeps its depth until its own finally sees `stopping` and does not re-arm.
+  cancelAllPushRetries();
   if (onUpdated) recordEvents.off('updated', onUpdated);
   if (onDeleted) recordEvents.off('deleted', onDeleted);
   if (onPeerOnline) instanceEvents.off('peer:online', onPeerOnline);
@@ -862,6 +982,8 @@ export async function __resetForTests() {
   await drainBackgroundOperations();
   await drainWriteTail();
   await flushBaseHashes();
+  // Direct callers of retryPendingPushesForPeer in later tests never re-install.
+  stopping = false;
 }
 
 /**
@@ -884,6 +1006,11 @@ export async function __drainForTests() {
 // in the other direction (even a dynamic one) formed a load-order-sensitive
 // cycle. Module-load registration is safe: sharing/index.js imports this file
 // during server boot, before any HTTP write can fire an adapter call.
+registerPushRetryScheduler({
+  onDue: armPushRetry,
+  onClear: cancelPushRetry,
+});
+
 registerSubscriptionAdapter({
   autoSubscribeRecordToAllPeers,
   unsubscribeAllForRecord,

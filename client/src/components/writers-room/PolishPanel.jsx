@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sparkles, StopCircle, RotateCcw, Check, X, ArrowRight, Loader2 } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
+import useListResource from '../../hooks/useListResource';
 import useMounted from '../../hooks/useMounted';
 import { useSseProgress, isTerminalSseFrame } from '../../hooks/useSseProgress';
 import { timeAgo, formatCount } from '../../utils/formatters';
@@ -38,7 +40,6 @@ export default function PolishPanel({ work, dirty, blocked = false, onBusyChange
   const [cycles, setCycles] = useState(1);
   const [sseUrl, setSseUrl] = useState(null);
   const [starting, setStarting] = useState(false);
-  const [snapshots, setSnapshots] = useState([]);
   const [reverting, setReverting] = useState(null);
 
   const { frames, latest, closed } = useSseProgress(sseUrl, { enabled: !!sseUrl });
@@ -48,23 +49,21 @@ export default function PolishPanel({ work, dirty, blocked = false, onBusyChange
     return () => onBusyChange?.(false);
   }, [starting, running, reverting, onBusyChange]);
 
-  const refreshSnapshots = useCallback(async () => {
-    const list = await listWritersRoomPolishSnapshots(work.id).catch(() => []);
-    if (mountedRef.current) setSnapshots(list);
-  }, [work.id, mountedRef]);
+  const fetchSnapshots = useCallback(() => listWritersRoomPolishSnapshots(work.id, { silent: true }), [work.id]);
+  const {
+    items: snapshots, state: snapshotsState, error: snapshotsError, retry: refreshSnapshots,
+  } = useListResource(fetchSnapshots);
 
   // On mount / work switch: reset stream state and load existing snapshots. If a
   // run is already active on the server (e.g. this panel was reopened), re-attach.
   useEffect(() => {
     let live = true;
     setSseUrl(null);
-    setSnapshots([]);
-    refreshSnapshots();
     getWritersRoomPolishStatus(work.id)
       .then((s) => { if (s?.active && live && mountedRef.current) setSseUrl(`/api/writers-room/works/${encodeURIComponent(work.id)}/polish/progress`); })
       .catch(() => {});
     return () => { live = false; };
-  }, [work.id, refreshSnapshots, mountedRef]);
+  }, [work.id, mountedRef]);
 
   // When the stream closes on a terminal frame, refresh snapshots and pull the
   // server-mutated body back into the editor.
@@ -227,7 +226,10 @@ export default function PolishPanel({ work, dirty, blocked = false, onBusyChange
         <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1.5">
           Snapshots {snapshots.length > 0 && <span className="text-gray-600">({snapshots.length})</span>}
         </div>
-        {snapshots.length === 0 && (
+        {snapshotsState === 'error' && (
+          <ListLoadError what="snapshots" error={snapshotsError} onRetry={refreshSnapshots} />
+        )}
+        {snapshotsState === 'ready' && snapshots.length === 0 && (
           <div className="text-[11px] text-gray-500 italic">No snapshots yet — run a polish cycle to create revert points.</div>
         )}
         <ul className="space-y-1">

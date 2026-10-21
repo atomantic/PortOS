@@ -62,6 +62,14 @@ const snapshotIdentity = (snapshot) =>
   snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`;
 const snapshotSourceLabel = (snapshot) =>
   snapshot.sourceLabel || snapshot.source || 'Current machine';
+const legacyStoreNames = (stores, status) =>
+  stores.filter(store => store.status === status).map(store => store.store).join(', ');
+const restoreRequest = (snapshot, filter, adoptIdentity) => ({
+  snapshotId: snapshot.id,
+  ...(snapshot.source ? { source: snapshot.source } : {}),
+  subdirFilter: filter.trim() || null,
+  ...(adoptIdentity ? { adoptIdentity: true } : {}),
+});
 
 // ---------------------------------------------------------------------------
 // RestorePanel
@@ -69,36 +77,45 @@ const snapshotSourceLabel = (snapshot) =>
 
 function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
   const filterId = useId();
+  const adoptIdentityId = useId();
   const [filter, setFilter] = useState('');
+  // Kept apart from the accepted preview so the adopt checkbox stays on screen
+  // while toggling it invalidates that preview (#12596).
+  const [identityMismatch, setIdentityMismatch] = useState(null);
+  const [adoptIdentity, setAdoptIdentity] = useState(false);
   const [acceptedPreview, setAcceptedPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
   const previewGenerationRef = useRef(0);
 
-  const currentRequest = {
-    snapshotId: snapshot.id,
-    ...(snapshot.source ? { source: snapshot.source } : {}),
-    subdirFilter: filter.trim() || null,
-  };
+  const currentRequest = restoreRequest(snapshot, filter, adoptIdentity);
   const previewMatchesCurrentRequest = acceptedPreview
     && acceptedPreview.request.snapshotId === currentRequest.snapshotId
     && acceptedPreview.request.source === currentRequest.source
-    && acceptedPreview.request.subdirFilter === currentRequest.subdirFilter;
+    && acceptedPreview.request.subdirFilter === currentRequest.subdirFilter
+    && acceptedPreview.request.adoptIdentity === currentRequest.adoptIdentity;
 
-  const handleFilterChange = useCallback((event) => {
+  const invalidatePreview = useCallback(() => {
     previewGenerationRef.current += 1;
-    setFilter(event.target.value);
     setAcceptedPreview(null);
     setPreviewing(false);
   }, []);
 
+  const handleFilterChange = useCallback((event) => {
+    invalidatePreview();
+    setFilter(event.target.value);
+    setIdentityMismatch(null);
+    setAdoptIdentity(false);
+  }, [invalidatePreview]);
+
+  const handleAdoptIdentityChange = useCallback((event) => {
+    invalidatePreview();
+    setAdoptIdentity(event.target.checked);
+  }, [invalidatePreview]);
+
   const handlePreview = useCallback(async () => {
     const generation = previewGenerationRef.current + 1;
     previewGenerationRef.current = generation;
-    const request = {
-      snapshotId: snapshot.id,
-      ...(snapshot.source ? { source: snapshot.source } : {}),
-      subdirFilter: filter.trim() || null,
-    };
+    const request = restoreRequest(snapshot, filter, adoptIdentity);
     setPreviewing(true);
     setAcceptedPreview(null);
     const outcome = await api.restoreBackup({
@@ -115,8 +132,15 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
       toast.error(`Preview failed: ${outcome.previewError.message}`);
       return;
     }
-    if (outcome.previewResult) setAcceptedPreview({ request, result: outcome.previewResult });
-  }, [snapshot.id, snapshot.source, filter]);
+    if (outcome.previewResult) {
+      const { identityPreserved, identityAdopted } = outcome.previewResult;
+      const mismatch = identityPreserved ?? identityAdopted ?? null;
+      setIdentityMismatch(mismatch);
+      // Never send an adoption the operator can no longer see or uncheck.
+      if (!mismatch) setAdoptIdentity(false);
+      setAcceptedPreview({ request: mismatch ? request : restoreRequest(snapshot, filter, false), result: outcome.previewResult });
+    }
+  }, [snapshot, filter, adoptIdentity]);
 
   const handleRestore = useCallback(async () => {
     if (!previewMatchesCurrentRequest || restoring) return;
@@ -133,7 +157,12 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     if (result) {
       // Execution re-verifies the snapshot; report its status after the preview closes.
       const suffix = result.verification?.status === 'unverified' ? ' (unverified legacy snapshot)' : '';
-      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}`);
+      const parked = (result.restoredLegacyStores ?? []).filter(store => store.parkedAs).map(store => store.parkedAs);
+      const conversion = parked.length > 0 ? `. Converted older-format data; the replaced stores were kept as ${parked.join(', ')}` : '';
+      const ledger = result.restoredLegacyLedger?.status === 'adopted'
+        ? `. Adopted the snapshot's migration record${result.restoredLegacyLedger.parkedAs ? ` (previous record kept as ${result.restoredLegacyLedger.parkedAs})` : ''}; restart PortOS to re-run the migrations it predates`
+        : '';
+      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}${conversion}${ledger}`);
       onClose();
     }
   }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot]);
@@ -193,6 +222,30 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
         Preview changes
       </button>
 
+      {identityMismatch && (
+        <div className="space-y-2 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+          <p className="flex items-start gap-1.5">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            <span className="min-w-0 break-words">
+              This snapshot belongs to another federation identity ({identityMismatch.snapshotInstanceId ?? 'unreadable'}) than this machine ({identityMismatch.liveInstanceId ?? 'unreadable'}). {adoptIdentity
+                ? 'Its instances.json (identity, peers and pair secrets) will replace this machine\'s. If that machine is still running, both will claim the same tasks and sync records.'
+                : 'This machine keeps its own instances.json, so it stays a separate peer; every other file restores normally.'}
+            </span>
+          </p>
+          <label htmlFor={adoptIdentityId} className="flex items-start gap-2 text-gray-300">
+            <input
+              id={adoptIdentityId}
+              type="checkbox"
+              checked={adoptIdentity}
+              onChange={handleAdoptIdentityChange}
+              disabled={restoring}
+              className="mt-0.5"
+            />
+            <span>Adopt the snapshot&apos;s identity — only if the machine that made it is retired</span>
+          </label>
+        </div>
+      )}
+
       {/* Dry-run results */}
       {preview && (
         <div>
@@ -213,6 +266,29 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               <span className="min-w-0 break-words">
                 This snapshot predates {pluralize(preview.ledgerGap.count, 'data migration')} this install has applied ({preview.ledgerGap.names.join(', ')}). A folder restore keeps this install&apos;s migration record, so restored files may stay in their older format. A full restore (leave the folder blank) re-runs the missing migrations on the next start.
+              </span>
+            </p>
+          )}
+          {preview.restoredLegacyLedger && (
+            <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">
+                {preview.restoredLegacyLedger.status === 'unreadable'
+                  ? <>This snapshot&apos;s migration record (<code>migrations/.applied.json</code>) is unreadable, so this install keeps its own record and no migration re-runs over the restored files; repair the snapshot copy or run the migrations by hand afterwards.</>
+                  : <>This snapshot keeps its migration record in the older <code>migrations/.applied.json</code> location. Restoring installs it as this install&apos;s record (the current one is kept as <code>migrations.applied.json.pre-restore-&lt;time&gt;</code>) so the next start re-runs every migration the snapshot predates.</>}
+              </span>
+            </p>
+          )}
+          {preview.restoredLegacyStores?.length > 0 && (
+            <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">
+                {legacyStoreNames(preview.restoredLegacyStores, 'pending') && (
+                  <>This snapshot keeps {legacyStoreNames(preview.restoredLegacyStores, 'pending')} in an older single-file format. Restoring converts it to the current format and moves this install&apos;s copy aside to <code>&lt;store&gt;.pre-restore-&lt;time&gt;</code> instead of merging the two. </>
+                )}
+                {legacyStoreNames(preview.restoredLegacyStores, 'unreadable') && (
+                  <>The snapshot copy of {legacyStoreNames(preview.restoredLegacyStores, 'unreadable')} is unreadable, so it is restored as-is without conversion and its records stay hidden until the file is repaired.</>
+                )}
               </span>
             </p>
           )}
@@ -269,7 +345,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
       // server-side fileCount recount or a middle-row mutation can't hide
       // behind the head/tail id check.
       compare: (prev, next) => prev != null && equalListByKeys(prev, next, [
-        'selectionKey', 'id', 'source', 'fileCount', 'incomplete', 'failed',
+        'selectionKey', 'id', 'source', 'fileCount', 'incomplete', 'failed', 'interrupted',
       ]),
     },
   );
@@ -323,7 +399,9 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               <div className="text-xs text-gray-300 font-mono truncate">{snap.id}</div>
               <div className="text-xs text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</div>
               <div className="text-xs text-gray-600">
-                {snap.incomplete
+                {snap.interrupted
+                  ? 'Interrupted'
+                  : snap.incomplete
                   ? 'Still being written…'
                   : snap.failed
                     ? 'Backup failed — download available for salvage'
@@ -336,7 +414,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
                 // Deliberately disabled across every row, not just this one:
                 // each download spawns a tar over the whole snapshot on the
                 // same external drive, so two at once only thrash the disk.
-                disabled={downloadingId !== null || snap.incomplete}
+                disabled={downloadingId !== null || snap.incomplete || snap.interrupted}
                 aria-label={`Download snapshot ${snap.id} from ${snapshotSourceLabel(snap)}`}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
@@ -345,8 +423,10 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               </button>
               <button
                 onClick={() => setSelectedId(selectedId === snapshotIdentity(snap) ? null : snapshotIdentity(snap))}
-                disabled={snap.incomplete || snap.failed || restoringSnapshotId !== null}
-                title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
+                disabled={snap.incomplete || snap.failed || snap.interrupted || restoringSnapshotId !== null}
+                title={snap.interrupted
+                  ? 'An interrupted backup snapshot cannot be restored'
+                  : snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
                 <RotateCcw size={12} />
@@ -354,7 +434,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               </button>
             </div>
           </div>
-          {selectedId === snapshotIdentity(snap) && !snap.incomplete && !snap.failed && (
+          {selectedId === snapshotIdentity(snap) && !snap.incomplete && !snap.failed && !snap.interrupted && (
             <RestorePanel
               snapshot={snap}
               onClose={() => setSelectedId(null)}

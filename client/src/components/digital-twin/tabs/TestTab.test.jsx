@@ -134,3 +134,56 @@ describe('TestTab multi-model progress (#10063)', () => {
     expect(api.runSoulMultiTests).not.toHaveBeenCalled();
   });
 });
+
+describe('TestTab failed reads stay distinct from empty lists (#12783)', () => {
+  it('shows a retryable error, not "No Test Suite Found", when the suite read fails', async () => {
+    const user = userEvent.setup();
+    api.getDigitalTwinTests.mockRejectedValueOnce(new Error('suite offline'));
+    render(<TestTab onRefresh={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the behavioral test suite — suite offline');
+    expect(screen.queryByText('No Test Suite Found')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Run Selected Tests/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'alpha' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows a retryable error instead of an empty provider picker when providers fail to load', async () => {
+    const user = userEvent.setup();
+    api.getProviders.mockRejectedValueOnce(new Error('providers offline'));
+    render(<TestTab onRefresh={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load AI providers');
+    expect(screen.queryByRole('button', { name: /Run Selected Tests/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'alpha' })).toBeInTheDocument();
+  });
+
+  it('flags failed history and persona reads inline while the rest of the tab stays usable', async () => {
+    const user = userEvent.setup();
+    api.getDigitalTwinTestHistory
+      .mockRejectedValueOnce(new Error('history offline'))
+      .mockResolvedValueOnce([{ runId: 'r1', score: 1, passed: 1, total: 1, model: 'alpha', timestamp: new Date().toISOString() }]);
+    api.getDigitalTwinPersonas
+      .mockRejectedValueOnce(new Error('personas offline'))
+      .mockResolvedValueOnce([{ id: 'persona-1', name: 'Alice Example' }]);
+    render(<TestTab onRefresh={vi.fn()} />);
+
+    await screen.findByRole('button', { name: 'alpha' });
+    const alerts = await screen.findAllByRole('alert');
+    expect(alerts.map(a => a.textContent)).toEqual([
+      expect.stringContaining('Could not load personas — personas offline'),
+      expect.stringContaining('Could not load recent test runs — history offline'),
+    ]);
+    expect(screen.queryByText('Recent Test Runs')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run Selected Tests/ })).toBeInTheDocument();
+
+    await user.click(within(alerts[1]).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Recent Test Runs')).toBeInTheDocument();
+    await user.click(within(alerts[0]).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: 'Alice Example' })).toBeInTheDocument();
+  });
+});

@@ -31,6 +31,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `api.js` | Barrel — re-exports every `apiX.js`. |
 | `apiCore.js` | `request()` and `uploadBody()` (stream File/Blob multipart; legacy base64 JSON) + stable PortOS-app id. Shared error / toast handling. |
 | `apiBatch.js` | `fetchByIds(path, ids, options)` — batch-fetch records through a list route's `?ids=a,b,c` filter (dedupe, empty-list short-circuit, `{ items }` envelope unwrap). |
+| `actionFeedback.js` | Marks the button whose click/submit started a `request()` as `data-pending` until it settles (never `aria-busy`, which stays component-owned) (styled in `index.css`), and counts those requests for `ActionActivityBar`. Installed once from `main.jsx`; no per-component opt-in. |
 | `socket.js` | Singleton Socket.IO client over relative path (Tailscale-friendly). |
 | `appUrls.js` | Compute candidate launch URLs for an app from page context. |
 
@@ -116,7 +117,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiContinuousVideo.js` | Continuous-video episode generation: client-side-callable lint preview of a scene draft, queue-episode submit, and the SSE progress-events URL. |
 | `apiSprites.js` | Sprite Manager records, asset library, production-set import (#2895), reference workflow: create/generate/lock (#2896), directional walk and per-track generation/approval, animation-type definition CRUD (#3153), trim/postprocess, and per-run source-frame listing for the Loop Trimmer's re-derive (#2980), and animation render-provider readiness (#4876). |
 | `apiShell.js` | Shell sessions over HTTP: hand a photo (plus a message) to the agent TUI running in a session. Keystrokes/output stay on the `shell:*` socket protocol. |
-| `apiCodeAnimation.js` | Code Animation: host-contract options, LLM-written briefs from a universe, universe-styled prompt building, a persistent generation gallery, provider jobs, frame-exact export, portable package download, and opt-in Production project settings, immutable candidate/accepted source imports, brief handoff paged run history, and bounded production stage runs (start, cancel, resume). |
+| `apiCodeAnimation.js` | Code Animation: host-contract options, LLM-written briefs from a universe, universe-styled prompt building, a persistent generation gallery with poster thumbnails, provider jobs, frame-exact export, portable package download, and opt-in Production project settings, immutable candidate/accepted source imports, brief handoff paged run history, and bounded production stage runs (start, cancel, resume). |
 | `apiThreejsModels.js` | Procedural Three.js model workspaces: gallery-image generation, refinement, source export, deletion, and the subject-family checklist options. |
 | `apiImageTo3d.js` | Image-to-3D (`/3d`): selectable targets (TRELLIS.2) with host availability/install status, and per-image model records — create/list/get/generate/delete + GLB asset URL, the full-resolution OBJ download URL, and the AR Quick Look USDZ upload/download pair. |
 | `apiPipeline.js` | Pipeline (issues + stages + canon; series names and index summaries). |

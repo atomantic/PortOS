@@ -5,9 +5,8 @@
  * When a peer's cloud-sync app drops a new manifest into the shared folder,
  * chokidar fires `add` and we ingest it via importer.processManifest. When
  * asset files arrive after the manifest, we rescan the backlog so pending
- * manifests can finish. Mirrors the pattern in server/services/taskWatcher.js
- * — persistent + ignoreInitial + awaitWriteFinish so we don't pick up the file
- * mid-write.
+ * manifests can finish. The chokidar options are persistent + ignoreInitial +
+ * awaitWriteFinish so we don't pick up the file mid-write.
  *
  * Per-bucket watchers are kept in a map keyed by bucket id so a bucket
  * registration / removal can attach / detach individually without restarting

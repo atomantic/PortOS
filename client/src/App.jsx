@@ -90,7 +90,15 @@ const DeckDetail = lazyWithReload(() => import('./pages/DeckDetail'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
 const Templates = lazyWithReload(() => import('./pages/Templates'));
 const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
-const Brain = lazyWithReload(() => import('./pages/Brain'));
+// Inbox (the capture form) is Brain's landing tab and its own lazy chunk; start
+// it alongside the page chunk instead of after it renders, one round trip
+// fewer before the form can take input on a phone.
+const Brain = lazyWithReload(() => {
+  if (/^\/brain(\/inbox)?\/?$/.test(window.location.pathname)) {
+    import('./components/brain/tabs/InboxTab').catch(() => {});
+  }
+  return import('./pages/Brain');
+});
 const BrainScanReport = lazyWithReload(() => import('./pages/BrainScanReport'));
 const Security = lazyWithReload(() => import('./pages/Security'));
 const DigitalTwin = lazyWithReload(() => import('./pages/DigitalTwin'));
@@ -616,6 +624,7 @@ export default function App() {
           <Route path="objects" element={<CreativeLibrary key="objects" libraryId="objects" />} />
           <Route path="objects/:id/:tab?" element={<CatalogIngredient />} />
           <Route path="code-animation" element={<CodeAnimation />} />
+          <Route path="code-animation/gallery" element={<CodeAnimation />} />
           <Route path="code-animation/:jobId" element={<CodeAnimation />} />
           <Route path="code-animation/production" element={<CodeAnimation />} />
           <Route path="code-animation/production/:projectId" element={<CodeAnimation />} />

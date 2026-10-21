@@ -75,17 +75,50 @@ import { markUsageRunReconciled, recordRunUsage } from './usage.js';
 // per-message claim below, not by the window.
 export const WINDOW_SLACK_MS = 60_000;
 
-// Messages already billed to a run, keyed `<transcript-key>:<message-key>`.
+// How long a claim outlives the window that made it. A later run can only
+// re-count a message whose timestamp falls inside ITS window, so a claim is
+// needed only while some run still to be reconciled can start before the
+// message. Every run path is bounded far below this (the CoS max-runtime
+// ceiling, the toolkit's API run cap), and the ledger never sees in-flight
+// runs, so a fixed bound stands in for "oldest pending run start". A live run
+// that outlives it can re-bill a pruned neighbour's overlap — the same exposure
+// a server restart, which empties the ledger, already accepts. The historical
+// backfill, which reaches runs of any age, does not rely on these claims for
+// old windows: it re-claims what settled runs billed from their run records.
+export const CLAIM_RETENTION_MS = 48 * 60 * 60 * 1000;
+
+// Messages already billed to a run: transcript key -> message key -> stamp.
 // A transcript message must be counted exactly ONCE across every run that can
 // see it: without this, two concurrent runs in the same cwd (or one run whose
 // window overlaps a neighbour's through WINDOW_SLACK_MS) each fold the same
-// tokens and the cost report doubles. Module-instance-local by design — the
-// live completion path (this module, in the main thread) and the historical
+// tokens and the cost report doubles. The stamp is an UPPER bound on the
+// message's own timestamp (the claiming run's window end), which is what makes
+// `pruneUsageClaims` safe: a message older than every possible future window
+// can never be counted again. Module-instance-local by design — the live
+// completion path (this module, in the main thread) and the historical
 // backfill worker (a SEPARATE module instance in a worker thread) each get
-// their own copy of this Set, so `snapshotUsageClaims`/`mergeUsageClaims`
-// hand claims across that boundary; see `usageBackfill.js`. A restart loses
-// the ledger, but a run that already completed is never reconciled again.
-const claimedMessages = new Set();
+// their own copy, so `snapshotUsageClaims`/`mergeUsageClaims` hand claims
+// across that boundary; see `usageBackfill.js`. A restart loses the ledger,
+// but a run that already completed is never reconciled again.
+const claimedMessages = new Map();
+
+const isClaimed = (fileKey, messageKey) => claimedMessages.get(fileKey)?.has(messageKey) === true;
+
+const addClaim = (fileKey, messageKey, stampMs) => {
+  let messages = claimedMessages.get(fileKey);
+  if (!messages) {
+    messages = new Map();
+    claimedMessages.set(fileKey, messages);
+  }
+  messages.set(messageKey, Math.max(messages.get(messageKey) ?? stampMs, stampMs));
+};
+
+const removeClaim = (fileKey, messageKey) => {
+  const messages = claimedMessages.get(fileKey);
+  if (!messages) return;
+  messages.delete(messageKey);
+  if (messages.size === 0) claimedMessages.delete(fileKey);
+};
 
 // The ABSOLUTE cumulative position of each Codex rollout that has already been
 // billed, keyed by file path. Codex reports cumulative totals, so a rollout that
@@ -112,15 +145,19 @@ export function __resetUsageClaims() {
  * billed by both.
  */
 export function snapshotUsageClaims() {
+  const claimed = [];
+  for (const [fileKey, messages] of claimedMessages) {
+    for (const [messageKey, stampMs] of messages) claimed.push([fileKey, messageKey, stampMs]);
+  }
   return {
-    claimedMessages: [...claimedMessages],
+    claimedMessages: claimed,
     codexHighWater: [...codexHighWater.entries()]
   };
 }
 
 /** Merge claims made elsewhere (a worker thread's ledger) into this one. */
 export function mergeUsageClaims({ claimedMessages: claimed = [], codexHighWater: highWater = [] } = {}) {
-  for (const key of claimed) claimedMessages.add(key);
+  for (const [fileKey, messageKey, stampMs] of claimed) addClaim(fileKey, messageKey, stampMs);
   for (const [path, value] of highWater) {
     const existing = codexHighWater.get(path);
     codexHighWater.set(path, existing ? {
@@ -130,6 +167,25 @@ export function mergeUsageClaims({ claimedMessages: claimed = [], codexHighWater
       cacheReadTokens: Math.max(existing.cacheReadTokens || 0, value.cacheReadTokens || 0),
       cacheWriteTokens: Math.max(existing.cacheWriteTokens || 0, value.cacheWriteTokens || 0)
     } : value);
+  }
+}
+
+/**
+ * Drop every claim no run still to be reconciled can re-count (see
+ * CLAIM_RETENTION_MS), so the ledger is bounded by recent activity rather than
+ * by the life of the process. The Codex high-water marks are NOT pruned: they
+ * are one entry per rollout file, not per message, and a rollout that resumes
+ * after its mark was dropped would re-bill its whole cumulative total.
+ *
+ * @param {number} [nowMs]
+ */
+function pruneUsageClaims(nowMs = Date.now()) {
+  const cutoff = nowMs - CLAIM_RETENTION_MS - WINDOW_SLACK_MS;
+  for (const [fileKey, messages] of claimedMessages) {
+    for (const [messageKey, stampMs] of messages) {
+      if (stampMs < cutoff) messages.delete(messageKey);
+    }
+    if (messages.size === 0) claimedMessages.delete(fileKey);
   }
 }
 
@@ -404,8 +460,7 @@ async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFr
       const chatPath = join(sessionDir, 'chat_history.jsonl');
       const chatText = await tryReadFile(chatPath);
       if (!chatText) continue;
-      const claimKey = `${chatPath}:session`;
-      if (claimedMessages.has(claimKey)) continue;
+      if (isClaimed(chatPath, 'session')) continue;
       const chat = parseGrokChatHistory(chatText);
       const estimated = {
         messages: chat.messages,
@@ -415,7 +470,8 @@ async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFr
         cacheWriteTokens: 0
       };
       if (totalTranscriptTokens(estimated) === 0) continue;
-      claim(claimKey);
+      // The session can run past this window, so stamp it by its own end too.
+      claim(chatPath, 'session', Number.isFinite(endedMs) ? endedMs : null);
       const named = chat.model || summary.current_model_id || null;
       const modelKey = named ?? UNKNOWN_MODEL;
       fold({ ...estimated, models: named ? [named] : [], byModel: { [modelKey]: { ...estimated } } }, 'estimate');
@@ -563,6 +619,8 @@ const FAMILY_READERS = Object.assign(Object.create(null), {
  * @param {string|null} run.endTime ISO
  * @param {'claude'|'codex'|'grok'|'agy'|'kimi'} run.family
  * @param {string} [run.home] override for tests
+ * @param {string|null} [run.seenUntil] ISO; caps the window end at the moment a
+ *   transcript could last have been read, for replaying a read made back then
  * @returns {Promise<null|{ source: 'measured'|'estimate'|'mixed', family: string,
  *   sessions: number, model: string|null, messages: number, tokensIn: number,
  *   tokensOut: number, cacheReadTokens: number, cacheWriteTokens: number,
@@ -571,13 +629,15 @@ const FAMILY_READERS = Object.assign(Object.create(null), {
  *   died mid-turn, and Antigravity is always an estimate (it writes no token
  *   counts anywhere).
  */
-export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir() } = {}) {
+export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir(), seenUntil = null } = {}) {
   if (!workspacePath || !family) return null;
 
   const startMs = Date.parse(startTime || '');
   const endMs = Date.parse(endTime || '');
+  const seenMs = Date.parse(seenUntil || '');
   const from = Number.isNaN(startMs) ? null : startMs - WINDOW_SLACK_MS;
-  const to = Number.isNaN(endMs) ? null : endMs + WINDOW_SLACK_MS;
+  const slackTo = Number.isNaN(endMs) ? null : endMs + WINDOW_SLACK_MS;
+  const to = slackTo != null && Number.isFinite(seenMs) ? Math.min(slackTo, seenMs) : slackTo;
 
   const totals = {
     source: 'measured',
@@ -614,11 +674,13 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     }
   };
 
-  // Keys reserved by THIS call, so a failed/empty read can release them.
+  // [fileKey, messageKey] pairs reserved by THIS call, so a failed/empty read
+  // can release them. Every message this call counts lies inside its window,
+  // so the window end (or now, for an unbounded read) bounds its timestamp.
   const reserved = [];
-  const claim = (claimKey) => {
-    claimedMessages.add(claimKey);
-    reserved.push(claimKey);
+  const claim = (fileKey, messageKey, laterStampMs = null) => {
+    addClaim(fileKey, messageKey, Math.max(to ?? Date.now(), laterStampMs ?? -Infinity));
+    reserved.push([fileKey, messageKey]);
   };
   // Codex high-water marks advanced by this call, as [path, previousValue], so
   // an empty read restores the prior boundary instead of stranding it.
@@ -626,12 +688,9 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
   // Per-file view of the global ledger: a message key is only meaningful within
   // its own transcript, so scope the claim by file path to avoid a same-id
   // collision across two different sessions.
-  const excludeFor = (fileKey) => {
-    const prefix = `${fileKey}:`;
-    return {
-      has: (messageKey) => claimedMessages.has(prefix + messageKey)
-    };
-  };
+  const excludeFor = (fileKey) => ({
+    has: (messageKey) => isClaimed(fileKey, messageKey)
+  });
   // Reserve IMMEDIATELY after each file is parsed, before the next `await`.
   // Deferring every claim to the end of the read would reopen the race the
   // ledger exists to close: this function awaits once per file, so two
@@ -639,14 +698,11 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
   // bill it. Reserving synchronously per file means the second run's read of
   // file A already sees the first run's claim.
   const reserveFrom = (fileKey, parsed) => {
-    for (const key of parsed.countedKeys || []) {
-      const claimKey = `${fileKey}:${key}`;
-      claim(claimKey);
-    }
+    for (const key of parsed.countedKeys || []) claim(fileKey, key);
   };
   // Nothing was attributable after all — release so a later run can claim it.
   const releaseReserved = () => {
-    for (const key of reserved) claimedMessages.delete(key);
+    for (const [fileKey, messageKey] of reserved) removeClaim(fileKey, messageKey);
     for (const [path, previous] of codexReserved) {
       if (previous == null) codexHighWater.delete(path);
       else codexHighWater.set(path, previous);
@@ -896,24 +952,32 @@ export async function recordCompletedRunUsage(metadata, output, { home = homedir
   const resolved = providers ?? await import('./providers.js')
     .then((module) => module.listProviders())
     .catch(() => null);
+  // Same condition `reconcileRunUsage` scans siblings under.
+  const siblingsScanned = Array.isArray(resolved) && resolved.length > 0;
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
   await reconcileRunUsage(metadata, estimate, { home, providers: resolved, estimateSource })
     .then(recordRunUsage)
     .then(async () => {
       if (!metadata?.id) return;
-      await markUsageRunReconciled(metadata.id);
+      await markUsageRunReconciled(metadata.id, { siblings: siblingsScanned });
       const metadataPath = join(PATHS.runs, metadata.id, 'metadata.json');
       // Non-strict exception: missing/unreadable metadata skips the marker
       // write; the usage ledger remains authoritative for the accounting.
       const persisted = await readJSONFile(metadataPath, null);
       if (!persisted) return;
+      const now = new Date().toISOString();
       persisted.usageReconciled = true;
-      persisted.usageReconciledAt = new Date().toISOString();
+      persisted.usageReconciledAt = now;
+      if (siblingsScanned) {
+        persisted.usageSiblingsReconciled = true;
+        persisted.usageSiblingsReconciledAt = now;
+      }
       await atomicWrite(metadataPath, persisted);
     })
     .catch((err) => {
       maintenance.markCurrentUnsettled();
       console.error(`❌ Failed to record usage: ${err.message}`);
     });
+  pruneUsageClaims();
 }

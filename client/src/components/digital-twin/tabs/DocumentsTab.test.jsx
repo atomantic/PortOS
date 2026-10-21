@@ -46,3 +46,27 @@ describe('DocumentsTab failed save', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Document saved'));
   });
 });
+
+describe('DocumentsTab failed load', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows a retryable load error instead of "No documents yet", then the list once Retry succeeds', async () => {
+    api.getDigitalTwinDocuments.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([DOC]);
+    const user = userEvent.setup();
+    render(<DocumentsTab onRefresh={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load documents');
+    expect(screen.queryByText('No documents yet')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: /Core Values/ })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps "No documents yet" for a genuinely empty library', async () => {
+    api.getDigitalTwinDocuments.mockResolvedValue([]);
+    render(<DocumentsTab onRefresh={vi.fn()} />);
+    expect(await screen.findByText('No documents yet')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

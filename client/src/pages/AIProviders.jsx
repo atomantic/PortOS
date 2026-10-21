@@ -105,7 +105,16 @@ export default function AIProviders() {
   const [showRunPanel, setShowRunPanel] = useState(false);
   const [runPrompt, setRunPrompt] = useState('');
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
-  const [orchestrationProfiles, setOrchestrationProfiles] = useState([]);
+  const loadOrchestrationProfiles = useCallback(async () => {
+    const result = await api.getOrchestrationProfiles?.({ silent: true });
+    return Array.isArray(result) ? result : result?.profiles || [];
+  }, []);
+  const {
+    items: orchestrationProfiles,
+    state: orchestrationProfilesState,
+    error: orchestrationProfilesError,
+    retry: retryOrchestrationProfiles,
+  } = useListResource(loadOrchestrationProfiles);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const loadApps = useCallback(async () => {
     const list = await api.getApps({ silent: true });
@@ -116,8 +125,19 @@ export default function AIProviders() {
   const [activeRun, setActiveRun] = useState(null);
   const [runOutput, setRunOutput] = useState('');
   const [showSamples, setShowSamples] = useState(false);
-  const [sampleProviders, setSampleProviders] = useState([]);
-  const [loadingSamples, setLoadingSamples] = useState(false);
+  // Samples are fetched only once the user asks for them (`showSamples`).
+  const loadSamples = useCallback(async () => {
+    const result = await api.getSampleProviders({ silent: true });
+    return result?.providers || [];
+  }, []);
+  const {
+    items: sampleProviders,
+    state: samplesState,
+    error: samplesError,
+    retry: retrySamples,
+    setItems: setSampleProviders,
+  } = useListResource(loadSamples, { enabled: showSamples });
+  const loadingSamples = showSamples && samplesState === 'loading';
   const [addingSample, setAddingSample] = useState({});
   // Samples this machine could actually run. One the server marked
   // hardware-`unavailable` has no path to becoming usable here, so it is not
@@ -288,13 +308,12 @@ export default function AIProviders() {
     setLoadError(false);
     let providersFailed = false;
     const statusRevision = ++observationRevision.current.status;
-    const [providersData, statusData, orchestrationProfilesData] = await Promise.all([
+    const [providersData, statusData] = await Promise.all([
       api.getProviders({ fresh: true }).catch(() => {
         providersFailed = true;
         return null;
       }),
       api.getProviderStatuses().catch(() => ({ providers: {} })),
-      api.getOrchestrationProfiles?.({ silent: true }).catch(() => ({ profiles: [] })),
     ]);
     if (providersFailed || !providersData) {
       setLoadError(true);
@@ -311,10 +330,6 @@ export default function AIProviders() {
         : null);
     }
     if (statusRevision === observationRevision.current.status) setStatuses(statusData.providers || {});
-    const profList = Array.isArray(orchestrationProfilesData)
-      ? orchestrationProfilesData
-      : orchestrationProfilesData?.profiles || [];
-    setOrchestrationProfiles(profList);
     setLoading(false);
   };
 
@@ -586,12 +601,11 @@ export default function AIProviders() {
     }
   };
 
-  const handleLoadSamples = async () => {
-    setLoadingSamples(true);
-    setShowSamples(true);
-    const result = await api.getSampleProviders().catch(() => ({ providers: [] }));
-    setSampleProviders(result.providers || []);
-    setLoadingSamples(false);
+  // First open fetches via `enabled`; re-selecting "Load Samples" while the
+  // panel is already open re-fetches.
+  const handleLoadSamples = () => {
+    if (showSamples) retrySamples();
+    else setShowSamples(true);
   };
 
   const handleAddSample = async (provider) => {
@@ -922,6 +936,8 @@ export default function AIProviders() {
 
           {loadingSamples ? (
             <div className="text-center py-6 text-gray-400">Loading sample providers...</div>
+          ) : samplesState === 'error' ? (
+            <ListLoadError what="sample providers" error={samplesError} onRetry={retrySamples} />
           ) : addableSamples.length === 0 ? (
             <div className="text-center py-6 text-gray-500">
               {sampleProviders.length === 0
@@ -1032,17 +1048,21 @@ export default function AIProviders() {
               />
             </div>
 
-            <select
-              aria-label="Orchestration profile"
-              value={selectedProfileId}
-              onChange={(e) => setSelectedProfileId(e.target.value)}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
-            >
-              <option value="">No profile (direct)</option>
-              {orchestrationProfiles.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+            {orchestrationProfilesState === 'error' ? (
+              <ListLoadError what="orchestration profiles" error={orchestrationProfilesError} onRetry={retryOrchestrationProfiles} />
+            ) : (
+              <select
+                aria-label="Orchestration profile"
+                value={selectedProfileId}
+                onChange={(e) => setSelectedProfileId(e.target.value)}
+                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
+              >
+                <option value="">No profile (direct)</option>
+                {orchestrationProfiles.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            )}
 
             {appsState === 'error' && (
               <ListLoadError what="workspaces" error={appsError} onRetry={retryApps} />

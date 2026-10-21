@@ -17,6 +17,7 @@ import toast from '../ui/Toast';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import Field from '../ui/FormField';
+import ListLoadError from '../ui/ListLoadError';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatTimecode } from '../../utils/formatters';
@@ -68,6 +69,8 @@ export default function AlbumsManager() {
   const [albums, setAlbums] = useState([]);
   const [allTracks, setAllTracks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -83,17 +86,27 @@ export default function AlbumsManager() {
   const setCover = (url) => setForm((f) => ({ ...f, coverImageUrl: url }));
   const clearGeneration = () => { genRequestRef.current += 1; setGenJobId(null); setStartingGen(false); };
 
+  // Albums and the track pool load together; either failing is an error with
+  // Retry, never an empty list (and never a "not found" for the open album).
   useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setLoadError(null);
     Promise.all([
-      listAlbums().catch(() => []),
-      listTracks({ silent: true }).catch(() => []),
+      listAlbums({ silent: true }),
+      listTracks({ silent: true }),
     ])
       .then(([albumList, trackList]) => {
+        if (!active) return;
         setAlbums(Array.isArray(albumList) ? albumList : []);
         setAllTracks(Array.isArray(trackList) ? trackList : []);
       })
-      .finally(() => setLoading(false));
-  }, []);
+      .catch((err) => {
+        if (active) setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [loadAttempt]);
 
   useEffect(() => {
     if (!genJobId) return;
@@ -112,7 +125,7 @@ export default function AlbumsManager() {
     () => (isCreate || !id ? null : albums.find((a) => a.id === id) || null),
     [albums, id, isCreate],
   );
-  const notFound = !isCreate && !!id && !loading && !selected;
+  const notFound = !isCreate && !!id && !loading && !loadError && !selected;
   const tracksById = useMemo(() => new Map(allTracks.map((t) => [t.id, t])), [allTracks]);
   const canGenerate = !!(form.title.trim() || form.genre.trim() || form.description.trim());
 
@@ -126,7 +139,7 @@ export default function AlbumsManager() {
   const hydratedRef = useRef(null);
   const selectionKey = id ?? null;
   useEffect(() => {
-    if (loading) return;
+    if (loading || loadError) return;
     if (hydratedRef.current === selectionKey) return;
     hydratedRef.current = selectionKey;
     cancelDelete();
@@ -134,7 +147,7 @@ export default function AlbumsManager() {
     setTrackPickerOpen(false);
     if (isCreate) setForm(emptyForm());
     else if (selected) setForm(formFromAlbum(selected));
-  }, [selectionKey, isCreate, selected, loading]);
+  }, [selectionKey, isCreate, selected, loading, loadError]);
 
   const handleGenerateCover = async () => {
     if (isGenerating) return;
@@ -251,6 +264,8 @@ export default function AlbumsManager() {
         <div className="bg-port-card border border-port-border rounded-lg p-2">
           {loading ? (
             <div className="text-sm p-2"><BrailleSpinner text="Loading…" /></div>
+          ) : loadError ? (
+            <ListLoadError what="albums" error={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} />
           ) : albums.length === 0 ? (
             <div className="text-gray-500 text-sm p-2">
               No albums yet.{' '}

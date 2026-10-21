@@ -5,7 +5,7 @@
  * on behalf of the user, using their digital twin identity to make decisions.
  *
  * Jobs are different from tasks:
- * - Tasks are one-shot work items (TASKS.md)
+ * - Tasks are one-shot work items (the CoS task queues)
  * - Jobs are recurring schedules that generate tasks when due
  *
  * Job types:

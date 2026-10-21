@@ -10,6 +10,7 @@ import {
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
+import ListLoadError from '../../ui/ListLoadError';
 
 import {
   STATUS_COLORS,
@@ -22,6 +23,8 @@ export default function TrustTab({ onRefresh }) {
   const [entries, setEntries] = useState([]);
   const [counts, setCounts] = useState({});
   const [settings, setSettings] = useState(null);
+  const [inboxError, setInboxError] = useState(null);
+  const [settingsError, setSettingsError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [expandedId, setExpandedId] = useState(null);
@@ -29,15 +32,26 @@ export default function TrustTab({ onRefresh }) {
   const [settingsForm, setSettingsForm] = useState({});
 
   const fetchData = useCallback(async () => {
-    const [inboxData, settingsData] = await Promise.all([
-      api.getBrainInbox({ status: statusFilter || undefined, limit: 100 }).catch(() => ({ entries: [], counts: {} })),
-      api.getBrainSettings().catch(() => null)
+    const asError = (error) => (error instanceof Error ? error : new Error('Request failed'));
+    // The rows own their error UI (silent), and a failure is carried as a
+    // value so it never reads as an empty log or as default settings.
+    const [inboxResult, settingsResult] = await Promise.all([
+      api.getBrainInbox({ status: statusFilter || undefined, limit: 100, silent: true })
+        .then((data) => ({ data }), (error) => ({ error: asError(error) })),
+      api.getBrainSettings({ silent: true })
+        .then((data) => ({ data }), (error) => ({ error: asError(error) })),
     ]);
 
-    setEntries(inboxData.entries || []);
-    setCounts(inboxData.counts || {});
-    setSettings(settingsData);
-    setSettingsForm(settingsData || {});
+    setInboxError(inboxResult.error || null);
+    if (inboxResult.data) {
+      setEntries(inboxResult.data.entries || []);
+      setCounts(inboxResult.data.counts || {});
+    }
+    setSettingsError(settingsResult.error || null);
+    if (settingsResult.data) {
+      setSettings(settingsResult.data);
+      setSettingsForm(settingsResult.data);
+    }
     setLoading(false);
   }, [statusFilter]);
 
@@ -90,13 +104,15 @@ export default function TrustTab({ onRefresh }) {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-          <span className="text-gray-500">Total: {counts.total || 0}</span>
-          <span className="text-port-success">Filed: {counts.filed || 0}</span>
-          <span className="text-port-warning">Review: {counts.needs_review || 0}</span>
-          <span className="text-blue-400">Corrected: {counts.corrected || 0}</span>
-          <span className="text-port-error">Errors: {counts.error || 0}</span>
-        </div>
+        {!inboxError && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <span className="text-gray-500">Total: {counts.total || 0}</span>
+            <span className="text-port-success">Filed: {counts.filed || 0}</span>
+            <span className="text-port-warning">Review: {counts.needs_review || 0}</span>
+            <span className="text-blue-400">Corrected: {counts.corrected || 0}</span>
+            <span className="text-port-error">Errors: {counts.error || 0}</span>
+          </div>
+        )}
       </div>
 
       {/* Settings Section */}
@@ -106,7 +122,7 @@ export default function TrustTab({ onRefresh }) {
             <Settings size={16} />
             Settings
           </h3>
-          {!editingSettings && (
+          {!editingSettings && !settingsError && (
             <button
               onClick={() => setEditingSettings(true)}
               className="text-sm text-port-accent hover:underline"
@@ -116,7 +132,9 @@ export default function TrustTab({ onRefresh }) {
           )}
         </div>
 
-        {editingSettings ? (
+        {settingsError ? (
+          <ListLoadError what="Brain settings" error={settingsError} onRetry={fetchData} />
+        ) : editingSettings ? (
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField label="Confidence Threshold">
@@ -233,7 +251,9 @@ export default function TrustTab({ onRefresh }) {
 
       {/* Audit Log */}
       <div className="space-y-2">
-        {entries.length === 0 ? (
+        {inboxError ? (
+          <ListLoadError what="the audit log" error={inboxError} onRetry={fetchData} />
+        ) : entries.length === 0 ? (
           <p className="text-gray-500 text-center py-8">No entries found.</p>
         ) : (
           entries.map(entry => {

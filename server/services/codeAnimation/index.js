@@ -32,6 +32,7 @@ import {
   listRunningCodeAnimationJobIds,
   listCodeAnimationJobPage,
   countCodeAnimationJobs,
+  codeAnimationPosterVersions,
   readCodeAnimationHtml,
   saveCodeAnimationHtml,
   saveCodeAnimationJobRecord,
@@ -397,7 +398,9 @@ export async function pageCodeAnimationJobs({ limit = JOB_PAGE_SIZE, cursor } = 
     listCodeAnimationJobPage({ limit: size, cursor: after }),
     countCodeAnimationJobs(),
   ]);
-  const items = rows.slice(0, size);
+  const page = rows.slice(0, size);
+  const posters = await codeAnimationPosterVersions(page.filter((job) => job.status === 'completed').map((job) => job.id));
+  const items = page.map((job) => (posters.has(job.id) ? { ...job, posterVersion: posters.get(job.id) } : job));
   const last = items.at(-1);
   return {
     items,
@@ -410,6 +413,12 @@ export async function pageCodeAnimationJobs({ limit = JOB_PAGE_SIZE, cursor } = 
 
 const canAttachImages = (provider) => provider.type === 'api'
   || isVisionCapableCliProvider(provider) || isVisionCapableCodexTuiProvider(provider);
+
+// Resolved per attempt, so a fallback of another type gets its own bound.
+const CODE_ANIMATION_API_STALL_MS = 15 * 60 * 1000;
+const codeAnimationRunTimeout = (provider) => (provider?.type === 'api'
+  ? Math.max(provider.timeout || 0, CODE_ANIMATION_API_STALL_MS)
+  : 0);
 
 async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
   const promptRunner = await import('../promptRunner.js');
@@ -426,7 +435,12 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
     // Every provider that can read images gets them as attachments; a
     // non-vision CLI keeps only the on-disk paths written into the prompt.
     screenshots: canAttachImages(provider) ? referencePaths : [],
-    timeout: Math.max(provider.timeout || 0, 15 * 60 * 1000),
+    // Authoring a whole animation can legitimately run for hours, so no
+    // total-runtime cap: a cap here failed long runs over and benched a
+    // healthy provider for everyone. CLI/TUI read `timeout` as that cap
+    // (0 = unbounded); API runs read it as a no-progress bound, which stays.
+    timeout: codeAnimationRunTimeout,
+    absoluteTimeoutMs: 0,
   });
   // A fallback to a non-vision provider must not silently drop the references.
   if (referencePaths.length && canAttachImages(provider)) promptRunner.assertVisionRunUsedImages(result, provider);
@@ -496,6 +510,10 @@ export async function startCodeAnimationGeneration(input) {
       emitCodeAnimationChanged(id);
       activeJobs.delete(id);
       console.log(`✅ Code animation generation ${id.slice(0, 8)} completed (${html.length} chars)`);
+      // Detached: the gallery shows a placeholder until the poster lands.
+      import('./poster.js').then(({ captureCodeAnimationPoster }) => captureCodeAnimationPoster(id)).catch((error) => {
+        console.error(`❌ Code animation ${id.slice(0, 8)} poster could not start: ${error.message}`);
+      });
     })
     .catch(async (error) => {
       const message = String(error?.message || error || 'Generation failed').slice(0, 2_000);
@@ -508,6 +526,19 @@ export async function startCodeAnimationGeneration(input) {
       console.error(`❌ Code animation generation ${id.slice(0, 8)} failed: ${message}`);
     });
   return job;
+}
+
+export { codeAnimationPosterPath } from './jobStore.js';
+
+/** Draw a completed job's missing gallery poster; posterVersion is null when the page drew nothing. */
+export async function captureCodeAnimationJobPoster(id) {
+  const job = isCodeAnimationJobId(id) ? await getCodeAnimationJobRecord(id) : null;
+  if (!job) throw new ServerError('Code Animation job not found', { status: 404, code: 'NOT_FOUND' });
+  if (job.status !== 'completed') throw new ServerError('Only a completed animation has a poster', { status: 409, code: 'NOT_COMPLETED' });
+  const { captureCodeAnimationPoster } = await import('./poster.js');
+  await captureCodeAnimationPoster(id);
+  const versions = await codeAnimationPosterVersions([id]);
+  return { posterVersion: versions.get(id) ?? null };
 }
 
 export async function getCodeAnimationJob(id) {

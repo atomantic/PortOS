@@ -71,6 +71,7 @@ import KeyboardHelp from './KeyboardHelp';
 import VoiceWidget from './voice/VoiceWidget';
 import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
 import SidebarContext from './SidebarContext.jsx';
+import ActionActivityBar from './ui/ActionActivityBar';
 
 function ThemeModeToggle({ className = '' }) {
   const { theme, toggleMode } = useThemeContext();
@@ -1106,6 +1107,7 @@ export default function Layout() {
         })()}
       </div>
       {/* Cmd+K search overlay — mounted in layout so it's available on every page */}
+      <ActionActivityBar />
       <CmdKSearch />
       {/* Keyboard shortcuts help — press ? to toggle */}
       <KeyboardHelp />

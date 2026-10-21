@@ -120,12 +120,28 @@ that was validated — untracked and uncommitted files included, so a later
 commit of that state yields the same `HEAD^{tree}`. A green summary never
 claims a suite it skipped; required CI checks still apply.
 
+Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
+it: the running stage — including the test runner's npm and Vitest
+processes, which share that stage's process group — gets the signal and a
+5-second grace, then the group is killed until no member remains. Only then
+does pregate write an incomplete receipt (`passed: false`) and exit by the
+same signal. After every stage, on POSIX, pregate also kills anything still
+left in that stage's group, with a warning, so no stage's processes run into
+the next one or past pregate.
+
+`npm run pregate` is `exec node scripts/pregate.js`, so no shell wrapper sits
+between npm and pregate: a SIGTERM sent to the whole process group (a CI
+cancel, `kill -TERM -<pgid>`) cannot kill the wrapper and let npm return while
+pregate is still settling its stage. On Windows, where `cmd.exe` has no
+`exec`, the repository-root `exec.cmd` shim (found first in the working
+directory) runs the same command.
+
 After the push (and, when you open the pull request yourself, before
 `gh pr create`), `node scripts/pregate-attest.js` posts that receipt as a
 `pregate` commit status on the pushed head, bound to the validated tree and
 naming the platform and Node it ran on, and the pull request's impact planner
 skips the stages it attests to (only stages that ran and passed; never
-Windows, Linux containment or the Node-minimum check; and, per stage, never
+Windows, Linux containment, SuperCollider live containment or the Node-minimum check; and, per stage, never
 one that a change `main` gained since the branch forked could reach). It
 refuses — saying what to rerun — when the receipt did not pass, the tree
 changed after pregate, the commit is not on the upstream remote yet, or

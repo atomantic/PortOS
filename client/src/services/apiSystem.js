@@ -479,9 +479,9 @@ export const generateImage = (data, options = {}) => request('/image-gen/generat
 // promise and reuse it for the lifetime of the page. Eliminates the repeat
 // fetch when the user navigates ImageGen → VideoGen → Writers Room.
 let stylePresetsPromise = null;
-export const listImageStylePresets = () => {
+export const listImageStylePresets = (options = {}) => {
   if (!stylePresetsPromise) {
-    stylePresetsPromise = request('/image-gen/style-presets').catch((err) => {
+    stylePresetsPromise = request('/image-gen/style-presets', options).catch((err) => {
       stylePresetsPromise = null;
       throw err;
     });
@@ -516,7 +516,7 @@ export const updateTool = (id, data, options) => request(`/tools/${id}`, {
 });
 
 // DataDog
-export const getDatadogInstances = () => request('/datadog/instances');
+export const getDatadogInstances = (options) => request('/datadog/instances', options);
 export const searchDatadogErrors = (instanceId, serviceName, environment, fromTime, options) =>
   request(`/datadog/instances/${instanceId}/search-errors`, {
     method: 'POST',
@@ -525,7 +525,7 @@ export const searchDatadogErrors = (instanceId, serviceName, environment, fromTi
   });
 
 // JIRA
-export const getJiraInstances = () => request('/jira/instances');
+export const getJiraInstances = (options) => request('/jira/instances', options);
 export const getJiraProjects = (instanceId, options) => request(`/jira/instances/${instanceId}/projects`, options);
 export const getJiraBoards = (instanceId, projectKey, options) =>
   request(`/jira/instances/${instanceId}/projects/${encodeURIComponent(projectKey)}/boards`, options);

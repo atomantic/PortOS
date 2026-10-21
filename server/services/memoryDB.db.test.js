@@ -605,6 +605,25 @@ describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
     // A record that isn't in the table has no relations (and doesn't throw).
     expect(await memoryDB.getRelatedMemories('00000000-0000-4000-8000-00000000dead')).toEqual([]);
   });
+
+  it('resolves when explicit links exceed the limit, and still fills a larger limit with neighbours', async () => {
+    // 11 explicit links from one embedded hub: more than the default limit of 10,
+    // which used to make the similarity query's LIMIT negative and throw.
+    const hub = await memoryDB.createMemory({ type: 'fact', content: 'Hub memory with many explicit links.' }, VEC_FAR);
+    for (let i = 0; i < 11; i++) {
+      const spoke = await memoryDB.createMemory({ type: 'fact', content: `Spoke ${i} linked to the hub.` }, VEC_UNSEEN);
+      await memoryDB.linkMemories(hub.id, spoke.id);
+    }
+
+    const capped = await memoryDB.getRelatedMemories(hub.id, 10);
+    expect(capped).toHaveLength(10);
+    expect(capped.every((r) => r.relationship === 'linked')).toBe(true);
+
+    // Limit above the link count: the 11 links plus neighbours fill the remainder.
+    const filled = await memoryDB.getRelatedMemories(hub.id, 13);
+    expect(filled).toHaveLength(13);
+    expect(filled.filter((r) => r.relationship === 'similar')).toHaveLength(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

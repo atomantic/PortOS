@@ -127,7 +127,7 @@ const onDemand = createOnDemandDaemon({
   readSection: () => readSettings().then((settings) => settings?.localLlm?.slotstream ?? null),
   endpointFor,
   probe: probeEndpoint,
-  start: (config) => startSlotstreamServer(config),
+  start: (config) => launchSlotstreamServer(config),
   stop: () => stopSlotstreamServer(),
   getStatusStrict: () => getAppStatusStrict(SLOTSTREAM_APP),
   clearStatusCache: () => clearJlistCache(),
@@ -284,11 +284,21 @@ async function resolveStartModel(requested, emit) {
 }
 
 /**
- * Start `slotstream serve` under PM2.
+ * Start `slotstream serve` under PM2, queued behind any in-flight on-demand
+ * wake or explicit start (`onDemand.runStart`, #12723) so it cannot
+ * `pm2 delete` a launch that is still loading.
+ *
+ * @param {Parameters<typeof launchSlotstreamServer>[0]} [options]
+ */
+export const startSlotstreamServer = (options = {}) => onDemand.runStart(() => launchSlotstreamServer(options));
+
+/**
+ * The unserialized start behind `startSlotstreamServer`; only the on-demand
+ * wake, which already holds the start slot, calls it directly.
  *
  * @param {{port?: number, model?: string, memoryGb?: number, waitMs?: number, onProgress?: (line: string) => void}} options
  */
-export async function startSlotstreamServer(options = {}) {
+async function launchSlotstreamServer(options = {}) {
   const { port: requestedPort, model: requestedModel = null, memoryGb = null, waitMs, onProgress = () => {} } = options;
   const port = resolveStartPort(requestedPort ?? DEFAULT_PORT);
   const emit = (line) => { appendLog(line); onProgress(line); };

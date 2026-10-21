@@ -18,7 +18,7 @@
  */
 
 import { createSyncScheduler } from './createSettingsGatedSyncScheduler.js';
-import { getSignalConfig, runSync } from './signalSync.js';
+import { getSignalConfig, runSync, readSyncState } from './signalSync.js';
 
 /**
  * Start the Signal sync scheduler. No-ops when disabled in settings.
@@ -30,4 +30,5 @@ export const startSignalScheduler = createSyncScheduler({
   source: 'signalScheduler',
   getConfig: getSignalConfig,
   runSync,
+  getLastRunAt: async () => (await readSyncState()).lastRunAt,
 });

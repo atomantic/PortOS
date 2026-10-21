@@ -26,6 +26,7 @@ import {
   claimItemRender,
   settleItemRender,
   applyRenderedItem,
+  projectInterruptedNoteRenders,
 } from './logic.js';
 
 describe('buildBoardRecord', () => {
@@ -581,6 +582,35 @@ describe('text note render lifecycle (#10531)', () => {
   it('only renders text notes', () => {
     expect(() => claimItemRender(board(), 'i0')).toThrow(expect.objectContaining({ code: 'MOOD_BOARD_ITEM_NOT_TEXT' }));
     expect(() => claimItemRender(board(), 'missing')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+  });
+
+  it('projects a queued note whose job is gone as interrupted, and leaves a live one', () => {
+    const queued = settleItemRender(claimItemRender(board(), 'n1').board, 'n1', { jobId: 'job-dead', status: 'queued' }).board;
+    queued.updatedAt = '2020-01-01T00:00:00.000Z';
+    const dead = projectInterruptedNoteRenders(queued, { isLive: () => false });
+    expect(dead.changed).toBe(true);
+    expect(dead.board.items.find((it) => it.id === 'n1').render).toMatchObject({
+      status: 'failed', error: 'interrupted by restart', jobId: 'job-dead',
+    });
+    expect(dead.board.updatedAt).not.toBe(queued.updatedAt);
+    const live = projectInterruptedNoteRenders(queued, { isLive: (jobId) => jobId === 'job-dead' });
+    expect(live).toEqual({ board: queued, changed: false });
+  });
+
+  it('keeps a claim with no job id until the claim TTL, then fails it', () => {
+    const claimed = claimItemRender(board(), 'n1', { now: '2026-01-01T00:00:00.000Z' }).board;
+    expect(projectInterruptedNoteRenders(claimed, { now: '2026-01-01T00:09:00.000Z' }).changed).toBe(false);
+    const expired = projectInterruptedNoteRenders(claimed, { now: '2026-01-01T00:11:00.000Z' });
+    expect(expired.board.items.find((it) => it.id === 'n1').render).toMatchObject({
+      status: 'failed', error: 'interrupted by restart', jobId: null,
+    });
+  });
+
+  it('ignores an image item and a note that is not queued', () => {
+    const image = { id: 'i0', type: 'image', mediaKey: 'image:a.png', render: { status: 'queued', jobId: 'job-x' } };
+    const failed = { id: 'n1', type: 'text', text: 'note', render: { status: 'failed', jobId: 'job-y', error: 'boom' } };
+    const board = { items: [image, failed] };
+    expect(projectInterruptedNoteRenders(board, { isLive: () => false })).toEqual({ board, changed: false });
   });
 });
 

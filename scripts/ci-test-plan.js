@@ -537,13 +537,28 @@ const DOCUMENTATION_RULES = [
 // Text snapshots are executable test inputs, but their extension is deliberately
 // outside EXECUTABLE_RE. Keep this mapping explicit rather than treating every
 // `.txt` file as a test fixture: an unmapped text artifact must still widen CI.
-// `dir` names the directory the pattern covers so the test memo
-// (scripts/lib/testMemo.js) can hash every fixture an owning test reads.
+// `dir` names the directory the test memo (scripts/lib/testMemo.js) hashes for
+// an owning test. `fileRe`, when set, keeps only that directory's direct
+// children — `scripts/` is past the memo's directory limit, and hashing the
+// whole tree would fail the installer suites closed instead of keying the pins.
 export const FIXTURE_OWNERS = [
   {
     re: /^server\/services\/promptSections\/__snapshots__\/reviewLoopMatrix\/[^/]+\.txt$/,
     dir: 'server/services/promptSections/__snapshots__/reviewLoopMatrix',
     tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
+  },
+  // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`).
+  // No Vitest suite reads the files; the installer-contract tests are the suites
+  // that exercise that script and server/lib/pythonSetup.js.
+  {
+    re: /^scripts\/requirements-[^/]+\.txt$/,
+    dir: 'scripts',
+    fileRe: /^requirements-[^/]+\.txt$/,
+    tests: [
+      'scripts/setup-image-video.test.js',
+      'server/lib/pythonSetup.install.test.js',
+      'server/lib/pythonSetup.test.js',
+    ],
   },
 ];
 
@@ -595,9 +610,9 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
   || plan.server.sources.some((path) => SLASHDO_CONTRACT_SOURCE_FILES.includes(path))
 );
 
-// Two narrow CI jobs observe a small, enumerable input set, so a pull request
+// Three narrow CI jobs observe a small, enumerable input set, so a pull request
 // that touches none of it skips them (non-PR and release-base runs are forced
-// full and always run both). Each gate is the head tree's static import
+// full and always run all three). Each gate is the head tree's static import
 // closure of the job's entry points, computed per run so it cannot drift from
 // a hand-kept list, plus the non-module inputs named by the pattern. ci.yml is
 // in both patterns so a workflow edit proves the job still runs.
@@ -625,6 +640,22 @@ const LINUX_CONTAINMENT_ENTRIES = [
 ];
 // The job installs server dependencies from these before running anything.
 export const LINUX_CONTAINMENT_PATH_RE = /^(?:server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
+// The `supercollider-live` job builds docker/supercollider/ through the setup
+// script and runs the opt-in live suite on native amd64 and arm64 runners. The
+// setup script and the live test reach the runtime, render service and the
+// spawn/kill plumbing through static imports, so the closure — not a literal
+// path list — selects the job. The server Vitest config and setup files load
+// around the live test; vitestTempRootSetup.js is named by URL, not import.
+export const SUPERCOLLIDER_LIVE_ENTRIES = [
+  'server/services/superColliderRender.live.test.js',
+  'scripts/setup-supercollider.js',
+  'server/vitest.config.js',
+  'server/vitest.setup.js',
+  'scripts/vitestTempRootSetup.js',
+];
+// The recipe directory and the dependency manifests the job installs from are
+// not modules, so the closure cannot see them.
+export const SUPERCOLLIDER_LIVE_PATH_RE = /^(?:docker\/supercollider\/|server\/package(?:-lock)?\.json|package(?:-lock)?\.json|\.github\/workflows\/ci\.yml$)/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -660,6 +691,9 @@ export function collectPromptHistoryInputs(files, cwd) {
 
 /** Static closure of the linux-containment tests and their Vitest harness. */
 export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
+
+/** Static closure of the SuperCollider live suite, its setup script and their Vitest harness. */
+export const collectSuperColliderLiveInputs = (cwd) => staticClosureOf(SUPERCOLLIDER_LIVE_ENTRIES, cwd);
 
 /** True when the diff reaches a gated job's inputs; null inputs fail open to running it. */
 const touchesJobInputs = (changed, inputs, pattern) => inputs === null
@@ -717,8 +751,13 @@ const isDocumentationOnly = (path) => !isExecutable(path) && DOCUMENTATION_RULES
 const isServerRunnerFile = (path) => RUNNER_ROOTS.server.some((root) => path.startsWith(root));
 const isClientRunnerFile = (path) => RUNNER_ROOTS.client.some((root) => path.startsWith(root));
 
+// Model-capability fixtures ship deliberately broken `*.test.mjs` sandboxes that
+// a model is asked to repair. They are data, not suites: no runner collects them,
+// and a feature-name match ("models") must not hand one to vitest as a target.
+const RUNNER_EXCLUDED_FIXTURES = /^server\/fixtures\//;
+
 const runnerForTest = (path) => {
-  if (!isTestFile(path)) return null;
+  if (!isTestFile(path) || RUNNER_EXCLUDED_FIXTURES.test(path)) return null;
   if (isClientRunnerFile(path)) return 'client';
   if (isServerRunnerFile(path)) return 'server';
   return null;
@@ -958,14 +997,16 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
  */
 /**
  * The CI plan for a diff: the test-suite selection plus whether each
- * path-gated job (prompt history, Linux containment) runs.
+ * path-gated job (prompt history, Linux containment, SuperCollider live) runs.
  *
- * `promptHistoryInputs` / `linuxContainmentInputs` are the jobs' static
+ * `promptHistoryInputs` / `linuxContainmentInputs` / `supercolliderLiveInputs` are the jobs' static
  * import closures from collectPlanInputs(); null (the default) runs the job.
  */
 export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
-  const { forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, serverReach = null } = options;
+  const {
+    forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, supercolliderLiveInputs = null, serverReach = null,
+  } = options;
   // Informational: names the changed source behind a large related selection
   // (#12285). It never changes what runs.
   const reachNote = !plan.full && plan.server.mode === 'related' ? formatReachSummary(serverReach) : '';
@@ -975,6 +1016,8 @@ export function buildCiTestPlan(changedFiles, options = {}) {
     promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
     linuxContainment: forceFull
       || touchesJobInputs(plan.changedFiles, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE),
+    supercolliderLive: forceFull
+      || touchesJobInputs(plan.changedFiles, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE),
   };
 }
 
@@ -1218,6 +1261,7 @@ function buildSuitePlan(changedFiles, {
   let reason = 'Vitest related-test fallback';
   if (features.length) reason = `targeted features: ${features.join(', ')}`;
   else if (jsSources.length === 0 && pythonSources.length > 0) reason = 'python script parsing contracts';
+  else if (jsSources.length === 0 && fixtureTests.length > 0) reason = 'text fixture owners';
 
   return finishPlan({
     full: false,
@@ -1398,6 +1442,7 @@ export function emitGitHubPlan(plan) {
     slashdo: plan.slashdo,
     prompt_history: plan.promptHistory,
     linux_containment: plan.linuxContainment,
+    supercollider_live: plan.supercolliderLive,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
@@ -1626,12 +1671,13 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     }
   }
 
-  // A forced-full run always runs both gated jobs, so it skips the walks.
+  // A forced-full run always runs every gated job, so it skips the walks.
   const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(dependencyFiles, cwd);
   const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
+  const supercolliderLiveInputs = forceFull ? null : collectSuperColliderLiveInputs(cwd);
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs,
+    clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
     serverReach };
 }
 
@@ -1904,7 +1950,7 @@ function main() {
   }
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies,
-    dependencyChanges, promptHistoryInputs, linuxContainmentInputs, serverReach,
+    dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, serverReach,
   } = collectPlanInputs({
     baseSha: base,
     forceFull,
@@ -1922,6 +1968,7 @@ function main() {
     dependencyChanges,
     promptHistoryInputs,
     linuxContainmentInputs,
+    supercolliderLiveInputs,
     serverReach,
   });
   // Last, over the finished plan: the attestation only ever removes work.

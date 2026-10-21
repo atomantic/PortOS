@@ -97,6 +97,19 @@ describe('BackupWidget snapshots', () => {
     expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled();
   });
 
+  it('labels an interrupted snapshot and offers neither download nor restore', async () => {
+    mockGetBackupSnapshots.mockResolvedValue([
+      { id: '2026-08-25T12-00-00', fileCount: 0, incomplete: false, failed: true, interrupted: true },
+    ]);
+    renderWidget();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
+    expect(await screen.findByText('Interrupted')).toBeInTheDocument();
+    expect(screen.queryByText('Still being written…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Download snapshot/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled();
+  });
+
   it('keeps failed snapshots downloadable for salvage but disables restore', async () => {
     mockGetBackupSnapshots.mockResolvedValue([
       { id: '2026-08-25T12-00-00', fileCount: 2, failed: true, incomplete: false },
@@ -237,6 +250,64 @@ describe('BackupWidget snapshots', () => {
     expect(mockToast.success).toHaveBeenCalledWith('File restore complete — 1 file(s) restored');
   });
 
+  it('keeps the live federation identity unless the operator adopts the snapshot identity (#12596)', async () => {
+    const ids = { liveInstanceId: 'live-instance', snapshotInstanceId: 'other-instance' };
+    mockRestoreBackup
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ brain/example.json'], identityPreserved: ids })
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ instances.json'], identityAdopted: ids })
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ instances.json'], identityAdopted: ids });
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText(/This machine keeps its own instances.json/)).toBeInTheDocument();
+    const adopt = screen.getByRole('checkbox', { name: /Adopt the snapshot.s identity/ });
+    expect(adopt).not.toBeChecked();
+
+    // Adopting changes what execution does, so the old preview cannot authorize it.
+    fireEvent.click(adopt);
+    expect(screen.queryByRole('button', { name: /^Restore \d/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/will replace this machine.s/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText('>f+++++++++ instances.json')).toBeInTheDocument();
+    expect(mockRestoreBackup).toHaveBeenNthCalledWith(2, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: null,
+      adoptIdentity: true,
+      dryRun: true,
+    }, { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockRestoreBackup).toHaveBeenNthCalledWith(3, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: null,
+      adoptIdentity: true,
+      dryRun: false,
+    }, { silent: true }));
+  });
+
+  it('drops a hidden adoption when a fresh preview shows no identity mismatch (#12596)', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ brain/example.json'], identityPreserved: { liveInstanceId: 'a', snapshotInstanceId: 'b' } })
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ brain/example.json'] })
+      .mockResolvedValueOnce({ changedFiles: ['>f+++++++++ brain/example.json'] });
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Adopt the snapshot.s identity/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore 1 file(s)' }));
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    await waitFor(() => expect(mockRestoreBackup).toHaveBeenNthCalledWith(3, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: null,
+      dryRun: false,
+    }, { silent: true }));
+  });
+
   it('describes restore as files-only and never claims all data is up to date', async () => {
     mockRestoreBackup.mockResolvedValueOnce({ changedFiles: [] });
     renderWidget();
@@ -285,6 +356,63 @@ describe('BackupWidget snapshots', () => {
     );
     // A warning, not a refusal: a folder no migration touched restores legitimately.
     expect(screen.getByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
+  });
+
+  it('announces a pre-split store conversion and names where the replaced store was kept', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({
+        dryRun: true,
+        changedFiles: ['brain/people.json'],
+        restoredLegacyStores: [{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'pending', parkedAs: null }],
+      })
+      .mockResolvedValueOnce({
+        changedFiles: ['brain/people.json'],
+        restoredLegacyStores: [{ store: 'brain/people', legacyFile: 'brain/people.json', status: 'converted', parkedAs: 'brain/people.pre-restore-example' }],
+      });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/keeps brain\/people in an older single-file format.*pre-restore/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'File restore complete — 1 file(s) restored. Converted older-format data; the replaced stores were kept as brain/people.pre-restore-example',
+    ));
+  });
+
+  it('announces a pre-May-2026 ledger adoption and asks for a restart afterwards', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({
+        dryRun: true,
+        changedFiles: ['migrations/.applied.json'],
+        restoredLegacyLedger: { status: 'pending', parkedAs: null },
+      })
+      .mockResolvedValueOnce({
+        changedFiles: ['migrations/.applied.json'],
+        restoredLegacyLedger: { status: 'adopted', parkedAs: 'migrations.applied.json.pre-restore-example' },
+      });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/older migrations\/\.applied\.json location.*re-runs every migration/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      "File restore complete — 1 file(s) restored. Adopted the snapshot's migration record (previous record kept as migrations.applied.json.pre-restore-example); restart PortOS to re-run the migrations it predates",
+    ));
+  });
+
+  it('warns that an unreadable legacy ledger keeps this install\'s record', async () => {
+    mockRestoreBackup.mockResolvedValueOnce({
+      dryRun: true,
+      changedFiles: ['migrations/.applied.json'],
+      restoredLegacyLedger: { status: 'unreadable', parkedAs: null },
+    });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/is unreadable, so this install keeps its own record/);
   });
 
   it('shows no migration warning for a gap that is empty or unknown', async () => {

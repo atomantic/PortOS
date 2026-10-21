@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { prepareReconcileRetirements, retirementReviewInstructions } from './branchReconcileRetirement.js';
+import { prepareReconcileRetirements, retirementReviewInstructions, retirementCognitiveIdentity } from './branchReconcileRetirement.js';
 
 const forge = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock('./github.js', () => ({ execGh: forge.read }));
@@ -14,10 +14,42 @@ const tree = { branch: branch.branch, path: branch.worktreePath, head, managed: 
 const scan = (b = {}, t = {}) => ({ wip: [{ ...branch, ...b }], worktreeInventory: [{ ...tree, ...t }] });
 const setup = () => ({
   readPr: vi.fn(async () => 'https://github.com/example/repo/pull/42'),
-  prepare: vi.fn(async () => ({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'old-owner', status: 'completed', success: true }] } } })),
+  prepare: vi.fn(async () => ({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'old-owner', status: 'completed', success: true }] }, comparison: { disposition: 'review-supersession', localPatch: '+old', difference: '+new' }, forge: { prHead: head } } })),
 });
 
 describe('historical completed-checkout review obligations', () => {
+  it('retires integrated exact-head work without cognitive dispatch through the fenced service', async () => {
+    const deps = setup();
+    const prepared = await deps.prepare();
+    prepared.review.comparison = { disposition: 'integrated', localPatch: '', difference: '' };
+    deps.prepare.mockResolvedValue(prepared);
+    deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
+    const result = await prepareReconcileRetirements(app, scan(), deps);
+    expect(result.candidates).toEqual([]);
+    expect(result.retired).toEqual([expect.objectContaining({ branch: branch.branch, head })]);
+    expect(deps.retire).toHaveBeenCalledWith(expect.objectContaining({ release: expect.objectContaining({ head }),
+      review: { prUrl: 'https://github.com/example/repo/pull/42', digest: 'd'.repeat(64), acceptSuperseded: false } }),
+      { beforeMutation: expect.any(Function) });
+  });
+
+  it('retains a missing archive receipt across repeated deterministic attempts without dispatch', async () => {
+    const deps = setup();
+    const prepared = await deps.prepare();
+    prepared.review.comparison = { disposition: 'integrated', localPatch: '', difference: '' };
+    deps.prepare.mockResolvedValue(prepared);
+    deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true }));
+    for (let n = 0; n < 70; n++) expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'retirement-receipt-unverified' }],
+    });
+  });
+
+  it('does not wake cognitive review for an unrelated default advance, timestamp or digest change', () => {
+    const review = { policy: { policies: [{ id: 'original-owner' }] }, comparison: { disposition: 'superseded', localPatch: '+local', difference: '+replacement' }, digest: 'old', forge: { defaultHead: 'a' } };
+    const first = retirementCognitiveIdentity(review, tree, 'https://github.com/example/repo/pull/42');
+    expect(retirementCognitiveIdentity({ ...review, digest: 'new', observedAt: 'later', forge: { defaultHead: 'b' } }, tree, 'https://github.com/example/repo/pull/42')).toEqual(first);
+    expect(retirementCognitiveIdentity({ ...review, comparison: { ...review.comparison, difference: '+changed source' } }, tree, 'https://github.com/example/repo/pull/42')).not.toEqual(first);
+  });
+
   it('dispatches a scoped obligation only after the live preview accepts the exact release', async () => {
     const deps = setup();
     const result = await prepareReconcileRetirements(app, scan(), deps);

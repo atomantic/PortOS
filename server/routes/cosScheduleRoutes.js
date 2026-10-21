@@ -9,7 +9,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema, initializedCheckoutFinalizationSchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, initializedCheckoutRetireBodySchema, initializedCheckoutTransactionSchema, initializedCheckoutRestoreSchema, initializedCheckoutBranchRetireSchema, initializedCheckoutMetadataRestoreSchema, initializedCheckoutFinalizationSchema, initializedCheckoutQuarantineResumptionSchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -314,7 +314,8 @@ router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (r
   res.json(result);
 }));
 
-// Explicit operator capability; automatic cleanup retains its initialized-module guard.
+// Initial retirement remains explicit. Only existing proof-bound journals can be
+// continued by the deterministic daemon; ordinary cleanup keeps its module guard.
 router.post('/schedule/branch-reconcile/initialized-checkouts/review', asyncHandler(async (req, res) => {
   const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.strict(), req.body);
   const { reviewInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
@@ -367,6 +368,20 @@ router.post('/schedule/branch-reconcile/initialized-checkouts/finalize-restored'
   const input = validateRequest(initializedCheckoutFinalizationSchema, req.body);
   const { finalizeInitializedCheckoutRestored } = await import('../services/initializedCheckoutRecovery.js');
   const result = await finalizeInitializedCheckoutRestored(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/review-quarantine-resumption', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutRestoreSchema, req.body);
+  const { reviewInitializedCheckoutQuarantineResumption } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await reviewInitializedCheckoutQuarantineResumption(input);
+  res.status(result.ok ? 200 : 409).json(result);
+}));
+
+router.post('/schedule/branch-reconcile/initialized-checkouts/resume-quarantine', asyncHandler(async (req, res) => {
+  const input = validateRequest(initializedCheckoutQuarantineResumptionSchema, req.body);
+  const { resumeInitializedCheckoutQuarantine } = await import('../services/initializedCheckoutRecovery.js');
+  const result = await resumeInitializedCheckoutQuarantine(input);
   res.status(result.ok ? 200 : 409).json(result);
 }));
 

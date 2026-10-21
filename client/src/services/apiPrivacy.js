@@ -107,7 +107,8 @@ export const deletePrivacyOrg = (id, options) => request(`/privacy/orgs/${id}`, 
 
 // ── Org holdings (which vault records an org holds) ─────────────────────────
 export const getOrgHoldings = (id, options) => request(`/privacy/orgs/${id}/holdings`, options);
-// Replace-set semantics: `holdings` is the FULL list of { vaultRecordId, status }.
+// Replace-set semantics: `holdings` is the FULL list of { vaultRecordId, status? };
+// an omitted status keeps a held record's stored one (new rows start 'current').
 export const setOrgHoldings = (id, holdings, options) => request(`/privacy/orgs/${id}/holdings`, {
   method: 'PUT',
   body: JSON.stringify({ holdings }),

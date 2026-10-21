@@ -20,8 +20,17 @@ it('settles sharing round-trip writes before fail-fast fixture cleanup', () => {
     const sourcePath = fileURLToPath(new URL('../server/services/sharing/integration.test.js', import.meta.url));
     const header = "it('exports a series, processes the manifest as inbox, then promotes — id + origin preserved', async () => {";
     const end = "expect(await importer.listInbox(bucket.id)).toEqual([]);";
-    const source = readFileSync(sourcePath, 'utf8')
-      .replace(/(['"])(\.\.?\/[^'"]+)\1/g, (_, quote, specifier) => JSON.stringify(resolve(dirname(sourcePath), specifier)))
+    const input = readFileSync(sourcePath, 'utf8')
+      .replace(/(['"])(\.\.?\/[^'"]+)\1/g, (_, quote, specifier) => JSON.stringify(resolve(dirname(sourcePath), specifier)));
+    const start = input.indexOf(header);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const stop = input.indexOf('\n  });', start + header.length);
+    expect(stop).toBeGreaterThan(start);
+    const selected = input.slice(start, stop);
+    expect(selected).toContain(end);
+    // Bound both substitutions to the selected top-level test body. Other
+    // round trips can have the same assertion without receiving its finally.
+    const source = input.slice(0, start) + selected
       .replace(header, `${header.replace('async () =>', 'async ({ signal }) =>')}
         const { appendFileSync } = await import('node:fs');
         const record = event => appendFileSync(${JSON.stringify(events)}, event + '\\n');
@@ -46,7 +55,7 @@ it('settles sharing round-trip writes before fail-fast fixture cleanup', () => {
         } finally {
           record('body-settled');
           writeFileSync(${JSON.stringify(finished)}, 'finished');
-        }`);
+        }`) + input.slice(stop);
     expect(source).toContain('await cancelled;');
     expect(source).toContain("record('round-trip-assertions-complete');");
     writeFileSync(join(fixture, 'lifecycle.test.js'), source + `

@@ -49,6 +49,8 @@ export default function PipelineEditorialChecks() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [checks, setChecks] = useState([]);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
+  const [catalogError, setCatalogError] = useState(null);
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
   const [savingIds, setSavingIds] = useState(() => new Set());
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   // Checks the user muted from the triage this session (#1602, lifted here for
@@ -164,13 +166,19 @@ export default function PipelineEditorialChecks() {
   // ---- Load the global catalog + series list once. ----
   useEffect(() => {
     let canceled = false;
-    getEditorialChecks().catch(() => ({ checks: [] })).then((catalog) => {
-      if (canceled) return;
-      setChecks(Array.isArray(catalog?.checks) ? catalog.checks : []);
-      setLoadingCatalog(false);
-    });
+    setLoadingCatalog(true);
+    setCatalogError(null);
+    getEditorialChecks({ silent: true })
+      .then((catalog) => {
+        if (canceled) return;
+        setChecks(Array.isArray(catalog?.checks) ? catalog.checks : []);
+      })
+      .catch((err) => {
+        if (!canceled) setCatalogError(err instanceof Error ? err : new Error('Request failed'));
+      })
+      .finally(() => { if (!canceled) setLoadingCatalog(false); });
     return () => { canceled = true; };
-  }, []);
+  }, [catalogAttempt]);
 
   // ---- Load findings + re-attach to an in-flight run when the series changes. ----
   // Tracks the currently-selected series so a slow findings fetch for a series
@@ -729,6 +737,8 @@ export default function PipelineEditorialChecks() {
 
       {loadingCatalog ? (
         <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading checks…</p>
+      ) : catalogError ? (
+        <ListLoadError what="the editorial check catalog" error={catalogError} onRetry={() => setCatalogAttempt((n) => n + 1)} />
       ) : (
         <div className="space-y-4">
           {/* Below `lg` the two columns stack — this switch picks which one

@@ -71,6 +71,20 @@ beforeEach(() => {
   ] });
 });
 
+describe('PipelineManuscriptEditor — failed editorial-review read', () => {
+  it('shows a load error with Retry — not an empty comment index — and still opens the manuscript', async () => {
+    api.getPipelineManuscriptReview.mockRejectedValueOnce(new Error('Server unavailable'));
+    renderEditor();
+    expect(await screen.findByText('My Series')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load editorial notes — Server unavailable');
+    expect(screen.getByDisplayValue('The hero walked in. She left.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('The ending is abrupt')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
 describe('PipelineManuscriptEditor', () => {
   it('renders the manuscript section and an open editorial comment in the index', async () => {
     renderEditor();

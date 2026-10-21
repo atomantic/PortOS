@@ -62,6 +62,8 @@ import {
   TRUNCATION_NUDGE_MAX_ATTEMPTS,
   TRUNCATION_NUDGE_TEXT,
   createStallNudgeGate,
+  createPromptSubmissionGate,
+  UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS,
   createAgyResumeGate,
   AGY_RESUME_MAX_ATTEMPTS,
   STALL_NUDGE_MAX_ATTEMPTS,
@@ -113,7 +115,9 @@ const SENTINEL_RECOVERY_RETRY_MS = 250;
 // read by handleData and the provider-signal timer well outside this cluster, so
 // they stay owned by the controller and are threaded through rather than
 // duplicated here. `finishStartupFailure`/`appendLine` are likewise the
-// controller's own closures, passed in rather than re-implemented.
+// controller's own closures, passed in rather than re-implemented, and
+// `noteInput` reports each submit and re-delivery to the controller's
+// prompt-submission gate.
 function createPasteRetryController({
   agentId,
   sessionLabel,
@@ -129,6 +133,7 @@ function createPasteRetryController({
   isFinalized,
   markPromptSent,
   markPromptSubmitted,
+  noteInput,
   finishStartupFailure,
 }) {
   // Markers already present in the prompt text itself (a transcript-analysis task
@@ -228,6 +233,7 @@ function createPasteRetryController({
     if (submitEnterTimer) clearInterval(submitEnterTimer);
     const handle = paste(text, { label: `[cosAgents] ${label}` });
     submitEnterTimer = handle || null;
+    if (handle) noteInput();
     return !!handle;
   };
 
@@ -259,12 +265,17 @@ function createPasteRetryController({
     attemptPaste(reason);
   };
 
-  const submitPaste = () => {
+  // The commit buffer goes to noteInput because it holds the paste chip: a TUI
+  // that ignores the submit Enter may never repaint it (createPromptSubmissionGate).
+  const submitConfirmedPaste = () => {
+    const evidence = pasteState.buffer;
+    clearPaste();
     if (pasteRetryTimer) {
       clearTimeout(pasteRetryTimer);
       pasteRetryTimer = null;
     }
     markPromptSubmitted();
+    noteInput(evidence);
     submitEnterTimer = scheduleSubmitEnters(
       () => write(SUBMIT_KEY, { promptSubmission: true }),
       () => isFinalized()
@@ -328,8 +339,7 @@ function createPasteRetryController({
           pasteRetryTimer = null;
           if (isFinalized()) return;
           if (pasteConfirmed(pasteState.buffer)) {
-            clearPaste();
-            submitPaste();
+            submitConfirmedPaste();
             return;
           }
           attemptPaste(reason);
@@ -384,8 +394,7 @@ function createPasteRetryController({
         // pasteConfirmed is a superset of the pasteCommitted exit above, so only
         // the commitWaitMs timeout can fall through to the verification window.
         if (pasteConfirmed(commitBuffer)) {
-          clearPaste();
-          submitPaste();
+          submitConfirmedPaste();
           return;
         }
         // Markerless AND text not visible yet: give the prompt a short window to
@@ -407,8 +416,7 @@ function createPasteRetryController({
             clearInterval(pasteVerifyTimer);
             pasteVerifyTimer = null;
             if (confirmed) {
-              clearPaste();
-              submitPaste();
+              submitConfirmedPaste();
             } else {
               enterBackoff();
               retryOrFailPaste();
@@ -434,8 +442,7 @@ function createPasteRetryController({
     if (pasteState.phase === 'backoff' && pasteRetryTimer && pasteConfirmed(pasteState.buffer)) {
       clearTimeout(pasteRetryTimer);
       pasteRetryTimer = null;
-      clearPaste();
-      submitPaste();
+      submitConfirmedPaste();
     }
   };
 
@@ -608,6 +615,10 @@ export function createTuiSessionController({
   // The stall no detector can see, because nothing is on screen: a turn that
   // ended with the task unfinished. Reads pure silence. See createStallNudgeGate.
   const stallNudgeGate = createStallNudgeGate();
+  // A prompt whose paste landed but whose submit Enter was ignored: pressed
+  // again where it sits, and a run that never started is failed rather than
+  // parked. See createPromptSubmissionGate.
+  const promptGate = createPromptSubmissionGate({ promptMarkerCount: countPasteMarkers(stripAnsi(prompt)) });
   // Guards ingestDoneSentinel to a single read. finish() is its only caller and
   // is itself guarded by `sessionPhase`, so this is defensive — it pins the
   // read-at-most-once invariant at the helper.
@@ -1434,6 +1445,7 @@ export function createTuiSessionController({
       }
 
       if (promptSubmittedAt) codexModelRejectionGate?.observe(stripped);
+      promptGate.observe(stripped, now);
       // Startup-idle detection (the promptTimer's non-inputReady branch below)
       // reads lastOutputAt/firstOutputAt to decide the TUI has gone quiet and is
       // ready for the prompt paste. Gate them on commandInjected for the same
@@ -1689,6 +1701,7 @@ export function createTuiSessionController({
       isFinalized: () => isTerminal() || !!terminalRefusal,
       markPromptSent: () => { promptSentAt = Date.now(); },
       markPromptSubmitted: () => { if (promptSubmittedAt === null) promptSubmittedAt = Date.now(); },
+      noteInput: (evidence) => promptGate.noteInput(Date.now(), evidence),
       finishStartupFailure,
     });
 
@@ -1927,6 +1940,15 @@ export function createTuiSessionController({
         }
         return;
       }
+      // A prompt still sitting unsubmitted gets the Enter it missed, long before
+      // the stall nudge below would paste a second message on top of it.
+      const enter = sessionPhase === 'running' && promptSubmittedAt ? promptGate.takeEnter(now, lastOutputAt) : 0;
+      if (enter) {
+        if (session.write(sessionId, SUBMIT_KEY, { promptSubmission: true }) !== false) {
+          appendLine(LIFECYCLE_LINES.unsubmittedPromptEntered({ attempt: enter, max: UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS }));
+        }
+        return;
+      }
       // Last, and only once no gate above has a say: every one of them describes a
       // session stalled for a KNOWN reason, and their own silence tests would be
       // pre-empted by a nudge sent on plain quiet.
@@ -1946,6 +1968,19 @@ export function createTuiSessionController({
       // own clock, so a run can be done-but-not-yet-finalized at this instant, and
       // this is the only moment the answer is acted on.
       if (sentinelPresent()) return;
+      if (stalled === 'exhausted' && !promptGate.worked) {
+        // Nothing but echoes of PortOS's own keystrokes since the submit: the
+        // prompt never started a turn. Parking it would keep a live run that
+        // registered as a possible claim owner (claimSelectionPending) holding
+        // every claim checkout in its repository; failing it releases them and
+        // requeues the task through the ordinary retry budget.
+        emitLog('warn', `🛑 TUI agent ${agentId} never started its prompt — failing it after ${stallNudgeGate.nudgesSent} stall nudges`, { agentId });
+        finishStartupFailure(
+          'prompt-not-submitted',
+          `${tuiConfig.command} never started working on the submitted prompt: the session stayed idle through ${stallNudgeGate.nudgesSent} stall nudges.`,
+        ).catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(prompt-not-submitted) failed: ${err?.message || err}`, { agentId }));
+        return;
+      }
       if (stalled === 'exhausted') {
         // Every nudge in the streak was ignored (wedged below its composer), or the
         // run spent its lifetime budget answering nudges without ever finishing

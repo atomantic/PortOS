@@ -2,14 +2,16 @@ import { shotActionContractProblem } from '../../../server/lib/musicVideoActionC
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { addMusicVideoSceneTake, getMusicVideoSceneJobs } from '../services/apiMusicVideo.js';
+import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
+import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
@@ -157,6 +159,32 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
     return () => { live = false; };
   }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs]);
+  // The Casting media of every cast member a shot names in its `characterVariant`
+  // (#12763), keyed by ingredient id: an array once loaded, null when the first load
+  // failed, absent while pending. A shot's frames lead with that member's guides;
+  // without an array the shot uses the automatic set. Casting has no change event,
+  // so the board reloads them when its tab comes back into view.
+  const castIds = [...new Set((project?.scenes || []).map((scene) => scene?.characterVariant?.ingredientId).filter(Boolean))].sort().join(',');
+  const [castMedia, setCastMedia] = useState({});
+  const [castRefresh, setCastRefresh] = useState(0);
+  useVisibilityEvent((state) => { if (state === 'visible') setCastRefresh((n) => n + 1); });
+  useEffect(() => {
+    if (!castIds) return undefined;
+    let active = true;
+    Promise.all(castIds.split(',').map((id) => listCatalogIngredientMedia(id, { silent: true })
+      .then((media) => [id, Array.isArray(media) ? media : null], () => [id, null])))
+      // A failed reload keeps the media already loaded; only a never-loaded member is marked failed (null).
+      .then((entries) => { if (active) setCastMedia((prev) => Object.fromEntries(entries.map(([id, media]) => [id, media ?? prev[id] ?? null]))); });
+    return () => { active = false; };
+  }, [castIds, castRefresh]);
+  // A render before the shot's cast guides load would silently go out without them.
+  const castGuidesPending = (scene) => {
+    const id = scene?.characterVariant?.ingredientId;
+    if (!id || castMedia[id] !== undefined) return false;
+    toast.error('Cast guides are still loading. Try again in a moment.');
+    return true;
+  };
+
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
   const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
@@ -191,8 +219,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    */
   const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
+    if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     // The shot's references (the card's References row) ride along on every frame render, a refine included.
-    const conditioning = conditioningReferences(project, scene);
+    const conditioning = conditioningReferences(project, scene, castMedia);
     const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     // The director's text (or a refine's instruction); the server composes the still's
@@ -259,9 +288,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const refining = Boolean(refine?.trim() && referenceImageId);
     const endPrompt = scene.endFramePrompt?.trim();
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
+    if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     const projectId = project.id;
     // The frame it renders from leads, then the shot's references (the card's References row).
-    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene));
+    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene, castMedia));
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
       // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
@@ -503,6 +533,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     frameBatch,
     videoBatch,
     conditioning,
+    castMedia,
     generateFrame,
     generateEndFrame,
     generateSceneVideo,

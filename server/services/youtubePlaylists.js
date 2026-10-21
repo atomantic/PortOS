@@ -8,6 +8,7 @@
  */
 import { dataPath, ensureDir, atomicWrite, readJSONFile, sleep } from '../lib/fileUtils.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
+import { withYoutubeTab } from './youtubeBrowserLock.js';
 
 const PLAYLISTS_URL = 'https://www.youtube.com/feed/playlists';
 const PLAYLIST_URL = 'https://www.youtube.com/playlist?list=';
@@ -159,7 +160,7 @@ let syncInFlight = null;
 
 export async function syncYoutubePlaylists() {
   if (syncInFlight) return syncInFlight;
-  syncInFlight = doSyncYoutubePlaylists().finally(() => { syncInFlight = null; });
+  syncInFlight = withYoutubeTab(doSyncYoutubePlaylists).finally(() => { syncInFlight = null; });
   return syncInFlight;
 }
 

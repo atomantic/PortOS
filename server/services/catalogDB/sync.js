@@ -17,6 +17,7 @@
  * peer's own clock. See `upsertRefFromPeer` for the full rationale.
  */
 
+import { normalizeLibrary } from '../../lib/catalogMediaLibrary.js';
 import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
 import {
   rowToScrap,
@@ -122,6 +123,13 @@ export async function upsertMediaFromPeer(media) {
   const metadataPlaceholder = hasMetadata ? `, $${hasTombstoneFields ? 10 : 7}` : '';
   const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
   const metadataParam = hasMetadata ? [JSON.stringify(media.metadata || {})] : [];
+  // Casting reference library (catalog v12): absent = no opinion, same as metadata.
+  const hasLibrary = Object.prototype.hasOwnProperty.call(media, 'library')
+    && media.library && typeof media.library === 'object' && !Array.isArray(media.library);
+  const libraryColumn = hasLibrary ? ', library' : '';
+  const libraryPlaceholder = hasLibrary ? `, ${(hasTombstoneFields ? 10 : 7) + (hasMetadata ? 1 : 0)}` : '';
+  const libraryUpdate = hasLibrary ? ', library = EXCLUDED.library' : '';
+  const libraryParam = hasLibrary ? [JSON.stringify(normalizeLibrary(media.library))] : [];
   if (hasTombstoneFields) {
     // #8347 revival guard — see upsertRelationFromPeer for the rationale.
     // `updated_at` also moves on a role/caption/metadata-only edit (the
@@ -130,30 +138,30 @@ export async function upsertMediaFromPeer(media) {
     const updatedAtClock = media.updatedAt || media.deletedAt || media.createdAt;
     await query(
       `INSERT INTO catalog_ingredient_media
-         (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at, updated_at${metadataColumn})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9${metadataPlaceholder})
+         (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at, updated_at${metadataColumn}${libraryColumn})
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9${metadataPlaceholder}${libraryPlaceholder})
        ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
          SET role = EXCLUDED.role,
              caption = EXCLUDED.caption,
              deleted = EXCLUDED.deleted,
              deleted_at = EXCLUDED.deleted_at,
-             updated_at = EXCLUDED.updated_at${metadataUpdate}
+             updated_at = EXCLUDED.updated_at${metadataUpdate}${libraryUpdate}
        WHERE EXCLUDED.updated_at > catalog_ingredient_media.updated_at`,
       [
         media.ingredientId, media.mediaKey, media.kind,
         media.role ?? null, media.caption ?? null, media.createdAt,
         !!media.deleted, media.deletedAt || null, updatedAtClock,
-        ...metadataParam,
+        ...metadataParam, ...libraryParam,
       ],
     );
   } else {
     await query(
       `INSERT INTO catalog_ingredient_media
-         (ingredient_id, media_key, kind, role, caption, created_at${metadataColumn})
-       VALUES ($1, $2, $3, $4, $5, $6${metadataPlaceholder})
+         (ingredient_id, media_key, kind, role, caption, created_at${metadataColumn}${libraryColumn})
+       VALUES ($1, $2, $3, $4, $5, $6${metadataPlaceholder}${libraryPlaceholder})
        ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
-         SET role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}`,
-      [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt, ...metadataParam],
+         SET role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}${libraryUpdate}`,
+      [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt, ...metadataParam, ...libraryParam],
     );
   }
   });

@@ -126,7 +126,24 @@ const clampLogText = (value) => {
   return flat.length > LOG_DETAIL_MAX_CHARS ? `${flat.slice(0, LOG_DETAIL_MAX_CHARS)}…` : flat;
 };
 
-const describeObjectEntries = (obj) => Object.entries(obj).map(([k, v]) => `${k}=${v}`).join('; ');
+// Render a single `details` value for the log line by type. Primitives print as
+// themselves; arrays/objects become compact single-line JSON. A cycle guard keeps
+// a cyclic `details` value to a bounded placeholder instead of throwing inside
+// the handler. An empty array prints as `[]` rather than nothing — previously it
+// was truthy but summarized to an empty string (see #12586).
+const renderDetailValue = (v) => {
+  if (v === null) return 'null';
+  if (v === undefined) return 'undefined';
+  if (typeof v !== 'object') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return '[unserializable]';
+  }
+};
+
+const describeObjectEntries = (obj) =>
+  Object.entries(obj).map(([k, v]) => `${k}=${renderDetailValue(v)}`).join('; ');
 
 const describeDetailEntry = (entry) => {
   if (!entry || typeof entry !== 'object') return String(entry);

@@ -10,6 +10,16 @@ import { materializeGitRepo, resetGitWorktreeSandbox, SKIP_HEAVY_INTEGRATION } f
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { cleanupOrphanedWorktrees } from './worktreeManager.js';
+import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
+
+const archiveGate = vi.hoisted(() => ({ beforeArchive: null }));
+vi.mock('./heldCheckoutRecovery.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, preserveMergedCheckout: async (...args) => {
+    await archiveGate.beforeArchive?.(...args);
+    return actual.preserveMergedCheckout(...args);
+  } };
+});
 
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal();
@@ -104,6 +114,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     fault.aliasTarget = null;
     fault.registrationPath = null;
     fault.onGit = null;
+    archiveGate.beforeArchive = null;
     await resetGitWorktreeSandbox(external, initialHead);
     await rm(PATHS.worktrees, { recursive: true, force: true });
     await mkdir(PATHS.worktrees, { recursive: true });
@@ -135,6 +146,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     expect(await branchExists('agent-unmerged')).toBe(true);
     expect(existsSync(merged)).toBe(false);
     expect(await branchExists('agent-merged')).toBe(false);
+  });
+
+  // #12748: the archive ran inside the shared claim-ownership lock.
+  it('archives with the ownership queue free while fencing only the reclaimed checkout', async () => {
+    const path = await addTree('agent-fenced', { committed: true });
+    await execGit(['merge', '--no-ff', 'agent-fenced', '--no-edit'], external);
+    let started;
+    let resume;
+    const archiving = new Promise(resolve => { started = resolve; });
+    // Git spells the parent repository its own way on Windows; fence what it archives.
+    archiveGate.beforeArchive = repoPath => new Promise(resolve => { resume = resolve; started(repoPath); });
+    const cleaning = cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS);
+    const repoPath = await archiving;
+    expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
+    expect(checkoutRetirementFenceReason({ repoPath, branch: 'agent-fenced' })).toBe('checkout-retirement-reserved');
+    expect(checkoutRetirementFenceReason({ repoPath, branch: 'agent-unrelated' })).toBe(null);
+    resume();
+    expect(await cleaning).toBe(1);
+    expect(existsSync(path)).toBe(false);
+    expect(checkoutRetirementFenceReason({ repoPath, branch: 'agent-fenced' })).toBe(null);
   });
 
   it('matches Git registration spelling when Node retains another alias for the same checkout', async () => {
@@ -229,7 +260,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
 
   it('retains merged work when durable completion policy is unreadable despite an empty owner snapshot', async () => {
     const path = await addTree('agent-policy-unreadable');
-    await writeFile(join(PATHS.cos, 'state.json'), '{');
+    // Agent records are cos_agents rows (#12738); the agent index is the durable policy input left on disk.
+    await mkdir(join(PATHS.cos, 'agents'), { recursive: true });
+    await writeFile(join(PATHS.cos, 'agents', 'index.json'), '{');
     expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(await branchExists('agent-policy-unreadable')).toBe(true);

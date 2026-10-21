@@ -31,13 +31,13 @@ import { sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
  * so a live sibling agent is structurally invisible to it.
  */
 
-import { existsSync } from 'fs';
+import { readLocalBranchPresence, readCheckoutPathPresence, inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 import { join, resolve } from 'path';
 import { emitLog } from './cosEvents.js';
 import { addTask } from './cos.js';
 import * as git from './git.js';
 import { listWorktrees } from './worktreeManager.js';
-import { listRemoteHeads, driveToMerge, cleanupMerged } from './branchReconcile.js';
+import { listRemoteHeads, driveToMerge } from './branchReconcile.js';
 import { readAllTasksFlat } from './investigationTaskProducer.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -45,7 +45,7 @@ import { isTruthyMeta } from './agentState.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { leavesPrForHuman, resolvePrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
-import { probePrForBranch } from './prProbe.js';
+import { probePrForBranch, probeChangeRequestState } from './prProbe.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import {
@@ -138,26 +138,23 @@ async function probeBranchMerged(repoPath, branch, target) {
  * @param {boolean} params.prExpected - gates the forge lookup
  * @returns {Promise<{worktreePresent: boolean|null, localBranchPresent: boolean|null, remoteBranchPresent: boolean|null, branchMerged: boolean|null, prState: string|null, prUrl: string|null, defaultBranch: string|null}>}
  */
-async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branchShouldBeGone, prExpected }) {
+async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branchShouldBeGone, prExpected, originalPrUrl }) {
   // A worktree counts as present if the directory survived on disk OR git still
   // tracks it. Either alone is a leak: an unregistered directory is the full
   // checkout `removeWorktree` believed it deleted, and a registered-but-deleted
   // tree wedges the next `git worktree add` for that path. The cheap disk check
   // first, so the common leaked-directory case skips the `git worktree list` spawn.
   const probeWorktree = async () => {
-    if (worktreePath && existsSync(worktreePath)) return true;
+    const present = worktreePath ? await readCheckoutPathPresence(worktreePath) : null;
+    if (present !== false) return present;
     const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
     if (!worktrees) return null;
     return worktrees.some(wt =>
-      wt.branch?.replace(/^refs\/heads\//, '') === branchName || wt.path === worktreePath
+      wt.path === worktreePath
     );
   };
 
-  const probeLocalBranch = () => execGit(
-    ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`],
-    sourceWorkspace,
-    { ignoreExitCode: true }
-  ).then(r => r.exitCode === 0).catch(() => null);
+  const probeLocalBranch = () => readLocalBranchPresence(sourceWorkspace, branchName);
 
   // `listRemoteHeads` is branch-reconcile's single answer to "what is on origin
   // right now", already carrying the null-means-could-not-ask contract. It reads
@@ -173,6 +170,14 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   // one", so there is nothing here to report and nothing missing on a `none`
   // answer.
   const probePr = async () => {
+    if (originalPrUrl && branchShouldBeGone) {
+      const parsed = parsePullRequestUrl(originalPrUrl);
+      const { getOriginInfo } = await import('../lib/gitRemote.js');
+      const origin = await getOriginInfo(sourceWorkspace);
+      if (!parsed || origin?.host !== parsed.host || origin?.fullName !== `${parsed.owner}/${parsed.repo}`) return { readable: false, prState: null, prUrl: null };
+      const probe = await probeChangeRequestState(sourceWorkspace, { number: parsed.number, branch: branchName });
+      return { ...probe, prUrl: originalPrUrl, prNumber: parsed.number };
+    }
     if (!prExpected || !branchShouldBeGone) return { prState: null, prUrl: null, prNumber: null, cli: null, readable: true };
     return probePrForBranch(sourceWorkspace, branchName);
   };
@@ -292,7 +297,7 @@ async function resumeCompletionAudits() {
       continue;
     }
     await verifyAgentRepoState({ agentId: agent.id || agent.agentId, agentState: agent, task,
-      success: agent.result?.success === true, prExpected: isTruthyMeta(task.metadata?.openPR) })
+      success: agent.result?.success === true, prExpected: isTruthyMeta(task.metadata?.openPR) || !!task.metadata?.reviewLoopPRUrl || !!agent.metadata?.reviewLoopMergeTarget?.url })
       .catch(error => emitLog('warn', `Completion recovery deferred for ${agent.id}: ${error.message}`, { agentId: agent.id }));
     checked++;
   }
@@ -314,19 +319,27 @@ async function verifyRunBranches(input) {
   const results = [];
   for (const branch of branches) {
     const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
-    const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+    const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
     const agents = await readClaimOwnershipAgents().catch(() => null);
-    const owner = claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace, agents });
+    const owner = claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents });
     if (owner) {
-      results.push({ branch, verified: false, skipReason: owner, issues: [], recoveryTaskId: null });
+      const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+      await recordCleanupOutcome(input.agentId, { branch, status: 'blocked', reason: owner.reason, owners: owner.owners });
+      results.push({ branch, verified: false, skipReason: owner.reason, issues: [], recoveryTaskId: null });
       continue;
     }
-    // Scope only to server-recorded bindings, never branches parsed from prose.
-    // Resolve the holder from Git; the claim agent's workspace is the primary.
-    const holder = trees.find(tree => tree.branch === `refs/heads/${branch}`);
+    // A current branch holder is not evidence of the old claim's checkout.
+    // Only the server's completion capture names its original incarnation.
+    const original = meta.completedCheckouts?.find(row => row.branch === branch);
+    if (!original?.path) {
+      const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+      await recordCleanupOutcome(input.agentId, { branch, status: 'blocked', reason: 'claim-checkout-identity-unverified' });
+      results.push({ branch, verified: false, skipReason: 'claim-checkout-identity-unverified', issues: [], recoveryTaskId: null });
+      continue;
+    }
     results.push({ branch, ...await verifyAgentBranchState({ ...input, prExpected: true,
       agentState: { ...input.agentState, metadata: { ...meta, isWorktree: true,
-        worktreeBranch: branch, sourceWorkspace, workspacePath: holder?.path || null } },
+        worktreeBranch: branch, sourceWorkspace, workspacePath: original.path } },
     }) });
   }
   return { verified: results.every(result => result.verified), branches: results,
@@ -370,27 +383,73 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     : null;
   if (app === UNREADABLE) return skipped(REPO_STATE_SKIPS.GATE_UNREADABLE);
 
+  const worktreePath = isTruthyMeta(metadata.claimPicksOwnBranch) ? metadata.workspacePath : metadata.workspacePath || join(PATHS.worktrees, agentId);
+  const domain = async (status, reason, extra = {}) => {
+    const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+    await recordCleanupOutcome(agentId, { status, reason, branch: branchName, path: worktreePath, ...extra });
+  };
   const enabled = repoStateVerificationEnabled(app);
   const owned = enabled ? await branchHasPendingOwner(branchName, app).catch(() => null) : false;
-  if (owned === null) return skipped(REPO_STATE_SKIPS.GATE_UNREADABLE);
+  if (owned === null) { await domain('blocked', 'ownership-unreadable'); return skipped(REPO_STATE_SKIPS.GATE_UNREADABLE); }
+  if (owned) await domain('pending', 'existing-completion-owner');
 
-  const expectation = resolveRepoStateExpectation({ ...structural, enabled, followUpPending: owned });
+  const originalPrUrl = [metadata.reviewLoopMergeTarget?.url, metadata.recoveryMergeTarget?.url,
+    task?.metadata?.reviewLoopPRUrl, task?.metadata?.recoveryMergeTarget?.url].find(value => parsePullRequestUrl(value));
+  const expectation = resolveRepoStateExpectation({ ...structural, prExpected: prExpected || !!originalPrUrl, enabled, followUpPending: owned });
   if (!expectation.verify) return skipped(expectation.skipReason);
 
-  const worktreePath = isTruthyMeta(metadata.claimPicksOwnBranch) ? metadata.workspacePath : metadata.workspacePath || join(PATHS.worktrees, agentId);
+  // A reused branch is not the old checkout. No model is needed to identify a
+  // different holder, and its live work must never become this parent's target.
+  const inventory = await listWorktrees(sourceWorkspace).catch(() => null);
+  if (!inventory) { await domain('blocked', 'checkout-inventory-unavailable'); return skipped('checkout-inventory-unavailable'); }
+  const holders = inventory.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branchName);
+  const pathHolder = inventory.find(tree => tree.path === worktreePath);
+  if (holders.some(tree => tree.path !== worktreePath)
+    || (pathHolder && pathHolder.branch?.replace(/^refs\/heads\//, '') !== branchName)) {
+    await domain('blocked', 'checkout-incarnation-changed');
+    return skipped('checkout-incarnation-changed');
+  }
+  const completed = metadata.completedCheckouts?.find(row => row.branch === branchName && resolve(row.path) === resolve(worktreePath));
+  if (completed && pathHolder) {
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch: branchName,
+      path: worktreePath, head: pathHolder.head }).catch(() => null);
+    if (!identity || identity.head !== completed.head || JSON.stringify(identity.incarnation) !== JSON.stringify(completed.incarnation)) {
+      await domain('blocked', 'checkout-incarnation-changed');
+      return skipped('checkout-incarnation-changed');
+    }
+  }
+  const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
+  const owner = claimCheckoutOwner({ branchName, sourceWorkspace,
+    agents: await readClaimOwnershipAgents().catch(() => null) });
+  if (owner) { await domain('blocked', owner.reason, { owners: owner.owners }); return skipped(owner.reason); }
   const observed = await probeRepoState({
     sourceWorkspace,
     branchName,
     worktreePath,
     branchShouldBeGone: !expectation.staysOpen,
-    prExpected: expectation.prExpected,
+    prExpected: expectation.prExpected, originalPrUrl,
   }).catch(err => {
     emitLog('warn', `🔎 Repo-state probe failed for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
   });
 
-  if (!observed) return skipped(REPO_STATE_SKIPS.PROBE_INCOMPLETE);
+  if (!observed) { await domain('blocked', 'probe-incomplete'); return skipped(REPO_STATE_SKIPS.PROBE_INCOMPLETE); }
 
+  // Missing originals are an accounting gap, not a reason to hire an agent
+  // to rediscover absence. Never invent a preservation receipt.
+  if (observed.worktreePresent === false && observed.localBranchPresent === false) {
+    const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+    const proofUrl = originalPrUrl || observed.prUrl;
+    const forge = proofUrl && observed.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
+      { forgeAccount: app?.forgeAccount ?? null }).catch(() => null) : null;
+    const integrated = forge && (await execGit(['merge-base', '--is-ancestor', forge.prHead, forge.defaultHead], sourceWorkspace,
+      { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
+    const reason = integrated ? 'already-absent-preservation-unverified' : 'absent-checkout-integration-unverified';
+    await domain(integrated ? 'already-absent' : 'blocked', reason, { prUrl: originalPrUrl, committedIntegrationVerified: !!integrated });
+    return skipped(reason);
+  }
   const issues = classifyRepoStateIssues(expectation, { ...observed, branchName });
   if (issues.length === 0) {
     // A run where some probe could not be read has not been verified — it has been
@@ -398,6 +457,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     // repo. Findings still stand on their own: what WAS readable is fact, so a
     // divergence below is reported even alongside an unreadable probe.
     if (observed.unreadable.length > 0) {
+      await domain('blocked', 'probe-incomplete');
       emitLog('info', `🔎 Repo state only partly readable for ${agentId} (${branchName}) — could not check: ${observed.unreadable.join(', ')}`, { agentId, branchName });
       return { verified: false, skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE, issues: [], observed, recoveryTaskId: null };
     }
@@ -410,41 +470,54 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     return { verified: false, skipReason: null, issues, observed, recoveryTaskId: null };
   }
 
-  // A merged branch with no remote ref is safe for the deterministic reaper to
-  // retire. Do this before creating another agent task: the common failure is
-  // simply that the completing agent exited before its worktree teardown ran.
-  // `cleanupMerged` repeats merge evidence and the clean-worktree/protection
-  // gates at action time, so an unsafe or racing state falls through to the
-  // existing evidence-backed recovery task.
-  const cleanupOnly = observed.branchMerged === true
-    && observed.remoteBranchPresent === false
-    && !issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED);
-  if (cleanupOnly) {
-    const retired = await cleanupMerged(sourceWorkspace, observed.defaultBranch, [{
-      branch: branchName,
-      upstreamGone: true,
-    }]).catch(() => ({ cleaned: [] }));
-    if (retired.cleaned.includes(branchName)) {
-      // Record the proven cleanup outcome, never infer it from an agent summary.
-      await import('./cosAgentLifecycle.js').then(({ updateAgent }) => updateAgent(agentId, {
-        metadata: { maintenanceOutcome: 'deterministic-cleanup' },
-      })).catch(error => emitLog('warn', `Could not record deterministic cleanup outcome: ${error.message}`, { agentId }));
-      emitLog('info', `🔎 Deterministic cleanup retired merged branch ${branchName} for ${agentId}`, { agentId, branchName });
-      return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
-    }
-  }
-
   let retirement = null;
   if (observed.prState === 'MERGED' && (observed.worktreePresent || observed.localBranchPresent)) {
     const prepared = await prepareRecoveryRetirement({ app, sourceWorkspace, branchName, worktreePath, observed })
       .catch(() => ({ reason: 'retirement-review-unavailable' }));
     if (!prepared.retirement) {
+      await domain('blocked', prepared.reason);
       emitLog('warn', `Repo-state retirement retained ${branchName}: ${prepared.reason}`, { agentId, branchName });
       return { verified: false, skipReason: prepared.reason, issues, observed, recoveryTaskId: null };
     }
     retirement = prepared.retirement;
+    if (prepared.integrated) {
+      const { retireInventoriedCheckout } = await import('./heldCheckoutRecovery.js');
+      const { assertAutomaticRetirementAllowed } = await import('./branchReconcileRetirement.js');
+      const result = await retireInventoriedCheckout({ appId, release: retirement.release,
+        review: { prUrl: retirement.prUrl, digest: retirement.digest, acceptSuperseded: false } }, { beforeMutation: assertAutomaticRetirementAllowed }).catch(error => ({ reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-outcome-uncertain' }));
+      const verified = result.ok && result.archiveDir && result.branchDeleted === true;
+      await domain(verified ? 'verified' : 'blocked', verified ? 'retirement-receipt-verified' : result.reason || 'retirement-receipt-unverified');
+      return { verified: !!verified, skipReason: verified ? null : result.reason || 'retirement-receipt-unverified', issues: verified ? [] : issues, observed, recoveryTaskId: null };
+    }
   }
 
+  // Cleanup bookkeeping/unknown forge/CI waits remain deterministic. Only
+  // source/history judgment or an actual undelivered branch needs cognition.
+  if (!retirement && !issues.some(issue => issue.code === REPO_STATE_ISSUES.BRANCH_UNMERGED
+    || issue.code === REPO_STATE_ISSUES.PR_UNMERGED)) {
+    await domain('blocked', 'deterministic-cleanup-pending');
+    return { verified: false, skipReason: 'deterministic-cleanup-pending', issues, observed, recoveryTaskId: null };
+  }
+  if (!retirement && (!observed.prState || observed.unreadable.length)) {
+    await domain('blocked', 'delivery-evidence-unavailable');
+    return { verified: false, skipReason: 'delivery-evidence-unavailable', issues, observed, recoveryTaskId: null };
+  }
+  if (!retirement) {
+    const delivery = observed.prState === 'OPEN' ? await inspectOpenDeliveryRepair(sourceWorkspace, branchName, observed.prUrl, { forgeAccount: app?.forgeAccount ?? null }).catch(() => ({ reason: 'delivery-evidence-unavailable' })) : { reason: 'delivery-not-open' };
+    let review = null;
+    if (delivery.headSha) {
+      const { inspectOrQueueCompletedReview } = await import('./repoCleanupRecovery.js');
+      review = await inspectOrQueueCompletedReview({ agentId, repoPath: sourceWorkspace, branch: branchName,
+        prUrl: observed.prUrl, headSha: delivery.headSha, worktreePath, forgeAccount: app?.forgeAccount ?? null, repairEvidence: delivery.evidence }).catch(() => ({ disposition: 'held', reason: 'completed-review-inspection-unavailable' }));
+    }
+    if (review?.disposition === 'queued-review') {
+      await domain('pending', review.reason, { taskId: review.taskId });
+      return { verified: false, skipReason: review.reason, issues, observed, recoveryTaskId: review.taskId };
+    }
+    const reason = review?.reason || delivery.reason || 'completed-review-target-unverified';
+    await domain('blocked', reason);
+    return { verified: false, skipReason: reason, issues, observed, recoveryTaskId: null };
+  }
   emitLog('warn', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
@@ -499,7 +572,11 @@ async function prepareRecoveryRetirement({ app, sourceWorkspace, branchName, wor
       nextAction: 'Retain the checkout and obligation; retry a fresh preview after the reported hold resolves.' });
     return { reason: prepared.reason };
   }
-  return { retirement: { release, createdAt: obligation.createdAt, prUrl: observed.prUrl, digest: prepared.review.digest } };
+  if (!['integrated', 'review-supersession'].includes(prepared.review?.comparison?.disposition)
+    || typeof prepared.review.comparison.localPatch !== 'string' || typeof prepared.review.comparison.difference !== 'string') return { reason: 'retirement-comparison-unavailable' };
+  return { integrated: prepared.review.forge?.prHead === release.head && prepared.review.comparison?.disposition === 'integrated' && prepared.review.comparison.difference === '',
+    retirement: { release, createdAt: obligation.createdAt, prUrl: observed.prUrl, digest: prepared.review.digest,
+      cognition: (await import('./branchReconcileRetirement.js')).retirementCognitiveIdentity(prepared.review, release, observed.prUrl) } };
 }
 
 /**
@@ -573,9 +650,23 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
       + `Do not switch branches in ${sourceWorkspace} itself.`,
   ].join('\n');
 
-  const observation = processAuditFingerprint({ codes: issues.map(issue => issue.code).sort(),
-    merged: observed.branchMerged, remotePresent: observed.remoteBranchPresent, prState: observed.prState });
-  const previous = task?.metadata?.recoveryOrigin;
+  const head = await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace)
+    .then(result => result.exitCode === 0 ? result.stdout.trim() : null).catch(() => null);
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head || '')
+    || (retirement && retirement.release.head !== head)) return null;
+  const observation = retirement?.cognition?.observation || processAuditFingerprint({ branchName, worktreePath, head, prUrl: observed.prUrl,
+    codes: issues.map(issue => issue.code).sort(), merged: observed.branchMerged,
+    remotePresent: observed.remoteBranchPresent, prState: observed.prState, deliveryRepair: observed.deliveryRepair,
+    // Stable observation: periodic checks alone do not create new work.
+    work: 'delivery-repair' });
+  const { reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+  const recoveryOwner = retirement?.cognition?.ownerAgentId || agentId;
+  const reservation = await reserveRepoCleanupRecovery(recoveryOwner, branchName, observation);
+  if (!reservation?.admitted) {
+    await recordCleanupOutcome(agentId, { status: 'blocked', reason: reservation?.reason || 'cleanup-observation-unavailable', branch: branchName, path: worktreePath });
+    return null;
+  }
+
   // The PR this recovery may land under merge admission (#12251): the forge's
   // own answer for this branch, never the agent's report or the task prose.
   const mergeTarget = issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED) && parsePullRequestUrl(observed.prUrl)
@@ -586,14 +677,16 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     app: appId || undefined,
     isRecovery: true,
     metadata: { recoveryOrigin: { parentAgentId: agentId, parentTaskId: task?.id || null,
-      subsystem: 'repository-cleanup', attempt: Math.min(1000, (previous?.attempt || 0) + 1),
-      observation, noProgress: previous?.observation === observation },
+      subsystem: 'repository-cleanup', attempt: reservation.attempt,
+      observation, noProgress: false },
     ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}),
     ...(retirement ? { retirementReview: { appId, release: retirement.release, createdAt: retirement.createdAt } } : {}) },
     context,
     useWorktree: false,
   }, 'user');
 
+  await recordRepoCleanupRecovery(recoveryOwner, branchName, observation, { phase: created?.id ? 'dispatched' : 'blocked', taskId: created?.id || null });
+  await recordCleanupOutcome(agentId, { status: 'pending', reason: 'cognitive-review-pending', branch: branchName, path: worktreePath, taskId: created?.id || null });
   if (created?.duplicate) {
     emitLog('info', `🔎 Repo-state recovery for ${branchName} already queued as ${created.id}`, { agentId, branchName });
     // Repair an interruption between task creation and backlink persistence,

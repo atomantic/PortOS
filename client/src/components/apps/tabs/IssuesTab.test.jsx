@@ -68,13 +68,17 @@ const okPayload = (issues) => ({
   remedy: null,
 });
 
-const renderTab = async () => {
+const renderTab = async ({ open = false } = {}) => {
   const result = render(
     <MemoryRouter>
       <IssuesTab appId="app-1" appName="Widget" />
     </MemoryRouter>
   );
   await act(async () => {});
+  if (open) {
+    fireEvent.click(screen.getByRole('button', { name: 'Change' }));
+    await act(async () => {});
+  }
   return result;
 };
 
@@ -254,7 +258,7 @@ describe('IssuesTab', () => {
     expect(screen.queryByRole('link', { name: /Completed/ })).not.toBeInTheDocument();
   });
 
-  it('applies every task from a user task-list update', async () => {
+  it('applies every task update that arrives in the same tick', async () => {
     const SECOND_ISSUE = {
       ...ISSUE,
       number: 43,
@@ -272,12 +276,10 @@ describe('IssuesTab', () => {
     fireEvent.click(claimButtons[1]);
     await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledTimes(2));
 
-    act(() => socketHandlers.get('cos:tasks:user:changed')({
-      tasks: [
-        { id: 'task-1', status: 'completed' },
-        { id: 'task-2', status: 'completed' },
-      ],
-    }));
+    act(() => {
+      socketHandlers.get('cos:tasks:changed')({ task: { id: 'task-1', status: 'completed' } });
+      socketHandlers.get('cos:tasks:changed')({ task: { id: 'task-2', status: 'completed' } });
+    });
 
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Completed/ })).toHaveLength(2));
   });
@@ -286,7 +288,7 @@ describe('IssuesTab', () => {
     const listenerCountBeforeMount = socketHandlers.size;
     const { unmount } = await renderTab();
 
-    expect(socketHandlers.size).toBe(listenerCountBeforeMount + 6);
+    expect(socketHandlers.size).toBe(listenerCountBeforeMount + 4);
     unmount();
     expect(socketHandlers.size).toBe(listenerCountBeforeMount);
   });
@@ -326,7 +328,7 @@ describe('IssuesTab', () => {
       reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: 'codex,claude',
     });
 
-    await renderTab();
+    await renderTab({ open: true });
 
     expect(await screen.findByText('codex,claude')).toBeInTheDocument();
     expect(screen.getByText(/claim-work/)).toBeInTheDocument();
@@ -334,7 +336,7 @@ describe('IssuesTab', () => {
   });
 
   it('points at the Code Reviewers panel when no override is in play', async () => {
-    await renderTab();
+    await renderTab({ open: true });
 
     expect(await screen.findByText('antigravity')).toBeInTheDocument();
     expect(screen.queryByText(/claim-work/)).not.toBeInTheDocument();
@@ -358,7 +360,7 @@ describe('IssuesTab', () => {
       providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', enabled: true,
         models: ['gpt-5'], defaultModel: 'gpt-5', effort: 'high' }],
     });
-    await renderTab();
+    await renderTab({ open: true });
     await screen.findByText('Crash on save');
     await waitFor(() => expect(screen.getByLabelText('Provider')).toHaveValue('codex'));
     expect(screen.getByLabelText('Model')).toHaveValue('gpt-5');
@@ -377,7 +379,7 @@ describe('IssuesTab', () => {
         models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
       }],
     });
-    await renderTab();
+    await renderTab({ open: true });
 
     await screen.findByText('Crash on save');
     fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
@@ -404,7 +406,7 @@ describe('IssuesTab', () => {
   });
 
   it('sends a reviewer effort override without pinning untouched defaults', async () => {
-    await renderTab();
+    await renderTab({ open: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
     fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
@@ -417,7 +419,7 @@ describe('IssuesTab', () => {
   });
 
   it('blocks an empty claim review chain, leaves replans alone, and restores inheritance', async () => {
-    await renderTab();
+    await renderTab({ open: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
     expect(screen.getByRole('button', { name: /Claim/ })).toBeDisabled();
@@ -431,8 +433,51 @@ describe('IssuesTab', () => {
     expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled();
   });
 
+  it('collapses run settings into a truthful summary that Change expands', async () => {
+    await renderTab();
+
+    const summary = screen.getByTestId('run-settings-summary');
+    expect(summary).toHaveTextContent(/^Run with: Auto \(default\) · default model · default effort · After PR: .+ · Reviewers: antigravity$/);
+    expect(screen.queryByLabelText('Provider')).not.toBeInTheDocument();
+    const change = screen.getByRole('button', { name: 'Change' });
+    expect(change).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(change);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'Hide' })).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.change(screen.getByLabelText(/Extra context/), { target: { value: 'Keep it small.' } });
+    expect(summary).toHaveTextContent(/· extra context set$/);
+  });
+
+  it('keeps an invalid review override visible by forcing the settings open', async () => {
+    await renderTab({ open: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Claims require at least one non-Copilot reviewer');
+    expect(screen.queryByRole('button', { name: 'Hide' })).not.toBeInTheDocument();
+  });
+
+  it('opens the settings automatically once a code-review override is active', async () => {
+    await renderTab({ open: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
+
+    expect(screen.queryByRole('button', { name: 'Hide' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Code-review override (active)' })).toBeInTheDocument();
+  });
+
+  it('shows a failed issues load above the run settings', async () => {
+    api.getAppIssues.mockRejectedValue(new Error('forge down'));
+    await renderTab();
+
+    const banner = await screen.findByText(/Couldn.t load issues — forge down/);
+    const summary = screen.getByTestId('run-settings-summary');
+    expect(banner.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('clears review overrides when switching apps', async () => {
-    const view = await renderTab();
+    const view = await renderTab({ open: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
     fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
     view.rerender(<MemoryRouter><IssuesTab appId="app-2" appName="Other" /></MemoryRouter>);
@@ -444,7 +489,7 @@ describe('IssuesTab', () => {
   });
 
   it('sends optional override context with the selected claim', async () => {
-    await renderTab();
+    await renderTab({ open: true });
 
     await screen.findByText('Crash on save');
     fireEvent.change(screen.getByLabelText(/Extra context/), {
@@ -970,7 +1015,7 @@ describe('IssuesTab replan', () => {
   });
 
   it('allows selecting merge-on-green, hides reviewer controls, and sends prCompletion', async () => {
-    await renderTab();
+    await renderTab({ open: true });
 
     expect(await screen.findByText('Reviewed by')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Code-review override' })).toBeInTheDocument();
@@ -989,7 +1034,7 @@ describe('IssuesTab replan', () => {
   });
 
   it('unblocks claim when switching to merge-on-green even after removing all reviewers', async () => {
-    await renderTab();
+    await renderTab({ open: true });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));

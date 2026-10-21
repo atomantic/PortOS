@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -58,5 +58,25 @@ describe('RunsTab ?run= deep link', () => {
 
     expect(await screen.findByText('first prompt')).toBeInTheDocument();
     expect(api.getRunPrompt).not.toHaveBeenCalled();
+  });
+
+  it('renders a failed runs read as an error row with Retry, not "No AI runs yet"', async () => {
+    api.getRuns.mockRejectedValueOnce(new Error('runs 500'));
+    renderTab('/cos/runs');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load runs — runs 500');
+    expect(screen.queryByText('No AI runs yet')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the empty copy for a genuinely empty run history', async () => {
+    api.getRuns.mockResolvedValue({ runs: [] });
+    renderTab('/cos/runs');
+
+    expect(await screen.findByText('No AI runs yet')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

@@ -537,7 +537,7 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
   // run that DID commit before dying is requeued as if it had produced nothing.
   it('the post-restart recovery path hands the dead agent’s metadata to the retry handler', () => {
     const body = recoveryBranchSource();
-    expect(body).toMatch(/handleOrphanedTask\([^)]*\{\s*agentMetadata: cosAgent\.metadata,\s*agentStartedAt: cosAgent\.startedAt\s*\}\)/);
+    expect(body).toMatch(/handleOrphanedTask\([^)]*\{\s*agentMetadata: cosAgent\.metadata,\s*agentStartedAt: cosAgent\.startedAt,[\s\S]*?\}\)/);
   });
 });
 

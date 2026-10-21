@@ -67,6 +67,9 @@ const LIFECYCLE_EVENTS = new Set([
   'Target.detachedFromTarget', 'Target.targetCrashed', 'Target.targetDestroyed', 'Inspector.detached', 'Inspector.targetCrashed',
 ]);
 
+// Under the 30s per-command timer; see the document-load wait in connectComposition.
+const DOCUMENT_LOAD_DEADLINE_MS = 27000;
+
 // One browser-level socket owns a disposable context and its hidden target.
 // Disconnect/abort rejects pending commands; disposeOnDetach covers crashes.
 // `bytes=a-b` / `bytes=a-` / `bytes=-n` against `size`; null when absent or unsatisfiable.
@@ -435,7 +438,19 @@ async function connectComposition(assets, {
     phase = 'navigate';
     const navigation = await send('Page.navigate', { url: `${ORIGIN}/index.html` });
     if (navigation.errorText) throw new Error(`Composition navigation failed: ${navigation.errorText}`);
-    await evaluate(`new Promise(resolve => document.readyState === 'complete' ? resolve() : addEventListener('load', resolve, { once: true }))`, 'document load');
+    phase = 'document-load';
+    // The page-side deadline sits under the 30s command timer so the two
+    // failures separate (#12656): a command timeout means the renderer stopped
+    // answering (host starvation or a hung target); this stall means the page
+    // answered but its load event never came, which is a lifecycle fault.
+    const loadWaitMs = sinceStart();
+    const loaded = await evaluate(`new Promise(resolve => {
+      if (document.readyState === 'complete') return resolve('loaded');
+      addEventListener('load', () => resolve('loaded'), { once: true });
+      setTimeout(() => resolve('stalled:' + document.readyState), ${DOCUMENT_LOAD_DEADLINE_MS});
+    })`, 'document load');
+    if (typeof loaded === 'string' && loaded.startsWith('stalled:')) throw new Error(`Composition document load stalled: ${loaded.slice('stalled:'.length)} after ${DOCUMENT_LOAD_DEADLINE_MS}ms while the page stayed responsive (${commandFacts(loadWaitMs)})`);
+    phase = 'font-readiness';
     await evaluate('document.fonts.ready.then(() => true)', 'font readiness');
     phase = 'ready';
     return { evaluate, send, close, check: () => { signal?.throwIfAborted(); if (failure) throw failure; } };

@@ -206,6 +206,43 @@ async function pendingIsLive(pending) {
   return Date.now() - Date.parse(pending.requestedAt || 0) < RESERVATION_TTL_MS;
 }
 
+const INTERRUPTED_PAINT_ERROR = 'interrupted by restart';
+
+// A restart archives the paint without clearing `pending`, and replaying the
+// job failure at boot would run every other terminal listener. The publish-kit
+// read projects that outcome instead. Not safe from getProject: the completion
+// hook treats a missing pending as "not this request".
+export async function reconcileInterruptedYoutubeThumbnail(project) {
+  if (!project?.id) return project;
+  const thumb = projectYoutubeThumbnail(project);
+  if (!thumb.pending || await pendingIsLive(thumb.pending)) return project;
+  const seenRequestId = thumb.pending.requestId || null;
+  const seenJobId = thumb.pending.jobId || null;
+  const out = await mutateProjectRecord(project.id, async (current) => {
+    const currentThumb = projectYoutubeThumbnail(current);
+    const pending = currentThumb.pending;
+    const same = pending
+      && (pending.requestId || null) === seenRequestId
+      && (pending.jobId || null) === seenJobId;
+    if (!same || await pendingIsLive(pending)) return { project: current, skipPersist: true, healed: false };
+    const kit = projectPublishKit(current);
+    return {
+      project: {
+        ...current,
+        publishKit: {
+          ...kit,
+          youtubeThumbnail: { ...currentThumb, pending: null, lastError: INTERRUPTED_PAINT_ERROR },
+        },
+      },
+      healed: true,
+    };
+  });
+  if (!out.healed) return out.project;
+  console.warn(`⚠️ Music Video YouTube thumbnail ${String(project.id).slice(3, 11)}: painting interrupted by restart`);
+  musicVideoEvents.emit('cover-art', { projectId: project.id, project: out.project });
+  return out.project;
+}
+
 const writeThumb = (projectId, update) => mutateProjectRecord(projectId, (current) => {
   const kit = projectPublishKit(current);
   const thumb = projectYoutubeThumbnail(current);

@@ -99,6 +99,14 @@ describe('recordQuotaBurnDenial', () => {
     expect(repeat.until).toBe(NOW + 3 * 3_600_000);
   });
 
+  it('falls back to the TTL when the prior reset has already lapsed', async () => {
+    await recordQuotaBurnDenial({ familyId: 'claude', output: 'hit your usage limit — try again in 3 hours', at: NOW });
+    const later = NOW + 4 * 3_600_000;
+    const repeat = await recordQuotaBurnDenial({ familyId: 'claude', output: 'usage limit reached', at: later });
+    expect(repeat.until).toBeNull();
+    await expect(getActiveQuotaBurnBlocks({ now: later + 1 })).resolves.toHaveProperty('claude');
+  });
+
   it('records nothing for a failure that is not a quota refusal', async () => {
     await expect(recordQuotaBurnDenial({ familyId: 'claude', output: 'ENOENT: no such file', at: NOW })).resolves.toBeNull();
     await expect(getQuotaBurnDenials()).resolves.toEqual({});

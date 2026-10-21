@@ -143,6 +143,7 @@ import {
   getPerpetualDrainState,
   recordPerpetualDispatch,
   recordBranchReconcileOutcome,
+  recordInitializedRetirementRecovery,
   recordHeldCheckoutRetirement,
   applyOnDemandRunResets,
   queuePerpetualRefill,
@@ -3187,6 +3188,11 @@ describe('taskSchedule', () => {
         writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
         const remaining = [{ branch: 'fix/example', path: '/example/checkout', reason: 'worktree-locked' }];
         await recordBranchReconcileOutcome('app-1', { status: 'running', reason: 'batch-pending', remaining, nextAction: 'Continue.' });
+        await recordInitializedRetirementRecovery('app-1', { transactionId: 'transaction-a', branch: 'claim/held',
+          phase: 'quarantined-working', journalDigest: 'digest-a', ok: false, reason: 'automatic-retirement-independent-review-required' });
+        expect((await getScheduleStatus()).tasks['branch-reconcile'].reconcileOutcomes['app-1'].initializedRetirements)
+          .toEqual([expect.objectContaining({ transactionId: 'transaction-a', branch: 'claim/held', reason: 'automatic-retirement-independent-review-required' })]);
+
         const observedAt = saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome.observedAt;
         await recordBranchReconcileOutcome('app-1', { status: 'incomplete', reason: 'agent-failed', nextAction: 'Resolve the provider failure and run again.' });
         expect(saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome)

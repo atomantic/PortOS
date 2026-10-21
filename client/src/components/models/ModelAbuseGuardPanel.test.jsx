@@ -59,6 +59,24 @@ const renderPanel = async () => {
 };
 
 describe('ModelAbuseGuardPanel', () => {
+  it('warns when a ready classifier cannot back GitHub contribution assessment', async () => {
+    getModelAbuseGuardStatus.mockResolvedValue({ ready: true, stages: STAGES.map(stage => ({ ...stage, ready: true })),
+      contributionAssessment: { ready: false, code: 'untrusted-content-model-required' } });
+    await renderPanel();
+    expect(await screen.findByText(/assessment is not ready \(untrusted-content-model-required\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Pick a provider and model in Content safety policies below/)).toBeInTheDocument();
+    expect(screen.getByText('Not ready').className).toContain('text-port-warning');
+  });
+
+  it('names a non-model assessment failure without blaming a missing default model', async () => {
+    getModelAbuseGuardStatus.mockResolvedValue({ ready: true, stages: STAGES.map(stage => ({ ...stage, ready: true })),
+      contributionAssessment: { ready: false, code: 'untrusted-content-settings-unreadable' } });
+    await renderPanel();
+    expect(await screen.findByText(/assessment is not ready \(untrusted-content-settings-unreadable\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/no eligible API provider resolves a model/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pick a provider and model/)).not.toBeInTheDocument();
+  });
+
   it('offers repair for partial setup and disables installation without Python', async () => {
     getModelAbuseGuardStatus.mockResolvedValueOnce({
       ready: false, setupState: 'incomplete', venvReady: true, pythonAvailable: false, stages: STAGES,
