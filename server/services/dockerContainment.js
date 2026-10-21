@@ -13,7 +13,7 @@
  * package can import it. Settings and the feature flag are the caller's input.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn } from '../lib/childProcess.js';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, chmod, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
