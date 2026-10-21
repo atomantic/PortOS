@@ -330,10 +330,10 @@ export function buildCodeAnimationPrompt({
 // A fork extends a finished animation: its HTML is the first cut to build on.
 function baseSection({ title, durationSeconds: baseSeconds, html }, durationSeconds) {
   return [
-    `BASE ANIMATION — EXTEND THIS FILM${isNonBlankStr(title) ? ` ("${trimTo(title, 200)}")` : ''}: the HTML below is a finished ${baseSeconds}s cut of this film. Write the ${durationSeconds}s version by extending it, not by starting over.`,
+    `BASE ANIMATION — EXTEND THIS FILM${isNonBlankStr(title) ? ` ("${trimTo(title, 200)}")` : ''}: the HTML below is a finished ${baseSeconds ? `${baseSeconds}s ` : ''}cut of this film. Write the ${durationSeconds}s version by extending it, not by starting over.`,
     '- Keep its art style, palette, characters, rigs, typography, and code architecture. Reuse and extend its drawing, rig, and timeline code rather than rewriting it, so the extended film is recognisably the same.',
     `- Its existing beats open the film in their original order unless the BRIEF says otherwise; the BRIEF describes the full ${durationSeconds}s story, including what the base already shows.`,
-    `- Update ANIMATION_META, the timeline, and every duration constant to ${durationSeconds}s; nothing may stop, loop, or freeze at the old ${baseSeconds}s mark.`,
+    `- Update ANIMATION_META, the timeline, and every duration constant to ${durationSeconds}s; nothing may stop, loop, or freeze at the old ${baseSeconds ? `${baseSeconds}s ` : ''}end.`,
     '- Everything in the runtime contract below still applies to the extended file.',
     '```html',
     html,
