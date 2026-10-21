@@ -30,9 +30,10 @@ describe('vitestTempRootSetup teardown', () => {
     process.env.PORTOS_TEST_TEMP_ROOT = root;
     populate(root);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     process.exitCode = undefined;
     cleanupRunTempRoot();
-    const result = { warnings: warn.mock.calls.map((c) => c[0]), exitCode: process.exitCode, removed: !existsSync(root) };
+    const result = { warnings: warn.mock.calls.map((c) => c[0]), errors: error.mock.calls.map((c) => c[0]), exitCode: process.exitCode, removed: !existsSync(root) };
     rmSync(root, { recursive: true, force: true });
     return result;
   }
@@ -91,6 +92,8 @@ describe('vitestTempRootSetup teardown', () => {
       writeFileSync(join(root, 'fixture-Abc123', 'data.json'), '{}');
     });
     expect(leaked.warnings).toEqual(['⚠️ test temp leak: fixture- ×1']);
+    // The only thing that fails an all-passing run must say so (#12536).
+    expect(leaked.errors).toEqual(['❌ test temp leak guard: failing the run with exit code 1 for 1 leaked entry under the run temp root']);
     expect(leaked.exitCode).toBe(1);
   });
 
@@ -101,7 +104,7 @@ describe('vitestTempRootSetup teardown', () => {
       writeFileSync(join(cache, 'dotnet-suggest-registration-git-credential-manager, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null'),
         'Exception during registration: dotnet-suggest is unavailable');
     });
-    expect(clean).toEqual({ warnings: [], exitCode: undefined, removed: true });
+    expect(clean).toEqual({ warnings: [], errors: [], exitCode: undefined, removed: true });
   });
 
   it.each(['unknown-file', 'empty-unknown-file', 'nested-directory', 'empty-nested-directory', 'linked-directory', 'lookalike-name', 'unreadable'])(
