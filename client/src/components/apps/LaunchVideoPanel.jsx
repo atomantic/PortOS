@@ -21,6 +21,7 @@ import { trackAudioUrl } from '../../services/apiTracks';
 import { formatBytes, formatDateTime, formatDurationSec, formatLoudness } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
+const fetchTracks = () => listPipelineMusicLibrary({ silent: true }).then(result => result.tracks);
 const fetchSkillPacks = () => getMotionToolkit({ silent: true }).then(result => result.skillPacks);
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50';
@@ -64,7 +65,7 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [generateMusic, setGenerateMusic] = useState(false);
   const [musicMethod, setMusicMethod] = useState('agent');
   const [musicTrack, setMusicTrack] = useState('');
-  const [tracks, setTracks] = useState(null);
+  const { items: tracks, state: tracksState, error: tracksError, retry: retryTracks } = useListResource(fetchTracks);
   // A style reference (#8961): either an existing Media History image/video
   // (`source: 'gallery'`) or a fresh upload into the generic uploads store
   // (`source: 'upload'`) — kept out of the gallery so a one-off reference
@@ -77,13 +78,6 @@ function LaunchVideoForm({ appId, onQueued }) {
   const submitting = useRef(false);
   const picker = useRunWithPicker();
 
-  useEffect(() => {
-    let active = true;
-    listPipelineMusicLibrary({ silent: true }).then(result => {
-      if (active) setTracks(result.tracks);
-    }).catch(err => { if (active) { setTracks([]); setError(err.message); } });
-    return () => { active = false; };
-  }, []);
   const installedSkills = skillPacks.filter(pack => pack.found.length);
   const consultSkills = motionSkills && installedSkills.length > 0;
 
@@ -226,9 +220,10 @@ function LaunchVideoForm({ appId, onQueued }) {
     </div>}
     {music && !generateMusic && <fieldset className="space-y-2">
       <legend>Music-library track</legend>
-      {tracks === null && <p className="text-sm text-port-text-muted">Loading tracks…</p>}
-      {tracks?.length === 0 && <p>Add a track to the Music library first.</p>}
-      {!!tracks?.length && <ul className="max-h-80 space-y-2 overflow-y-auto">
+      {tracksState === 'loading' && <p className="text-sm text-port-text-muted">Loading tracks…</p>}
+      {tracksState === 'error' && <ListLoadError what="the music library" error={tracksError} onRetry={retryTracks} />}
+      {tracksState === 'ready' && tracks.length === 0 && <p>Add a track to the Music library first.</p>}
+      {tracksState === 'ready' && tracks.length > 0 && <ul className="max-h-80 space-y-2 overflow-y-auto">
         {tracks.map((track, index) => {
           const id = `launch-track-${index}`;
           const name = track.label || track.filename;
