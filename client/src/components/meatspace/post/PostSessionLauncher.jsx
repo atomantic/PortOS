@@ -216,20 +216,24 @@ export default function PostSessionLauncher({
   }, []);
 
   useEffect(() => {
+    let active = true;
     loadReviewReps();
     getPostRecommendations()
       .then(r => {
+        if (!active) return;
         setRecommendations(r?.recommendations || []);
         setRecentPractice(r?.recentPractice || null);
       })
       .catch(() => {
+        if (!active) return;
         setRecommendations([]);
         setRecentPractice(null);
       })
-      .finally(() => setRecommendationsLoaded(true));
+      .finally(() => { if (active) setRecommendationsLoaded(true); });
     getMemoryItems({ silent: true })
-      .then(items => setMemoryItemsState({ status: 'ready', items: Array.isArray(items) ? items : [] }))
-      .catch(() => setMemoryItemsState({ status: 'error', items: [] }));
+      .then(items => { if (active) setMemoryItemsState({ status: 'ready', items: Array.isArray(items) ? items : [] }); })
+      .catch(() => { if (active) setMemoryItemsState({ status: 'error', items: [] }); });
+    return () => { active = false; };
   }, [loadReviewReps]);
 
   // Only fetch Morse progress when a Morse WPM goal exists — avoids an extra
