@@ -7,9 +7,14 @@ import BrailleSpinner from '../BrailleSpinner';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import { usePagedCollection } from '../../hooks/usePagedCollection';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 
 const PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 const INGESTS_PAGE_SIZE = 50;
+
+// Module-level so useListResource sees a stable fetcher; the picker owns its error UI.
+const fetchVaults = () => api.getNotesVaults({ silent: true });
 
 /**
  * Settings for the YouTube → Brain ingest, plus the list of what has been
@@ -24,18 +29,14 @@ const INGESTS_PAGE_SIZE = 50;
 export default function YoutubeIngestSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [vaults, setVaults] = useState([]);
+  const vaultsResource = useListResource(fetchVaults);
   const [settings, setSettings] = useState(null);
   // Two-click arm rather than a confirm dialog, per the client UI conventions.
   const [armedDelete, setArmedDelete] = useState(null);
 
   useEffect(() => {
-    Promise.all([
-      api.getYoutubeIngestSettings({ silent: true }).catch(() => null),
-      api.getNotesVaults().catch(() => ({ vaults: [] })),
-    ]).then(([loaded, vaultData]) => {
+    api.getYoutubeIngestSettings({ silent: true }).catch(() => null).then((loaded) => {
       setSettings(loaded);
-      setVaults(vaultData?.vaults || []);
       setLoading(false);
     });
   }, []);
@@ -117,22 +118,28 @@ export default function YoutubeIngestSettings() {
           <label htmlFor="ytVault" className="block text-sm font-medium text-gray-300 mb-2">
             Obsidian Vault
           </label>
-          <select
-            id="ytVault"
-            value={settings.obsidianVaultId || ''}
-            onChange={(e) => patch({ obsidianVaultId: e.target.value || null })}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-          >
-            <option value="">Same as Daily Log</option>
-            {vaults.map((v) => (
-              <option key={v.id} value={v.id}>{v.name}</option>
-            ))}
-          </select>
-          <p className="mt-1 text-xs text-gray-500">
-            {vaults.length === 0
-              ? 'No vaults configured yet — add one under Brain → Notes.'
-              : 'Leave as "Same as Daily Log" to reuse the journal\'s vault.'}
-          </p>
+          {vaultsResource.state === 'error' ? (
+            <ListLoadError what="Obsidian vaults" error={vaultsResource.error} onRetry={vaultsResource.retry} />
+          ) : (
+            <>
+              <select
+                id="ytVault"
+                value={settings.obsidianVaultId || ''}
+                onChange={(e) => patch({ obsidianVaultId: e.target.value || null })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+              >
+                <option value="">Same as Daily Log</option>
+                {vaultsResource.items.map((v) => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {vaultsResource.state === 'ready' && vaultsResource.items.length === 0
+                  ? 'No vaults configured yet — add one under Brain → Notes.'
+                  : 'Leave as "Same as Daily Log" to reuse the journal\'s vault.'}
+              </p>
+            </>
+          )}
         </div>
 
         <div>

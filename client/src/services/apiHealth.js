@@ -5,11 +5,11 @@ export const ingestAppleHealth = (data) => request('/health/ingest', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const getAppleHealthMetrics = (metricName, from, to) => {
+export const getAppleHealthMetrics = (metricName, from, to, options = {}) => {
   const params = new URLSearchParams();
   if (from) params.set('from', from);
   if (to) params.set('to', to);
-  return request(`/health/metrics/${metricName}/daily?${params}`);
+  return request(`/health/metrics/${metricName}/daily?${params}`, options);
 };
 export const getAvailableHealthMetrics = () => request('/health/metrics/available');
 export const getLatestHealthMetrics = (metricNames, options = {}) =>

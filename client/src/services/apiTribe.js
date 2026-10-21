@@ -51,7 +51,7 @@ export const createTribeTouchpoint = (personId, data = {}, options = {}) => requ
   ...options,
 });
 
-export const getTribeMemoryLinks = (personId) => request(`/tribe/people/${personId}/memories`);
+export const getTribeMemoryLinks = (personId, options = {}) => request(`/tribe/people/${personId}/memories`, options);
 
 export const linkTribeMemory = (personId, data, options = {}) => request(`/tribe/people/${personId}/memories`, {
   method: 'POST',

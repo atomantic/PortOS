@@ -88,3 +88,21 @@ describe('brain ConfigTab provider pickers', () => {
     expect(screen.getByLabelText('Embedding Model')).toHaveValue('nomic-embed-text');
   });
 });
+
+describe('brain ConfigTab provider list failure', () => {
+  it('shows a retryable error instead of empty provider pickers, and recovers on retry', async () => {
+    api.getBrainSettings.mockResolvedValue({ defaultProvider: 'local', defaultModel: 'llama3.2:latest', confidenceThreshold: 0.6 });
+    api.getProviders.mockRejectedValueOnce(new Error('providers down'));
+    render(<ConfigTab />);
+
+    const alerts = await screen.findAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toHaveTextContent('Could not load AI providers');
+    expect(screen.queryByLabelText('Default Provider')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+
+    expect(await screen.findByLabelText('Default Provider')).toHaveValue('local');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});

@@ -29,6 +29,7 @@ import Banner from '../components/ui/Banner';
 import PageHeader from '../components/PageHeader';
 import { localDateStr } from '../components/meatspace/constants';
 import toast from '../components/ui/Toast';
+import ListLoadError from '../components/ui/ListLoadError';
 import TabPills from '../components/ui/TabPills';
 import TribeCircleMap from '../components/tribe/TribeCircleMap.jsx';
 import { copyToClipboard } from '../lib/clipboard.js';
@@ -408,23 +409,32 @@ function MemoryLinksPanel({ personId }) {
   const [memoryId, setMemoryId] = useState('');
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
+  // Each read fails on its own: a failed link read must not say "No memories linked yet",
+  // nor a failed picker read render an empty picker.
+  const [linksError, setLinksError] = useState(null);
+  const [memoriesError, setMemoriesError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!personId) return;
     let cancelled = false;
     setLoading(true);
+    setLinksError(null);
+    setMemoriesError(null);
+    const asError = (err) => (err instanceof Error ? err : new Error('Request failed'));
     Promise.all([
-      api.getTribeMemoryLinks(personId).catch(() => ({ links: [] })),
-      api.getMemories({ limit: 25, sortBy: 'updatedAt', sortOrder: 'desc' }).catch(() => ({ memories: [] })),
-    ]).then(([linkResult, memoryResult]) => {
-      if (cancelled) return;
-      setLinks(linkResult?.links || []);
-      setMemories(memoryResult?.memories || []);
-    }).finally(() => {
+      api.getTribeMemoryLinks(personId, { silent: true })
+        .then((result) => { if (!cancelled) setLinks(result?.links || []); })
+        .catch((err) => { if (!cancelled) setLinksError(asError(err)); }),
+      api.getMemories({ limit: 25, sortBy: 'updatedAt', sortOrder: 'desc' }, { silent: true })
+        .then((result) => { if (!cancelled) setMemories(result?.memories || []); })
+        .catch((err) => { if (!cancelled) setMemoriesError(asError(err)); }),
+    ]).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [personId]);
+  }, [personId, attempt]);
+  const retry = () => setAttempt((n) => n + 1);
 
   const linkMemory = async () => {
     if (!memoryId) return;
@@ -454,6 +464,7 @@ function MemoryLinksPanel({ personId }) {
         {loading && <span className="text-xs text-gray-500">Loading</span>}
       </div>
       <div className="mt-3 grid gap-2">
+        {memoriesError && <ListLoadError what="recent memories" error={memoriesError} onRetry={retry} retrying={loading} />}
         <select
           aria-label="Brain memory"
           value={memoryId}
@@ -484,6 +495,7 @@ function MemoryLinksPanel({ personId }) {
       </div>
 
       <div className="mt-4 grid gap-2">
+        {linksError && <ListLoadError what="linked memories" error={linksError} onRetry={retry} retrying={loading} />}
         {links.length ? links.map((link) => (
           <div key={link.memoryId} className="rounded border border-port-border bg-port-bg p-3">
             <div className="flex items-start justify-between gap-3">
@@ -502,7 +514,7 @@ function MemoryLinksPanel({ personId }) {
               </button>
             </div>
           </div>
-        )) : (
+        )) : !linksError && !loading && (
           <p className="text-sm text-gray-500">No memories linked yet.</p>
         )}
       </div>

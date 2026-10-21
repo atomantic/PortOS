@@ -312,6 +312,29 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     expect(onStart).not.toHaveBeenCalled();
   });
 
+  it('shows a retryable error — not a quiet empty list — when the due-review read fails', async () => {
+    getPostReviewReps.mockRejectedValueOnce(new Error('boom'));
+    renderLauncher();
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/Could not load due skill reviews/));
+    getPostReviewReps.mockResolvedValue({ reps: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(getPostReviewReps).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts nothing and says why when the on-demand review rep fetch fails', async () => {
+    const onStart = vi.fn();
+    getPostReviewReps.mockResolvedValueOnce({ reps: [] }).mockRejectedValue(new Error('offline'));
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'skill-review:cognitive:n-back:L0', kind: 'skill-review', title: 'Re-verify n-back L0', deepLink: '/post/launcher', drillType: 'n-back', priority: 0 },
+    ] });
+    renderLauncher({ onStart });
+    await waitFor(() => expect(screen.getByText('Re-verify n-back L0')).toBeTruthy());
+    fireEvent.click(screen.getByText('Re-verify n-back L0').closest('button'));
+    await waitFor(() => expect(getPostReviewReps).toHaveBeenCalledTimes(2));
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it('launches a review rep (with markers) for a skill-review recommendation', async () => {
     const onStart = vi.fn();
     getPostReviewReps.mockResolvedValue({ reps: [

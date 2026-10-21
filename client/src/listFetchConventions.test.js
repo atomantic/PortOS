@@ -56,23 +56,7 @@ export const LIST_COLLAPSE = /\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{?\s*set[A-Z]\
  * site is migrated to `useListResource`; never raise one.
  */
 const KNOWN = Object.freeze({
-  'src/components/brain/IdeaLoomLists.jsx': 1,
-  'src/components/brain/YoutubeIngestSettings.jsx': 1,
-  'src/components/brain/tabs/ConfigTab.jsx': 1,
-  'src/components/brain/tabs/DailyLogTab.jsx': 1,
-  'src/components/brain/tabs/FeedsTab.jsx': 1,
-  'src/components/brain/tabs/TrustTab.jsx': 1,
-  'src/components/meatspace/EpigeneticTracker.jsx': 1,
-  'src/components/meatspace/HealthCategorySection.jsx': 1,
-  'src/components/meatspace/post/PostSessionLauncher.jsx': 2,
-  'src/components/meatspace/post/PracticePlan.jsx': 1,
-  'src/components/meatspace/tabs/AlcoholTab.jsx': 1,
-  'src/components/meatspace/tabs/NicotineTab.jsx': 1,
-  'src/components/meatspace/tabs/PostTab.jsx': 1,
-  'src/components/messages/DraftsTab.jsx': 1,
-  'src/components/messages/IMessageTab.jsx': 1,
   'src/components/privacy/PrivacyOrgsTab.jsx': 2,
-  'src/pages/Tribe.jsx': 2,
 });
 
 /**

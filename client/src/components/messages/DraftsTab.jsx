@@ -6,6 +6,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
 
 function DeliveryReconciliation({ draft, onReconciled }) {
   const [checkedMailbox, setCheckedMailbox] = useState(false);
@@ -64,6 +65,7 @@ function DeliveryReconciliation({ draft, onReconciled }) {
 export default function DraftsTab({ accounts }) {
   const [drafts, setDrafts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const sendingRef = useRef(new Set());
   const [sendingIds, setSendingIds] = useState(new Set());
   const [copiedId, setCopiedId] = useState(null);
@@ -80,8 +82,16 @@ export default function DraftsTab({ accounts }) {
 
   const fetchDrafts = useCallback(async () => {
     setLoading(true);
-    const data = await api.getMessageDrafts().catch(() => []);
-    setDrafts(data || []);
+    // A failed read keeps whatever drafts are already shown and surfaces an error row;
+    // it must not read as "No drafts".
+    const data = await api.getMessageDrafts({}, { silent: true }).catch((err) => {
+      setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      return null;
+    });
+    if (data) {
+      setDrafts(data);
+      setLoadError(null);
+    }
     setLoading(false);
   }, []);
 
@@ -160,7 +170,11 @@ export default function DraftsTab({ accounts }) {
         </div>
       )}
 
-      {drafts.length === 0 && !loading && (
+      {loadError && (
+        <ListLoadError what="drafts" error={loadError} onRetry={fetchDrafts} retrying={loading} />
+      )}
+
+      {drafts.length === 0 && !loading && !loadError && (
         <div className="text-center py-12 text-gray-500">
           <FileText size={48} className="mx-auto mb-4 opacity-50" />
           <p>No drafts</p>

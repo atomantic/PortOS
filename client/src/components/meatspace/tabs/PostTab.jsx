@@ -4,6 +4,7 @@ import { Loader } from 'lucide-react';
 import { getPostConfig, getPostRecommendations, getPostSessions, getPostStats } from '../../../services/api';
 import { usePostSession } from '../../../hooks/usePostSession';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
 import PostSessionLauncher from '../post/PostSessionLauncher';
 import PostDrillRunner from '../post/PostDrillRunner';
 import PostLlmDrillRunner from '../post/PostLlmDrillRunner';
@@ -56,6 +57,7 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
   const location = useLocation();
   const [config, setConfig] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
+  const [sessionsError, setSessionsError] = useState(null);
   const [stats, setStats] = useState(null);
   const [statsWeek, setStatsWeek] = useState(null);
   const session = usePostSession();
@@ -76,14 +78,18 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
   }, [tab, subtab, session.state, navigate]);
 
   async function loadData() {
+    let sessionsFailure = null;
     const [cfg, sessions, st, stWeek] = await Promise.all([
       getPostConfig().catch(() => null),
-      getPostSessions().catch(() => []),
+      getPostSessions(undefined, undefined, { silent: true }).catch(err => { sessionsFailure = err; return null; }),
       getPostStats(30).catch(() => null),
       getPostStats(7).catch(() => null)
     ]);
     setConfig(cfg);
-    setRecentSessions(sessions || []);
+    // A failed sessions read keeps the last list and raises a notice, so it never
+    // reads as "no sessions today".
+    setSessionsError(sessionsFailure);
+    if (!sessionsFailure) setRecentSessions(sessions || []);
     setStats(st);
     setStatsWeek(stWeek);
   }
@@ -381,16 +387,21 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
     }
     default:
       return (
-        <PostSessionLauncher
-          config={config}
-          recentSessions={recentSessions}
-          stats={stats}
-          statsWeek={statsWeek}
-          onStart={handleStart}
-          autoStartRecommendationId={new URLSearchParams(location.search).get('continue')}
-          onAutoStartConsumed={() => navigate('/post/launcher', { replace: true })}
-          onNavigate={navigate}
-        />
+        <>
+          {sessionsError && (
+            <ListLoadError className="mb-4" what="recent sessions" error={sessionsError} onRetry={loadData} />
+          )}
+          <PostSessionLauncher
+            config={config}
+            recentSessions={recentSessions}
+            stats={stats}
+            statsWeek={statsWeek}
+            onStart={handleStart}
+            autoStartRecommendationId={new URLSearchParams(location.search).get('continue')}
+            onAutoStartConsumed={() => navigate('/post/launcher', { replace: true })}
+            onNavigate={navigate}
+          />
+        </>
       );
   }
 }

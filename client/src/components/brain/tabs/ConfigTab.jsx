@@ -16,6 +16,8 @@ import {Settings,
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import YoutubeIngestSettings from '../YoutubeIngestSettings';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 
 const DAYS_OF_WEEK = [
   'monday',
@@ -27,11 +29,14 @@ const DAYS_OF_WEEK = [
   'sunday'
 ];
 
+// Module-level so useListResource sees a stable fetcher; the pickers own the error UI.
+const fetchProviders = async () => (await api.getProviders({ silent: true }))?.providers || [];
+
 export default function ConfigTab({ onRefresh }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState(null);
-  const [providers, setProviders] = useState([]);
+  const { items: providers, state: providersState, error: providersError, retry: retryProviders } = useListResource(fetchProviders);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
@@ -55,9 +60,8 @@ export default function ConfigTab({ onRefresh }) {
   }, []);
 
   const fetchData = async () => {
-    const [settingsData, providersData, cosConfig, embStatus] = await Promise.all([
+    const [settingsData, cosConfig, embStatus] = await Promise.all([
       api.getBrainSettings().catch(() => null),
-      api.getProviders().catch(() => ({ providers: [] })),
       api.getCosConfig().catch(() => null),
       api.getEmbeddingStatus().catch(() => null)
     ]);
@@ -71,10 +75,6 @@ export default function ConfigTab({ onRefresh }) {
       setDailyDigestTime(settingsData.dailyDigestTime || '09:00');
       setWeeklyReviewDay(settingsData.weeklyReviewDay || 'sunday');
       setWeeklyReviewTime(settingsData.weeklyReviewTime || '16:00');
-    }
-
-    if (providersData) {
-      setProviders(providersData.providers || []);
     }
 
     if (cosConfig) {
@@ -199,7 +199,13 @@ export default function ConfigTab({ onRefresh }) {
     );
   };
 
-  if (loading) {
+  // One list backs both pickers, so a failed read replaces both rather than
+  // offering a provider list that looks empty.
+  const providerLoadError = (
+    <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} />
+  );
+
+  if (loading || providersState === 'loading') {
     return (
       <div className="flex items-center justify-center h-64">
         <BrailleSpinner text="Loading" />
@@ -247,22 +253,24 @@ export default function ConfigTab({ onRefresh }) {
 
         <div className="space-y-4">
           <div>
-            <ProviderModelSelector
-              id="provider"
-              providers={providers}
-              selectedProviderId={selectedProvider}
-              selectedModel={selectedModel}
-              availableModels={getAvailableModels()}
-              onProviderChange={handleProviderChange}
-              onModelChange={setSelectedModel}
-              label="Default Provider"
-              modelLabel="Default Model"
-              emptyProviderOption="Select a provider..."
-              emptyModelOption="Select a model..."
-              alwaysShowModel
-              modelDisabled={!selectedProvider || getAvailableModels().length === 0}
-              layout="stacked"
-            />
+            {providersState === 'error' ? providerLoadError : (
+              <ProviderModelSelector
+                id="provider"
+                providers={providers}
+                selectedProviderId={selectedProvider}
+                selectedModel={selectedModel}
+                availableModels={getAvailableModels()}
+                onProviderChange={handleProviderChange}
+                onModelChange={setSelectedModel}
+                label="Default Provider"
+                modelLabel="Default Model"
+                emptyProviderOption="Select a provider..."
+                emptyModelOption="Select a model..."
+                alwaysShowModel
+                modelDisabled={!selectedProvider || getAvailableModels().length === 0}
+                layout="stacked"
+              />
+            )}
             <p className="mt-1 text-xs text-gray-500">
               Used for thought classification, digests, and reviews
             </p>
@@ -304,22 +312,24 @@ export default function ConfigTab({ onRefresh }) {
 
         <div className="space-y-4">
           <div>
-            <ProviderModelSelector
-              id="embeddingProvider"
-              providers={providers}
-              selectedProviderId={embeddingProvider}
-              selectedModel={embeddingModel}
-              availableModels={getEmbeddingModels()}
-              onProviderChange={handleEmbeddingProviderChange}
-              onModelChange={setEmbeddingModel}
-              label="Embedding Provider"
-              modelLabel="Embedding Model"
-              emptyProviderOption="Select a provider..."
-              emptyModelOption="Select a model..."
-              alwaysShowModel
-              modelDisabled={!embeddingProvider || getEmbeddingModels().length === 0}
-              layout="stacked"
-            />
+            {providersState === 'error' ? providerLoadError : (
+              <ProviderModelSelector
+                id="embeddingProvider"
+                providers={providers}
+                selectedProviderId={embeddingProvider}
+                selectedModel={embeddingModel}
+                availableModels={getEmbeddingModels()}
+                onProviderChange={handleEmbeddingProviderChange}
+                onModelChange={setEmbeddingModel}
+                label="Embedding Provider"
+                modelLabel="Embedding Model"
+                emptyProviderOption="Select a provider..."
+                emptyModelOption="Select a model..."
+                alwaysShowModel
+                modelDisabled={!embeddingProvider || getEmbeddingModels().length === 0}
+                layout="stacked"
+              />
+            )}
             <p className="mt-1 text-xs text-gray-500">
               Backend that generates vector embeddings (must serve an OpenAI-compatible <span className="font-mono">/v1/embeddings</span>).
               Changing the model can change vector dimensions — reprocess after switching so all entries share one space.

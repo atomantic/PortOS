@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { ArrowLeft, Save, ChevronRight, ChevronDown, ListChecks, Loader } from 'lucide-react';
 import BrowseCatalogLink from './BrowseCatalogLink';
 import { updatePostConfig, getMemoryItems } from '../../../services/api';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 import {
   POST_TOPICS,
   TOPIC_UI,
@@ -57,6 +59,8 @@ function ToggleRow({ id, label, hint, checked, disabled, onChange, indent = fals
   );
 }
 
+const fetchMemoryItems = () => getMemoryItems({ silent: true });
+
 export default function PracticePlan({ config, onSaved, onBack }) {
   // Draft state seeded once from the loaded config — mirrors PostDrillConfig,
   // which is why PostTab only mounts this after the config resolves.
@@ -90,15 +94,13 @@ export default function PracticePlan({ config, onSaved, onBack }) {
     })
   ));
   const [memoryItemFlags, setMemoryItemFlags] = useState(() => ({ ...(config?.memory?.items || {}) }));
-  const [memoryItems, setMemoryItems] = useState(null);
   const [expanded, setExpanded] = useState({});
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    // Silent: the plan still renders (and saves) without the item list; only the
-    // per-item rows are missing, and an error toast here would be noise.
-    getMemoryItems({ silent: true }).then(setMemoryItems).catch(() => setMemoryItems([]));
-  }, []);
+  // Silent: the plan still renders (and saves) without the item list; the rows
+  // own the error UI. Saving never reads this list, so a failed load can't erase flags.
+  const { items: memoryItemList, state: memoryItemsState, error: memoryItemsError, retry: retryMemoryItems } = useListResource(fetchMemoryItems);
+  const memoryItems = memoryItemsState === 'loading' ? null : memoryItemList;
 
   // Memory and Morse each have a module-level `enabled` flag on the server AND a
   // topic entry. The user gets ONE control — the topic toggle — and save writes
@@ -231,7 +233,10 @@ export default function PracticePlan({ config, onSaved, onBack }) {
                     <Loader size={12} className="animate-spin" /> Loading your items…
                   </p>
                 )}
-                {memoryItems?.length === 0 && (
+                {memoryItemsState === 'error' && (
+                  <ListLoadError className="ml-7" what="your memorized texts" error={memoryItemsError} onRetry={retryMemoryItems} />
+                )}
+                {memoryItemsState === 'ready' && memoryItems.length === 0 && (
                   <p className="pl-7 text-xs text-gray-500">No memory items yet — add one from the Memory tab.</p>
                 )}
                 {(memoryItems || []).map(item => (
