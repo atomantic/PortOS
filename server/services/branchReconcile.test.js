@@ -1613,6 +1613,51 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(wt.deleteCompletedLocalBranch).not.toHaveBeenCalled();
   });
 
+  // #12748: the backup copies the dirty tree, and it ran inside the shared
+  // claim-ownership lock that every bind/release/reserve queues behind.
+  it('backs up an opted-in superseded checkout with the ownership queue free and only it fenced', async () => {
+    setupAbandoned();
+    tryReadFileMock.mockResolvedValue(ledger());
+    let started;
+    let finish;
+    const backingUp = new Promise(resolve => { started = resolve; });
+    backupSupersededBranchMock.mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => resolve({ dir: '/backups/x', manifest: 'manifest.json', untracked: [] });
+      started();
+    }));
+    const pending = reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
+    await backingUp;
+    expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
+    expect(checkoutRetirementFenceReason({ repoPath: '/repo', path: WORKTREE })).toBe('checkout-retirement-reserved');
+    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: BRANCH })).toBe('checkout-retirement-reserved');
+    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: 'feature/unrelated', path: '/repo/data/cos/worktrees/other' })).toBe(null);
+    finish();
+    expect((await pending).reapedSuperseded).toEqual([BRANCH]);
+    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: BRANCH })).toBe(null);
+  });
+
+  it('retains an opted-in superseded checkout whose change set moves during its unlocked backup', async () => {
+    setupAbandoned();
+    tryReadFileMock.mockResolvedValue(ledger());
+    const scripted = execGit.getMockImplementation();
+    let backedUp = false;
+    execGit.mockImplementation(async (args, ...rest) => (backedUp && args[0] === 'status'
+      ? { stdout: `${DIRTY}?? notes.md\n`, exitCode: 0 }
+      : scripted(args, ...rest)));
+    backupSupersededBranchMock.mockImplementation(async () => {
+      backedUp = true;
+      return { dir: '/backups/x', manifest: 'manifest.json', untracked: [] };
+    });
+    wt.forceRemoveWorktreeDir.mockImplementation(async (_repo, _path, options) => {
+      const reason = await options.verifyRemoval({ head: RETIRE_HEAD, path: WORKTREE, branch: `refs/heads/${BRANCH}` });
+      return { removed: !reason, reason };
+    });
+    const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
+    expect(res.reapedSuperseded).toEqual([]);
+    expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'worktree-changed-since-backup' });
+    expect(wt.deleteCompletedLocalBranch).not.toHaveBeenCalled();
+  });
+
   it('retains an explicitly opted-in superseded ref when its deletion lease fails', async () => {
     setupAbandoned();
     tryReadFileMock.mockResolvedValue(ledger());

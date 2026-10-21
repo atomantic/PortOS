@@ -1184,6 +1184,49 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(rm).not.toHaveBeenCalled();
   });
 
+  // #12748: every agent completion archived its checkout inside the shared
+  // claim-ownership lock, starving each bind/release/reserve queued behind it.
+  it.each(['present', 'missing', 'lockfile'])('archives a %s checkout with the ownership queue free and only it fenced', async state => {
+    if (state === 'missing') existsSync.mockReturnValue(false);
+    if (state === 'lockfile') scriptGit({ porcelain: ' M package-lock.json' });
+    const { withClaimOwnershipLock, checkoutRetirementFenceReason } = await import('./cosClaimOwnershipState.js');
+    const fenced = { repoPath: '/repo', path: join(PATHS.worktrees, 'agent-x') };
+    let started;
+    let finish;
+    const archiving = new Promise(resolve => { started = resolve; });
+    preserveCheckoutMock.mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => resolve({ archiveDir: '/archive', verify: async () => null });
+      started();
+    }));
+    const pending = removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+    await archiving;
+    expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
+    expect(checkoutRetirementFenceReason(fenced)).toBe('checkout-retirement-reserved');
+    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: 'cos/task-1/agent-x' })).toBe('checkout-retirement-reserved');
+    expect(checkoutRetirementFenceReason({ repoPath: '/repo', branch: 'cos/task-2/agent-y', path: join(PATHS.worktrees, 'agent-y') })).toBe(null);
+    finish();
+    expect((await pending).removed).toBe(true);
+    expect(checkoutRetirementFenceReason(fenced)).toBe(null);
+  });
+
+  it('keeps a lockfile-only checkout that changed while its pre-cleanup snapshot was archived', async () => {
+    scriptGit({ porcelain: ' M package-lock.json' });
+    const scripted = execGitMock.getMockImplementation();
+    let archived = false;
+    execGitMock.mockImplementation((args, ...rest) => (archived && args[0] === 'status'
+      ? Promise.resolve({ stdout: ' M package-lock.json\n?? notes.md', stderr: '', exitCode: 0 })
+      : scripted(args, ...rest)));
+    preserveCheckoutMock.mockImplementationOnce(async () => {
+      archived = true;
+      return { archiveDir: '/archive', verify: async () => null };
+    });
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain('changed while its pre-cleanup snapshot was archived');
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'checkout' || args[0] === 'push'
+      || (args[0] === 'worktree' && args[1] === 'remove'))).toBe(false);
+  });
+
   it('retains checkout and ref when preserved bytes change before removal', async () => {
     preserveCheckoutMock.mockResolvedValue({ archiveDir: '/archive', verify: async () => 'checkout-content-changed' });
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
