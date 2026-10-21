@@ -159,10 +159,13 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
       const suffix = result.verification?.status === 'unverified' ? ' (unverified legacy snapshot)' : '';
       const parked = (result.restoredLegacyStores ?? []).filter(store => store.parkedAs).map(store => store.parkedAs);
       const conversion = parked.length > 0 ? `. Converted older-format data; the replaced stores were kept as ${parked.join(', ')}` : '';
+      const replayed = result.restoredLegacyMigrations?.status === 'applied'
+        ? `. Ran the ${pluralize(result.restoredLegacyMigrations.names.length, 'data migration')} the snapshot predates through ${result.restoredLegacyMigrations.through}`
+        : '';
       const ledger = result.restoredLegacyLedger?.status === 'adopted'
         ? `. Adopted the snapshot's migration record${result.restoredLegacyLedger.parkedAs ? ` (previous record kept as ${result.restoredLegacyLedger.parkedAs})` : ''}; restart PortOS to re-run the migrations it predates`
         : '';
-      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}${conversion}${ledger}`);
+      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}${conversion}${replayed}${ledger}`);
       onClose();
     }
   }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot]);
@@ -289,6 +292,14 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
                 {legacyStoreNames(preview.restoredLegacyStores, 'unreadable') && (
                   <>The snapshot copy of {legacyStoreNames(preview.restoredLegacyStores, 'unreadable')} is unreadable, so it is restored as-is without conversion and its records stay hidden until the file is repaired.</>
                 )}
+              </span>
+            </p>
+          )}
+          {preview.restoredLegacyMigrations && (
+            <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">
+                This snapshot predates {pluralize(preview.restoredLegacyMigrations.names.length, 'data migration')} up to <code>{preview.restoredLegacyMigrations.through}</code>. Restoring runs them right away, in order, so its records convert exactly as an upgrade would; later migrations run on the next start.
               </span>
             </p>
           )}

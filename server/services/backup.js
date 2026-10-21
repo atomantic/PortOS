@@ -1903,12 +1903,17 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // migrations the live ledger already records.
   const ledgerGap = subdirFilter ? await migrationLedgerGap(srcDir) : undefined;
   // Split migrations gate on their output, so neither ledger re-runs them over
-  // a restored monolith; restore converts those stores itself (#12626).
-  const legacyStores = await snapshotLegacySplitStores(srcDir, subdirFilter);
+  // a restored monolith; restore converts those stores itself (#12626). A full
+  // restore installs the snapshot's ledger, so the migrations it lacks before a
+  // split are replayed with that split, in order (#12813).
+  const legacyStores = await snapshotLegacySplitStores(srcDir, subdirFilter, {
+    ledger: subdirFilter ? null : await readSnapshotMigrationLedger(srcDir),
+  });
   const legacyLedger = await snapshotLegacyLedger(srcDir, subdirFilter);
-  const restoreNotes = (restoredLegacyStores, restoredLegacyLedger = legacyLedger) => ({
+  const restoreNotes = (restoredLegacy, restoredLegacyLedger = legacyLedger) => ({
     ...(ledgerGap !== undefined && { ledgerGap }),
-    ...(restoredLegacyStores.length > 0 && { restoredLegacyStores }),
+    ...(restoredLegacy.stores.length > 0 && { restoredLegacyStores: restoredLegacy.stores }),
+    ...(restoredLegacy.migrations && { restoredLegacyMigrations: restoredLegacy.migrations }),
     ...(restoredLegacyLedger && { restoredLegacyLedger }),
     ...(identity.preserved && { identityPreserved: identity.preserved }),
     ...(identity.adopted && { identityAdopted: identity.adopted }),
@@ -1970,10 +1975,11 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   }
 
   const scope = subdirFilter;
-  let restoredLegacyStores = [];
+  let restoredLegacy = { stores: [], migrations: null };
   let restoredLegacyLedger = legacyLedger;
   // Conversion parks live stores, so it runs only after a successful transfer,
-  // and before reconciliation so the Brain caches drop the parked records.
+  // and before reconciliation so the Brain caches drop the parked records. It
+  // follows ledger adoption so a replay reads the ledger the boot would read.
   const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, () => transferAndReconcileLiveFiles({
     subdirFilter,
     transfer: async () => {
@@ -1985,12 +1991,12 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
         },
         transferFiles,
       });
-      restoredLegacyStores = await convertRestoredLegacySplitStores(legacyStores);
       if (legacyLedger) restoredLegacyLedger = await adoptRestoredLegacyLedger(legacyLedger);
+      restoredLegacy = await convertRestoredLegacySplitStores(legacyStores);
       return changed;
     },
   }));
-  return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(restoredLegacyStores, restoredLegacyLedger) };
+  return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(restoredLegacy, restoredLegacyLedger) };
 }
 
 async function readMigrationLedger(path) {

@@ -248,6 +248,18 @@ export default {
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
     await expect(listPendingMigrations({ rootDir, migrationsDir })).resolves.toEqual(['002-invalid.js']);
   });
+
+  it('stops after the migration named by `through`, leaving later ones pending (#12813)', async () => {
+    writeFileSync(join(migrationsDir, '002-bounded.js'), 'export default { up() {} };');
+    writeFileSync(join(migrationsDir, '003-later.js'), 'throw new Error("A migration after the bound was imported");');
+
+    await expect(runMigrations({ rootDir, migrationsDir, through: '002-bounded.js' })).resolves.toBe(2);
+
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js', '002-bounded.js']);
+    await expect(listPendingMigrations({ rootDir, migrationsDir })).resolves.toEqual(['003-later.js']);
+    await expect(runMigrations({ rootDir, migrationsDir, through: '009-missing.js' }))
+      .rejects.toThrow('Cannot run migrations through "009-missing.js"');
+  });
 });
 
 describe('runMigrations purge-migration guard (#2770)', () => {

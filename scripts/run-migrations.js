@@ -196,6 +196,10 @@ export async function runMigrations({
   migrationsDir = DEFAULT_MIGRATIONS_DIR,
   lockWaitMs = LOCK_WAIT_MS,
   lockPollMs = LOCK_POLL_MS,
+  // Stop after this migration file, leaving later ones pending. A restore
+  // replays a pre-split snapshot's pending migrations through its split this
+  // way, so the split sees what an in-order upgrade would have given it (#12813).
+  through = null,
 } = {}) {
   // Backstop for #1947: a process booted from inside a CoS agent git worktree
   // (data/cos/worktrees/agent-*) has no gitignored data/ runtime tree, so
@@ -217,13 +221,13 @@ export async function runMigrations({
   // the read is only trustworthy while no other runner can append to it.
   const releaseLock = await acquireMigrationLock(lockDirPath(rootDir), { waitMs: lockWaitMs, pollMs: lockPollMs });
   try {
-    return await runPendingMigrations({ rootDir, migrationsDir, appliedFile });
+    return await runPendingMigrations({ rootDir, migrationsDir, appliedFile, through });
   } finally {
     await releaseLock();
   }
 }
 
-async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
+async function runPendingMigrations({ rootDir, migrationsDir, appliedFile, through }) {
   if (await adoptLegacyAppliedList(rootDir)) {
     console.log('🧹 Moved data/migrations/.applied.json → data/migrations.applied.json');
   }
@@ -260,6 +264,9 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
   const ledgerStartedEmpty = applied.length === 0;
 
   const files = await scanMigrationFiles(migrationsDir);
+  if (through !== null && !files.includes(through)) {
+    throw new Error(`Cannot run migrations through "${through}": no such migration in ${migrationsDir}`);
+  }
 
   // The migration helper also carries prompt-drift and provider-seed
   // machinery. Boot/status callers import this runner widely, but only an
@@ -301,7 +308,7 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile }) {
   if (disarmed > 0) await persistAppliedList();
 
   let ran = 0;
-  for (const file of files) {
+  for (const file of through === null ? files : files.slice(0, files.indexOf(through) + 1)) {
     if (applied.includes(file)) continue;
 
     const mod = await import(pathToFileURL(join(migrationsDir, file)).href);

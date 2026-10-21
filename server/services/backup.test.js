@@ -83,6 +83,10 @@ vi.mock('../lib/databaseMaintenanceJournal.js', () => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
+// The file-migration runner a pre-split restore replays through (#12813);
+// backupLegacyStores.test.js runs the real one against the real migrations.
+const runFileMigrations = vi.hoisted(() => vi.fn());
+vi.mock('../../scripts/run-migrations.js', () => ({ runMigrations: runFileMigrations }));
 const catalogRepair = vi.hoisted(() => ({
   migrate: vi.fn().mockResolvedValue({ skipped: false }),
   tags: vi.fn().mockResolvedValue({ skipped: false }),
@@ -2507,6 +2511,45 @@ describe('restoreSnapshot manifest verification', () => {
       expect(result).not.toHaveProperty('restoredLegacyStores');
       expect(await readLive('brain', 'people', 'live-1', 'index.json')).toEqual({ name: 'Live Person' });
       await realFs.rm(live('cos', 'example.json'), { force: true });
+    });
+
+    it('replays the adopted ledger through the split and reports it in preview and result (#12813)', async () => {
+      const ledgerPath = live('migrations.applied.json');
+      const legacyLedgerPath = live('migrations', '.applied.json');
+      const split = '200-split-brain-stores-to-per-record.js';
+      const journals = JSON.stringify({ records: { '2025-03-01': { id: 'jrnl-example', date: '2025-03-01' } } });
+      await seedSnapshot({ 'brain/journals.json': journals, 'migrations/.applied.json': JSON.stringify(['001-example.js']) });
+      await realFs.writeFile(ledgerPath, JSON.stringify(['001-example.js', split]));
+      try {
+        const preview = await finishRestore({ dryRun: true });
+        expect(preview.restoredLegacyMigrations).toMatchObject({ status: 'pending', through: split });
+        expect(preview.restoredLegacyMigrations.names).toContain('081-brain-daily-log-inbox-sync.js');
+        expect(preview.restoredLegacyMigrations.names.at(-1)).toBe(split);
+        expect(preview.restoredLegacyStores.map(entry => entry.store)).toEqual(['brain/people', 'brain/journals']);
+
+        // rsync is faked, so stand in for its transfer of the snapshot files.
+        await realFs.writeFile(live('brain', 'journals.json'), journals);
+        await realFs.mkdir(live('migrations'), { recursive: true });
+        await realFs.writeFile(legacyLedgerPath, JSON.stringify(['001-example.js']));
+        runFileMigrations.mockImplementationOnce(async ({ through }) => {
+          // The replay must read the snapshot's ledger, so adoption runs first.
+          expect(JSON.parse(await realFs.readFile(ledgerPath, 'utf8'))).toEqual(['001-example.js']);
+          await realFs.writeFile(ledgerPath, JSON.stringify(['001-example.js', through]));
+        });
+        spawn.mockReset();
+        const result = await finishRestore({ dryRun: false });
+
+        expect(runFileMigrations).toHaveBeenCalledWith(expect.objectContaining({ through: split }));
+        expect(result.restoredLegacyLedger).toMatchObject({ status: 'adopted' });
+        expect(result.restoredLegacyMigrations).toEqual({ ...preview.restoredLegacyMigrations, status: 'applied' });
+        expect(existsSync(live('brain', 'people', 'live-1'))).toBe(false);
+      } finally {
+        runFileMigrations.mockReset();
+        await realFs.rm(live('migrations'), { recursive: true, force: true });
+        for (const name of await realFs.readdir(PATHS.data)) {
+          if (name.startsWith('migrations.applied.json')) await realFs.rm(live(name), { force: true });
+        }
+      }
     });
 
     it('never parks the live store for a monolith the split would refuse', async () => {
