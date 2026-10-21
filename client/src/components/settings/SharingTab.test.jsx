@@ -335,4 +335,17 @@ describe('SharingTab — an absent federation slice is not a failed read', () =>
       .toHaveBeenCalledWith('Could not read current settings — provider not saved'));
     expect(updateSettings).not.toHaveBeenCalled();
   });
+
+  it('shows an error row with Retry when the music engine catalog fails, not the "not available" copy', async () => {
+    listMusicEngines.mockRejectedValueOnce(new Error('engines 500'));
+    render(<SharingTab />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the local music engine catalog — engines 500');
+    expect(screen.queryByText(/music engine catalog is not available/)).not.toBeInTheDocument();
+
+    listMusicEngines.mockResolvedValue({ engines: [{ id: 'e1', name: 'Example Engine', models: [{ id: 'm1', name: 'Example Model' }] }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Example Engine')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

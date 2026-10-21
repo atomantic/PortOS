@@ -7,13 +7,15 @@
  * that get stamped as the source on every outgoing share.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import { FormField } from '../components/ui/FormField';
@@ -111,9 +113,13 @@ export default function Sharing() {
 // deep-linkable and reload-safe. `selectedId` is the route param.
 function SharingBuckets({ selectedId }) {
   const navigate = useNavigate();
-  const [buckets, setBuckets] = useState([]);
-  const [, setLocalSchemaVersion] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const fetchBuckets = useCallback(() => listShareBuckets({ silent: true }).then((resp) => resp?.buckets || []), []);
+  const { items: buckets, state: bucketsState, error: bucketsError, retry: retryBuckets, setItems: setBuckets } = useListResource(fetchBuckets);
+  const loading = bucketsState === 'loading';
+  // 'loading' | 'ready' | 'error'. The display-name editor is seeded from these
+  // settings and its Save replaces them, so it stays locked until the read succeeds.
+  const [settingsState, setSettingsState] = useState('loading');
+  const [settingsError, setSettingsError] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [creating, setCreating] = useState(false);
@@ -133,27 +139,32 @@ function SharingBuckets({ selectedId }) {
 
   const { isConfirming: isRemoveArmed, requestDelete: armRemove, cancelDelete: cancelRemove, confirmDelete: confirmRemove } = useConfirmDelete();
 
-  // Load buckets + settings on mount.
+  // Auto-select the first bucket when the URL doesn't already name one, so a
+  // bare /sharing lands on a populated detail panel (replace: no history spam).
   useEffect(() => {
-    Promise.all([
-      listShareBuckets({ silent: true }).catch(() => ({ buckets: [] })),
-      getSettings().catch(() => ({})),
-    ]).then(([bResp, settings]) => {
-      const list = bResp?.buckets || [];
-      setBuckets(list);
-      setLocalSchemaVersion(bResp?.localSchemaVersion ?? null);
-      // Auto-select the first bucket when the URL doesn't already name one, so a
-      // bare /sharing lands on a populated detail panel (replace: no history spam).
-      if (!selectedId && list.length > 0) navigate(`/sharing/buckets/${encodeURIComponent(list[0].id)}`, { replace: true });
-      const display = settings?.sharingDisplayName || '';
-      const bio = settings?.sharingBio || '';
-      setSharingDisplayName(display);
-      setSharingBio(bio);
-      setSavedDisplayName(display);
-      setSavedBio(bio);
-      setLoading(false);
-    });
+    if (bucketsState === 'ready' && !selectedId && buckets.length > 0) {
+      navigate(`/sharing/buckets/${encodeURIComponent(buckets[0].id)}`, { replace: true });
+    }
+  }, [bucketsState]);
+
+  const loadSettings = useCallback(() => {
+    setSettingsState('loading');
+    return getSettings({ silent: true })
+      .then((settings) => {
+        const display = settings?.sharingDisplayName || '';
+        const bio = settings?.sharingBio || '';
+        setSharingDisplayName(display);
+        setSharingBio(bio);
+        setSavedDisplayName(display);
+        setSavedBio(bio);
+        setSettingsState('ready');
+      })
+      .catch((err) => {
+        setSettingsError(err instanceof Error ? err : new Error('Request failed'));
+        setSettingsState('error');
+      });
   }, []);
+  useEffect(() => { loadSettings(); }, [loadSettings]);
 
   // Lazy-load inbox + activity when a bucket is selected.
   const loadInbox = (bucketId) => {
@@ -288,7 +299,7 @@ function SharingBuckets({ selectedId }) {
 
   const selected = buckets.find((b) => b.id === selectedId) || null;
   // A bucketId in the URL that isn't in the loaded list (removed / bad deep link).
-  const bucketNotFound = !!selectedId && !loading && !selected;
+  const bucketNotFound = !!selectedId && bucketsState === 'ready' && !selected;
   const displayNameDirty = sharingDisplayName !== savedDisplayName || sharingBio !== savedBio;
 
   return (
@@ -327,12 +338,16 @@ function SharingBuckets({ selectedId }) {
         <p className="text-xs text-gray-500 mb-3">
           This name is stamped as the <em>source</em> on every share you send. Recipients see it as attribution. Each bucket can override this with its own name.
         </p>
+        {settingsState === 'error' && (
+          <ListLoadError what="your display name" error={settingsError} onRetry={loadSettings} className="mb-3" />
+        )}
         <div className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-3 items-start">
           <input
             type="text"
             aria-label="Your display name"
             value={sharingDisplayName}
             onChange={(e) => setSharingDisplayName(e.target.value)}
+            disabled={settingsState !== 'ready'}
             placeholder="Display name (e.g. atomantic)"
             maxLength={120}
             className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
@@ -342,6 +357,7 @@ function SharingBuckets({ selectedId }) {
             aria-label="Your bio / contact note"
             value={sharingBio}
             onChange={(e) => setSharingBio(e.target.value)}
+            disabled={settingsState !== 'ready'}
             placeholder="Optional bio / contact note (visible to recipients)"
             maxLength={2000}
             className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
@@ -349,7 +365,7 @@ function SharingBuckets({ selectedId }) {
           <button
             type="button"
             onClick={handleSaveDisplayName}
-            disabled={!displayNameDirty || savingDisplayName}
+            disabled={!displayNameDirty || savingDisplayName || settingsState !== 'ready'}
             className="inline-flex items-center gap-2 px-3 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {savingDisplayName ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -452,6 +468,8 @@ function SharingBuckets({ selectedId }) {
         <aside>
           {loading ? (
             <PageSkeleton header="none" label="Loading buckets" cards={3} sidebar={false} />
+          ) : bucketsState === 'error' ? (
+            <ListLoadError what="buckets" error={bucketsError} onRetry={retryBuckets} />
           ) : buckets.length === 0 ? (
             <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
               No buckets yet. Click <span className="text-port-accent">Add bucket</span> to register a synced folder.

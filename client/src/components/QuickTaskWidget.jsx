@@ -1,16 +1,15 @@
-import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import * as api from '../services/api';
 import TaskAddForm from './cos/TaskAddForm';
+import ListLoadError from './ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
+
+const fetchProviders = () => api.getProviders({ silent: true }).then(data => data?.providers || []);
+const fetchApps = () => api.getApps({ silent: true }).then(data => (Array.isArray(data) ? data : data?.apps || []));
 
 export default function QuickTaskWidget() {
-  const [providers, setProviders] = useState([]);
-  const [apps, setApps] = useState([]);
-
-  useEffect(() => {
-    api.getProviders().then(data => setProviders(data.providers || [])).catch(() => setProviders([]));
-    api.getApps().then(setApps).catch(() => setApps([]));
-  }, []);
+  const providersList = useListResource(fetchProviders);
+  const appsList = useListResource(fetchApps);
 
   // Tiles render with overflow-hidden + a fixed pixel height (h * ROW_HEIGHT)
   // — fill the cell and let the form area scroll if the user shrank the
@@ -24,7 +23,15 @@ export default function QuickTaskWidget() {
         </Link>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <TaskAddForm providers={providers} apps={apps} onTaskAdded={() => {}} compact defaultExpanded />
+        {providersList.state === 'error' && (
+          <ListLoadError what="AI providers" error={providersList.error} onRetry={providersList.retry} />
+        )}
+        {appsList.state === 'error' && (
+          <ListLoadError what="apps" error={appsList.error} onRetry={appsList.retry} className={providersList.state === 'error' ? 'mt-2' : ''} />
+        )}
+        {providersList.state !== 'error' && appsList.state !== 'error' && (
+          <TaskAddForm providers={providersList.items} apps={appsList.items} onTaskAdded={() => {}} compact defaultExpanded />
+        )}
       </div>
     </div>
   );

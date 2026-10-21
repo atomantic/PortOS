@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
@@ -59,5 +59,22 @@ describe('ProviderStatusCard', () => {
     render(<ProviderStatusCard />);
 
     await waitFor(() => expect(screen.getByTestId('rate-limit-window-example')).toHaveTextContent('API window: limit 100'));
+  });
+
+  it('fails into Retry instead of "All Available" when the provider list read fails', async () => {
+    api.getProviderStatuses.mockResolvedValue({
+      providers: { example: { available: false, reason: 'rate-limit', message: 'Rate limit exceeded' } },
+    });
+    api.getProviders.mockRejectedValueOnce(new Error('providers 500'));
+
+    render(<ProviderStatusCard />);
+
+    expect(await screen.findByText('Unable to load status')).toBeInTheDocument();
+    expect(screen.queryByText('All Available')).not.toBeInTheDocument();
+
+    api.getProviders.mockResolvedValue({ providers: [{ id: 'example', name: 'Example Provider' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading status' }));
+    await waitFor(() => expect(screen.queryByText('Unable to load status')).not.toBeInTheDocument());
+    expect(screen.getByText('Example Provider')).toBeInTheDocument();
   });
 });

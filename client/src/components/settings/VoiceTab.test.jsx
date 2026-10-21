@@ -161,6 +161,17 @@ describe('VoiceTab TTS engine registry', () => {
     expect(voiceSelect).toHaveValue('retired-voice');
     expect(screen.getByRole('option', { name: 'retired-voice (current)' })).toBeTruthy();
   });
+
+  it('shows an error row with Retry when the voice catalog fails, not a picker offering only the saved voice', async () => {
+    voiceApi.listVoices.mockRejectedValueOnce(new Error('voices 500'));
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load voices — voices 500');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('option', { name: /Expressive Alto/ });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });
 
 describe('VoiceTab LLM / code-agent pickers', () => {

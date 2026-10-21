@@ -525,7 +525,7 @@ export const searchDatadogErrors = (instanceId, serviceName, environment, fromTi
   });
 
 // JIRA
-export const getJiraInstances = () => request('/jira/instances');
+export const getJiraInstances = (options) => request('/jira/instances', options);
 export const getJiraProjects = (instanceId, options) => request(`/jira/instances/${instanceId}/projects`, options);
 export const getJiraBoards = (instanceId, projectKey, options) =>
   request(`/jira/instances/${instanceId}/projects/${encodeURIComponent(projectKey)}/boards`, options);

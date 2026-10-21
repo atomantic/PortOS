@@ -14,6 +14,8 @@ import { formatVoiceLabel } from '../../lib/voiceLabel';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import ProviderModelSelector from '../ProviderModelSelector';
 import FormField from '../ui/FormField';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 
 const SERVICE_LABELS = {
@@ -70,7 +72,6 @@ export function VoiceTab() {
   const [saving, setSaving] = useState(false);
   const [cfg, setCfg] = useState(null);
   const [status, setStatus] = useState(null);
-  const [voiceList, setVoiceList] = useState({ engine: null, voices: [] });
   const [ttsEngines, setTtsEngines] = useState([]);
   const [ttsEngineError, setTtsEngineError] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -95,6 +96,14 @@ export function VoiceTab() {
 
   const currentEngine = cfg?.tts?.engine;
 
+  // The selected engine's voice catalog. A failed read renders an error row with
+  // Retry rather than an empty picker that offers only the saved voice.
+  const fetchVoices = useCallback(
+    () => listVoices(currentEngine, { silent: true }).then((v) => (Array.isArray(v?.voices) ? v.voices : [])),
+    [currentEngine],
+  );
+  const { items: voices, state: voicesState, error: voicesError, retry: retryVoices, setItems: setVoices } = useListResource(fetchVoices, { enabled: Boolean(currentEngine) });
+
   useEffect(() => {
     if (!currentEngine || ttsEngines.length === 0) return;
     const registered = ttsEngines.find((item) => (
@@ -105,13 +114,11 @@ export function VoiceTab() {
   }, [currentEngine, ttsEngines]);
 
   const refreshStatus = useCallback(() => {
-    return Promise.all([
-      getVoiceStatus(),
-      listVoices(currentEngine).catch(() => ({ engine: null, voices: [] })),
-    ])
-      .then(([s, v]) => { setStatus(s); setVoiceList(v); })
+    retryVoices();
+    return getVoiceStatus()
+      .then(setStatus)
       .catch(() => setStatus(null));
-  }, [currentEngine]);
+  }, [retryVoices]);
 
   useEffect(() => {
     Promise.all([getVoiceConfig({ silent: true }), getVoiceStatus({ silent: true })])
@@ -141,17 +148,6 @@ export function VoiceTab() {
         setTtsEngineError('Could not load the TTS engine registry. The saved engine remains selected.');
       });
   }, []);
-
-  // Refetch the voice catalog whenever the user flips TTS engine so the picker
-  // reflects the selected engine's voices (without requiring a save first).
-  useEffect(() => {
-    if (!currentEngine) return undefined;
-    let active = true;
-    listVoices(currentEngine)
-      .then((v) => { if (active) setVoiceList(v); })
-      .catch(() => { if (active) setVoiceList({ engine: currentEngine, voices: [] }); });
-    return () => { active = false; };
-  }, [currentEngine]);
 
   // Functional setState form so sequential patch() calls in one event handler
   // compose correctly — each one sees the prior's result instead of cloning
@@ -285,7 +281,6 @@ export function VoiceTab() {
     item.id === configuredEngine || item.aliases?.includes(configuredEngine)
   ));
   const engine = engineMeta?.id || configuredEngine;
-  const voices = voiceList.voices || [];
   const engineConfigKey = typeof engineMeta?.configKey === 'string' ? engineMeta.configKey : null;
   const fallbackConfigKey = [configuredEngine, configuredEngine.replace(/-tts$/, '')]
     .find((key) => cfg.tts[key] && typeof cfg.tts[key] === 'object');
@@ -537,7 +532,7 @@ export function VoiceTab() {
                   setDownloadingVoice(val);
                   fetchPiperVoice(val, { silent: true })
                     .then(() => listVoices('piper', { silent: true }))
-                    .then((fresh) => setVoiceList(fresh))
+                    .then((fresh) => setVoices(Array.isArray(fresh?.voices) ? fresh.voices : []))
                     .catch((err) => toast.error(`Voice download failed: ${err.message}`))
                     .finally(() => setDownloadingVoice(null));
                 }
@@ -560,6 +555,9 @@ export function VoiceTab() {
                 : <Play size={14} />}
             </button>
           </div>
+          {voicesState === 'error' && (
+            <ListLoadError what="voices" error={voicesError} onRetry={retryVoices} className="mt-2" />
+          )}
         </FormField>
 
         {cfg.tts.retiredEngine === 'kokoro' && (
