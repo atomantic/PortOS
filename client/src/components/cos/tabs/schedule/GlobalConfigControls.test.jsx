@@ -175,6 +175,17 @@ describe('GlobalConfigControls — branch-reconcile batch size', () => {
   });
 });
 
+describe('GlobalConfigControls — error-log-triage run caps', () => {
+  it('shows the shipped caps and persists a changed cap beside the other one', () => {
+    const onUpdate = renderControls({ taskType: 'error-log-triage', taskMetadata: { triageMaxInvestigations: 2 } });
+    expect(screen.getByLabelText('Occurrences before investigating')).toHaveValue('3');
+    fireEvent.change(screen.getByLabelText('Investigations per run'), { target: { value: '0' } });
+    expect(onUpdate).toHaveBeenCalledWith('error-log-triage', {
+      taskMetadata: { triageMaxInvestigations: 0 }
+    });
+  });
+});
+
 describe('GlobalConfigControls — dependency-freedom removal bar', () => {
   it('is hidden for other audits', () => {
     renderControls({ taskType: 'better-complexity' });

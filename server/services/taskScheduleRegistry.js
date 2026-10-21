@@ -6,7 +6,7 @@ import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/pr
  * so app configuration can consume task definitions without forming a cycle.
  */
 
-import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, RELEASE_OPTION_KEYS } from '../lib/cosValidation.js';
+import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cosValidation.js';
 import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import {
@@ -418,6 +418,14 @@ const TASK_INTERVAL_DEFAULTS = {
   // global-ledger review PER app) and scheduled dispatch has no global lane
   // for install-wide types yet — see #5629.
   'user-action-review':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  // error-log-triage (#12851) triages new stderr lines from PortOS's own PM2
+  // processes. Off by default the way every shipped task is: ON_DEMAND is never
+  // clock-due, so a manual Run or a cadence the user picks is the consent for
+  // the investigation agents it files on providerId/model below. The
+  // collect/fingerprint/dedupe pass itself makes no provider call, and its
+  // buildTaskInput hook never spawns a coordinator agent — hence no prompt.
+  // taskMetadata holds the run caps (lib/cosValidation.js clamps them).
+  'error-log-triage': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: Object.fromEntries(Object.entries(ERROR_LOG_TRIAGE_LIMITS).map(([key, limit]) => [key, limit.default])) },
   // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). On-demand
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the
   // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
@@ -632,6 +640,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
   'media-render-research': 'Research local Apple Silicon image/video models, runtimes and settings; file ready-to-work issues for improvements (no code)',
   'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
+  'error-log-triage': 'Triage new stderr lines from PortOS processes — fingerprint and dedupe against issues, then queue one investigation agent per new fault',
   'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code",
   'development-watchdog': 'Inspect maintainer repository ownership and queue eligible work without an inference call',
   'music-video-autopilot': 'Turn the next unused Brain idea into a fully autonomous music video — lyrics, Suno song, mood board and video. No agent',
@@ -662,6 +671,10 @@ export const TASK_TYPE_PROMPT_INFO = Object.freeze({
   'issue-watcher': Object.freeze({
     mode: 'runtime-generated',
     description: 'Three enforced server phases: screen external issue activity, analyze it through a text-only API with no tools or private context, then validate current content before replies or assignments. Configure the source policy in Models → LLMs → Abuse Guard.'
+  }),
+  'error-log-triage': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'PortOS reads its own stderr logs, fingerprints and redacts each new fault, and dedupes it against the issue tracker with no model call. Each new fault seen at least the configured number of times queues one investigation agent on the provider and model below, up to the per-run cap; that prompt is generated from the redacted excerpt.'
   }),
   'layered-intelligence': Object.freeze({
     mode: 'runtime-generated',

@@ -81,6 +81,11 @@ const HOOK_MODULES = {
   'user-action-review': {
     load: () => import('./userActionReviewHooks.js')
   },
+  // buildTaskInput only: runs the deterministic stderr triage and always
+  // skips — the investigations it files are separate investigation tasks.
+  'error-log-triage': {
+    load: () => import('./errorLogTriageHooks.js')
+  },
 };
 const PAYLOAD_OPTIONAL_OUTPUT_HOOKS = new Set();
 

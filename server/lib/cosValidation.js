@@ -1116,6 +1116,14 @@ export const SWARM_COUNT_MAX = 12;
 export const BRANCHES_PER_AGENT_MIN = 1;
 export const BRANCHES_PER_AGENT_MAX = 6;
 
+// error-log-triage run caps (#12851): how many occurrences make a fault worth
+// an investigation agent, and how many investigations one pass may queue.
+// `0` investigations keeps the deterministic dedupe and parks investigation.
+export const ERROR_LOG_TRIAGE_LIMITS = Object.freeze({
+  triageMinOccurrences: Object.freeze({ min: 1, max: 100, default: 3 }),
+  triageMaxInvestigations: Object.freeze({ min: 0, max: 10, default: 2 }),
+});
+
 // POST /api/cos/tasks/slashdo — a `/do:*` button click from an app's Agent
 // Operations panel. The run-settings fields are PICKED from createCosTaskSchema
 // rather than restated, so the drawer's provider/model/effort/simplify/reviewer
@@ -1351,6 +1359,12 @@ export function sanitizeTaskMetadata(raw) {
       && raw.branchesPerAgent <= BRANCHES_PER_AGENT_MAX) {
     clean.branchesPerAgent = raw.branchesPerAgent;
     hasKeys = true;
+  }
+  for (const [key, { min, max }] of Object.entries(ERROR_LOG_TRIAGE_LIMITS)) {
+    if (Number.isInteger(raw[key]) && raw[key] >= min && raw[key] <= max) {
+      clean[key] = raw[key];
+      hasKeys = true;
+    }
   }
   // The programmatic bible handlers' params bag (BIBLE_HANDLER_* above). Each
   // key is dropped when it doesn't match, so a bad value falls back to the

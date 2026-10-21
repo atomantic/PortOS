@@ -148,6 +148,12 @@ export function useOnDemandTaskToast() {
           });
           return;
         }
+        // error-log-triage's deterministic pass IS the run; the reason is its
+        // result line (new entries, comments, investigations queued).
+        if (data?.taskType === 'error-log-triage' && data?.reason) {
+          toast(`${task}: ${data.reason}.`, { duration: 7000, icon: '🩺' });
+          return;
+        }
         toast(`${task}${scope}: re-checked now — nothing to do right now.`, {
           duration: 6000,
           icon: '💤'

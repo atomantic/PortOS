@@ -2031,6 +2031,12 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   if (outcome === 'idle' && request.taskType === 'pr-reviewer') {
     reason = skip?.gate === 'security-preflight' ? skip.reason : null;
   }
+  // error-log-triage never produces an agent task of its own — its pass IS the
+  // run — so toast what that pass did instead of "nothing to do".
+  if (outcome === 'idle' && request.taskType === 'error-log-triage') {
+    const { readLastTriageSummary } = await import('./errorLogTriage.js');
+    reason = await readLastTriageSummary().catch(() => null);
+  }
 
   // 'transient' says "the forge probe failed, try again shortly" — only true when
   // the forge is momentarily flaky. A gh that is missing, unauthenticated, or

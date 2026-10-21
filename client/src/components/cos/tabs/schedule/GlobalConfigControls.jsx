@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { RotateCcw, AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, STALL_NUDGE_OPTION, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, STALL_NUDGE_OPTION, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
@@ -235,6 +235,17 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     try {
       await onUpdate(taskType, {
         taskMetadata: { ...(config.taskMetadata || {}), branchesPerAgent: value }
+      });
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const handleTriageCapChange = async (field, value) => {
+    setUpdating(true);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: { ...(config.taskMetadata || {}), [field]: value }
       });
     } finally {
       setUpdating(false);
@@ -666,6 +677,33 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             {BRANCHES_PER_AGENT_OPTIONS.find(o => o.value === (config.taskMetadata?.branchesPerAgent || BRANCHES_PER_AGENT_DEFAULT))?.description}.
             {' '}Branches are prioritized deterministically; the next drain picks up the remainder after this batch progresses.
           </p>
+        </div>
+      )}
+
+      {LOG_TRIAGE_TASK_TYPES.has(taskType) && (
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-3">
+          {LOG_TRIAGE_CAPS.map((cap) => {
+            const value = Number.isInteger(config.taskMetadata?.[cap.field]) ? config.taskMetadata[cap.field] : cap.defaultValue;
+            // A hand-edited in-range value outside the preset list still shows.
+            const options = cap.options.some((opt) => opt.value === value) ? cap.options : [...cap.options, { value, label: String(value) }];
+            return (
+              <div key={cap.field}>
+                <label htmlFor={`${cap.field}-${taskType}`} className="text-sm text-gray-400 block mb-2">{cap.label}</label>
+                <select
+                  id={`${cap.field}-${taskType}`}
+                  value={value}
+                  onChange={(e) => handleTriageCapChange(cap.field, Number(e.target.value))}
+                  disabled={updating}
+                  className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+                >
+                  {options.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">{cap.description}.</p>
+              </div>
+            );
+          })}
         </div>
       )}
 
