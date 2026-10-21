@@ -54,6 +54,39 @@ export async function withGeneratedSoundtrack(job, deps = {}) {
   };
 }
 
+async function requireCompletedJob(id) {
+  const job = isCodeAnimationJobId(id) ? await getCodeAnimationJobRecord(id) : null;
+  if (!job) throw fail(404, 'NOT_FOUND', 'Code Animation job not found');
+  if (job.status !== 'completed') throw fail(409, 'NOT_COMPLETED', 'Generate audio once the animation has finished');
+  return job;
+}
+
+const createSoundtrackTrack = (job, deps) => deps.createTrack({ title: `${job.title || 'Code animation'} soundtrack`.slice(0, 200) });
+
+/**
+ * The animation's soundtrack track, created on first use. A coded score
+ * (Strudel / Tone.js / SuperCollider) saves its take onto this track, which
+ * then becomes the job's audio like a music-model render does.
+ */
+export async function ensureCodeAnimationSoundtrackTrack(id, overrides = {}) {
+  const deps = { ...defaults, ...overrides };
+  const job = await requireCompletedJob(id);
+  const existing = job.soundtrack?.trackId ? await deps.getTrack(job.soundtrack.trackId).catch(() => null) : null;
+  if (existing) return { trackId: existing.id };
+  if (starting.has(id)) throw fail(409, 'CODE_ANIMATION_SOUNDTRACK_BUSY', 'A soundtrack for this animation is already starting');
+  starting.add(id);
+  try {
+    const track = await createSoundtrackTrack(job, deps);
+    const now = new Date().toISOString();
+    const latest = await getCodeAnimationJobRecord(id) || job;
+    await saveCodeAnimationJobRecord({ ...latest, soundtrack: { trackId: track.id, mediaJobId: null, requestedAt: now }, updatedAt: now });
+    emitCodeAnimationChanged(id);
+    return { trackId: track.id };
+  } finally {
+    starting.delete(id);
+  }
+}
+
 /**
  * Queue a soundtrack render for a completed animation. Resolves to the updated
  * job's `soundtrack` record: `{ trackId, mediaJobId, engine, modelId, prompt,
@@ -61,9 +94,7 @@ export async function withGeneratedSoundtrack(job, deps = {}) {
  */
 export async function startCodeAnimationSoundtrack(id, request, overrides = {}) {
   const deps = { ...defaults, ...overrides };
-  const job = isCodeAnimationJobId(id) ? await getCodeAnimationJobRecord(id) : null;
-  if (!job) throw fail(404, 'NOT_FOUND', 'Code Animation job not found');
-  if (job.status !== 'completed') throw fail(409, 'NOT_COMPLETED', 'Generate audio once the animation has finished');
+  const job = await requireCompletedJob(id);
   if (starting.has(id)) throw fail(409, 'CODE_ANIMATION_SOUNDTRACK_BUSY', 'A soundtrack for this animation is already starting');
 
   const engine = await deps.getEngine(request.engine);
@@ -83,7 +114,7 @@ export async function startCodeAnimationSoundtrack(id, request, overrides = {}) 
   starting.add(id);
   try {
     const existing = job.soundtrack?.trackId ? await deps.getTrack(job.soundtrack.trackId).catch(() => null) : null;
-    const track = existing || await deps.createTrack({ title: `${job.title || 'Code animation'} soundtrack`.slice(0, 200) });
+    const track = existing || await createSoundtrackTrack(job, deps);
     const queued = await deps.queueGeneration({
       trackId: track.id,
       prompt: request.prompt,

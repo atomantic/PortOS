@@ -833,6 +833,7 @@ function FastCodeAnimation() {
             )}
             {preview?.jobId && job?.id === preview.jobId && job.status === 'completed' && (
               <CodeAnimationSoundtrack
+                job={job}
                 jobId={job.id}
                 soundtrack={job.soundtrack}
                 audioUrl={job.audioUrl}

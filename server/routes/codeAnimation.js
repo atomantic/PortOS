@@ -23,7 +23,7 @@
 
 import { Router } from 'express';
 import { soundAssetSchema, stageProductionSoundAsset } from '../services/codeAnimation/soundAssets.js';
-import { startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtrack.js';
+import { ensureCodeAnimationSoundtrackTrack, startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtrack.js';
 import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -337,6 +337,13 @@ const soundtrackSchema = z.object({
 router.post('/:id/soundtrack', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   res.status(202).json(await startCodeAnimationSoundtrack(id, validateRequest(soundtrackSchema, req.body ?? {})));
+}));
+
+// The soundtrack track a coded score (written by a coding model, rendered in
+// the browser or by SuperCollider) saves its take onto. Created on first use.
+router.post('/:id/soundtrack/track', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await ensureCodeAnimationSoundtrackTrack(id));
 }));
 
 // Frame-exact export: the stored HTML renders through the HTML-composition

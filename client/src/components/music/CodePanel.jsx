@@ -11,6 +11,10 @@
  * "Save as take" records the code in the frame for the chosen length and
  * uploads the WAV into the track's render history (`engine: 'code'`).
  *
+ * A Code Animation soundtrack reuses the panel: `scene` (the animation script)
+ * and `fixedLengthSec` (the film's length) join the brief, and `resolveTrackId`
+ * creates the soundtrack track on the first save.
+ *
  * The LLM call fires only from the Write/Revise buttons (no cold-bootstrap LLM
  * calls). The latest code is remembered per viewer in localStorage, tagged
  * with the language it was written in, so a reload doesn't lose it.
@@ -19,12 +23,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Code2, Loader2, Play, Save, Square, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import ModelInputPreview from '../media/ModelInputPreview';
+import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import useMounted from '../../hooks/useMounted';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 import { clamp, formatTimecode } from '../../utils/formatters';
 import SuperColliderStage from './SuperColliderStage';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
-import { renderTrackCode, writeMusicCode } from '../../services/api';
+import { previewMusicCode, renderTrackCode, writeMusicCode } from '../../services/api';
 import {
   CODE_FRAME_SOURCE, STRUDEL_VERSION, TONE_VERSION, buildStrudelFrameDoc, buildToneFrameDoc,
 } from './strudelFrame';
@@ -67,9 +73,9 @@ const DEFAULT_LANGUAGE = 'strudel';
 
 // Only the most recent code (and the language it was written in) is kept —
 // one key, tagged with its draft track.
-const readStoredCode = (trackId) => {
+const readStoredCode = (draftId) => {
   const stored = safeReadJsonStorage(CODE_KEY);
-  if (!trackId || stored?.trackId !== trackId) return { code: '', language: DEFAULT_LANGUAGE };
+  if (!draftId || stored?.trackId !== draftId) return { code: '', language: DEFAULT_LANGUAGE };
   return {
     code: typeof stored.code === 'string' ? stored.code : '',
     language: LANGUAGES[stored.language] ? stored.language : DEFAULT_LANGUAGE,
@@ -79,10 +85,12 @@ const readStoredCode = (trackId) => {
 export default function CodePanel({
   trackId, disabled = false, description = '', lyrics = '', title = '',
   providerId, model, effort, providerPicker, onRendered,
+  scene = '', fixedLengthSec = null, draftKey = null, resolveTrackId = null,
 }) {
   const mountedRef = useMounted();
   const frameRef = useRef(null);
-  const initialStored = useMemo(() => readStoredCode(trackId), [trackId]);
+  const draftId = draftKey || trackId;
+  const initialStored = useMemo(() => readStoredCode(draftId), [draftId]);
   const [code, setCode] = useState(initialStored.code);
   const [language, setLanguage] = useState(initialStored.language);
   const [guidance, setGuidance] = useState('');
@@ -97,13 +105,18 @@ export default function CodePanel({
   const [recordedSec, setRecordedSec] = useState(0);
   const [takeSec, setTakeSec] = useState(TAKE_SEC.DEFAULT);
   const saveContextRef = useRef({});
-  saveContextRef.current = { trackId, description, title, onRendered };
+  // The track resolveTrackId created, held across re-renders until the parent passes it down.
+  const createdTrackRef = useRef(null);
+  saveContextRef.current = { trackId: trackId || createdTrackRef.current, description, title, onRendered };
+  const brief = description.trim() || scene.trim();
+  const filmTooLong = !!fixedLengthSec && fixedLengthSec > TAKE_SEC.MAX;
   const busy = !!writing || !!savePhase;
 
   const post = (msg) => frameRef.current?.contentWindow?.postMessage(msg, '*');
 
   const uploadTake = async (wav, durationSec) => {
     const { trackId: id, description: prompt, title: takeTitle, onRendered: done } = saveContextRef.current;
+    if (!id) return;
     setSavePhase('uploading');
     const form = new FormData();
     form.append('track', new Blob([wav], { type: 'audio/wav' }), 'code-take.wav');
@@ -140,7 +153,7 @@ export default function CodePanel({
     // Subscribed once; uploadTake reads the latest props through saveContextRef.
   }, []);
 
-  const rememberCode = (next, lang = language) => safeWriteJsonStorage(CODE_KEY, { trackId, code: next, language: lang });
+  const rememberCode = (next, lang = language) => safeWriteJsonStorage(CODE_KEY, { trackId: draftId, code: next, language: lang });
 
   // Switching languages invalidates the code in the box (it's the wrong
   // dialect for the new frame), so clear it and remount the player fresh.
@@ -155,11 +168,13 @@ export default function CodePanel({
   };
 
   const write = async (mode) => {
-    if (!description.trim()) { toast.error('Write the musical description first'); return; }
+    if (!brief) { toast.error('Write the musical description first'); return; }
     setWriting(mode);
     const res = await writeMusicCode({
-      description: description.trim(),
+      ...(description.trim() ? { description: description.trim() } : {}),
       lyrics: lyrics.trim() || undefined,
+      ...(scene.trim() ? { scene } : {}),
+      ...(fixedLengthSec ? { durationSec: fixedLengthSec } : {}),
       guidance: guidance.trim() || undefined,
       ...(mode === 'revise' && code.trim() ? { current: code } : {}),
       language,
@@ -185,9 +200,22 @@ export default function CodePanel({
     setSavePhase((phase) => (phase === 'recording' ? null : phase));
   };
 
-  const save = () => {
-    if (!code.trim() || !trackId) return;
-    const seconds = clamp(Number(lengthInput) || TAKE_SEC.DEFAULT, TAKE_SEC.MIN, TAKE_SEC.MAX);
+  // A soundtrack's track is created on the first save, so viewing never makes one.
+  const ensureTrackId = async () => {
+    if (trackId || createdTrackRef.current) return trackId || createdTrackRef.current;
+    const id = await resolveTrackId?.().catch((err) => { toast.error(err?.message || 'Could not create the soundtrack track'); return null; });
+    if (id) {
+      createdTrackRef.current = id;
+      saveContextRef.current = { ...saveContextRef.current, trackId: id };
+    }
+    return id || null;
+  };
+
+  const save = async () => {
+    if (!code.trim() || filmTooLong) return;
+    // Short-circuits so a known track records in the same tick as the tap.
+    if (!(trackId || createdTrackRef.current || await ensureTrackId()) || !mountedRef.current) return;
+    const seconds = fixedLengthSec || clamp(Number(lengthInput) || TAKE_SEC.DEFAULT, TAKE_SEC.MIN, TAKE_SEC.MAX);
     setTakeSec(seconds);
     setFrameError('');
     setRecordedSec(0);
@@ -199,7 +227,12 @@ export default function CodePanel({
   const playing = frameState === 'playing';
   const lang = LANGUAGES[language];
   const serverRendered = !!lang.serverRendered;
-  const takeLength = clamp(Number(lengthInput) || TAKE_SEC.DEFAULT, TAKE_SEC.MIN, TAKE_SEC.MAX);
+  const takeLength = fixedLengthSec || clamp(Number(lengthInput) || TAKE_SEC.DEFAULT, TAKE_SEC.MIN, TAKE_SEC.MAX);
+  const canSaveTo = !!trackId || !!resolveTrackId;
+  const sentPreview = useModelInputPreview(previewMusicCode, {
+    description: description.trim(), lyrics: lyrics.trim(), scene, guidance, language,
+    ...(fixedLengthSec ? { durationSec: fixedLengthSec } : {}),
+  }, { enabled: !!brief && !filmTooLong });
 
   return (
     <div className="space-y-4">
@@ -237,19 +270,23 @@ export default function CodePanel({
             className={FIELD_CLASS}
           />
         </label>
-        <label htmlFor="music-code-length" className="block">
-          <span className={LABEL_CLASS}>{serverRendered ? 'Render length (sec)' : 'Take length (sec)'}</span>
-          <input
-            id="music-code-length"
-            type="number"
-            min={TAKE_SEC.MIN}
-            max={TAKE_SEC.MAX}
-            value={lengthInput}
-            onChange={(event) => setLengthInput(event.target.value)}
-            disabled={disabled || busy}
-            className={`${FIELD_CLASS} sm:w-28`}
-          />
-        </label>
+        {fixedLengthSec ? (
+          <p className="self-end pb-2 text-xs text-gray-500">{fixedLengthSec}s, the film&apos;s length</p>
+        ) : (
+          <label htmlFor="music-code-length" className="block">
+            <span className={LABEL_CLASS}>{serverRendered ? 'Render length (sec)' : 'Take length (sec)'}</span>
+            <input
+              id="music-code-length"
+              type="number"
+              min={TAKE_SEC.MIN}
+              max={TAKE_SEC.MAX}
+              value={lengthInput}
+              onChange={(event) => setLengthInput(event.target.value)}
+              disabled={disabled || busy}
+              className={`${FIELD_CLASS} sm:w-28`}
+            />
+          </label>
+        )}
       </div>
 
       <div className="rounded border border-port-border bg-port-bg/60 p-3">
@@ -258,17 +295,25 @@ export default function CodePanel({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => write('fresh')} disabled={disabled || busy || !description.trim()} className={hasCode ? GHOST_BTN : PRIMARY_BTN}>
+        <button type="button" onClick={() => write('fresh')} disabled={disabled || busy || !brief || filmTooLong} className={hasCode ? GHOST_BTN : PRIMARY_BTN}>
           {writing === 'fresh' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Code2 className="h-4 w-4" />}
           <span>{writing === 'fresh' ? 'Writing…' : hasCode ? 'Write from scratch' : 'Write the code'}</span>
         </button>
         {hasCode && (
-          <button type="button" onClick={() => write('revise')} disabled={disabled || busy || !description.trim()} className={PRIMARY_BTN}>
+          <button type="button" onClick={() => write('revise')} disabled={disabled || busy || !brief || filmTooLong} className={PRIMARY_BTN}>
             {writing === 'revise' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
             <span>{writing === 'revise' ? 'Revising…' : 'Revise code'}</span>
           </button>
         )}
       </div>
+
+      <ModelInputPreview preview={sentPreview} prompt={description.trim()} />
+
+      {filmTooLong && (
+        <p role="alert" className="text-xs text-port-warning">
+          The film is {fixedLengthSec}s; coded audio renders at most {TAKE_SEC.MAX}s. Use a music model for this film, or shorten it.
+        </p>
+      )}
 
       <label htmlFor="music-code-editor" className="block">
         <span className={LABEL_CLASS}>{lang.label} code</span>
@@ -297,9 +342,10 @@ export default function CodePanel({
           code={code}
           durationSec={takeLength}
           trackId={trackId}
+          resolveTrackId={resolveTrackId ? ensureTrackId : null}
           description={description}
           title={title}
-          disabled={disabled || !!writing}
+          disabled={disabled || !!writing || filmTooLong}
           onRendered={onRendered}
         />
       ) : (
@@ -324,7 +370,7 @@ export default function CodePanel({
               <Square className="h-4 w-4" />
               <span>Stop</span>
             </button>
-            <button type="button" onClick={save} disabled={disabled || busy || !frameReady || !hasCode || !trackId} className={PRIMARY_BTN}>
+            <button type="button" onClick={save} disabled={disabled || busy || !frameReady || !hasCode || !canSaveTo || filmTooLong} className={PRIMARY_BTN}>
               {savePhase ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               <span>{savePhase === 'recording' ? 'Recording…' : savePhase === 'uploading' ? 'Saving…' : 'Save as take'}</span>
             </button>

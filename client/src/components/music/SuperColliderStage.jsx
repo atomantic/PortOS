@@ -31,7 +31,7 @@ import {
 const LOG_TAIL = 6;
 
 export default function SuperColliderStage({
-  code, durationSec, trackId, description = '', title = '', disabled = false, onRendered,
+  code, durationSec, trackId, description = '', title = '', disabled = false, onRendered, resolveTrackId = null,
 }) {
   const mountedRef = useMounted();
   const [status, setStatus] = useState(null); // null = checking
@@ -105,9 +105,12 @@ export default function SuperColliderStage({
   };
 
   const save = async () => {
-    if (!preview || !trackId) return;
+    if (!preview) return;
     setSaving(true);
-    const res = await saveSuperColliderTake(trackId, {
+    const id = trackId || await resolveTrackId?.();
+    if (!mountedRef.current) return;
+    if (!id) { setSaving(false); return; }
+    const res = await saveSuperColliderTake(id, {
       jobId: job.jobId,
       ...(description.trim() ? { prompt: description.trim() } : {}),
       ...(title.trim() ? { title: title.trim() } : {}),
@@ -176,7 +179,7 @@ export default function SuperColliderStage({
           </button>
         )}
         {preview && (
-          <button type="button" onClick={save} disabled={disabled || saving || !trackId || stale} className={PRIMARY_BTN}>
+          <button type="button" onClick={save} disabled={disabled || saving || !(trackId || resolveTrackId) || stale} className={PRIMARY_BTN}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             <span>{saving ? 'Saving…' : 'Save as take'}</span>
           </button>
