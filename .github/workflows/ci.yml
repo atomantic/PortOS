@@ -238,10 +238,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
 
       - name: Check shipped stage-prompt history
         run: node scripts/migrations/check-shipped-prompt-history.js
@@ -274,10 +274,10 @@ jobs:
       - name: Resolve the pull-request diff base
         run: node scripts/ci-base-sha.js
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
 
@@ -292,7 +292,7 @@ jobs:
       # manifest-vs-lockfile check, and the key carries the Node *major* rather
       # than the resolved patch, because NODE_MODULE_VERSION is stable across
       # patches and keying on the patch would discard the entry on every Node
-      # 24.x release. The transform-artifact cache below keeps its own key and
+      # 26.x release. The transform-artifact cache below keeps its own key and
       # its own restore-keys; this one is about dependencies.
       #
       # Hit rate comes from the nightly full run: there is no push trigger on
@@ -304,7 +304,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       # A restored tree is only reusable if it was rebuilt before it was saved,
       # and that is not answerable by looking at the tree — with today's
@@ -471,10 +471,10 @@ jobs:
       - name: Resolve the pull-request diff base
         run: node scripts/ci-base-sha.js
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: client/package-lock.json
 
@@ -498,7 +498,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
         if: steps.client-modules.outputs.cache-hit != 'true'
@@ -592,10 +592,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: client/package-lock.json
 
@@ -619,7 +619,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
         if: steps.client-modules.outputs.cache-hit != 'true'
@@ -667,10 +667,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
 
@@ -682,7 +682,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       # A restored tree is only reusable if it was rebuilt before it was saved,
       # and that is not answerable by looking at the tree — with today's
@@ -819,10 +819,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
 
@@ -834,7 +834,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       # A restored tree is only reusable if it was rebuilt before it was saved,
       # and that is not answerable by looking at the tree — with today's
@@ -941,7 +941,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
         if: steps.client-modules.outputs.cache-hit != 'true'
@@ -1016,10 +1016,10 @@ jobs:
       - name: Resolve the pull-request diff base
         run: node scripts/ci-base-sha.js
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
 
@@ -1031,7 +1031,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       # A restored tree is only reusable if it was rebuilt before it was saved,
       # and that is not answerable by looking at the tree — with today's
@@ -1206,7 +1206,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
       - name: Install the containment prerequisite
@@ -1259,7 +1259,7 @@ jobs:
         run: node scripts/ci-dependabot-admission.js
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: |
             package-lock.json

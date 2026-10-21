@@ -163,7 +163,7 @@ export function buildPinnedLookup(address, family) {
  * version speaks. undici 8 dropped v7's implicit wrapping of the legacy
  * (onConnect/onHeaders/onComplete) handler shape, so a bare undici-8 `Agent`
  * handed to the built-in fetch of any Node that still bundles undici 7 (22, 24,
- * 25 — including the 24.x CI matrix) throws `InvalidArgumentError: invalid
+ * 25 — including the 22.22.2 minimum CI job) throws `InvalidArgumentError: invalid
  * onRequestStart method` and the request never leaves. Since fetchGuarded
  * swallows network errors to null, that failure would be SILENT: every guarded
  * fetch would return null rather than fall back to an unpinned connect, but the
