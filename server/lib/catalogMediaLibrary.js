@@ -19,7 +19,7 @@ const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 const cleanStr = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 
 // Era a bare age falls into when the asset was not tagged with one.
-export function eraForAge(age) {
+function eraForAge(age) {
   if (!Number.isFinite(age)) return undefined;
   if (age < 13) return 'child';
   if (age < 20) return 'teen';

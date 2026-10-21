@@ -1,18 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MAX_CAST_GUIDES, eraForAge, normalizeLibrary, filterLibraryMedia, pickGuideMedia,
+  MAX_CAST_GUIDES, normalizeLibrary, filterLibraryMedia, pickGuideMedia,
   parseLibraryMediaKey, inferAgeFromText,
 } from './catalogMediaLibrary.js';
 
 const row = (mediaKey, kind, library = {}, createdAt = '2026-01-01T00:00:00.000Z') => ({ mediaKey, kind, library, createdAt });
 
 describe('catalogMediaLibrary', () => {
-  it('derives eras from ages', () => {
-    expect(eraForAge(7)).toBe('child');
-    expect(eraForAge(17)).toBe('teen');
-    expect(eraForAge(27)).toBe('adult');
-    expect(eraForAge(70)).toBe('elder');
-    expect(eraForAge(undefined)).toBeUndefined();
+  it('derives eras from ages when filtering', () => {
+    const media = [7, 17, 27, 70].map((age) => row(`${age}.png`, 'reference', { variant: { age } }));
+    expect(['child', 'teen', 'adult', 'elder'].map((era) => filterLibraryMedia(media, { era })[0].mediaKey))
+      .toEqual(['7.png', '17.png', '27.png', '70.png']);
   });
 
   it('normalizes library values and drops junk', () => {
