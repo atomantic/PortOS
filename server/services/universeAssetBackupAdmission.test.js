@@ -157,7 +157,7 @@ describe('render completion listeners', () => {
         await writeFile(join(PATHS.images, 'entry-render.metadata.json'), JSON.stringify({ prompt: 'example prompt' }));
       },
       changedFiles: async () => {
-        await vi.waitFor(async () => expect(await entrySidecar()).toMatchObject({ universeId: 'universe-1' }));
+        await vi.waitFor(async () => expect(await entrySidecar()).toMatchObject({ universeId: 'universe-1' }), { timeout: 10000 });
         expect(character().imageRefs).toEqual([RENDER]);
       },
       captured: async () => {

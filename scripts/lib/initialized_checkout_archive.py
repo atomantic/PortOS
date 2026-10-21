@@ -1209,15 +1209,181 @@ def verify(request):
             **({'metadataRecoveryAccepted': True} if recovering else {})}
 
 
-def verify_common_metadata(saved, mutable_shared):
+def unrelated_tracking_changes(root, saved, common, expected, observed):
+    """Concurrent branch creation/deletion may rewrite config; never undo it.
+
+    Only whole tracking-only stanzas for unrelated local branches may appear
+    or disappear, with present/absent refs proven respectively. Existing values,
+    target/global settings, security metadata and archive bytes remain strict.
+    Capture and ordinary moves never use this.
+    """
+    if root is None or len(expected) != 1 or len(observed) != 1:
+        return False
+    old, current = expected[0], observed[0]
+    variable = {'bytes', 'sha256', 'mtimeNs', 'filesystemIdentity'}
+    if old.get('kind') != 'file' or {k: v for k, v in old.items() if k not in variable} != {
+            k: v for k, v in current.items() if k not in variable}:
+        return False
+    if max(old.get('bytes', 0), current.get('bytes', 0)) > 16 * 1024 ** 2:
+        return False
+    archived = root / 'archive/common/config'
+    if sha(archived) != old['sha256']:
+        fail('shared-tracking-archive-changed')
+    def entries(path):
+        raw = git(common, Path(saved['facts']['repoPath']), 'config', '--null',
+                  '--no-includes', '--file', str(path), '--list')
+        records = []
+        for value in raw.split('\0'):
+            if not value:
+                continue
+            key, separator, content = value.partition('\n')
+            # Preserve boolean/no-value distinctions and repeated-value order.
+            records.append((key, separator, content))
+        return records
+    before, after = entries(archived), entries(common / 'config')
+    old_keys, new_keys = {r[0] for r in before}, {r[0] for r in after}
+    removed, added = old_keys - new_keys, new_keys - old_keys
+    removed_branches, added_branches = set(), set()
+    for key in removed | added:
+        match = re.fullmatch(r'branch\.(.+)\.(remote|merge)', key)
+        if not match or match[1] == saved['facts']['release']['branch']:
+            return False
+        (removed_branches if key in removed else added_branches).add(match[1])
+    if not removed_branches and not added_branches:
+        return False
+    for branch in removed_branches:
+        prefix = 'branch.' + branch + '.'
+        # Removing only part of a stanza, or non-tracking attributes, is not
+        # the narrowly understood unrelated-branch cleanup operation.
+        if any(key.startswith(prefix) for key in new_keys) or any(
+                key.startswith(prefix) and key not in removed for key in old_keys):
+            return False
+        ref = 'refs/heads/' + branch
+        git(common, Path(saved['facts']['repoPath']), 'check-ref-format', ref)
+        try:
+            require_absent_local_ref(saved['facts'], ref)
+        except RuntimeError:
+            return False
+    for branch in added_branches:
+        prefix = 'branch.' + branch + '.'
+        if any(key.startswith(prefix) for key in old_keys) or {
+                key for key in new_keys if key.startswith(prefix)} != {
+                    prefix + 'remote', prefix + 'merge'}:
+            return False
+        ref = 'refs/heads/' + branch
+        try:
+            git(common, Path(saved['facts']['repoPath']), 'check-ref-format', ref)
+            git(common, Path(saved['facts']['repoPath']),
+                'symbolic-ref', '--quiet', ref, expected_returncode=1)
+            head = git(common, Path(saved['facts']['repoPath']),
+                       'rev-parse', '--verify', ref + '^{commit}')
+            if git(common, Path(saved['facts']['repoPath']),
+                   'show-ref', '--verify', ref) != head + ' ' + ref:
+                return False
+            git(common, Path(saved['facts']['repoPath']),
+                'symbolic-ref', '--quiet', ref, expected_returncode=1)
+        except RuntimeError:
+            return False
+        if not re.fullmatch(r'[a-f0-9]{' + str(len(saved['facts']['parent']['head'])) + '}', head):
+            return False
+    if [r for r in before if r[0] not in removed] != [r for r in after if r[0] not in added]:
+        return False
+    # The parser and ref observations must describe the same file incarnation.
+    if manifest(common / 'config', True) != observed or sha(archived) != old['sha256']:
+        fail('shared-tracking-observation-changed')
+    return True
+
+
+def verify_live_resolution_cache(path, expected):
+    """Recovery leaves this shared conflict-resolution cache entirely live.
+
+    Its original bytes remain checked in verify_saved_archive. Concurrent Git
+    resolutions may update or prune entries; none are read by recovery's Git
+    commands. Keep the root incarnation/security and a bounded no-follow shape.
+    """
+    original = next((row for row in expected if row['path'] == ''), None)
+    def root_security():
+        info = path.lstat()
+        return {'path': '', 'kind': 'directory' if stat.S_ISDIR(info.st_mode) else 'unsafe',
+                'mode': stat.S_IMODE(info.st_mode), 'uid': info.st_uid, 'gid': info.st_gid,
+                'flags': info.st_flags, 'acl': acl(path),
+                'xattrs': {k: hashlib.sha256(v).hexdigest() for k, v in raw_xattrs(path).items()},
+                'filesystemIdentity': identity(path)}
+    pinned = {k: v for k, v in (original or {}).items() if k != 'mtimeNs'}
+    if root_security() != pinned:
+        fail('shared-resolution-cache-root-changed')
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        held = os.fstat(fd)
+        if (held.st_dev, held.st_ino) != (pinned['filesystemIdentity']['dev'], pinned['filesystemIdentity']['ino']):
+            fail('shared-resolution-cache-root-changed')
+        count, size = 0, 0
+        def failed_walk(_error):
+            fail('shared-resolution-cache-unreadable')
+        for _, directories, files, directory_fd in os.fwalk('.', dir_fd=fd, follow_symlinks=False, onerror=failed_walk):
+            for name in directories + files:
+                info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                count += 1
+                if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                    fail('shared-resolution-cache-unsafe-entry')
+                if stat.S_ISREG(info.st_mode):
+                    size += info.st_size
+                    if info.st_nlink != 1:
+                        fail('shared-resolution-cache-hardlink')
+                if count > MAX_FILES or size > MAX_BYTES:
+                    fail('shared-resolution-cache-budget-exceeded')
+        if root_security() != pinned:
+            fail('shared-resolution-cache-root-changed')
+    finally:
+        os.close(fd)
+
+
+def shared_ref_advertisement_changed(common, expected, observed):
+    """Only info/refs is generated data; every sibling remains a control.
+
+    Local recovery plumbing does not consume this dumb-transport advertisement
+    and never rewrites it. Its original bytes/provenance remain in the exact
+    archive; atomic Git regeneration may replace the live file and provenance.
+    """
+    old, current = ({row['path']: row for row in rows} for rows in (expected, observed))
+    if old.keys() != current.keys() or not {'', 'refs'} <= old.keys():
+        return False
+    if old['']['kind'] != 'directory' or {k: v for k, v in old[''].items() if k != 'mtimeNs'} != {
+            k: v for k, v in current[''].items() if k != 'mtimeNs'}:
+        return False
+    before, after = old['refs'], current['refs']
+    variable = {'bytes', 'sha256', 'mtimeNs', 'filesystemIdentity', 'xattrs'}
+    if (before['kind'] != 'file' or after['kind'] != 'file'
+            or 'hardlinkGroup' in before or 'hardlinkGroup' in after
+            or max(before['bytes'], after['bytes']) > 16 * 1024 ** 2
+            or {k: v for k, v in before.items() if k not in variable} != {
+                k: v for k, v in after.items() if k not in variable}
+            or {k: v for k, v in before['xattrs'].items() if k != 'com.apple.provenance'} != {
+                k: v for k, v in after['xattrs'].items() if k != 'com.apple.provenance'}):
+        return False
+    if any(old[name] != current[name] for name in old.keys() - {'', 'refs'}):
+        return False
+    if manifest(common / 'info', True) != observed:
+        fail('shared-ref-advertisement-observation-changed')
+    return True
+
+
+def verify_common_metadata(saved, mutable_shared, root=None):
     facts = saved['facts']
     common = safe_path(facts['commonGitDir'])
     check_admin(common, common=True)
     if identity(common) != facts['identity']['common']:
         fail('common-store-incarnation-changed')
     for name, expected in facts['sources']['common'].items():
-        if name not in mutable_shared and manifest(common / name, True) != expected:
-            fail('common-store-changed:' + name)
+        if name not in mutable_shared:
+            if name == 'rr-cache' and mutable_shared:
+                verify_live_resolution_cache(common / name, expected)
+                continue
+            observed = manifest(common / name, True)
+            if observed != expected and not (mutable_shared and (
+                    (name == 'config' and unrelated_tracking_changes(root, saved, common, expected, observed))
+                    or (name == 'info' and shared_ref_advertisement_changed(common, expected, observed)))):
+                fail('common-store-changed:' + name)
     if sorted(p.name for p in common.iterdir() if p.name in COMMON_PARTS and p.name not in mutable_shared) != sorted(
             name for name in facts['sources']['common'] if name not in mutable_shared):
         fail('common-store-layout-changed')
@@ -1240,7 +1406,7 @@ def verify_live_object_closure(root, common):
 
 
 def verify_live_common(root, saved, restoring):
-    common = verify_common_metadata(saved, {'objects', 'refs', 'logs', 'packed-refs'} if restoring else set())
+    common = verify_common_metadata(saved, {'objects', 'refs', 'logs', 'packed-refs'} if restoring else set(), root)
     if restoring:
         # Other branches may legitimately advance after quarantine. Rollback
         # never rewrites shared refs or objects: prove the original private index
@@ -1306,19 +1472,8 @@ def require_no_packed_ref(common, ref, oid_length):
             fail('deleted-branch-packed-refs-changed')
 
 
-def verify_deleted_parent(saved, request):
-    facts = saved['facts']
-    receipt = request.get('confirmedDeletion')
-    # The service derives this binding only from its validated durable receipt,
-    # never from ref absence or a deletion intent. This command writes no refs.
-    if (not isinstance(receipt, dict) or set(receipt) != {'journalDigest', 'branch', 'head', 'phase'}
-            or not isinstance(receipt['journalDigest'], str)
-            or not re.fullmatch(r'[0-9a-f]{64}', receipt['journalDigest'])
-            or receipt['branch'] != facts['release']['branch']
-            or receipt['head'] != facts['parent']['head']
-            or receipt['phase'] not in ('branch-retired', 'retired')):
-        fail('quarantine-resumption-confirmed-deletion-required')
-    ref = 'refs/heads/' + facts['release']['branch']
+def require_absent_local_ref(facts, ref):
+    """Prove absence independently of Git omitting broken loose/packed refs."""
     def require_no_loose_ref():
         current = safe_path(facts['commonGitDir'])
         if identity(current) != facts['identity']['common']:
@@ -1349,6 +1504,21 @@ def verify_deleted_parent(saved, request):
     require_no_loose_ref()
 
 
+def verify_deleted_parent(saved, request):
+    facts = saved['facts']
+    receipt = request.get('confirmedDeletion')
+    # The service derives this binding only from its validated durable receipt,
+    # never from ref absence or a deletion intent. This command writes no refs.
+    if (not isinstance(receipt, dict) or set(receipt) != {'journalDigest', 'branch', 'head', 'phase'}
+            or not isinstance(receipt['journalDigest'], str)
+            or not re.fullmatch(r'[0-9a-f]{64}', receipt['journalDigest'])
+            or receipt['branch'] != facts['release']['branch']
+            or receipt['head'] != facts['parent']['head']
+            or receipt['phase'] not in ('branch-retired', 'retired')):
+        fail('quarantine-resumption-confirmed-deletion-required')
+    require_absent_local_ref(facts, 'refs/heads/' + facts['release']['branch'])
+
+
 def verify_deleted_branch(request):
     if not re.fullmatch(r'[0-9a-f]{64}', request.get('manifestSha256', '')):
         fail('deleted-branch-manifest-proof-required')
@@ -1374,7 +1544,7 @@ def quarantine_observation(request, retired=False):
         verify_deleted_parent(saved, request)
         # Receipt replay restores nothing. The strict standalone archive proof
         # above retains closure even after legitimate live-store garbage collection.
-        verify_common_metadata(saved, {'objects', 'refs', 'logs', 'packed-refs'})
+        verify_common_metadata(saved, {'objects', 'refs', 'logs', 'packed-refs'}, root)
     else:
         verify_live_common(root, saved, restoring=True)
     if original_sources(root, saved['facts']) != (located, sources):

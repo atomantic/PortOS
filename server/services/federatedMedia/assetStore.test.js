@@ -84,18 +84,29 @@ const plantSparse = (callerId, tag, sizeBytes, ageMs = 0) => {
 
 describe('federated media asset store', () => {
   describe('storage quota', () => {
+    // Each real upload re-scans the whole inbox and fsyncs a temp+rename write,
+    // so filling the cap with ~64 of them is quadratic file-system work that
+    // blew the 30s test deadline on Windows CI (#12701). Stage the bulk as
+    // count-only placeholders (what the quota scan reads is name + size) and
+    // let the last slot, the refusal and the replay go through the real path.
+    const fillCount = (callerId, count) => {
+      for (let i = 0; i < count; i += 1) plantSparse(callerId, `fill${i}`, 1);
+    };
+
     it('refuses a caller beyond the per-caller count with 429, but still lets another caller upload and a replay refresh', async () => {
-      for (let i = 0; i < FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT; i += 1) await upload('peer-a', distinctPng(i));
+      fillCount('peer-a', FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT - 1);
+      await upload('peer-a', distinctPng(0));
       await expect(upload('peer-a', distinctPng(9999))).rejects.toMatchObject({ status: 429, code: 'MEDIA_PROVIDER_ASSET_QUOTA' });
       await expect(upload('peer-a', distinctPng(0))).resolves.toMatchObject({ sizeBytes: distinctPng(0).length });
       await expect(upload('peer-b', distinctPng(9999))).resolves.toMatchObject({ assetId: expect.any(String) });
     });
 
     it('does not let concurrent uploads jointly overshoot the per-caller count', async () => {
+      fillCount('peer-a', FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT - 8);
       const results = await Promise.allSettled(
-        Array.from({ length: FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT + 8 }, (_, i) => upload('peer-a', distinctPng(i))),
+        Array.from({ length: 16 }, (_, i) => upload('peer-a', distinctPng(i))),
       );
-      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(FEDERATED_MEDIA_ASSET_CALLER_MAX_COUNT);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(8);
       expect(results.filter((r) => r.status === 'rejected' && r.reason.code === 'MEDIA_PROVIDER_ASSET_QUOTA')).toHaveLength(8);
     });
 

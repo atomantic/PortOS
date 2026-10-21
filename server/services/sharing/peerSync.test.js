@@ -1688,12 +1688,22 @@ describe('peerSync', () => {
         vi.mocked(peerFetch).mockClear();
 
         let resolveFetch = () => {};
-        vi.mocked(peerFetch).mockImplementation(() => new Promise((resolve) => {
-          resolveFetch = () => resolve(settled());
-        }));
+        let markFetchEntered = () => {};
+        const fetchEntered = new Promise((resolve) => { markFetchEntered = resolve; });
+        vi.mocked(peerFetch).mockImplementation(() => {
+          markFetchEntered();
+          return new Promise((resolve) => {
+            resolveFetch = () => resolve(settled());
+          });
+        });
         const walk = retryPendingPushesForPeer('peer-a');
-        const tick = () => new Promise((resolve) => { setImmediate(resolve); });
-        for (let i = 0; i < 50 && vi.mocked(peerFetch).mock.calls.length === 0; i += 1) await tick();
+        // The walk reads subscriptions from disk before calling the peer, so wait on the walk
+        // itself rather than a fixed turn count; a walk that settles without reaching peerFetch fails here.
+        const walkEnded = walk.then((result) => ({ result }), (error) => ({ error }));
+        const outcome = await Promise.race([fetchEntered.then(() => 'entered'), walkEnded]);
+        if (outcome !== 'entered') {
+          throw new Error(`retry walk settled without calling peerFetch: ${JSON.stringify(outcome.error?.message ?? outcome.result)}`);
+        }
         expect(peerFetch).toHaveBeenCalledTimes(1);
         expect(await retryPendingPushesForPeer('peer-a')).toEqual({ walked: 0, pushed: 0, skipped: 'in-flight' });
 
