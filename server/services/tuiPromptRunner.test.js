@@ -1396,6 +1396,38 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('presses Enter again when the paste chip sits unsubmitted, instead of idle-completing on it', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-unsubmitted', provider, prompt: 'complete this task', workspacePath: TEST_WORKSPACE, timeout: 600000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('\x1b[?2004h');
+      await vi.advanceTimersByTimeAsync(300);
+      pty.emitData('❯ [Pasted text #1 +113 lines]');
+      await vi.advanceTimersByTimeAsync(3000);
+      const enters = () => pty.write.mock.calls.filter(([keys]) => keys === '\r').length;
+      const submitted = enters();
+      expect(submitted).toBeGreaterThan(0);
+
+      // Every submit Enter was ignored: nothing repaints past the chip.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(runnerMocks.finalizeRunRecord, 'a quiet composer holding the chip is not an answer').not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(enters()).toBe(submitted + 1);
+
+      pty.emitData('\n✻ Thinking… (2s · esc to interrupt)');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(enters(), 'a started turn gets no further Enters').toBe(submitted + 1);
+      pty.emitExit({ exitCode: 0 });
+      await flushAsync();
+      await promise;
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-unsubmitted' }));
+    });
+
     it('falls back on Claude session-limit chrome when low-priority is not enabled', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
       const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };

@@ -76,8 +76,10 @@ import {
   OPENCODE_INPUT_READY_PATTERN,
   detectMissingTuiBinary,
   createSelfClearingSignalGate,
+  createPromptSubmissionGate,
   screenShowsInFlightChrome,
   SUBMIT_KEY,
+  UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS,
 } from '../lib/tuiHandshake.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { isCodexCommand } from '../lib/codex.js';
@@ -92,6 +94,7 @@ import { killProcessTree } from '../lib/bufferedSpawn.js';
 //     to stop talking)
 const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_ONE_SHOT_IDLE_MS = 8000;
+const UNSUBMITTED_PROMPT_POLL_MS = 1000;
 // Enough stripped screen to hold a status line plus the composer and footer
 // painted beneath it; see screenShowsInFlightChrome.
 const IN_FLIGHT_SCREEN_TAIL_CHARS = 4096;
@@ -281,6 +284,9 @@ ${prompt}`;
   // STRIP first so a pasted RAW transcript's cursor-positioned marker (counts as 0
   // unstripped) is counted the same way the stripped post-paste buffer is.
   const promptMarkerCount = countPasteMarkers(stripAnsi(wrappedPrompt));
+  // The paste chip can render and every submit Enter still be ignored, leaving
+  // the prompt sitting in the composer (#12769). Shared with the agent path.
+  const promptGate = createPromptSubmissionGate({ promptMarkerCount });
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +
   // CLAUDECODE strip) — see buildCliChildEnv. The PWD pin matters here because
@@ -482,6 +488,7 @@ ${prompt}`;
   let readyTimer = null;
   let pasteEnterTimer = null;
   let submitEnterTimer = null;
+  let unsubmittedPromptTimer = null;
   let idleWatchTimer = null;
   let responseFileWatchTimer = null;
   let hardTimeoutTimer = null;
@@ -509,6 +516,7 @@ ${prompt}`;
     if (readyTimer) { clearInterval(readyTimer); readyTimer = null; }
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
+    if (unsubmittedPromptTimer) { clearInterval(unsubmittedPromptTimer); unsubmittedPromptTimer = null; }
     if (idleWatchTimer) { clearInterval(idleWatchTimer); idleWatchTimer = null; }
     if (responseFileWatchTimer) { clearInterval(responseFileWatchTimer); responseFileWatchTimer = null; }
     if (hardTimeoutTimer) { clearTimeout(hardTimeoutTimer); hardTimeoutTimer = null; }
@@ -670,6 +678,7 @@ ${prompt}`;
       // survive only in raw output, while startup dialog text is ANSI-stripped.
       inputReady.observe(text, stripped);
       if (stripped) {
+        promptGate.observe(stripped, now);
         if (postPasteStripped !== null) postPasteStripped += stripped;
         outputBuffer += stripped;
         if (outputBuffer.length > OUTPUT_BUFFER_HEADROOM) {
@@ -811,6 +820,9 @@ ${prompt}`;
           // either while the mode command is being processed or after the task
           // has been re-submitted.
           if (lowPriorityCommandAttempted) return;
+          // Quiet with the paste chip still in the composer is a prompt that was
+          // never submitted, not an answer; unsubmittedPromptTimer owes it an Enter.
+          if (promptGate.awaitingSubmit) return;
           const idle = Date.now() - lastOutputAt;
           if (idle >= idleThresholdMs) {
             if (requiresResponseFileForIdleCompletion) return;
@@ -949,6 +961,9 @@ ${prompt}`;
           || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
           clearInterval(pasteEnterTimer);
           pasteEnterTimer = null;
+          // The commit buffer holds the chip: a TUI that ignores the Enter may
+          // never repaint it.
+          promptGate.noteInput(Date.now(), postPasteStripped || '');
           postPasteStripped = null;
           // Submit with repeated Enters — a single `\r` can be swallowed while
           // the TUI is still reflowing a large paste, stranding the prompt
@@ -959,6 +974,20 @@ ${prompt}`;
             () => finalized
           );
           promptSubmittedAt = Date.now();
+          unsubmittedPromptTimer = setInterval(() => {
+            if (finalized || promptGate.worked) {
+              clearInterval(unsubmittedPromptTimer);
+              unsubmittedPromptTimer = null;
+              return;
+            }
+            const now = Date.now();
+            const enter = promptGate.takeEnter(now, lastOutputAt);
+            if (!enter) return;
+            try {
+              ptyProcess.write(SUBMIT_KEY);
+              console.log(`⏎ TUI run ${runId} prompt still unsubmitted in the composer — pressed Enter (attempt ${enter}/${UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS})`);
+            } catch { /* PTY may have already exited */ }
+          }, UNSUBMITTED_PROMPT_POLL_MS);
         }
       }, PASTE_MARKER_POLL_MS);
     };
