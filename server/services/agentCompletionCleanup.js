@@ -370,7 +370,9 @@ async function runCompletionCleanupSteps(context, { onStepError }) {
   // spawners run this from a `finally`, so they reach here on exactly that
   // path. An unreadable record counts as not-over: leaving the file for the
   // stale sweep is the recoverable direction, destroying a deliverable is not.
-  if (context.agentState?.status === 'completed') {
+  // `failed` is an outcome too: left behind in a preserved worktree, the sentinel
+  // reads as uncommitted work and blocks every later merged-worktree cleanup.
+  if (['completed', 'failed'].includes(context.agentState?.status)) {
     await removeCompletionSentinel(context)
       .catch(err => emitLog('warn', `Completion sentinel removal failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId }));
   }

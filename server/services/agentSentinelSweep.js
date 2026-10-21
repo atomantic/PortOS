@@ -35,6 +35,7 @@ import { readdir, stat } from 'fs/promises';
 import { join } from 'path';
 
 import { doneSentinelAgentId } from '../lib/agentSentinel.js';
+import { execGit } from '../lib/execGit.js';
 import { HOUR, rmGuarded } from '../lib/fileUtils.js';
 
 /** How long a sentinel must have sat untouched before it counts as abandoned. */
@@ -78,4 +79,25 @@ export async function sweepStaleDoneSentinels(dirs, protectedAgentIds) {
   }
 
   return removed;
+}
+
+/**
+ * Every checkout of the given repos: the repo itself plus its linked worktrees.
+ * A sentinel stranded in a preserved agent worktree reads as uncommitted work, so
+ * it blocks that worktree's merged-tree cleanup until something deletes it; the
+ * sweep above only helps if it is pointed at those directories.
+ *
+ * @param {string[]} repoPaths
+ * @returns {Promise<string[]>} unique checkout paths; an unreadable repo contributes itself only
+ */
+export async function checkoutDirsOf(repoPaths) {
+  const dirs = new Set();
+  for (const repo of new Set((repoPaths || []).filter(p => typeof p === 'string' && p))) {
+    dirs.add(repo);
+    const listed = await execGit(['worktree', 'list', '--porcelain'], repo).catch(() => null);
+    for (const line of (listed?.stdout || '').split(/\r?\n/)) {
+      if (line.startsWith('worktree ')) dirs.add(line.slice(9));
+    }
+  }
+  return [...dirs];
 }
