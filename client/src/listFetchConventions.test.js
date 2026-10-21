@@ -56,7 +56,6 @@ export const LIST_COLLAPSE = /\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{?\s*set[A-Z]\
 const KNOWN = Object.freeze({
   'src/components/FeatureProviderPicker.jsx': 1,
   'src/components/QuickTaskWidget.jsx': 2,
-  'src/components/apps/EditAppDrawer.jsx': 2,
   'src/components/apps/JiraConfigPanel.jsx': 1,
   'src/components/brain/IdeaLoomLists.jsx': 1,
   'src/components/brain/YoutubeIngestSettings.jsx': 1,
