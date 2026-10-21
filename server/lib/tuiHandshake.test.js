@@ -2133,9 +2133,17 @@ describe('createPromptSubmissionGate', () => {
     gate.noteInput(0, CHIP);
     gate.observe('echo of our own keystroke', 29_000);
     expect(gate.worked).toBe(false);
-    gate.observe('• Working (31s • esc to interrupt)', 31_000);
+    gate.observe('Reading the repository…', 31_000);
     expect(gate.worked).toBe(true);
     expect(settled(gate, 31_000)).toBe(0);
+  });
+
+  it('treats in-flight chrome as a started turn, however soon it went quiet', () => {
+    const gate = createPromptSubmissionGate({ settleMs: 20_000, workEvidenceMs: 30_000 });
+    gate.noteInput(0, CHIP);
+    gate.observe('✻ Thinking… (4s · ↑ 1.2k tokens · esc to interrupt)', 4_000);
+    expect(gate.worked).toBe(true);
+    expect(settled(gate, 4_000)).toBe(0);
   });
 });
 
