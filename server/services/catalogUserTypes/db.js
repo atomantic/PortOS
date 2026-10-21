@@ -16,6 +16,7 @@
 
 import { query, withTransaction } from '../../lib/db.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 function rowToType(row) {
   // `data` already holds id/label/primaryContentKey/fields/updatedAt/deletedAt;
@@ -86,7 +87,7 @@ async function applyWrite(exec, list) {
          data = EXCLUDED.data,
          updated_at = EXCLUDED.updated_at,
          deleted_at = EXCLUDED.deleted_at`,
-      [t.id, JSON.stringify(t), updatedAt, deletedAt],
+      [t.id, toPgJson(t), updatedAt, deletedAt],
     );
   }
   // Prune rows that left the desired slice. With keepIds empty the whole

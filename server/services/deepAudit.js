@@ -10,6 +10,7 @@ import { normalizeAuditTaskType, isAuditTaskType } from '../lib/auditCatalog.js'
 import { deepAuditProgress, mergeDeepAuditReport, DEEP_AUDIT_CONTRACT_VERSION } from '../lib/deepAudit.js';
 import { PROMPT_VERSIONS } from './taskPromptDefaults/versions.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 function deepAuditId(task) {
   const meta = task.metadata || {};
@@ -59,11 +60,11 @@ async function mutateLedger(id, initial, mutate) {
   await ensureSchema();
   return withTransaction(async client => {
     if (initial) await client.query(`INSERT INTO deep_audit_ledgers (id, app_id, category, ledger)
-      VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (id) DO NOTHING`, [id, initial.appId, initial.category, JSON.stringify(initial)]);
+      VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (id) DO NOTHING`, [id, initial.appId, initial.category, toPgJson(initial)]);
     const { rows } = await client.query('SELECT ledger FROM deep_audit_ledgers WHERE id=$1 FOR UPDATE', [id]);
     if (!rows.length) throw new Error('Deep audit ledger is unavailable');
     const updated = await mutate(rows[0].ledger);
-    await client.query('UPDATE deep_audit_ledgers SET ledger=$2::jsonb, updated_at=NOW() WHERE id=$1', [id, JSON.stringify(updated)]);
+    await client.query('UPDATE deep_audit_ledgers SET ledger=$2::jsonb, updated_at=NOW() WHERE id=$1', [id, toPgJson(updated)]);
     return updated;
   });
 }

@@ -35,6 +35,7 @@ import {
   imageToRow, videoToRow, compactGalleryRecord, compactSource, compactSourceToRow,
   COMPACT_SOURCE_FIELDS, COMPACT_PREVIEW_KEY, COMPACT_PROMPT_CHARS,
 } from './logic.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 function rowToAsset(row) {
   if (!row) return null;
@@ -57,7 +58,7 @@ export async function upsertAsset(row) {
     `INSERT INTO media_assets (media_key, kind, ref, data, created_at, indexed_at)
      VALUES ($1, $2, $3, $4::jsonb, $5, NOW())
      ${UPSERT_CONFLICT}`,
-    [row.mediaKey, row.kind, row.ref, JSON.stringify(row.data), row.createdAt],
+    [row.mediaKey, row.kind, row.ref, toPgJson(row.data), row.createdAt],
   );
 }
 
@@ -81,7 +82,7 @@ async function upsertAssets(rows, runQuery = query) {
       const b = j * 5;
       // NOW() for indexed_at is a literal, not a param.
       values.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}::jsonb, $${b + 5}, NOW())`);
-      params.push(row.mediaKey, row.kind, row.ref, JSON.stringify(row.data), row.createdAt);
+      params.push(row.mediaKey, row.kind, row.ref, toPgJson(row.data), row.createdAt);
     });
     await runQuery(
       `INSERT INTO media_assets (media_key, kind, ref, data, created_at, indexed_at)
@@ -181,7 +182,7 @@ const rowShape = (compact, projected) => !compact ? data => data
 function assetSource(params, videos, { materialized = false, compact = false } = {}) {
   const data = compact ? `${compactSourceSql('data')} AS data` : 'data';
   if (videos === undefined) return { cte: '', table: 'media_assets', data };
-  params.push(JSON.stringify(videos.map(video => ({ data: compact ? compactSource(video) : video,
+  params.push(toPgJson(videos.map(video => ({ data: compact ? compactSource(video) : video,
     createdAt: Number.isFinite(Date.parse(video.createdAt)) ? new Date(video.createdAt).toISOString() : new Date(0).toISOString() }))));
   return {
     data: 'data',
@@ -305,7 +306,7 @@ export async function collectionCovers(collections, videos) {
     SELECT 'unsorted',
       (SELECT cover FROM unsorted WHERE kind = 'image' OR cover IS NOT NULL ORDER BY created_at DESC, media_key ASC LIMIT 1),
       COUNT(*) FILTER (WHERE kind = 'image'), COUNT(*) FILTER (WHERE kind = 'video')
-    FROM unsorted`, [JSON.stringify(collections), JSON.stringify(videoRows)]);
+    FROM unsorted`, [toPgJson(collections), toPgJson(videoRows)]);
   return result.rows;
 }
 
@@ -316,7 +317,7 @@ export async function visibleImageCollections(collections) {
   const result = await query(`SELECT DISTINCT m.id
     FROM jsonb_to_recordset($1::jsonb) AS m(id text, key text)
     JOIN media_assets a ON a.media_key = m.key
-    WHERE a.kind = 'image' AND COALESCE(a.data->>'hidden', 'false') <> 'true'`, [JSON.stringify(memberships)]);
+    WHERE a.kind = 'image' AND COALESCE(a.data->>'hidden', 'false') <> 'true'`, [toPgJson(memberships)]);
   const populated = new Set(result.rows.map(row => row.id));
   return collections.filter(collection => populated.has(collection.id)).map(({ id, name }) => ({ id, name }));
 }

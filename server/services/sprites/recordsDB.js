@@ -19,6 +19,7 @@ import {
   mergeImportedRecord,
   mirrorTimestamp,
 } from './recordsLogic.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 function rowToRecord(row) {
   return row ? row.data : null;
@@ -41,7 +42,7 @@ async function persist(exec, record) {
       record.id,
       record.kind,
       record.status,
-      JSON.stringify(record),
+      toPgJson(record),
       createdAt,
       mirrorTimestamp(record.updatedAt, createdAt),
       record.deleted === true,

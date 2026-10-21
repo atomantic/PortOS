@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import { z } from 'zod';
 import { peerAdminIntentSchema, peerAdminActionSchema } from '../lib/peerAdminValidation.js';
 import { createPeerExecutionAuthority, executionAuthorityError } from '../lib/peerExecutionAuthority.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const uuid = z.string().uuid().toLowerCase();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -90,7 +91,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
       const { rows: [row] } = await client.query(`INSERT INTO peer_execution_operations
         (operation_id, host_instance_id, peer_instance_id, request_id, fingerprint, binding, execution_epoch, state)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'queued') RETURNING *`,
-      [makeId(), binding.hostInstanceId, binding.peerInstanceId, binding.requestId, fingerprint(binding), JSON.stringify(binding), binding.executionEpoch]);
+      [makeId(), binding.hostInstanceId, binding.peerInstanceId, binding.requestId, fingerprint(binding), toPgJson(binding), binding.executionEpoch]);
       await client.query(`INSERT INTO peer_execution_generation_floors (host_instance_id, peer_instance_id, action, generation)
         VALUES ($1, $2, $3, $4) ON CONFLICT (host_instance_id, peer_instance_id, action)
         DO UPDATE SET generation = GREATEST(peer_execution_generation_floors.generation, EXCLUDED.generation)`,
@@ -113,7 +114,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
       const { rows: [row] } = await client.query(`INSERT INTO peer_execution_operations
         (operation_id, host_instance_id, peer_instance_id, request_id, fingerprint, binding, execution_epoch, state, receipt)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'failed', $8::jsonb) RETURNING *`,
-      [makeId(), binding.hostInstanceId, binding.peerInstanceId, binding.requestId, fingerprint(binding), JSON.stringify(binding), binding.executionEpoch, JSON.stringify(receipt)]);
+      [makeId(), binding.hostInstanceId, binding.peerInstanceId, binding.requestId, fingerprint(binding), toPgJson(binding), binding.executionEpoch, toPgJson(receipt)]);
       authority.requireReady(epoch);
       return fromRow(row);
     });
@@ -173,7 +174,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
       const next = operationSchema.parse({ ...current, state, revision: revision + 1, claim: claim ?? current.claim, receipt });
       const { rows: [updated] } = await client.query(`UPDATE peer_execution_operations
         SET state = $2, revision = $3, claim = $4::jsonb, receipt = $5::jsonb, updated_at = NOW()
-        WHERE operation_id = $1 RETURNING *`, [id, next.state, next.revision, JSON.stringify(next.claim), JSON.stringify(next.receipt)]);
+        WHERE operation_id = $1 RETURNING *`, [id, next.state, next.revision, toPgJson(next.claim), toPgJson(next.receipt)]);
       authority.requireReady(epoch);
       return fromRow(updated);
     });
@@ -322,7 +323,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
         ON CONFLICT (operation_id) DO UPDATE SET state = EXCLUDED.state,
         revision = GREATEST(peer_execution_operations.revision, EXCLUDED.revision), claim = EXCLUDED.claim, receipt = EXCLUDED.receipt, updated_at = NOW()`,
       [saved.operationId, saved.binding.hostInstanceId, saved.binding.peerInstanceId, saved.binding.requestId, saved.fingerprint,
-        JSON.stringify(saved.binding), saved.binding.executionEpoch, state, saved.revision + 1, JSON.stringify(owner), JSON.stringify(receipt)]);
+        toPgJson(saved.binding), saved.binding.executionEpoch, state, saved.revision + 1, toPgJson(owner), toPgJson(receipt)]);
       });
       if (replayed.digest !== proof.digest || replayed.count !== proof.count)
         throw executionAuthorityError('Execution recovery evidence changed during reconciliation.');

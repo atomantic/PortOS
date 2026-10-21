@@ -28,6 +28,7 @@ import {
   rowToMedia,
   rowToTag,
 } from './shared.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 // One page of a table's feed: rows whose committed feed position is past the
 // peer's cursor, in position order. `syncSequence` on each item carries the
@@ -122,14 +123,14 @@ export async function upsertMediaFromPeer(media) {
   const metadataColumn = hasMetadata ? ', metadata' : '';
   const metadataPlaceholder = hasMetadata ? `, $${hasTombstoneFields ? 10 : 7}` : '';
   const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
-  const metadataParam = hasMetadata ? [JSON.stringify(media.metadata || {})] : [];
+  const metadataParam = hasMetadata ? [toPgJson(media.metadata || {})] : [];
   // Casting reference library (catalog v12): absent = no opinion, same as metadata.
   const hasLibrary = Object.prototype.hasOwnProperty.call(media, 'library')
     && media.library && typeof media.library === 'object' && !Array.isArray(media.library);
   const libraryColumn = hasLibrary ? ', library' : '';
   const libraryPlaceholder = hasLibrary ? `, $${(hasTombstoneFields ? 10 : 7) + (hasMetadata ? 1 : 0)}` : '';
   const libraryUpdate = hasLibrary ? ', library = EXCLUDED.library' : '';
-  const libraryParam = hasLibrary ? [JSON.stringify(normalizeLibrary(media.library))] : [];
+  const libraryParam = hasLibrary ? [toPgJson(normalizeLibrary(media.library))] : [];
   if (hasTombstoneFields) {
     // #8347 revival guard — see upsertRelationFromPeer for the rationale.
     // `updated_at` also moves on a role/caption/metadata-only edit (the
@@ -267,7 +268,7 @@ export async function upsertScrapFromPeer(scrap) {
       scrap.title || null,
       scrap.rawText,
       scrap.sourceKind || 'paste',
-      JSON.stringify(scrap.metadata || {}),
+      toPgJson(scrap.metadata || {}),
       scrap.embedding ? arrayToPgvector(scrap.embedding) : null,
       scrap.embeddingModel || null,
       scrap.originInstanceId || null,
@@ -319,7 +320,7 @@ export async function upsertIngredientFromPeer(ing) {
       ing.id,
       ing.type,
       ing.name,
-      JSON.stringify(ing.payload || {}),
+      toPgJson(ing.payload || {}),
       ing.tags || [],
       ing.embedding ? arrayToPgvector(ing.embedding) : null,
       ing.embeddingModel || null,
@@ -340,7 +341,7 @@ export async function upsertSourceFromPeer(src) {
     `INSERT INTO catalog_ingredient_sources (ingredient_id, scrap_id, span, extracted_at)
      VALUES ($1, $2, $3::jsonb, $4)
      ON CONFLICT (ingredient_id, scrap_id) DO UPDATE SET span = EXCLUDED.span`,
-    [src.ingredientId, src.scrapId, src.span ? JSON.stringify(src.span) : null, src.extractedAt],
+    [src.ingredientId, src.scrapId, src.span ? toPgJson(src.span) : null, src.extractedAt],
   );
   });
 }
@@ -422,7 +423,7 @@ async function deferParentApply(kind, row, parentId, updatedAt) {
        source_updated_at = EXCLUDED.source_updated_at,
        payload = EXCLUDED.payload
      WHERE EXCLUDED.source_updated_at > catalog_pending_applies.source_updated_at`,
-    [kind, row.id, parentId, updatedAt, JSON.stringify(row)],
+    [kind, row.id, parentId, updatedAt, toPgJson(row)],
   );
 }
 
@@ -453,7 +454,7 @@ export async function drainPendingCatalogApplies() {
         const removed = await query(
           `DELETE FROM catalog_pending_applies
            WHERE kind = $1 AND id = $2 AND payload = $3::jsonb`,
-          [kind, pending.id, JSON.stringify(pending.payload)],
+          [kind, pending.id, toPgJson(pending.payload)],
         );
         progressed ||= removed.rowCount > 0;
       }

@@ -1,4 +1,5 @@
 import { query, withTransaction } from '../lib/db.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 /**
  * Postgres adapter for the provider connection graph — `ai_connections`,
@@ -97,8 +98,8 @@ const upsertConnection = (client, connection) => client.query(
      credential_via = COALESCE($12, ai_connections.credential_via),
      updated_at = NOW()`,
   [connection.id, connection.revision ?? 1, connection.kind, connection.label ?? '',
-    JSON.stringify(connection.transports || {}), JSON.stringify(connection.credentials || {}),
-    JSON.stringify(connection.catalog || { state: 'unknown', models: [] }),
+    toPgJson(connection.transports || {}), toPgJson(connection.credentials || {}),
+    toPgJson(connection.catalog || { state: 'unknown', models: [] }),
     connection.slug ?? null, connection.definitionId ?? null, connection.plan ?? null,
     typeof connection.enabled === 'boolean' ? connection.enabled : null, connection.credentialVia ?? null],
 );
@@ -114,7 +115,7 @@ const upsertBinding = (client, binding) => client.query(
      enabled = EXCLUDED.enabled, selected_models = EXCLUDED.selected_models, updated_at = NOW()`,
   [binding.id, binding.revision ?? 1, binding.connectionId, binding.harnessId ?? null,
     binding.variantKey, binding.label ?? '', binding.enabled === true,
-    JSON.stringify(binding.selectedModels || [])],
+    toPgJson(binding.selectedModels || [])],
 );
 
 // `model_alias_overrides` is set on INSERT and deliberately absent from the
@@ -130,10 +131,10 @@ const upsertRoute = (client, route) => client.query(
      binding_id = EXCLUDED.binding_id, mode = EXCLUDED.mode, model_map = EXCLUDED.model_map,
      projected = EXCLUDED.projected, pending = EXCLUDED.pending,
      pending_revision = EXCLUDED.pending_revision, updated_at = NOW()`,
-  [route.providerId, route.bindingId, route.mode, JSON.stringify(route.modelMap || {}),
-    JSON.stringify(route.modelAliasOverrides || {}),
-    JSON.stringify(route.projected || {}),
-    route.pending == null ? null : JSON.stringify(route.pending),
+  [route.providerId, route.bindingId, route.mode, toPgJson(route.modelMap || {}),
+    toPgJson(route.modelAliasOverrides || {}),
+    toPgJson(route.projected || {}),
+    route.pending == null ? null : toPgJson(route.pending),
     route.pendingRevision ?? null],
 );
 
@@ -191,7 +192,7 @@ export async function applyReconciliation(plan) {
     for (const { providerId, owned } of plan.snapshots) {
       await client.query(
         'UPDATE ai_route_bindings SET projected = $1, updated_at = NOW() WHERE provider_id = $2',
-        [JSON.stringify(owned), providerId],
+        [toPgJson(owned), providerId],
       );
     }
 
@@ -222,7 +223,7 @@ export async function commitPendingProjection(projections) {
       const { rows } = await client.query(
         `UPDATE ai_route_bindings SET pending = $1, updated_at = NOW() WHERE provider_id = $2
            RETURNING binding_id`,
-        [JSON.stringify(owned), providerId],
+        [toPgJson(owned), providerId],
       );
       if (rows.length === 0) continue;
       const { rows: bumped } = await client.query(
@@ -325,8 +326,8 @@ export async function saveConnectionSettings({ id, label, transports, credential
             revision = revision + 1, updated_at = NOW()
       WHERE id = $1
       RETURNING revision`,
-    [id, label ?? '', JSON.stringify(transports || {}), JSON.stringify(credentials || {}),
-      JSON.stringify(catalog || { state: 'unknown', models: [] }),
+    [id, label ?? '', toPgJson(transports || {}), toPgJson(credentials || {}),
+      toPgJson(catalog || { state: 'unknown', models: [] }),
       plan ?? null, typeof enabled === 'boolean' ? enabled : null, credentialVia ?? null],
   );
   return rows[0]?.revision ?? null;
@@ -366,7 +367,7 @@ export async function saveBindingSettings({ id, label, selectedModels }) {
         SET label = $2, selected_models = $3, revision = revision + 1, updated_at = NOW()
       WHERE id = $1
       RETURNING revision`,
-    [id, label ?? '', JSON.stringify(selectedModels || [])],
+    [id, label ?? '', toPgJson(selectedModels || [])],
   );
   return rows[0]?.revision ?? null;
 }
@@ -374,7 +375,7 @@ export async function saveBindingSettings({ id, label, selectedModels }) {
 /** Record the canonical→executable model aliases a refresh observed on a route. */
 export async function saveRouteModelMap(providerId, modelMap) {
   await query('UPDATE ai_route_bindings SET model_map = $2, updated_at = NOW() WHERE provider_id = $1',
-    [providerId, JSON.stringify(modelMap || {})]);
+    [providerId, toPgJson(modelMap || {})]);
 }
 
 /**
@@ -388,6 +389,6 @@ export async function saveRouteModelMap(providerId, modelMap) {
 export async function saveRouteModelAliases(providerId, overrides) {
   await query(
     'UPDATE ai_route_bindings SET model_alias_overrides = $2, updated_at = NOW() WHERE provider_id = $1',
-    [providerId, JSON.stringify(overrides || {})],
+    [providerId, toPgJson(overrides || {})],
   );
 }

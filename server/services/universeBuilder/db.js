@@ -23,6 +23,7 @@
 import { query, withTransaction } from '../../lib/db.js';
 import { LOGLINE_MAX } from '../../lib/universeBibleLimits.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 // Keep the runs[] log bounded to the most-recent 200 — matches the file
 // backend's cap (universeBuilder.recordRun) so behavior is identical.
@@ -219,7 +220,7 @@ export async function writeRaw(id, record) {
     [
       id,
       typeof record?.name === 'string' ? record.name : '',
-      JSON.stringify(record),
+      toPgJson(record),
       schemaVersion,
       record?.ephemeral === true,
       createdAt,
@@ -264,7 +265,7 @@ export async function appendRun(run) {
         run.id,
         run.universeId,
         typeof run.collectionId === 'string' ? run.collectionId : null,
-        JSON.stringify(run),
+        toPgJson(run),
         mirrorTimestamp(run.createdAt, new Date().toISOString()),
       ],
     );

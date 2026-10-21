@@ -17,6 +17,7 @@
 import { query } from '../../../lib/db.js';
 import { mirrorTimestamp } from '../../../lib/pgTimestamp.js';
 import { PIPELINE_STAGE_IDS } from '../../../lib/pipelineStages.js';
+import { toPgJson } from '../../../lib/pgJson.js';
 
 // Only trusted, closed stage IDs form SQL paths. PostgreSQL removes history
 // before serializing JSONB for Node; every other field remains lossless.
@@ -124,7 +125,7 @@ export async function writeRaw(id, record) {
       typeof record?.seasonId === 'string' && record.seasonId ? record.seasonId : null,
       Number.isFinite(record?.number) ? Math.floor(record.number) : null,
       typeof record?.status === 'string' && record.status ? record.status.slice(0, 32) : null,
-      JSON.stringify(record),
+      toPgJson(record),
       record?.ephemeral === true,
       createdAt,
       mirrorTimestamp(record?.updatedAt, createdAt),

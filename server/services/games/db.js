@@ -5,6 +5,7 @@
 
 import { query } from '../../lib/db.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 export async function readRaw(id) {
   const { rows } = await query('SELECT data FROM games WHERE id = $1', [id]);
@@ -28,7 +29,7 @@ export async function writeRaw(id, record) {
        name = EXCLUDED.name,
        data = EXCLUDED.data,
        updated_at = EXCLUDED.updated_at`,
-    [id, record.appId, record.name, JSON.stringify(record), createdAt, updatedAt],
+    [id, record.appId, record.name, toPgJson(record), createdAt, updatedAt],
   );
   return record;
 }

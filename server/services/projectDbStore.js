@@ -10,6 +10,7 @@ import {
   deleteSyncBaseHash,
   withBaseHashFlushBatch,
 } from '../lib/conflictJournal.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel, logic }) {
   if (!/^[a-z][a-z0-9_]*$/.test(table)) throw new Error(`Invalid project table: ${table}`);
@@ -43,7 +44,7 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
       [
         prepared.id,
         logic.mirrorStatus(prepared.status),
-        JSON.stringify(prepared),
+        toPgJson(prepared),
         createdAt,
         logic.mirrorTimestamp(prepared.updatedAt, createdAt),
         prepared.deleted === true,

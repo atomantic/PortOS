@@ -10,6 +10,7 @@ import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
 import { chunkRawText } from '../../lib/catalogChunking.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import { newScrapId, rowToScrap } from './shared.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 // `{ client }` is optional — when supplied, the INSERT runs on the caller's
 // transaction client so a bulk-import batch can commit-or-rollback its scraps
@@ -31,7 +32,7 @@ export async function createScrap({ id: explicitId, title, rawText, sourceKind =
       title || null,
       rawText,
       sourceKind,
-      JSON.stringify(metadata || {}),
+      toPgJson(metadata || {}),
       embedding ? arrayToPgvector(embedding) : null,
       embeddingModel,
       originInstanceId,
@@ -141,7 +142,7 @@ export async function updateScrap(id, patch = {}) {
     if (patch[jsField] === undefined) continue;
     if (jsField === 'metadata') {
       fields.push(`${dbField} = $${idx++}::jsonb`);
-      params.push(JSON.stringify(patch.metadata || {}));
+      params.push(toPgJson(patch.metadata || {}));
     } else if (jsField === 'embedding') {
       fields.push(`${dbField} = $${idx++}`);
       params.push(patch.embedding ? arrayToPgvector(patch.embedding) : null);

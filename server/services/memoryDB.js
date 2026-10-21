@@ -17,6 +17,7 @@ import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
 import { getInstanceId } from './instanceIdentity.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
 
@@ -173,7 +174,7 @@ export async function getBrainMemoryLinks(legacyMap = {}, { readOnly = false, re
         SELECT legacy.key, m.id FROM jsonb_each_text($1::jsonb) legacy
         JOIN memories m ON m.id::text = legacy.value AND m.source_app_id = 'brain'
         ORDER BY legacy.key
-        ON CONFLICT (bridge_key) DO NOTHING`, [JSON.stringify(legacyMap)]);
+        ON CONFLICT (bridge_key) DO NOTHING`, [toPgJson(legacyMap)]);
     }
     const result = await client.query(`
       SELECT l.bridge_key, l.memory_id FROM brain_memory_links l
@@ -182,7 +183,7 @@ export async function getBrainMemoryLinks(legacyMap = {}, { readOnly = false, re
       SELECT legacy.key, m.id FROM jsonb_each_text($1::jsonb) legacy
       JOIN memories m ON m.id::text = legacy.value AND m.source_app_id = 'brain'
       WHERE NOT EXISTS (SELECT 1 FROM brain_memory_links l WHERE l.bridge_key = legacy.key)`,
-    [JSON.stringify(legacyMap)]);
+    [toPgJson(legacyMap)]);
     return Object.fromEntries(result.rows.map(row => [row.bridge_key, row.memory_id]));
   });
 }

@@ -16,6 +16,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { writeFileGuarded } from '../../lib/fileUtils.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 export const VOICE_PROFILE_ENGINES = new Set(['kokoro', 'piper', 'qwen3-tts', 'auk']);
 export const VOICE_PROFILE_KINDS = new Set(['preset', 'designed', 'cloned', 'fine-tuned']);
@@ -203,7 +204,7 @@ export const persistVoiceProfile = async (profile, execute = query) => {
       profile.binding.universeId,
       profile.binding.characterId,
       profile.approval.status,
-      JSON.stringify(profile),
+      toPgJson(profile),
       profile.createdAt,
       profile.updatedAt,
     ],
@@ -597,7 +598,7 @@ export async function saveProfileBenchmark(profile, benchmark, { interactive } =
        updated_at = $5
      WHERE id = $1 AND (data->>'version')::int = $3
      RETURNING data`,
-    [profile.id, JSON.stringify(patch), profile.version, route ? JSON.stringify(route) : null, patch.updatedAt],
+    [profile.id, toPgJson(patch), profile.version, route ? toPgJson(route) : null, patch.updatedAt],
   );
   if (!rows.length) {
     throw new ServerError('Voice profile changed during benchmarking; run the benchmark again', {
@@ -655,7 +656,7 @@ export async function recordVoiceProfileRender({
        profile_revision = EXCLUDED.profile_revision,
        data = EXCLUDED.data,
        updated_at = EXCLUDED.updated_at`,
-    [issue, line, profileId, profileRevision, JSON.stringify(data), now, now],
+    [issue, line, profileId, profileRevision, toPgJson(data), now, now],
   );
 }
 

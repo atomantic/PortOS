@@ -59,14 +59,21 @@ vi.mock('fs/promises', () => ({
 
 let uTable;
 let rTable;
+// jsonb refuses the ASCII escape of an unpaired surrogate (`\ud83d`), as PostgreSQL does (#12815).
+const assertJsonbAccepts = (text) => {
+  const unpaired = text.replace(/\\ud[89ab][0-9a-f]{2}\\ud[c-f][0-9a-f]{2}/gi, '').match(/\\ud[89a-f][0-9a-f]{2}/i);
+  if (unpaired) throw new Error(`invalid input syntax for type json: lone surrogate ${unpaired[0]}`);
+};
 const query = vi.fn(async (sql, params) => {
   if (/INSERT INTO universes/.test(sql)) {
+    assertJsonbAccepts(params[2]);
     const id = params[0];
     if (uTable.has(id)) return { rowCount: 0, rows: [] };
     uTable.set(id, { id, name: params[1], data: JSON.parse(params[2]) });
     return { rowCount: 1, rows: [] };
   }
   if (/INSERT INTO universe_runs/.test(sql)) {
+    assertJsonbAccepts(params[3]);
     const id = params[0];
     if (rTable.has(id)) return { rowCount: 0, rows: [] };
     rTable.set(id, { id, universeId: params[1] });
@@ -126,6 +133,16 @@ describe('migrateUniversesToDB', () => {
     expect(result).toMatchObject({ ok: true, reason: 'imported', imported: 2, runs: 1 });
     expect(uTable.get('u-1').data.logline).toBe('a'); // verbatim
     expect(rTable.has('r-1')).toBe(true);
+    expect(renamed).toEqual([['/fake/data/universes', '/fake/data/universes.imported']]);
+    expect(MARKER in files).toBe(true);
+  });
+
+  it('imports a record holding a lone-surrogate \\ud83d escape, repaired, instead of retaining it for retry', async () => {
+    dirEntries = ['u-1'];
+    recordsByDir['/fake/data/universes/u-1/index.json'] = rec('u-1', { logline: 'cut\ud83d', credit: '\ud83d\ude00 kept' });
+    const result = await importer();
+    expect(result).toMatchObject({ ok: true, reason: 'imported', imported: 1 });
+    expect(uTable.get('u-1').data).toMatchObject({ logline: 'cut\uFFFD', credit: '😀 kept' });
     expect(renamed).toEqual([['/fake/data/universes', '/fake/data/universes.imported']]);
     expect(MARKER in files).toBe(true);
   });

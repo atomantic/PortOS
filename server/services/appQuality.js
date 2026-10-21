@@ -6,6 +6,7 @@ import { tryReadFile } from '../lib/jsonIo.js';
 import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { AUDIT_FRESHNESS_MS, parseAuditQualityReport, parseAuditSlice, summarizeAppQuality, buildAppQualityHistory, dailyQualityRecords } from '../lib/auditQuality.js';
 import { collectAppQuality, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt, deepDiscoveryComplete = false }, deps = {}) {
   if (!success || !workspacePath || !task?.metadata?.app || !agentId) return false;
@@ -31,7 +32,7 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
     `INSERT INTO app_quality_measurements (app_id, category, agent_id, assessed_at, report, slice)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6)
      ON CONFLICT (app_id, category, agent_id) DO NOTHING`,
-    [task.metadata.app, category, agentId, assessedAt, JSON.stringify(report), slice]
+    [task.metadata.app, category, agentId, assessedAt, toPgJson(report), slice]
   );
   return true;
 }

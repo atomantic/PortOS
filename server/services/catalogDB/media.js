@@ -13,6 +13,7 @@ import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { rowToMedia } from './shared.js';
 import { MAX_CAST_GUIDES, normalizeLibrary } from '../../lib/catalogMediaLibrary.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } from './identityAccess.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 const hasMeaningfulMetadata = (value) => value && typeof value === 'object'
@@ -44,7 +45,7 @@ async function insertMedia(runQuery, ingredientId, mediaKey, kind, options) {
      RETURNING *`,
     [
       ingredientId, mediaKey, kind, role, caption,
-      ...(hasMetadata ? [JSON.stringify(options.metadata || {})] : []),
+      ...(hasMetadata ? [toPgJson(options.metadata || {})] : []),
     ],
   );
   return rowToMedia(result.rows[0]);
@@ -176,7 +177,7 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
       `UPDATE catalog_ingredient_media SET library = $4::jsonb
         WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind = $3 AND deleted = false
         RETURNING *`,
-      [ingredientId, mediaKey, kind, JSON.stringify(next)],
+      [ingredientId, mediaKey, kind, toPgJson(next)],
     );
     return rowToMedia(result.rows[0]);
   });

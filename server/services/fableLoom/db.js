@@ -6,6 +6,7 @@
 
 import { query } from '../../lib/db.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 export async function readRaw(id) {
   const { rows } = await query('SELECT data FROM fableloom_stories WHERE id = $1', [id]);
@@ -69,7 +70,7 @@ export async function writeRaw(id, record) {
       record.name,
       record.universeId ?? null,
       record.seriesId ?? null,
-      JSON.stringify(record),
+      toPgJson(record),
       createdAt,
       updatedAt,
       record.deleted === true,

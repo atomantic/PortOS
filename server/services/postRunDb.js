@@ -6,6 +6,8 @@
  * rolls the complete save back instead of leaving a partial training session.
  */
 
+import { toPgJson } from '../lib/pgJson.js';
+
 const asIso = (value) => value instanceof Date ? value.toISOString() : value;
 const asDay = (value) => value instanceof Date ? value.toISOString().slice(0, 10) : String(value || '').slice(0, 10);
 
@@ -58,8 +60,8 @@ export async function saveNormalizedRunWithClient(client, input) {
        updated_at = NOW()`,
     [
       run.id, run.mode, run.localDay, run.startedAt, run.completedAt || null,
-      run.status || 'completed', JSON.stringify(run.planned || {}),
-      JSON.stringify(run.data || {}), run.legacy === true,
+      run.status || 'completed', toPgJson(run.planned || {}),
+      toPgJson(run.data || {}), run.legacy === true,
     ],
   );
 
@@ -107,11 +109,11 @@ export async function saveNormalizedRunWithClient(client, input) {
          updated_at = NOW()`,
       [
         attempt.id, run.id, position, attempt.module, attempt.drillType,
-        attempt.difficulty == null ? null : JSON.stringify(attempt.difficulty),
+        attempt.difficulty == null ? null : toPgJson(attempt.difficulty),
         attempt.configVersion || null, attempt.correct ?? null, attempt.score ?? null,
         attempt.latencyMs || 0, attempt.completion ?? null, attempt.hintUsed === true,
         attempt.confidence ?? null, attempt.inputMode || 'unknown',
-        attempt.scorerProvenance || 'unknown', JSON.stringify(attempt.data || {}),
+        attempt.scorerProvenance || 'unknown', toPgJson(attempt.data || {}),
         attempt.legacy === true,
       ],
     );
