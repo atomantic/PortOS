@@ -1772,8 +1772,16 @@ export const STALL_NUDGE_MAX_ATTEMPTS = 3;
 export const STALL_NUDGE_MAX_TOTAL = 6;
 // The original prompt still owns scope, publication authority, and the exact
 // sentinel contract. Recovery asks for an honest disposition, not a success.
+//
+// It opens with "keep going", not "wrap up": the commonest quiet session is one
+// that ended its turn waiting on a background command it started (a `gh pr
+// checks --watch`, a long build), and a nudge that reads as "write the sentinel
+// now" makes it abandon work its own prompt says to drive to the end. A release
+// run did exactly that: it wrote INCOMPLETE with its release PR's CI still
+// running instead of reading the failure, re-running it and merging.
 export const STALL_NUDGE_TEXT = [
-  'Finish what you can and then write the completion sentinel. File GitHub issues for anything that is too big for this session.',
+  'Continue the task from where you stopped. If you are waiting on a background command, CI run, or job you started, check its current state and keep working toward the goal your original instructions set; a pending or failed check is a step to handle, not a reason to stop.',
+  'Write the completion sentinel once the task is done, or once a real blocker your original instructions name stops it. File GitHub issues for anything that is too big for this session.',
   'Stay within the original task scope, permissions, and safety limits; do not bypass a refusal or permission block.',
   'Follow the owning repository\'s issue-filing instructions: search for duplicates and reuse an existing issue, or file an actionable issue with redacted evidence, affected paths, a chosen next step, and acceptance criteria.',
   'If issue filing is not authorized, unavailable, or fails, report the filing blocker and ready-to-file details as an INCOMPLETE disposition; do not claim it was filed.',
