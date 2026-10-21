@@ -69,7 +69,6 @@ export const LIST_COLLAPSE = new RegExp(
  * site is migrated to `useListResource`; never raise one.
  */
 const KNOWN = Object.freeze({
-  'src/components/privacy/PrivacyOrgsTab.jsx': 2,
   // Named-parameter, multi-statement spelling (#12807); migrated under #12819.
   'src/components/loraTraining/CharacterLoraChip.jsx': 1,
   'src/components/meatspace/post/MemoryPractice.jsx': 1,

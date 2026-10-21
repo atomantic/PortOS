@@ -43,7 +43,7 @@ export default function PrivacyOrgsTab({ subjectId }) {
   const [vaultRecords, setVaultRecords] = useState([]);
   const [orgsError, setOrgsError] = useState(null);
   const [vaultError, setVaultError] = useState(null);
-  const [holdingsByOrg, setHoldingsByOrg] = useState({}); // orgId -> [holdings]
+  const [holdingsByOrg, setHoldingsByOrg] = useState({}); // orgId -> [holdings], or null when that read failed
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ trust: null, category: null, status: null });
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -51,6 +51,11 @@ export default function PrivacyOrgsTab({ subjectId }) {
   const [confirmDelete, setConfirmDelete] = useState(null);
 
   const beginRequest = useLatestRequest();
+  // null marks a failed read, so a badge row never claims "No holdings recorded" for it.
+  const readHoldings = (orgId) => getOrgHoldings(orgId, { silent: true })
+    .then((h) => [orgId, h || []])
+    .catch(() => [orgId, null]);
+
   const load = useCallback(() => {
     const isCurrent = beginRequest();
     setLoading(true);
@@ -63,10 +68,7 @@ export default function PrivacyOrgsTab({ subjectId }) {
         if (!isCurrent()) return;
         setOrgs(orgList);
         // One request per org (single-user scale — a handful of orgs).
-        const entries = await Promise.all(orgList.map(async (org) => {
-          const h = await getOrgHoldings(org.id, { silent: true }).catch(() => []);
-          return [org.id, h || []];
-        }));
+        const entries = await Promise.all(orgList.map((org) => readHoldings(org.id)));
         if (isCurrent()) setHoldingsByOrg(Object.fromEntries(entries));
       })
       .catch((err) => { if (isCurrent()) { setOrgs([]); setHoldingsByOrg({}); setOrgsError(err); } });
@@ -87,8 +89,13 @@ export default function PrivacyOrgsTab({ subjectId }) {
     setDrawerOpen(false);
     setOrgs((prev) => (wasEditing ? prev.map((o) => (o.id === savedOrg.id ? savedOrg : o)) : [...prev, savedOrg]));
     // Refresh this org's holdings badges.
-    const h = await getOrgHoldings(savedOrg.id, { silent: true }).catch(() => []);
-    setHoldingsByOrg((prev) => ({ ...prev, [savedOrg.id]: h || [] }));
+    const [, h] = await readHoldings(savedOrg.id);
+    setHoldingsByOrg((prev) => ({ ...prev, [savedOrg.id]: h }));
+  };
+
+  const retryHoldings = async (orgId) => {
+    const [, h] = await readHoldings(orgId);
+    setHoldingsByOrg((prev) => ({ ...prev, [orgId]: h }));
   };
 
   const handleDelete = async (org) => {
@@ -162,7 +169,9 @@ export default function PrivacyOrgsTab({ subjectId }) {
                       )}
                     </div>
                     <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-                      {Object.keys(counts).length === 0 ? (
+                      {holdingsByOrg[org.id] === null ? (
+                        <ListLoadError what="holdings" onRetry={() => retryHoldings(org.id)} className="py-1" />
+                      ) : Object.keys(counts).length === 0 ? (
                         <span className="text-[11px] text-gray-600">No holdings recorded</span>
                       ) : (
                         ORG_HOLDING_STATUSES.filter((s) => counts[s.id]).map((s) => (
