@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { seedDataDir } from './seedDataDir.js';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 describe('seedDataDir migration safety', () => {
   let root;
@@ -42,5 +45,12 @@ describe('seedDataDir migration safety', () => {
     seedDataDir({ referenceDir, dataDir });
     expect(readFileSync(join(dataDir, 'cos/starter.json'), 'utf8')).toBe('starter content');
     expect(readFileSync(join(dataDir, 'cos/custom.json'), 'utf8')).toBe('user customization');
+  });
+});
+
+describe('data.reference seeds', () => {
+  it('ships no retired agents key in data.reference/cos/state.json (#12814)', () => {
+    const stateSeed = JSON.parse(readFileSync(join(repoRoot, 'data.reference', 'cos', 'state.json'), 'utf8'));
+    expect(Object.hasOwn(stateSeed, 'agents')).toBe(false);
   });
 });
