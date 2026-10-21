@@ -1860,9 +1860,11 @@ export function createStallNudgeGate({
 // paste chip still the last thing painted, means the turn never started.
 export const UNSUBMITTED_PROMPT_SETTLE_MS = 20000;
 export const UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS = 3;
-// Output arriving this long after PortOS's own last keystroke cannot be the
-// echo of that keystroke, so it is a turn running. The same 30s that proves a
-// stall nudge took.
+// Evidence the turn started: the TUI's own in-flight chrome (a working counter,
+// `Generating…` — createGenerationActivityTracker) at any time, or any output
+// arriving this long after PortOS's last keystroke, which cannot be its echo.
+// The same 30s that proves a stall nudge took. The silence fallback covers a TUI
+// that paints no such chrome (OpenCode).
 export const PROMPT_WORK_EVIDENCE_MS = STALL_NUDGE_RECOVERY_MS;
 const UNSUBMITTED_PROMPT_TAIL_CAP = 4096;
 // A selector or confirmation painted after the chip owns the Enter key; a bare
@@ -1879,8 +1881,8 @@ const SELECTOR_AFTER_PASTE_PATTERN = /enter\s*to\s*(?:select|confirm)|↑\s*\/\s
  * - `observe(strippedText, nowMs)` — every ANSI-stripped chunk.
  * - `takeEnter(nowMs, lastOutputAtMs)` — the 1-based bare-Enter number when one
  *   is due, else 0.
- * - `worked` — whether the run ever produced output that was not the echo of a
- *   PortOS keystroke. A run whose stall-nudge budget runs out with this still
+ * - `worked` — whether the run ever painted in-flight chrome or produced output
+ *   that was not the echo of a PortOS keystroke. A run whose stall-nudge budget runs out with this still
  *   false never started, and the caller fails it rather than parking it.
  *
  * @param {{ promptMarkerCount?: number, settleMs?: number, maxAttempts?: number, workEvidenceMs?: number }} [options]
@@ -1895,6 +1897,7 @@ export function createPromptSubmissionGate({
   let worked = false;
   let tail = '';
   let enters = 0;
+  const generation = createGenerationActivityTracker();
   const holdsUnsubmittedPaste = () => {
     if (!isPasteCommitted(tail, { promptMarkerCount })) return false;
     let lastMarkerEnd = -1;
@@ -1908,7 +1911,7 @@ export function createPromptSubmissionGate({
     },
     observe(strippedText, nowMs) {
       if (worked || inputAt === null || !strippedText) return;
-      if (nowMs - inputAt >= workEvidenceMs) {
+      if (generation.observe(strippedText) || nowMs - inputAt >= workEvidenceMs) {
         worked = true;
         tail = '';
         return;
