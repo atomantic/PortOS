@@ -345,8 +345,8 @@ export async function pushRecordToPeer(sub, options = {}) {
         peerPortosVersion: typeof details.receiverPortosVersion === 'string' ? details.receiverPortosVersion : null,
         peerSchemaVersions: isPlainObject(details.receiverSchemaVersions) ? details.receiverSchemaVersions : null,
       });
-      console.warn(
-        `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — peer is on an older PortOS schema. ` +
+      console.log(
+        `⏸️ peerSync: ${peer.name || peer.instanceId} rejected push — peer is on an older PortOS schema. ` +
         `Re-tries will pause until they upgrade. ${formatVersionGap({ ahead: details.ahead || [], behind: details.behind || [] })}`,
       );
       return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };

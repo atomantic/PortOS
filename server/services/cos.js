@@ -513,7 +513,8 @@ async function bootDaemon(state) {
       if (learningInsights?.recommendations?.length > 0) {
         const recommendations = learningInsights.recommendations.slice(0, 3);
         for (const rec of recommendations) {
-          const level = rec.type === 'warning' ? 'warn' : rec.type === 'action' ? 'info' : 'debug';
+          // A recommendation is advice re-announced every cycle, not a fault — stdout only.
+          const level = rec.type === 'warning' || rec.type === 'action' ? 'info' : 'debug';
           emitLog(level, `🧠 Learning: ${rec.message}`, { recommendationType: rec.type });
         }
         cosEvents.emit('learning:recommendations', {

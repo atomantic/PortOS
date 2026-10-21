@@ -489,7 +489,7 @@ describe('state operation slow diagnostics', () => {
     const store = await freshModule();
     const clock = __createManualClock();
     store.__setCosStateDiagnosticsClockForTests(clock);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const stages = [];
       await store.saveState(await store.loadState(), { onStage: (stage) => {

@@ -63,7 +63,8 @@ export async function settleBranchReconcileRun(agent) {
   const uncertain = unverifiedRetirements.length > 0 || result.forgeUnavailable || result.prStateUnavailable
     || result.worktreeInventory == null || result.orphanRemotes?.remoteUnavailable;
   const remaining = inFlightBranches.size + holds.remaining.length;
-  emitLog(uncertain || remaining ? 'warn' : 'info',
+  // Branches left to live owners are the normal outcome; only an incomplete scan is an anomaly.
+  emitLog(uncertain ? 'warn' : 'info',
     `Branch reconciliation completion: cleaned ${result.cleaned.length}, superseded ${result.reapedSuperseded?.length || 0}, remaining ${remaining}${uncertain ? '; scan incomplete' : ''}`,
     { appId: app.id, analysisType: type, counts: holds.counts, skipCauses: holds.skipCauses });
   return result;

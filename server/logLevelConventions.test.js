@@ -24,7 +24,9 @@
  * violation. Route it by what actually happened:
  *
  *   - a genuine failure          → `console.error`
- *   - a deliberate refusal/skip  → `console.warn`
+ *   - a recoverable defect worth tracing → `console.warn`
+ *   - a deliberate refusal/skip  → `console.log` with a non-failure marker
+ *     (stderr means "investigate" — root `AGENTS.md`)
  *   - a mixed success/failure line (a ternary status message) → pick the sink
  *     first and log through it: `const log = ok ? console.log : console.error;`
  *
@@ -58,9 +60,10 @@
  *
  * There is none for the failure-stream rule, on purpose. Every site in the tree passes; a new violation is
  * a bug to fix, not an entry to add. If you are reading this because the scan
- * just failed, change `console.log` to `console.error` (or `console.warn` for a
- * refusal) on the named line. An `emitLog` hit is the level argument, not the
- * wrapper: `'error'` for a failure, `'warn'` for a refusal or skip (#12576).
+ * just failed, either the line reports a fault — change `console.log` to
+ * `console.error` — or it reports a deliberate refusal/skip, and the fix is to
+ * replace the failure marker, not the stream. An `emitLog` hit is the level
+ * argument, not the wrapper: `'error'` for a failure (#12576).
  *
  * ## What this guard CANNOT see
  *

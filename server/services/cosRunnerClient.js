@@ -153,7 +153,7 @@ export function initCosRunnerConnection() {
   socket.on('connect_error', (err) => {
     if (connectErrorLogged) return;
     connectErrorLogged = true;
-    console.error(`🔌 CoS Runner connection error: ${err.message} — retrying until it answers`);
+    console.log(`🔌 CoS Runner connection error: ${err.message} — retrying until it answers`);
   });
 
   // Forward events to registered handlers

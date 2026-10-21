@@ -1353,8 +1353,8 @@ export async function applyRemote(category, remoteData, options = {}) {
   const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
   const versionDiff = scopeVersionDiff(fullDiff, SNAPSHOT_CATEGORY_SCHEMA_KEYS[category] || []);
   if (versionDiff.ahead.length > 0) {
-    console.warn(
-      `⚠️ dataSync: rejecting "${category}" snapshot — ${formatVersionGap(versionDiff)} ` +
+    console.log(
+      `⏸️ dataSync: rejecting "${category}" snapshot — ${formatVersionGap(versionDiff)} ` +
       `(sender PortOS ${senderPortosVersion || 'unknown'})`,
     );
     return {
