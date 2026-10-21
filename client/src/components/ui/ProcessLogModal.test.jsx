@@ -79,6 +79,18 @@ describe('ProcessLogModal', () => {
     expect(await screen.findByText('daemon down')).toBeInTheDocument();
   });
 
+  it('reports a failed process-list read with Retry instead of silently offering only the hinted process', async () => {
+    getProcessesList.mockRejectedValueOnce(new Error('pm2 unreachable'));
+    render(<ProcessLogModal open onClose={() => {}} processName="portos-server" />);
+
+    expect(await screen.findByText(/Could not load the process list/)).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'portos-cos' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: 'portos-cos' })).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load the process list/)).not.toBeInTheDocument();
+  });
+
   it('keeps the hinted process selectable even when PM2 does not report it', async () => {
     getProcessesList.mockResolvedValueOnce([{ name: 'portos-cos' }]);
     render(<ProcessLogModal open onClose={() => {}} processName="portos-server" />);

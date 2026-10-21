@@ -6,6 +6,11 @@ import useMounted from '../../hooks/useMounted';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 import { formatBytes, formatCount, formatPercent } from '../../utils/formatters';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
+
+// Module-level so the hook's fetcher identity is stable across renders.
+const fetchClips = () => listRiggingClips({ silent: true }).then((value) => value?.clips || []);
 
 /**
  * "Rig this character" plus the rig-status panel on `/3d/:id`.
@@ -27,9 +32,6 @@ export default function RigPanel({ record, onRecordChange }) {
   const enabled = isFeatureEnabled('rigging');
   const [readiness, setReadiness] = useState(null);
   const [busy, setBusy] = useState(false);
-  // Retarget lane (#6065). `clips === null` means "not fetched yet", distinct from
-  // an empty roster — the empty state gets an explaining line, not a dead picker.
-  const [clips, setClips] = useState(null);
   const [selectedClip, setSelectedClip] = useState('');
   const [retargeting, setRetargeting] = useState(false);
 
@@ -44,17 +46,11 @@ export default function RigPanel({ record, onRecordChange }) {
     return () => { active = false; };
   }, [enabled]);
 
-  // The clip library is only relevant once a rig exists to animate. Fetched from
-  // `record.rig` directly (not the `rig` const below, which is declared after the
-  // early return) so this hook stays unconditional per the Rules of Hooks.
-  useEffect(() => {
-    if (!enabled || record.rig?.status !== 'ready') return;
-    let active = true;
-    listRiggingClips({ silent: true })
-      .then((value) => { if (active) setClips(value?.clips || []); })
-      .catch(() => { if (active) setClips([]); });
-    return () => { active = false; };
-  }, [enabled, record.rig?.status]);
+  // Retarget lane (#6065). The clip library is only relevant once a rig exists to
+  // animate; a failed read must not read as "no clips yet".
+  const {
+    items: clips, state: clipsState, error: clipsError, retry: retryClips,
+  } = useListResource(fetchClips, { enabled: enabled && record.rig?.status === 'ready' });
 
   const handleRig = useCallback(async () => {
     if (busy) return;
@@ -107,8 +103,8 @@ export default function RigPanel({ record, onRecordChange }) {
 
   const retarget = record.retarget || null;
   const canRetarget = rig?.status === 'ready';
-  const clipsLoaded = clips !== null;
-  const hasClips = clipsLoaded && clips.length > 0;
+  const clipsLoaded = clipsState === 'ready';
+  const hasClips = clips.length > 0;
   const retargetBusy = retargeting || retarget?.status === 'retargeting';
   const diagnosticReady = retarget?.status === 'ready' && retarget.mode === 'diagnostic';
   const writeReady = retarget?.status === 'ready' && retarget.mode === 'write';
@@ -185,7 +181,10 @@ export default function RigPanel({ record, onRecordChange }) {
           <h2 className="text-sm font-semibold text-white">Animate with a clip</h2>
         </div>
 
-        {!clipsLoaded && <p className="mt-2 text-xs text-gray-500">Checking the clip library…</p>}
+        {clipsState === 'loading' && <p className="mt-2 text-xs text-gray-500">Checking the clip library…</p>}
+        {clipsState === 'error' && (
+          <ListLoadError what="the clip library" error={clipsError} onRetry={retryClips} className="mt-2" />
+        )}
         {clipsLoaded && !hasClips && (
           <p className="mt-2 text-xs text-gray-500">
             No animation clips yet. Drop a GLB clip into the clip library to animate this character.

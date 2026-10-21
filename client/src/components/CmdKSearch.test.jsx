@@ -10,6 +10,7 @@ const getPaletteManifest = vi.fn();
 const getInstanceFeatures = vi.fn();
 const getDashboardLayouts = vi.fn();
 const search = vi.fn(() => Promise.resolve({ sources: [] }));
+const listCatalogIngredients = vi.fn(() => Promise.resolve({ items: [] }));
 const runPaletteAction = vi.fn(() => Promise.resolve({ ok: true }));
 const toast = vi.hoisted(() => {
   const mock = vi.fn();
@@ -25,7 +26,7 @@ vi.mock('../services/api', () => ({
   runPaletteAction: (...args) => runPaletteAction(...args),
   getDashboardLayouts: (...args) => getDashboardLayouts(...args),
   setActiveDashboardLayout: vi.fn(() => Promise.resolve()),
-  listCatalogIngredients: vi.fn(() => Promise.resolve({ items: [] })),
+  listCatalogIngredients: (...args) => listCatalogIngredients(...args),
 }));
 
 vi.mock('./ui/Toast', () => ({ default: toast }));
@@ -61,6 +62,8 @@ beforeEach(() => {
   getDashboardLayouts.mockResolvedValue({ layouts: [] });
   search.mockReset();
   search.mockResolvedValue({ sources: [] });
+  listCatalogIngredients.mockReset();
+  listCatalogIngredients.mockResolvedValue({ items: [] });
   runPaletteAction.mockReset();
   runPaletteAction.mockResolvedValue({ ok: true });
   toast.mockReset();
@@ -551,6 +554,32 @@ describe('CmdKSearch global search staleness', () => {
 
     expect(screen.getByText('Fresh result')).toBeInTheDocument();
     expect(screen.queryByText('Stale result')).not.toBeInTheDocument();
+
+    vi.useRealTimers();
+  });
+});
+
+describe('CmdKSearch catalog lookup failure', () => {
+  it('says catalog matches may be missing instead of a bare "No results", and clears on the next query', async () => {
+    vi.useFakeTimers();
+    listCatalogIngredients.mockRejectedValueOnce(new Error('catalog down'));
+    render(
+      <MemoryRouter initialEntries={['/current']}>
+        <CmdKSearch />
+      </MemoryRouter>,
+    );
+    await act(async () => { fireEvent.keyDown(document, { key: 'k', metaKey: true }); });
+    const input = screen.getByPlaceholderText(/Go to page/);
+
+    await act(async () => { fireEvent.change(input, { target: { value: 'zzzz' } }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(screen.getByRole('alert')).toHaveTextContent(/catalog search failed/i);
+
+    await act(async () => { fireEvent.change(input, { target: { value: 'zzzzy' } }); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/No results for/)).toBeInTheDocument();
 
     vi.useRealTimers();
   });

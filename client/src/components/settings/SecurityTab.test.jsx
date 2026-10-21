@@ -221,6 +221,24 @@ describe('SecurityTab', () => {
     expect(api.listAuthSessions).toHaveBeenCalledTimes(2);
   });
 
+  it('reports a failed agent-session read with Retry instead of hiding the revoke panel', async () => {
+    api.getAuthStatus.mockResolvedValue({ enabled: true });
+    api.listAuthSessions
+      .mockRejectedValueOnce(new Error('sessions down'))
+      .mockResolvedValueOnce({
+        sessions: [{ id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') }],
+      });
+
+    render(<SecurityTab />);
+
+    expect(await screen.findByText(/Could not load agent sessions/)).toBeInTheDocument();
+    expect(screen.queryByText(/agent session\b/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('1 agent session')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load agent sessions/)).not.toBeInTheDocument();
+  });
+
   it('hides the sessions panel when auth is disabled', async () => {
     api.getAuthStatus.mockResolvedValue({ enabled: false });
 

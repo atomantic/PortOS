@@ -33,6 +33,7 @@ import PeerSyncSecretEditor from '../components/instances/PeerSyncSecretEditor';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
+import ListLoadError from '../components/ui/ListLoadError';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT, DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
 import PeerAdministrationPanel from '../components/instances/PeerAdministrationPanel';
@@ -1220,6 +1221,10 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   const [confirmRemove, setConfirmRemove] = useState(false);
   // Outbound subscriptions inform per-record schema compatibility.
   const [peerSubs, setPeerSubs] = useState([]);
+  // A failed read keeps the last good subscriptions and surfaces an error row,
+  // so a hidden "peer is behind" warning is never mistaken for "no mismatch".
+  const [peerSubsError, setPeerSubsError] = useState(null);
+  const [peerSubsAttempt, setPeerSubsAttempt] = useState(0);
   // Live sync activity, driven by the `sync:progress` socket event. `syncing`
   // is true between this peer's `start` and `complete`; while it's true every
   // enabled category badge shows "syncing…". On `complete` it clears and the
@@ -1256,15 +1261,18 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   useEffect(() => {
     if (!peer.instanceId) {
       setPeerSubs([]);
+      setPeerSubsError(null);
       return;
     }
     let cancelled = false;
     const refetch = () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
       .then((r) => {
-        if (!cancelled) setPeerSubs(r?.subscriptions || []);
+        if (cancelled) return;
+        setPeerSubs(r?.subscriptions || []);
+        setPeerSubsError(null);
       })
-      .catch(() => {
-        if (!cancelled) setPeerSubs([]);
+      .catch((err) => {
+        if (!cancelled) setPeerSubsError(err instanceof Error ? err : new Error('Request failed'));
       });
     refetch();
     // When a per-record schema block is persisted server-side, the
@@ -1295,7 +1303,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
       socket.off('peerSync:subscription-unblocked', handleSchemaSubChange);
       socket.off('peerSync:subscription:created', handleSchemaSubChange);
     };
-  }, [peer.instanceId]);
+  }, [peer.instanceId, peerSubsAttempt]);
 
   const StatusIcon = STATUS_ICONS[peer.status] || CircleDot;
   const isInboundOnly = peer.directions?.includes('inbound') && !peer.directions?.includes('outbound');
@@ -1526,6 +1534,14 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
       )}
 
       <SchemaGapBadge peer={peer} peerSubs={peerSubs} />
+      {peerSubsError && (
+        <ListLoadError
+          what="subscriptions used for schema-compatibility warnings"
+          error={peerSubsError}
+          onRetry={() => setPeerSubsAttempt((n) => n + 1)}
+          className="mt-2"
+        />
+      )}
 
       <PeerMediaProviderPanel peer={peer} onRefresh={onRefresh} />
       <PeerAdministrationPanel peer={peer} />

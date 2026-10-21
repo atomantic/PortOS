@@ -8,23 +8,17 @@
  * `onChange('', '')`. Self-contained: fetches the artist list on mount.
  */
 
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { listArtists } from '../../services/api';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
+
+const fetchArtists = () => listArtists({ silent: true });
 
 export default function ArtistPicker({ id = 'music-artist', value, name, onChange, disabled = false }) {
-  const [artists, setArtists] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let alive = true;
-    listArtists({ silent: true })
-      .then((list) => { if (alive) setArtists(Array.isArray(list) ? list : []); })
-      .catch(() => { if (alive) setArtists([]); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, []);
+  const { items: artists, state, error, retry } = useListResource(fetchArtists);
+  const loading = state === 'loading';
 
   const handleChange = (e) => {
     const artistId = e.target.value || '';
@@ -54,8 +48,9 @@ export default function ArtistPicker({ id = 'music-artist', value, name, onChang
           <option key={a.id} value={a.id}>{a.name}</option>
         ))}
       </select>
+      {state === 'error' && <ListLoadError what="artist personas" error={error} onRetry={retry} className="mt-1" />}
       <p className="text-[11px] text-gray-500 mt-1">
-        {artists.length === 0 && !loading ? (
+        {state === 'ready' && artists.length === 0 ? (
           <>No artist personas yet — <Link to="/music/artists" className="text-port-accent hover:underline">create one</Link>.</>
         ) : !value && name ? (
           <>Unlinked artist: <span className="text-gray-400">{name}</span> — pick a persona to link it.</>

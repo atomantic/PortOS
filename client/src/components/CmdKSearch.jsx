@@ -82,6 +82,8 @@ export default function CmdKSearch() {
   const { isFeatureEnabled } = useInstanceFeatures();
   const [searchResults, setSearchResults] = useState([]);
   const [catalogResults, setCatalogResults] = useState([]);
+  // A failed catalog lookup must not read as "No results" for the query.
+  const [catalogFailed, setCatalogFailed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [expandedSources, setExpandedSources] = useState(new Set());
@@ -201,6 +203,7 @@ export default function CmdKSearch() {
   }, [query]);
 
   useEffect(() => {
+    setCatalogFailed(false);
     if (query.length < 2) {
       setCatalogResults([]);
       return;
@@ -209,7 +212,11 @@ export default function CmdKSearch() {
     const timer = setTimeout(() => {
       listCatalogIngredients({ q: query, limit: 5, silent: true })
         .then((data) => { if (!cancelled) setCatalogResults(data?.items ?? []); })
-        .catch(() => { if (!cancelled) setCatalogResults([]); });
+        .catch(() => {
+          if (cancelled) return;
+          setCatalogResults([]);
+          setCatalogFailed(true);
+        });
     }, 300);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [query]);
@@ -606,6 +613,9 @@ export default function CmdKSearch() {
               <div className="text-center text-sm text-gray-500 py-8">
                 No results for &ldquo;{query}&rdquo;
               </div>
+            )}
+            {catalogFailed && (
+              <div role="alert" className="px-4 py-2 text-center text-xs text-port-error">Catalog search failed, so catalog matches may be missing.</div>
             )}
 
             {!loading && !query && combined.commandCount === 0 && (

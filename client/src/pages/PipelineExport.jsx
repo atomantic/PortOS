@@ -10,7 +10,7 @@
  * first, mirroring the "Run Now gates on saved state" rule).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
 import { Loader2, ArrowLeft, Download, Save, BookText, FileText, FileType } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -28,6 +28,8 @@ import {
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import AttributionList from '../components/media/AttributionList';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import { TRIM_SIZES, DEFAULT_TRIM_SIZE, INTERIOR_FONTS, DEFAULT_INTERIOR_FONT } from '../lib/proseExportSettings.js';
 
 // Client labels for the server TRIM_SIZES and INTERIOR_FONTS (via
@@ -90,7 +92,30 @@ export default function PipelineExport() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(emptyForm);
   const [savedForm, setSavedForm] = useState(emptyForm);
-  const [seriesAssets, setSeriesAssets] = useState([]);
+  // Roll up licenses from the series media collection so a user about to
+  // publish can see the terms that applied when the pixels were made (#5638).
+  const fetchSeriesAssets = useCallback(async () => {
+    const [collections, videos] = await Promise.all([
+      listMediaCollections({ silent: true }),
+      listVideoHistory({ silent: true }),
+    ]);
+    const list = Array.isArray(collections) ? collections : [];
+    const collection = list.find((c) => c.seriesId === seriesId || c.id === `sc-${seriesId}`);
+    if (!collection) return [];
+    const images = await getGalleryImages((collection.items || []).filter(item => item.kind === 'image').map(item => item.ref), { silent: true });
+    const imagesByName = new Map((images || []).map((i) => [i.filename, i]));
+    const videosById = new Map((videos || []).map((v) => [v.id, v]));
+    const out = [];
+    for (const it of collection.items || []) {
+      if (it.kind === 'image' && imagesByName.has(it.ref)) {
+        out.push(normalizeImage(imagesByName.get(it.ref)));
+      } else if (it.kind === 'video' && videosById.has(it.ref)) {
+        out.push(normalizeVideo(videosById.get(it.ref)));
+      }
+    }
+    return out;
+  }, [seriesId]);
+  const { items: seriesAssets, state: assetsState, error: assetsError, retry: retryAssets } = useListResource(fetchSeriesAssets);
 
   useEffect(() => {
     let canceled = false;
@@ -111,35 +136,6 @@ export default function PipelineExport() {
       .finally(() => { if (!canceled) setLoading(false); });
     return () => { canceled = true; };
   }, [seriesId, navigate]);
-
-  // Roll up licenses from the series media collection so a user about to
-  // publish can see the terms that applied when the pixels were made (#5638).
-  useEffect(() => {
-    let canceled = false;
-    Promise.all([
-      listMediaCollections({ silent: true }),
-      listVideoHistory({ silent: true }),
-    ]).then(async ([collections, videos]) => {
-      if (canceled) return;
-      const list = Array.isArray(collections) ? collections : [];
-      const collection = list.find((c) => c.seriesId === seriesId || c.id === `sc-${seriesId}`);
-      if (!collection) { setSeriesAssets([]); return; }
-      const images = await getGalleryImages((collection.items || []).filter(item => item.kind === 'image').map(item => item.ref), { silent: true });
-      if (canceled) return;
-      const imagesByName = new Map((images || []).map((i) => [i.filename, i]));
-      const videosById = new Map((videos || []).map((v) => [v.id, v]));
-      const out = [];
-      for (const it of collection.items || []) {
-        if (it.kind === 'image' && imagesByName.has(it.ref)) {
-          out.push(normalizeImage(imagesByName.get(it.ref)));
-        } else if (it.kind === 'video' && videosById.has(it.ref)) {
-          out.push(normalizeVideo(videosById.get(it.ref)));
-        }
-      }
-      setSeriesAssets(out);
-    }).catch(() => { if (!canceled) setSeriesAssets([]); });
-    return () => { canceled = true; };
-  }, [seriesId]);
 
   const dirty = useMemo(
     () => JSON.stringify(form) !== JSON.stringify(savedForm),
@@ -317,6 +313,9 @@ export default function PipelineExport() {
         </section>
       </div>
 
+      {assetsState === 'error' && (
+        <ListLoadError what="attribution and licenses" error={assetsError} onRetry={retryAssets} className="mt-6 max-w-5xl" />
+      )}
       <AttributionList
         records={seriesAssets}
         className="mt-6 max-w-5xl bg-port-card border border-port-border rounded-lg px-3 py-2"

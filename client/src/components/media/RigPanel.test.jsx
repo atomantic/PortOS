@@ -117,6 +117,20 @@ describe('RigPanel retarget lane', () => {
     expect(screen.queryByLabelText(/animation clip/i)).not.toBeInTheDocument();
   });
 
+  it('reports a failed clip-library read with Retry instead of "no clips yet"', async () => {
+    mock.listRiggingClips.mockRejectedValueOnce(new Error('clip library unreadable'));
+    mock.listRiggingClips.mockResolvedValueOnce({ clips: [{ filename: 'wave.glb', label: 'Wave' }] });
+    render(<RigPanel record={RIGGED_RECORD} onRecordChange={() => {}} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load the clip library.*clip library unreadable/i);
+    expect(screen.queryByText(/no animation clips yet/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText(/animation clip/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(mock.listRiggingClips).toHaveBeenCalledTimes(2);
+  });
+
   it('runs a diagnostic preview and shows the proposed cleanup without offering write yet', async () => {
     mock.listRiggingClips.mockResolvedValue({ clips: [{ filename: 'wave.glb', label: 'Wave' }] });
     const diagnosed = {

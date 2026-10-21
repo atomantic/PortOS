@@ -5,8 +5,10 @@ import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
 import FilmStylePicker from '../codeAnimation/FilmStylePicker';
 import FilePickerButton from '../ui/FilePickerButton';
+import ListLoadError from '../ui/ListLoadError';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
+import useListResource from '../../hooks/useListResource';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -19,6 +21,8 @@ import { trackAudioUrl } from '../../services/apiTracks';
 import { formatBytes, formatDateTime, formatDurationSec, formatLoudness } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
+const fetchTracks = () => listPipelineMusicLibrary({ silent: true }).then(result => result.tracks);
+const fetchSkillPacks = () => getMotionToolkit({ silent: true }).then(result => result.skillPacks);
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50';
 const videoUrl = video => `/data/videos/${encodeURIComponent(video.filename)}`;
@@ -56,12 +60,12 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [motionBlur, setMotionBlur] = useState('');
   const [motionSkills, setMotionSkills] = useState(false);
   const [installingSkills, setInstallingSkills] = useState(false);
-  const [skillPacks, setSkillPacks] = useState(null);
+  const { items: skillPacks, state: skillPacksState, error: skillPacksError, retry: retrySkillPacks, setItems: setSkillPacks } = useListResource(fetchSkillPacks);
   const [music, setMusic] = useState(false);
   const [generateMusic, setGenerateMusic] = useState(false);
   const [musicMethod, setMusicMethod] = useState('agent');
   const [musicTrack, setMusicTrack] = useState('');
-  const [tracks, setTracks] = useState(null);
+  const { items: tracks, state: tracksState, error: tracksError, retry: retryTracks } = useListResource(fetchTracks);
   // A style reference (#8961): either an existing Media History image/video
   // (`source: 'gallery'`) or a fresh upload into the generic uploads store
   // (`source: 'upload'`) — kept out of the gallery so a one-off reference
@@ -70,21 +74,10 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const [referenceUploading, setReferenceUploading] = useState(false);
-  const [error, setError] = useState('');
   const submitting = useRef(false);
   const picker = useRunWithPicker();
 
-  useEffect(() => {
-    let active = true;
-    listPipelineMusicLibrary({ silent: true }).then(result => {
-      if (active) setTracks(result.tracks);
-    }).catch(err => { if (active) { setTracks([]); setError(err.message); } });
-    getMotionToolkit({ silent: true }).then(result => {
-      if (active) setSkillPacks(result.skillPacks);
-    }).catch(() => { if (active) setSkillPacks([]); });
-    return () => { active = false; };
-  }, []);
-  const installedSkills = (skillPacks ?? []).filter(pack => pack.found.length);
+  const installedSkills = skillPacks.filter(pack => pack.found.length);
   const consultSkills = motionSkills && installedSkills.length > 0;
 
   const handleInstallSkills = async () => {
@@ -132,7 +125,6 @@ function LaunchVideoForm({ appId, onQueued }) {
   });
 
   return <form className="space-y-4" onSubmit={event => { event.preventDefault(); submit(); }}>
-    {error && <p role="alert" className="text-port-error">{error}</p>}
     <section className="space-y-2">
       <div className="text-xs uppercase tracking-wide text-gray-500">Agent</div>
       <ProviderModelSelector {...picker.selectorProps} />
@@ -203,10 +195,12 @@ function LaunchVideoForm({ appId, onQueued }) {
     </div>
     <div>
       <label htmlFor="launch-motion-skills"><input id="launch-motion-skills" type="checkbox" disabled={!installedSkills.length} checked={consultSkills} onChange={event => setMotionSkills(event.target.checked)} /> Consult motion skills</label>
-      <p className="text-sm text-port-text-muted">{skillPacks === null ? 'Checking installed skills…' : installedSkills.length
-        ? `Technique guides from ${installedSkills.map(pack => pack.label).join(', ')}.`
-        : 'HyperFrames, Remotion and Claude Animation skills are not installed.'}</p>
-      {skillPacks !== null && skillPacks.some(pack => !pack.installed) && (
+      {skillPacksState === 'error'
+        ? <ListLoadError what="installed motion skills" error={skillPacksError} onRetry={retrySkillPacks} />
+        : <p className="text-sm text-port-text-muted">{skillPacksState === 'loading' ? 'Checking installed skills…' : installedSkills.length
+          ? `Technique guides from ${installedSkills.map(pack => pack.label).join(', ')}.`
+          : 'HyperFrames, Remotion and Claude Animation skills are not installed.'}</p>}
+      {skillPacksState === 'ready' && skillPacks.some(pack => !pack.installed) && (
         <button type="button" className="btn btn-secondary" disabled={installingSkills} onClick={handleInstallSkills}>
           {installingSkills ? 'Installing motion skills…' : installedSkills.length ? 'Install missing motion skills' : 'Install and enable motion skills'}
         </button>
@@ -224,9 +218,10 @@ function LaunchVideoForm({ appId, onQueued }) {
     </div>}
     {music && !generateMusic && <fieldset className="space-y-2">
       <legend>Music-library track</legend>
-      {tracks === null && <p className="text-sm text-port-text-muted">Loading tracks…</p>}
-      {tracks?.length === 0 && <p>Add a track to the Music library first.</p>}
-      {!!tracks?.length && <ul className="max-h-80 space-y-2 overflow-y-auto">
+      {tracksState === 'loading' && <p className="text-sm text-port-text-muted">Loading tracks…</p>}
+      {tracksState === 'error' && <ListLoadError what="the music library" error={tracksError} onRetry={retryTracks} />}
+      {tracksState === 'ready' && tracks.length === 0 && <p>Add a track to the Music library first.</p>}
+      {tracksState === 'ready' && tracks.length > 0 && <ul className="max-h-80 space-y-2 overflow-y-auto">
         {tracks.map((track, index) => {
           const id = `launch-track-${index}`;
           const name = track.label || track.filename;

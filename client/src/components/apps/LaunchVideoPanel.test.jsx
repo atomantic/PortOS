@@ -2,10 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import LaunchVideoPanel from './LaunchVideoPanel';
+import { listPipelineMusicLibrary } from '../../services/apiPipeline';
 import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, installMotionSkills, publishAppLaunchVideo } from '../../services/apiApps';
 vi.mock('../../services/apiApps', () => ({ getAppLaunchVideos: vi.fn(async () => ({ videos: [] })), createAppLaunchVideo: vi.fn(), publishAppLaunchVideo: vi.fn(),
   getMotionToolkit: vi.fn(async () => ({ ffmpeg: true, skillPacks: [] })), installMotionSkills: vi.fn() }));
-vi.mock('../../services/apiPipeline', () => ({ listPipelineMusicLibrary: async () => ({ tracks: [{ filename: 'track-1a2b.wav', label: 'Example track', sizeBytes: 2048, updatedAt: '2026-01-01T00:00:00.000Z' }] }) }));
+const exampleTracks = { tracks: [{ filename: 'track-1a2b.wav', label: 'Example track', sizeBytes: 2048, updatedAt: '2026-01-01T00:00:00.000Z' }] };
+vi.mock('../../services/apiPipeline', () => ({ listPipelineMusicLibrary: vi.fn(async () => exampleTracks) }));
 // The shared Film style picker reads the catalog through the api barrel.
 vi.mock('../../services/api', () => ({
   listFilmStyles: vi.fn(async () => [{ id: 'example-style', label: 'Example style', summary: 'A fixture style.', nativeMoves: [] }]),
@@ -64,6 +66,20 @@ describe('launch video drawer', () => {
     expect(installMotionSkills).toHaveBeenCalledWith({ silent: true });
   });
 
+  it('reports a failed motion-toolkit read with Retry instead of "skills are not installed"', async () => {
+    getMotionToolkit.mockRejectedValueOnce(new Error('toolkit unreachable'));
+    getMotionToolkit.mockResolvedValueOnce({ ffmpeg: true, skillPacks: [{ id: 'hyperframes', label: 'HyperFrames', found: ['motion-graphics'], installed: true }] });
+    renderPanel('/?launchVideo=true');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load installed motion skills.*toolkit unreachable/i);
+    expect(screen.queryByText(/skills are not installed/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Technique guides from HyperFrames.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(getMotionToolkit).toHaveBeenCalledTimes(2);
+  });
+
   it.each(['agent', 'service'])('queues %s music without requiring a library track or installed engine', async musicMethod => {
     createAppLaunchVideo.mockReset().mockResolvedValue({ taskId: 'task-generated' });
     getMotionToolkit.mockResolvedValueOnce({ ffmpeg: true, skillPacks: [{ id: 'hyperframes', label: 'HyperFrames', found: ['motion-graphics'] }] });
@@ -86,6 +102,18 @@ describe('launch video drawer', () => {
     await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ formats: ['vertical', 'square'], targetDurationSec: 90, generateMusic: true, musicMethod, motionStyle: 'ui-morph', critiqueRounds: 3, motionSkills: true }), { silent: true }));
     expect(createAppLaunchVideo.mock.calls[0][1].musicTrack).toBeUndefined();
     expect(createAppLaunchVideo.mock.calls[0][1].format).toBeUndefined();
+  });
+
+  it('reports a failed music-library read with Retry instead of "Add a track first"', async () => {
+    listPipelineMusicLibrary.mockRejectedValueOnce(new Error('library unreachable'));
+    renderPanel('/?launchVideo=true');
+    fireEvent.click(screen.getByLabelText('Include music'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load the music library.*library unreachable/i);
+    expect(screen.queryByText(/Add a track to the Music library first/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('radio', { name: /Example track/ })).toBeTruthy();
   });
 
   it('sends the chosen film style grammar with the launch video and omits it when None', async () => {

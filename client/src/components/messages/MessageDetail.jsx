@@ -3,6 +3,8 @@ import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User, Ima
 import toast from '../ui/Toast';
 import { formatCount, formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 
 // Any src/href/poster/url()/@import that points at a remote http(s) or
 // protocol-relative (`//host/...`) resource — the load vectors a tracking
@@ -118,8 +120,6 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const [replyBody, setReplyBody] = useState('');
   const [generating, setGenerating] = useState(false);
   const [generatedDraftId, setGeneratedDraftId] = useState(null);
-  const [threadMessages, setThreadMessages] = useState([]);
-  const [threadLoading, setThreadLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [displayedMessage, setDisplayedMessage] = useState(message);
   const [actioning, setActioning] = useState(null);
@@ -139,17 +139,19 @@ export default function MessageDetail({ message, accounts, onBack }) {
 
   const account = accounts.find(a => a.id === displayedMessage.accountId) || accounts[0];
 
-  // Load thread messages if this message is part of a thread
-  useEffect(() => {
-    if (!message.threadId || !message.accountId) return;
-    let cancelled = false;
-    setThreadLoading(true);
-    api.getMessageThread(message.accountId, message.threadId)
-      .then(data => { if (!cancelled) setThreadMessages(data?.messages || []); })
-      .catch(() => { if (!cancelled) setThreadMessages([]); })
-      .finally(() => { if (!cancelled) setThreadLoading(false); });
-    return () => { cancelled = true; };
-  }, [message.threadId, message.accountId]);
+  // Load thread messages if this message is part of a thread. A failed read
+  // falls back to the single message but says so, so a missing conversation is
+  // not mistaken for a one-message thread.
+  const { threadId, accountId } = message;
+  const hasThreadRef = !!(threadId && accountId);
+  const fetchThread = useCallback(
+    () => api.getMessageThread(accountId, threadId, { silent: true }).then(data => data?.messages || []),
+    [accountId, threadId],
+  );
+  const {
+    items: threadMessages, state: threadState, error: threadError, retry: retryThread, setItems: setThreadMessages,
+  } = useListResource(fetchThread, { enabled: hasThreadRef });
+  const threadLoading = hasThreadRef && threadState === 'loading';
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -274,6 +276,9 @@ export default function MessageDetail({ message, accounts, onBack }) {
       )}
 
       {/* Message body / thread */}
+      {hasThreadRef && threadState === 'error' && (
+        <ListLoadError what="the conversation" error={threadError} onRetry={retryThread} />
+      )}
       {threadLoading ? (
         <div className="text-sm text-gray-500 animate-pulse">Loading conversation...</div>
       ) : (

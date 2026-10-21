@@ -13,6 +13,8 @@ import { useState, useEffect, useCallback, useId } from 'react';
 import { AlertTriangle, Check, Sparkles, Terminal } from 'lucide-react';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import LocalSetupPanel from './LocalSetupPanel';
 import LocalRuntimeStatus from '../imageGen/LocalRuntimeStatus';
 import FalModelSelect from '../imageGen/FalModelSelect';
@@ -35,6 +37,17 @@ import { formatCount } from '../../utils/formatters';
 export const PARALLEL_FALLBACK = { min: 1, max: Number.MAX_SAFE_INTEGER, default: 1 };
 export const clampParallel = (n, bounds = PARALLEL_FALLBACK) =>
   Math.max(bounds.min, Math.min(bounds.max, Math.floor(Number(n) || bounds.default)));
+
+// The configured Codex provider's model ids (the signed-in account's catalog
+// when fetched, else the shipped presets).
+const fetchCodexProviderModels = () => getProviders({ silent: true }).then((data) => {
+  const providers = Array.isArray(data?.providers) ? data.providers : [];
+  const provider = providers.find((p) => p?.id === 'codex' && isCodexSubscriptionProvider(p))
+    || providers.find(isCodexSubscriptionProvider);
+  return provider ? providerModelList(provider)
+    .map((m) => (typeof m === 'string' ? m : m?.id))
+    .filter((id) => typeof id === 'string' && id !== '') : [];
+});
 
 const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 const SECTION_CLASS = 'bg-port-card border border-port-border rounded-xl p-6 space-y-4';
@@ -116,30 +129,12 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
     { id: 'codex', command: 'codex' },
     codexModel.trim() || CODEX_IMAGEGEN_DEFAULT_MODEL,
   );
-  // Model picker options: the configured Codex provider's model list (the
-  // signed-in account's catalog when fetched, else the shipped presets), read
-  // only once the Codex section is enabled. `null` = not loaded yet; the
-  // shipped default is always offered so the picker is never empty.
-  const [codexProviderModels, setCodexProviderModels] = useState(null);
-  useEffect(() => {
-    if (!codexEnabled) return undefined;
-    let active = true;
-    getProviders({ silent: true })
-      .then((data) => {
-        if (!active) return;
-        const providers = Array.isArray(data?.providers) ? data.providers : [];
-        const provider = providers.find((p) => p?.id === 'codex' && isCodexSubscriptionProvider(p))
-          || providers.find(isCodexSubscriptionProvider);
-        const ids = provider ? providerModelList(provider)
-          .map((m) => (typeof m === 'string' ? m : m?.id))
-          .filter((id) => typeof id === 'string' && id !== '') : [];
-        setCodexProviderModels(ids);
-      })
-      .catch(() => { if (active) setCodexProviderModels([]); });
-    return () => { active = false; };
-  }, [codexEnabled]);
+  // Model picker options, read only once the Codex section is enabled. The
+  // shipped default is always offered so the picker is never empty, even when
+  // the provider read failed (the error row below says so).
+  const { items: codexProviderModels, state: codexModelsState, error: codexModelsError, retry: retryCodexModels } = useListResource(fetchCodexProviderModels, { enabled: codexEnabled });
   const codexModelOptions = withUnlistedOption(
-    [...new Set([CODEX_IMAGEGEN_DEFAULT_MODEL, ...(codexProviderModels || [])])].map((id) => ({ id })),
+    [...new Set([CODEX_IMAGEGEN_DEFAULT_MODEL, ...codexProviderModels])].map((id) => ({ id })),
     codexModel.trim(),
     (id) => ({ id }),
   );
@@ -331,6 +326,9 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
                   <option key={id} value={id}>{id}</option>
                 ))}
               </select>
+              {codexModelsState === 'error' && (
+                <ListLoadError what="your Codex provider's models" error={codexModelsError} onRetry={retryCodexModels} className="mt-1" />
+              )}
               <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave on Default for the cheap shipped model (<code>{CODEX_IMAGEGEN_DEFAULT_MODEL}</code>). Models come from your Codex provider.</p>
             </FormField>
             <FormField label="Reasoning effort (optional)" labelClassName={FIELD_LABEL_CLASS}>

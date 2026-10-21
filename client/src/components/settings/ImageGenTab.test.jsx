@@ -375,6 +375,21 @@ describe('ImageGenTab grouped tabs', () => {
     expect(sentSlices()['imageGen.codex']).toEqual({ model: 'gpt-6-sol' });
   });
 
+  it('shows a retryable error, not a bare default-only picker, when the Codex provider read fails', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: { mode: 'codex', codex: { enabled: true }, expose: { a1111: false } },
+    });
+    getProviders.mockRejectedValueOnce(new Error('providers down'));
+    await renderTab(['/media/image?mediaTab=codex']);
+
+    expect(await screen.findByText(/Could not load your Codex provider's models/)).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'gpt-6-sol' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: 'gpt-6-sol' })).toBeTruthy();
+    expect(screen.queryByText(/Could not load your Codex provider's models/)).toBeNull();
+  });
+
   it('pins the install-wide default local model and saves it under imageGen.local.modelId', async () => {
     await renderTab(['/media/image?mediaTab=local']);
     await act(async () => {});
