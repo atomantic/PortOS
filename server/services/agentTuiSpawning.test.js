@@ -275,6 +275,9 @@ import {
   STALL_NUDGE_IDLE_MS,
   STALL_NUDGE_MAX_ATTEMPTS,
   STALL_NUDGE_TEXT,
+  PROMPT_WORK_EVIDENCE_MS,
+  UNSUBMITTED_PROMPT_SETTLE_MS,
+  UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS,
   RETRY_STALL_MS,
   TOOL_PERMISSION_NUDGE_TEXT,
 } from '../lib/tuiHandshake.js';
@@ -1232,6 +1235,11 @@ describe('spawnTuiAgent runtime', () => {
     await capturedOnData(Buffer.from('do the thing\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(3600);
+    await flushMicrotasks();
+    // It works for a while before going quiet: a run that never started is
+    // failed instead (#12769), and this one is about the lack of a ceiling.
+    await vi.advanceTimersByTimeAsync(PROMPT_WORK_EVIDENCE_MS);
+    await capturedOnData(Buffer.from('Reading the repository…\n'));
     await flushMicrotasks();
 
     await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
@@ -2299,6 +2307,11 @@ describe('spawnTuiAgent runtime', () => {
 
   it("badges a session that ignored every nudge instead of giving up silently", async () => {
     await driveAgyToSubmittedPrompt();
+    // A run that worked and then stopped; one that never started is failed
+    // instead (see the never-started case below).
+    await vi.advanceTimersByTimeAsync(PROMPT_WORK_EVIDENCE_MS);
+    await capturedOnData(Buffer.from('Reading the repository…\n'));
+    await flushMicrotasks();
     vi.mocked(shellService.pasteToSession).mockClear();
 
     // A session wedged below its composer never echoes the paste, so nothing
@@ -2316,6 +2329,71 @@ describe('spawnTuiAgent runtime', () => {
       'agent-1',
       { metadata: { phase: 'stalled' } },
     );
+  });
+
+  // ── Unsubmitted prompt: the paste chip rendered, every submit Enter was lost ──
+  // #12769: claim runs sat at `❯ [Pasted text #1 +N lines]` indefinitely. As
+  // possible claim owners they held every claim checkout in their repository.
+  const driveToUnsubmittedChip = async () => {
+    runSpawn({ prompt: 'claim the issue and ship a PR' });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('>_ OpenAI Codex\n' + CODEX_COMPOSER));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+    await capturedOnData(Buffer.from('> [Pasted Content 29448 chars]\n'));
+    await flushMicrotasks();
+    // The paste confirms and every submit Enter goes out; the TUI ignores them.
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+  };
+  const enterCount = () => vi.mocked(shellService.writeToSession).mock.calls
+    .filter(([id, data]) => id === SESSION_ID && data === '\r').length;
+
+  it('presses Enter again on a prompt left unsubmitted in the composer, without re-pasting', async () => {
+    await driveToUnsubmittedChip();
+    const submitted = enterCount();
+    expect(submitted).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(UNSUBMITTED_PROMPT_SETTLE_MS - 5000);
+    await flushMicrotasks();
+    expect(enterCount()).toBe(submitted);
+
+    await vi.advanceTimersByTimeAsync(5000 + SIGNAL_POLL_MS);
+    await flushMicrotasks();
+    expect(enterCount()).toBe(submitted + 1);
+    expect(pasteCount()).toBe(1);
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+
+    // That Enter started the turn: a working session is left alone.
+    for (let elapsed = 0; elapsed < 3 * 60_000; elapsed += 1000) {
+      await capturedOnData(Buffer.from('• Working (12s • esc to interrupt)\n'));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    await flushMicrotasks();
+    expect(enterCount()).toBe(submitted + 1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
+  it('fails a run that never started after the full nudge budget, so the task retries', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+    await driveToUnsubmittedChip();
+    const submitted = enterCount();
+
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS * (STALL_NUDGE_MAX_ATTEMPTS + 2));
+    await flushMicrotasks();
+    // A bounded number of bare Enters, then the stall nudges, then the verdict.
+    expect(enterCount()).toBe(submitted + UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS);
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(STALL_NUDGE_MAX_ATTEMPTS);
+    vi.useRealTimers();
+    await completeDone;
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'agent-1', success: false, completionReason: 'prompt-not-submitted' }),
+    );
+    expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalledWith('agent-1', { metadata: { phase: 'stalled' } });
   });
 
   // ── 1b. Submit-Enter retries ─────────────────────────────────────────────────
