@@ -72,3 +72,9 @@ The CoS feedback reference migration is input-gated: it derives rows from the
 install's existing `state.json` and therefore has no `data.reference` seed. A
 seed would be copied before the migration and could overwrite the meaning of a
 user's existing state.
+
+The CoS agent migrations follow the same input-gated shape: 020 imports the
+`agents` map from `data/cos/state.json` into `cos_agents` and verifies every
+record byte for byte before committing; 021, which runs only after 020 has
+committed, re-verifies, keeps the original file as `state.json.imported`, and
+removes the key. Neither ships a seed.

@@ -76,6 +76,7 @@ import { initSpawner } from './subAgentSpawner.js';
 import { initCertRenewer } from './certRenewer.js';
 
 import * as cos from './cos.js';
+import { markCosAgentMigrationsSettled } from './cosState.js';
 // Side-effect-free shared state module — importing it here does NOT pull in the
 // agent-lifecycle orchestrator graph (that's why activeAgents lives in its own
 // leaf module), so the shutdown handler can read the live agent set cheaply.
@@ -785,6 +786,8 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     return { dbReady, ensureSchema };
   },
 
+  // Releases CoS reads that wait on the agent-record migrations (020/021) once the
+  // runner has had its turn — a failed migration exits the process instead.
   migrate: ({ dbReady, ensureSchema }) => runDbAndCatalogMigrations({
     dbReady,
     ensureSchema,
@@ -814,7 +817,7 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     // Bytes + sidecars + video-history.json stay authoritative; this builds a
     // queryable index over them. Idempotent, safe to run every boot.
     initMediaAssetIndex: async () => (await import('./mediaAssetIndex/index.js')).initMediaAssetIndex()
-  }),
+  }).finally(markCosAgentMigrationsSettled),
 
   warmStores: () => warmMandatoryStores({
     // Universe Builder PG warm (#1014): listIds() is the cheapest call that
