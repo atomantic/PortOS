@@ -615,6 +615,19 @@ describe('claim-swarm completion', () => {
     for (const branch of branches) expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({ branch, status: 'blocked' }));
     expect(cleanupMerged).not.toHaveBeenCalled();
   });
+  // #12769: "Cleanup blocked: claim-owner-ambiguous" named no run, so nobody
+  // could tell which live run to look at.
+  it('names the live runs that keep a swarm checkout ambiguous', async () => {
+    const pending = (id) => ({ id, status: 'running', workspacePath: '/repo',
+      metadata: { sourceWorkspace: '/repo', claimBranch: `claim/issue-${id.length}`, claimPicksOwnBranch: false, claimSelectionPending: true } });
+    readClaimOwnershipAgents.mockResolvedValue([pending('agent-a'), pending('agent-bb'),
+      { id: 'agent-done', status: 'completed', metadata: { sourceWorkspace: '/repo', claimSelectionPending: true } }]);
+    const state = agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo', claimPicksOwnBranch: true,
+      claimBranches: ['claim/issue-11'] });
+    await run({ agentState: state });
+    expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      branch: 'claim/issue-11', status: 'blocked', reason: 'claim-owner-ambiguous', owners: ['agent-a', 'agent-bb'] }));
+  });
   it('does not infer branches from output or override manual handoffs and failed retries', async () => {
     const state = agentState({ isWorktree: false, worktreeBranch: null, claimPicksOwnBranch: true, claimBranches: ['claim/issue-11'] });
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'OPEN', url: 'https://github.com/example/repo/pull/11' });

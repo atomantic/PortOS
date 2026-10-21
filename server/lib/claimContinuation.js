@@ -236,22 +236,30 @@ function mayPickClaimBranch(agent, branchName) {
  *     that has not yet bound the branch it works on, in this same repository,
  *     so it might be the one that cut this tree — unprovable from the registry
  *     alone.
- * `active` outranks `ambiguous` across the whole list.
+ * `active` outranks `ambiguous` across the whole list. `holderIds` names the
+ * run(s) behind the verdict — the one active owner, or every possible one — so
+ * a blocked cleanup can say which live run it is waiting on.
  *
- * @returns {'active'|'ambiguous'|null}
+ * @returns {{ occupancy: 'active'|'ambiguous'|null, holderIds: string[] }}
  */
-function claimHolderOccupancy({ agents, holderPath, branchName, sourceWorkspace, ignoreIds }) {
-  let ambiguous = false;
+function scanClaimHolders({ agents, holderPath, branchName, sourceWorkspace, ignoreIds }) {
+  const possible = [];
   const claimHolder = /^(claim|next)\//.test(branchName) || isHumanClaimWorktree(worktreeAgentId(holderPath));
   for (const agent of agents) {
     if (!agent || ignoreIds.has(agent.id) || !isLiveAgent(agent)) continue;
     const workspace = agentWorkspace(agent);
-    if (samePath(workspace, holderPath) || (holderPath && workspace && isPathInsideDir(holderPath, workspace))) return 'active';
+    if (samePath(workspace, holderPath) || (holderPath && workspace && isPathInsideDir(holderPath, workspace))) {
+      return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
+    }
     if (!inRepository(agent, sourceWorkspace)) continue;
-    if (ownsClaimBranch(agent, branchName)) return 'active';
-    if (claimHolder && mayPickClaimBranch(agent, branchName)) ambiguous = true;
+    if (ownsClaimBranch(agent, branchName)) return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
+    if (claimHolder && mayPickClaimBranch(agent, branchName)) possible.push(agent.id);
   }
-  return ambiguous ? 'ambiguous' : null;
+  return possible.length ? { occupancy: 'ambiguous', holderIds: possible.filter(Boolean) } : { occupancy: null, holderIds: [] };
+}
+
+function claimHolderOccupancy(input) {
+  return scanClaimHolders(input).occupancy;
 }
 
 /**
@@ -400,11 +408,23 @@ export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace,
  * @param {{ branchName: string, holderPath?: string|null, sourceWorkspace?: string, agents: Array<object>|null, ignoreIds?: string[] }} input
  * @returns {'claim-owner-active'|'claim-owner-ambiguous'|'claim-ownership-unreadable'|null}
  */
-export function claimCheckoutOwnerReason({ branchName, holderPath = null, sourceWorkspace, agents, ignoreIds = [] }) {
+export function claimCheckoutOwnerReason(input) {
+  return claimCheckoutOwner(input)?.reason ?? null;
+}
+
+/**
+ * `claimCheckoutOwnerReason` plus the live run ids behind it, for a caller that
+ * records the hold where a person reads it (the Agent card's cleanup line).
+ * `owners` is empty for an unreadable registry.
+ *
+ * @param {{ branchName: string, holderPath?: string|null, sourceWorkspace?: string, agents: Array<object>|null, ignoreIds?: string[] }} input
+ * @returns {{ reason: 'claim-owner-active'|'claim-owner-ambiguous'|'claim-ownership-unreadable', owners: string[] }|null}
+ */
+export function claimCheckoutOwner({ branchName, holderPath = null, sourceWorkspace, agents, ignoreIds = [] }) {
   if (!Array.isArray(agents) || !branchName
-    || agents.some(agent => !agent || !['running', 'paused', 'completed'].includes(agent.status))) return 'claim-ownership-unreadable';
-  const occupancy = claimHolderOccupancy({
+    || agents.some(agent => !agent || !['running', 'paused', 'completed'].includes(agent.status))) return { reason: 'claim-ownership-unreadable', owners: [] };
+  const { occupancy, holderIds } = scanClaimHolders({
     agents, holderPath, branchName, sourceWorkspace, ignoreIds: new Set(ignoreIds.filter(Boolean)),
   });
-  return occupancy ? `claim-owner-${occupancy}` : null;
+  return occupancy ? { reason: `claim-owner-${occupancy}`, owners: holderIds } : null;
 }
