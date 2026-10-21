@@ -76,12 +76,19 @@ export const registerVoiceOutputCandidate = (socket) => {
 // calls this (via the `voice:output:claim` socket event) on focus / visibility
 // / explicit request. The previous primary is told it lost the binding so its
 // UI can reflect the change; the new primary is told it now owns output.
+// Stamp claim recency so a later election or promotion picks the
+// most-recently-focused tab (not merely the newest connection), without making
+// it primary. Used directly while voice is disabled so focus history survives
+// until voice is enabled.
+export const noteVoiceOutputFocus = (socket) => {
+  if (!socket) return;
+  candidates.add(socket);
+  claimSeq.set(socket, ++claimCounter);
+};
+
 export const claimVoiceOutput = (socket) => {
   if (!socket) return null;
-  candidates.add(socket);
-  // Stamp claim recency so a later disconnect promotes the most-recently-focused
-  // survivor (not merely the newest connection). Re-stamped on every claim.
-  claimSeq.set(socket, ++claimCounter);
+  noteVoiceOutputFocus(socket);
   if (primary === socket) return socket;
   const prev = primary;
   primary = socket;

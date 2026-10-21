@@ -335,14 +335,44 @@ describe('voice:output single-recipient wiring', () => {
     expect(getVoiceOutputSocket()).toBe(b);
   });
 
-  it('ignores output claims while voice is disabled', async () => {
-    getVoiceConfig.mockResolvedValueOnce({ enabled: false });
+  it('does not elect a primary while voice is disabled, but remembers focus for later', async () => {
+    getVoiceConfig.mockResolvedValue({ enabled: false });
+    const focused = makeFakeSocket();
+    const background = makeFakeSocket();
+    registerVoiceHandlers(focused);
+    registerVoiceHandlers(background);
+    focused.fire('voice:output:available');
+    background.fire('voice:output:available');
+    focused.fire('voice:output:claim');
+    await flush();
+    expect(focused.emitted.filter((e) => e.event === 'voice:output:primary')).toHaveLength(0);
+
+    // Voice enabled with no further focus change: the first election picks the
+    // tab the user focused, not the later-connected background tab.
+    getVoiceConfig.mockResolvedValue({ enabled: true });
+    expect(getVoiceOutputSocket()).toBe(focused);
+  });
+
+  it('drops a claim from a tab that disconnected while the config was read', async () => {
     const a = makeFakeSocket();
     registerVoiceHandlers(a);
-    a.fire('voice:output:available');
+    a.fire('voice:output:claim');
+    a.connected = false;
+    await flush();
+    expect(a.emitted.filter((e) => e.event === 'voice:output:primary')).toHaveLength(0);
+    expect(getVoiceOutputSocket()).toBe(null);
+  });
+
+  it('survives a config read failure without electing a primary', async () => {
+    getVoiceConfig.mockRejectedValueOnce(new Error('settings unreadable'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const a = makeFakeSocket();
+    registerVoiceHandlers(a);
     a.fire('voice:output:claim');
     await flush();
     expect(a.emitted.filter((e) => e.event === 'voice:output:primary')).toHaveLength(0);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('settings unreadable'));
+    errSpy.mockRestore();
   });
 });
 
