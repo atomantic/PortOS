@@ -19,7 +19,7 @@
  */
 
 import { createSyncScheduler } from './createSettingsGatedSyncScheduler.js';
-import { getYoutubeConfig, runSync } from './youtubeSync.js';
+import { getYoutubeConfig, runSync, readSyncState } from './youtubeSync.js';
 
 /**
  * Start the YouTube sync scheduler. No-ops when disabled in settings.
@@ -31,4 +31,5 @@ export const startYoutubeScheduler = createSyncScheduler({
   source: 'youtubeScheduler',
   getConfig: getYoutubeConfig,
   runSync,
+  getLastRunAt: async () => (await readSyncState()).lastRunAt,
 });

@@ -19,7 +19,7 @@
  */
 
 import { createSyncScheduler } from './createSettingsGatedSyncScheduler.js';
-import { getSpotifyConfig, runSync } from './spotifySync.js';
+import { getSpotifyConfig, runSync, readSyncState } from './spotifySync.js';
 
 /**
  * Start the Spotify sync scheduler. No-ops when disabled in settings.
@@ -31,4 +31,5 @@ export const startSpotifyScheduler = createSyncScheduler({
   source: 'spotifyScheduler',
   getConfig: getSpotifyConfig,
   runSync,
+  getLastRunAt: async () => (await readSyncState()).lastRunAt,
 });

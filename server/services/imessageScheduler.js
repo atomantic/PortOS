@@ -18,7 +18,7 @@
  */
 
 import { createSyncScheduler } from './createSettingsGatedSyncScheduler.js';
-import { getImessageConfig, runSync } from './imessageSync.js';
+import { getImessageConfig, runSync, readSyncState } from './imessageSync.js';
 
 /**
  * Start the iMessage sync scheduler. No-ops when disabled in settings.
@@ -30,4 +30,5 @@ export const startImessageScheduler = createSyncScheduler({
   source: 'imessageScheduler',
   getConfig: getImessageConfig,
   runSync,
+  getLastRunAt: async () => (await readSyncState()).lastRunAt,
 });
