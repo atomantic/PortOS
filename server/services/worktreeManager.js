@@ -1385,11 +1385,13 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
  *   run, forever. ONLY the discard path may pass this.
  */
 export async function removeWorktree(agentId, sourceWorkspace, branchName, options = {}) {
-  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
-  const ownershipHold = async () => claimCheckoutOwnerReason({
-    branchName, holderPath: join(WORKTREES_DIR, agentId), sourceWorkspace,
-    agents: await readClaimOwnershipAgents().catch(() => null), ignoreIds: [agentId],
-  });
+  const { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } = await import('./cosClaimOwnershipState.js');
+  // A retirement archiving this checkout with the lock released owns it until removal.
+  const ownershipHold = async () => checkoutRetirementFenceReason({ repoPath: sourceWorkspace, path: join(WORKTREES_DIR, agentId), branch: branchName })
+    || claimCheckoutOwnerReason({
+      branchName, holderPath: join(WORKTREES_DIR, agentId), sourceWorkspace,
+      agents: await readClaimOwnershipAgents().catch(() => null), ignoreIds: [agentId],
+    });
   const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
   return withClaimOwnershipLock(() => withCheckoutPublication(sourceWorkspace,
     () => removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold)));
@@ -1844,9 +1846,9 @@ function activeIdsReader(activeIds) {
  * can be removed out from under it. Resolves `remove()`'s result, or null when held.
  */
 async function removeIfStillOrphaned({ isOwned, branchName, holderPath, sourceWorkspace, readOwners }, remove) {
-  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock, checkoutRetirementFenceReason } = await import('./cosClaimOwnershipState.js');
   return withClaimOwnershipLock(async () => {
-    if (isOwned()) return null;
+    if (isOwned() || checkoutRetirementFenceReason({ repoPath: sourceWorkspace, path: holderPath, branch: branchName })) return null;
     const agents = await readOwners();
     if (claimCheckoutOwnerReason({ branchName, holderPath, sourceWorkspace, agents })) return null;
     const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
