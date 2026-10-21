@@ -45,6 +45,14 @@ export const listCodeAnimationJobPage = ({ cursor, signal, limit = 50 } = {}) =>
   request(`/code-animation/jobs?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
     { signal, silent: true });
 
+// `version` is the poster's mtime from the jobs page; the server caches each URL forever.
+export const codeAnimationPosterUrl = (id, version) =>
+  `/api/code-animation/jobs/${encodeURIComponent(id)}/poster?v=${encodeURIComponent(version)}`;
+
+// Resolves { posterVersion } once captured (null when the page drew nothing); captures run one at a time.
+export const requestCodeAnimationPoster = (id, options) =>
+  request(`/code-animation/jobs/${encodeURIComponent(id)}/poster`, { method: 'POST', ...options });
+
 export const getCodeAnimationJob = (id, options) =>
   request(`/code-animation/generate/${encodeURIComponent(id)}`, options);
 
