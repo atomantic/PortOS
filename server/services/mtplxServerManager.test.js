@@ -964,6 +964,86 @@ describe('mtplxServerManager', () => {
     });
   });
 
+  // #12723: every start of the daemon shares one exclusive slot, so a direct
+  // start or a tuning relaunch cannot `pm2 delete` a wake that is still loading.
+  describe('serializing starts against an on-demand wake (#12723)', () => {
+    const count = (verb) => execPm2Calls.filter((c) => c[0] === verb).length;
+
+    // Holds the next `pm2 start` until released, leaving that launch in flight.
+    const holdNextPm2Start = () => {
+      const record = pm2Module.execPm2.getMockImplementation();
+      let release;
+      const held = new Promise((resolve) => { release = resolve; });
+      const state = { reached: false, release: () => release() };
+      pm2Module.execPm2.mockImplementation(async (args) => {
+        if (args[0] === 'start' && !state.reached) {
+          state.reached = true;
+          await held;
+        }
+        return record(args);
+      });
+      return state;
+    };
+
+    let findBinary;
+    beforeEach(() => {
+      findBinary = vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
+    });
+
+    it('runs a direct start only after an in-flight wake settles, deleting nothing meanwhile', async () => {
+      const hold = holdNextPm2Start();
+      const wake = ensureMtplxRunning();
+      await vi.waitFor(() => expect(hold.reached).toBe(true));
+      const deletesBeforeStart = count('delete');
+
+      // An unqueued start resolves the binary synchronously, before its first await.
+      const binaryLookups = findBinary.mock.calls.length;
+      const direct = startMtplxServer({ port: 8000 }).catch((err) => err);
+      expect(findBinary.mock.calls.length).toBe(binaryLookups);
+
+      hold.release();
+      expect(await wake).toEqual({ ready: true, reason: null });
+      // Queued behind the wake, the direct start finds it online and refuses
+      // instead of replacing it.
+      expect((await direct).message).toMatch(/already running/);
+      expect(count('delete')).toBe(deletesBeforeStart);
+      expect(count('start')).toBe(1);
+      expect(pm2State.status).toBe('online');
+    });
+
+    it('resolves a wake issued during a tuning relaunch after it, with no second start', async () => {
+      await startMtplxServer({ port: 8010 });
+      execPm2Calls = [];
+      const hold = holdNextPm2Start();
+      const relaunch = relaunchMtplxServerWithTuning({ contextWindow: 32768 });
+      // Held after the relaunch's stop: the daemon is down, which a wake
+      // outside the slot reads synchronously as "start it".
+      await vi.waitFor(() => expect(hold.reached).toBe(true));
+      expect(pm2State).toBeNull();
+
+      // The relaunched checkpoint takes a couple of probes to load, so a wake
+      // outside the slot cannot settle by finding the port already answering.
+      let loadingProbes = 2;
+      vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockImplementation(async () => {
+        if (pm2State?.status !== 'online') return { reachable: false };
+        if (loadingProbes > 0) {
+          loadingProbes -= 1;
+          return { reachable: false };
+        }
+        return { reachable: true };
+      });
+
+      const wake = ensureMtplxRunning();
+      hold.release();
+
+      expect((await relaunch).applied).toBe(true);
+      expect(await wake).toEqual({ ready: true, reason: null });
+      expect(count('start')).toBe(1);
+      const launch = execPm2Calls.find((c) => c[0] === 'start');
+      expect(launch[launch.indexOf('--context-window') + 1]).toBe('32768');
+    });
+  });
+
   describe('surviving an idle-reaper stop (#8105)', () => {
     // Bug #2 from the issue: `stopMtplxServer` clears `currentConfig`, and the
     // saved launch line used to hold only `model`/`port` — an assessment's

@@ -215,7 +215,7 @@ const onDemand = createOnDemandDaemon({
   readSection: () => readSettings().then((settings) => settings?.localLlm?.mtplx ?? null),
   endpointFor,
   probe: probeEndpoint,
-  start: (config) => startMtplxServer(config),
+  start: (config) => launchMtplxServer(config),
   stop: () => stopMtplxServer(),
   getStatusStrict: () => getAppStatusStrict(MTPLX_APP),
   clearStatusCache: () => clearJlistCache(),
@@ -474,7 +474,17 @@ async function resolveStartModel(requested, emit) {
 }
 
 /**
- * Start `mtplx serve` under PM2.
+ * Start `mtplx serve` under PM2, queued behind any in-flight on-demand wake,
+ * explicit start, or tuning relaunch (`onDemand.runStart`, #12723) so it cannot
+ * `pm2 delete` a launch that is still loading.
+ *
+ * @param {Parameters<typeof launchMtplxServer>[0]} [options]
+ */
+export const startMtplxServer = (options = {}) => onDemand.runStart(() => launchMtplxServer(options));
+
+/**
+ * The unserialized start behind `startMtplxServer`. Only code already holding
+ * the start slot calls it directly: the on-demand wake and the tuning relaunch.
  *
  * `waitMs` overrides how long this blocks before handing back `online: false`
  * for a server that is still loading. The LLMs-page launcher takes the short
@@ -496,7 +506,7 @@ async function resolveStartModel(requested, emit) {
  *
  * @param {{port?: number, model?: string, tuning?: object, waitMs?: number, onProgress?: (line: string) => void}} options
  */
-export async function startMtplxServer(options = {}) {
+async function launchMtplxServer(options = {}) {
   const { port = DEFAULT_PORT, model: requestedModel = null, tuning = null, waitMs, onProgress = () => {} } = options;
   const normalizedTuning = normalizeTuning('mtplx', tuning);
   const emit = (line) => { appendLog(line); onProgress(line); };
@@ -706,6 +716,12 @@ export async function relaunchMtplxServerWithTuning(tuning = {}) {
     return { applied: false, reason: 'that tuning renders no `mtplx serve` flag, so there is nothing to relaunch with', config: currentConfig };
   }
 
+  // The status read sits inside the slot too, so a relaunch queued behind a
+  // wake reads the configuration that wake brought up (#12723).
+  return onDemand.runStart(() => relaunchWithTuning(normalized, knobs));
+}
+
+async function relaunchWithTuning(normalized, knobs) {
   const status = await getMtplxServerStatus();
   if (!status.running) {
     return { applied: false, reason: 'MTPLX is not running, so PortOS has no checkpoint to relaunch with', config: null };
@@ -752,7 +768,7 @@ export async function relaunchMtplxServerWithTuning(tuning = {}) {
   await stopMtplxServer();
   await waitForPortRelease(port);
 
-  const started = await startMtplxServer(next).catch((err) => ({ failure: err }));
+  const started = await launchMtplxServer(next).catch((err) => ({ failure: err }));
   if (started.failure) {
     const reason = launchFailureReason(started.failure);
     console.error(`❌ MTPLX: tuning launch failed (${started.failure.message}) — restoring the previous configuration`);
@@ -803,7 +819,7 @@ const launchFailureReason = (err) => (err?.code === 'MTPLX_EXITED'
  */
 async function restorePrevious(previous, failure) {
   await waitForPortRelease(previous.port ?? DEFAULT_PORT);
-  const restored = await startMtplxServer(previous).catch((err) => {
+  const restored = await launchMtplxServer(previous).catch((err) => {
     console.error(`❌ MTPLX: could not restore the previous configuration: ${err.message}`);
     return null;
   });
