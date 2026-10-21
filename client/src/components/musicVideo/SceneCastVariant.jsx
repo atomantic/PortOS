@@ -14,9 +14,12 @@ export default function SceneCastVariant({ project, scene, castMedia = null, onE
   const variant = scene.characterVariant || null;
   const id = (name) => `mv-scene-${scene.sceneId}-cast-${name}`;
   // A shot's hand-picked references keep their guide ids only for the variant that picked them.
+  // A pick of only guides returns to Auto (null), so the new variant's guides lead; [] would send nothing.
   const save = (next) => {
-    const patch = Array.isArray(scene.frameReferenceIds)
-      ? { characterVariant: next, frameReferenceIds: scene.frameReferenceIds.filter((refId) => !refId.startsWith('mvr-guide-')) }
+    const picked = scene.frameReferenceIds;
+    const kept = Array.isArray(picked) ? picked.filter((refId) => !refId.startsWith('mvr-guide-')) : null;
+    const patch = Array.isArray(picked)
+      ? { characterVariant: next, frameReferenceIds: kept.length || !picked.length ? kept : null }
       : { characterVariant: next };
     onEditLocal(scene.sceneId, patch);
     onSave(scene.sceneId, patch);

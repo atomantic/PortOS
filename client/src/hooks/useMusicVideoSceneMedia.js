@@ -160,7 +160,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     return () => { live = false; };
   }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs]);
   // The Casting media of every cast member a shot names in its `characterVariant`
-  // (#12763), keyed by ingredient id: an array once loaded, null when the load
+  // (#12763), keyed by ingredient id: an array once loaded, null when the first load
   // failed, absent while pending. A shot's frames lead with that member's guides;
   // without an array the shot uses the automatic set. Casting has no change event,
   // so the board reloads them when its tab comes back into view.
@@ -173,7 +173,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     let active = true;
     Promise.all(castIds.split(',').map((id) => listCatalogIngredientMedia(id, { silent: true })
       .then((media) => [id, Array.isArray(media) ? media : null], () => [id, null])))
-      .then((entries) => { if (active) setCastMedia(Object.fromEntries(entries)); });
+      // A failed reload keeps the media already loaded; only a never-loaded member is marked failed (null).
+      .then((entries) => { if (active) setCastMedia((prev) => Object.fromEntries(entries.map(([id, media]) => [id, media ?? prev[id] ?? null]))); });
     return () => { active = false; };
   }, [castIds, castRefresh]);
   // A render before the shot's cast guides load would silently go out without them.

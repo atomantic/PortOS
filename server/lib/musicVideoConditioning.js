@@ -48,6 +48,9 @@ export function sceneCastVariant(scene) {
   return variant && typeof variant.ingredientId === 'string' && variant.ingredientId ? variant : null;
 }
 
+// A file a frame render can name as a reference (routes/imageGen.js galleryImageFilenameSchema).
+const SENDABLE_REFERENCE_FILE = /^[^/\\]+\.(png|jpe?g|webp)$/i;
+
 /**
  * The Casting guide images (catalogMediaLibrary.pickGuideMedia) for the cast
  * member a scene's `characterVariant` names, as visual-spec-shaped references.
@@ -60,9 +63,10 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
   const media = variant && castMedia?.[variant.ingredientId];
   if (!Array.isArray(media)) return [];
   const name = (project?.concept?.subjects || []).find((s) => s?.ingredientId === variant.ingredientId)?.name || 'Cast guide';
-  return pickGuideMedia(media, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES)
-    // Frame renders name references by basename (routes/imageGen.js), so a nested key cannot be sent.
-    .filter((m) => typeof m.mediaKey === 'string' && m.mediaKey && !/[/\\]/.test(m.mediaKey))
+  // Frame renders accept only a png/jpg/jpeg/webp basename (routes/imageGen.js). Filtering before
+  // the pick lets the next candidate take an unsendable file's slot.
+  const sendable = media.filter((m) => typeof m?.mediaKey === 'string' && SENDABLE_REFERENCE_FILE.test(m.mediaKey));
+  return pickGuideMedia(sendable, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES)
     .map((m) => {
       const v = m.library?.variant || {};
       const detail = v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || '');

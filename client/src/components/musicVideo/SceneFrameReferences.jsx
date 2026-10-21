@@ -56,7 +56,13 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   // Until the cast member's guides load, an edit would save the row without them.
   const variantId = scene.characterVariant?.ingredientId;
   const locked = disabled || Boolean(castMedia && variantId && castMedia[variantId] === undefined);
-  const set = (next) => { onEditLocal(scene.sceneId, { frameReferenceIds: next }); onSave(scene.sceneId, { frameReferenceIds: next }); };
+  // A saved guide id that does not resolve now (its media failed to load) is kept, so an edit cannot drop it.
+  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => refId.startsWith('mvr-guide-') && !ids.includes(refId));
+  const set = (picked) => {
+    const next = picked && [...picked, ...unresolvedGuides].slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+    onEditLocal(scene.sceneId, { frameReferenceIds: next });
+    onSave(scene.sceneId, { frameReferenceIds: next });
+  };
 
   return (
     <div role="group" aria-label="References sent with the frames" className="space-y-1">
