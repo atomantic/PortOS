@@ -94,7 +94,6 @@ const KNOWN = Object.freeze({
   'src/components/media/UniverseMoodBoardPicker.jsx': 3,
   'src/components/messages/DraftsTab.jsx': 1,
   'src/components/messages/IMessageTab.jsx': 1,
-  'src/components/models/ProviderFallbacks.jsx': 1,
   'src/components/music/AlbumsManager.jsx': 2,
   'src/components/music/ChiptunePanel.jsx': 1,
   'src/components/music/TracksManager.jsx': 2,

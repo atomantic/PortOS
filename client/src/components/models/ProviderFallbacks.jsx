@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, ListOrdered, Plus, Save, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
+import ListLoadError from '../ui/ListLoadError';
 import PageSkeleton from '../ui/PageSkeleton';
 import ProviderModelSelector from '../ProviderModelSelector';
 
@@ -19,15 +20,23 @@ export default function ProviderFallbacks() {
   const [entries, setEntries] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
+  // A failed read stays an error with Retry: rendering it as an empty list
+  // would read as "no fallback list" over a configured chain.
   useEffect(() => {
-    Promise.all([api.getProviders(), api.getProviderFallbacks()])
+    let active = true;
+    setLoadError(null);
+    Promise.all([api.getProviders({ silent: true }), api.getProviderFallbacks({ silent: true })])
       .then(([provs, chain]) => {
+        if (!active) return;
         setProviders((provs.providers || []).filter((p) => p.enabled !== false));
         setEntries(chain.entries || []);
       })
-      .catch(() => setEntries([]));
-  }, []);
+      .catch((err) => { if (active) setLoadError(err); });
+    return () => { active = false; };
+  }, [loadAttempt]);
 
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers]);
 
@@ -54,6 +63,13 @@ export default function ProviderFallbacks() {
     toast.success('Fallback list saved');
   };
 
+  if (loadError) {
+    return (
+      <div className="mx-auto w-full max-w-4xl">
+        <ListLoadError what="the fallback list" error={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} />
+      </div>
+    );
+  }
   if (!entries) return <PageSkeleton header="none" label="Loading fallbacks" cards={2} sidebar={false} />;
 
   return (
