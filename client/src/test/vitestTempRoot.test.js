@@ -69,5 +69,5 @@ describe('real client runner temp lifecycle', () => {
     } finally {
       rmSync(host, { recursive: true, force: true });
     }
-  }, 90000);
+  }, 150000); // must exceed the fixture's readiness bound (WATCH_READY_MS)
 });

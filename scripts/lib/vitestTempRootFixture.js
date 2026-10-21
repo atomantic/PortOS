@@ -106,7 +106,10 @@ it('controlled sibling failure', async ({ signal }) => {
 `;
 }
 
-const WATCH_READY_MS = 60000;
+// Measured: the whole watch test takes ~30s idle and ~50s under 2x CPU oversubscription
+// (a loaded full client run), so 60s left no headroom (#12834). Readiness is event-driven;
+// this only bounds a hang.
+const WATCH_READY_MS = 120000;
 const FIXTURE_RUN_CEILING_MS = 120000;
 
 // `sweepGroup` also signals after the leader exited: its detached group can
