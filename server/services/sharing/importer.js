@@ -17,8 +17,8 @@
  * local `data/{images,videos}/` directories (skip-if-present). v2+ manifests
  * use a content-addressed source at `assets/blobs/<hash>`; legacy v1 manifests
  * fall back to `assets/{images,videos}/<filename>`. Media-job records bundled
- * in `records/media/` are merged into `data/media-jobs.json` so re-render
- * workflows have the prompt + params.
+ * in `records/media/` are handed to the media queue (which owns
+ * `data/media-jobs.json`) so re-render workflows have the prompt + params.
  */
 
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
@@ -50,6 +50,7 @@ import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentH
 import { isStr } from '../../lib/textUtils.js';
 import { detectImageFormat, detectMediaManifest } from '../../lib/mimeTypes.js';
 import { ASSET_PULL_MAX_BYTES, SIDECAR_MAX_BYTES } from './assetLimits.js';
+import { importArchivedJobs } from '../mediaJobQueue/index.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 
 // Record kinds that participate in the non-blocking conflict journal. Universe,
@@ -443,32 +444,19 @@ function importableMediaJob(raw, recordId) {
   };
 }
 
-/** Merge bucket-bundled media-job records into local data/media-jobs.json. */
+/** Hand bucket-bundled media-job records to the media queue, which owns data/media-jobs.json. */
 async function mergeMediaJobRecords(bucketPath, recordIds) {
   const mediaDir = bucketRecordsDir(bucketPath, 'media');
   if (!existsSync(mediaDir)) return;
-  const persistedPath = join(PATHS.data, 'media-jobs.json');
-  const [persisted, incoming] = await Promise.all([
-    readJSONFile(persistedPath, { jobs: [] }, { logError: false, strict: true }),
-    Promise.all((recordIds || []).map(async (id) => {
-      if (!isSafeRecordId(id)) return null;
-      const recordPath = bucketRecordPath(bucketPath, 'media', id);
-      if (!existsSync(recordPath)) return null;
-      // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
-      return readJSONFile(recordPath, null, { logError: false });
-    })),
-  ]);
-  const byId = new Map((persisted.jobs || []).map((j) => [j.id, j]));
-  let changed = false;
-  for (const [index, raw] of incoming.entries()) {
-    const job = importableMediaJob(raw, recordIds[index]);
-    if (!job || byId.has(job.id)) continue;
-    byId.set(job.id, job);
-    changed = true;
-  }
-  if (changed) {
-    await atomicWrite(persistedPath, { ...persisted, jobs: Array.from(byId.values()) });
-  }
+  const incoming = await Promise.all((recordIds || []).map(async (id) => {
+    if (!isSafeRecordId(id)) return null;
+    const recordPath = bucketRecordPath(bucketPath, 'media', id);
+    if (!existsSync(recordPath)) return null;
+    // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
+    return importableMediaJob(await readJSONFile(recordPath, null, { logError: false }), id);
+  }));
+  const records = incoming.filter(Boolean);
+  if (records.length) await importArchivedJobs(records);
 }
 
 /**

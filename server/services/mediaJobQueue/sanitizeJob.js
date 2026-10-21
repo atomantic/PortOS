@@ -5,7 +5,7 @@ import { mediaJobExecutionLane } from '../../lib/generationModes.js';
 
 // Public projection of a media job. Keep worker-only paths and subprocess
 // details out of both the queue API and the processing dashboard.
-const PARAM_ALLOWLIST = new Set([
+export const PARAM_ALLOWLIST = new Set([
   'prompt', 'negativePrompt', 'modelId', 'model', 'effort',
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
   'batchSize', 'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',

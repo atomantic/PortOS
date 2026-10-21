@@ -53,6 +53,7 @@ import { parseQuotaDeferral, formatDeferral } from '../../lib/imageQuotaSignal.j
 import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane } from '../../lib/generationModes.js';
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
 import { createVideoHolds } from './videoHolds.js';
+import { importedArchiveRow } from './importedJob.js';
 import {
   canReceiveProgress, canRequestCancellation, claimTerminalOutcome,
   snapshotCancellationIntent, applyCancellationIntent, restoreCancellationIntent,
@@ -113,6 +114,9 @@ const RESERVATION_RECONCILE_RETRY_MS = 30_000;
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_ARCHIVE = 500;
+// Share-bucket re-render records outlive the 24h TTL (they are old by nature) but
+// stay bounded; the oldest imports drop first.
+const MAX_IMPORTED_ARCHIVE = 2000;
 // Defaults (env-overridable). `Number(non-numeric)` → NaN, and
 // `setTimeout(NaN)` fires immediately — that would fail every job at boot
 // if MEDIA_JOB_WATCHDOG_*_MS were set to garbage. Fall back to the default
@@ -639,12 +643,14 @@ async function persistImpl() {
 function trimArchiveForSnapshot() {
   const cutoff = Date.now() - COMPLETED_TTL_MS;
   const pendingArchive = archive.filter((job) => job.durabilityPending);
-  const trimmedArchive = archive
-    .filter((j) => {
-      const ts = j.completedAt ? new Date(j.completedAt).getTime() : Date.now();
-      return !j.durabilityPending && (j.params?.remotePeerReservation === true || ts > cutoff);
-    })
-    .filter((job) => job.params?.remotePeerReservation !== true).slice(-MAX_PERSISTED_ARCHIVE)
+  const isImported = (job) => job.imported === true && !job.durabilityPending && job.params?.remotePeerReservation !== true;
+  const trimmedArchive = archive.filter(isImported).slice(-MAX_IMPORTED_ARCHIVE)
+    .concat(archive
+      .filter((j) => {
+        const ts = j.completedAt ? new Date(j.completedAt).getTime() : Date.now();
+        return !isImported(j) && !j.durabilityPending && (j.params?.remotePeerReservation === true || ts > cutoff);
+      })
+      .filter((job) => job.params?.remotePeerReservation !== true).slice(-MAX_PERSISTED_ARCHIVE))
     .concat(archive.filter((job) => !job.durabilityPending && job.params?.remotePeerReservation === true), pendingArchive);
   // Mutate `archive` in place so subsequent reads see the trim too.
   archive.length = 0;
@@ -757,8 +763,9 @@ function captureQueueSnapshot() {
   const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
   const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending }) =>
+  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs,
+      ...(imported === true ? { imported } : {}),
       ...(status !== 'completed' && durabilityPending?.status === 'completed' ? { durabilityPending } : {}) }),
   );
   const transitions = [...pendingTransitions].filter(([job]) => canWriteOutcome(job));
@@ -1353,6 +1360,26 @@ export function quiesceMediaJobQueue() {
   wakeWorker?.();
   console.log(`⏸️  mediaJobQueue dispatch stopped for shutdown (${queue.length} waiting job(s) kept queued)`);
   return true;
+}
+
+// Share-bucket import entry point. The queue owns media-jobs.json: a writer
+// outside it is overwritten by the next persist() (the snapshot is built from
+// memory alone), so imported re-render records go through the in-memory archive
+// and are saved with the queue's own snapshot. Ids already known to the queue
+// win; returns the number of rows added.
+export async function importArchivedJobs(records) {
+  if (!initPromise) throw new Error('Media queue is not initialized; imported jobs cannot be saved');
+  await initPromise;
+  if (persistBlocked) throw new Error('Media queue storage is blocked until its snapshot is repaired and the server restarts');
+  let added = 0;
+  for (const record of Array.isArray(records) ? records : []) {
+    const row = importedArchiveRow(record);
+    if (!row || findJob(row.id)) continue;
+    archive.push(row);
+    added += 1;
+  }
+  if (added) await persist();
+  return added;
 }
 
 // Drop a job from the archive (e.g. after a successful retry — the old failed
