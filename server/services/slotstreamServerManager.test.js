@@ -337,6 +337,41 @@ describe('slotstreamServerManager', () => {
     });
   });
 
+  // #12723: a direct start shares the wake's exclusive start slot, so it cannot
+  // `pm2 delete` a wake that is still loading.
+  describe('serializing starts against an on-demand wake (#12723)', () => {
+    it('runs a direct start only after an in-flight wake settles, deleting nothing meanwhile', async () => {
+      const findBinary = vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
+      const record = pm2Module.execPm2.getMockImplementation();
+      let release;
+      const held = new Promise((resolve) => { release = resolve; });
+      let reached = false;
+      pm2Module.execPm2.mockImplementation(async (args) => {
+        if (args[0] === 'start' && !reached) {
+          reached = true;
+          await held;
+        }
+        return record(args);
+      });
+      const count = (verb) => execPm2Calls.filter((c) => c[0] === verb).length;
+
+      const wake = ensureSlotstreamRunning();
+      await vi.waitFor(() => expect(reached).toBe(true));
+      const deletesBeforeStart = count('delete');
+
+      // An unqueued start resolves the binary synchronously, before its first await.
+      const binaryLookups = findBinary.mock.calls.length;
+      const direct = startSlotstreamServer().catch((err) => err);
+      expect(findBinary.mock.calls.length).toBe(binaryLookups);
+
+      release();
+      expect(await wake).toEqual({ ready: true, reason: null });
+      expect((await direct).message).toMatch(/already running/);
+      expect(count('delete')).toBe(deletesBeforeStart);
+      expect(count('start')).toBe(1);
+    });
+  });
+
   describe('isSlotstreamProvider', () => {
     it('matches a local Slotstream endpoint on the dedicated port', () => {
       expect(isSlotstreamProvider({
