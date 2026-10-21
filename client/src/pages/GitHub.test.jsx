@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 
 const mock = vi.hoisted(() => ({
   getGitHubRepos: vi.fn(),
@@ -12,6 +12,11 @@ const mock = vi.hoisted(() => ({
   syncGitHubSecret: vi.fn(),
   archiveGitHubRepo: vi.fn(),
   unarchiveGitHubRepo: vi.fn(),
+  getGitHubAccounts: vi.fn(),
+  createGitHubAccount: vi.fn(),
+  updateGitHubAccount: vi.fn(),
+  deleteGitHubAccount: vi.fn(),
+  getGitHubAccountStatus: vi.fn(),
 }));
 
 vi.mock('../services/api', () => mock);
@@ -292,5 +297,65 @@ describe('GitHub account setup', () => {
     expect(screen.getByRole('checkbox', { name: 'NPM' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Sync to Repos' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Sync Repos' })).not.toBeDisabled();
+  });
+});
+
+const renderAccounts = () => render(
+  <MemoryRouter initialEntries={['/devtools/github/accounts']}>
+    <Routes>
+      <Route path="/devtools/github/:tab" element={<GitHub />} />
+    </Routes>
+  </MemoryRouter>,
+);
+
+const IMPLICIT = {
+  id: 'github-com', label: 'github.com', host: 'github.com', login: null,
+  trust: 'public', allowedProviders: null, mode: 'observe', enabled: true, implicit: true,
+};
+
+describe('GitHub accounts tab', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock.getGitHubAccounts.mockResolvedValue([IMPLICIT]);
+    mock.getGitHubAccountStatus.mockResolvedValue({ id: 'github-com', host: 'github.com', status: 'ok', login: 'octocat', remedy: null, command: null });
+  });
+
+  it('lists each account with its trust level and live sign-in state', async () => {
+    renderAccounts();
+    expect(await screen.findByText('Signed in')).toBeTruthy();
+    expect(screen.getByText('@octocat')).toBeTruthy();
+    expect(screen.getByText('Public')).toBeTruthy();
+    expect(screen.getByText('Observe')).toBeTruthy();
+    expect(mock.getGitHubRepos).not.toHaveBeenCalled();
+  });
+
+  it('adds an Enterprise account as Private by default and offers its sign-in command', async () => {
+    mock.createGitHubAccount.mockImplementation(async (body) => ({
+      ...body, id: 'acct-2', label: 'alice @ ghe.example.com', mode: 'observe', enabled: true, allowedProviders: null,
+    }));
+    mock.getGitHubAccountStatus.mockImplementation(async (id) => (id === 'acct-2'
+      ? { id, host: 'ghe.example.com', status: 'not-authenticated', login: null, remedy: 'Sign in.', command: 'gh auth login --hostname ghe.example.com --web --clipboard' }
+      : { id, host: 'github.com', status: 'ok', login: 'octocat', remedy: null, command: null }));
+    renderAccounts();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'ghe.example.com' } });
+    fireEvent.change(screen.getByLabelText('Login'), { target: { value: 'alice' } });
+    expect(screen.getByLabelText('Trust').value).toBe('private');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add account' }).at(-1));
+
+    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'private' });
+    const signIn = await screen.findByRole('link', { name: 'Sign in on ghe.example.com' });
+    expect(decodeURIComponent(signIn.getAttribute('href'))).toBe('/shell?cmd=gh auth login --hostname ghe.example.com --web --clipboard');
+  });
+
+  it('removes an account only after an inline confirmation', async () => {
+    mock.deleteGitHubAccount.mockResolvedValue({ id: 'github-com' });
+    renderAccounts();
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    expect(mock.deleteGitHubAccount).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(mock.deleteGitHubAccount).toHaveBeenCalledWith('github-com');
+    expect(await screen.findByText('No GitHub accounts yet.')).toBeTruthy();
   });
 });

@@ -1,7 +1,8 @@
 import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, githubRepoUpdateSchema, githubSecretSchema } from '../lib/validation.js';
+import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
+import * as githubAccounts from '../services/githubAccounts.js';
 
 const router = express.Router();
 
@@ -93,6 +94,34 @@ router.post('/secrets/:name/sync', asyncHandler(async (req, res) => {
 router.get('/status', asyncHandler(async (req, res) => {
   const status = await githubService.getStatus();
   res.json(status);
+}));
+
+/**
+ * GET /api/github/accounts — configured accounts (github.com + Enterprise hosts)
+ */
+router.get('/accounts', asyncHandler(async (req, res) => {
+  res.json(await githubAccounts.listAccounts());
+}));
+
+router.post('/accounts', asyncHandler(async (req, res) => {
+  const body = validateRequest(githubAccountCreateSchema, req.body);
+  res.status(201).json(await githubAccounts.createAccount(body));
+}));
+
+router.put('/accounts/:id', asyncHandler(async (req, res) => {
+  const body = validateRequest(githubAccountUpdateSchema, req.body);
+  res.json(await githubAccounts.updateAccount(req.params.id, body));
+}));
+
+router.delete('/accounts/:id', asyncHandler(async (req, res) => {
+  res.json(await githubAccounts.deleteAccount(req.params.id));
+}));
+
+/**
+ * GET /api/github/accounts/:id/status — live `gh` sign-in probe for one account
+ */
+router.get('/accounts/:id/status', asyncHandler(async (req, res) => {
+  res.json(await githubAccounts.getAccountStatus(req.params.id));
 }));
 
 export default router;
