@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, Music2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ModelInputPreview from '../media/ModelInputPreview';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { generateCodeAnimationSoundtrack, listMusicEngines, previewMusicPrompt } from '../../services/api';
@@ -21,6 +23,8 @@ const readChoice = () => {
   return stored && typeof stored === 'object' ? stored : {};
 };
 
+const fetchEngines = async () => (await listMusicEngines({ silent: true }))?.engines;
+
 const fits = (engine, filmSec) => !Number.isFinite(engine.maxDurationSec) || engine.maxDurationSec >= filmSec;
 
 function engineNote(engine, filmSec) {
@@ -36,7 +40,8 @@ function engineNote(engine, filmSec) {
  */
 export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, durationSeconds, onReady }) {
   const filmSec = Math.ceil(Number(durationSeconds) || 0);
-  const [engines, setEngines] = useState(null);
+  const engineList = useListResource(fetchEngines);
+  const engines = engineList.state === 'ready' ? engineList.items : null;
   const [choice, setChoice] = useState(readChoice);
   const [prompt, setPrompt] = useState(soundtrack?.prompt || '');
   const [starting, setStarting] = useState(false);
@@ -46,12 +51,6 @@ export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, d
     setPrompt(soundtrack?.prompt || '');
     setMediaJobId(soundtrack?.mediaJobId || null);
   }, [jobId, soundtrack?.mediaJobId]);
-
-  useEffect(() => {
-    listMusicEngines({ silent: true })
-      .then((data) => setEngines(Array.isArray(data?.engines) ? data.engines : []))
-      .catch(() => setEngines([]));
-  }, []);
 
   const usable = useMemo(() => (engines || []).filter((engine) => engine.ready && fits(engine, filmSec)), [engines, filmSec]);
   const engine = useMemo(() => {
@@ -118,7 +117,7 @@ export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, d
           <label htmlFor="ca-soundtrack-engine" className={labelClass}>Music model</label>
           <select id="ca-soundtrack-engine" value={engine?.id || ''} disabled={!engines?.length || live}
             onChange={(event) => updateChoice({ engine: event.target.value, modelId: '' })} className={inputClass}>
-            {engines === null && <option value="">Loading models…</option>}
+            {engines === null && <option value="">{engineList.state === 'error' ? 'Models unavailable' : 'Loading models…'}</option>}
             {engines?.length === 0 && <option value="">No music models</option>}
             {(engines || []).map((item) => {
               const note = engineNote(item, filmSec);
@@ -136,6 +135,7 @@ export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, d
           </div>
         )}
       </div>
+      {engineList.state === 'error' && <ListLoadError what="music models" error={engineList.error} onRetry={engineList.retry} />}
       {engine && engineBlocked === 'not installed' && (
         <p className="text-xs text-port-warning">{engine.name} is not installed. Install it in Music › Generate, or pick another model.</p>
       )}
