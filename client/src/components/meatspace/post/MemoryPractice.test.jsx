@@ -401,4 +401,41 @@ describe('MemoryPractice daily routine actions', () => {
     expect(payload.results).toHaveLength(2);
     expect(payload.results.map(result => result.chunkId)).toEqual(['chunk-a', 'chunk-b']);
   });
+
+  it('shows a Retry — not "No chunks available" — when chunk mastery read fails, and shows empty state after successful retry', async () => {
+    getChunkMastery.mockRejectedValueOnce(new Error('Server unavailable'));
+    const item = {
+      id: 'example-memory',
+      title: 'Example Memory',
+      content: {
+        lines: [{ text: 'First line.' }],
+        chunks: [{ id: 'chunk-a', label: 'Chunk A', lineRange: [0, 0] }],
+      },
+    };
+
+    render(
+      <MemoryPractice
+        itemId={item.id}
+        item={item}
+        mode="spaced"
+        onSelectMode={() => {}}
+        onExitMode={() => {}}
+        onBack={() => {}}
+        onContinue={() => {}}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Could not load chunk mastery — Server unavailable');
+    });
+    expect(screen.queryByText('No chunks available for spaced practice.')).not.toBeInTheDocument();
+
+    getChunkMastery.mockResolvedValueOnce([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('No chunks available for spaced practice.')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });
