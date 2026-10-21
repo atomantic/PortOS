@@ -377,6 +377,39 @@ export const catalogMediaAttachSchema = z.object({
   caption: z.string().trim().max(2_000).optional().nullable(),
 }).strict();
 
+// Casting reference library patch (#casting-reference-library). Identifies a
+// live media row by (mediaKey, kind) and merges any of variant/tags/guide.
+export const catalogMediaLibraryVariantSchema = z.object({
+  age: z.number().int().min(0).max(150).optional(),
+  era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
+  wardrobeId: z.string().trim().min(1).max(59).optional(),
+  label: z.string().trim().max(120).optional(),
+}).strict();
+export const catalogMediaLibraryPatchSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+  kind: z.enum(MEDIA_KINDS),
+  variant: catalogMediaLibraryVariantSchema.optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  guide: z.boolean().optional(),
+}).strict();
+// Attach mood-board items to a cast member as references, optionally tagging
+// them all with one variant (e.g. every age-7 sheet) and tags.
+export const catalogMediaFromMoodBoardSchema = z.object({
+  boardId: z.string().trim().min(1).max(64),
+  itemIds: z.array(z.string().trim().min(1).max(64)).min(1).max(100),
+  variant: catalogMediaLibraryVariantSchema.optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  inferAge: z.boolean().optional(),
+}).strict();
+export const catalogMediaLibraryQuerySchema = z.object({
+  age: z.coerce.number().int().min(0).max(150).optional(),
+  era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
+  wardrobeId: z.string().trim().min(1).max(59).optional(),
+  tag: z.string().trim().min(1).max(40).optional(),
+  kind: z.enum(MEDIA_KINDS).optional(),
+  guide: z.enum(['true', 'false']).optional(),
+}).strip();
+
 // Set-portrait body — same as attach minus `kind` (the route forces 'portrait').
 export const catalogPortraitSetSchema = z.object({
   mediaKey: z.string().trim().min(1).max(512),
@@ -769,6 +802,8 @@ export const catalogSyncMediaSchema = z.object({
   role: z.string().max(64).nullable().optional(),
   caption: z.string().max(2_000).nullable().optional(),
   metadata: catalogMediaMetadataSchema.optional(),
+  // catalog v12: Casting reference library (variant/tags/guide); normalized on apply.
+  library: z.object({}).passthrough().refine((v) => JSON.stringify(v).length <= 4096, { message: 'media library exceeds 4KB' }).optional(),
   createdAt: isoDate,
   deleted: z.boolean().optional(),
   deletedAt: z.string().nullable().optional(),

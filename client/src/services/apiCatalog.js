@@ -235,3 +235,15 @@ export const getCatalogMergeReceipt = (id, options) =>
   request(`/catalog/ingredient-merges/${enc(id)}`, options);
 export const recoverCatalogMerge = (id, options) =>
   request(`/catalog/ingredient-merges/${enc(id)}/recover`, { method: 'POST', body: '{}', ...options });
+
+// --- Casting reference library (variant / tags / render-guide flag) ---
+export const updateCatalogIngredientMediaLibrary = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media/library`, { method: 'PATCH', body: JSON.stringify(body), ...options });
+
+export const attachCatalogIngredientMediaFromMoodBoard = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media/from-mood-board`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const getCatalogIngredientGuides = (id, params = {}, options) => {
+  const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '' && v !== null)).toString();
+  return request(`/catalog/ingredients/${enc(id)}/media/guides${qs ? `?${qs}` : ''}`, options);
+};

@@ -7,6 +7,7 @@
  * unsaved draft. Full-width page; owns its scroll.
  */
 
+import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibrary.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
 import { Sparkles, Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt } from 'lucide-react';
@@ -864,6 +865,10 @@ function IngredientEditor() {
             onSetRole={identityReadOnly ? undefined : handleSetMediaRole}
             onDetach={identityReadOnly ? undefined : handleDetachMedia}
           />
+        )}
+
+        {activeTab === 'references' && record.type === 'character' && (
+          <CatalogReferenceLibrary ingredientId={record.id} media={media} readOnly={identityReadOnly} onChanged={refreshMedia} />
         )}
 
         {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (

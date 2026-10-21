@@ -425,7 +425,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // BOTH sides apply the guard. Tombstone-only transfers already skip the
   // live-row equality check; a v11 receiver's guard still degrades safely
   // for a ≤v10 sender's tombstone-less payload (unchanged "no opinion" path).
-  catalog: 11,
+  // v12 = `catalog_ingredient_media.library` (Casting reference library:
+  // variant age/era/wardrobe, tags, render-guide flag). A ≤v11 receiver would
+  // drop it and whole-row LWW it back, so live transfers need equal versions.
+  catalog: 12,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
