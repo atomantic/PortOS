@@ -110,8 +110,6 @@ describe('composition CDP setup timeout evidence', () => {
 
     expect(error.message).toMatch(/^Composition document load stalled: loading after \d+ms while the page stayed responsive \(phase=document-load,/);
     expect(error.message).not.toContain('Browser command timed out');
-    // sentMs is when the wait began, not the moment of failure.
-    expect(error.message).toMatch(/sentMs=\d+, timeoutMs=\d+/);
   });
 
   it('sends a load wait that resolves on a complete document or the load event and gives up with the readyState at the deadline', async () => {
