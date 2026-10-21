@@ -9,14 +9,15 @@
  */
 
 import { realpathSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
+import { posix } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from './childProcess.js';
 
 const LSOF_TIMEOUT_MS = 10_000;
 const LSOF_MAX_BUFFER = 16 * 1024 * 1024;
 
-const realOrResolved = (p) => { try { return realpathSync(p); } catch { return resolve(p); } };
+// lsof only runs on darwin/linux and prints POSIX paths, so compare with posix semantics on every host.
+const realOrResolved = (p) => { try { return realpathSync(p); } catch { return posix.resolve(p); } };
 
 /** Working directories from `lsof -Fn` field output (`p<pid>` then `n<path>` per process). */
 function parseLsofCwds(stdout) {
@@ -38,6 +39,6 @@ export async function hasProcessCwdInside(dir, { platform = process.platform, ru
   const cwds = out == null ? [] : parseLsofCwds(out);
   // This very process always has a cwd, so an empty listing means lsof failed.
   if (cwds.length === 0) return true;
-  const targets = new Set([resolve(dir), realOrResolved(dir)]);
-  return cwds.some(cwd => [...targets].some(t => cwd === t || cwd.startsWith(t.endsWith(sep) ? t : t + sep)));
+  const targets = new Set([posix.resolve(dir), realOrResolved(dir)]);
+  return cwds.some(cwd => [...targets].some(t => cwd === t || cwd.startsWith(t.endsWith(posix.sep) ? t : t + posix.sep)));
 }
