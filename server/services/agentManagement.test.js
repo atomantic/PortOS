@@ -18,10 +18,10 @@
  * driven through the real exported function with a mocked `exec`.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { ChildProcess } from '../lib/childProcess.js';
 import { pinPlatform } from '../lib/testHelper.js';
-import { readFileSync } from 'fs';
+import { readFileSync, rmSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -120,18 +120,30 @@ vi.mock('../lib/hostShutdown.js', async (importOriginal) => ({
   readHostShutdownMarker: vi.fn().mockResolvedValue(null),
   clearHostShutdownMarker: vi.fn().mockResolvedValue(undefined),
 }));
-// Real admission with only the settlement release observable: the default instance
-// resolves the live data root, so a spy keeps this suite off real journal state.
+// Real admission over a per-file temp directory with only the settlement
+// release observable via spy. Isolated from the live install's maintenance state.
 // The sweep also reconciles dead-owner reservations. This file's maintenance
-// proxy forwards every other method to the live journal, so the reconcile must
-// stay stubbed or a test would stamp the install's publication residue.
+// proxy forwards every other method to the test journal, so the reconcile must
+// stay stubbed or a test would stamp publication residue.
+const { maintenanceTestDir } = vi.hoisted(() => {
+  // eslint-disable-next-line no-restricted-syntax
+  const { mkdtempSync } = require('node:fs');
+  const { tmpdir } = require('node:os');
+  const { join } = require('node:path');
+  return { maintenanceTestDir: mkdtempSync(join(tmpdir(), 'agent-management-maintenance-')) };
+});
+afterAll(() => {
+  rmSync(maintenanceTestDir, { recursive: true, force: true });
+});
+
 vi.mock('./deadOwnerReservations.js', () => ({
   reconcileDeadOwnerReservations: vi.fn(() => ({ marked: 0, released: 0 })),
 }));
 vi.mock('../lib/maintenanceAdmission.js', async (importOriginal) => {
   const actual = await importOriginal();
   const finishResource = vi.fn().mockResolvedValue([]);
-  return { ...actual, maintenance: new Proxy(actual.maintenance, { get: (target, key) => key === 'finishResource' ? finishResource : target[key] }) };
+  const admission = actual.createMaintenanceAdmission(maintenanceTestDir, { assertWrite: () => {} });
+  return { ...actual, maintenance: new Proxy(admission, { get: (target, key) => key === 'finishResource' ? finishResource : target[key] }) };
 });
 vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
 vi.mock('./agentRunnerOutputBatchers.js', () => ({ flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined) }));
