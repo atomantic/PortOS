@@ -19,14 +19,12 @@ describe('actionFeedback', () => {
 
     document.getElementById('icon').click();
     expect(button.getAttribute('data-pending')).toBe('true');
-    expect(button.getAttribute('aria-busy')).toBe('true');
     expect(getPendingActionCount()).toBe(1);
 
     req.reject(new Error('boom'));
     await req.promise.catch(() => {});
     await nextTask();
     expect(button.hasAttribute('data-pending')).toBe(false);
-    expect(button.hasAttribute('aria-busy')).toBe(false);
     expect(getPendingActionCount()).toBe(0);
   });
 
@@ -44,7 +42,7 @@ describe('actionFeedback', () => {
     expect(document.getElementById('send').hasAttribute('data-pending')).toBe(false);
   });
 
-  it('leaves an aria-busy the component manages alone', async () => {
+  it('never touches a component-managed aria-busy', async () => {
     document.body.innerHTML = '<button id="b" aria-busy="true">Run</button>';
     const button = document.getElementById('b');
     const req = deferred();

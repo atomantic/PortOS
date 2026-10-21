@@ -43,23 +43,19 @@ export function installActionFeedback(doc = globalThis.document) {
   doc.addEventListener('submit', capture, true);
 }
 
-// Elements whose aria-busy this module set, so a component that manages its
-// own aria-busy (RunTaskButton, RunActionButton) never has it removed here.
-const ownsAriaBusy = new WeakSet();
-
+// Only `data-pending` is set here. `aria-busy` stays with components that
+// manage it: a button that sets its busy state in the same click hasn't
+// committed it yet when the request starts, so this module could not tell its
+// attribute from one it added, and removing it on settle would strip a busy
+// state the component still holds. ActionActivityBar announces long waits.
 const markPending = (element, delta) => {
   const count = (pendingByElement.get(element) ?? 0) + delta;
   if (count > 0) {
     pendingByElement.set(element, count);
     element.setAttribute('data-pending', 'true');
-    if (!element.hasAttribute('aria-busy')) {
-      element.setAttribute('aria-busy', 'true');
-      ownsAriaBusy.add(element);
-    }
   } else {
     pendingByElement.delete(element);
     element.removeAttribute('data-pending');
-    if (ownsAriaBusy.delete(element)) element.removeAttribute('aria-busy');
   }
 };
 
