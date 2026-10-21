@@ -4,7 +4,7 @@
  * page from here, so they load the same policy, audio global and three.js
  * vendor files.
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { PREVIEW_PAGE_CSP } from '../../lib/generatedPreviewSandbox.js';
@@ -30,7 +30,10 @@ export async function writeComposition(name, html) {
   const scratchRoot = join(PATHS.data, SCRATCH_DIR, name);
   const composition = join(scratchRoot, 'composition');
   await mkdir(composition, { recursive: true });
-  await writeFile(join(composition, 'index.html'), html);
+  await writeFile(join(composition, 'index.html'), html).catch(async (error) => {
+    await rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  });
   return { scratchRoot, directory: `${SCRATCH_DIR}/${name}/composition`, composition };
 }
 
@@ -39,12 +42,18 @@ export async function stageCodeAnimationPage(name, html, { audioGlobal, audioDat
   const three = importsThree(html);
   const page = injectPolicy(three ? injectThreeImportMap(html) : html, { csp: PREVIEW_PAGE_CSP, audioGlobal, audioDataUrl });
   const written = await writeComposition(name, page);
-  if (three) {
-    for (const file of await threeStagedFiles()) {
-      const target = join(written.composition, file.rel);
-      await mkdir(join(target, '..'), { recursive: true });
-      await writeFile(target, file.data);
+  // Callers learn scratchRoot only on success, so a half-staged tree is removed here.
+  try {
+    if (three) {
+      for (const file of await threeStagedFiles()) {
+        const target = join(written.composition, file.rel);
+        await mkdir(join(target, '..'), { recursive: true });
+        await writeFile(target, file.data);
+      }
     }
+  } catch (error) {
+    await rm(written.scratchRoot, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
   return written;
 }
