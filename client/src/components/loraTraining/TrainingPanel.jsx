@@ -13,6 +13,8 @@ import { Dumbbell, Loader2, Square, CheckCircle2, XCircle, Sparkles, RotateCcw, 
 import toast from '../ui/Toast';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 import CheckpointPicker from './CheckpointPicker';
 import LiveSampleGallery from './LiveSampleGallery';
 import {
@@ -27,13 +29,33 @@ import {
 
 const isActive = (run) => run && ['queued', 'running'].includes(run.status);
 
+// The status is a single object; wrapping it in a one-item list lets it ride
+// the same loading | ready | error resource as the lists, so a failed read is
+// never mistaken for "no engine installed".
+const fetchStatus = () => getLoraTrainingStatus({ silent: true }).then((s) => [s]);
+
+// FLUX.2 Klein only — mflux ≥0.17 dropped FLUX.1 training, and the torch
+// fallback trains the same bf16 Klein bases.
+const fetchTrainableModels = () => listImageModels({ silent: true })
+  .then((list) => (Array.isArray(list) ? list : []).filter((m) => m.runner === 'flux2'));
+
+// Default to the 9B base — it captures identity better than 4B and trains
+// fine via 4-bit QLoRA (the server forces the panic-safe quant tier
+// regardless of which inference id is picked). Prefer the plain 9B id we
+// validated (flux2-klein-9b); avoid the explicit *-bf16 variant (the heavy
+// path that GPU-watchdog-panics this M5). Fall back to any 9B, then first.
+const defaultBaseModelId = (trainable) => {
+  const nineB = trainable.filter((m) => /9b/i.test(m.id));
+  const nonBf16 = nineB.find((m) => !/bf16/i.test(m.id));
+  return (nonBf16 || nineB[0] || trainable[0])?.id || '';
+};
+
 export default function TrainingPanel({ dataset, readiness, triggerSaving, onRunFinished }) {
-  const [status, setStatus] = useState(null);
-  const [models, setModels] = useState([]);
+  const { items: statusItems, state: statusState, error: statusError, retry: retryStatus } = useListResource(fetchStatus);
+  const status = statusItems[0] ?? null;
+  const { items: models, state: modelsState, error: modelsError, retry: retryModels } = useListResource(fetchTrainableModels);
   const [baseModelId, setBaseModelId] = useState('');
   const [params, setParams] = useState(null);
-  const [activeRun, setActiveRun] = useState(null);
-  const [lastRun, setLastRun] = useState(null);
   const [starting, setStarting] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -43,28 +65,12 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   const [captionLeak, setCaptionLeak] = useState({ fragments: [], total: 0 });
 
   useEffect(() => {
-    getLoraTrainingStatus().then((s) => {
-      setStatus(s);
-      setParams((prev) => prev || { ...s.defaults });
-    }).catch(err => { console.warn('⚠️ Failed to load training status: ' + err.message); setStatus({ runtimes: {}, defaults: {} }); });
-    listImageModels().then((list) => {
-      // FLUX.2 Klein only — mflux ≥0.17 dropped FLUX.1 training, and the
-      // torch fallback trains the same bf16 Klein bases.
-      const trainable = (Array.isArray(list) ? list : []).filter((m) => m.runner === 'flux2');
-      setModels(trainable);
-      // Default to the 9B base — it captures identity better than 4B and trains
-      // fine via 4-bit QLoRA (the server forces the panic-safe quant tier
-      // regardless of which inference id is picked). Prefer the plain 9B id we
-      // validated (flux2-klein-9b); avoid the explicit *-bf16 variant (the heavy
-      // path that GPU-watchdog-panics this M5). Fall back to any 9B, then first.
-      setBaseModelId((prev) => {
-        if (prev) return prev;
-        const nineB = trainable.filter((m) => /9b/i.test(m.id));
-        const nonBf16 = nineB.find((m) => !/bf16/i.test(m.id));
-        return (nonBf16 || nineB[0] || trainable[0])?.id || '';
-      });
-    }).catch(err => { console.warn('⚠️ Failed to load image models: ' + err.message); setModels([]); });
-  }, []);
+    if (status) setParams((prev) => prev || { ...status.defaults });
+  }, [status]);
+
+  useEffect(() => {
+    if (modelsState === 'ready') setBaseModelId((prev) => prev || defaultBaseModelId(models));
+  }, [models, modelsState]);
 
   // A reassigned dataset keeps its id but its old runs belong to the previous
   // subject. Re-fetch (and re-filter) whenever the subject identity moves,
@@ -74,23 +80,30 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   const charEntryId = dataset.character?.entryId;
   const charUniverseId = dataset.character?.universeId;
   const charEntryKind = dataset.character?.entryKind || 'characters';
-  const refreshRuns = useCallback(() => {
+  const fetchRuns = useCallback(() => (
     // Query by dataset id, then guard by the full subject identity. That covers
     // character/object/place reassignments without relying on the legacy
     // `character_id` mirror column.
-    listLoraTrainingRuns({ datasetId: dataset.id, limit: 5 }).then((runs) => {
-      const own = (Array.isArray(runs) ? runs : []).filter(
-        (r) => !r.character || (
-          r.character.entryId === charEntryId
-          && r.character.universeId === charUniverseId
-          && (r.character.entryKind || 'characters') === charEntryKind
-        ),
-      );
-      setActiveRun(own.find(isActive) || null);
-      setLastRun(own.find((r) => !isActive(r)) || null);
-    }).catch(err => console.warn('⚠️ Failed to refresh training runs: ' + err.message));
-  }, [dataset.id, charEntryId, charEntryKind, charUniverseId]);
-  useEffect(() => { refreshRuns(); }, [refreshRuns]);
+    listLoraTrainingRuns({ datasetId: dataset.id, limit: 5 }, { silent: true }).then((runs) => (Array.isArray(runs) ? runs : []).filter(
+      (r) => !r.character || (
+        r.character.entryId === charEntryId
+        && r.character.universeId === charUniverseId
+        && (r.character.entryKind || 'characters') === charEntryKind
+      ),
+    ))
+  ), [dataset.id, charEntryId, charEntryKind, charUniverseId]);
+  const { items: runs, state: runsState, error: runsError, retry: retryRuns, setItems: setRuns } = useListResource(fetchRuns);
+  const activeRun = runs.find(isActive) || null;
+  const lastRun = runs.find((r) => !isActive(r)) || null;
+  // Re-read in place so the panel does not flash back to the launch form. A
+  // failed re-read drops to the resource's error state, which disables Start:
+  // an unknown run state must never offer a second multi-hour launch.
+  const refreshRuns = useCallback(() => {
+    fetchRuns().then(setRuns).catch((err) => {
+      console.warn('⚠️ Failed to refresh training runs: ' + err.message);
+      retryRuns();
+    });
+  }, [fetchRuns, setRuns, retryRuns]);
 
   const sseUrl = activeRun ? `/api/lora-training/runs/${activeRun.id}/events` : null;
   const { frames, latest, closed } = useSseProgress(sseUrl, { enabled: !!activeRun });
@@ -181,8 +194,12 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   const disabledReason = !readiness?.trainable
     ? `Needs ${readiness?.required ?? 10} captioned images (have ${readiness?.captioned ?? 0})`
     : triggerSaving ? 'Saving trigger word…'
+    : statusState === 'error' ? 'Could not read training status'
+    : runsState === 'error' ? 'Could not read training runs'
+    : modelsState === 'error' ? 'Could not load base models'
+    : (statusState === 'loading' || runsState === 'loading') ? 'Checking training status…'
     : !baseModelId ? 'Pick a base model'
-    : (status && !engineReady) ? 'No training engine — install mflux ≥0.17 or run scripts/setup-image-video.sh'
+    : !engineReady ? 'No training engine — install mflux ≥0.17 or run scripts/setup-image-video.sh'
     : null;
 
   if (activeRun) {
@@ -280,18 +297,27 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
       {(lastRun?.status === 'completed' || lastRunCheckpoints > 0) && (
         <CheckpointPicker run={lastRun} onPromoted={refreshRuns} />
       )}
+      {statusState === 'error' && <ListLoadError what="training status" error={statusError} onRetry={retryStatus} />}
+      {runsState === 'error' && <ListLoadError what="training runs" error={runsError} onRetry={retryRuns} />}
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2">
-          <label htmlFor="lt-base-model" className="block text-xs text-gray-400 mb-1">Base model</label>
-          <select
-            id="lt-base-model"
-            value={baseModelId}
-            onChange={(e) => setBaseModelId(e.target.value)}
-            className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
-          >
-            {!models.length && <option value="">No trainable models registered</option>}
-            {models.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
-          </select>
+          {modelsState === 'error' ? (
+            <ListLoadError what="base models" error={modelsError} onRetry={retryModels} />
+          ) : (
+            <>
+              <label htmlFor="lt-base-model" className="block text-xs text-gray-400 mb-1">Base model</label>
+              <select
+                id="lt-base-model"
+                value={baseModelId}
+                onChange={(e) => setBaseModelId(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+              >
+                {modelsState === 'loading' && <option value="">Loading models…</option>}
+                {modelsState === 'ready' && !models.length && <option value="">No trainable models registered</option>}
+                {models.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+              </select>
+            </>
+          )}
         </div>
         {params && [
           ['steps', 'Steps', 10, 10000],

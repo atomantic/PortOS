@@ -93,7 +93,7 @@ export const stripLoraDatasetSharedCaptionFragments = (id) =>
 
 // ---- Training runs ----
 
-export const getLoraTrainingStatus = () => request('/lora-training/status');
+export const getLoraTrainingStatus = (options = {}) => request('/lora-training/status', options);
 
 export const startLoraTrainingRun = ({ datasetId, baseModelId, name, params, acknowledgeCaptionLeak }, options = {}) =>
   request('/lora-training/runs', {
@@ -108,13 +108,13 @@ export const startLoraTrainingRun = ({ datasetId, baseModelId, name, params, ack
     }),
   });
 
-export const listLoraTrainingRuns = (filters = {}) => {
+export const listLoraTrainingRuns = (filters = {}, options = {}) => {
   const params = new URLSearchParams();
   for (const key of ['status', 'characterId', 'datasetId', 'limit']) {
     if (filters[key]) params.set(key, filters[key]);
   }
   const qs = params.toString();
-  return request(`/lora-training/runs${qs ? `?${qs}` : ''}`);
+  return request(`/lora-training/runs${qs ? `?${qs}` : ''}`, options);
 };
 
 export const cancelLoraTrainingRun = (runId) =>
@@ -127,8 +127,8 @@ export const resumeLoraTrainingRun = (runId, { silent = false } = {}) =>
 
 // Checkpoints for a finished run — each with step, loss, preview thumbnail,
 // and which one is currently deployed. Drives the manual checkpoint picker.
-export const listLoraTrainingCheckpoints = (runId) =>
-  request(`/lora-training/runs/${runId}/checkpoints`);
+export const listLoraTrainingCheckpoints = (runId, options = {}) =>
+  request(`/lora-training/runs/${runId}/checkpoints`, options);
 
 // Mid-training sample timeline (step + thumbnail URL) — seeds the live
 // progress gallery so a reload mid-run shows every sample rendered so far.
