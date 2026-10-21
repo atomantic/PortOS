@@ -970,23 +970,30 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   const ignoredInput = (rel) => IGNORED_INPUT_PREFIXES.some((prefix) => rel === prefix.slice(0, -1) || rel.startsWith(prefix));
   const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
 
-  /** Sorted files under `dirRel`, or null when the tree exceeds the limit. */
-  const tree = (dirRel) => {
-    if (trees.has(dirRel)) return trees.get(dirRel);
+  /**
+   * Sorted files under `dirRel`, or null when the collected set exceeds the
+   * limit. `nameRe` keeps only direct children whose basename matches; other
+   * names are not counted, so a directory past the limit can still contribute
+   * a small explicit set (the Python requirement pins under `scripts/`).
+   */
+  const tree = (dirRel, nameRe = null) => {
+    const cacheKey = nameRe ? `${dirRel}\0${nameRe.source}\0${nameRe.flags}` : dirRel;
+    if (trees.has(cacheKey)) return trees.get(cacheKey);
     const files = [];
     const walk = (dir) => {
       for (const name of fs.list(dir).sort()) {
         if (SKIP_TREE_DIRS.has(name) || (dir === '' && name === 'data')) continue;
         const rel = dir === '' ? name : `${dir}/${name}`;
         const kind = fs.kind(rel);
-        if (kind === 'dir') walk(rel);
-        else if (kind === 'file') files.push(rel);
+        if (kind === 'dir') {
+          if (!nameRe) walk(rel);
+        } else if (kind === 'file' && (!nameRe || nameRe.test(name))) files.push(rel);
         if (files.length > DIRECTORY_INPUT_LIMIT) throw new RangeError('tree too large');
       }
     };
     let result = files;
     try { walk(dirRel); } catch (error) { if (!(error instanceof RangeError)) throw error; result = null; }
-    trees.set(dirRel, result);
+    trees.set(cacheKey, result);
     return result;
   };
 
@@ -1202,7 +1209,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const problems = [];
     for (const owner of FIXTURE_OWNERS) {
       if (!owner.tests.includes(testRel)) continue;
-      const files = tree(owner.dir);
+      const files = tree(owner.dir, owner.fileRe);
       if (files === null) problems.push(`fixture directory too large: ${owner.dir}`);
       else for (const file of files) inputs.add(file);
     }

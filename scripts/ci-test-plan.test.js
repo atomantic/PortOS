@@ -1004,6 +1004,48 @@ describe('CI test impact planner', () => {
       expect(missingOwner.reason).toMatch(/fixture owner not tracked/);
     });
 
+    it('scopes a requirements-pin change to the installer contract', () => {
+      const requirements = [
+        'scripts/requirements-ltx25-cuda.txt',
+        'scripts/requirements-minimax-h3-cuda.txt',
+        'scripts/requirements-minimax-h3-mlx.lock.txt',
+        'scripts/requirements-wan22-cuda.txt',
+      ];
+      const owners = [
+        'scripts/setup-image-video.test.js',
+        'server/lib/pythonSetup.install.test.js',
+        'server/lib/pythonSetup.test.js',
+      ];
+      const plan = buildCiTestPlan(requirements, { trackedFiles: [...TRACKED, ...requirements, ...owners] });
+
+      expect(plan.full).toBe(false);
+      expect(plan.reason).toBe('text fixture owners');
+      expect(plan.server).toMatchObject({ mode: 'files', sources: [] });
+      expect(plan.server.files).toEqual([
+        ...owners,
+        'server/services/taskPromptDefaults.test.js',
+      ].sort());
+      expect(plan.client).toMatchObject({ mode: 'skip' });
+      expect(plan).toMatchObject({ db: false, build: false, smoke: false, windows: false });
+    });
+
+    it('still widens CI for an unmapped text artifact', () => {
+      const owners = [
+        'scripts/setup-image-video.test.js',
+        'server/lib/pythonSetup.test.js',
+      ];
+      const unmapped = buildCiTestPlan(['scripts/notes.txt'], {
+        trackedFiles: [...TRACKED, ...owners, 'scripts/notes.txt'],
+      });
+      expect(unmapped.full).toBe(true);
+      expect(unmapped.reason).toMatch(/unclassified changed file: scripts\/notes\.txt/);
+
+      // The pin pattern is one filename shape, not every requirements text file.
+      const bare = buildCiTestPlan(['scripts/requirements.txt'], { trackedFiles: TRACKED });
+      expect(bare.full).toBe(true);
+      expect(bare.reason).toMatch(/unclassified/);
+    });
+
     it('keeps an independent lockfile full-CI trigger authoritative', () => {
       const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT, 'server/package-lock.json'], {
         trackedFiles: [...REVIEW_LOOP_TRACKED, ...WINDOWS_CONTRACT_TESTS],
