@@ -127,7 +127,7 @@ export async function upsertMediaFromPeer(media) {
   const hasLibrary = Object.prototype.hasOwnProperty.call(media, 'library')
     && media.library && typeof media.library === 'object' && !Array.isArray(media.library);
   const libraryColumn = hasLibrary ? ', library' : '';
-  const libraryPlaceholder = hasLibrary ? `, ${(hasTombstoneFields ? 10 : 7) + (hasMetadata ? 1 : 0)}` : '';
+  const libraryPlaceholder = hasLibrary ? `, $${(hasTombstoneFields ? 10 : 7) + (hasMetadata ? 1 : 0)}` : '';
   const libraryUpdate = hasLibrary ? ', library = EXCLUDED.library' : '';
   const libraryParam = hasLibrary ? [JSON.stringify(normalizeLibrary(media.library))] : [];
   if (hasTombstoneFields) {
