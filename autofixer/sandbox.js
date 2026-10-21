@@ -616,6 +616,9 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir =
 // gets a contained `npm ci` (registry-only network) into the same work volume
 // first, under the install phase's own wall limit (the verify timeout bounds
 // the verify command alone); the verify then runs with no network over it.
+// The install allowlist includes the worktree's .npmrc registries; that file
+// is the repository's committed one, because validateProposedDiff refuses any
+// .npmrc edit before a verify runs.
 async function runDockerVerify(command, cwd, { dataDir, homeDir, timeoutMs, docker, bubblewrapReason }) {
   const run = docker.run ?? (await import('../server/services/dockerContainment.js')).runContained;
   const common = { worktree: cwd, settings: docker.settings ?? {}, dataDir, homeDir };

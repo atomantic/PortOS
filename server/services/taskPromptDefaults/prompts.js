@@ -541,9 +541,10 @@ step through it instead of on the host:
   container made to any other file are withheld and listed; review \`git diff\` before committing);
 - lint, typecheck, test, build: \`node "{portosRoot}/scripts/contained-run.js" --phase validate -- "<command>"\`
   (no network; it reuses the node_modules the install left in its container volume).
-Exit 2 means containment is unavailable and nothing ran: proceed with the host
+Any other exit means containment is not confirmed (2: refused and nothing ran;
+1: the PortOS API or the run failed; 124: timed out): proceed with the host
 commands as before and state in your summary that dependency validation ran
-UNCONTAINED, with the refusal reason. A refusal is never a passing check.
+UNCONTAINED, with the exit code and message. A refusal is never a passing check.
 
 Inventory security alerts first, then resolve open automated dependency PRs before
 making your own bumps. A Dependabot/Renovate PR is a bump already

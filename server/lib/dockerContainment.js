@@ -268,7 +268,9 @@ export const DOCKER_CONTAINMENT_DRIVER = `set -u
 phase="$1"; command="$2"
 mkdir -p "$HOME" "$TMPDIR/npm-logs"
 cd ${DOCKER_CONTAINMENT_PATHS.work} || exit 125
-tar -C ${DOCKER_CONTAINMENT_PATHS.src} --exclude=node_modules --exclude=.git -cf - . | tar -C ${DOCKER_CONTAINMENT_PATHS.work} -xf - || { echo "portos-contained: could not copy the source" >&2; exit 125; }
+# Two steps, not a pipe: POSIX sh has no pipefail, so a failed read of /src
+# would otherwise go unnoticed and the step would run on a partial tree.
+{ tar -C ${DOCKER_CONTAINMENT_PATHS.src} --exclude=node_modules --exclude=.git -cf "$TMPDIR/src.tar" . && tar -C ${DOCKER_CONTAINMENT_PATHS.work} -xf "$TMPDIR/src.tar" && rm -f "$TMPDIR/src.tar"; } || { echo "portos-contained: could not copy the source" >&2; exit 125; }
 echo "portos-contained: $phase phase"
 sh -c "$command"
 status=$?
