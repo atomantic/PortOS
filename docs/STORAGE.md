@@ -46,11 +46,22 @@ certify the old work finished. Do not delete this journal to claim readiness; pr
 with the related run/job records for recovery. A backup restored on another installation
 therefore starts conservatively if it contains a hold or outstanding operations.
 
+On server boot, and again when orphaned agents are swept, a settled `Output publication`
+reservation whose admitting pid is dead is marked unsettled and given an uncertainty
+stamp. That does not release it. A live pid is left untouched, and an already-unsettled
+stamp is not rotated. A dead-owner `cli-run` is released only when that run's metadata
+already has an end time, which is published before the reservation is finished. A
+dead-owner `mind-turn` is released only when the persisted mind record has no active
+turn, including after restart recovery of an orphaned turn. A dead-owner `provider`
+reservation names a caller label, not a run, so it is left in place. Other kinds are
+not inferred from a dead pid alone.
+
 Publication admission keeps a maintenance reservation while waiting for a backup
 cut. A boundary-owned callback-start check retires a refused admission without
 claiming any output was saved; failures after callback entry remain unresolved.
 Legacy generic `Output publication` reservations lack destination/batch identity.
-They cannot be swept automatically. After explicit operator disposition of
+They cannot be swept as finished work. A dead admitting process is recorded as
+uncertainty, not deleted. After explicit operator disposition of
 inspected evidence, an owning service may use `reconcilePublicationRefusal` with
 the exact original operation and hold. Its synchronous publisher must preserve a
 durable, replayable evidence receipt before retirement; the journal validates and

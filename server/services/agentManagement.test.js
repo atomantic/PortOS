@@ -122,6 +122,12 @@ vi.mock('../lib/hostShutdown.js', async (importOriginal) => ({
 }));
 // Real admission with only the settlement release observable: the default instance
 // resolves the live data root, so a spy keeps this suite off real journal state.
+// The sweep also reconciles dead-owner reservations. This file's maintenance
+// proxy forwards every other method to the live journal, so the reconcile must
+// stay stubbed or a test would stamp the install's publication residue.
+vi.mock('./deadOwnerReservations.js', () => ({
+  reconcileDeadOwnerReservations: vi.fn(() => ({ marked: 0, released: 0 })),
+}));
 vi.mock('../lib/maintenanceAdmission.js', async (importOriginal) => {
   const actual = await importOriginal();
   const finishResource = vi.fn().mockResolvedValue([]);

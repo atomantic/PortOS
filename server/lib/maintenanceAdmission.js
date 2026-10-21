@@ -310,6 +310,21 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
         && seen.resource === op.resource && seen.pid === op.pid && seen.startedAt === op.startedAt));
     return before - state.operations.length;
   });
+  // Fail-closed stamp for records the caller already inspected. Already-unsettled
+  // rows keep their stamp: rotating it would invalidate an operator receipt in flight.
+  const markOperationsUncertain = expected => transaction(state => {
+    let marked = 0;
+    for (const op of state.operations) {
+      if (op.unsettled) continue;
+      const seen = expected.some(item => item.id === op.id && item.kind === op.kind
+        && item.resource === op.resource && item.pid === op.pid && item.startedAt === op.startedAt);
+      if (!seen) continue;
+      op.unsettled = true;
+      op.uncertaintyStamp = randomUUID();
+      marked += 1;
+    }
+    return marked;
+  });
   // Owning-service recovery only. Validation and durable receipt publication
   // run under the same journal lock as the exact reservation removal.
   const reconcileAbandonedAgent = ({ hold, agentId, validate, publish, replay }) => transaction(state => {
@@ -326,7 +341,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return receipt;
   });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 

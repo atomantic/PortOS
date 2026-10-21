@@ -68,6 +68,7 @@ import { recordCompletedRunUsage } from './usageReconciler.js';
 import { setAIToolkit as setProvidersToolkit } from './providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
 import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed } from './runner.js';
+import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { setAIToolkit as setPromptsToolkit } from './promptService.js';
 import { executeTuiRun as executeTuiRunFixed } from './tuiPromptRunner.js';
 import { initAutoFixer } from './autoFixer.js';
@@ -418,6 +419,11 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
  * server from listening; each logs its own failure and the boot continues.
  */
 const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
+  // A crashed process leaks settled reservations that finish() never reached.
+  // Stamp uncertain publications before later boot steps read the journal.
+  // Sync and non-throwing; CoS may be off. Smoke boot skips this whole function.
+  reconcileDeadOwnerReservations();
+
   // Keep the opt-in agent API key file current (Settings > Security). A no-op
   // beyond one settings read while the key is off. Disabled under smoke boot
   // with the rest of this function, so a smoke run never writes to $HOME.
