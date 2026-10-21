@@ -32,7 +32,7 @@ describe('migration 043 — seed Story Builder prompts', () => {
   });
 
   afterEach(() => {
-    rmSync(rootDir, { recursive: true, force: true });
+    rmSync(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it('seeds all three prompt files + stage-config entries on a fresh install', async () => {
