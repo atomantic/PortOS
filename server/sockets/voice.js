@@ -416,8 +416,19 @@ export const registerVoiceHandlers = (socket) => {
   // focused/visible (or where the user explicitly clicked "speak here") becomes
   // the single recipient of `voice:speak`. Last claim wins; the previous holder
   // is notified via voice:output:detached so its UI can reflect the handoff.
-  socket.on('voice:output:claim', () => {
-    claimVoiceOutput(socket);
+  // Ignored while voice is disabled: every tab claims on each focus/visibility
+  // change, and proactive speech is refused when disabled anyway. Candidates
+  // stay registered, so enabling voice later still lazily elects a recipient.
+  // Re-check the connection after the await: a tab that disconnected mid-read
+  // was already released and must not be re-added as primary.
+  socket.on('voice:output:claim', async () => {
+    try {
+      const cfg = await getVoiceConfig();
+      if (!cfg.enabled || socket.connected === false) return;
+      claimVoiceOutput(socket);
+    } catch (err) {
+      console.error(`❌ voice: output claim failed: ${err.message}`);
+    }
   });
 
   // ---------------------------------------------------------------------------
