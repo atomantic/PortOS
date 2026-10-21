@@ -690,6 +690,12 @@ export function getSessionProcess(sessionId) {
   return shellSessions.get(sessionId)?.pty || null;
 }
 
+// Automatic xterm replies to the TUI's own queries/focus tracking: focus
+// in/out, CPR, DA1/DA2, DSR, and OSC color answers. An attached viewer emits
+// these unprompted, so they are not a person typing over a pasted prompt.
+// eslint-disable-next-line no-control-regex
+const TERMINAL_REPLY_RE = /^(?:\x1b\[[IO]|\x1b\[\??[\d;]*[Rcn]|\x1b\][\s\S]*?(?:\x07|\x1b\\))+$/;
+
 /**
  * Write input to a shell session
  */
@@ -697,7 +703,10 @@ export function writeToSession(sessionId, data, options) {
   const session = shellSessions.get(sessionId);
   if (session) {
     session.lastInputAt = Date.now();
-    session.inputRevision = (session.inputRevision || 0) + 1;
+    // pasteToSession cancels its Enter retries when this moves; a terminal
+    // protocol reply must not, or an attached viewer silently strands the
+    // pasted prompt unsubmitted.
+    if (!TERMINAL_REPLY_RE.test(data)) session.inputRevision = (session.inputRevision || 0) + 1;
     // Runner proxies carry submission evidence alongside the Enter. Native
     // node-pty sessions retain their ordinary one-argument write contract.
     if (session.external && options?.promptSubmission) session.pty.write(data, options);
