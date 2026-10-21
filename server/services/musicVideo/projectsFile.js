@@ -106,6 +106,7 @@ async function reorderProjectScenesUnqueued(id, orderedIds) {
 async function mutateProject(id, transform) {
   const { all, idx } = await loadAllAndIndex(id);
   const outcome = await transform(all[idx]);
+  if (outcome.skipPersist) return outcome;
   all[idx] = outcome.project;
   await saveAll(all);
   return outcome;

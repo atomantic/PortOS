@@ -531,7 +531,8 @@ async function mutateProjectRecordAdmitted(id, transform, { source = null, runId
   let dropped = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
   const outcome = await write(id, async (current) => {
-    const outcome = transform(current);
+    // A transform may be async: the thumbnail heal re-checks job liveness under the lock.
+    const outcome = await transform(current);
     if (source) {
       const guarded = preserveAutomatedShotLocks(current, outcome.project, source, { runId });
       outcome.project = guarded.project;

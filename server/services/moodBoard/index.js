@@ -20,18 +20,42 @@ import * as store from './db.js';
 import { localizeImageUrl } from './localize.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
-// Read paths + federation entry points pass straight through to the store. The
+// Read paths + federation entry points pass straight through to the store, except
+// getBoard, which projects a note render a restart interrupted. The
 // asset-manifest filename resolver lives in logic.js (pure) and is re-exported
 // here so peerSync imports a single module (mirrors creativeDirector/local.js
 // re-exporting startingImageFilename).
 export {
   listBoards,
-  getBoard,
   listBoardIds,
   listBoardNames,
   mergeBoardsFromSync,
   pruneTombstonedBoards,
 } from './db.js';
+
+function hasQueuedTextNote(board) {
+  return Array.isArray(board?.items) && board.items.some((item) => item?.type === 'text' && item.render?.status === 'queued');
+}
+
+// Sync loads with includeDeleted stay a pure read: healing there would emit
+// from inside a peer push. Liveness matches claimItemRender (queued or running).
+export async function getBoard(id, options = {}) {
+  const board = await store.getBoard(id, options);
+  if (!board || options.includeDeleted || !hasQueuedTextNote(board)) return board;
+  const { getJob } = await import('../mediaJobQueue/index.js');
+  const healed = await store.healInterruptedNoteRenders(id, {
+    isLive: (jobId) => {
+      const status = getJob(jobId)?.status;
+      return status === 'queued' || status === 'running';
+    },
+  });
+  if (!healed) return null;
+  if (healed.changed) {
+    emitRecordUpdated('moodBoard', id);
+    console.warn(`⚠️ Mood board ${id}: a note render was interrupted by restart`);
+  }
+  return healed.board;
+}
 export { imageUrlToAppAsset } from './logic.js';
 
 // Pinterest importer (link + manual "Sync now"). Lives in its own module

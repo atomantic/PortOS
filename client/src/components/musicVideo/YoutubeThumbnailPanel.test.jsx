@@ -56,4 +56,31 @@ describe('YoutubeThumbnailPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /Paint the title into this image/ }));
     expect(k.paintThumbnail).toHaveBeenCalledWith({ source: { kind: 'thumbnail', filename: 'best.jpg' }, title: 'Example Song', notes: 'chrome letters' });
   });
+
+  const openPaint = async (kit, publishKit) => {
+    render(<YoutubeThumbnailPanel project={project({ youtubeThumbnail: kit })} publishKit={publishKit} />);
+    fireEvent.click(screen.getByRole('button', { name: /YouTube thumbnail/ }));
+    fireEvent.click(screen.getByText('Paint the title with the image model'));
+    await waitFor(() => expect(screen.getByRole('button', { name: '+ YouTube thumbnail brief' })).toBeTruthy());
+  };
+
+  it('disables Paint while the server still reports a live paint', async () => {
+    const made = { filename: 'yt-1.jpg', source: { kind: 'thumbnail', filename: 'best.jpg' }, title: 'Example Song', lettering: true, pending: { requestId: 'r1', jobId: 'job-live', mode: 'codex' } };
+    await openPaint(made, hook());
+    expect(screen.getByRole('button', { name: 'Painting…' })).toBeDisabled();
+    expect(screen.getByRole('status').textContent).toContain('Painting on codex');
+  });
+
+  it('enables Paint once a restart has cleared the pending paint', async () => {
+    const made = { filename: 'yt-1.jpg', source: { kind: 'thumbnail', filename: 'best.jpg' }, title: 'Example Song', lettering: true, pending: null, lastError: 'interrupted by restart' };
+    await openPaint(made, hook());
+    expect(screen.getByRole('button', { name: 'Paint the title into this image' })).toBeEnabled();
+    expect(screen.getByRole('alert').textContent).toBe('interrupted by restart');
+  });
+
+  it('disables Paint while the click is still queuing', async () => {
+    const made = { filename: 'yt-1.jpg', source: { kind: 'thumbnail', filename: 'best.jpg' }, title: 'Example Song', lettering: true };
+    await openPaint(made, hook({ paintingThumbnail: true }));
+    expect(screen.getByRole('button', { name: 'Queuing…' })).toBeDisabled();
+  });
 });
