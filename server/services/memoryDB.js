@@ -839,19 +839,21 @@ export async function getRelatedMemories(id, limit = 10) {
   const embedding = existing.rows[0].embedding;
   const remaining = limit - related.length;
   if (embedding && remaining > 0) {
-    const seenIds = new Set([id, ...related.map(r => r.id)]);
+    // Exclude already-linked ids in SQL (not after the query) so linked
+    // memories ranking among the nearest neighbours can't under-fill (#12768).
+    const linkedIds = related.map(r => r.id);
 
     const similar = await query(`
       SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id,
              1 - (embedding <=> $1) AS similarity
       FROM memories
       WHERE id != $2 AND embedding IS NOT NULL AND status = 'active'
+        AND NOT (id = ANY($4::uuid[]))
       ORDER BY embedding <=> $1
       LIMIT $3
-    `, [embedding, id, remaining]);
+    `, [embedding, id, remaining, linkedIds]);
 
     for (const row of similar.rows) {
-      if (seenIds.has(row.id)) continue;
       related.push({
         ...rowToMeta(row),
         relationship: 'similar',
