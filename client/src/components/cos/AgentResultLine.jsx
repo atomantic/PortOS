@@ -1,3 +1,5 @@
+import { Fragment } from 'react';
+import { Link } from 'react-router';
 import { CheckCircle, AlertCircle, RotateCcw } from 'lucide-react';
 import { formatCount, formatUsd } from '../../utils/formatters';
 import { isAgentHandoff, agentHandoffReason } from '../../lib/agentOutcome';
@@ -46,12 +48,29 @@ export default function AgentResultLine({ agent, className = '' }) {
       )}
       </span>
       {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
-      {cleanupPending && <div>Cleanup {cleanup?.status === 'already-absent' ? 'already absent; preservation unverified' : cleanup?.status === 'blocked' ? 'blocked' : 'unverified/pending'}{cleanup?.reason ? `: ${cleanup.reason}` : ''}</div>}
+      {cleanupPending && <div>Cleanup {cleanup?.status === 'already-absent' ? 'already absent; preservation unverified' : cleanup?.status === 'blocked' ? 'blocked' : 'unverified/pending'}{cleanup?.reason ? `: ${cleanup.reason}` : ''}<CleanupHolders owners={cleanup?.owners} /></div>}
       <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
       {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
       {!handoff && validationFailed && <div>Delivery validation failed</div>}
       {!handoff && publicationIncomplete && <div>{publication.status === 'running' ? 'Publication checks running' : 'Publication blocked; worktree preserved'}</div>}
     </div>
+  );
+}
+
+// The live run(s) a claim-owner hold waits on. Without them the card said only
+// "claim-owner-ambiguous" and the operator had to hunt for the run (#12769).
+function CleanupHolders({ owners }) {
+  if (!Array.isArray(owners) || owners.length === 0) return null;
+  return (
+    <span className="break-words">
+      {' '}— waiting on {owners.length === 1 ? 'live run' : 'live runs'}{' '}
+      {owners.map((id, index) => (
+        <Fragment key={id}>
+          {index > 0 && ', '}
+          <Link to={`/cos/agents/${encodeURIComponent(id)}`} className="font-mono underline">{id}</Link>
+        </Fragment>
+      ))}
+    </span>
   );
 }
 

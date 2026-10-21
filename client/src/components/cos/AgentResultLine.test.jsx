@@ -114,3 +114,13 @@ it('does not promote historical cleanup process success to verified cleanup', ()
   view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata, cleanupOutcome: { status: 'verified' } } }} />);
   expect(screen.getByText('Completed successfully')).toBeInTheDocument();
 });
+
+it('names the live runs a claim-owner cleanup hold is waiting on', async () => {
+  const { MemoryRouter } = await import('react-router');
+  const cleanupOutcome = { status: 'blocked', reason: 'claim-owner-ambiguous', owners: ['agent-aaa', 'agent-bbb'] };
+  render(<MemoryRouter><AgentResultLine agent={{ result: { success: true }, metadata: { cleanupOutcome } }} /></MemoryRouter>);
+  const first = screen.getByRole('link', { name: 'agent-aaa' });
+  expect(first.closest('div')).toHaveTextContent('Cleanup blocked: claim-owner-ambiguous — waiting on live runs agent-aaa, agent-bbb');
+  expect(first).toHaveAttribute('href', '/cos/agents/agent-aaa');
+  expect(screen.getByRole('link', { name: 'agent-bbb' })).toHaveAttribute('href', '/cos/agents/agent-bbb');
+});

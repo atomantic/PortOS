@@ -319,13 +319,13 @@ async function verifyRunBranches(input) {
   const results = [];
   for (const branch of branches) {
     const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
-    const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
+    const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
     const agents = await readClaimOwnershipAgents().catch(() => null);
-    const owner = claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace, agents });
+    const owner = claimCheckoutOwner({ branchName: branch, sourceWorkspace, agents });
     if (owner) {
       const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
-      await recordCleanupOutcome(input.agentId, { branch, status: 'blocked', reason: owner });
-      results.push({ branch, verified: false, skipReason: owner, issues: [], recoveryTaskId: null });
+      await recordCleanupOutcome(input.agentId, { branch, status: 'blocked', reason: owner.reason, owners: owner.owners });
+      results.push({ branch, verified: false, skipReason: owner.reason, issues: [], recoveryTaskId: null });
       continue;
     }
     // A current branch holder is not evidence of the old claim's checkout.
@@ -420,10 +420,10 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     }
   }
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
-  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
-  const owner = claimCheckoutOwnerReason({ branchName, sourceWorkspace,
+  const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
+  const owner = claimCheckoutOwner({ branchName, sourceWorkspace,
     agents: await readClaimOwnershipAgents().catch(() => null) });
-  if (owner) { await domain('blocked', owner); return skipped(owner); }
+  if (owner) { await domain('blocked', owner.reason, { owners: owner.owners }); return skipped(owner.reason); }
   const observed = await probeRepoState({
     sourceWorkspace,
     branchName,
