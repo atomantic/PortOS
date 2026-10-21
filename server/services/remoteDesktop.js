@@ -36,6 +36,8 @@ export const createRemoteDesktopBroker = ({
   connectedSessionTtlMs = CONNECTED_SESSION_TTL_MS,
 } = {}) => {
   const sessions = new Map();
+  // Live bridges per token so revokeAll can end connections the session map no longer gates.
+  const liveBridges = new Map();
   const mountedServers = new WeakSet();
 
   const deleteExpiredSessions = () => {
@@ -139,6 +141,9 @@ export const createRemoteDesktopBroker = ({
       const vncSocket = connect({ host, port });
       const webSocketStream = createWebSocketStream(webSocket, { encoding: null });
       let cleanedUp = false;
+      let bridges = liveBridges.get(token);
+      if (!bridges) liveBridges.set(token, bridges = new Set());
+      bridges.add(webSocket);
       const expiryTimer = setTimeout(() => {
         webSocket.close(1000, 'Remote desktop session expired');
       }, Math.max(1, expiresAt - now()));
@@ -147,6 +152,8 @@ export const createRemoteDesktopBroker = ({
         if (cleanedUp) return;
         cleanedUp = true;
         clearTimeout(expiryTimer);
+        bridges.delete(webSocket);
+        if (bridges.size === 0 && liveBridges.get(token) === bridges) liveBridges.delete(token);
         releaseSession(token);
         vncSocket.destroy();
         webSocketStream.destroy();
@@ -160,7 +167,17 @@ export const createRemoteDesktopBroker = ({
     });
   };
 
-  return { createSession, hasSession, mountWebSocket, status };
+  // Mirrors the auth contract that every PortOS session credential dies on
+  // revocation: drop all tokens, then close bridges (close runs cleanup, which
+  // destroys the VNC socket).
+  const revokeAll = (reason = 'Remote desktop access revoked') => {
+    sessions.clear();
+    for (const bridges of [...liveBridges.values()]) {
+      for (const webSocket of [...bridges]) webSocket.close(1008, reason);
+    }
+  };
+
+  return { createSession, hasSession, mountWebSocket, revokeAll, status };
 };
 
 export const remoteDesktopBroker = createRemoteDesktopBroker();

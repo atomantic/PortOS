@@ -190,6 +190,7 @@ import remoteDesktopRoutes from './routes/remoteDesktop.js';
 import remoteDesktopViewerRoutes from './routes/remoteDesktopViewer.js';
 import { initSocket } from './services/socket.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';
+import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
 import { bootstrapServices, runBootSequence, registerShutdownHandlers } from './services/bootstrap.js';
 import { errorMiddleware } from './lib/errorHandler.js';
@@ -238,6 +239,8 @@ const io = new Server(httpServer, {
 // request input. Mount the HTTPS server and its optional loopback HTTP mirror.
 remoteDesktopBroker.mountWebSocket(httpServer);
 remoteDesktopBroker.mountWebSocket(localHttpServer);
+// Viewer tokens obey the same revocation contract as every other session credential.
+authEvents.on('sessions:revoked-all', () => remoteDesktopBroker.revokeAll('PortOS sessions revoked'));
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);
