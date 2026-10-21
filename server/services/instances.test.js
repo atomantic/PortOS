@@ -86,15 +86,22 @@ import {
   DEFAULT_SYNC_CATEGORIES,
   startPolling,
   stopPolling,
-  __resetPeersSeenOnlineForTests
+  __resetPeersSeenOnlineForTests,
+  __resetPeerWakesForTests,
+  BACKOFF_TIERS_MS,
+  PEER_WAKE_RATE_LIMIT_MS,
+  shouldWakePeer,
+  wakePeerProbe
 } from './instances.js';
 
 describe('instances.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     __resetPeersSeenOnlineForTests();
+    __resetPeerWakesForTests();
     vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn());
+    dns.lookup.mockResolvedValue([]);
     readJSONFile.mockResolvedValue({ self: null, peers: [] });
     getTailscaleStatus.mockResolvedValue({ available: true, running: true, state: 'Running', reason: 'running' });
   });
@@ -1966,6 +1973,210 @@ describe('instances.js', () => {
       });
 
       expect(result.peer.host).toBeNull();
+    });
+
+    it('probes a paired peer on the top backoff tier immediately when it announces, emits peer:online, and preserves host/port/name (#12621)', async () => {
+      const peer = {
+        id: 'peer-paired',
+        instanceId: 'remote-paired',
+        address: '192.0.2.10',
+        port: 5555,
+        host: null,
+        name: 'Stored Box Name',
+        status: 'offline',
+        consecutiveFailures: 5,
+        nextProbeAt: new Date(Date.now() + 3_600_000).toISOString(),
+        syncSecret: 'synthetic-pair-secret-32-characters-long',
+        enabled: true,
+      };
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+
+      fetch.mockImplementation(async (url) => {
+        if (url.includes('/api/system/health/details')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ instanceId: 'remote-paired', version: '1.7.0' }),
+          };
+        }
+        return { ok: false, status: 404 };
+      });
+
+      const onlineEmits = () => instanceEvents.emit.mock.calls.filter(([name]) => name === 'peer:online');
+
+      const result = await handleAnnounce({
+        instanceId: 'remote-paired',
+        address: '192.0.2.10',
+        port: 5555,
+        host: 'attacker-host.example.com',
+        name: 'Attacker Attempt Name',
+      });
+
+      expect(result.created).toBe(false);
+      expect(result.peer.host).toBeNull();
+      expect(result.peer.port).toBe(5555);
+      expect(result.peer.name).toBe('Stored Box Name');
+      expect(result.peer.nextProbeAt).toBeNull();
+
+      await vi.waitFor(() => expect(onlineEmits().length).toBe(1));
+      expect(onlineEmits()[0][1]).toMatchObject({
+        id: 'peer-paired',
+        status: 'online',
+        host: null,
+        port: 5555,
+        name: 'Stored Box Name',
+        consecutiveFailures: 0,
+        nextProbeAt: null,
+      });
+    });
+
+    it('triggers probe to stored address only when a forged announce with mismatched address arrives (#12621)', async () => {
+      const peer = {
+        id: 'peer-paired',
+        instanceId: 'remote-paired',
+        address: '192.0.2.10',
+        port: 5555,
+        host: null,
+        name: 'Stored Box Name',
+        status: 'offline',
+        consecutiveFailures: 5,
+        nextProbeAt: new Date(Date.now() + 3_600_000).toISOString(),
+        syncSecret: 'synthetic-pair-secret-32-characters-long',
+        enabled: true,
+      };
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+
+      const fetchedUrls = [];
+      fetch.mockImplementation(async (url) => {
+        fetchedUrls.push(url);
+        return { ok: false, status: 500 };
+      });
+
+      const result = await handleAnnounce({
+        instanceId: 'remote-paired',
+        address: '198.51.100.99', // forged IP
+        port: 9999,
+        host: 'attacker-host.example.com',
+        name: 'Attacker Attempt Name',
+      });
+
+      expect(result.created).toBe(false);
+      expect(result.peer.address).toBe('192.0.2.10');
+      expect(result.peer.port).toBe(5555);
+      expect(result.peer.host).toBeNull();
+      expect(result.peer.name).toBe('Stored Box Name');
+
+      await vi.waitFor(() => expect(fetchedUrls.length).toBeGreaterThan(0));
+      for (const url of fetchedUrls) {
+        expect(url).not.toContain('198.51.100.99');
+        expect(url).not.toContain('9999');
+        expect(url).not.toContain('attacker-host.example.com');
+        expect(url).toContain('192.0.2.10');
+      }
+    });
+
+    it('rate-limits announce wakes to at most once per 30 seconds per peer (#12621)', async () => {
+      const peer = {
+        id: 'peer-paired',
+        instanceId: 'remote-paired',
+        address: '192.0.2.10',
+        port: 5555,
+        status: 'offline',
+        syncSecret: 'synthetic-pair-secret-32-characters-long',
+        enabled: true,
+      };
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+
+      let probeCount = 0;
+      fetch.mockImplementation(async (url) => {
+        if (url.includes('/api/system/health/details')) probeCount++;
+        return { ok: false, status: 500 };
+      });
+
+      // First announce wakes the probe
+      await handleAnnounce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
+      await vi.waitFor(() => expect(probeCount).toBe(1));
+
+      // Second announce 5s later does not wake
+      vi.advanceTimersByTime(5_000);
+      await handleAnnounce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
+      expect(probeCount).toBe(1);
+
+      // Third announce after 30s interval wakes again
+      vi.advanceTimersByTime(26_000); // 31s total
+      await handleAnnounce({ instanceId: 'remote-paired', address: '192.0.2.10', port: 5555 });
+      await vi.waitFor(() => expect(probeCount).toBe(2));
+    });
+  });
+
+  describe('probe backoff and wake (#12621)', () => {
+    it('pins the tier sequence and caps backoff at 1 hour (#12621)', () => {
+      expect(BACKOFF_TIERS_MS).toEqual([
+        30_000,
+        60_000,
+        300_000,
+        900_000,
+        3_600_000,
+      ]);
+      expect(BACKOFF_TIERS_MS.at(-1)).toBe(3_600_000);
+    });
+
+    it('caps backoff tier at 1h (3_600_000 ms) on repeated consecutive failures', async () => {
+      const peer = {
+        id: 'peer-failing',
+        address: '192.0.2.20',
+        port: 5555,
+        name: 'Failing peer',
+        status: 'offline',
+        consecutiveFailures: 10,
+        enabled: true,
+      };
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      fetch.mockRejectedValue(new Error('offline'));
+
+      const updated = await probePeer(peer);
+      expect(updated.consecutiveFailures).toBe(11);
+      const expectedTime = new Date(Date.now() + 3_600_000).toISOString();
+      expect(updated.nextProbeAt).toBe(expectedTime);
+    });
+
+    it('wakePeerProbe clears nextProbeAt and fires probePeer rate-limited to once per 30s', async () => {
+      const peer = {
+        id: 'peer-sleepy',
+        address: '192.0.2.30',
+        port: 5555,
+        name: 'Sleepy peer',
+        status: 'offline',
+        nextProbeAt: new Date(Date.now() + 3_600_000).toISOString(),
+        enabled: true,
+      };
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+
+      let probeCalled = 0;
+      fetch.mockImplementation(async (url) => {
+        if (url.includes('/api/system/health/details')) probeCalled++;
+        return { ok: false, status: 500 };
+      });
+
+      const first = wakePeerProbe(peer);
+      expect(first).toBe(true);
+      await vi.waitFor(() => expect(probeCalled).toBe(1));
+
+      // Second call immediately is rate-limited
+      const second = wakePeerProbe(peer);
+      expect(second).toBe(false);
+      expect(probeCalled).toBe(1);
+
+      // After 30s passes, it wakes again
+      vi.advanceTimersByTime(PEER_WAKE_RATE_LIMIT_MS);
+      const third = wakePeerProbe(peer);
+      expect(third).toBe(true);
+      await vi.waitFor(() => expect(probeCalled).toBe(2));
+    });
+
+    it('wakePeerProbe ignores disabled peers', () => {
+      const disabled = { id: 'peer-off', enabled: false };
+      expect(wakePeerProbe(disabled)).toBe(false);
     });
   });
 

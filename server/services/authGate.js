@@ -106,7 +106,16 @@ const refusePeerScope = (req, res, path, peer) => {
   }));
 };
 
-export const __testing = { verifyBasicPassword };
+const wakePeer = (peer) => {
+  if (!peer?.id) return;
+  import('./instances.js').then(({ wakePeerProbe }) => {
+    wakePeerProbe(peer);
+  }).catch((err) => {
+    console.error(`❌ Failed to wake peer probe: ${err?.message || err}`);
+  });
+};
+
+export const __testing = { verifyBasicPassword, wakePeer };
 
 const BROWSER_REFUSAL_MESSAGES = {
   CROSS_ORIGIN_BLOCKED: 'Cross-origin request rejected',
@@ -165,7 +174,10 @@ export const authGate = async (req, res, next) => {
     // as anonymous as any other request to a password-free install.
     const peer = isPeerApiRequestAllowed(req.method, req.path.toLowerCase())
       ? await verifyPeerToken(req.headers) : null;
-    if (peer) req.portosAuthContext = { enabled: false, authenticated: true, method: 'peer', peerId: peer.id };
+    if (peer) {
+      req.portosAuthContext = { enabled: false, authenticated: true, method: 'peer', peerId: peer.id };
+      wakePeer(peer);
+    }
     return next();
   }
   // Express mounts match case-insensitively. Use the same casing for every
@@ -201,6 +213,7 @@ export const authGate = async (req, res, next) => {
       return;
     }
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'peer', peerId: peer.id };
+    wakePeer(peer);
     return next();
   }
   // Also accept HTTP Basic auth — the legacy peer credential, kept so unpaired
