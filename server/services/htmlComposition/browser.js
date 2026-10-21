@@ -443,12 +443,13 @@ async function connectComposition(assets, {
     // failures separate (#12656): a command timeout means the renderer stopped
     // answering (host starvation or a hung target); this stall means the page
     // answered but its load event never came, which is a lifecycle fault.
+    const loadWaitMs = sinceStart();
     const loaded = await evaluate(`new Promise(resolve => {
       if (document.readyState === 'complete') return resolve('loaded');
       addEventListener('load', () => resolve('loaded'), { once: true });
       setTimeout(() => resolve('stalled:' + document.readyState), ${DOCUMENT_LOAD_DEADLINE_MS});
     })`, 'document load');
-    if (loaded !== 'loaded') throw new Error(`Composition document load stalled: ${loaded.slice('stalled:'.length)} after ${DOCUMENT_LOAD_DEADLINE_MS}ms while the page stayed responsive (${commandFacts(sinceStart())})`);
+    if (typeof loaded === 'string' && loaded.startsWith('stalled:')) throw new Error(`Composition document load stalled: ${loaded.slice('stalled:'.length)} after ${DOCUMENT_LOAD_DEADLINE_MS}ms while the page stayed responsive (${commandFacts(loadWaitMs)})`);
     phase = 'font-readiness';
     await evaluate('document.fonts.ready.then(() => true)', 'font readiness');
     phase = 'ready';
