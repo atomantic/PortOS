@@ -242,7 +242,7 @@ export const attestMemoryMastery = (id, options = {}) => request(`/meatspace/pos
   ...options
 });
 export const getMemoryMastery = (id) => request(`/meatspace/post/memory-items/${id}/mastery`);
-export const getChunkMastery = (id) => request(`/meatspace/post/memory-items/${id}/chunk-mastery`);
+export const getChunkMastery = (id, options = {}) => request(`/meatspace/post/memory-items/${id}/chunk-mastery`, options);
 
 // MeatSpace - POST Training Log
 export const submitTrainingEntry = (data, options = {}) => request('/meatspace/post/training', {

@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { ChevronLeft, Check, X, SkipForward, RotateCcw, Target, ChevronDown, Loader, ShieldCheck } from 'lucide-react';
 import { submitMemoryPractice, getChunkMastery, getMemoryItem, attestMemoryMastery } from '../../../services/api';
 import ProgressBar from '../../ui/ProgressBar';
 import PostCompletionActions from './PostCompletionActions';
 import { startRetryableSave } from './completionSave';
+import useListResource from '../../../hooks/useListResource';
+import ListLoadError from '../../ui/ListLoadError';
 
 // Exported so the Practice Library (practiceCatalog.js) derives its study-mode
 // rows from this list rather than re-typing them — a new mode shows up in the
@@ -125,7 +127,18 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
   }, [item.id, item.mastery]);
 
   // Spaced repetition state
-  const [chunkMastery, setChunkMastery] = useState(null);
+  const fetchChunkMastery = useCallback(
+    () => getChunkMastery(item?.id, { silent: true }),
+    [item?.id],
+  );
+  const {
+    items: chunkMastery,
+    state: chunkMasteryState,
+    error: chunkMasteryError,
+    retry: retryChunkMastery,
+  } = useListResource(fetchChunkMastery, {
+    enabled: mode === 'spaced' && Boolean(item?.id),
+  });
   const [spacedChunkIdx, setSpacedChunkIdx] = useState(0);
   const [spacedLineIdx, setSpacedLineIdx] = useState(0);
 
@@ -168,19 +181,6 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
     if (mode && inputRef.current) inputRef.current.focus();
   }, [mode, currentIdx, spacedLineIdx]);
 
-  // Load chunk mastery when entering spaced mode
-  useEffect(() => {
-    if (mode !== 'spaced') return undefined;
-    let active = true;
-    getChunkMastery(item.id).then(data => {
-      if (active) setChunkMastery(data || []);
-    }).catch(err => {
-      console.warn('⚠️ Failed to load chunk mastery: ' + err.message);
-      if (active) setChunkMastery([]);
-    });
-    return () => { active = false; };
-  }, [mode, item.id]);
-
   // Drive terminal transitions from an effect, never during render. The render
   // fallbacks below (chunk exhausted, line exhausted, sequence exhausted) return null
   // for a frame while this effect advances or marks the session done. Spaced
@@ -188,7 +188,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
   useEffect(() => {
     if (done) return;
     if (mode === 'spaced') {
-      if (!chunkMastery || chunkMastery.length === 0) return;
+      if (chunkMasteryState !== 'ready' || !chunkMastery || chunkMastery.length === 0) return;
       const currentChunk = chunkMastery[spacedChunkIdx];
       if (!currentChunk) {
         setDone(true);
@@ -205,7 +205,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
     } else if (mode === 'sequence' && !lines[currentIdx + 1]) {
       finishSequence();
     }
-  }, [mode, chunkMastery, spacedChunkIdx, spacedLineIdx, currentIdx, done]);
+  }, [mode, chunkMastery, chunkMasteryState, spacedChunkIdx, spacedLineIdx, currentIdx, done]);
 
   // Back goes up exactly one level: from a running mode (or the results screen)
   // to the mode picker via `onExitMode`, and from the picker out to the item
@@ -348,7 +348,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
 
   // SPACED REPETITION mode — focus on weakest chunks with graduated hints
   if (mode === 'spaced') {
-    if (!chunkMastery) {
+    if (chunkMasteryState === 'loading') {
       return (
         <div className="space-y-6 max-w-2xl">
           <div className="text-gray-400 text-sm">Loading chunk mastery...</div>
@@ -356,7 +356,25 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
       );
     }
 
-    if (chunkMastery.length === 0) {
+    if (chunkMasteryState === 'error') {
+      return (
+        <div className="space-y-6 max-w-2xl">
+          <div className="flex items-center gap-3">
+            <button aria-label="Back" onClick={onExitMode} className="text-gray-400 hover:text-white transition-colors">
+              <ChevronLeft size={20} />
+            </button>
+            <h2 className="text-lg font-bold text-white">Spaced Repetition — {item.title}</h2>
+          </div>
+          <ListLoadError
+            what="chunk mastery"
+            error={chunkMasteryError}
+            onRetry={retryChunkMastery}
+          />
+        </div>
+      );
+    }
+
+    if (chunkMasteryState === 'ready' && chunkMastery.length === 0) {
       return (
         <div className="space-y-6 max-w-2xl">
           <div className="flex items-center gap-3">
