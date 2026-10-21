@@ -2460,6 +2460,62 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
   });
 });
 
+describe('importArchivedJobs (#12782)', () => {
+  const file = () => join(tempDataDir, 'media-jobs.json');
+  const readJobs = () => JSON.parse(readFileSync(file(), 'utf8')).jobs;
+  const OLD = '2026-01-01T00:00:00.000Z';
+  const record = (n, patch = {}) => ({
+    id: `00000000-0000-4000-8000-0000000000${n}`, kind: 'image', status: 'completed', completedAt: OLD,
+    params: { prompt: 'a harbour', seed: 7 }, result: { filename: `${n}.png` }, ...patch,
+  });
+
+  it('makes an imported record visible without a restart and survives a later queue persist and the 24h trim', async () => {
+    await mediaJobQueue.initMediaJobQueue();
+    const imported = record('11');
+    expect(await mediaJobQueue.importArchivedJobs([imported])).toBe(1);
+    expect(mediaJobQueue.getJob(imported.id)).toMatchObject({ params: { prompt: 'a harbour', seed: 7 }, result: { filename: '11.png' } });
+
+    // The regression: an unrelated queue mutation rewrites the file from memory
+    // and trims archive rows older than 24h — the imported row must outlive both.
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'later job' } });
+    await flush();
+    expect(readJobs().map((j) => j.id)).toContain(imported.id);
+    expect(mediaJobQueue.getJob(imported.id)).toBeTruthy();
+
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getJob(imported.id)).toMatchObject({ imported: true, status: 'completed' });
+  });
+
+  it('keeps local rows on an id collision and refuses peer-supplied runtime state', async () => {
+    writeFileSync(file(), JSON.stringify({ jobs: [record('21', { params: { prompt: 'local' }, completedAt: new Date().toISOString() })] }));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    const hostile = record('22', {
+      params: { prompt: 'p', remotePeerReservation: true, uploadedTempPath: '/etc/passwd', initImagePath: '/etc/hosts' },
+      result: { filename: '../../escape.png' },
+    });
+    const skipped = [record('23', { status: 'running' }), record('24', { kind: 'training' }), record('../25')];
+    expect(await mediaJobQueue.importArchivedJobs([record('21', { params: { prompt: 'peer' } }), hostile, ...skipped])).toBe(1);
+    expect(mediaJobQueue.getJob(record('21').id).params.prompt).toBe('local');
+    const stored = mediaJobQueue.getJob(hostile.id);
+    expect(stored.params).toEqual({ prompt: 'p' });
+    expect(stored.result).toEqual({});
+    expect(skipped.map((j) => mediaJobQueue.getJob(j.id))).toEqual([null, null, null]);
+  });
+
+  it('refuses to import into a queue whose snapshot was unreadable, leaving the file alone', async () => {
+    const CORRUPT = '{"jobs": [{"id": "00000000-0000-4000-8000-0000000000aa",';
+    writeFileSync(file(), CORRUPT);
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await expect(mediaJobQueue.importArchivedJobs([record('31')])).rejects.toThrow(/blocked/);
+    expect(mediaJobQueue.getJob(record('31').id)).toBeNull();
+    expect(readFileSync(file(), 'utf8')).toBe(CORRUPT);
+  });
+});
+
 // Polling helper for the async settles this suite waits on (a debounced disk
 // write, a worker tick). A predicate that THROWS counts as "not true yet" and
 // keeps polling: several predicates readFileSync the persisted snapshot, which

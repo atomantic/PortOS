@@ -27,7 +27,8 @@ vi.mock('./instanceIdentity.js', () => mockTestIdentity());
 vi.mock('./sharing/peerSync.js', () => mockNoPeerSync({}, {
   getOutboundCoverageForPeer: async () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() }),
 }));
-vi.mock('./mediaJobQueue/index.js', () => ({ getJob: () => null }));
+// The queue owns data/media-jobs.json (its unreadable-snapshot latch is pinned in mediaJobQueue/index.test.js).
+vi.mock('./mediaJobQueue/index.js', () => ({ getJob: () => null, importArchivedJobs: async () => 0 }));
 vi.mock('./sharing/annotationIdentity.js', () => ({ resolveBucketSourceName: async () => 'Test' }));
 vi.mock('../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn(() => { throw new Error('Unexpected network request'); }) }));
 
@@ -100,8 +101,6 @@ const cases = [
     () => manifests.markProcessed(bucket.id, 'new', 'new-id'), saved => { expect(saved.processedById).toEqual({ old: 'old-id', new: 'new-id' }); expect(saved.processed).toEqual(['legacy']); }],
   ['import inbox', () => join(tempRoot, 'sharing/inbox', `${bucket.id}.json`), { items: [{ manifestId: 'old' }] },
     () => importer.processManifest(bucket.id, 'incoming.json'), saved => expect(saved.items.map(i => i.manifestId)).toEqual(['old', 'incoming'])],
-  ['import media jobs', () => join(tempRoot, 'media-jobs.json'), { jobs: [{ id: 'old' }], custom: true },
-    () => importer.processManifest(bucket.id, 'incoming.json'), saved => { expect(saved.jobs.map(j => j.id)).toEqual(['old', 'job-new']); expect(saved.custom).toBe(true); }],
   ['annotation tombstones', () => join(bucketPath, 'records/media-annotations/test-instance.json'), { annotations: { 'image:note.png': { note: 'old' } } },
     () => annotations.exportAnnotationsToBucket({ ...bucket, mode: 'auto-merge' }, { 'image:new.png': { note: 'new' } }, 'test-instance'),
     saved => { expect(saved.annotations['image:note.png'].note).toBe(''); expect(saved.annotations['image:new.png'].note).toBe('new'); }],

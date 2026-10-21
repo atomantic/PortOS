@@ -74,8 +74,12 @@ vi.mock('./peerSync.js', () => mockNoPeerSync());
 // Stub mediaJobQueue.getJob — exporter uses it for full-fidelity gen
 // metadata on each shared imageJobId. Returns null so the exporter falls
 // through to direct asset copy via imageRefs.
+// importArchivedJobs is the importer's only write path into the queue; the
+// media-job import test points it at the real queue to pin the persisted file.
+const mediaQueue = vi.hoisted(() => ({ actual: null }));
 vi.mock('../mediaJobQueue/index.js', () => ({
   getJob: () => null,
+  importArchivedJobs: (...args) => mediaQueue.actual.importArchivedJobs(...args),
 }));
 
 const buckets = await import('./buckets.js');
@@ -326,20 +330,31 @@ describe('sharing round-trip', () => {
 
   it('preserves local video holds while importing bundled media-job records', async () => {
     const bucket = await buckets.createBucket({ name: 'Example Bucket', path: tempBucket, mode: 'inbox' });
-    const local = { id: 'retained-local', kind: 'video', status: 'queued', params: { modelId: 'example-video' } };
+    const local = { id: 'retained-local', kind: 'video', status: 'completed', completedAt: new Date().toISOString(), params: { prompt: 'local' } };
     const videoHolds = [{ id: '00000000-0000-4000-8000-000000000001', modelId: 'example-video', runtime: 'mlx_video',
       classification: 'runtimeerror', cause: 'shader failed', heldAt: '2026-09-05T00:00:00.000Z' }];
     const file = join(tempData, 'media-jobs.json');
-    writeFileSync(file, JSON.stringify({ jobs: [local], videoHolds, futureEnvelopeField: 'preserved' }));
-    const incoming = { id: '00000000-0000-4000-8000-000000000002', kind: 'video', status: 'completed', params: {} };
+    writeFileSync(file, JSON.stringify({ jobs: [local], videoHolds }));
+    const incoming = { id: '00000000-0000-4000-8000-000000000002', kind: 'video', status: 'completed',
+      completedAt: '2026-01-01T00:00:00.000Z', params: { prompt: 'bundled' }, result: { filename: 'bundled.mp4' } };
     mkdirSync(join(tempBucket, 'records', 'media'), { recursive: true });
     writeFileSync(join(tempBucket, 'records', 'media', `${incoming.id}.json`), JSON.stringify(incoming));
     writeFileSync(join(tempBucket, 'manifests', 'example-media.json'), JSON.stringify({
       id: 'example-manifest', senderInstanceId: 'example-peer', kind: 'media', recordIds: [incoming.id], assetRefs: [],
     }));
-    expect((await importer.processManifest(bucket.id, 'example-media.json')).processed).toBe(true);
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ jobs: [local, { ...incoming, owner: null, completedAt: null, result: null }],
-      videoHolds, futureEnvelopeField: 'preserved' });
+    const queue = await vi.importActual('../mediaJobQueue/index.js');
+    mediaQueue.actual = queue;
+    await queue.initMediaJobQueue();
+    try {
+      expect((await importer.processManifest(bucket.id, 'example-media.json')).processed).toBe(true);
+      // Visible without a restart, and older than the queue's 24h trim yet kept.
+      expect(queue.getJob(incoming.id)).toMatchObject({ params: { prompt: 'bundled' }, result: { filename: 'bundled.mp4' } });
+      const saved = JSON.parse(readFileSync(file, 'utf8'));
+      expect(saved.jobs.map((j) => j.id).sort()).toEqual([local.id, incoming.id].sort());
+      expect(saved.videoHolds).toEqual(videoHolds);
+    } finally {
+      await queue.__resetForTests();
+    }
   });
 
   it('merges bundled media-job records only as completed re-render metadata under the id they were read by', async () => {
@@ -364,11 +379,18 @@ describe('sharing round-trip', () => {
     writeFileSync(join(tempBucket, 'manifests', 'example-media.json'), JSON.stringify({
       id: 'example-manifest', senderInstanceId: 'example-peer', kind: 'media', recordIds: Object.keys(records), assetRefs: [],
     }));
-    await importer.processManifest(bucket.id, 'example-media.json');
-    expect(JSON.parse(readFileSync(file, 'utf8')).jobs).toEqual([{
-      id: id(4), kind: 'image', owner: null, status: 'completed', completedAt: '2026-09-05T00:00:00.000Z',
-      params: { prompt: 'example' }, result: { filename: `${id(4)}.png` },
-    }]);
+    const queue = await vi.importActual('../mediaJobQueue/index.js');
+    mediaQueue.actual = queue;
+    await queue.initMediaJobQueue();
+    try {
+      await importer.processManifest(bucket.id, 'example-media.json');
+      expect(JSON.parse(readFileSync(file, 'utf8')).jobs).toEqual([{
+        id: id(4), kind: 'image', owner: null, status: 'completed', completedAt: '2026-09-05T00:00:00.000Z',
+        params: { prompt: 'example' }, result: { filename: `${id(4)}.png` }, imported: true,
+      }]);
+    } finally {
+      await queue.__resetForTests();
+    }
   });
 
   it('names an exported media record by its job id, never by an imported sidecar id', async () => {
