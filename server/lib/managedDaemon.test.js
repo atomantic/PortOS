@@ -192,6 +192,49 @@ describe('createOnDemandDaemon', () => {
     expect(await third).toEqual({ ready: true, reason: null });
   });
 
+  // #12723: a user-clicked Start used to `pm2 delete` a wake's still-loading
+  // process. It must queue, not join: its launch config can differ.
+  it('runs an explicit start only after an in-flight wake settles', async () => {
+    let loading = false;
+    let finishWake;
+    const start = vi.fn(() => {
+      loading = true;
+      return new Promise((resolve) => { finishWake = (value) => { loading = false; resolve(value); }; });
+    });
+    const { onDemand, stop } = makeOnDemand({ start });
+
+    const wake = onDemand.ensureRunning();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    const stoppedWhileLoading = [];
+    const queued = onDemand.runStart(async () => {
+      stoppedWhileLoading.push(loading);
+      await stop();
+      return 'restarted';
+    });
+
+    finishWake({ online: true });
+    expect(await wake).toEqual({ ready: true, reason: null });
+    expect(await queued).toBe('restarted');
+    expect(stoppedWhileLoading).toEqual([false]);
+  });
+
+  it('makes a wake issued during an explicit relaunch wait for it, then find the daemon online', async () => {
+    const { onDemand, start, setStatus } = makeOnDemand();
+    const order = [];
+    let finishRelaunch;
+    const relaunch = onDemand.runStart(() => new Promise((resolve) => {
+      finishRelaunch = () => { order.push('relaunch'); resolve('relaunched'); };
+    }));
+    const wake = onDemand.ensureRunning().then((result) => { order.push('wake'); return result; });
+
+    setStatus({ status: 'online' });
+    finishRelaunch();
+    expect(await relaunch).toBe('relaunched');
+    expect(await wake).toEqual({ ready: true, reason: null });
+    expect(order).toEqual(['relaunch', 'wake']);
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it('waitForReady reports the shared exit-tail diagnosis when the process dies before answering', async () => {
     const { onDemand, setStatus } = makeOnDemand({
       start: vi.fn(async () => ({ online: false, endpoint: 'http://127.0.0.1:9000/v1' })),
