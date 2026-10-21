@@ -6,6 +6,7 @@ import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
+import CodeAnimationSoundtrack from '../components/codeAnimation/CodeAnimationSoundtrack';
 import FilmStylePicker from '../components/codeAnimation/FilmStylePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import ProductionProjects from '../components/codeAnimation/ProductionProjects';
@@ -360,8 +361,13 @@ function FastCodeAnimation() {
     if (!next) return;
     const requested = jobId;
     setJob(next);
-    if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame, jobId: next.id });
-    else setPreview(null);
+    // Keep the same preview object when only other job fields changed (a
+    // soundtrack request), so the running preview session is not restarted.
+    if (next.status === 'completed' && next.html) {
+      setPreview((current) => (current?.jobId === next.id && current.html === next.html && current.audioUrl === next.audioUrl
+        ? current
+        : { html: next.html, audioUrl: next.audioUrl, frame: next.frame, jobId: next.id }));
+    } else setPreview(null);
     if (locallyStartedJobIdRef.current !== requested
       && hydratedJobIdRef.current !== requested
       && next.input) {
@@ -692,6 +698,7 @@ function FastCodeAnimation() {
                     <input type="checkbox" checked={draft.soundtrack === 'procedural'} onChange={(event) => update({ soundtrack: event.target.checked ? 'procedural' : 'none' })} />
                     No track? Have the code compose a procedural soundtrack
                   </label>
+                  <p className="text-xs text-gray-500">Or generate one with a music model once the preview is ready, under Soundtrack below it.</p>
                 </div>
               )}
             </div>
@@ -785,6 +792,16 @@ function FastCodeAnimation() {
                 messages={options.messages}
                 audioGlobal={options.audioGlobal}
                 title={draft.title || draft.concept.slice(0, 40)}
+              />
+            )}
+            {preview?.jobId && job?.id === preview.jobId && job.status === 'completed' && (
+              <CodeAnimationSoundtrack
+                jobId={job.id}
+                soundtrack={job.soundtrack}
+                audioUrl={job.audioUrl}
+                audioTrackId={job.input?.audio?.trackId}
+                durationSeconds={job.frame?.durationSeconds}
+                onReady={jobResource.refetch}
               />
             )}
           </section>
