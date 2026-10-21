@@ -29,7 +29,7 @@ import {
   restoreRecoveryRefusal, settleReplayOutcome,
 } from './backupRestoreRecovery.js';
 import { getBackendName } from './memoryBackend.js';
-import { appliedFilePath, legacyAppliedFilePath } from '../../scripts/lib/migrationLedger.js';
+import { APPLIED_LEDGER_RELPATH, LEGACY_APPLIED_LEDGER_RELPATH } from '../../scripts/lib/migrationLedger.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
 import { reloadSettings, withLiveSettingsRestore } from './settings.js';
@@ -846,6 +846,16 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 }
 
 /**
+ * The explicit file escape hatch (MEMORY_BACKEND=file, or a backend that
+ * resolved to 'file'): the one state in which PostgreSQL is not required. The
+ * backend initializes lazily (ensureBackend), so the env var is consulted too —
+ * an uninitialized backend under the hatch must not count as "Postgres required".
+ * Shared by the dump, the restore compatibility check and restore reconciliation
+ * so the three cannot disagree about one install.
+ */
+const usesFileEscapeHatch = () => process.env.MEMORY_BACKEND === 'file' || getBackendName() === 'file';
+
+/**
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
  * Returns an explicit status so the caller can distinguish the benign file
  * escape hatch from "PG required but dump failed" (data at risk):
@@ -857,16 +867,6 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
  *      no installed pg_dump is new enough for the running server)
  * @param {string} outputPath - Path to write the SQL dump file
  */
-/**
- * The explicit file escape hatch (MEMORY_BACKEND=file, or a backend that
- * resolved to 'file'): the one state in which PostgreSQL is not required. The
- * backend initializes lazily (ensureBackend), so the env var is consulted too —
- * an uninitialized backend under the hatch must not count as "Postgres required".
- * Shared by the dump, the restore compatibility check and restore reconciliation
- * so the three cannot disagree about one install.
- */
-const usesFileEscapeHatch = () => process.env.MEMORY_BACKEND === 'file' || getBackendName() === 'file';
-
 export async function dumpPostgres(outputPath) {
   const health = await checkHealth();
   if (!health.connected || !health.hasSchema) {
@@ -1998,9 +1998,8 @@ async function readMigrationLedger(path) {
   return ok && Array.isArray(value) ? value.filter(name => typeof name === 'string') : null;
 }
 
-// The ledger helpers take an install root and join `data/` themselves; a
-// snapshot's data directory and the live one both sit one level below theirs.
-const ledgerPaths = (dataDir) => ({ current: appliedFilePath(dirname(dataDir)), legacy: legacyAppliedFilePath(dirname(dataDir)) });
+const ledgerPaths = (dataDir) => ({ current: join(dataDir, APPLIED_LEDGER_RELPATH), legacy: join(dataDir, LEGACY_APPLIED_LEDGER_RELPATH) });
+const fileExists = (path) => stat(path).then(info => info.isFile(), error => { if (error.code === 'ENOENT') return false; throw error; });
 
 /**
  * The snapshot's migration ledger: `data/migrations.applied.json`, or the
@@ -2009,7 +2008,7 @@ const ledgerPaths = (dataDir) => ({ current: appliedFilePath(dirname(dataDir)), 
  */
 async function readSnapshotMigrationLedger(srcDir) {
   const { current, legacy } = ledgerPaths(srcDir);
-  return await readMigrationLedger(current) ?? readMigrationLedger(legacy);
+  return (await readMigrationLedger(current)) ?? (await readMigrationLedger(legacy));
 }
 
 /**
@@ -2023,8 +2022,7 @@ async function readSnapshotMigrationLedger(srcDir) {
 async function snapshotLegacyLedger(srcDir, subdirFilter) {
   if (subdirFilter) return null;
   const { current, legacy } = ledgerPaths(srcDir);
-  const present = (path) => stat(path).then(info => info.isFile(), error => { if (error.code === 'ENOENT') return false; throw error; });
-  return !(await present(current)) && await present(legacy) ? { status: 'pending', parkedAs: null } : null;
+  return !(await fileExists(current)) && await fileExists(legacy) ? { status: 'pending', parkedAs: null } : null;
 }
 
 /**
@@ -2035,6 +2033,12 @@ async function snapshotLegacyLedger(srcDir, subdirFilter) {
  */
 async function adoptRestoredLegacyLedger() {
   const { current, legacy } = ledgerPaths(PATHS.data);
+  // Confirmed before the live ledger moves: parking it and then failing the
+  // rename would leave no ledger at all, which the next boot reads as a fresh
+  // install (every migration re-runs, purge migrations are disarmed).
+  if (!await fileExists(legacy)) {
+    throw new Error(`Restore transferred no ${LEGACY_APPLIED_LEDGER_RELPATH}; the live migration ledger was left unchanged`);
+  }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const parkedAs = `${basename(current)}.pre-restore-${stamp}`;
   const parked = await rename(current, join(dirname(current), parkedAs)).then(
