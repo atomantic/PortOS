@@ -1117,7 +1117,9 @@ async function retainedClaimMarkers(repoPath, branch, { origin } = {}) {
  *   2. the branch's worktree (if any) has no real uncommitted changes.
  *   3. that worktree (if any) lives in a managed root and is unlocked.
  *   4. fresh ownership and completion policy permit retirement under the claim
- *      binding lock; manual claims have an exact successful checkout receipt.
+ *      binding lock; a claim checkout has an exact successful run receipt, or
+ *      the forge reports its exact head merged and it has idled past
+ *      SHIPPED_CLAIM_IDLE_MS (see manualClaimShippedHold).
  *   5. recovery archives verify before removal and exact-head ref deletion.
  * A failed gate skips the branch with a reason. Age, an absent upstream, and
  * a cached merged flag never substitute for successful completion evidence.
@@ -1146,6 +1148,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       claimOwners,
       mergedRetirement: true,
       mergeTarget: defaultBranch,
+      forgeAccount,
       label: `🔀 branch-reconcile: remove worktree for ${b.branch}`,
     });
     if (!retired.ok) {
@@ -1347,7 +1350,7 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -1358,6 +1361,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
   const policyHold = await readPolicyHold();
   if (policyHold) return stop({ ok: false, reason: policyHold });
   let archiveTree = null;
+  let claimCompletion = null;
   const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
   if (mergedRetirement) {
@@ -1403,25 +1407,50 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
       const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
       const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
       // Registry absence cannot prove a manual CLI or external task finished.
-      // Require a recorded completed owner before waiving its claim hold.
+      // Waive the claim hold only on a recorded completed owner or, for a
+      // manual session that records none, the forge's merged exact head.
       const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
-      const completed = records && await hasCompletedCheckoutEvidence(records, {
+      if (!records) return stop({ ok: false, reason: 'claim-ownership-unreadable' });
+      if (await hasCompletedCheckoutEvidence(records, {
         repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
-      });
-      if (!completed) return stop({ ok: false, reason: records ? 'claim-completion-unverified' : 'claim-ownership-unreadable' });
+      })) claimCompletion = 'receipt';
+      else {
+        const hold = await manualClaimShippedHold(repoPath, b, expectedHead, forgeAccount);
+        if (hold) return stop(hold);
+        claimCompletion = 'forge-merged';
+      }
     }
     const tree = (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
     if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
     archiveTree = tree;
   }
-  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement };
+  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement, claimCompletion };
+}
+
+/**
+ * Why a merged manual `claim-*` checkout without a run receipt is still held, or
+ * null once the forge proves it shipped (#12849). A manual /claim session never
+ * records the receipt a CoS claim run does, so without this its checkouts were
+ * held forever. The forge must report a merged PR whose head is exactly
+ * `head`; the clean-tree, lock, owner and merge gates have already run. What
+ * neither proof shows is a session still tearing down, so SHIPPED_CLAIM_IDLE_MS
+ * must have passed since the checkout was created AND since the merge.
+ */
+async function manualClaimShippedHold(repoPath, b, head, forgeAccount) {
+  // No retryAt: the idle window is not the only gate, so no clock lifts this.
+  const unverified = { ok: false, reason: 'claim-completion-unverified' };
+  if (!Number.isFinite(b.worktreeAgeMs) || b.worktreeAgeMs < SHIPPED_CLAIM_IDLE_MS) return unverified;
+  const { readMergedClaimEvidence } = await import('./completedCheckoutEvidence.js');
+  const merged = await readMergedClaimEvidence({ repoPath, branch: b.branch, head, forgeAccount }).catch(() => null);
+  if (!merged || Date.now() - Date.parse(merged.mergedAt) < SHIPPED_CLAIM_IDLE_MS) return unverified;
+  return null;
 }
 
 /**
  * Removal and branch deletion. `preservation` is the archive and `prepared` the
  * `prepare` backup, each taken after admission with the ownership lock released.
  */
-async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement }, { prepared = null, preservation = null } = {}) {
+async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion }, { prepared = null, preservation = null } = {}) {
   if (b.worktreePath) {
     const verifyRemoval = async (holder) => {
       if (!holder || holder.branch !== `refs/heads/${b.branch}` || holder.head !== expectedHead) return 'worktree-holder-changed';
@@ -1432,7 +1461,9 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       }
       const policyHold = await readPolicyHold();
       if (policyHold) return policyHold;
-      if (mergedRetirement && isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
+      // A forge-merged exact head cannot un-merge, and the holder check above
+      // pins that head; only a run receipt can be superseded by a later owner.
+      if (mergedRetirement && isHumanClaimWorktree(worktreeAgentId(b.worktreePath)) && claimCompletion !== 'forge-merged') {
         const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
         const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
         const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);

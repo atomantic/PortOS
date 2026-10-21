@@ -25,7 +25,7 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 }));
 afterAll(cleanupTempDataRoots);
 
-const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [] }));
+const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {} }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
@@ -56,6 +56,18 @@ vi.mock('./branchCompletionPolicy.js', async (importOriginal) => {
   }) };
 });
 
+// The hermetic repo has no forge. A branch's merged PR is injected at the
+// forge-read boundary: { head, mergedAt }, or 'unavailable' for a failed read.
+vi.mock('./heldCheckoutReview.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  findMergedPullRequest: async (repoPath, branch) => {
+    const pr = injected.forge[branch];
+    if (!pr || pr === 'unavailable') throw new Error('retirement-forge-unavailable');
+    return { url: `https://github.com/example/repo/pull/${branch.split('-').at(-1)}`, mergedAt: pr.mergedAt };
+  },
+  readRetirementForgeEvidence: async (repoPath, branch, prUrl) => ({ prUrl, prHead: injected.forge[branch].head }),
+}));
+
 // Keep the run hermetic: the verdict ledger otherwise reads this install's
 // real CoS data directory.
 vi.mock('./supersededLedger.js', async (importOriginal) => ({
@@ -75,7 +87,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   let external;
 
   beforeEach(async () => {
-    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [] });
+    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {} });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-reconcile-own-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -221,6 +233,63 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(result.wip).toContainEqual(expect.objectContaining({ branch: 'claim/issue-14' }));
     for (const path of [locked, dirty, unmerged]) expect(existsSync(path)).toBe(true);
     expect(await branches()).toEqual(expect.arrayContaining(['claim/issue-12', 'claim/issue-13', 'claim/issue-14']));
+  });
+
+  it('retires a forge-merged manual claim without a run receipt and holds every unproven sibling (#12849)', async () => {
+    const root = join(repo, '.claude', 'worktrees');
+    await mkdir(root, { recursive: true });
+    const HOUR = 60 * 60 * 1000;
+    const longAgo = new Date(Date.now() - 3 * HOUR).toISOString();
+    // A manual /claim: commit in the checkout, merge it into main, leave the tree.
+    const claim = async (n, { merge = true, ageMs = 2 * HOUR } = {}) => {
+      const branch = `claim/issue-${n}`;
+      const path = await addTree(join(root, `claim-issue-${n}`), branch);
+      await writeFile(join(path, `work-${n}.txt`), `issue ${n}\n`);
+      await execGit(['add', `work-${n}.txt`], path);
+      await execGit(['commit', '-m', `feat: issue ${n}`], path);
+      const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+      if (merge) await execGit(['merge', '--no-ff', '-m', `Merge ${branch}`, branch], repo);
+      if (ageMs) await utimes(path, new Date(Date.now() - ageMs), new Date(Date.now() - ageMs));
+      injected.forge[branch] = { head, mergedAt: longAgo };
+      return { branch, path, head };
+    };
+    const shipped = await claim(21);
+    const dirty = await claim(22);
+    await writeFile(join(dirty.path, 'unsaved.txt'), 'preserve\n');
+    await utimes(dirty.path, new Date(Date.now() - 2 * HOUR), new Date(Date.now() - 2 * HOUR));
+    const locked = await claim(23);
+    await execGit(['worktree', 'lock', locked.path], repo);
+    const owned = await claim(24);
+    injected.owners = [{ id: 'agent-live-claim', status: 'running', sourceWorkspace: repo, workspacePath: repo,
+      metadata: { sourceWorkspace: repo, claimBranches: [owned.branch] } }];
+    const unmerged = await claim(25, { merge: false });
+    const forgeDown = await claim(26);
+    injected.forge[forgeDown.branch] = 'unavailable';
+    const otherHead = await claim(27);
+    injected.forge[otherHead.branch] = { head: 'f'.repeat(40), mergedAt: longAgo };
+    const justMerged = await claim(28);
+    injected.forge[justMerged.branch].mergedAt = new Date().toISOString();
+    const young = await claim(29, { ageMs: 0 });
+
+    const result = await reconcile(repo, {
+      activeAgentIds: new Set(), claimOwners: { agents: injected.owners, readAgents: async () => injected.owners },
+    });
+    const context = JSON.stringify({ cleaned: result.cleaned, skipped: result.skipped });
+    expect(result.cleaned, context).toEqual([shipped.branch]);
+    expect(existsSync(shipped.path)).toBe(false);
+    expect(await branches()).not.toContain(shipped.branch);
+    expect((await execGit(['rev-parse', `refs/portos/completed/${shipped.head}`], repo)).stdout.trim()).toBe(shipped.head);
+
+    const reasonFor = branch => result.skipped.find(row => row.branch === branch)?.reason;
+    expect(reasonFor(locked.branch), context).toBe('worktree-locked');
+    expect(reasonFor(owned.branch), context).toBe('claim-owner-active');
+    for (const held of [forgeDown, otherHead, justMerged, young]) expect(reasonFor(held.branch), context).toBe('claim-completion-unverified');
+    expect(result.inFlight).toContainEqual(expect.objectContaining({ branch: dirty.branch, state: 'ABANDONED_WIP' }));
+    expect(result.wip).toContainEqual(expect.objectContaining({ branch: unmerged.branch }));
+    const kept = [dirty, locked, owned, unmerged, forgeDown, otherHead, justMerged, young];
+    for (const { path } of kept) expect(existsSync(path)).toBe(true);
+    expect(existsSync(join(dirty.path, 'unsaved.txt'))).toBe(true);
+    expect(await branches()).toEqual(expect.arrayContaining(kept.map(held => held.branch)));
   });
 
   it('holds a clean agent tree at the default HEAD while its dispatch is still registering (#11775)', async () => {

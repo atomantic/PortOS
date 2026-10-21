@@ -100,3 +100,15 @@ export async function hasCompletedCheckoutEvidence(records, target) {
       && Date.parse(receipt.capturedAt) <= Date.parse(agent.completedAt)
       && same(current, { repoPath: receipt.repoPath, branch: receipt.branch, path: receipt.path, head: receipt.head, incarnation: receipt.incarnation })));
 }
+
+/** A manual /claim session records no receipt (#12849). Its proof is the forge:
+ * a PR merged into the default branch whose head is exactly this checkout's head.
+ * Returns that PR and its merge time, or null — any read failure grants nothing.
+ */
+export async function readMergedClaimEvidence({ repoPath, branch, head, forgeAccount = null }) {
+  const { findMergedPullRequest, readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const pr = await findMergedPullRequest(repoPath, branch, head, { forgeAccount }).catch(() => null);
+  if (!pr || !Number.isFinite(Date.parse(pr.mergedAt))) return null;
+  const forge = await readRetirementForgeEvidence(repoPath, branch, pr.url, { forgeAccount }).catch(() => null);
+  return forge?.prHead === head ? { prUrl: pr.url, mergedAt: pr.mergedAt } : null;
+}
