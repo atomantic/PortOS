@@ -17,7 +17,7 @@ async function fixture(action = 'review') {
   // Persisted registries key apps by ID; getAppById adds the id at read time.
   const apps = { apps: { 'portos-default': { repoPath: root } } };
   await writeFile(join(root, 'data/apps.json'), JSON.stringify(apps));
-  await writeFile(join(root, 'data/cos/state.json'), JSON.stringify({ agents: {} }));
+  await writeFile(join(root, 'data/cos/state.json'), JSON.stringify({ running: false }));
   const body = { ...request, ...(['restore', 'finalize', 'resume-quarantine'].includes(action)
     ? { review: { digest: 'b'.repeat(64), ...(action === 'resume-quarantine' ? { acceptSuperseded: true } : {}) } } : {}) };
   const input = join(root, 'request.json');
@@ -127,7 +127,7 @@ describe('initialized checkout recovery CLI', () => {
       const f = await fixture('restore');
       if (change === 'missing-install') f.args[3] = join(f.root, 'absent');
       if (change === 'missing-agents') await rm(join(f.root, 'data/cos/agents'), { recursive: true });
-      if (change === 'invalid-state') await writeFile(join(f.root, 'data/cos/state.json'), '{"agents":null}');
+      if (change === 'invalid-state') await writeFile(join(f.root, 'data/cos/state.json'), '[]');
       if (change === 'wrong-app-root') {
         f.apps.apps['portos-default'].repoPath = join(f.root, 'other');
         await writeFile(join(f.root, 'data/apps.json'), JSON.stringify(f.apps));

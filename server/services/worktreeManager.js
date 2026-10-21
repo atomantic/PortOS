@@ -30,6 +30,7 @@ import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../
 export { isHumanClaimWorktree } from '../lib/worktreeOwnership.js';
 
 const WORKTREES_DIR = PATHS.worktrees;
+const CACHE_ENTRIES = new Set(['.vite', '.vitest-cache', '.cache']);
 // `git worktree list --porcelain` reports POSIX separators on every platform —
 // `H:/repo/data/cos/worktrees/agent-x` — while WORKTREES_DIR is built with
 // `join` and is backslash-separated on Windows. So a git-reported path is never
@@ -81,8 +82,22 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
     const targetPath = join(worktreePath, relativePath);
     const sourceExists = await stat(sourcePath).then(info => info.isDirectory()).catch(() => false);
     if (!sourceExists) return;
-    const targetExists = await lstat(targetPath).then(() => true).catch(() => false);
-    if (targetExists) return;
+    const targetStat = await lstat(targetPath).catch(() => null);
+    if (targetStat) {
+      const isSymlink = targetStat.isSymbolicLink?.() ?? false;
+      const isDir = targetStat.isDirectory?.() ?? !isSymlink;
+      if (!isSymlink && isDir) {
+        const entries = await readdir(targetPath).catch(() => null);
+        if (entries !== null && entries.length > 0 && entries.every(name => CACHE_ENTRIES.has(name))) {
+          await rm(targetPath, { recursive: true, force: true });
+        } else {
+          console.warn(`⚠️ linkWorktreeDependencies: skipping existing ${targetPath} (not a cache-only directory)`);
+          return;
+        }
+      } else {
+        return;
+      }
+    }
     if (relativePath === 'node_modules' && await provisionWorkspaceNodeModules(sourceWorkspace, worktreePath)) return;
     await symlink(sourcePath, targetPath, 'dir');
   }));

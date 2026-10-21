@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { __createManualClock } from '../lib/eventLoopLagProbe.js';
@@ -7,6 +7,17 @@ import { __createManualClock } from '../lib/eventLoopLagProbe.js';
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'cos-state-test-' });
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makeProxy(await importOriginal()));
+// cosState's view of the backend choice; the repositories keep the real (in-memory) one.
+const backendMode = vi.hoisted(() => ({ postgres: false }));
+vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return { ...real, isFileBackend: () => !backendMode.postgres && real.isFileBackend() };
+});
+// Observe the row writes cosState sends, against the real in-memory backend.
+vi.mock('./cosAgentRepository.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return { ...real, applyAgentSave: vi.fn(real.applyAgentSave) };
+});
 
 const COS_DIR = join(tempRoot, 'cos');
 const STATE_PATH = join(COS_DIR, 'state.json');
@@ -22,13 +33,19 @@ const freshModule = async () => {
 };
 
 const writeState = (state) => writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+// Agent records are cos_agents rows (#12738); seed them into the in-memory store
+// the freshly imported cosState module uses.
+const seedAgents = async (agents) => (await import('./cosAgentRepository.js')).__seedCosAgents(agents);
+const storedAgents = async () => Object.fromEntries((await (await import('./cosAgentRepository.js')).loadAgentRows()).rows.map((row) => [row.id, JSON.parse(row.body)]));
 const writeConfig = (config) => writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
 const quarantined = (prefix) => readdirSync(COS_DIR).filter(f => f.startsWith(`${prefix}.corrupted.`));
 
-beforeEach(() => {
+beforeEach(async () => {
   rmSync(COS_DIR, { recursive: true, force: true });
   mkdirSync(COS_DIR, { recursive: true });
+  (await import('./cosAgentRepository.js')).__resetCosAgentRepository();
+  backendMode.postgres = false;
 });
 
 describe('cosState persistence', () => {
@@ -57,13 +74,8 @@ describe('cosState persistence', () => {
     });
     writeState({
       running: false,
-      agents: {
-        'agent-1': {
-          id: 'agent-1',
-          // Verbatim shape of the text that triggered the false positive.
-          prompt: 'Using saved defaults: --review-with={value}{, --review-iterations=…}{ — project|global}',
-        },
-      },
+      // Verbatim shape of the text that triggered the false positive.
+      note: 'Using saved defaults: --review-with={value}{, --review-iterations=…}{ — project|global}',
     });
 
     const { loadState } = await freshModule();
@@ -71,7 +83,7 @@ describe('cosState persistence', () => {
 
     expect(state.config.maxConcurrentAgents).toBe(20);
     expect(state.config.maxConcurrentAgentsPerProject).toBe(12);
-    expect(state.agents['agent-1']).toBeDefined();
+    expect(state.note).toContain('{value}{');
     // A valid file is never treated as corrupt, so nothing is quarantined.
     expect(quarantined('state.json')).toHaveLength(0);
   });
@@ -91,9 +103,8 @@ describe('cosState persistence', () => {
   });
 
   it('reports a "}{"-carrying state file as trusted to the update safety gate', async () => {
-    writeState({ agents: { 'agent-1': { id: 'agent-1', status: 'running', prompt: 'a }{ b' } } });
-
     const { readAgentsStateForSafetyCheck } = await freshModule();
+    await seedAgents({ 'agent-1': { id: 'agent-1', status: 'running', prompt: 'a }{ b' } });
 
     // `trusted: false` here would make the update gate treat a live agent as
     // "records unreadable" and demand a manual state.json restore.
@@ -138,7 +149,7 @@ describe('cosState persistence', () => {
     expect(recovered.config.maxConcurrentAgentsPerProject).toBe(12);
     // Settings the user never changed still come from the shipped defaults.
     expect(recovered.config.maxTotalProcesses).toBe(DEFAULT_CONFIG.maxTotalProcesses);
-    // Agent records are genuinely lost — but the bad bytes stay inspectable.
+    // The bad bytes stay inspectable.
     expect(recovered.agents).toEqual({});
     expect(quarantined('state.json')).toHaveLength(1);
   });
@@ -147,8 +158,9 @@ describe('cosState persistence', () => {
 describe('CoS config lives in its own file', () => {
   it('never writes config back into state.json', async () => {
     writeConfig({ maxConcurrentAgents: 9 });
-    writeState({ running: true, agents: { a1: { status: 'running' } } });
+    writeState({ running: true });
     const { loadState, saveState, getConfig } = await freshModule();
+    await seedAgents({ a1: { status: 'running' } });
 
     const state = await loadState();
     expect(state.config.maxConcurrentAgents).toBe(9);
@@ -161,7 +173,8 @@ describe('CoS config lives in its own file', () => {
 
     const persisted = readJson(STATE_PATH);
     expect(persisted.config).toBeUndefined();
-    expect(Object.keys(persisted.agents)).toEqual(['a1', 'a2']);
+    expect(persisted.agents).toBeUndefined();
+    expect(Object.keys(await storedAgents())).toEqual(['a1', 'a2']);
     // config.json is untouched by a runtime-record write.
     expect(readJson(CONFIG_PATH)).toEqual({ maxConcurrentAgents: 9 });
   });
@@ -448,13 +461,15 @@ describe('live CoS restore boundary', () => {
     { agents: { example: { status: 'paused' } } },
     { agents: {}, persistentMind: { started: true } },
     { agents: {}, persistentMind: { activeTurn: { id: 'example-turn' } } },
-  ])('refuses unsafe ownership before transferring: %j', async state => {
+  ])('refuses unsafe ownership before transferring: %j', async ({ agents, ...state }) => {
     writeState(state);
     const store = await freshModule();
+    await seedAgents(agents);
     const transfer = vi.fn();
     await expect(store.withLiveCosRestore(transfer)).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
     expect(transfer).not.toHaveBeenCalled();
     expect(readJson(STATE_PATH)).toEqual(state);
+    expect(await storedAgents()).toEqual(agents);
   });
 
   it('refuses unreadable runtime records without overwriting them', async () => {
@@ -482,10 +497,10 @@ describe('state operation slow diagnostics', () => {
         if (stage === 'write') clock.advance(1500);
         if (stage === 'dirSync') clock.stall(600);
       } });
-      expect(stages).toEqual(['prepare', 'serialize', 'write', 'replace', 'dirSync']);
-      expect(readJson(STATE_PATH).agents).toEqual({});
+      expect(stages).toEqual(['prepare', 'agents', 'serialize', 'write', 'replace', 'dirSync']);
+      expect(readJson(STATE_PATH).agents).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][0]).toMatch(/^🐢 CoS state write slow outcome=saved totalMs=2100 prepareMs=0 serializeMs=0 writeMs=1500 replaceMs=0 dirSyncMs=600 loopLagMs=500 loopLagMaxMs=500 sizeKiB=\d+$/);
+      expect(warn.mock.calls[0][0]).toMatch(/^🐢 CoS state write slow outcome=saved totalMs=2100 prepareMs=0 agentsMs=0 serializeMs=0 writeMs=1500 replaceMs=0 dirSyncMs=600 loopLagMs=500 loopLagMaxMs=500 sizeKiB=\d+$/);
 
       warn.mockClear();
       await store.withStateLock(async () => clock.advance(200));
@@ -496,5 +511,126 @@ describe('state operation slow diagnostics', () => {
       store.__setCosStateDiagnosticsClockForTests(null);
       warn.mockRestore();
     }
+  });
+});
+
+// #12738: agent records are cos_agents rows, written per changed row.
+describe('agent records in cos_agents', () => {
+  const agent = (n, extra = {}) => ({ id: `agent-example-${n}`, taskId: `task-example-${n}`, status: 'running', output: [], ...extra });
+
+  it('loses no concurrent update and writes only the changed row per update', async () => {
+    const store = await freshModule();
+    const repo = await import('./cosAgentRepository.js');
+    const agents = Object.fromEntries(Array.from({ length: 8 }, (_, n) => [agent(n).id, agent(n)]));
+    await seedAgents(agents);
+    await store.saveState(await store.loadState());
+    const fileWrite = statSync(STATE_PATH).mtimeMs;
+    repo.applyAgentSave.mockClear();
+
+    await Promise.all(Object.keys(agents).map((agentId, n) => store.withStateLock(async () => {
+      const state = await store.loadState();
+      state.agents[agentId] = { ...state.agents[agentId], status: 'completed', output: [`line ${n}`] };
+      await store.saveState(state);
+    })));
+
+    const stored = await storedAgents();
+    expect(Object.values(stored).map((record) => record.status)).toEqual(Array(8).fill('completed'));
+    expect(stored[agent(3).id].output).toEqual(['line 3']);
+    const writes = repo.applyAgentSave.mock.calls.map(([plan]) => plan);
+    expect(writes).toHaveLength(8);
+    expect(writes.every((plan) => plan.upserts.length === 1 && plan.deletes.length === 0)).toBe(true);
+    // Nothing outside the agent map changed, so state.json was not rewritten.
+    expect(statSync(STATE_PATH).mtimeMs).toBe(fileWrite);
+    expect(readJson(STATE_PATH).agents).toBeUndefined();
+  });
+
+  it('keeps agent records when state.json becomes unreadable', async () => {
+    const store = await freshModule();
+    await seedAgents({ [agent(1).id]: agent(1) });
+    writeFileSync(STATE_PATH, '{broken');
+    expect((await store.loadState()).agents).toEqual({ [agent(1).id]: agent(1) });
+  });
+
+  it('ignores a legacy agents map left in state.json and drops it on the next save', async () => {
+    writeState({ running: false, agents: { [agent(1).id]: agent(1) } });
+    const store = await freshModule();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const state = await store.loadState();
+      expect(state.agents).toEqual({});
+      expect(warn.mock.calls.some(([line]) => line.includes('legacy agents map'))).toBe(true);
+      await store.saveState(state);
+      expect(readJson(STATE_PATH)).not.toHaveProperty('agents');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('refuses a save planned on a cache the store has moved past, then reloads from the store', async () => {
+    const store = await freshModule();
+    await seedAgents({ [agent(1).id]: agent(1) });
+    const state = await store.loadState();
+    // The store changes underneath the cache (a database restore, say).
+    await seedAgents({ [agent(2).id]: agent(2) });
+    state.agents[agent(1).id].status = 'completed';
+    await expect(store.saveState(state)).rejects.toMatchObject({ code: 'COS_AGENTS_STALE' });
+    expect(await storedAgents()).toEqual({ [agent(2).id]: agent(2) });
+    expect(Object.keys((await store.loadState()).agents)).toEqual([agent(2).id]);
+  });
+
+  it('sweeps stale state.json temp files from other processes, never its own or a fresh one', async () => {
+    const uuid = '0123abcd-0123-4567-89ab-0123456789ab';
+    const names = {
+      stale: `state.json.${process.pid + 1}.1000.${uuid}.tmp`,
+      own: `state.json.${process.pid}.1000.${uuid}.tmp`,
+      fresh: `state.json.${process.pid + 2}.1000.${uuid}.tmp`,
+      unrelated: `config.json.${process.pid + 1}.1000.${uuid}.tmp`,
+    };
+    for (const name of Object.values(names)) writeFileSync(join(COS_DIR, name), '{}');
+    const old = new Date(Date.now() - 5 * 60_000);
+    for (const key of ['stale', 'own', 'unrelated']) utimesSync(join(COS_DIR, names[key]), old, old);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const store = await freshModule();
+      await store.loadState();
+      const left = readdirSync(COS_DIR);
+      expect(left).not.toContain(names.stale);
+      expect(left).toEqual(expect.arrayContaining([names.own, names.fresh, names.unrelated]));
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+// Boot starts CoS before the database phase runs db-migrations 020/021.
+describe('agent migration boot gate', () => {
+  const legacy = { 'agent-example-1': { id: 'agent-example-1', status: 'completed' } };
+
+  it('holds a read of a legacy agents map until the migrations settle, so no save can drop it first', async () => {
+    writeState({ running: false, agents: legacy });
+    backendMode.postgres = true;
+    const store = await freshModule();
+    let loaded = null;
+    const load = store.loadState().then((state) => { loaded = state; });
+    const save = store.saveState({ running: true, agents: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(loaded).toBeNull();
+    // Nothing touched the file while the import was pending.
+    expect(readJson(STATE_PATH).agents).toEqual(legacy);
+
+    // What 020 + 021 leave behind: the rows, and a file without the map.
+    await seedAgents(legacy);
+    writeState({ running: false });
+    store.markCosAgentMigrationsSettled();
+    await Promise.all([load, save]);
+    expect(loaded.agents).toEqual(legacy);
+  });
+
+  it('never waits once the map is gone', async () => {
+    writeState({ running: false });
+    backendMode.postgres = true;
+    const store = await freshModule();
+    await seedAgents(legacy);
+    expect((await store.loadState()).agents).toEqual(legacy);
   });
 });
