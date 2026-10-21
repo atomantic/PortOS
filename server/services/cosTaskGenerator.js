@@ -1328,7 +1328,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
     const appBusy = appsWithPendingImprovement.has(app.id);
     if (appBusy && cronTasks.length === 0) {
       if (appsWithBlockedImprovement.has(app.id)) {
-        emitLog('warn', `⛔ Skipping improvement queue for ${app.name}: failure-blocked improvement task ${appsWithBlockedImprovement.get(app.id)} occupies the app slot — resolve or delete it to resume`, { appId: app.id });
+        emitLog('info', `⏸️ Skipping improvement queue for ${app.name}: failure-blocked improvement task ${appsWithBlockedImprovement.get(app.id)} occupies the app slot — resolve or delete it to resume`, { appId: app.id });
       } else {
         emitLog('debug', `App ${app.name} already has a pending improvement task — skipping queue`);
       }

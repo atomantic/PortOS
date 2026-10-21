@@ -81,7 +81,7 @@ export function withStateLock(fn) {
     } finally {
       const { totalMs, lagMs, lagMaxMs } = span.end();
       if (totalMs >= SLOW_STATE_OPERATION_MS) {
-        console.warn(`🐢 CoS state queue slow hold heldMs=${totalMs} waitMs=${waitMs} loopLagMs=${lagMs} loopLagMaxMs=${lagMaxMs}`);
+        console.log(`🐢 CoS state queue slow hold heldMs=${totalMs} waitMs=${waitMs} loopLagMs=${lagMs} loopLagMaxMs=${lagMaxMs}`);
       }
     }
   });
@@ -726,7 +726,7 @@ export async function saveState(state, { onStage, changedAgentIds } = {}) {
     const summary = span.end();
     if (summary.totalMs >= SLOW_STATE_OPERATION_MS) {
       const ms = (name) => summary.phases[name]?.ms ?? 0;
-      console.warn(`🐢 CoS state write slow outcome=${outcome} totalMs=${summary.totalMs} prepareMs=${ms('prepare')} agentsMs=${ms('agents')} serializeMs=${ms('serialize')} writeMs=${ms('write')} replaceMs=${ms('replace')} dirSyncMs=${ms('dirSync')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} sizeKiB=${Math.round(bytes / 1024)}`);
+      console.log(`🐢 CoS state write slow outcome=${outcome} totalMs=${summary.totalMs} prepareMs=${ms('prepare')} agentsMs=${ms('agents')} serializeMs=${ms('serialize')} writeMs=${ms('write')} replaceMs=${ms('replace')} dirSyncMs=${ms('dirSync')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} sizeKiB=${Math.round(bytes / 1024)}`);
     }
   }
   stateCache = stampGeneration(state, stateRecovery);

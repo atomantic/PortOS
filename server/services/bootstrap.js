@@ -1069,7 +1069,8 @@ const withGrace = (label, ms, run) => new Promise((resolve) => {
   const finish = (msg) => complete(msg, console.log);
   const finishWithError = (msg, error) => complete(msg, console.error, error);
   run({ finish, finishWithError });
-  setTimeout(() => finishWithError(`⚠️ ${label} close exceeded ${ms}ms — proceeding`), ms).unref?.();
+  // Expected on most restarts (lingering upgraded sockets); the bounded wait is the handling.
+  setTimeout(() => finish(`⏱️ ${label} close exceeded ${ms}ms — proceeding`), ms).unref?.();
 });
 
 // graceMs is deliberately bounded: this runs after the request drain's deadline,

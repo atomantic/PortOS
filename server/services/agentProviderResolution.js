@@ -212,7 +212,9 @@ async function resolveOrdinaryProviderAndModel(task) {
   const providerAvailable = isProviderAvailable(provider.id);
   if (!providerAvailable) {
     const status = getProviderStatus(provider.id);
-    emitLog('warn', `Provider ${provider.id} unavailable: ${status.message}`, {
+    // A sidelined provider (quota, cooldown) is handled by the fallback below;
+    // only the no-fallback path is a failure.
+    emitLog('info', `⏸️ Provider ${provider.id} unavailable: ${status.message}`, {
       taskId: task.id,
       providerId: provider.id,
       reason: status.reason

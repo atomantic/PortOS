@@ -194,11 +194,11 @@ describe('bounded server shutdown', () => {
     await vi.advanceTimersByTimeAsync(1);
     await closing;
     expect(settled).toHaveBeenCalledTimes(1);
-    expect(error.mock.calls).toEqual([['⚠️ HTTP server close exceeded 1000ms — proceeding']]);
+    expect(log.mock.calls).toEqual([['⏱️ HTTP server close exceeded 1000ms — proceeding']]);
     onClose();
     onClose(new Error('late failure'));
-    expect(log).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
   });
 });
 

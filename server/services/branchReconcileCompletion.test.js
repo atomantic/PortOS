@@ -61,7 +61,7 @@ describe('branch reconciliation completion', () => {
       claimMarkersHeld: [{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified' }],
     });
     await settleBranchReconcileRun(agent);
-    expect(emitLog).toHaveBeenLastCalledWith('warn', expect.stringContaining('remaining 3'), expect.objectContaining({
+    expect(emitLog).toHaveBeenLastCalledWith('info', expect.stringContaining('remaining 3'), expect.objectContaining({
       counts: { heldBranches: 1, heldDetached: 1, heldClaims: 1 },
       skipCauses: { 'worktree-locked': 1, 'checkout-retained': 1, 'claim-reservation-owner-unverified': 1 },
     }));
@@ -77,7 +77,7 @@ describe('branch reconciliation completion', () => {
       ],
     });
     await settleBranchReconcileRun(agent);
-    expect(emitLog).toHaveBeenLastCalledWith('warn', expect.stringContaining('remaining 2'), expect.objectContaining({
+    expect(emitLog).toHaveBeenLastCalledWith('info', expect.stringContaining('remaining 2'), expect.objectContaining({
       counts: { heldBranches: 1, heldDetached: 0, heldBackMerged: 1 },
       skipCauses: { 'worktree-locked': 1 },
     }));

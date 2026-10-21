@@ -387,7 +387,7 @@ function warnEvictedOnce(detail) {
   const now = Date.now();
   if (now - lastEvictedWarnAt < EVICTED_WARN_INTERVAL_MS) return;
   lastEvictedWarnAt = now;
-  console.warn(`⚠️ MortalLoom store evicted from local storage; ${detail}`);
+  console.log(`☁️ MortalLoom store evicted from local storage; ${detail}`);
 }
 
 async function readStoreAtPathResult(path) {

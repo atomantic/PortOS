@@ -90,7 +90,7 @@ export async function spawnAgentForTask(task) {
     return null;
   }
   if (outcome === SPAWN_DEDUP_SKIP) {
-    console.warn(`⚠️ Task ${task.id} is already being spawned — ignoring this dequeue`);
+    console.log(`⏭️ Task ${task.id} is already being spawned — ignoring this dequeue`);
     return null;
   }
   return outcome;
