@@ -330,6 +330,7 @@ export * as fileUtils from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './forgeIssueCli.js';
 export * from './forgeIssueState.js';
+export * from './nodeInterpreterPin.js';
 export * from './portosEnv.js';
 export * from './portosRootPlaceholder.js';
 export * from './pm2Jlist.js';

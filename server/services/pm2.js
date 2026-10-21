@@ -554,6 +554,21 @@ export async function listProcessesStrict(pm2Home = null) {
   return list.map(mapProcess);
 }
 
+/**
+ * The running daemon's own pm2 and Node versions — what the Node runtime panel
+ * compares against the pm2 PortOS ships. Only those two fields leave this
+ * function: the daemon's report also carries its whole environment.
+ * @returns {Promise<{pm2Version: string|null, nodeVersion: string|null}|null>} null when unreachable
+ */
+export async function getDaemonIdentity() {
+  const report = await connectAndRun(client => new Promise((resolve, reject) => {
+    client.Client.executeRemote('getReport', {}, (error, value) => error ? reject(error) : resolve(value));
+  }), JLIST_TIMEOUT_MS).catch(() => null);
+  if (!report) return null;
+  const text = (value) => (typeof value === 'string' && value && value !== 'N/A' ? value : null);
+  return { pm2Version: text(report.pm2_version), nodeVersion: text(report.node_version) };
+}
+
 /** Internal maintenance inventory: fresh daemon read, no UI cache or env dump. */
 export async function listMaintenanceProcesses() {
   return connectAndRun(pm2 => new Promise((resolve, reject) => {

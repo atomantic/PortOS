@@ -203,6 +203,16 @@ first line, `useWorktree: false`) and waits. That agent then counts as activity,
 update lands in the first idle window after it finishes. The escalation is switchable
 (`resolveBlockersWithAgent`), since it costs a provider call.
 
+## Node.js runtime and pm2
+
+The Update tab's **Node.js runtime** panel (`client/src/components/apps/tabs/NodeRuntimePanel.jsx`, `GET /api/update/node-runtime`) reports the Node the server process is actually running (`process.version`, not `node -v`), newer releases from nodejs.org's index inside `SUPPORTED_NODE_RANGE` (the running line's latest patch, the newest LTS, the newest release, with a security flag), nvm, and pm2 three ways: the version PortOS ships, the daemon's own `getReport`, and the terminal's global CLI.
+
+Why the runtime has to be pinned: `interpreter: 'node'` resolves against the pm2 daemon's PATH, and `pm2 resurrect` reuses each app's saved PATH, so an install can keep running an older Homebrew node after nvm's default moved. `ecosystem.config.cjs` therefore launches every PortOS app on `PORTOS_NODE_INTERPRETER` (exported env, then `.env`), falling back to `node` when the value is not an absolute path to an existing node binary (`server/lib/nodeInterpreterPin.js`).
+
+`POST /api/update/node-runtime { version }` (offered versions only, host-control gated) refuses unless the system is idle, then: `nvm install`, `nvm alias default`, `npm install -g pm2@<shipped>` under the new Node, pins `PORTOS_NODE_INTERPRETER`, repoints a macOS pm2 LaunchAgent's nvm paths, and launches the detached update script in `refresh` mode. `launchUpdate` puts the pin first on the script's PATH and exports it, so npm install and the trusted native rebuilds target the new Node, `pm2-daemon-refresh.js` reloads a daemon still on another Node, and `pm2 delete` + `pm2 start` makes pm2 read the new interpreter. A refused launch restores the previous pin. The run also pulls `main`, like any refresh.
+
+`POST /api/update/pm2` aligns a global CLI or daemon that is older than the shipped pm2 (a restart only for the daemon). A systemd boot script still needs `sudo pm2 startup`; the panel shows the exact command.
+
 ## Syncing a fork
 
 `POST /api/update/sync-fork` shells out to:

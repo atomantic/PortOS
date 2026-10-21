@@ -4,6 +4,7 @@ import { canonicalStringify } from '../lib/objects.js';
 import { assertPeerExecutionCapability } from '../lib/maintenanceExclusive.js';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
+import { NODE_INTERPRETER_ENV_KEY, resolvePinnedNodeInterpreter, withNodeBinOnPath } from '../lib/nodeInterpreterPin.js';
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
 
@@ -65,7 +66,13 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
   const cleanList = Array.isArray(forceCleanWorkspaces)
     ? forceCleanWorkspaces.filter(w => CLEANABLE_WORKSPACES.has(w))
     : [];
-  const childEnv = { ...process.env };
+  // The script's bare `node`/`npm` must be the pinned runtime pm2 will launch:
+  // its npm install and native rebuilds target whichever Node runs them.
+  // Exporting the pin also tells pm2-daemon-refresh.js to move the daemon onto
+  // it when the daemon still runs an older Node.
+  const pinnedNode = resolvePinnedNodeInterpreter();
+  const childEnv = withNodeBinOnPath({ ...process.env }, pinnedNode);
+  if (pinnedNode) childEnv[NODE_INTERPRETER_ENV_KEY] = pinnedNode;
   // Never inherit peer-only pinning from an operator's ambient environment.
   delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;
   delete childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA;
