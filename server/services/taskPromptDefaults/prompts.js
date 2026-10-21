@@ -102,6 +102,12 @@ if [ "$GH_HOST" = "ssh.github.com" ]; then GH_HOST="github.com"; fi`;
 // All prompts use {appName} and {repoPath} template variables
 // ============================================================
 
+// Mirrors scripts/ci-dependabot-admission.js: CI on a dependency-bot PR is held
+// until a repository writer re-runs it, so the held step's message must stay
+// recognizable to every prompt that triages bot PRs (dependency-updates Phase 1,
+// do-release Step 2).
+const DEPENDABOT_ADMISSION_HOLD_GUIDANCE = 'A failing step that only says the run is `held for maintainer review` is a maintainer-admission hold, not a broken bump: the repository withholds CI from bot commits until a writer inspects them. Confirm the diff is manifest + lockfile only, then release the held run with `gh run rerun <run-id>` (a writer-only re-run keeps the original SHA) and wait for the real result before deciding. Never push a commit onto the bot branch to "fix" a hold — a new commit only re-arms it.';
+
 export const DEFAULT_TASK_PROMPTS = {
   'app-launch-video': APP_LAUNCH_VIDEO_PROMPT,
   'model-comparison-refresh': `[Research] Fill PortOS model comparison evidence and estimates
@@ -525,10 +531,14 @@ Check {appName} dependencies for updates and security vulnerabilities:
 
 Repository: {repoPath}
 
-When this task runs in a CoS-managed worktree, its \`node_modules\` directories are
-intentionally private to that worktree. If validation needs installed packages,
-use the repository's documented package manager from the worktree so installs
-and lockfile regeneration stay isolated from the source checkout.
+You are working in an isolated CoS worktree cut from {repoPath}'s default branch,
+and its \`node_modules\` directories are intentionally private to that worktree
+(no links to the source checkout). If validation needs installed packages, use
+the repository's documented package manager inside this worktree so installs and
+lockfile regeneration stay isolated from the source checkout. Never run an
+install in {repoPath} itself: that is the app's live checkout. If every
+dependency is already current and no alert needs action, leave the worktree
+clean and exit — an empty branch is a successful run, not a missed one.
 
 Freshly bumped packages run lifecycle scripts and test code nobody has reviewed,
 so run installs and validation CONTAINED when this machine can. From the
@@ -603,6 +613,9 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
      \`glab ci trace <job-id>\`) and identify the root cause — a real incompatibility, a
      flaky test, or an unrelated pre-existing failure on the default branch (check that
      before blaming the bump).
+   - ${DEPENDABOT_ADMISSION_HOLD_GUIDANCE} Release a hold only for a patch or minor
+     jump and only after the diff-sanity check below; if the re-run is refused (no
+     write access), the verdict is LEAVE.
    - Mergeability: \`CONFLICTING\` (GitLab: \`cannot_be_merged\`) almost always means
      lockfile/manifest drift from another dependency PR that already merged.
    - Diff sanity: the diff should be manifest + lockfile only. Source-file edits, a new
@@ -623,9 +636,10 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
        branch. Keep it scoped to the breakage — never bundle unrelated work onto a
        bot branch.
      * Either way, work on the bot branch in a THROWAWAY WORKTREE, never by checking
-       it out in {repoPath} — this task usually runs in the app's live checkout, so a
-       \`gh pr checkout\` there hijacks whatever branch the user is on and fails outright
-       on their uncommitted work. The bot branch normally exists only on the remote, so
+       it out in {repoPath} — that is the app's live checkout, so a \`gh pr checkout\`
+       there hijacks whatever branch the user is on and fails outright on their
+       uncommitted work — and never inside this task's own worktree, whose branch is
+       reserved for Phase 2's bumps. The bot branch normally exists only on the remote, so
        name the remote ref explicitly and let \`-b\` create the local branch. Call the
        worktree \`dep-{appSlug}-pr-<n>\` verbatim — {worktreesRoot} is shared by every app
        this install manages, so a bare \`dep-pr-<n>\` collides with another app's PR of
@@ -689,7 +703,10 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
    - Run tests
    - Verify the app starts correctly
 
-7. Commit with a clear explanation and follow the repo's changelog convention.
+7. If you changed anything, commit with a clear explanation and follow the repo's
+   changelog convention. With nothing to change, leave the worktree clean — do not
+   commit a run report or an audit timestamp alone, and never a lockfile churned by a
+   verification install.
 
 8. Re-run affected audits and refresh forge alerts. Report each alert as fixed,
    mitigated (upstream alert still open), blocked, or awaiting merge/rescan, with its
@@ -3925,7 +3942,8 @@ Skip this step when the options above say merging dependency updates is off.
 List open dependency-bot PRs (Dependabot, Renovate, or equivalent): \`gh pr list --repo <OWNER>/<REPO> --state open --search "author:app/dependabot" --json number,title,headRefName,mergeable\` (repeat for \`author:app/renovate\`). For each, oldest first:
 - Read the update's release notes for breaking changes that affect this codebase.
 - Green CI and no breaking change that affects the codebase: merge it.
-- Red CI: check out the branch, fix what the new version broke, push the fix onto the PR branch, wait for CI, then merge. Never pin back or drop a security update to dodge a fix.
+- ${DEPENDABOT_ADMISSION_HOLD_GUIDANCE}
+- Red CI from the bump itself: check out the branch, fix what the new version broke, push the fix onto the PR branch, wait for CI, then merge. Never pin back or drop a security update to dodge a fix.
 - Conflicted or out of date: ask the bot to rebase (\`@dependabot rebase\`), or rebase it yourself, then merge once green.
 - Superseded by a newer bump of the same package: close it.
 

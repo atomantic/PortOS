@@ -440,17 +440,26 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // back into the default origin it was rendered with, so an uncustomized stored
   // copy must still read as shipped (and so upgrade). Hashing folds every origin
   // into one placeholder (see the custom-origin case above).
-  it.each(['claim-issue-jira', 'do-release', 'issue-reconcile', 'jira-status-report', 'user-action-review'])(
+  // Each row may carry a [from, to] edit that undoes a post-token body change, so
+  // the ACTUALLY shipped pre-token body is reconstructed rather than a synthetic
+  // old-origin rendering of today's intentionally changed text.
+  it.each([
+    // claim-issue-jira: the handoff contract changed after the token swap.
+    ['claim-issue-jira', ["After the reviewers finish, preserve the exact worktree, local `claim/<KEY>` branch and open MR/PR for the intentional human handoff. Do not invoke merged retirement while it remains unmerged.", "After the reviewers finish, run the worktree-only cleanup so the source checkout is left clean:\n   ```bash\n   cd {repoPath}\n   git worktree remove \"${WORKTREE}\"\n   ```\n   Leave the local `claim/<KEY>` branch and the open MR/PR in place."]],
+    // do-release v20 split Step 2's "Red CI" bullet to recognize a maintainer-admission hold.
+    ['do-release', [/- A failing step that only says the run is[^\n]*\n- Red CI from the bump itself: check out the branch/, '- Red CI: check out the branch']],
+    ['issue-reconcile'],
+    ['jira-status-report'],
+    ['user-action-review'],
+  ])(
     '%s: the pre-token body rendered with the default origin still reads as a shipped default',
-    (key) => {
+    (key, edit) => {
       const current = DEFAULT_TASK_PROMPTS[key];
       expect(current).toContain('{portosApiUrl}');
       expect(current).not.toContain('localhost:5555');
-      // Reconstruct the actually shipped pre-cleanup Jira body, not a synthetic
-      // old-origin rendering of today's intentionally changed handoff contract.
-      const historical = key === 'claim-issue-jira'
-        ? current.replace("After the reviewers finish, preserve the exact worktree, local `claim/<KEY>` branch and open MR/PR for the intentional human handoff. Do not invoke merged retirement while it remains unmerged.", "After the reviewers finish, run the worktree-only cleanup so the source checkout is left clean:\n   ```bash\n   cd {repoPath}\n   git worktree remove \"${WORKTREE}\"\n   ```\n   Leave the local `claim/<KEY>` branch and the open MR/PR in place.")
-        : current;
+      const historical = edit ? current.replace(...edit) : current;
+      // A row's edit must actually hit, or the case silently tests today's body.
+      if (edit) expect(historical).not.toBe(current);
       const retired = historical.replaceAll('{portosApiUrl}', 'http://localhost:5555');
       expect(promptMatchesShippedDefault(retired, key)).toBe(true);
     },
@@ -535,9 +544,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // per package rather than trusting Phase 1's listing to have been complete.
     expect(current).toContain('owns the bump');
     expect(current).toContain('confirm per package');
-    // The task runs in the app's LIVE checkout (no useWorktree default), so repairing a
-    // bot branch has to happen in a throwaway worktree — a bare `gh pr checkout` there
-    // hijacks whatever branch the user is on.
+    // Repairing a bot branch happens in a throwaway worktree, never in {repoPath} (the
+    // app's live checkout, where a bare `gh pr checkout` hijacks whatever branch the
+    // user is on) and never in this task's own worktree (reserved for Phase 2's bumps).
     // …namespaced per app, since {worktreesRoot} is shared across every managed app.
     // {appSlug} (not {appName}) is the segment that isolates them: it carries the
     // app id, so two managed apps sharing a name still get distinct directories.
@@ -576,6 +585,26 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('intentionally private to that worktree');
     expect(current).toContain('isolated from the source checkout');
     expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(7);
+  });
+
+  // v9: the schedule default pins `useWorktree: true` (locked), so the body must
+  // describe the isolated worktree as the cwd — a prompt that still called the live
+  // checkout "usual" would send a package-manager install into the source tree.
+  it('dependency-updates v9 runs isolated, exits clean when current, and re-runs held bot CI', () => {
+    const current = DEFAULT_TASK_PROMPTS['dependency-updates'];
+    expect(current).toContain('You are working in an isolated CoS worktree');
+    // Dependencies already current → empty branch is a success (noChangeSuccess).
+    expect(current).toContain('an empty branch is a successful run');
+    // A Dependabot CI admission hold (scripts/ci-dependabot-admission.js) is a re-run
+    // after diff inspection, never a FIX-THEN-MERGE push that would re-arm the hold.
+    expect(current).toContain('gh run rerun <run-id>');
+    expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(9);
+  });
+
+  // The hold bullet itself is pinned by the pre-token reconstruction case above.
+  it('do-release v20 separates a held bot-PR CI run from a bump that broke CI', () => {
+    expect(DEFAULT_TASK_PROMPTS['do-release']).toContain('Red CI from the bump itself');
+    expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(20);
   });
 
   // NOTE: PROMPT_VERSIONS keys are SCHEDULE keys, not always prompt keys —

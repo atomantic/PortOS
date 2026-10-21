@@ -189,7 +189,8 @@ import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromp
 // — the posture guard below iterates it so the two can't drift apart.
 import { NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js'
 import { enforceManagedAgentOptions } from './taskScheduleRegistry.js'
-import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_TASK_TYPES } from '../lib/auditCatalog.js'
+import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_TASK_TYPES, isAuditTaskType } from '../lib/auditCatalog.js'
+import { NO_CHANGE_SCHEDULED_TYPES } from '../lib/noChangeCompletion.js'
 
 import { loadState } from './cosState.js'
 
@@ -505,6 +506,38 @@ describe('taskSchedule', () => {
       expect(enforceManagedAgentOptions('issue-watcher', config)).toBe(true);
       expect(config.taskMetadata).toMatchObject({ useWorktree: false, openPR: false, readOnly: true, worktreeChangesExpected: false });
     });
+  });
+
+  describe('dependency-updates isolation posture', () => {
+    // Rationale lives on the registry entry: installs are never safe in the live checkout.
+    it('ships worktree + PR delivery with the no-change marker and locks only useWorktree', () => {
+      expect(DEFAULT_TASK_INTERVALS['dependency-updates'].taskMetadata).toEqual({ useWorktree: true, openPR: true, noChangeSuccess: true });
+      expect(MANAGED_AGENT_OPTIONS['dependency-updates']).toEqual(['useWorktree']);
+    });
+
+    it('loadSchedule re-isolates an install whose stored config predates the lock', async () => {
+      mockSchedule({
+        tasks: {
+          'dependency-updates': { type: 'cron', cronExpression: '0 6 * * 1', enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false } }
+        }
+      })
+      const meta = (await loadSchedule()).tasks['dependency-updates'].taskMetadata
+      expect(meta.useWorktree).toBe(true)
+      // Backfilled from the defaults by the taskMetadata deep-merge.
+      expect(meta.openPR).toBe(true)
+      expect(meta.noChangeSuccess).toBe(true)
+    })
+
+    // The finalizer admits a non-audit scheduled type to the no-change exemption by
+    // name (lib/noChangeCompletion.js), while the schedule default is what tells the
+    // agent a clean exit is allowed. Keep the two in parity so a type cannot carry
+    // the marker without the exemption, or the exemption without the marker.
+    it('keeps the no-change allowlist in parity with the shipped noChangeSuccess defaults', () => {
+      const marked = Object.entries(DEFAULT_TASK_INTERVALS)
+        .filter(([type, interval]) => !isAuditTaskType(type) && interval.taskMetadata?.noChangeSuccess === true)
+        .map(([type]) => type)
+      expect(new Set(marked)).toEqual(NO_CHANGE_SCHEDULED_TYPES)
+    })
   });
 
   describe('pr-reviewer (layered public-content review task)', () => {
