@@ -29,21 +29,52 @@ export function agentRowColumns(agent) {
 /**
  * Diff the next agents map against the persisted serializations.
  *
- * @param {{ persisted: Map<string, string>, next: object }} input
+ * @param {{
+ *   persisted: Map<string, string>,
+ *   next: object,
+ *   changedAgentIds?: Iterable<string> | string,
+ *   serialize?: (agent: object) => string
+ * }} input
  *   `persisted` maps agent id to the JSON text last stored for it.
+ *   `changedAgentIds` is an optional hint of agent ids modified in memory.
+ *   When provided, only those ids plus any added/removed keys are serialized.
+ *   When omitted, all records are serialized to detect changes.
  * @returns {{ upserts: Array<{ id: string, body: string, agent: object }>, deletes: string[], persisted: Map<string, string> }}
  *   `persisted` is what the store holds once the plan is applied.
  */
-export function planAgentSave({ persisted, next }) {
+export function planAgentSave({ persisted, next, changedAgentIds, serialize = JSON.stringify }) {
   const upserts = [];
   const after = new Map();
-  for (const [id, agent] of Object.entries(next ?? {})) {
-    // An undefined entry is absent, exactly as JSON.stringify of the map drops it.
-    if (agent === undefined) continue;
-    const body = JSON.stringify(agent);
-    after.set(id, body);
-    if (persisted.get(id) !== body) upserts.push({ id, body, agent });
+  const nextEntries = Object.entries(next ?? {});
+
+  if (changedAgentIds == null) {
+    for (const [id, agent] of nextEntries) {
+      // An undefined entry is absent, exactly as JSON.stringify of the map drops it.
+      if (agent === undefined) continue;
+      const body = serialize(agent);
+      after.set(id, body);
+      if (persisted.get(id) !== body) upserts.push({ id, body, agent });
+    }
+    const deletes = [...persisted.keys()].filter((id) => !after.has(id));
+    return { upserts, deletes, persisted: after };
   }
+
+  const dirty = new Set(typeof changedAgentIds === 'string' ? [changedAgentIds] : changedAgentIds);
+  for (const [id, agent] of nextEntries) {
+    if (agent === undefined) continue;
+    const isDirty = dirty.has(id);
+    const isPersisted = persisted.has(id);
+    if (isDirty || !isPersisted) {
+      const body = serialize(agent);
+      after.set(id, body);
+      if (persisted.get(id) !== body) {
+        upserts.push({ id, body, agent });
+      }
+    } else {
+      after.set(id, persisted.get(id));
+    }
+  }
+
   const deletes = [...persisted.keys()].filter((id) => !after.has(id));
   return { upserts, deletes, persisted: after };
 }
