@@ -176,9 +176,22 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     ctx.repoPath, release.branch, prUrl, { forgeAccount: ctx.forgeAccount, exactAliasHead: release.head }));
   const comparison = deps.comparison || (async (ctx, release, prUrl, snapshot, policy, forgeFacts) => {
     const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
-    return buildCheckoutRetirementReview({ repoPath: ctx.repoPath, release, prUrl,
+    const run = () => buildCheckoutRetirementReview({ repoPath: ctx.repoPath, release, prUrl,
       contentFingerprint: snapshot.fingerprint, administrationFingerprint: snapshot.administrationFingerprint, policy },
     { readForge: async () => forgeFacts });
+    try {
+      return await run();
+    } catch (error) {
+      if (error?.message === 'retirement-local-objects-missing') {
+        const { fetchRetirementProofObjects } = await import('./heldCheckoutRecovery.js');
+        const fetched = await (deps.fetchProofObjects || fetchRetirementProofObjects)(
+          ctx.repoPath, release, prUrl, null,
+          { forgeAccount: ctx.forgeAccount, readForge: async () => forgeFacts, exactAliasHead: release.head }
+        );
+        if (fetched?.ok) return run();
+      }
+      throw error;
+    }
   });
   const ensureOwner = async (ctx, release, registration = true) => {
     const result = await ownership({ repoPath: ctx.repoPath, release, registration });
