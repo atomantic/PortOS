@@ -2632,6 +2632,53 @@ CREATE TRIGGER trg_catalog_identity_member BEFORE INSERT OR UPDATE OR DELETE ON 
 DROP TRIGGER IF EXISTS trg_catalog_identity_member ON catalog_ingredient_revisions;
 CREATE TRIGGER trg_catalog_identity_member BEFORE INSERT OR UPDATE OR DELETE ON catalog_ingredient_revisions
       FOR EACH ROW EXECUTE FUNCTION guard_catalog_identity_member();
+-- Drop identity read views whose base table gained a column (CREATE OR REPLACE
+-- VIEW can only append columns; see catalogIdentityViews.js).
+DO $$ BEGIN
+    IF to_regclass('catalog_identity_read_sources') IS NOT NULL AND EXISTS (
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_ingredient_sources'
+      EXCEPT
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_identity_read_sources'
+    ) THEN
+      DROP VIEW catalog_identity_read_sources;
+    END IF;
+  END $$;
+DO $$ BEGIN
+    IF to_regclass('catalog_identity_read_refs') IS NOT NULL AND EXISTS (
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_ingredient_refs'
+      EXCEPT
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_identity_read_refs'
+    ) THEN
+      DROP VIEW catalog_identity_read_refs;
+    END IF;
+  END $$;
+DO $$ BEGIN
+    IF to_regclass('catalog_identity_read_media') IS NOT NULL AND EXISTS (
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_ingredient_media'
+      EXCEPT
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_identity_read_media'
+    ) THEN
+      DROP VIEW catalog_identity_read_media;
+    END IF;
+  END $$;
+DO $$ BEGIN
+    IF to_regclass('catalog_identity_read_relations') IS NOT NULL AND EXISTS (
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_ingredient_relations'
+      EXCEPT
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_identity_read_relations'
+    ) THEN
+      DROP VIEW catalog_identity_read_relations;
+    END IF;
+  END $$;
+DO $$ BEGIN
+    IF to_regclass('catalog_identity_read_revisions') IS NOT NULL AND EXISTS (
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_ingredient_revisions'
+      EXCEPT
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_identity_read_revisions'
+    ) THEN
+      DROP VIEW catalog_identity_read_revisions;
+    END IF;
+  END $$;
 CREATE OR REPLACE VIEW catalog_identity_read_sources AS
     WITH active AS (SELECT * FROM catalog_identity_operations WHERE state IN ('committed', 'recovery_prepared')),
     candidates AS (
