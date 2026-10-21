@@ -66,7 +66,7 @@ function egressProxyMain(env) {
   server.on('connect', (req, client, head) => {
     client.on('error', () => {});
     const refuse = (reason) => {
-      console.log(`refused ${req.url}: ${reason}`);
+      console.warn(`⛔ egress refused ${req.url}: ${reason}`);
       client.end(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\n${reason}\n`);
     };
     const decision = decideEgressConnect(req.url, { allow, ports });
@@ -85,7 +85,7 @@ function egressProxyMain(env) {
       client.on('close', () => upstream.destroy());
     });
   });
-  server.listen(listenPort, listenHost, () => console.log(`portos-egress-proxy ready on ${server.address().port} for ${allow.join(',')}`));
+  server.listen(listenPort, listenHost, () => console.log(`🛡️ portos-egress-proxy ready on ${server.address().port} for ${allow.join(',')}`));
 }
 
 /** The marker line the executor waits for before starting the install container. */
