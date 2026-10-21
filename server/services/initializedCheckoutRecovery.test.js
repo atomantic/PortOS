@@ -1155,6 +1155,33 @@ describe('initialized checkout transaction', () => {
     await writeFile(first, JSON.stringify(value));
     await expect(fixture.service.status({ appId: 'app', transactionId: result.transactionId })).rejects.toThrow('retirement-journal-invalid');
   });
+  it('acquires missing forge proof objects when review comparison reports retirement-local-objects-missing', async () => {
+    let attempts = 0;
+    const fetchProofObjects = vi.fn(async () => ({ ok: true }));
+    const recovery = _createInitializedCheckoutRecovery({
+      ...fixture.deps,
+      comparison: undefined,
+      fetchProofObjects,
+    });
+    const heldReview = await import('./heldCheckoutReview.js');
+    const spy = vi.spyOn(heldReview, 'buildCheckoutRetirementReview').mockImplementation(async () => {
+      if (++attempts === 1) throw new Error('retirement-local-objects-missing');
+      return {
+        release,
+        forge: fixture.facts,
+        policy: null,
+        comparison: { disposition: 'integrated', difference: '' },
+      };
+    });
+    try {
+      const response = await recovery.review({ appId: 'app', release, prUrl });
+      expect(response.ok).toBe(true);
+      expect(fetchProofObjects).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 // These exercise persisted journal discovery through the actual service
