@@ -12,7 +12,16 @@
  * Nothing is scheduled while no span is open. Resolution is about one interval,
  * and an overdue stretch no longer than `toleranceMs` is ignored as timer
  * jitter. Phase names are caller-supplied constants; summaries are numbers only.
+ *
+ * A span charged more than `attributeAboveMs` of lag also carries `load`
+ * (#12852): this process's CPU time, GC time and involuntary context switches
+ * over the span, plus host load, so lag can be told apart as busy-process
+ * (`cpuMs` near the span's wall time; `gcMs` names the GC share) versus
+ * starved-process (low `cpuMs`, `load1` at or above `cpus`).
  */
+
+import os from 'node:os';
+import { PerformanceObserver } from 'node:perf_hooks';
 
 /** Resolves the globals at call time, so fake timers in tests govern it. */
 export const systemClock = {
@@ -52,10 +61,96 @@ export function __createManualClock() {
 export const roundMs = (ms) => Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(ms)));
 
 /**
- * @param {{ clock?: typeof systemClock, intervalMs?: number, toleranceMs?: number }} [options]
+ * GC time by occurrence, not delivery: Node queues `gc` entries to a later
+ * loop turn (`takeRecords()` does not see them synchronously), so each entry is
+ * charged to the open windows by its `startTime`. A GC in a span's last loop
+ * turn may arrive after the span is read. The observer runs only while a
+ * window is open, and entries older than every open window are dropped.
+ */
+function createGcMeter() {
+  const windows = new Set();
+  let entries = [];
+  let observer = null;
+  const record = (list) => {
+    for (const entry of list.getEntries()) entries.push([entry.startTime, entry.duration]);
+  };
+  return {
+    begin() {
+      const gcWindow = { since: performance.now() };
+      if (windows.size === 0) {
+        observer = new PerformanceObserver(record);
+        observer.observe({ entryTypes: ['gc'] });
+      }
+      windows.add(gcWindow);
+      let open = true;
+      return {
+        ms: () => entries.reduce((ms, [start, duration]) => (start >= gcWindow.since ? ms + duration : ms), 0),
+        end() {
+          if (!open) return;
+          open = false;
+          windows.delete(gcWindow);
+          if (windows.size === 0) {
+            observer.disconnect();
+            observer = null;
+            entries = [];
+            return;
+          }
+          let oldest = Infinity;
+          for (const { since } of windows) oldest = Math.min(oldest, since);
+          entries = entries.filter(([start]) => start >= oldest);
+        },
+      };
+    },
+  };
+}
+
+/** Process and host counters for lag attribution; each is resolved at call time. */
+export const systemResources = {
+  cpuUsage: () => process.cpuUsage(),
+  loadavg: () => os.loadavg(),
+  cpus: () => os.availableParallelism(),
+  involuntaryContextSwitches: () => process.resourceUsage().involuntaryContextSwitches,
+  gc: createGcMeter(),
+};
+
+/**
+ * Start counting this process's CPU, GC and involuntary context switches.
+ * `read()` returns the deltas so far plus host load; `end()` stops the GC
+ * window and is idempotent. Numbers only.
+ */
+export function beginLoadSample(resources = systemResources) {
+  const cpuStart = resources.cpuUsage();
+  const switchesStart = resources.involuntaryContextSwitches();
+  const gc = resources.gc.begin();
+  return {
+    read() {
+      const cpu = resources.cpuUsage();
+      const [load1] = resources.loadavg();
+      return {
+        cpuMs: roundMs((cpu.user - cpuStart.user + cpu.system - cpuStart.system) / 1000),
+        load1: Math.round(load1 * 100) / 100,
+        cpus: resources.cpus(),
+        gcMs: roundMs(gc.ms()),
+        invCtx: Math.max(0, resources.involuntaryContextSwitches() - switchesStart),
+      };
+    },
+    end: () => gc.end(),
+  };
+}
+
+/** ` cpuMs=… load1=… cpus=… gcMs=… invCtx=…` for a log line, or '' without a sample. */
+export const formatLoadAttribution = (load) => (load
+  ? ` cpuMs=${load.cpuMs} load1=${load.load1} cpus=${load.cpus} gcMs=${load.gcMs} invCtx=${load.invCtx}`
+  : '');
+
+/**
+ * @param {{ clock?: typeof systemClock, intervalMs?: number, toleranceMs?: number,
+ *   resources?: typeof systemResources, attributeAboveMs?: number }} [options]
  * @returns {{ begin: (phase: string) => { mark: (phase: string) => void, snapshot: () => object, end: () => object } }}
  */
-export function createEventLoopLagProbe({ clock = systemClock, intervalMs = 100, toleranceMs = 20 } = {}) {
+export function createEventLoopLagProbe({
+  clock = systemClock, intervalMs = 100, toleranceMs = 20, resources = systemResources, attributeAboveMs = 1000,
+} = {}) {
   const spans = new Set();
   let timer = null;
   let dueAt = 0;
@@ -105,13 +200,14 @@ export function createEventLoopLagProbe({ clock = systemClock, intervalMs = 100,
     lagMaxMs: roundMs(span.lagMaxMs),
     phases: Object.fromEntries(Object.entries(span.phases)
       .map(([name, { ms, lagMs }]) => [name, { ms: roundMs(ms), lagMs: roundMs(lagMs) }])),
+    load: span.lagMs > attributeAboveMs ? span.sample.read() : null,
   });
 
   return {
     begin(phase) {
       const at = clock.now();
       if (timer === null) schedule(at);
-      const span = { startedAt: at, accountedTo: at, lagMs: 0, lagMaxMs: 0, phases: {} };
+      const span = { startedAt: at, accountedTo: at, lagMs: 0, lagMaxMs: 0, phases: {}, sample: beginLoadSample(resources) };
       enter(span, phase, at);
       spans.add(span);
       let ended = null;
@@ -133,6 +229,7 @@ export function createEventLoopLagProbe({ clock = systemClock, intervalMs = 100,
           const now = clock.now();
           close(span, now);
           ended = summarize(span, now);
+          span.sample.end();
           spans.delete(span);
           if (spans.size === 0 && timer !== null) {
             clock.clearTimer(timer);

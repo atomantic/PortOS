@@ -139,7 +139,7 @@ describe('merge admission state queue deadline', () => {
     const admission = await response;
     const logs = [...console.log.mock.calls, ...console.warn.mock.calls].flat();
     for (const line of logs) {
-      expect(line).toMatch(/^🚦 Merge admission operation=acquire status=(pending|settled) phase=(trustedState|origin|persistence) phaseMs=\d+ totalMs=\d+ queueMs=\d+ trustedStateMs=\d+ stateLoadMs=\d+ originMs=\d+ ownerRecoveryMs=\d+ persistenceMs=\d+ readMs=\d+ parseMs=\d+ prepareMs=\d+ agentsMs=\d+ serializeMs=\d+ writeMs=\d+ replaceMs=\d+ dirSyncMs=\d+ loopLagMs=\d+ loopLagMaxMs=\d+ queueLagMs=\d+ trustedStateLagMs=\d+ persistenceLagMs=\d+ timerLateMs=\d+$/);
+      expect(line).toMatch(/^🚦 Merge admission operation=acquire status=(pending|settled) phase=(trustedState|origin|persistence) phaseMs=\d+ totalMs=\d+ queueMs=\d+ trustedStateMs=\d+ stateLoadMs=\d+ originMs=\d+ ownerRecoveryMs=\d+ persistenceMs=\d+ readMs=\d+ parseMs=\d+ prepareMs=\d+ agentsMs=\d+ serializeMs=\d+ writeMs=\d+ replaceMs=\d+ dirSyncMs=\d+ loopLagMs=\d+ loopLagMaxMs=\d+ queueLagMs=\d+ trustedStateLagMs=\d+ persistenceLagMs=\d+ timerLateMs=\d+( cpuMs=\d+ load1=\d+(\.\d+)? cpus=\d+ gcMs=\d+ invCtx=\d+)?$/);
       expect(line).not.toContain(admission.token);
       expect(line).not.toContain(agentId);
       expect(line).not.toContain('/repos');
