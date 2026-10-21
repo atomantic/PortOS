@@ -902,6 +902,15 @@ export const COMPLETION_REASON_ANALYSES = {
     message: 'Prompt never rendered in the TUI input box',
     suggestedFix: 'The provider CLI accepted the bracketed paste but the prompt never appeared, so nothing was ever submitted. Usually the TUI was still initializing, or a startup dialog (folder trust, an opt-in offer, an account banner) was up and swallowed the paste. Check the tail of the raw transcript for a modal — if it is one PortOS does not know about yet, it needs a dismissal branch in agentTuiSpawning.js.'
   },
+  // The TUI spawner's verdict for a prompt that was submitted but never started
+  // a turn (createPromptSubmissionGate): bare Enters and every stall nudge went
+  // unanswered. Retryable — a fresh session usually takes the same prompt.
+  'prompt-not-submitted': {
+    category: 'startup-failure',
+    actionable: false,
+    message: 'Prompt was delivered but the TUI never started working on it',
+    suggestedFix: 'The paste rendered and Enter was sent, but the session stayed idle through every bare Enter and stall nudge, so the run was failed and the task requeued. If it recurs, check the tail of the raw transcript: a composer still holding a pasted-text chip means the TUI ignored the submit key, and a dialog or banner there means it needs a dismissal branch.'
+  },
   'tui-not-ready': {
     category: 'startup-failure',
     actionable: false,
@@ -1075,7 +1084,7 @@ const AWAITING_INPUT_REFINABLE_REASONS = new Set(['idle-no-changes', 'idle-no-ac
  * dialog is a STARTUP gate the spawner does not know how to dismiss, and the fix
  * is a dismissal branch, not a reworded task.
  */
-const STARTUP_GATE_REFINABLE_REASONS = new Set(['paste-not-rendered', 'tui-not-ready']);
+const STARTUP_GATE_REFINABLE_REASONS = new Set(['paste-not-rendered', 'tui-not-ready', 'prompt-not-submitted']);
 
 /**
  * Re-word a run whose transcript ends on an unanswered prompt — a legacy idle-out that

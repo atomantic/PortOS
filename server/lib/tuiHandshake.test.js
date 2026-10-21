@@ -17,6 +17,7 @@ import {
   createTruncationNudgeGate,
   TRUNCATION_NUDGE_MAX_ATTEMPTS,
   createStallNudgeGate,
+  createPromptSubmissionGate,
   STALL_NUDGE_MAX_TOTAL,
   STALL_NUDGE_IDLE_MS,
   STALL_NUDGE_RECOVERY_MS,
@@ -2106,6 +2107,35 @@ describe('answerStartupDialogs', () => {
     const second = answerOnce(reAsking, answers);
     expect(second.result).toBeNull();
     expect(second.written).toEqual([]);
+  });
+});
+
+// The bare Enter can pick a dialog's highlighted default, so it is withheld
+// unless the paste chip is still the last thing on screen (#12769).
+describe('createPromptSubmissionGate', () => {
+  const CHIP = '❯ [Pasted text #1 +353 lines]\n⏵⏵ bypass permissions on';
+  const settled = (gate, at = 0) => gate.takeEnter(at + 21_000, at);
+
+  it('presses Enter on a settled chip, and never over selector chrome painted after it', () => {
+    const gate = createPromptSubmissionGate({ settleMs: 20_000 });
+    gate.noteInput(0, CHIP);
+    expect(gate.takeEnter(10_000, 0)).toBe(0);
+    expect(settled(gate)).toBe(1);
+
+    const dialog = createPromptSubmissionGate({ settleMs: 20_000 });
+    dialog.noteInput(0, CHIP);
+    dialog.observe('Do you want to proceed?\n❯ 1. Yes\n  2. No', 1_000);
+    expect(settled(dialog, 1_000)).toBe(0);
+  });
+
+  it('counts only output past the echo window as the turn running', () => {
+    const gate = createPromptSubmissionGate({ settleMs: 20_000, workEvidenceMs: 30_000 });
+    gate.noteInput(0, CHIP);
+    gate.observe('echo of our own keystroke', 29_000);
+    expect(gate.worked).toBe(false);
+    gate.observe('• Working (31s • esc to interrupt)', 31_000);
+    expect(gate.worked).toBe(true);
+    expect(settled(gate, 31_000)).toBe(0);
   });
 });
 

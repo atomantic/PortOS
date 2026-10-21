@@ -1843,6 +1843,90 @@ export function createStallNudgeGate({
   };
 }
 
+// ─── Unsubmitted prompt — "the paste landed, the Enter did not" ─────────────
+//
+// A TUI can render the paste chip and still ignore every submit Enter that
+// follows it: the composer shows `❯ [Pasted text #1 +353 lines]` and nothing else
+// ever happens. Seen on Claude Code claim runs started in a burst (#12769). The
+// likeliest mechanism is a TUI too busy committing a large paste to read the
+// trailing CRs as a submit; the transcripts show the outcome, not the cause. A
+// bare Enter once the composer has settled submits the paste where it sits.
+// Re-pasting — which is all the stall nudge can do — would only stack a second
+// chip on the first.
+//
+// Silence is the signal, as for the stall nudge: a submitted prompt starts a
+// turn, and every TUI we drive repaints its in-flight chrome at least once a
+// second for as long as a turn runs. Quiet this long after the submit, with the
+// paste chip still the last thing painted, means the turn never started.
+export const UNSUBMITTED_PROMPT_SETTLE_MS = 20000;
+export const UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS = 3;
+// Output arriving this long after PortOS's own last keystroke cannot be the
+// echo of that keystroke, so it is a turn running. The same 30s that proves a
+// stall nudge took.
+export const PROMPT_WORK_EVIDENCE_MS = STALL_NUDGE_RECOVERY_MS;
+const UNSUBMITTED_PROMPT_TAIL_CAP = 4096;
+// A selector or confirmation painted after the chip owns the Enter key; a bare
+// Enter there would pick its highlighted default.
+const SELECTOR_AFTER_PASTE_PATTERN = /enter\s*to\s*(?:select|confirm)|↑\s*\/\s*↓|❯\s*1\.|do\s*you\s*want\s*to\s*proceed\?|press\s*enter\s*to\s*continue/i;
+
+/**
+ * State machine for "the prompt was pasted and submitted, but the turn never
+ * started". Owned per run by the agent session controller.
+ *
+ * - `noteInput(nowMs, evidence)` — every PortOS keystroke into the composer: the
+ *   submit (with the paste-commit buffer as `evidence`, because a TUI that
+ *   ignores the Enter may never repaint the chip), a nudge, a bare Enter.
+ * - `observe(strippedText, nowMs)` — every ANSI-stripped chunk.
+ * - `takeEnter(nowMs, lastOutputAtMs)` — the 1-based bare-Enter number when one
+ *   is due, else 0.
+ * - `worked` — whether the run ever produced output that was not the echo of a
+ *   PortOS keystroke. A run whose stall-nudge budget runs out with this still
+ *   false never started, and the caller fails it rather than parking it.
+ *
+ * @param {{ promptMarkerCount?: number, settleMs?: number, maxAttempts?: number, workEvidenceMs?: number }} [options]
+ */
+export function createPromptSubmissionGate({
+  promptMarkerCount = 0,
+  settleMs = UNSUBMITTED_PROMPT_SETTLE_MS,
+  maxAttempts = UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS,
+  workEvidenceMs = PROMPT_WORK_EVIDENCE_MS,
+} = {}) {
+  let inputAt = null;
+  let worked = false;
+  let tail = '';
+  let enters = 0;
+  const holdsUnsubmittedPaste = () => {
+    if (!isPasteCommitted(tail, { promptMarkerCount })) return false;
+    let lastMarkerEnd = -1;
+    for (const match of tail.matchAll(PASTE_MARKER_PATTERN_GLOBAL)) lastMarkerEnd = match.index + match[0].length;
+    return lastMarkerEnd >= 0 && !SELECTOR_AFTER_PASTE_PATTERN.test(tail.slice(lastMarkerEnd));
+  };
+  return {
+    noteInput(nowMs, evidence = '') {
+      inputAt = nowMs;
+      if (!worked && evidence) tail = (tail + evidence).slice(-UNSUBMITTED_PROMPT_TAIL_CAP);
+    },
+    observe(strippedText, nowMs) {
+      if (worked || inputAt === null || !strippedText) return;
+      if (nowMs - inputAt >= workEvidenceMs) {
+        worked = true;
+        tail = '';
+        return;
+      }
+      tail = (tail + strippedText).slice(-UNSUBMITTED_PROMPT_TAIL_CAP);
+    },
+    takeEnter(nowMs, lastOutputAtMs) {
+      if (worked || inputAt === null || enters >= maxAttempts) return 0;
+      if (nowMs - lastOutputAtMs < settleMs || nowMs - inputAt < settleMs) return 0;
+      if (!holdsUnsubmittedPaste()) return 0;
+      enters += 1;
+      inputAt = nowMs;
+      return enters;
+    },
+    get worked() { return worked; },
+  };
+}
+
 // ─── agy exited to its launch shell ─────────────────────────────────────────
 //
 // When agy quits (a crash, a dropped connection, a stray `/exit`), it prints
