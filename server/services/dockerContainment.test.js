@@ -84,8 +84,20 @@ it("leaves another process's live run alone: only stopped containers, and a fres
   expect(engine.calls.some((call) => call.startsWith('rm --force') || call.startsWith('network rm'))).toBe(false);
 });
 
+// These refusals sit behind the mount-source check, which accepts only absolute POSIX paths. A
+// Windows host's temp dir is refused there first (the resolver also refuses win32 hosts outright,
+// see dockerEngine.test.js), so the ordering below is only observable on a POSIX host.
+const POSIX_HOST = process.platform !== 'win32';
+
 describe('runContained refusals', () => {
-  it('refuses when the pinned image is not pulled, without creating anything', async () => {
+  it.runIf(!POSIX_HOST)('refuses a non-POSIX worktree path at the mount check, before any image probe', async () => {
+    const engine = fakeEngine();
+    expect(await runContained({ worktree: repo, phase: 'validate', command: 'npm test', deps: { engine } }))
+      .toMatchObject({ status: 'refused', state: 'mount-refused', contained: false });
+    expect(engine.calls).toEqual([]);
+  });
+
+  it.runIf(POSIX_HOST)('refuses when the pinned image is not pulled, without creating anything', async () => {
     writeFileSync(join(repo, '.nvmrc'), '24\n');
     const engine = fakeEngine([['image inspect', { success: false }]]);
     const result = await runContained({ worktree: repo, phase: 'validate', command: 'npm test', deps: { engine } });
@@ -93,7 +105,7 @@ describe('runContained refusals', () => {
     expect(engine.calls.every((call) => call.startsWith('image inspect'))).toBe(true);
   });
 
-  it('refuses a Node major with no pinned image rather than testing under another runtime', async () => {
+  it.runIf(POSIX_HOST)('refuses a Node major with no pinned image rather than testing under another runtime', async () => {
     writeFileSync(join(repo, '.nvmrc'), '18\n');
     const engine = fakeEngine();
     const result = await runContained({ worktree: repo, phase: 'validate', command: 'npm test', deps: { engine } });
@@ -107,7 +119,7 @@ describe('runContained refusals', () => {
     expect(overridden).toMatchObject({ status: 'refused', state: 'image-missing', image: `node:18-bookworm-slim@sha256:${'a'.repeat(64)}` });
   });
 
-  it('refuses to mount the data directory or a credential store as the worktree', async () => {
+  it.runIf(POSIX_HOST)('refuses to mount the data directory or a credential store as the worktree', async () => {
     const engine = fakeEngine();
     expect(await runContained({ worktree: repo, phase: 'validate', command: 'npm test', dataDir: repo, deps: { engine } }))
       .toMatchObject({ status: 'refused', state: 'mount-refused' });

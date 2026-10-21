@@ -1,8 +1,5 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { mkdtempSync, realpathSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -35,8 +32,10 @@ app.use(express.json());
 app.use('/api/docker-containment', router);
 app.use(errorMiddleware);
 
-const worktree = realpathSync(mkdtempSync(join(tmpdir(), 'portos-contained-route-')));
-afterAll(() => rmSync(worktree, { recursive: true, force: true }));
+// A literal POSIX path, not a host temp dir: the run schema accepts only absolute POSIX paths,
+// so a Windows temp path would fail validation (400) before the gate under test. Every run
+// here is refused before the worktree is touched on disk.
+const worktree = '/srv/example/worktree';
 
 beforeEach(() => {
   gate.enabled = false;
