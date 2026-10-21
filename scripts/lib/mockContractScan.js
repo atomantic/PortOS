@@ -23,6 +23,17 @@ function startsRegex(source, at) {
   return before === '' || /[(,=:[!&|?{};>]$/.test(before) || /\breturn$/.test(before);
 }
 
+const KEYWORD_BEFORE_STRING = /(?:^|[^\w$.])(?:return|case|typeof|in|of|yield|await|default|else|do|void|delete|new|throw|instanceof|from|import|export|as)$/;
+
+/**
+ * A quote glued to the end of an identifier cannot open a string literal, so it
+ * is JSX text or prose (`scene's`), not code. Keywords legitimately precede strings.
+ */
+function isTextApostrophe(source, at) {
+  if (!/[\w$]/.test(source[at - 1] ?? '')) return false;
+  return !KEYWORD_BEFORE_STRING.test(source.slice(Math.max(0, at - 12), at));
+}
+
 /** Blank comments and string/template text (keeping `${}` code), preserving offsets. */
 export function mask(source) {
   const out = source.split('');
@@ -58,7 +69,7 @@ export function mask(source) {
         }
         blank(i + 1, j);
         i = j + 1;
-      } else if (ch === '\'' || ch === '"') {
+      } else if ((ch === '\'' || ch === '"') && !isTextApostrophe(source, i)) {
         let j = i + 1;
         while (j < source.length && source[j] !== ch) j += source[j] === '\\' ? 2 : 1;
         blank(i + 1, j);
