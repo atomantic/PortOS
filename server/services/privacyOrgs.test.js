@@ -206,7 +206,8 @@ describe('setOrgHoldings', () => {
     expect(deleteCall[1]).toEqual(['o1', ['v1', 'v2']]);
     const insertCalls = client.query.mock.calls.filter(([sql]) => /INSERT INTO privacy_org_holdings/.test(sql));
     expect(insertCalls).toHaveLength(2);
-    expect(insertCalls[1][1]).toEqual(['o1', SELF, 'v2', 'current']); // subject stamped + default status applied
+    expect(insertCalls[0][1]).toEqual(['o1', SELF, 'v1', 'current']);
+    expect(insertCalls[1][1]).toEqual(['o1', SELF, 'v2', null]); // subject stamped; omitted status left to the SQL default/keep
     expect(withTransactionMock).toHaveBeenCalledTimes(1);
   });
 

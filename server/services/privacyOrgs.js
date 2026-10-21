@@ -221,12 +221,15 @@ export async function setOrgHoldings(orgId, holdings) {
         // A vaultRecordId that doesn't exist (stale UI id, typo, raced with a
         // deletion) trips the FK constraint — surface it as a clean 400
         // instead of a raw Postgres constraint-violation 500.
+        // An omitted status keeps a held record's stored one: the org editor
+        // sends ids only, and resetting to 'current' there erased the
+        // change-of-address workflow's update_pending/updated/removed marks.
         await client.query(
           `INSERT INTO privacy_org_holdings (org_id, subject_id, vault_record_id, status, noted_at, updated_at)
-           VALUES ($1, $2, $3, $4, NOW(), NOW())
+           VALUES ($1, $2, $3, COALESCE($4::text, 'current'), NOW(), NOW())
            ON CONFLICT (org_id, vault_record_id)
-           DO UPDATE SET status = EXCLUDED.status, subject_id = EXCLUDED.subject_id, updated_at = NOW()`,
-          [orgId, subjectId, h.vaultRecordId, h.status ?? 'current'],
+           DO UPDATE SET status = COALESCE($4::text, privacy_org_holdings.status), subject_id = EXCLUDED.subject_id, updated_at = NOW()`,
+          [orgId, subjectId, h.vaultRecordId, h.status ?? null],
         ).catch((err) => {
           if (err?.code === '23503') {
             throw new ServerError(`Vault record ${h.vaultRecordId} not found`, { status: 400, code: 'VAULT_RECORD_NOT_FOUND' });
