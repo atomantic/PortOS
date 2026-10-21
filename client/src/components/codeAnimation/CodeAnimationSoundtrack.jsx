@@ -38,7 +38,7 @@ function engineNote(engine, filmSec) {
  * the score, and render a track at the film's length. The animation is not
  * re-run; the track becomes its audio for the preview and the MP4 export.
  */
-export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, durationSeconds, onReady }) {
+export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, audioTrackId, durationSeconds, onReady }) {
   const filmSec = Math.ceil(Number(durationSeconds) || 0);
   const engineList = useListResource(fetchEngines);
   const engines = engineList.state === 'ready' ? engineList.items : null;
@@ -46,6 +46,9 @@ export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, d
   const [prompt, setPrompt] = useState(soundtrack?.prompt || '');
   const [starting, setStarting] = useState(false);
   const [mediaJobId, setMediaJobId] = useState(soundtrack?.mediaJobId || null);
+  // Only a render started here counts as live before its first status read; a
+  // persisted id the queue no longer knows (archived, lost on restart) is idle.
+  const [startedId, setStartedId] = useState(null);
 
   useEffect(() => {
     setPrompt(soundtrack?.prompt || '');
@@ -77,7 +80,7 @@ export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, d
   }, { enabled: !!engine && !!prompt.trim() });
 
   const progress = useMediaJobProgress(mediaJobId, { kind: 'audio' });
-  const live = progress.status === 'queued' || progress.status === 'running' || (mediaJobId && progress.status === 'unknown');
+  const live = progress.status === 'queued' || progress.status === 'running' || (!!mediaJobId && mediaJobId === startedId && progress.status === 'unknown');
   // Refetch the animation once the take lands so the preview and export use it.
   const settledRef = useRef(null);
   useEffect(() => {
@@ -101,11 +104,15 @@ export default function CodeAnimationSoundtrack({ jobId, soundtrack, audioUrl, d
       return null;
     });
     setStarting(false);
-    if (started?.mediaJobId) setMediaJobId(started.mediaJobId);
+    if (started?.mediaJobId) {
+      setStartedId(started.mediaJobId);
+      setMediaJobId(started.mediaJobId);
+    }
   };
 
   const percent = Math.round((progress.progress || 0) * 100);
-  const hasTake = !!soundtrack?.trackId && !!audioUrl;
+  // The job's audio is the generated track only once a take has rendered onto it.
+  const hasTake = !!soundtrack?.trackId && !!audioUrl && audioTrackId === soundtrack.trackId;
 
   return (
     <section className="space-y-3 rounded-lg border border-port-border bg-port-card p-3" aria-labelledby="ca-soundtrack-heading">

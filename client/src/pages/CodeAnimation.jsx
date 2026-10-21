@@ -799,6 +799,7 @@ function FastCodeAnimation() {
                 jobId={job.id}
                 soundtrack={job.soundtrack}
                 audioUrl={job.audioUrl}
+                audioTrackId={job.input?.audio?.trackId}
                 durationSeconds={job.frame?.durationSeconds}
                 onReady={jobResource.refetch}
               />

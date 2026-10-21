@@ -66,9 +66,19 @@ describe('CodeAnimationSoundtrack', () => {
     expect(screen.getByText('Rendering the score')).toBeTruthy();
 
     progress.current = { status: 'completed', progress: 1 };
-    rerender(<CodeAnimationSoundtrack jobId={JOB_ID} durationSeconds={120} soundtrack={soundtrack} onReady={onReady} audioUrl="/data/music/take.wav" />);
+    rerender(<CodeAnimationSoundtrack jobId={JOB_ID} durationSeconds={120} soundtrack={soundtrack} onReady={onReady} audioUrl="/data/music/take.wav" audioTrackId="track-1" />);
     await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
     expect(screen.getByLabelText('Generated soundtrack').getAttribute('src')).toBe('/data/music/take.wav');
     expect(screen.getByRole('button', { name: 'Regenerate audio' })).toBeTruthy();
+  });
+
+  it('stays usable when the saved render is gone from the queue, and never calls older audio the take', async () => {
+    // A 404 hydrate leaves the media job "unknown"; that is not a live render.
+    const soundtrack = { trackId: 'track-1', mediaJobId: 'media-archived', prompt: 'Warm synths' };
+    render(<CodeAnimationSoundtrack jobId={JOB_ID} durationSeconds={120} soundtrack={soundtrack} audioUrl="/api/uploads/original.mp3" audioTrackId={undefined} />);
+    const button = await screen.findByRole('button', { name: 'Generate audio' });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(screen.getByLabelText('Describe the music').disabled).toBe(false);
+    expect(screen.queryByLabelText('Generated soundtrack')).toBeNull();
   });
 });
