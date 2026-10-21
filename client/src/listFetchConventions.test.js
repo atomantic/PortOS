@@ -15,8 +15,10 @@
  * The rule is a ratchet. `KNOWN` records how many such sites each page still
  * carries today; a NEW site, or a higher count in a listed page, fails. So does
  * a count that DROPPED, so the row is lowered or removed and the baseline
- * stays honest. The remaining sites are tracked by surface in the follow-up
- * issues #12040 names; the app detail tabs (#12591) are already at zero.
+ * stays honest. The page sweeps (#12169–#12171) and the app detail tabs
+ * (#12591) are done; the remaining component sites are tracked by surface in
+ * #12783 (Digital Twin), #12784 (Brain/MeatSpace/Messages/Privacy/Tribe),
+ * #12785 (creative panels) and #12786 (settings/sharing/CoS/providers).
  *
  * ## What this guard CANNOT see
  *
