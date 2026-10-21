@@ -402,6 +402,19 @@ describe('BackupWidget snapshots', () => {
     ));
   });
 
+  it('warns that an unreadable legacy ledger keeps this install\'s record', async () => {
+    mockRestoreBackup.mockResolvedValueOnce({
+      dryRun: true,
+      changedFiles: ['migrations/.applied.json'],
+      restoredLegacyLedger: { status: 'unreadable', parkedAs: null },
+    });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/is unreadable, so this install keeps its own record/);
+  });
+
   it('shows no migration warning for a gap that is empty or unknown', async () => {
     mockRestoreBackup
       .mockResolvedValueOnce({ changedFiles: ['cos/quota-burn.json'], ledgerGap: { count: 0, names: [] } })

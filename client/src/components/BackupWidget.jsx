@@ -273,7 +273,9 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
             <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               <span className="min-w-0 break-words">
-                This snapshot keeps its migration record in the older <code>migrations/.applied.json</code> location. Restoring installs it as this install&apos;s record (the current one is kept as <code>migrations.applied.json.pre-restore-&lt;time&gt;</code>) so the next start re-runs every migration the snapshot predates.
+                {preview.restoredLegacyLedger.status === 'unreadable'
+                  ? <>This snapshot&apos;s migration record (<code>migrations/.applied.json</code>) is unreadable, so this install keeps its own record and no migration re-runs over the restored files; repair the snapshot copy or run the migrations by hand afterwards.</>
+                  : <>This snapshot keeps its migration record in the older <code>migrations/.applied.json</code> location. Restoring installs it as this install&apos;s record (the current one is kept as <code>migrations.applied.json.pre-restore-&lt;time&gt;</code>) so the next start re-runs every migration the snapshot predates.</>}
               </span>
             </p>
           )}

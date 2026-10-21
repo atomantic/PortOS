@@ -2616,6 +2616,19 @@ describe('restoreSnapshot manifest verification', () => {
         expect(await parkedLedgers()).toEqual([]);
       });
 
+      it('reports an unreadable legacy ledger and keeps the live ledger', async () => {
+        await writeManifest({ 'migrations/.applied.json': await writeSnapshotFile('migrations/.applied.json', '{ not a ledger') });
+        await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));
+        await realFs.mkdir(joinPath(PATHS.data, 'migrations'), { recursive: true });
+        await realFs.writeFile(liveLegacyLedgerPath(), '{ not a ledger');
+
+        await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'unreadable', parkedAs: null } });
+        spawn.mockReset();
+        await expect(finishRestore({ dryRun: false })).resolves.toMatchObject({ restoredLegacyLedger: { status: 'unreadable', parkedAs: null } });
+        expect(JSON.parse(await realFs.readFile(liveLedgerPath(), 'utf8'))).toEqual(['001-example.js', '359-example.js']);
+        expect(await parkedLedgers()).toEqual([]);
+      });
+
       it('leaves a snapshot that also carries a current-path ledger to rsync', async () => {
         await seedLegacySnapshot({ alsoCurrent: true });
         await realFs.writeFile(liveLedgerPath(), JSON.stringify(['001-example.js', '359-example.js']));

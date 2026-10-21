@@ -1986,7 +1986,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
         transferFiles,
       });
       restoredLegacyStores = await convertRestoredLegacySplitStores(legacyStores);
-      if (legacyLedger) restoredLegacyLedger = await adoptRestoredLegacyLedger();
+      if (legacyLedger) restoredLegacyLedger = await adoptRestoredLegacyLedger(legacyLedger);
       return changed;
     },
   }));
@@ -2018,11 +2018,15 @@ async function readSnapshotMigrationLedger(srcDir) {
  * then keeps the live ledger (a current ledger is authoritative over a legacy
  * one), so nothing would re-run over the restored records (#12355 assumed the
  * two paths coincide). Null when the snapshot carries a current ledger or none.
+ * A legacy ledger that does not parse as a list is reported `unreadable` and
+ * never adopted: the live ledger is worth more than a broken one, which the
+ * runner would rename aside and rebuild from scratch.
  */
 async function snapshotLegacyLedger(srcDir, subdirFilter) {
   if (subdirFilter) return null;
   const { current, legacy } = ledgerPaths(srcDir);
-  return !(await fileExists(current)) && await fileExists(legacy) ? { status: 'pending', parkedAs: null } : null;
+  if (await fileExists(current) || !await fileExists(legacy)) return null;
+  return { status: await readMigrationLedger(legacy) ? 'pending' : 'unreadable', parkedAs: null };
 }
 
 /**
@@ -2031,13 +2035,18 @@ async function snapshotLegacyLedger(srcDir, subdirFilter) {
  * like a parked split store), and the next migration run starts from the
  * snapshot's list, exactly as a full restore with a current-path ledger does.
  */
-async function adoptRestoredLegacyLedger() {
+async function adoptRestoredLegacyLedger(legacyLedger) {
+  if (legacyLedger.status !== 'pending') {
+    console.warn(`⚠️ Restore left the live migration ledger in place: the snapshot's ${LEGACY_APPLIED_LEDGER_RELPATH} is unreadable`);
+    return legacyLedger;
+  }
   const { current, legacy } = ledgerPaths(PATHS.data);
-  // Confirmed before the live ledger moves: parking it and then failing the
-  // rename would leave no ledger at all, which the next boot reads as a fresh
-  // install (every migration re-runs, purge migrations are disarmed).
-  if (!await fileExists(legacy)) {
-    throw new Error(`Restore transferred no ${LEGACY_APPLIED_LEDGER_RELPATH}; the live migration ledger was left unchanged`);
+  // Confirmed on the transferred copy before the live ledger moves: parking it
+  // and then failing would leave no ledger (or a broken one), which the next
+  // boot reads as a fresh install: every migration re-runs and purge migrations
+  // are disarmed.
+  if (!await readMigrationLedger(legacy)) {
+    throw new Error(`Restore transferred no readable ${LEGACY_APPLIED_LEDGER_RELPATH}; the live migration ledger was left unchanged`);
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const parkedAs = `${basename(current)}.pre-restore-${stamp}`;
