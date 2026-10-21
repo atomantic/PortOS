@@ -1,3 +1,4 @@
+import { pickGuideMedia } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
@@ -41,14 +42,63 @@ function featuredAuthoredCharacters(references, scene) {
 export const musicVideoReferenceChoices = (project) => (project?.visualSpec?.references || [])
   .filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref));
 
-export function musicVideoConditioningReferences(project, scene) {
-  const references = project?.visualSpec?.references || [];
+/** The cast member and variant a scene asks its frames to show, or null when it names none. */
+export function sceneCastVariant(scene) {
+  const variant = scene?.characterVariant;
+  return variant && typeof variant.ingredientId === 'string' && variant.ingredientId ? variant : null;
+}
+
+/**
+ * The Casting guide images (catalogMediaLibrary.pickGuideMedia) for the cast
+ * member a scene's `characterVariant` names, as visual-spec-shaped references.
+ * `castMedia` maps an ingredient id to its live catalog media rows; a missing
+ * entry (not loaded, or the load failed) yields none, so the scene falls back
+ * to the project's references.
+ */
+export function musicVideoCastGuideReferences(project, scene, castMedia) {
+  const variant = sceneCastVariant(scene);
+  const media = variant && castMedia?.[variant.ingredientId];
+  if (!Array.isArray(media)) return [];
+  const name = (project?.concept?.subjects || []).find((s) => s?.ingredientId === variant.ingredientId)?.name || 'Cast guide';
+  return pickGuideMedia(media, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES)
+    .filter((m) => m.mediaKey)
+    .map((m) => {
+      const v = m.library?.variant || {};
+      const detail = v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || '');
+      return {
+        id: `mvr-guide-${m.mediaKey}`.slice(0, 128),
+        imageId: m.mediaKey,
+        role: 'character',
+        label: `${name}${detail ? ` · ${detail}` : ''}`.slice(0, 120),
+        castGuide: true,
+      };
+    });
+}
+
+/**
+ * The references a scene's frames condition on, capped at
+ * MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES. Explicit `frameReferenceIds` win;
+ * otherwise the cast guides of the scene's `characterVariant` lead and the
+ * automatic set fills the remaining slots. `castMedia` is optional: without it
+ * (or without a variant) the result is the automatic set alone.
+ */
+export function musicVideoConditioningReferences(project, scene, castMedia = null) {
+  const guides = musicVideoCastGuideReferences(project, scene, castMedia);
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
-    const choices = musicVideoReferenceChoices(project);
+    const choices = [...guides, ...musicVideoReferenceChoices(project)];
     return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
   }
+  const automatic = automaticConditioningReferences(project, scene);
+  if (!guides.length) return automatic;
+  const chosen = [...guides, ...automatic];
+  return chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i)
+    .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+}
+
+function automaticConditioningReferences(project, scene) {
+  const references = project?.visualSpec?.references || [];
   const stage = project?.castAndSets;
   if (stage?.status === 'approved' && Number.isInteger(scene?.sectionIndex)) {
     const setId = stage.direction?.songMap?.find((entry) => entry.section === scene.sectionIndex)?.setId;

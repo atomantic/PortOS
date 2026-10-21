@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { musicVideoConditioningReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
@@ -14,18 +14,19 @@ const nameOf = (ref) => ref.label || ref.role || 'Reference';
  * end and both refines), shown as chips. Until the director changes them it is
  * the automatic set (the main character, the section's set and anyone the
  * prompt names); a change is kept on the shot (`frameReferenceIds`), and Auto
- * puts the automatic set back.
+ * puts the automatic set back. A shot naming a Casting cast member
+ * (`characterVariant`, #12763) leads with that member's guides, from `castMedia`.
  */
-export default function SceneFrameReferences({ project, scene, onEditLocal, onSave, disabled = false }) {
+export default function SceneFrameReferences({ project, scene, castMedia = null, onEditLocal, onSave, disabled = false }) {
   const [adding, setAdding] = useState(false);
   // The reference shown large: hovering a chip with a mouse, or long-pressing it on a phone.
   const [preview, setPreview] = useState(null);
   const pressTimer = useRef(null);
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
-  const choices = musicVideoReferenceChoices(project);
+  const choices = [...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
   if (!choices.length) return null;
-  const chosen = musicVideoConditioningReferences(project, scene);
+  const chosen = musicVideoConditioningReferences(project, scene, castMedia);
   const ids = chosen.map((ref) => ref.id);
   const others = choices.filter((ref) => !ids.includes(ref.id));
   const auto = !Array.isArray(scene.frameReferenceIds);

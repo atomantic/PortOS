@@ -280,6 +280,7 @@ export default function BoardStage({ board }) {
               onEditLocal={board.editSceneLocal}
               onSave={board.saveScene}
               onGenerateFrame={sceneMedia.generateFrame}
+              castMedia={sceneMedia.castMedia}
               onGenerateEndFrame={sceneMedia.generateEndFrame}
               generatingEndFrame={sceneMedia.genEndFrameScenes?.[scene.sceneId]}
               onGenerateVideo={sceneMedia.generateSceneVideo}

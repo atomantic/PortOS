@@ -519,6 +519,7 @@ function buildScene(input, { order }) {
     lyricText: input.lyricText ?? null,
     visualIntent: input.visualIntent ?? null,
     ...(input.frameReferenceIds ? { frameReferenceIds: input.frameReferenceIds } : {}),
+    ...(input.characterVariant ? { characterVariant: input.characterVariant } : {}),
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
     visualLayer: input.visualLayer ?? 'footage',
     stillMove: input.stillMove ?? 'hold',
@@ -648,7 +649,7 @@ export function replaceScenes(project, sceneInputs) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'characterVariant'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the

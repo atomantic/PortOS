@@ -26,6 +26,7 @@ import { getProject } from './projects.js';
 import { releaseRevisionSection } from './revisionService.js';
 import { dispatchProductionStep } from './productionDispatch.js';
 import { loadPoolEnv, routeUnavailableReason, sceneRequirement } from './productionPool.js';
+import { loadSceneCastMedia } from './castGuideMedia.js';
 
 const unavailable = (reason) => ({ reason });
 
@@ -70,7 +71,7 @@ async function planSection(project, section, env) {
   const stepKind = section.kind === 'image' ? 'frame' : 'clip';
   const planned = stepKind === 'frame' ? await frameRoute(project, env) : await clipRoute(project, env);
   if (planned.reason) return planned;
-  const refused = await routeUnavailableReason(planned.route, sceneRequirement(project, scene, stepKind), env);
+  const refused = await routeUnavailableReason(planned.route, sceneRequirement(project, scene, stepKind, stepKind === 'frame' ? await loadSceneCastMedia(scene) : null), env);
   return refused ? unavailable(refused) : { scene, stepKind, route: planned.route };
 }
 

@@ -130,10 +130,10 @@ export const poolPricing = (pool, project = null) => Object.fromEntries(pool.map
 /** Shared scene-aware frame conditioning, with the legacy capped fallback. */
 export const conditioningReferences = musicVideoConditioningReferences;
 
-/** What a scene's `kind` generation needs from a route. */
-export function sceneRequirement(project, scene, stepKind) {
+/** What a scene's `kind` generation needs from a route. `castMedia` is loadSceneCastMedia's result for the scene. */
+export function sceneRequirement(project, scene, stepKind, castMedia = null) {
   return stepKind === 'frame'
-    ? { kind: 'image', conditioning: conditioningReferences(project, scene).length }
+    ? { kind: 'image', conditioning: conditioningReferences(project, scene, castMedia).length }
     : { kind: 'video', performance: isPerformanceScene(scene) };
 }
 
