@@ -323,6 +323,23 @@ describe('share-bucket watcher attachment lifecycle', () => {
     expect(liveHandles()).toEqual([]);
   });
 
+  it('exit quiesce keeps handles open, drops their events and refuses later admission (#12853)', async () => {
+    const { watcher, quiesceAllWatchersForExit, attachWatcher, attachAllWatchers, listAttachedWatchers, paths, root } = await attach();
+    const queuedInit = attachAllWatchers();
+    quiesceAllWatchersForExit();
+    await queuedInit;
+    expect(watcher.close).not.toHaveBeenCalled();
+    expect(listBuckets).not.toHaveBeenCalled();
+    await expect(attachWatcher('bucket-late')).rejects.toThrow('watchers are shut down');
+    await deliver(watcher, 'add', paths.join(root, 'manifests', 'example-manifest.json'));
+    await deliver(watcher, 'change', paths.join(root, 'assets', 'blobs', 'example-blob'));
+    await deliver(watcher, 'unlink', paths.join(root, 'manifests', 'example-manifest.json'));
+    expect(processManifest).not.toHaveBeenCalled();
+    expect(processBacklog).not.toHaveBeenCalled();
+    expect(handleUnshare).not.toHaveBeenCalled();
+    expect(listAttachedWatchers()).toEqual(['bucket-example']);
+  });
+
   it('failed closure retains ownership, drains other closes, and allows teardown to retry', async () => {
     const { watcher, attachWatcher, listAttachedWatchers } = await attach();
     const other = await attachWatcher('bucket-other');
