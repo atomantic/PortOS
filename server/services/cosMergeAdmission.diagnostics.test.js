@@ -30,7 +30,7 @@ const deferred = () => {
 const agentId = 'synthetic-parent';
 const acquire = () => claimMergeAdmission({ agentId, action: 'acquire' });
 const origin = { host: 'github.com', fullName: 'example/repo' };
-const LINE = /^🚦 Merge admission operation=[a-z-]+ status=[a-z-]+ phase=[A-Za-z]+( [A-Za-z]+Ms=\d+)+$/;
+const LINE = /^🚦 Merge admission operation=[a-z-]+ status=[a-z-]+ phase=[A-Za-z]+( [A-Za-z]+Ms=\d+)+( cpuMs=\d+ load1=\d+(\.\d+)? cpus=\d+ gcMs=\d+ invCtx=\d+)?$/;
 const reported = () => [...console.log.mock.calls, ...console.warn.mock.calls, ...console.error.mock.calls].flat();
 const fields = (line) => Object.fromEntries([...line.matchAll(/ ([A-Za-z]+)=(\S+)/g)]
   .map(([, key, value]) => [key, /^\d+$/.test(value) ? Number(value) : value]));
@@ -81,6 +81,7 @@ describe('merge admission slow-operation diagnostics', () => {
     expect((await pending).admitted).toBe(true);
     expect(onlyLine()).toMatchObject({ operation: 'acquire', status: 'settled', totalMs: 5000,
       queueMs: 5000, queueLagMs: 0, loopLagMs: 0, persistenceMs: 0, timerLateMs: 0 });
+    expect(reported()[0]).not.toContain('cpuMs=');
   });
 
   it('attributes slow asynchronous persistence I/O to its stage without loop lag', async () => {
@@ -112,7 +113,7 @@ describe('merge admission slow-operation diagnostics', () => {
     // The first tick interval of a stall is indistinguishable from waiting for
     // that tick, so lag is measured to within one 100 ms interval.
     expect(onlyLine()).toMatchObject({ totalMs: 6000, persistenceMs: 6000, serializeMs: 6000,
-      persistenceLagMs: 5900, loopLagMs: 5900, loopLagMaxMs: 5900 });
+      persistenceLagMs: 5900, loopLagMs: 5900, loopLagMaxMs: 5900, cpuMs: expect.any(Number), invCtx: expect.any(Number) });
   });
 
   it('identifies a deadline delivered late by a blocked loop, and the expired sweep never mutates', async () => {

@@ -593,6 +593,7 @@ CoS runtime records share one serialized state queue (`withStateLock` in `server
 |------|------|
 | `🚦 Merge admission operation=… status=settled …` | a settled admission transaction that took 1 s or more |
 | `🚦 Merge admission … status=queue-timeout\|pending\|failed …` | always |
+| `❌ PM2 read failed (home=…): pm2 RPC timed out; … wallMs=… cpuMs=… load1=… cpus=… gcMs=… invCtx=…` | the first timed-out PM2 process-list read of a failure streak |
 | `🐢 CoS state write slow outcome=… totalMs=… prepareMs agentsMs serializeMs writeMs replaceMs dirSyncMs loopLagMs loopLagMaxMs sizeKiB` | any `saveState` of 1 s or more |
 | `🐢 CoS state queue slow hold heldMs=… waitMs=… loopLagMs=… loopLagMaxMs=…` | any operation that held the queue for 1 s or more |
 
@@ -600,7 +601,18 @@ Elapsed time inside an awaited phase is asynchronous wait plus delayed schedulin
 
 - **`queueMs` high, `queueLagMs` near 0** — the state queue was held by other operations while the loop stayed responsive. Look for `🐢 CoS state queue slow hold` lines in the same window.
 - **`persistenceMs` (or `trustedStateMs`) high, its `…LagMs` near 0** — asynchronous I/O wait: storage or fsync latency, or libuv threadpool queueing behind other file work. `agentsMs` (the changed `cos_agents` rows, written in one transaction), `writeMs` (temp write + file flush), `replaceMs` (rename) and `dirSyncMs` (directory flush) locate it; `readMs`/`parseMs` split the ownership read.
-- **`…LagMs` close to the phase time, or `timerLateMs` well above 0** — the event loop could not run: blocking JavaScript, garbage collection, host CPU starvation or process suspension. These numbers do not tell those apart; capture a CPU profile ([safely](#dynamic-import-callback-missing-after-profiling)) and host load at the time.
+- **`…LagMs` close to the phase time, or `timerLateMs` well above 0** — the event loop could not run: blocking JavaScript, garbage collection, host CPU starvation or process suspension. The attribution fields below tell those apart.
+
+**Lag attribution (#12852).** When an operation is charged more than 1,000 ms of loop lag, its line ends with `cpuMs=… load1=… cpus=… gcMs=… invCtx=…` measured over the same span. The PM2 timeout line carries them over the read, with `wallMs` as its span. Compare `cpuMs` with the span's wall time (`totalMs`, `heldMs` or `wallMs`):
+
+| Reading | Bucket | Next step |
+|---------|--------|-----------|
+| `cpuMs` near the wall time, `gcMs` a small share of it | **busy process**: blocking JavaScript | take one CPU profile on the next stall through the [safe inspector path](#dynamic-import-callback-missing-after-profiling); move the hot synchronous work off the loop, or chunk it |
+| `gcMs` a large share of `cpuMs` | **garbage collection** | reduce the allocation the profile names; a large `sizeKiB` on the state write points at snapshot cloning first |
+| `cpuMs` well below the wall time, `load1` at or above `cpus`, `invCtx` high | **host starvation**: other processes held the CPUs | reduce concurrent heavy work on the host (agent validation, full test suites), not PortOS code |
+| `cpuMs` and `load1` both low | **suspension**: the process was not scheduled at all (host sleep, a debugger, a stopped process) | check host power and debugger state for that window |
+
+`cpuMs` is this process's user plus system time, so worker threads can push it above the wall time. `load1` is the host's one-minute load average and trails a sudden spike. `gcMs` counts collections by when they started, and one finishing in a span's last loop turn may be missed. A span charged 1,000 ms of lag or less prints none of these fields.
 
 Lag resolves to about one tick: the first 100 ms of a stall and any overdue stretch of 20 ms or less are not counted. `timerLateMs` is how late the 15 s admission deadline fired; anything beyond a few milliseconds of timer jitter proves scheduling delay on its own.
 
