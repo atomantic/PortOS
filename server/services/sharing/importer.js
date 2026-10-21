@@ -423,6 +423,26 @@ async function processAnnotationManifest(bucket, manifest) {
   return { applied: changed.length, changedKeys: changed };
 }
 
+// A bundled media-job record is re-render metadata, never work to resume here:
+// the queue replays a persisted `queued` record at boot and re-enqueues some
+// `running`/remote ones, so a bucket record must not choose its status, carry
+// queue-internal state, or name itself anything but the safe id it was read by.
+// Rebuilt to the exporter's field set (exportMediaJobAndAsset).
+const IMPORTABLE_MEDIA_JOB_KINDS = new Set(['image', 'video']);
+function importableMediaJob(raw, recordId) {
+  if (!isPlainObject(raw) || raw.id !== recordId || raw.status !== 'completed') return null;
+  if (!IMPORTABLE_MEDIA_JOB_KINDS.has(raw.kind)) return null;
+  return {
+    id: raw.id,
+    kind: raw.kind,
+    owner: raw.owner ?? null,
+    status: 'completed',
+    completedAt: isStr(raw.completedAt) ? raw.completedAt : null,
+    params: isPlainObject(raw.params) ? raw.params : {},
+    result: isPlainObject(raw.result) ? raw.result : null,
+  };
+}
+
 /** Merge bucket-bundled media-job records into local data/media-jobs.json. */
 async function mergeMediaJobRecords(bucketPath, recordIds) {
   const mediaDir = bucketRecordsDir(bucketPath, 'media');
@@ -440,8 +460,9 @@ async function mergeMediaJobRecords(bucketPath, recordIds) {
   ]);
   const byId = new Map((persisted.jobs || []).map((j) => [j.id, j]));
   let changed = false;
-  for (const job of incoming) {
-    if (!job?.id || byId.has(job.id)) continue;
+  for (const [index, raw] of incoming.entries()) {
+    const job = importableMediaJob(raw, recordIds[index]);
+    if (!job || byId.has(job.id)) continue;
     byId.set(job.id, job);
     changed = true;
   }
