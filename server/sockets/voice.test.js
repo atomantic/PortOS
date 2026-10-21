@@ -54,6 +54,7 @@ const {
 const { transcribe } = await import('../services/voice/stt.js');
 const { synthesize } = await import('../services/voice/tts.js');
 const { runTurn } = await import('../services/voice/pipeline.js');
+const { getVoiceConfig } = await import('../services/voice/config.js');
 const {
   attachHost: attachCallHost,
   __resetCallSession,
@@ -273,6 +274,7 @@ describe('voice:text turn recovery', () => {
 });
 
 describe('voice:output single-recipient wiring', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
   beforeEach(() => __resetVoiceOutput());
 
   it('registers a candidate only after the tab announces voice:output:available', () => {
@@ -301,7 +303,7 @@ describe('voice:output single-recipient wiring', () => {
     expect(tab.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
 
-  it('claiming routes proactive output to the claiming tab, not another', () => {
+  it('claiming routes proactive output to the claiming tab, not another', async () => {
     const a = makeFakeSocket();
     const b = makeFakeSocket();
     registerVoiceHandlers(a);
@@ -310,6 +312,7 @@ describe('voice:output single-recipient wiring', () => {
     b.fire('voice:output:available');
     // b is the active tab and claims output.
     b.fire('voice:output:claim');
+    await flush();
 
     const io = { emit: () => { throw new Error('must not broadcast'); } };
     emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
@@ -317,7 +320,7 @@ describe('voice:output single-recipient wiring', () => {
     expect(b.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
 
-  it('disconnecting the primary promotes another announced tab', () => {
+  it('disconnecting the primary promotes another announced tab', async () => {
     const a = makeFakeSocket();
     const b = makeFakeSocket();
     registerVoiceHandlers(a);
@@ -325,10 +328,21 @@ describe('voice:output single-recipient wiring', () => {
     a.fire('voice:output:available');
     b.fire('voice:output:available');
     a.fire('voice:output:claim');
+    await flush();
     expect(getVoiceOutputSocket()).toBe(a);
 
     a.fire('disconnect');
     expect(getVoiceOutputSocket()).toBe(b);
+  });
+
+  it('ignores output claims while voice is disabled', async () => {
+    getVoiceConfig.mockResolvedValueOnce({ enabled: false });
+    const a = makeFakeSocket();
+    registerVoiceHandlers(a);
+    a.fire('voice:output:available');
+    a.fire('voice:output:claim');
+    await flush();
+    expect(a.emitted.filter((e) => e.event === 'voice:output:primary')).toHaveLength(0);
   });
 });
 
