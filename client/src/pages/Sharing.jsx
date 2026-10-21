@@ -182,20 +182,22 @@ function SharingBuckets({ selectedId }) {
   // Live socket updates: inbox changes + new manifests. A refresh that fails keeps
   // the rows already shown; a resource already in error retries through the hook.
   useEffect(() => {
-    const refresh = (resource, read, bucketId) => {
+    const pickInbox = (r) => r?.items || [];
+    const pickActivity = (r) => r?.manifests || [];
+    const refresh = (resource, read, pick, bucketId) => {
       if (bucketId !== liveRef.current.selectedId) return;
       if (resource.state === 'error') { resource.retry(); return; }
       read(bucketId, { silent: true })
-        .then((r) => resource.setItems(resource === liveRef.current.inbox ? (r?.items || []) : (r?.manifests || [])))
+        .then((r) => { if (bucketId === liveRef.current.selectedId) resource.setItems(pick(r)); })
         .catch((err) => console.warn(`⚠️ Sharing refresh failed: ${err.message}`));
     };
     const onInboxUpdated = ({ bucketId }) => {
-      if (bucketId) refresh(liveRef.current.inbox, listShareInbox, bucketId);
+      if (bucketId) refresh(liveRef.current.inbox, listShareInbox, pickInbox, bucketId);
     };
     const onManifestProcessed = ({ bucketId }) => {
       if (!bucketId) return;
-      refresh(liveRef.current.inbox, listShareInbox, bucketId);
-      refresh(liveRef.current.activity, listShareActivity, bucketId);
+      refresh(liveRef.current.inbox, listShareInbox, pickInbox, bucketId);
+      refresh(liveRef.current.activity, listShareActivity, pickActivity, bucketId);
     };
     socket.on('sharing:inbox-updated', onInboxUpdated);
     socket.on('sharing:manifest-processed', onManifestProcessed);
