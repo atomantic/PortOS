@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router';
 import { Save, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
@@ -11,6 +11,8 @@ import { INPUT_CLASS } from './constants';
 // A JIRA issue key like PROJ-1553 — used to tell "user typed a key to validate"
 // from "user is searching an epic by name" in the epic field.
 const EPIC_KEY_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+
+const EMPTY = Object.freeze([]);
 
 const fetchJiraInstances = () => api.getJiraInstances({ silent: true })
   .then(data => (data?.instances ? Object.values(data.instances) : []));
@@ -43,30 +45,38 @@ export default function JiraConfigPanel({ app, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const { items: instances, state: instancesState, error: instancesError, retry: retryInstances } = useListResource(fetchJiraInstances);
-  const [projects, setProjects] = useState([]);
-  const [loadingProjects, setLoadingProjects] = useState(false);
+  // Keyed reads: a failed one renders an error row + Retry, never "no projects" /
+  // "no boards" / "no active sprint". Items are ignored while the key is unset.
+  const fetchProjects = useCallback(
+    () => api.getJiraProjects(form.instanceId, { silent: true }),
+    [form.instanceId]
+  );
+  const { items: projectItems, state: projectsState, error: projectsError, retry: retryProjects } =
+    useListResource(fetchProjects, { enabled: !!form.instanceId });
+  const projects = form.instanceId ? projectItems : EMPTY;
+  const loadingProjects = !!form.instanceId && projectsState === 'loading';
   const [projectSearch, setProjectSearch] = useState('');
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
-  const [boards, setBoards] = useState([]);
-  const [loadingBoards, setLoadingBoards] = useState(false);
-  const [boardSprints, setBoardSprints] = useState([]);
+  const fetchBoards = useCallback(
+    () => api.getJiraBoards(form.instanceId, form.projectKey, { silent: true }),
+    [form.instanceId, form.projectKey]
+  );
+  const boardsEnabled = !!form.instanceId && !!form.projectKey;
+  const { items: boardItems, state: boardsState, error: boardsError, retry: retryBoards } =
+    useListResource(fetchBoards, { enabled: boardsEnabled });
+  const boards = boardsEnabled ? boardItems : EMPTY;
+  const loadingBoards = boardsEnabled && boardsState === 'loading';
+  const fetchSprints = useCallback(
+    () => api.getJiraBoardSprints(form.instanceId, form.boardId, { silent: true }),
+    [form.instanceId, form.boardId]
+  );
+  const sprintsEnabled = !!form.instanceId && !!form.boardId;
+  const { items: sprintItems, state: sprintsState, error: sprintsError, retry: retrySprints } =
+    useListResource(fetchSprints, { enabled: sprintsEnabled });
+  const boardSprints = sprintsEnabled ? sprintItems : EMPTY;
   const [epicResults, setEpicResults] = useState([]);
   const [epicDropdownOpen, setEpicDropdownOpen] = useState(false);
   const [epicValidation, setEpicValidation] = useState({ state: 'idle' });
-
-  useEffect(() => {
-    if (!form.instanceId) {
-      setProjects([]);
-      return;
-    }
-    let cancelled = false;
-    setLoadingProjects(true);
-    api.getJiraProjects(form.instanceId)
-      .then(list => { if (!cancelled) setProjects(list || []); })
-      .catch(() => { if (!cancelled) setProjects([]); })
-      .finally(() => { if (!cancelled) setLoadingProjects(false); });
-    return () => { cancelled = true; };
-  }, [form.instanceId]);
 
   // Default the assignee to the instance's own account so the common case needs
   // no typing — only when the field is still empty, never overwriting a choice.
@@ -75,35 +85,6 @@ export default function JiraConfigPanel({ app, onSaved }) {
     const inst = instances.find(i => i.id === form.instanceId);
     if (inst?.email) setForm(prev => ({ ...prev, assignee: inst.email }));
   }, [form.instanceId, form.assignee, instances]);
-
-  // Detect the project's agile boards so the boardId is picked from live data
-  // instead of hand-typed (which is how a boardId goes stale across a migration).
-  useEffect(() => {
-    if (!form.instanceId || !form.projectKey) {
-      setBoards([]);
-      return;
-    }
-    let cancelled = false;
-    setLoadingBoards(true);
-    api.getJiraBoards(form.instanceId, form.projectKey, { silent: true })
-      .then(list => { if (!cancelled) setBoards(list || []); })
-      .catch(() => { if (!cancelled) setBoards([]); })
-      .finally(() => { if (!cancelled) setLoadingBoards(false); });
-    return () => { cancelled = true; };
-  }, [form.instanceId, form.projectKey]);
-
-  // Show the selected board's active sprint as confirmation it's the right board.
-  useEffect(() => {
-    if (!form.instanceId || !form.boardId) {
-      setBoardSprints([]);
-      return;
-    }
-    let cancelled = false;
-    api.getJiraBoardSprints(form.instanceId, form.boardId, { silent: true })
-      .then(sprints => { if (!cancelled) setBoardSprints(sprints || []); })
-      .catch(() => { if (!cancelled) setBoardSprints([]); });
-    return () => { cancelled = true; };
-  }, [form.instanceId, form.boardId]);
 
   // Validate the configured epic key still resolves as an Epic on this instance.
   useEffect(() => {
@@ -309,14 +290,19 @@ export default function JiraConfigPanel({ app, onSaved }) {
                   )}
                 </div>
               ) : (
-                <input
-                  id="app-jira-project"
-                  type="text"
-                  value={form.projectKey}
-                  onChange={e => setForm({ ...form, projectKey: e.target.value })}
-                  className={INPUT_CLASS}
-                  placeholder="e.g. PROJ"
-                />
+                <>
+                  {projectsState === 'error' && (
+                    <ListLoadError what="JIRA projects" error={projectsError} onRetry={retryProjects} className="mb-2" />
+                  )}
+                  <input
+                    id="app-jira-project"
+                    type="text"
+                    value={form.projectKey}
+                    onChange={e => setForm({ ...form, projectKey: e.target.value })}
+                    className={INPUT_CLASS}
+                    placeholder="e.g. PROJ"
+                  />
+                </>
               )}
             </div>
 
@@ -345,13 +331,20 @@ export default function JiraConfigPanel({ app, onSaved }) {
                   {boardIsStale ? (
                     <p className="text-xs text-port-warning mt-1">⚠ Saved board {form.boardId} isn&apos;t among this project&apos;s boards — pick a current one.</p>
                   ) : form.boardId && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      {activeSprint ? `Active sprint: ${activeSprint.name}` : 'No active sprint on this board.'}
-                    </p>
+                    sprintsState === 'error' ? (
+                      <ListLoadError what="the board's sprints" error={sprintsError} onRetry={retrySprints} className="mt-1" />
+                    ) : sprintsState === 'ready' && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        {activeSprint ? `Active sprint: ${activeSprint.name}` : 'No active sprint on this board.'}
+                      </p>
+                    )
                   )}
                 </>
               ) : (
                 <>
+                  {boardsState === 'error' && (
+                    <ListLoadError what="JIRA boards" error={boardsError} onRetry={retryBoards} className="mb-2" />
+                  )}
                   <input
                     id="app-jira-board"
                     type="text"
@@ -360,7 +353,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
                     className={INPUT_CLASS}
                     placeholder="e.g. 1294 (from JIRA board URL rapidView param)"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Couldn&apos;t auto-detect boards — enter the id manually (board URL <span className="font-mono">rapidView</span> param).</p>
+                  {boardsState === 'ready' && <p className="text-xs text-gray-500 mt-1">Couldn&apos;t auto-detect boards — enter the id manually (board URL <span className="font-mono">rapidView</span> param).</p>}
                 </>
               )}
             </div>

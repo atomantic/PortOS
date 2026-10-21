@@ -44,12 +44,18 @@ const SCAN_PREFIXES = ['src/pages/', 'src/components/'];
 
 /**
  * `.catch(() => [])`, `.catch(() => setX([]))`, the braced one-statement form
- * `.catch(() => { setX([]); })`, and the object-literal spelling
+ * `.catch(() => { setX([]); })` (optionally behind an `if (...)` guard such as
+ * `if (!cancelled)`), the keyed-map setter `setX((m) => ({ ...m, [id]: [] }))`
+ * (bare or braced), and the object-literal spelling
  * `.catch(() => ({ agents: [], summary: {} }))` (a list under a key, one level
  * of nested braces allowed). The setter must start with `set` + a capital, so
  * `.catch(() => reset([]))` and a non-setter call stay out.
  */
-export const LIST_COLLAPSE = /\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{?\s*set[A-Z]\w*\(\s*\[\]\s*\)\s*;?\s*\}?|\(\s*\{(?:[^{}]|\{[^{}]*\})*?\b\w+\s*:\s*\[\](?:[^{}]|\{[^{}]*\})*\}\s*\))\s*\)/g;
+const EMPTY_SETTER = String.raw`set[A-Z]\w*\(\s*(?:\[\]|\(\s*\w+\s*\)\s*=>\s*\(\s*\{\s*\.\.\.\w+\s*,\s*\[[^\]]+\]\s*:\s*\[\]\s*\}\s*\))\s*\)`;
+export const LIST_COLLAPSE = new RegExp(
+  String.raw`\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\s*(?:if\s*\([^()]*\)\s*)?${EMPTY_SETTER}\s*;?\s*\}|${EMPTY_SETTER}|\(\s*\{(?:[^{}]|\{[^{}]*\})*?\b\w+\s*:\s*\[\](?:[^{}]|\{[^{}]*\})*\}\s*\))\s*\)`,
+  'g',
+);
 
 /**
  * Files still carrying a collapse, with how many. Lower or remove a row when a
@@ -57,6 +63,36 @@ export const LIST_COLLAPSE = /\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{?\s*set[A-Z]\
  */
 const KNOWN = Object.freeze({
   'src/components/privacy/PrivacyOrgsTab.jsx': 2,
+  // Spellings the widened pattern (#12790) newly sees; migrated under #12804.
+  'src/components/CmdKSearch.jsx': 1,
+  'src/components/TagPicker.jsx': 1,
+  'src/components/apps/LaunchVideoPanel.jsx': 1,
+  'src/components/apps/tabs/OverviewTab.jsx': 1,
+  'src/components/cos/tabs/MemoryRunsUsedBy.jsx': 1,
+  'src/components/eidoverse/EidoverseTravel.jsx': 1,
+  'src/components/media/RigPanel.jsx': 1,
+  'src/components/messages/MessageDetail.jsx': 1,
+  'src/components/music/ArtistPicker.jsx': 1,
+  'src/components/musicVideo/CharacterStyleSelect.jsx': 1,
+  'src/components/musicVideo/ExistingSongSelect.jsx': 1,
+  'src/components/musicVideo/PromotionPlanPanel.jsx': 1,
+  'src/components/pipeline/AuthorPicker.jsx': 1,
+  'src/components/pipeline/SeriesLoomsPanel.jsx': 1,
+  'src/components/pipeline/stages/EpisodeVideoStage.jsx': 1,
+  'src/components/privacy/OrgDrawer.jsx': 1,
+  'src/components/providers/ProviderServiceForm.jsx': 1,
+  'src/components/settings/ImageGenProviderSections.jsx': 1,
+  'src/components/settings/SecurityTab.jsx': 1,
+  'src/components/songbook/SongLinks.jsx': 2,
+  'src/components/sprites/SpriteReferencePicker.jsx': 1,
+  'src/components/threads/AddToThreadButton.jsx': 1,
+  'src/components/ui/ProcessLogModal.jsx': 1,
+  'src/components/videoGen/GalleryVideoPicker.jsx': 1,
+  'src/pages/Instances.jsx': 1,
+  'src/pages/OpenClaw.jsx': 1,
+  'src/pages/PipelineEditorialChecks.jsx': 2,
+  'src/pages/PipelineExport.jsx': 1,
+  'src/pages/Tribe.jsx': 3,
 });
 
 /**
@@ -64,6 +100,9 @@ const KNOWN = Object.freeze({
  * They are not ratcheted down: the count is the number of intentional matches.
  */
 const EXEMPT = Object.freeze({
+  // Epic-name typeahead: a failed search shows no suggestions, the typed key is
+  // validated separately (`epicValidation`), and nothing says "no epics exist".
+  'src/components/apps/JiraConfigPanel.jsx': 1,
   // `canDelete: true` on a failed usage read lets the server's own
   // SYSTEM_STAGE_PROTECTED guard answer. The empty `usedBy`/`referencedBy` feed
   // a delete-confirm prompt, not a library listing, so no "you have none" copy.
@@ -82,12 +121,17 @@ describe('page list fetches keep a failed read distinct from an empty list', () 
       'load().catch(() => { setRows([]); })',
       'getAppAgents(id).catch(() => ({ agents: [], summary: {} }))',
       'getBranches(p).catch(() => ({ summary: {}, branches: [] }))',
+      'getJiraBoards(i).catch(() => { if (!cancelled) setBoards([]); })',
+      'listShareInbox(id).catch(() => setInboxByBucket((m) => ({ ...m, [bucketId]: [] })))',
+      'listShareActivity(id).catch(() => { setActivityByBucket((m) => ({ ...m, [id]: [] })); })',
     ]) expect(countIn(sample), sample).toBe(1);
     for (const sample of [
       'listTracks().catch(() => setLoadError(true))',
       'load().catch(() => { setRows([]); setFailed(true); })',
       'load().catch(() => FETCH_FAILED)',
       'getAppTaskTypes(id).catch(() => ({ taskTypeOverrides: {} }))',
+      'load().catch(() => { if (!cancelled) { setRows([]); setFailed(true); } })',
+      'load().catch(() => setInboxByBucket((m) => ({ ...m, [bucketId]: m[bucketId] })))',
       'load().catch(() => ({ providers: [], error: true }))'.replace('[], error', 'x, error'),
     ]) expect(countIn(sample), sample).toBe(0);
   });

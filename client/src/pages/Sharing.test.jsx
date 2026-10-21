@@ -152,6 +152,30 @@ describe('Sharing list and settings reads', () => {
     expect((await screen.findAllByText('Bucket One')).length).toBeGreaterThan(0);
   });
 
+  it('shows an error row with Retry when the inbox read fails, not "No pending imports."', async () => {
+    api.listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
+    api.listShareInbox.mockRejectedValueOnce(new Error('inbox 500'));
+    renderAt('/sharing/buckets/b1?tab=inbox');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the inbox — inbox 500');
+    expect(screen.queryByText('No pending imports.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No pending imports.')).toBeInTheDocument();
+  });
+
+  it('shows an error row with Retry when the activity read fails, not "No share activity yet."', async () => {
+    api.listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
+    api.listShareActivity.mockRejectedValueOnce(new Error('activity 500'));
+    renderAt('/sharing/buckets/b1?tab=activity');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load share activity — activity 500');
+    expect(screen.queryByText('No share activity yet.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No share activity yet.')).toBeInTheDocument();
+  });
+
   it('locks the display-name editor when the settings read fails so a save cannot replace stored values', async () => {
     api.listShareBuckets.mockResolvedValue({ buckets: [] });
     api.getSettings.mockRejectedValueOnce(new Error('settings 500'));

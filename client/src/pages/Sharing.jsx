@@ -7,7 +7,7 @@
  * that get stamped as the source on every outgoing share.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
@@ -134,8 +134,21 @@ function SharingBuckets({ selectedId }) {
   const [savedBio, setSavedBio] = useState('');
   const [savingDisplayName, setSavingDisplayName] = useState(false);
 
-  const [inboxByBucket, setInboxByBucket] = useState({}); // bucketId → items[]
-  const [activityByBucket, setActivityByBucket] = useState({});
+  // Inbox + activity for the selected bucket. A failed read stays distinct from
+  // an empty bucket (error row + Retry, never "No pending imports.").
+  const fetchInbox = useCallback(
+    () => listShareInbox(selectedId, { silent: true }).then((r) => r?.items || []),
+    [selectedId],
+  );
+  const fetchActivity = useCallback(
+    () => listShareActivity(selectedId, { silent: true }).then((r) => r?.manifests || []),
+    [selectedId],
+  );
+  const inbox = useListResource(fetchInbox, { enabled: !!selectedId });
+  const activity = useListResource(fetchActivity, { enabled: !!selectedId });
+  // Socket handlers subscribe once; they read the latest hook state through this ref.
+  const liveRef = useRef(null);
+  liveRef.current = { selectedId, inbox, activity };
 
   const { isConfirming: isRemoveArmed, requestDelete: armRemove, cancelDelete: cancelRemove, confirmDelete: confirmRemove } = useConfirmDelete();
 
@@ -166,33 +179,23 @@ function SharingBuckets({ selectedId }) {
   }, []);
   useEffect(() => { loadSettings(); }, [loadSettings]);
 
-  // Lazy-load inbox + activity when a bucket is selected.
-  const loadInbox = (bucketId) => {
-    listShareInbox(bucketId, { silent: true })
-      .then((r) => setInboxByBucket((m) => ({ ...m, [bucketId]: r?.items || [] })))
-      .catch(() => setInboxByBucket((m) => ({ ...m, [bucketId]: [] })));
-  };
-  const loadActivity = (bucketId) => {
-    listShareActivity(bucketId, { silent: true })
-      .then((r) => setActivityByBucket((m) => ({ ...m, [bucketId]: r?.manifests || [] })))
-      .catch(() => setActivityByBucket((m) => ({ ...m, [bucketId]: [] })));
-  };
+  // Live socket updates: inbox changes + new manifests. A refresh that fails keeps
+  // the rows already shown; a resource already in error retries through the hook.
   useEffect(() => {
-    if (!selectedId) return;
-    loadInbox(selectedId);
-    loadActivity(selectedId);
-  }, [selectedId]);
-
-  // Live socket updates: inbox changes + new manifests.
-  useEffect(() => {
+    const refresh = (resource, read, bucketId) => {
+      if (bucketId !== liveRef.current.selectedId) return;
+      if (resource.state === 'error') { resource.retry(); return; }
+      read(bucketId, { silent: true })
+        .then((r) => resource.setItems(resource === liveRef.current.inbox ? (r?.items || []) : (r?.manifests || [])))
+        .catch((err) => console.warn(`⚠️ Sharing refresh failed: ${err.message}`));
+    };
     const onInboxUpdated = ({ bucketId }) => {
-      if (bucketId) loadInbox(bucketId);
+      if (bucketId) refresh(liveRef.current.inbox, listShareInbox, bucketId);
     };
     const onManifestProcessed = ({ bucketId }) => {
-      if (bucketId) {
-        loadInbox(bucketId);
-        loadActivity(bucketId);
-      }
+      if (!bucketId) return;
+      refresh(liveRef.current.inbox, listShareInbox, bucketId);
+      refresh(liveRef.current.activity, listShareActivity, bucketId);
     };
     socket.on('sharing:inbox-updated', onInboxUpdated);
     socket.on('sharing:manifest-processed', onManifestProcessed);
@@ -283,7 +286,7 @@ function SharingBuckets({ selectedId }) {
       return null;
     });
     if (!result) return;
-    setInboxByBucket((m) => ({ ...m, [bucketId]: (m[bucketId] || []).filter((it) => it.manifestId !== manifestId) }));
+    inbox.setItems((items) => items.filter((it) => it.manifestId !== manifestId));
     const applied = result.outcome?.applied ?? 0;
     toast.success(`Imported — ${applied} record${applied === 1 ? '' : 's'}`);
   };
@@ -294,7 +297,7 @@ function SharingBuckets({ selectedId }) {
       return null;
     });
     if (!result) return;
-    setInboxByBucket((m) => ({ ...m, [bucketId]: (m[bucketId] || []).filter((it) => it.manifestId !== manifestId) }));
+    inbox.setItems((items) => items.filter((it) => it.manifestId !== manifestId));
   };
 
   const selected = buckets.find((b) => b.id === selectedId) || null;
@@ -477,7 +480,7 @@ function SharingBuckets({ selectedId }) {
           ) : (
             <ul className="space-y-2">
               {buckets.map((b) => {
-                const inboxCount = (inboxByBucket[b.id] || []).length;
+                const inboxCount = selectedId === b.id && inbox.state === 'ready' ? inbox.items.length : 0;
                 const isSelected = selectedId === b.id;
                 const incompatible = b.schemaCompatible === false;
                 return (
@@ -536,7 +539,7 @@ function SharingBuckets({ selectedId }) {
               <TabPills
                 tabs={BUCKET_TABS.map((tab) => (
                   tab.id === 'inbox'
-                    ? { ...tab, count: (inboxByBucket[selected.id] || []).length }
+                    ? { ...tab, count: inbox.items.length }
                     : tab
                 ))}
                 activeTab={activeTab}
@@ -550,13 +553,16 @@ function SharingBuckets({ selectedId }) {
               {activeTab === 'inbox' && (
                 <Inboxlist
                   bucket={selected}
-                  items={inboxByBucket[selected.id] || []}
+                  items={inbox.items}
+                  state={inbox.state}
+                  error={inbox.error}
+                  onRetry={inbox.retry}
                   onPromote={(id) => handlePromote(selected.id, id)}
                   onDismiss={(id) => handleDismiss(selected.id, id)}
                 />
               )}
               {activeTab === 'activity' && (
-                <ActivityList manifests={activityByBucket[selected.id] || []} />
+                <ActivityList manifests={activity.items} state={activity.state} error={activity.error} onRetry={activity.retry} />
               )}
               {activeTab === 'settings' && (
                 <SettingsPanel
@@ -577,7 +583,7 @@ function SharingBuckets({ selectedId }) {
   );
 }
 
-function Inboxlist({ bucket, items, onPromote, onDismiss }) {
+function Inboxlist({ bucket, items, state, error, onRetry, onPromote, onDismiss }) {
   if (bucket.mode === 'auto-merge') {
     return (
       <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500 flex items-start gap-2">
@@ -588,6 +594,8 @@ function Inboxlist({ bucket, items, onPromote, onDismiss }) {
       </div>
     );
   }
+  if (state === 'error') return <ListLoadError what="the inbox" error={error} onRetry={onRetry} />;
+  if (state === 'loading') return <div className="p-4 text-sm text-gray-500">Loading inbox…</div>;
   if (items.length === 0) {
     return <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">No pending imports.</div>;
   }
@@ -658,7 +666,9 @@ function Inboxlist({ bucket, items, onPromote, onDismiss }) {
   );
 }
 
-function ActivityList({ manifests }) {
+function ActivityList({ manifests, state, error, onRetry }) {
+  if (state === 'error') return <ListLoadError what="share activity" error={error} onRetry={onRetry} />;
+  if (state === 'loading') return <div className="p-4 text-sm text-gray-500">Loading activity…</div>;
   if (manifests.length === 0) {
     return <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">No share activity yet.</div>;
   }
