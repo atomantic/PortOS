@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   FileText,
   Plus,
@@ -15,31 +15,23 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import { FormField } from '../../ui/FormField';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
+const fetchDocuments = () => api.getDigitalTwinDocuments({ silent: true });
+
 export default function DocumentsTab({ onRefresh }) {
-  const [documents, setDocuments] = useState([]);
+  const { items: documents, state: documentsState, error: documentsError, retry: loadDocuments } = useListResource(fetchDocuments);
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [editMode, setEditMode] = useState(false);
   const [editContent, setEditContent] = useState('');
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [newDoc, setNewDoc] = useState({ filename: '', title: '', category: 'core', content: '' });
   const [deleteConfirm, setDeleteConfirm] = useState(null);
-
-  useEffect(() => {
-    loadDocuments();
-  }, []);
-
-  const loadDocuments = async () => {
-    setLoading(true);
-    const docs = await api.getDigitalTwinDocuments().catch(() => []);
-    setDocuments(docs);
-    setLoading(false);
-  };
 
   const loadDocument = async (id) => {
     const doc = await api.getDigitalTwinDocument(id);
@@ -57,7 +49,7 @@ export default function DocumentsTab({ onRefresh }) {
     setSaving(false);
     if (!saved) return;
     toast.success('Document saved');
-    await loadDocuments();
+    loadDocuments();
     await loadDocument(selectedDoc.id);
     setEditMode(false);
     onRefresh();
@@ -66,7 +58,7 @@ export default function DocumentsTab({ onRefresh }) {
   const handleToggleEnabled = async (doc, enabled) => {
     await api.updateSoulDocument(doc.id, { enabled });
     toast.success(enabled ? 'Document enabled' : 'Document disabled');
-    await loadDocuments();
+    loadDocuments();
     if (selectedDoc?.id === doc.id) {
       await loadDocument(doc.id);
     }
@@ -76,7 +68,7 @@ export default function DocumentsTab({ onRefresh }) {
   const handleWeightChange = async (doc, weight) => {
     await api.updateSoulDocument(doc.id, { weight });
     toast.success(`Weight set to ${weight}`);
-    await loadDocuments();
+    loadDocuments();
     if (selectedDoc?.id === doc.id) {
       setSelectedDoc({ ...selectedDoc, weight });
     }
@@ -99,7 +91,7 @@ export default function DocumentsTab({ onRefresh }) {
     setSaving(false);
     if (!created) return;
     toast.success('Document created');
-    await loadDocuments();
+    loadDocuments();
     setShowCreate(false);
     setNewDoc({ filename: '', title: '', category: 'core', content: '' });
     onRefresh();
@@ -112,11 +104,11 @@ export default function DocumentsTab({ onRefresh }) {
       setSelectedDoc(null);
     }
     setDeleteConfirm(null);
-    await loadDocuments();
+    loadDocuments();
     onRefresh();
   };
 
-  if (loading) {
+  if (documentsState === 'loading') {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-gray-500">Loading documents...</div>
@@ -140,7 +132,11 @@ export default function DocumentsTab({ onRefresh }) {
         </div>
 
         <div className="flex-1 overflow-y-auto max-h-[50vh] lg:max-h-none">
-          {documents.length === 0 ? (
+          {documentsState === 'error' ? (
+            <div className="p-3">
+              <ListLoadError what="documents" error={documentsError} onRetry={loadDocuments} />
+            </div>
+          ) : documents.length === 0 ? (
             <div className="p-4 text-center text-gray-500">
               No documents yet
             </div>

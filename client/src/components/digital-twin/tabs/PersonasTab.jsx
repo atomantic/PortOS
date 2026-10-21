@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Drama, Plus, Pencil, Trash2, Check, X, CheckCircle2, SlidersHorizontal } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 import {
   describeTraitAdjustments,
   BIG_FIVE_LEAN,
@@ -51,15 +53,26 @@ function buildAdjustmentsPayload(adj) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+// Silent: a failed read renders <ListLoadError>, so a toast would double up.
+const fetchPersonas = () => api.getDigitalTwinPersonas({ silent: true });
+// The active pointer is one record or none; wrapped as a list so a failed read
+// stays distinct from "no persona is active" (toggling reads this to decide
+// between activating and deactivating).
+const fetchActivePersona = () => api.getActiveDigitalTwinPersona({ silent: true }).then(active => (active?.id ? [active] : []));
+
 /**
  * Twin Personas (M34 P7). Named context variants whose instructions are
  * prepended to the embodied-twin context. The active persona flavors the
  * context that CoS agents see; identity-building flows stay persona-free.
  */
 export default function PersonasTab({ onRefresh }) {
-  const [personas, setPersonas] = useState([]);
-  const [activeId, setActiveId] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const personasResource = useListResource(fetchPersonas);
+  const activeResource = useListResource(fetchActivePersona);
+  const { items: personas, setItems: setPersonas } = personasResource;
+  // `undefined` = follow the server's pointer; a local activate/deactivate/delete overrides it.
+  const [activeOverride, setActiveId] = useState(undefined);
+  const activeId = activeOverride !== undefined ? activeOverride : (activeResource.items[0]?.id ?? null);
+  const loading = personasResource.state === 'loading' || activeResource.state === 'loading';
   const [busy, setBusy] = useState(false);
 
   const [showCreate, setShowCreate] = useState(false);
@@ -69,21 +82,6 @@ export default function PersonasTab({ onRefresh }) {
   const [editForm, setEditForm] = useState(makeEmptyForm());
 
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
-    setLoading(true);
-    const [personaData, active] = await Promise.all([
-      api.getDigitalTwinPersonas({ silent: true }).catch(() => []),
-      api.getActiveDigitalTwinPersona({ silent: true }).catch(() => null)
-    ]);
-    setPersonas(personaData);
-    setActiveId(active?.id ?? null);
-    setLoading(false);
-  };
 
   const createPersona = async () => {
     if (!createForm.name.trim() || !createForm.instructions.trim()) {
@@ -161,6 +159,22 @@ export default function PersonasTab({ onRefresh }) {
     toast.success(next ? 'Persona activated' : 'Persona deactivated');
     onRefresh?.();
   };
+
+  // Both reads gate the tab: an empty default for either would show "No personas
+  // yet" for a failed list, or let a toggle activate an already-active persona.
+  const failed = [
+    { what: 'personas', resource: personasResource },
+    { what: 'the active persona', resource: activeResource },
+  ].filter(({ resource }) => resource.state === 'error');
+  if (failed.length > 0) {
+    return (
+      <div className="space-y-3">
+        {failed.map(({ what, resource }) => (
+          <ListLoadError key={what} what={what} error={resource.error} onRetry={resource.retry} />
+        ))}
+      </div>
+    );
+  }
 
   if (loading) {
     return (

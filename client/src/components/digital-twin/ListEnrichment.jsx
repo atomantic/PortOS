@@ -27,6 +27,8 @@ export default function ListEnrichment({
   onBack,
   onRefresh,
   providers,
+  providersError = null,
+  onRetryProviders,
   selectedProvider,
   setSelectedProvider
 }) {
@@ -266,13 +268,17 @@ export default function ListEnrichment({
       {/* Provider Selection & Analyze Button */}
       <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 mb-6">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-          <TwinProviderPicker
-            className="flex-1"
-            label="Analyze with"
-            providers={providers}
-            selected={selectedProvider}
-            onChange={setSelectedProvider}
-          />
+          {providersError ? (
+            <ListLoadError className="flex-1" what="AI providers" error={providersError} onRetry={onRetryProviders} />
+          ) : (
+            <TwinProviderPicker
+              className="flex-1"
+              label="Analyze with"
+              providers={providers}
+              selected={selectedProvider}
+              onChange={setSelectedProvider}
+            />
+          )}
 
           <button
             onClick={analyzeList}

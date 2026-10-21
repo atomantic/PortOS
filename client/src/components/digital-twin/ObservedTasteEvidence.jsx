@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Telescope, RefreshCw, Sparkles, Music, Tv, Clock, AlertTriangle, CheckCircle } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
+import useProviderList from '../../hooks/useProviderList';
 import BrailleSpinner from '../BrailleSpinner';
 import TwinProviderPicker from './TwinProviderPicker.jsx';
 import MarkdownOutput from '../cos/MarkdownOutput';
@@ -80,18 +82,19 @@ export default function ObservedTasteEvidence() {
   const [loading, setLoading] = useState(true);
   const [recomputing, setRecomputing] = useState(false);
   const [interpreting, setInterpreting] = useState(false);
-  const [providers, setProviders] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const providerList = useProviderList();
+  const providers = useMemo(() => providerList.items.filter((p) => p.enabled), [providerList.items]);
+  // Until the user picks one, default to the first enabled provider.
+  const [picked, setSelected] = useState(null);
+  const selected = picked
+    ?? (providers[0] ? { providerId: providers[0].id, model: providers[0].defaultModel || '' } : null);
 
   const load = useCallback(async () => {
-    const [ev, provData] = await Promise.all([
-      api.getTwinEvidence({ silent: true }).catch(() => null),
-      api.getProviders().catch(() => ({ providers: [] })),
-    ]);
+    setLoading(true);
+    setLoadError(null);
+    const ev = await api.getTwinEvidence({ silent: true }).catch((err) => { setLoadError(err); return null; });
     if (ev) setEvidence(ev);
-    const enabled = (provData.providers || []).filter((p) => p.enabled);
-    setProviders(enabled);
-    if (enabled.length > 0) setSelected({ providerId: enabled[0].id, model: enabled[0].defaultModel || '' });
     setLoading(false);
   }, []);
 
@@ -104,6 +107,7 @@ export default function ObservedTasteEvidence() {
     setRecomputing(false);
     if (!res) { toast('Recompute failed', { icon: '⚠️' }); return; }
     setEvidence(res.evidence);
+    setLoadError(null);
     toast('Observed evidence recomputed', { icon: '🧭' });
   };
 
@@ -161,7 +165,11 @@ export default function ObservedTasteEvidence() {
         </button>
       </div>
 
-      {!hasEvidence && (
+      {loadError && (
+        <ListLoadError what="observed evidence" error={loadError} onRetry={load} />
+      )}
+
+      {!hasEvidence && !loadError && (
         <div className="text-sm text-gray-400 bg-port-bg border border-port-border rounded-lg p-4">
           No observed evidence yet. Once you&apos;ve synced Spotify / YouTube history (or logged activity), hit
           {' '}<span className="text-gray-300">Recompute</span> to build your evidence profile.
@@ -230,7 +238,11 @@ export default function ObservedTasteEvidence() {
         <div className="border-t border-port-border pt-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-end gap-3">
             <div className="flex-1">
-              {providers.length === 0 ? (
+              {providerList.state === 'error' ? (
+                <ListLoadError what="AI providers" error={providerList.error} onRetry={providerList.retry} />
+              ) : providerList.state === 'loading' ? (
+                <BrailleSpinner text="Loading providers" />
+              ) : providers.length === 0 ? (
                 <>
                   <p className="block text-xs text-gray-500 mb-1">Interpret with AI provider</p>
                   <p className="text-xs text-gray-500">No AI provider configured — add one in AI Providers.</p>

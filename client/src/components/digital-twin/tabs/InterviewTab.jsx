@@ -11,11 +11,16 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import InterviewAnalysisCard from '../InterviewAnalysisCard';
 import { ENRICHMENT_CATEGORIES } from '../constants';
 import { formatCount } from '../../../utils/formatters';
+
+// Module-level so the identity is stable for useListResource.
+const fetchGaps = () => api.getDigitalTwinGaps({ silent: true }).then((data) => data?.gaps ?? []);
 
 export default function InterviewTab({ onRefresh }) {
   const navigate = useNavigate();
@@ -27,21 +32,18 @@ export default function InterviewTab({ onRefresh }) {
   const [content, setContent] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
-  const [gaps, setGaps] = useState([]);
+  const {
+    items: gaps, state: gapsState, error: gapsError, retry: retryGaps, setItems: setGaps
+  } = useListResource(fetchGaps);
   const [enrichProgress, setEnrichProgress] = useState(null);
 
-  const loadEnrichmentData = useCallback(async () => {
-    const [gapsData, progressData] = await Promise.all([
-      api.getDigitalTwinGaps().catch(() => ({ gaps: [] })),
-      api.getDigitalTwinEnrichProgress().catch(() => null)
-    ]);
-    setGaps(gapsData.gaps || []);
-    setEnrichProgress(progressData);
+  const loadProgress = useCallback(async () => {
+    setEnrichProgress(await api.getDigitalTwinEnrichProgress().catch(() => null));
   }, []);
 
   useEffect(() => {
-    loadEnrichmentData();
-  }, [loadEnrichmentData]);
+    loadProgress();
+  }, [loadProgress]);
 
   const handleAnalyze = async () => {
     if (!content.trim() || content.trim().length < 50) {
@@ -64,9 +66,10 @@ export default function InterviewTab({ onRefresh }) {
     } else {
       setAnalysisResult(result.analysisResult);
       if (result.gaps) setGaps(result.gaps);
+      else retryGaps();
       toast.success('Assessment analyzed successfully');
       onRefresh?.();
-      loadEnrichmentData();
+      loadProgress();
     }
     setAnalyzing(false);
   };
@@ -210,7 +213,11 @@ export default function InterviewTab({ onRefresh }) {
           </div>
         )}
 
-        {sortedGaps.length === 0 && (
+        {gapsState === 'error' && (
+          <ListLoadError what="enrichment gaps" error={gapsError} onRetry={retryGaps} />
+        )}
+
+        {gapsState === 'ready' && sortedGaps.length === 0 && (
           <div className="bg-port-card rounded-lg border border-port-border p-4 flex items-center gap-3">
             <AlertCircle size={18} className="text-gray-500" />
             <span className="text-sm text-gray-400">

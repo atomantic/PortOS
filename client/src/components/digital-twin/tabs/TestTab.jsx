@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {Play,
   CheckCircle,
   XCircle,
@@ -22,16 +22,32 @@ import ValuesAlignmentPanel from './ValuesAlignmentPanel';
 import AdversarialBoundaryPanel from './AdversarialBoundaryPanel';
 import MultiTurnPanel from './MultiTurnPanel';
 import PersonaBadge from '../PersonaBadge';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
+import useProviderList from '../../../hooks/useProviderList';
 import { TEST_STATUS } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
 const pairKey = (providerId, model) => `${providerId}:${model}`;
 
+// Silent: each read below renders its own <ListLoadError>, so a toast would double up.
+const fetchTests = () => api.getDigitalTwinTests({ silent: true });
+const fetchHistory = () => api.getDigitalTwinTestHistory(5, { silent: true });
+const fetchPersonas = () => api.getDigitalTwinPersonas({ silent: true });
+
 export default function TestTab({ onRefresh }) {
-  const [tests, setTests] = useState([]);
-  const [providers, setProviders] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Tests and providers gate the whole tab (nothing can run without them), so
+  // a failed read of either is a tab-level error; history and personas are
+  // optional sections with their own inline error row.
+  const testsResource = useListResource(fetchTests);
+  const providersResource = useProviderList();
+  const historyResource = useListResource(fetchHistory);
+  const personasResource = useListResource(fetchPersonas);
+  const { items: tests } = testsResource;
+  const { items: history } = historyResource;
+  const { items: personas } = personasResource;
+  const providers = useMemo(() => providersResource.items.filter(p => p.enabled), [providersResource.items]);
+  const loading = testsResource.state === 'loading' || providersResource.state === 'loading';
   const [running, setRunning] = useState(false);
   // The in-flight multi-model batch: { id, order: [pairKey…], received: Map<pairKey, entry> }.
   // null when nothing is running, so a late/duplicate/foreign frame is dropped.
@@ -41,7 +57,6 @@ export default function TestTab({ onRefresh }) {
   // Test configuration
   const [selectedProviders, setSelectedProviders] = useState([]);
   const [selectedTests, setSelectedTests] = useState([]);
-  const [personas, setPersonas] = useState([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState(''); // '' = base twin (no persona)
 
   // Results
@@ -57,8 +72,26 @@ export default function TestTab({ onRefresh }) {
   const [feedbackGiven, setFeedbackGiven] = useState({}); // key: `${providerId}:${model}:${testId}` → validation
   const [feedbackStats, setFeedbackStats] = useState(null);
 
+  // Default: select all tests once the suite is read.
   useEffect(() => {
-    loadData();
+    if (testsResource.state === 'ready') setSelectedTests(testsResource.items.map(t => t.testId));
+  }, [testsResource.state, testsResource.items]);
+
+  // Drop the persona selection if it no longer exists (e.g. deleted elsewhere).
+  // A falsy prev ('' = base twin) fails the .some() check and falls back to '',
+  // so no extra guard is needed. Only judged against a successful read: a
+  // failed or in-flight list must not clear the user's choice.
+  useEffect(() => {
+    if (personasResource.state !== 'ready') return;
+    setSelectedPersonaId(prev => (personasResource.items.some(p => p.id === prev) ? prev : ''));
+  }, [personasResource.state, personasResource.items]);
+
+  useEffect(() => {
+    let active = true;
+    api.getBehavioralFeedbackStats().catch(() => null).then(fbStats => {
+      if (active && fbStats) setFeedbackStats(fbStats);
+    });
+    return () => { active = false; };
   }, []);
 
   // Merge each provider/model result into the visible set as the server reports
@@ -81,33 +114,6 @@ export default function TestTab({ onRefresh }) {
       activeBatchRef.current = null;
     };
   }, []);
-
-  const loadData = async () => {
-    setLoading(true);
-    const [testsData, providersData, historyData, fbStats, personaData] = await Promise.all([
-      api.getDigitalTwinTests().catch(() => []),
-      api.getProviders().catch(() => ({ providers: [] })),
-      api.getDigitalTwinTestHistory(5).catch(() => []),
-      api.getBehavioralFeedbackStats().catch(() => null),
-      api.getDigitalTwinPersonas({ silent: true }).catch(() => [])
-    ]);
-
-    setTests(testsData);
-    const providersList = providersData.providers || [];
-    setProviders(providersList.filter(p => p.enabled));
-    setHistory(historyData);
-    if (fbStats) setFeedbackStats(fbStats);
-    setPersonas(Array.isArray(personaData) ? personaData : []);
-    // Drop the persona selection if it no longer exists (e.g. deleted elsewhere).
-    // A falsy prev ('' = base twin) fails the .some() check and falls back to '',
-    // so no extra guard is needed.
-    setSelectedPersonaId(prev => ((personaData || []).some(p => p.id === prev) ? prev : ''));
-
-    // Default: select all tests
-    setSelectedTests(testsData.map(t => t.testId));
-
-    setLoading(false);
-  };
 
   const submitFeedback = async (providerId, model, testId, testName, response, validation) => {
     const key = `${providerId}:${model}:${testId}`;
@@ -146,7 +152,7 @@ export default function TestTab({ onRefresh }) {
   // catch and the values-alignment panel via the onPersonaNotFound callback.
   const handlePersonaNotFound = () => {
     setSelectedPersonaId('');
-    loadData();
+    personasResource.retry();
   };
 
   const toggleTest = (testId) => {
@@ -192,7 +198,7 @@ export default function TestTab({ onRefresh }) {
         setResults(multiResults);
       }
 
-      await loadData();
+      historyResource.retry();
       toast.success('Tests completed');
       onRefresh();
     } catch (err) {
@@ -250,6 +256,20 @@ export default function TestTab({ onRefresh }) {
     return (
       <div className="flex items-center justify-center h-64">
         <BrailleSpinner text="Loading" />
+      </div>
+    );
+  }
+
+  const requiredFailures = [
+    { what: 'the behavioral test suite', resource: testsResource },
+    { what: 'AI providers', resource: providersResource },
+  ].filter(({ resource }) => resource.state === 'error');
+  if (requiredFailures.length > 0) {
+    return (
+      <div className="space-y-3">
+        {requiredFailures.map(({ what, resource }) => (
+          <ListLoadError key={what} what={what} error={resource.error} onRetry={resource.retry} />
+        ))}
       </div>
     );
   }
@@ -343,6 +363,9 @@ export default function TestTab({ onRefresh }) {
       </div>
 
       {/* Persona selector — run the suite as a named persona (P7) or the base twin */}
+      {personasResource.state === 'error' && (
+        <ListLoadError what="personas" error={personasResource.error} onRetry={personasResource.retry} />
+      )}
       {personas.length > 0 && (
         <div className="bg-port-card rounded-lg border border-port-border p-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
           <label htmlFor="test-persona" className="text-sm font-medium text-gray-400">
@@ -653,6 +676,9 @@ export default function TestTab({ onRefresh }) {
       )}
 
       {/* History */}
+      {historyResource.state === 'error' && (
+        <ListLoadError what="recent test runs" error={historyResource.error} onRetry={historyResource.retry} />
+      )}
       {history.length > 0 && (
         <div className="bg-port-card rounded-lg border border-port-border p-4">
           <h3 className="font-semibold text-white mb-4 flex items-center gap-2">

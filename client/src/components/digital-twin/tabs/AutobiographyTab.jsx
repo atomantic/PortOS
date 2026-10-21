@@ -25,6 +25,8 @@ import * as api from '../../../services/api';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { countWords } from '../../../lib/textUtils';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { formatCount, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
 import { isValidTimeString } from '../../../utils/timeWindow';
@@ -37,13 +39,19 @@ const DEFAULT_REMINDER_TIME = '09:00';
 // story written against the user's own question is saved under.
 const CUSTOM_PROMPT_ID = 'custom';
 
+const fetchThemes = () => api.getAutobiographyThemes({ silent: true });
+// Suggestions come from the prompt bank and what's already been written —
+// never from the theme filter.
+const fetchSuggestions = () => api.getAutobiographySuggestions({ silent: true });
+
 export default function AutobiographyTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [stats, setStats] = useState(null);
-  const [stories, setStories] = useState([]);
-  const [themes, setThemes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterTheme, setFilterTheme] = useState(null);
+  const fetchStories = useCallback(() => api.getAutobiographyStories(filterTheme, { silent: true }), [filterTheme]);
+  const { items: stories, setItems: setStories, state: storiesState, error: storiesError, retry: retryStories } = useListResource(fetchStories);
+  const { items: themes, state: themesState, error: themesError, retry: retryThemes } = useListResource(fetchThemes);
 
   // Writing state
   const [currentPrompt, setCurrentPrompt] = useState(null);
@@ -52,7 +60,7 @@ export default function AutobiographyTab({ onRefresh }) {
   const [saving, setSaving] = useState(false);
 
   // Story ideas — the same menu the daily prompt notification offers
-  const [suggestions, setSuggestions] = useState([]);
+  const { items: suggestions, state: suggestionsState, error: suggestionsError, retry: refreshSuggestions } = useListResource(fetchSuggestions);
   const [ownQuestion, setOwnQuestion] = useState('');
 
   // Storytelling-craft evaluation, keyed by story id while it runs
@@ -81,36 +89,26 @@ export default function AutobiographyTab({ onRefresh }) {
 
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
-  const loadData = useCallback(async () => {
-    const [statsData, storiesData, themesData, configData] = await Promise.all([
+  // Stats and config are single objects, not lists: a failed read stays `null`
+  // (absent), which hides their panels rather than rendering a wrong value.
+  const refreshStats = useCallback(async () => {
+    setStats(await api.getAutobiographyStats().catch(() => null));
+  }, []);
+
+  const loadMeta = useCallback(async () => {
+    const [statsData, configData] = await Promise.all([
       api.getAutobiographyStats().catch(() => null),
-      api.getAutobiographyStories(filterTheme).catch(() => []),
-      api.getAutobiographyThemes().catch(() => []),
       api.getAutobiographyConfig().catch(() => null)
     ]);
     setStats(statsData);
-    setStories(storiesData);
-    setThemes(themesData);
     setConfig(configData);
     setReminderTimeDraft(configData?.reminder?.time || DEFAULT_REMINDER_TIME);
     setLoading(false);
-  }, [filterTheme]);
-
-  // Suggestions come from the prompt bank and what's already been written —
-  // never from the theme filter, so this stays out of `loadData` and its
-  // filterTheme dependency. It refreshes on mount and after a save, which is
-  // exactly when the set can actually change.
-  const refreshSuggestions = useCallback(async () => {
-    setSuggestions(await api.getAutobiographySuggestions({ silent: true }).catch(() => []));
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  useEffect(() => {
-    refreshSuggestions();
-  }, [refreshSuggestions]);
+    loadMeta();
+  }, [loadMeta]);
 
   // Auto-load prompt from URL param (when arriving from notification)
   useEffect(() => {
@@ -196,7 +194,9 @@ export default function AutobiographyTab({ onRefresh }) {
       // Show follow-ups from the saved story if it already has them, otherwise offer to generate
       setFollowUps({ storyId: result.id, prompts: result.followUpPrompts || null });
       setExpandedStory(result.id);
-      loadData();
+      // Newest first, and only when the story belongs under the active theme filter.
+      if (!filterTheme || result.themeId === filterTheme) setStories(prev => [result, ...prev]);
+      refreshStats();
       // The prompt just used drops out of the bank, so the menu changes here.
       refreshSuggestions();
       onRefresh?.();
@@ -264,7 +264,8 @@ export default function AutobiographyTab({ onRefresh }) {
       toast.success('Story updated');
       setEditingStory(null);
       setEditContent('');
-      loadData();
+      setStories(prev => prev.map(s => (s.id === storyId ? { ...s, ...result } : s)));
+      refreshStats();
     }
   };
 
@@ -273,7 +274,8 @@ export default function AutobiographyTab({ onRefresh }) {
       .catch((err) => { toast.error(err.message); return null; });
     if (result) {
       toast.success('Story deleted');
-      loadData();
+      setStories(prev => prev.filter(s => s.id !== storyId));
+      refreshStats();
     }
   };
 
@@ -425,6 +427,9 @@ export default function AutobiographyTab({ onRefresh }) {
             <span className="text-sm font-medium text-white">Story ideas</span>
             <span className="text-xs text-gray-500">Every story answers a question</span>
           </div>
+          {suggestionsState === 'error' && (
+            <ListLoadError what="story ideas" error={suggestionsError} onRetry={refreshSuggestions} />
+          )}
           {suggestions.length > 0 && (
             <div className="space-y-2">
               {suggestions.map((prompt) => (
@@ -596,7 +601,10 @@ export default function AutobiographyTab({ onRefresh }) {
       )}
 
       {/* Theme Filter */}
-      {stories.length > 0 && (
+      {themesState === 'error' && (
+        <ListLoadError what="story themes" error={themesError} onRetry={retryThemes} />
+      )}
+      {(stories.length > 0 || filterTheme) && (
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setFilterTheme(null)}
@@ -626,7 +634,15 @@ export default function AutobiographyTab({ onRefresh }) {
       )}
 
       {/* Stories List */}
-      {stories.length === 0 && !writing && (
+      {storiesState === 'loading' && (
+        <div className="flex items-center justify-center py-8">
+          <BrailleSpinner text="Loading stories" />
+        </div>
+      )}
+      {storiesState === 'error' && (
+        <ListLoadError what="stories" error={storiesError} onRetry={retryStories} />
+      )}
+      {storiesState === 'ready' && stories.length === 0 && !writing && (
         <div className="text-center py-12 text-gray-500">
           <BookOpen className="w-12 h-12 mx-auto mb-3 opacity-50" />
           <p className="text-lg">No stories yet</p>

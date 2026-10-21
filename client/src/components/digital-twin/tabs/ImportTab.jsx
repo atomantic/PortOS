@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Upload,
   BookOpen,
@@ -20,6 +20,9 @@ import TwinProviderPicker from '../TwinProviderPicker.jsx';
 import { formatBytes } from '../../../utils/formatters';
 import FilePickerButton from '../../ui/FilePickerButton';
 import { pluralize } from '../../../lib/textUtils';
+import ListLoadError from '../../ui/ListLoadError';
+import useListResource from '../../../hooks/useListResource';
+import useProviderList from '../../../hooks/useProviderList';
 
 const SOURCE_ICONS = {
   goodreads: BookOpen,
@@ -35,9 +38,12 @@ const SOURCE_COLORS = {
   ical: 'text-blue-400 bg-blue-500/20'
 };
 
+const fetchSources = () => api.getDigitalTwinImportSources({ silent: true }).then((data) => data?.sources ?? []);
+
 export default function ImportTab() {
-  const [sources, setSources] = useState([]);
-  const [providers, setProviders] = useState([]);
+  const { items: sources, state: sourcesState, error: sourcesError, retry: retrySources } = useListResource(fetchSources);
+  const { items: allProviders, state: providersState, error: providersError, retry: retryProviders } = useProviderList();
+  const providers = useMemo(() => allProviders.filter(p => p.enabled), [allProviders]);
   const [selectedSource, setSelectedSource] = useState(null);
   const [selectedProvider, setSelectedProvider] = useState(null);
   const [fileContent, setFileContent] = useState('');
@@ -49,23 +55,9 @@ export default function ImportTab() {
   const [importingSpotifyBrowser, setImportingSpotifyBrowser] = useState(false);
 
   useEffect(() => {
-    loadSources();
-    loadProviders();
-  }, []);
-
-  const loadSources = async () => {
-    const data = await api.getDigitalTwinImportSources().catch(() => ({ sources: [] }));
-    setSources(data.sources || []);
-  };
-
-  const loadProviders = async () => {
-    const data = await api.getProviders().catch(() => ({ providers: [] }));
-    const enabled = (data.providers || []).filter(p => p.enabled);
-    setProviders(enabled);
-    if (enabled.length > 0) {
-      setSelectedProvider({ providerId: enabled[0].id, model: enabled[0].defaultModel });
-    }
-  };
+    if (providersState !== 'ready' || providers.length === 0) return;
+    setSelectedProvider((prev) => prev ?? { providerId: providers[0].id, model: providers[0].defaultModel });
+  }, [providersState, providers]);
 
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
@@ -192,7 +184,10 @@ export default function ImportTab() {
       </div>
 
       {/* Source Selection */}
-      {!selectedSource && (
+      {!selectedSource && sourcesState === 'error' && (
+        <ListLoadError what="import sources" error={sourcesError} onRetry={retrySources} />
+      )}
+      {!selectedSource && sourcesState !== 'error' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {sources.map(source => {
             const Icon = SOURCE_ICONS[source.id] || FileText;
@@ -336,13 +331,17 @@ export default function ImportTab() {
           </div>
 
           {/* Provider Selection */}
-          <TwinProviderPicker
-            className="mb-6"
-            label="Analysis Provider"
-            providers={providers}
-            selected={selectedProvider}
-            onChange={setSelectedProvider}
-          />
+          {providersState === 'error' ? (
+            <ListLoadError className="mb-6" what="AI providers" error={providersError} onRetry={retryProviders} />
+          ) : (
+            <TwinProviderPicker
+              className="mb-6"
+              label="Analysis Provider"
+              providers={providers}
+              selected={selectedProvider}
+              onChange={setSelectedProvider}
+            />
+          )}
 
           {/* Analyze Button */}
           <button
