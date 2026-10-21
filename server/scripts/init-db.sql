@@ -698,6 +698,7 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
   role VARCHAR(64),                            -- optional free label (e.g. 'hero-shot', 'angry')
   caption TEXT,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb, -- bounded generation provenance when present
+  library JSONB NOT NULL DEFAULT '{}'::jsonb,  -- Casting reference library: variant/tags/guide
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so detaches propagate to peers
   deleted_at TIMESTAMPTZ,
@@ -877,7 +878,8 @@ BEGIN
      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
      OR NEW.role IS DISTINCT FROM OLD.role
      OR NEW.caption IS DISTINCT FROM OLD.caption
-     OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
+     OR NEW.metadata IS DISTINCT FROM OLD.metadata
+     OR NEW.library IS DISTINCT FROM OLD.library THEN
     IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
       NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
     END IF;

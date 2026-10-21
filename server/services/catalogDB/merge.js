@@ -155,10 +155,10 @@ export async function mergeIngredients(input) {
         caption: `Preserved from ${row.name}`, metadata: {}, created_at: row.created_at });
     }
     for (const row of mediaCopies.values()) {
-      await client.query(`INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption, metadata, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+      await client.query(`INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption, metadata, created_at, library)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb)
         ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE SET deleted = false, deleted_at = NULL`,
-      [survivorId, row.media_key, row.kind, row.role, row.caption, JSON.stringify(row.metadata), row.created_at]);
+      [survivorId, row.media_key, row.kind, row.role, row.caption, JSON.stringify(row.metadata), row.created_at, JSON.stringify(row.library || {})]);
     }
     await client.query(`INSERT INTO catalog_ingredient_relations (from_id, to_id, kind, created_at)
       SELECT CASE WHEN from_id = $1 THEN $2 ELSE from_id END,

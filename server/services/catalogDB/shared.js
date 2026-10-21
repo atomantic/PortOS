@@ -171,6 +171,7 @@ export function rowToMedia(row) {
     role: row.role ?? null,
     caption: row.caption ?? null,
     metadata: row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {},
+    library: row.library && typeof row.library === 'object' && !Array.isArray(row.library) ? row.library : {},
     createdAt: row.created_at.toISOString(),
     deleted: !!row.deleted,
     deletedAt: row.deleted_at?.toISOString() ?? null,

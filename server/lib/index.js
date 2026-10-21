@@ -39,6 +39,7 @@ export * from './brainThreads.js';
 export * from './humanActions.js';
 export * as catalogIdentityValidation from './catalogIdentityValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as catalogMediaLibrary from './catalogMediaLibrary.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';
 export * as characterEvolutionValidation from './characterEvolutionValidation.js';
 export * as cosValidation from './cosValidation.js';

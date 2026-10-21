@@ -321,6 +321,16 @@ export const catalogDdl = [
     `ALTER TABLE catalog_ingredient_media ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
     `UPDATE catalog_ingredient_media SET updated_at = COALESCE(deleted_at, created_at) WHERE updated_at IS NULL`,
     `ALTER TABLE catalog_ingredient_media ALTER COLUMN updated_at SET DEFAULT NOW()`,
+    // Casting reference library (variant/tags/guide). Added nullable so the
+    // one-time seed below can tell pre-existing rows (NULL) from rows a user
+    // already edited; once backfilled to '{}' the seed is a no-op forever.
+    `ALTER TABLE catalog_ingredient_media ADD COLUMN IF NOT EXISTS library JSONB`,
+    `UPDATE catalog_ingredient_media SET library = '{"guide": true}'::jsonb WHERE library IS NULL AND kind = 'portrait' AND deleted = false`,
+    `UPDATE catalog_ingredient_media SET library = jsonb_build_object('variant', jsonb_build_object('wardrobeId', left(substring(role from 6), 59), 'label', left(role, 120))) WHERE library IS NULL AND role LIKE 'look:_%'`,
+    `UPDATE catalog_ingredient_media SET library = jsonb_build_object('variant', jsonb_build_object('label', left(role, 120))) WHERE library IS NULL AND kind = 'reference' AND role ILIKE '%sheet%'`,
+    `UPDATE catalog_ingredient_media SET library = '{}'::jsonb WHERE library IS NULL`,
+    `ALTER TABLE catalog_ingredient_media ALTER COLUMN library SET DEFAULT '{}'::jsonb`,
+    `ALTER TABLE catalog_ingredient_media ALTER COLUMN library SET NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_ingredient ON catalog_ingredient_media (ingredient_id)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_key ON catalog_ingredient_media (media_key)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_sync_seq ON catalog_ingredient_media (sync_sequence)`,
@@ -477,7 +487,8 @@ export const catalogDdl = [
           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
           OR NEW.role IS DISTINCT FROM OLD.role
           OR NEW.caption IS DISTINCT FROM OLD.caption
-          OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
+          OR NEW.metadata IS DISTINCT FROM OLD.metadata
+          OR NEW.library IS DISTINCT FROM OLD.library THEN
          IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
            NEW.updated_at := catalog_next_change_clock(OLD.updated_at);
          END IF;

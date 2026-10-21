@@ -19,6 +19,9 @@ import {
   catalogIngredientLinkSchema,
   catalogRelationLinkSchema,
   catalogMediaAttachSchema,
+  catalogMediaLibraryPatchSchema,
+  catalogMediaFromMoodBoardSchema,
+  catalogMediaLibraryQuerySchema,
   catalogMediaDetachSchema,
   catalogMediaFileUploadSchema,
   catalogMediaVoiceMemoSchema,
@@ -54,6 +57,8 @@ import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/em
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
+import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
+import { filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
@@ -537,7 +542,61 @@ const IMAGE_MEDIA_KINDS = new Set(['portrait', 'reference']);
 router.get('/ingredients/:id/media', asyncHandler(async (req, res) => {
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  res.json(await catalogDB.listMediaForIngredient(req.params.id));
+  const filters = validateRequest(catalogMediaLibraryQuerySchema, req.query);
+  const media = await catalogDB.listMediaForIngredient(req.params.id);
+  // No filter = the unchanged full list; any filter narrows by the Casting library fields.
+  res.json(Object.keys(filters).length ? filterLibraryMedia(media, { ...filters, guide: filters.guide === 'true' ? true : undefined }) : media);
+}));
+
+// Casting reference library: the up-to-4 images a render of this cast member
+// should condition on for the requested variant (?age=&era=&wardrobeId=).
+router.get('/ingredients/:id/media/guides', asyncHandler(async (req, res) => {
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  const want = validateRequest(catalogMediaLibraryQuerySchema, req.query);
+  res.json({ guides: pickGuideMedia(await catalogDB.listMediaForIngredient(req.params.id), want) });
+}));
+
+// Edit a media row's Casting library fields (variant/tags/guide). 409 past 4 guides.
+router.patch('/ingredients/:id/media/library', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogMediaLibraryPatchSchema, req.body);
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  const { mediaKey, kind, ...patch } = body;
+  const media = await catalogDB.updateMediaLibrary(req.params.id, mediaKey, kind, patch).catch((err) => {
+    if (err?.status) throw new ServerError(err.message, { status: err.status });
+    throw err;
+  });
+  res.json(media);
+}));
+
+// Attach mood-board items (image:/video: keys) as references in one call,
+// tagging each with the given variant/tags (or an age read from its caption).
+router.post('/ingredients/:id/media/from-mood-board', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogMediaFromMoodBoardSchema, req.body);
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  const board = await getMoodBoard(body.boardId);
+  if (!board) throw new ServerError('Mood board not found', { status: 404 });
+  const items = new Map((board.items || []).map((item) => [item.id, item]));
+  const attached = [];
+  const skipped = [];
+  for (const itemId of body.itemIds) {
+    const item = items.get(itemId);
+    const parsed = parseLibraryMediaKey(item?.mediaKey);
+    if (!parsed || (parsed.kind === 'reference' && !resolveImageInputPath(parsed.mediaKey))) { skipped.push(itemId); continue; }
+    const caption = typeof item.caption === 'string' ? item.caption.slice(0, 2000) : null;
+    const metadata = parsed.kind === 'reference' ? await readImageGenerationMetadata(parsed.mediaKey) : {};
+    await catalogDB.attachMedia(req.params.id, parsed.mediaKey, parsed.kind, {
+      role: null, caption,
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    });
+    const age = body.variant?.age ?? (body.inferAge ? inferAgeFromText(caption) : undefined);
+    const variant = { ...(body.variant || {}), ...(age !== undefined ? { age } : {}) };
+    const patch = { ...(Object.keys(variant).length ? { variant } : {}), ...(body.tags ? { tags: body.tags } : {}) };
+    attached.push(Object.keys(patch).length ? await catalogDB.updateMediaLibrary(req.params.id, parsed.mediaKey, parsed.kind, patch) : { mediaKey: parsed.mediaKey, kind: parsed.kind });
+  }
+  res.status(201).json({ attached, skipped });
 }));
 
 // Integrity surface: media keys on this ingredient that don't resolve against

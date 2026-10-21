@@ -11,6 +11,7 @@
 import { query, withTransaction } from '../../lib/db.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { rowToMedia } from './shared.js';
+import { MAX_CAST_GUIDES, normalizeLibrary } from '../../lib/catalogMediaLibrary.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } from './identityAccess.js';
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
@@ -132,4 +133,51 @@ export async function getMissingMediaForIngredient(ingredientId) {
   return rows
     .filter((m) => RESOLVABLE_MEDIA_KINDS.has(m.kind) && !resolveImageInputPath(m.mediaKey))
     .map((m) => ({ mediaKey: m.mediaKey, kind: m.kind }));
+}
+
+// Casting reference library: merge a variant/tags/guide patch into one live
+// media row. Turning a guide ON is serialized on the owning ingredient row and
+// refused (409) past MAX_CAST_GUIDES so the render picker's cap holds.
+export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {}) {
+  ingredientId = await assertCatalogIdentityWritable(ingredientId);
+  return withTransaction(async (client) => {
+    await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
+    const cur = await client.query(
+      `SELECT * FROM catalog_ingredient_media
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind = $3 AND deleted = false`,
+      [ingredientId, mediaKey, kind],
+    );
+    const row = cur.rows[0];
+    if (!row) {
+      const err = new Error('Media not attached to this ingredient');
+      err.status = 404;
+      throw err;
+    }
+    const prev = normalizeLibrary(row.library);
+    const next = normalizeLibrary({
+      ...prev,
+      ...(hasOwn(patch, 'variant') ? { variant: patch.variant } : {}),
+      ...(hasOwn(patch, 'tags') ? { tags: patch.tags } : {}),
+      ...(hasOwn(patch, 'guide') ? { guide: patch.guide } : {}),
+    });
+    if (next.guide === true && prev.guide !== true) {
+      const count = await client.query(
+        `SELECT COUNT(*)::int AS n FROM catalog_ingredient_media
+          WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND deleted = false AND library->>'guide' = 'true'`,
+        [ingredientId],
+      );
+      if (count.rows[0].n >= MAX_CAST_GUIDES) {
+        const err = new Error(`At most ${MAX_CAST_GUIDES} references can be render guides`);
+        err.status = 409;
+        throw err;
+      }
+    }
+    const result = await client.query(
+      `UPDATE catalog_ingredient_media SET library = $4::jsonb
+        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind = $3 AND deleted = false
+        RETURNING *`,
+      [ingredientId, mediaKey, kind, JSON.stringify(next)],
+    );
+    return rowToMedia(result.rows[0]);
+  });
 }
