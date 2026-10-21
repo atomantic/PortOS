@@ -1166,6 +1166,196 @@ class NativeArchive(unittest.TestCase):
                              'only in index')
             self.assertNotEqual(self.git(tree, 'rev-parse', recovery_ref), self.git(tree, 'rev-parse', 'HEAD'))
 
+    def test_quarantine_recovery_preserves_unrelated_tracking_creation_and_cleanup(self):
+        cache = self.repo / '.git/rr-cache'
+        conflict = cache / ('a' * 40)
+        conflict.mkdir(parents=True)
+        (conflict / 'preimage').write_text('old conflict\n')
+        (conflict / 'postimage').write_text('old resolution\n')
+        self.git(self.repo, 'branch', 'other/finished')
+        self.git(self.repo, 'config', 'branch.other/finished.remote', 'origin')
+        self.git(self.repo, 'config', '--add', 'branch.other/finished.merge', 'refs/heads/other/finished')
+        self.git(self.repo, 'config', '--add', 'branch.other/finished.merge', 'refs/heads/other/second')
+        self.git(self.repo, 'update-server-info')
+        request = self.quarantine_resumption_fixture()
+        archived = self.txn / 'archive/common/config'
+        archived_bytes = archived.read_bytes()
+        self.git(self.repo, 'branch', '-D', 'other/finished')
+        active_head = self.git(self.repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD',
+                               '-m', 'new unrelated work')
+        self.git(self.repo, 'update-ref', 'refs/heads/other/active', active_head)
+        self.git(self.repo, 'config', 'branch.other/active.remote', 'origin')
+        self.git(self.repo, 'config', 'branch.other/active.merge', 'refs/heads/other/active')
+        self.git(self.repo, 'update-server-info')
+        current_info = archive.manifest(self.repo / '.git/info', True)
+        (conflict / 'thisimage').write_text('concurrent conflict\n')
+        (conflict / 'postimage').write_text('new resolution\n')
+        (conflict / 'preimage').unlink()
+        current_cache = archive.manifest(cache, True)
+        current = archive.manifest(self.repo / '.git/config', True)
+        # This is a real atomic Git config rewrite, not a mocked metadata delta.
+        self.assertNotEqual(archived_bytes, (self.repo / '.git/config').read_bytes())
+        rollback = archive.review_metadata_recovery(self.request)['metadataRecovery']
+        self.assertTrue(archive.verify({
+            **self.request, 'mode': 'restore', 'metadataRecovery': rollback})['verified'])
+        self.assertTrue(archive.verify_quarantine_resumption(request)['verified'])
+        self.assertTrue(archive.resume_quarantine(request)['moved'])
+        self.assertTrue(archive.verify_completed_quarantine(request)['verified'])
+        self.assertEqual(archive.manifest(self.repo / '.git/config', True), current)
+        self.assertEqual(archive.manifest(self.repo / '.git/info', True), current_info)
+        self.assertEqual(archive.manifest(cache, True), current_cache)
+        archived_cache = self.txn / 'archive/common/rr-cache' / ('a' * 40)
+        self.assertEqual((archived_cache / 'preimage').read_text(), 'old conflict\n')
+        self.assertEqual((archived_cache / 'postimage').read_text(), 'old resolution\n')
+        self.assertEqual(self.git(self.repo, 'rev-parse', 'refs/heads/other/active'), active_head)
+        self.assertEqual(archived.read_bytes(), archived_bytes)
+        self.assertTrue(archive.verify({**self.request, 'mode': 'standalone'})['standalone'])
+        _, saved = archive.load_transaction(request)
+        # Ordinary preservation still demands exact common metadata.
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed'):
+            archive.verify_common_metadata(saved, set(), self.txn)
+
+    def test_generated_ref_advertisement_keeps_controls_security_and_archive_strict(self):
+        self.git(self.repo, 'update-server-info')
+        request = self.quarantine_resumption_fixture()
+        info = self.repo / '.git/info'
+        self.git(self.repo, 'branch', 'other/advertised')
+        self.git(self.repo, 'update-server-info')
+        self.assertTrue(archive.verify_quarantine_resumption(request)['verified'])
+        control = info / 'exclude'
+        original, stamp = control.read_bytes(), control.stat()
+        control.write_bytes(original + b'new-policy\n')
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed:info'):
+            archive.verify_quarantine_resumption(request)
+        control.write_bytes(original)
+        os.utime(control, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        mode = info.stat().st_mode & 0o777
+        os.chmod(info, mode ^ 0o040)
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed:info'):
+            archive.verify_quarantine_resumption(request)
+        os.chmod(info, mode)
+        advertisement = info / 'refs'
+        subprocess.run(['/usr/bin/xattr', '-w', 'com.portos.fixture', 'unknown metadata', str(advertisement)], check=True)
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed:info'):
+            archive.verify_quarantine_resumption(request)
+        subprocess.run(['/usr/bin/xattr', '-d', 'com.portos.fixture', str(advertisement)], check=True)
+        retained = self.scratch / 'retained-advertisement'
+        advertisement.rename(retained)
+        advertisement.symlink_to(retained)
+        with self.assertRaisesRegex(RuntimeError, 'git-administration-symlink'):
+            archive.verify_quarantine_resumption(request)
+        advertisement.unlink()
+        retained.rename(advertisement)
+        self.assertTrue(archive.verify_quarantine_resumption(request)['verified'])
+        (self.txn / 'archive/common/info/refs').write_text('tampered\n')
+        with self.assertRaisesRegex(RuntimeError, 'common-archive-changed:info'):
+            archive.verify_quarantine_resumption(request)
+
+    def test_shared_resolution_cache_recovery_keeps_archive_root_and_structure_strict(self):
+        cache = self.repo / '.git/rr-cache'
+        conflict = cache / ('a' * 40)
+        conflict.mkdir(parents=True)
+        (conflict / 'preimage').write_text('original\n')
+        request = self.quarantine_resumption_fixture()
+        (conflict / 'thisimage').write_text('concurrent\n')
+        _, saved = archive.load_transaction(request)
+        with self.assertRaisesRegex(RuntimeError, 'common-store-changed:rr-cache'):
+            archive.verify_common_metadata(saved, set(), self.txn)
+        mode = cache.stat().st_mode & 0o777
+        os.chmod(cache, mode ^ 0o040)
+        with self.assertRaisesRegex(RuntimeError, 'shared-resolution-cache-root-changed'):
+            archive.verify_quarantine_resumption(request)
+        os.chmod(cache, mode)
+        retained = self.scratch / 'retained-cache'
+        cache.rename(retained)
+        cache.mkdir()
+        with self.assertRaisesRegex(RuntimeError, 'shared-resolution-cache-root-changed'):
+            archive.verify_quarantine_resumption(request)
+        cache.rmdir()
+        retained.rename(cache)
+        unsafe = conflict / 'unsafe'
+        unsafe.symlink_to(self.scratch)
+        with self.assertRaisesRegex(RuntimeError, 'git-administration-symlink'):
+            archive.verify_quarantine_resumption(request)
+        unsafe.unlink()
+        os.mkfifo(unsafe)
+        with self.assertRaisesRegex(RuntimeError, 'special-git-file-unsupported'):
+            archive.verify_quarantine_resumption(request)
+        unsafe.unlink()
+        self.assertTrue(archive.verify_quarantine_resumption(request)['verified'])
+        archived = self.txn / 'archive/common/rr-cache' / ('a' * 40) / 'preimage'
+        archived.write_text('tampered\n')
+        with self.assertRaisesRegex(RuntimeError, 'common-archive-changed:rr-cache'):
+            archive.verify_quarantine_resumption(request)
+
+    def test_shared_tracking_exception_rejects_target_global_additions_live_refs_metadata_and_races(self):
+        self.git(self.repo, 'branch', 'other/finished')
+        for name in ('other/finished', 'feature/fixture'):
+            self.git(self.repo, 'config', 'branch.' + name + '.remote', 'origin')
+            self.git(self.repo, 'config', 'branch.' + name + '.merge', 'refs/heads/' + name)
+        self.preserve()
+        _, saved = archive.load_transaction(self.request)
+        common = self.repo / '.git'
+        expected = saved['facts']['sources']['common']['config']
+        self.git(self.repo, 'branch', '-D', 'other/finished')
+        valid = (common / 'config').read_bytes()
+        mode = (common / 'config').stat().st_mode & 0o777
+        def check():
+            return archive.unrelated_tracking_changes(
+                self.txn, saved, common, expected, archive.manifest(common / 'config', True))
+        self.assertTrue(check())
+        for label, arguments in (
+            ('target removed', ('--remove-section', 'branch.feature/fixture')),
+            ('global changed', ('core.fsmonitor', 'changed')),
+            ('added tracking', ('branch.new-work.remote', 'origin')),
+            ('partly removed stanza', ('branch.other/finished.remote', 'origin')),
+            ('duplicate changed', ('--add', 'branch.feature/fixture.merge', 'refs/heads/other')),
+        ):
+            with self.subTest(change=label):
+                (common / 'config').write_bytes(valid)
+                self.git(self.repo, 'config', *arguments)
+                self.assertFalse(check())
+        (common / 'config').write_bytes(valid)
+        self.git(self.repo, 'config', 'branch.new-work.remote', 'origin')
+        self.git(self.repo, 'config', 'branch.new-work.merge', 'refs/heads/new-work')
+        self.assertFalse(check())  # A complete stanza without its branch is held.
+        added_ref = common / 'refs/heads/new-work'
+        for contents in ('not-an-object\n', 'ref: refs/heads/missing-target\n',
+                         'ref: refs/heads/feature/fixture\n'):
+            with self.subTest(unknownAddedRef=contents):
+                added_ref.write_text(contents)
+                self.assertFalse(check())
+                added_ref.unlink()
+        (common / 'config').write_bytes(valid)
+        loose = common / 'refs/heads/other/finished'
+        loose.parent.mkdir(parents=True, exist_ok=True)
+        for contents in ('not-an-object\n', 'ref: refs/heads/missing-target\n'):
+            with self.subTest(unknownRef=contents):
+                loose.write_text(contents)
+                self.assertFalse(check())
+                loose.unlink()
+        self.git(self.repo, 'branch', 'other/finished')
+        self.assertFalse(check())
+        self.git(self.repo, 'branch', '-D', 'other/finished')
+        (common / 'config').write_bytes(valid)
+        os.chmod(common / 'config', mode ^ 0o040)
+        self.assertFalse(check())
+        os.chmod(common / 'config', mode)
+        original_git = archive.git
+        def change_during_parse(admin, work, *arguments, **kwargs):
+            result = original_git(admin, work, *arguments, **kwargs)
+            if arguments[:1] == ('config',) and str(common / 'config') in arguments:
+                self.git(self.repo, 'config', 'core.editor', 'concurrent')
+            return result
+        with patch.object(archive, 'git', change_during_parse):
+            with self.assertRaisesRegex(RuntimeError, 'shared-tracking-observation-changed'):
+                check()
+        (common / 'config').write_bytes(valid)
+        archived = self.txn / 'archive/common/config'
+        archived.write_bytes(archived.read_bytes() + b'\n')
+        with self.assertRaisesRegex(RuntimeError, 'shared-tracking-archive-changed'):
+            check()
+
     def test_execution_lock_lasts_until_parent_stdin_closes(self):
         holder = subprocess.Popen([sys.executable, str(Path(archive.__file__))],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
