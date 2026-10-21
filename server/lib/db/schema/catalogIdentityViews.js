@@ -9,6 +9,25 @@ const ASSOCIATIONS = {
   revisions: ['catalog_ingredient_revisions', ['id']],
 };
 
+// The views project `(r).*` of their base table, so a column added to that
+// table (e.g. catalog_ingredient_media.library, #12762) shifts the view's
+// column list; CREATE OR REPLACE VIEW can only APPEND columns, and boot failed
+// with "cannot change name of view column". Drop a view whose base table has a
+// column the view lacks so the CREATE below rebuilds it. Nothing depends on these
+// views (read paths query them directly), and a current view is left untouched,
+// so this is idempotent on every boot and a no-op on a fresh database.
+const viewDriftDropSql = (kind, table) => `DO $$ BEGIN
+    IF to_regclass('catalog_identity_read_${kind}') IS NOT NULL AND EXISTS (
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'
+      EXCEPT
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'catalog_identity_read_${kind}'
+    ) THEN
+      DROP VIEW catalog_identity_read_${kind};
+    END IF;
+  END $$`;
+
+export const buildCatalogIdentityViewsPreludeDdl = () => Object.entries(ASSOCIATIONS).map(([kind, [table]]) => viewDriftDropSql(kind, table));
+
 export const buildCatalogIdentityViewsDdl = () => Object.entries(ASSOCIATIONS).map(([kind, [table, keys]]) => {
   const sourceMatch = kind === 'relations'
     ? '(live.from_id = o.source_id OR live.to_id = o.source_id)'
