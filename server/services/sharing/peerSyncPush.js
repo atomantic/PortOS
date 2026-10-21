@@ -83,15 +83,104 @@ const SCHEMA_BLOCK_RETRY_COOLDOWN_MS = 5 * 60_000;
 // hundreds of subscriptions from repeating the same line hundreds of times.
 const loggedPushFailures = new Map();
 
+// Instance ids that still owe a retry walk. A retryable failure marks the
+// peer; a settled push, or a walk that saw no retryable outcome, clears it.
+// `peer:online` only runs on an offline→online transition, so a peer that
+// stays "online" through a blip would otherwise never be retried.
+const pushRetryDue = new Set();
+// While a walk is on the stack, per-push mark/clear only records whether
+// THAT walk saw a retryable outcome. Deciding at the end keeps one landed
+// record from cancelling a sibling that failed in the same pass.
+const pushRetryWalks = new Map();
+const pushRetryWalkSaw = new Map();
+let pushRetryScheduler = null;
+
 const flattenLogText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
 
+function isRetryablePushReason(reason) {
+  if (reason === 'network') return true;
+  const match = /^http-(\d{3})$/.exec(reason || '');
+  if (!match) return false;
+  const status = Number(match[1]);
+  // 4xx is a rejection, not a blip — except the two statuses that mean
+  // "try again" (408 timeout, 429 backoff). Schema 409 never reaches here.
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function inPushRetryWalk(peerId) {
+  return (pushRetryWalks.get(peerId) || 0) > 0;
+}
+
+function markPushRetryDue(peerId) {
+  if (!isNonBlankStr(peerId)) return;
+  if (inPushRetryWalk(peerId)) {
+    pushRetryWalkSaw.set(peerId, true);
+    return;
+  }
+  pushRetryDue.add(peerId);
+  pushRetryScheduler?.onDue(peerId);
+}
+
+export function clearPushRetryDue(peerId) {
+  if (!isNonBlankStr(peerId) || inPushRetryWalk(peerId)) return;
+  pushRetryDue.delete(peerId);
+  pushRetryScheduler?.onClear(peerId);
+}
+
+export function retainPushRetryDue(peerId) {
+  if (!isNonBlankStr(peerId)) return;
+  pushRetryDue.add(peerId);
+}
+
+export function isPushRetryDue(peerId) {
+  return pushRetryDue.has(peerId);
+}
+
+export function listPushRetryDue() {
+  return [...pushRetryDue];
+}
+
+export function registerPushRetryScheduler(scheduler) {
+  pushRetryScheduler = scheduler;
+}
+
+export function beginPushRetryWalk(peerId) {
+  if (!isNonBlankStr(peerId)) return;
+  const depth = (pushRetryWalks.get(peerId) || 0) + 1;
+  pushRetryWalks.set(peerId, depth);
+  if (depth === 1) pushRetryWalkSaw.set(peerId, false);
+}
+
+// Outermost walk returns whether any push in it was retryable.
+export function finishPushRetryWalk(peerId) {
+  const depth = (pushRetryWalks.get(peerId) || 1) - 1;
+  if (depth > 0) {
+    pushRetryWalks.set(peerId, depth);
+    return false;
+  }
+  pushRetryWalks.delete(peerId);
+  const saw = pushRetryWalkSaw.get(peerId) === true;
+  pushRetryWalkSaw.delete(peerId);
+  return saw;
+}
+
+export function resetPushRetryBookkeeping({ keepWalks = false } = {}) {
+  pushRetryDue.clear();
+  if (!keepWalks) {
+    pushRetryWalks.clear();
+    pushRetryWalkSaw.clear();
+  }
+}
+
 function reportPushFailure(sub, peer, reason, detail) {
+  if (isRetryablePushReason(reason)) markPushRetryDue(sub.peerId);
   if (loggedPushFailures.get(sub.peerId) === reason) return;
   loggedPushFailures.set(sub.peerId, reason);
   const target = `${sub.recordKind}/${sub.recordId} (sub ${sub.id}) to ${flattenLogText(peer.name || peer.instanceId)}`;
   const suffix = `${detail ? `: ${flattenLogText(detail)}` : ''} — record not delivered; repeat ${reason} failures for this peer are logged once until a push lands`;
-  // An unreachable peer is routine (asleep, off the tailnet) and `peer:online`
-  // retries it; a peer that answered and refused the push is a real failure.
+  // An unreachable peer is routine (asleep, off the tailnet). Retryable
+  // failures schedule the bounded walk; a peer the probe has marked offline
+  // is left for `peer:online`. A peer that answered and refused is not retried.
   if (reason === 'network') console.warn(`⚠️ peerSync: push ${target} unreachable${suffix}`);
   else console.error(`❌ peerSync: push ${target} rejected with ${reason}${suffix}`);
 }
@@ -299,7 +388,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // reported missing assets. The receiver pulls them asynchronously,
   // and any pull failure (transient Tailnet flake, rejected
   // Content-Length, receiver restart mid-pull) would otherwise be
-  // permanently masked — the next `peer:online` retry would short-
+  // permanently masked — a later retry would short-
   // circuit on `unchanged` and never re-POST the manifest, so the
   // receiver never gets a fresh asset list to retry against. The
   // record itself still landed (mergeXxxFromSync ran on the receiver),
@@ -405,6 +494,14 @@ export async function pushRecordToPeer(sub, options = {}) {
     // a batch it fires async exactly as before.
     flushBaseHashes().catch((err) => console.log(`⚠️ peerSync: base-hash flush after push failed: ${err?.message || err}`));
   }
+  // HTTP 2xx is not "settled" when lastPushedHash was withheld: assets, draft
+  // bodies, or a receiver-pending sidecar are still owed, and `peer:online`
+  // will not run again while the probe still says online. A legacy strip is
+  // settled — lastPushedLegacyHash holds that cycle until the peer upgrades.
+  // The failure log was already cleared in reportPushRecovered; the retry
+  // mark follows this decision so a withheld hash is not treated as recovered.
+  if (pushedHash == null && legacyStrippedHash == null) markPushRetryDue(sub.peerId);
+  else clearPushRetryDue(sub.peerId);
   return {
     pushed: true,
     hash,

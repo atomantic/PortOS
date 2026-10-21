@@ -265,6 +265,7 @@ import {
   peerSyncEvents,
   __resetForTests,
   __drainForTests,
+  installPeerSyncListener,
   uninstallPeerSyncListener,
 } from './peerSync.js';
 
@@ -1516,6 +1517,227 @@ describe('peerSync', () => {
     it('returns {walked: 0, pushed: 0} for invalid peerId', async () => {
       expect(await retryPendingPushesForPeer('')).toEqual({ walked: 0, pushed: 0 });
       expect(await retryPendingPushesForPeer(null)).toEqual({ walked: 0, pushed: 0 });
+    });
+  });
+
+  describe('scheduled push retry while the peer stays online', () => {
+    const MINUTE = 60_000;
+    const BACKOFF = [MINUTE, 5 * MINUTE, 15 * MINUTE, 30 * MINUTE];
+    const examplePeer = (status) => ({
+      instanceId: 'peer-a',
+      name: 'Example Peer',
+      host: null,
+      address: '192.0.2.10',
+      port: 5555,
+      enabled: true,
+      syncEnabled: true,
+      status,
+      directions: ['outbound', 'inbound'],
+      syncCategories: { universe: true, pipeline: true },
+    });
+    const httpStatus = (status, body = { error: 'no' }) => {
+      const res = { ok: false, status, json: async () => body };
+      res.clone = () => res;
+      return res;
+    };
+    const settled = () => ({ ok: true, status: 200, json: async () => ({ missingAssets: [] }) });
+
+    beforeEach(() => {
+      vi.mocked(getPeers).mockResolvedValue([examplePeer('online')]);
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function subscribed(recordId = 'u1') {
+      return subscribePeer(
+        { peerId: 'peer-a', recordKind: 'universe', recordId },
+        { adoptedFromReverse: true },
+      );
+    }
+
+    async function advance(ms) {
+      await vi.advanceTimersByTimeAsync(ms);
+      await __drainForTests();
+    }
+
+    async function withFakeTimers(run) {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        await run();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it('delivers a network failure on the scheduled retry without a peer:online event', async () => {
+      await withFakeTimers(async () => {
+        const sub = await subscribed();
+        vi.mocked(peerFetch)
+          .mockRejectedValueOnce(new Error('ECONNRESET'))
+          .mockResolvedValue(settled());
+        expect(await pushRecordToPeer(sub)).toMatchObject({ pushed: false, reason: 'network' });
+        expect(peerFetch).toHaveBeenCalledTimes(1);
+
+        await advance(MINUTE - 1);
+        expect(peerFetch).toHaveBeenCalledTimes(1);
+        await advance(1);
+
+        expect(peerFetch).toHaveBeenCalledTimes(2);
+        expect((await findPeerSubscription('peer-a', 'universe', 'u1')).lastPushedAt).toBeTruthy();
+        await advance(30 * MINUTE);
+        expect(peerFetch).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it.each([500, 408, 429])('retries HTTP %s on the same schedule', async (status) => {
+      await withFakeTimers(async () => {
+        const sub = await subscribed();
+        vi.mocked(peerFetch)
+          .mockResolvedValueOnce(httpStatus(status, { error: 'unavailable' }))
+          .mockResolvedValue(settled());
+        expect(await pushRecordToPeer(sub)).toMatchObject({ pushed: false, reason: `http-${status}` });
+        await advance(MINUTE);
+        expect(peerFetch).toHaveBeenCalledTimes(2);
+        expect((await pushRecordToPeer(await findPeerSubscription('peer-a', 'universe', 'u1'))).reason).toBe('unchanged');
+      });
+    });
+
+    it('does not retry a 400 or a schema 409', async () => {
+      await withFakeTimers(async () => {
+        const rejected = await subscribed('u-400');
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u-400', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+        vi.mocked(peerFetch).mockResolvedValue(httpStatus(400, { error: 'bad record' }));
+        expect(await pushRecordToPeer(rejected)).toMatchObject({ pushed: false, reason: 'http-400' });
+
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u-409', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+        const blocked = await subscribed('u-409');
+        vi.mocked(peerFetch).mockResolvedValue(httpStatus(409, {
+          code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+          context: {
+            details: {
+              ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }],
+              behind: [],
+              receiverPortosVersion: '0.0.0',
+            },
+          },
+        }));
+        expect(await pushRecordToPeer(blocked)).toMatchObject({ pushed: false, reason: 'peer-schema-behind' });
+
+        await advance(MINUTE);
+        await advance(30 * MINUTE);
+        expect(peerFetch).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('backs off through 5 min and 15 min to the 30 min cap', async () => {
+      await withFakeTimers(async () => {
+        const sub = await subscribed();
+        vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNRESET'));
+        await pushRecordToPeer(sub);
+        for (const delay of BACKOFF) {
+          const before = vi.mocked(peerFetch).mock.calls.length;
+          await advance(delay - 1);
+          expect(vi.mocked(peerFetch).mock.calls.length).toBe(before);
+          await advance(1);
+          expect(vi.mocked(peerFetch).mock.calls.length).toBe(before + 1);
+        }
+        const atCap = vi.mocked(peerFetch).mock.calls.length;
+        await advance(15 * MINUTE);
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(atCap);
+        await advance(15 * MINUTE);
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(atCap + 1);
+      });
+    });
+
+    it('a landed push cancels further retries for that peer', async () => {
+      await withFakeTimers(async () => {
+        const sub = await subscribed();
+        vi.mocked(peerFetch)
+          .mockRejectedValueOnce(new Error('ECONNRESET'))
+          .mockResolvedValue(settled());
+        await pushRecordToPeer(sub);
+        expect(await pushRecordToPeer(await findPeerSubscription('peer-a', 'universe', 'u1'))).toMatchObject({ pushed: true });
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Edited after delivery', updatedAt: '2026-01-02T00:00:00Z' });
+        vi.mocked(peerFetch).mockClear();
+        await advance(MINUTE);
+        await advance(30 * MINUTE);
+        expect(peerFetch).not.toHaveBeenCalled();
+      });
+    });
+
+    it('skips the retry tick while the peer is offline', async () => {
+      await withFakeTimers(async () => {
+        const sub = await subscribed();
+        vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNRESET'));
+        await pushRecordToPeer(sub);
+        vi.mocked(getPeers).mockResolvedValue([examplePeer('offline')]);
+        await advance(MINUTE);
+        await advance(30 * MINUTE);
+        expect(peerFetch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('skips the retry tick while a walk for that peer is already running', async () => {
+      await withFakeTimers(async () => {
+        const sub = await subscribed();
+        vi.mocked(peerFetch).mockRejectedValueOnce(new Error('ECONNRESET'));
+        await pushRecordToPeer(sub);
+        vi.mocked(peerFetch).mockClear();
+
+        let resolveFetch = () => {};
+        vi.mocked(peerFetch).mockImplementation(() => new Promise((resolve) => {
+          resolveFetch = () => resolve(settled());
+        }));
+        const walk = retryPendingPushesForPeer('peer-a');
+        const tick = () => new Promise((resolve) => { setImmediate(resolve); });
+        for (let i = 0; i < 50 && vi.mocked(peerFetch).mock.calls.length === 0; i += 1) await tick();
+        expect(peerFetch).toHaveBeenCalledTimes(1);
+        expect(await retryPendingPushesForPeer('peer-a')).toEqual({ walked: 0, pushed: 0, skipped: 'in-flight' });
+
+        await advance(MINUTE);
+        expect(peerFetch).toHaveBeenCalledTimes(1);
+        resolveFetch();
+        await walk;
+      });
+    });
+
+    it('retries a missing-asset response without a new edit', async () => {
+      await withFakeTimers(async () => {
+        const sub = await subscribed();
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => ({ missingAssets: [{ filename: 'example.png' }] }),
+        });
+        const first = await pushRecordToPeer(sub);
+        expect(first.pushed).toBe(true);
+        expect(first.missingAssets).toHaveLength(1);
+        expect((await findPeerSubscription('peer-a', 'universe', 'u1')).lastPushedHash).toBeFalsy();
+        vi.mocked(peerFetch).mockClear();
+
+        await advance(MINUTE - 1);
+        expect(peerFetch).not.toHaveBeenCalled();
+        await advance(1);
+        expect(peerFetch).toHaveBeenCalledTimes(1);
+        const body = JSON.parse(vi.mocked(peerFetch).mock.calls[0][1].body);
+        expect(body.record.id).toBe('u1');
+      });
+    });
+
+    it('uninstall cancels a pending retry', async () => {
+      await withFakeTimers(async () => {
+        const sub = await subscribed();
+        vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNRESET'));
+        await pushRecordToPeer(sub);
+        uninstallPeerSyncListener();
+        installPeerSyncListener();
+        await advance(MINUTE);
+        await advance(30 * MINUTE);
+        expect(peerFetch).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
