@@ -13,7 +13,7 @@ const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
 const SCRATCH_DIR = 'music-video-song-renders';
 
 // Any CSP the generated page declares is replaced: the host's policy is the only one.
-export function injectPolicy(html, { csp, audioGlobal, audioDataUrl }) {
+function injectPolicy(html, { csp, audioGlobal, audioDataUrl }) {
   const stripped = String(html).replace(/<meta\b[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>/gi, '');
   const audio = audioDataUrl && IDENT.test(String(audioGlobal || ''))
     ? `<script>window[${JSON.stringify(audioGlobal)}] = ${JSON.stringify(audioDataUrl).replace(/</g, '\\u003c')};</script>`
