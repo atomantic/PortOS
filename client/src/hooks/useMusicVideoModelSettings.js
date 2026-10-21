@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { updateMusicVideoProject } from '../services/apiMusicVideo.js';
 import { getVideoGenStatus, listLorasFull } from '../services/apiImageVideo.js';
@@ -23,17 +23,26 @@ const isLtx23 = (model) => !!model
  */
 export default function useMusicVideoModelSettings({ project, onProjectPatch } = {}) {
   const [models, setModels] = useState([]);
-  const [modelsLoading, setModelsLoading] = useState(true);
+  const [statusRead, setStatusRead] = useState('loading');
+  const [loraRead, setLoraRead] = useState('loading');
   const [loras, setLoras] = useState([]);
   const [defaultModel, setDefaultModel] = useState('');
-  const [falEnabled, setFalEnabled] = useState(false);
-  const [runwayEnabled, setRunwayEnabled] = useState(false);
+  // null = unknown (read pending or failed) — never collapsed into "not configured".
+  const [falEnabled, setFalEnabled] = useState(null);
+  const [runwayEnabled, setRunwayEnabled] = useState(null);
+  const catalogGeneration = useRef(0);
   const [saving, setSaving] = useState(false);
   const [framePinSaving, setFramePinSaving] = useState(false);
 
-  useEffect(() => {
+  // A superseded read (retry, unmount) is dropped by the generation check.
+  const loadCatalog = useCallback(() => {
+    const generation = ++catalogGeneration.current;
+    const current = () => generation === catalogGeneration.current;
+    setStatusRead('loading');
+    setLoraRead('loading');
     getVideoGenStatus({ silent: true })
       .then((status) => {
+        if (!current()) return;
         // Music-video scenes always start from a reference frame. Hide
         // explicitly text-only models, while retaining general LTX models
         // whose runtime supports both text and image conditioning.
@@ -45,17 +54,26 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
         // general Video Gen page's `falEnabled`).
         setFalEnabled(status?.falEnabled === true);
         setRunwayEnabled(status?.runwayEnabled === true);
-        setModelsLoading(false);
+        setStatusRead('ready');
       })
-      .catch(() => {
-        setModels([]);
-        setDefaultModel('');
-        setModelsLoading(false);
-      });
+      .catch(() => { if (current()) setStatusRead('error'); });
     listLorasFull({ silent: true })
-      .then((installed) => setLoras(Array.isArray(installed) ? installed : []))
-      .catch(() => setLoras([]));
+      .then((installed) => {
+        if (!current()) return;
+        setLoras(Array.isArray(installed) ? installed : []);
+        setLoraRead('ready');
+      })
+      .catch(() => { if (current()) setLoraRead('error'); });
   }, []);
+
+  useEffect(() => {
+    loadCatalog();
+    return () => { catalogGeneration.current += 1; };
+  }, [loadCatalog]);
+
+  const combinedStatus = (...reads) => (reads.includes('error') ? 'error' : reads.includes('loading') ? 'loading' : 'ready');
+  const catalogStatus = combinedStatus(statusRead, loraRead);
+  const modelsLoading = statusRead === 'loading';
 
   const settings = {
     renderPool: project?.videoSettings?.renderPool,
@@ -116,13 +134,25 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   // preflight reason rather than a request that reaches the server only to
   // fail with FAL_NOT_CONFIGURED (#8968) — no silent fallback to local/Grok.
   // `blockedReasonFor` answers the same for a one-shot render with other settings (a scene card's Render on pick).
-  const blockedReasonFor = (pick) => (pick.backend === 'local' && pick.generationMode === 'audioReactive' && !audioReactiveReady
-    ? 'Audio-reactive generation requires an installed LTX-2.3 audio-reactive LoRA and an LTX-2.3 local model'
-    : pick.backend === 'fal' && !falEnabled
-      ? 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first'
-      : pick.backend === 'runway' && !runwayEnabled
-        ? 'No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var) first'
-        : null);
+  // While the catalog read is pending or failed the answer is unknown, so the
+  // reason names that state instead of claiming a key or LoRA is missing.
+  const blockedReasonFor = (pick) => {
+    const reads = pick.backend === 'local' && pick.generationMode === 'audioReactive'
+      ? combinedStatus(statusRead, loraRead)
+      : pick.backend === 'fal' || pick.backend === 'runway' ? statusRead : 'ready';
+    if (reads === 'error') return "Couldn't read Video Gen status — retry before rendering";
+    if (reads === 'loading') return 'Checking Video Gen status…';
+    if (pick.backend === 'local' && pick.generationMode === 'audioReactive' && !audioReactiveReady) {
+      return 'Audio-reactive generation requires an installed LTX-2.3 audio-reactive LoRA and an LTX-2.3 local model';
+    }
+    if (pick.backend === 'fal' && !falEnabled) {
+      return 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first';
+    }
+    if (pick.backend === 'runway' && !runwayEnabled) {
+      return 'No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var) first';
+    }
+    return null;
+  };
   const videoBlockedReason = blockedReasonFor(settings);
 
   const change = (patch) => {
@@ -176,6 +206,9 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   return {
     models,
     modelsLoading,
+    catalogStatus,
+    statusRead,
+    retryCatalog: loadCatalog,
     defaultModel,
     falEnabled,
     runwayEnabled,
