@@ -299,6 +299,17 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     });
     return status();
   };
+  // Cached read-only snapshot for trusted reconcilers (runs on every zombie sweep); releaseOperations re-verifies under the lock.
+  const operations = () => readForStatus().operations.map(op => ({ ...op }));
+  // Removes only settled records still identical to what the caller inspected;
+  // anything that changed (or settled elsewhere) since then is left alone.
+  const releaseOperations = expected => transaction(state => {
+    const before = state.operations.length;
+    state.operations = state.operations.filter(op => op.unsettled
+      || !expected.some(seen => seen.id === op.id && seen.kind === op.kind
+        && seen.resource === op.resource && seen.pid === op.pid && seen.startedAt === op.startedAt));
+    return before - state.operations.length;
+  });
   // Owning-service recovery only. Validation and durable receipt publication
   // run under the same journal lock as the exact reservation removal.
   const reconcileAbandonedAgent = ({ hold, agentId, validate, publish, replay }) => transaction(state => {
@@ -315,7 +326,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return receipt;
   });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 

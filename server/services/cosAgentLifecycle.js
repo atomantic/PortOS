@@ -23,6 +23,7 @@ import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
+import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
   return withStateLock(async () => {
@@ -924,6 +925,8 @@ export async function cleanupZombieAgents() {
   for (const agent of finalized) {
     cosEvents.emit('agent:completed', agent);
   }
+  for (const agentId of summary.cleaned) await releaseAgentReservation(agentId);
+  await reconcileStaleAgentReservations({ agents: await getAgents() });
 
   return summary;
 }
@@ -940,6 +943,7 @@ export async function deleteAgent(agentId) {
       throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
     }
 
+    const wasRunning = state.agents[agentId]?.status === 'running';
     delete state.agents[agentId];
     await saveState(state);
 
@@ -955,6 +959,8 @@ export async function deleteAgent(agentId) {
     }
 
     cosEvents.emit('agents:changed', { action: 'deleted', agentId });
+    // A purged record can never settle its own reservation; a live run keeps its hold.
+    if (!wasRunning) await releaseAgentReservation(agentId);
     return { success: true, agentId };
   }));
 }

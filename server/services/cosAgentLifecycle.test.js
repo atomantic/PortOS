@@ -98,6 +98,7 @@ import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
 import { persistAgentSecurityScan } from './agentSecurityScan.js';
 import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
@@ -1091,5 +1092,44 @@ describe('deleteAgent directory cleanup (#11446)', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe('agent maintenance reservations on terminal transitions (#12737)', () => {
+  const reserved = (agentId) => maintenance.status().blockers.some(b => b.kind === 'agent' && b.resource === agentId);
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+    mockCosState.state = { agents: {} };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
+    activeAgents.clear();
+    runnerAgents.clear();
+    spawningTasks.clear();
+  });
+  afterEach(async () => {
+    for (const id of ['agent-zombie', 'agent-purged', 'agent-live']) await maintenance.finishResource('agent', id);
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('releases the reservation of a reaped zombie', async () => {
+    maintenance.admit('agent', 'agent-zombie');
+    mockCosState.state.agents['agent-zombie'] = {
+      id: 'agent-zombie', status: 'running', pid: 2147483646,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-zombie']);
+    expect(reserved('agent-zombie')).toBe(false);
+  });
+
+  it('releases the reservation of a purged completed agent but keeps a running one', async () => {
+    maintenance.admit('agent', 'agent-purged');
+    maintenance.admit('agent', 'agent-live');
+    mockCosState.state.agents['agent-purged'] = { id: 'agent-purged', status: 'completed' };
+    mockCosState.state.agents['agent-live'] = { id: 'agent-live', status: 'running' };
+    await deleteAgent('agent-purged');
+    await deleteAgent('agent-live');
+    expect(reserved('agent-purged')).toBe(false);
+    expect(reserved('agent-live')).toBe(true);
   });
 });
