@@ -612,9 +612,22 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir =
 // The Docker validate phase: no network, the worktree read-only, and a work
 // copy in a throwaway volume. Loaded lazily so the bubblewrap path (and its
 // Linux CI job) does not pull the Docker executor in.
+// A disposable worktree has no node_modules, so a repo with an npm lockfile
+// gets a contained `npm ci` (registry-only network) into the same work volume
+// first; the verify command then runs with no network over that install.
 async function runDockerVerify(command, cwd, { dataDir, homeDir, timeoutMs, docker, bubblewrapReason }) {
   const run = docker.run ?? (await import('../server/services/dockerContainment.js')).runContained;
-  const result = await run({ worktree: cwd, phase: 'validate', command, settings: docker.settings ?? {}, dataDir, homeDir, timeoutMs });
+  const common = { worktree: cwd, settings: docker.settings ?? {}, dataDir, homeDir, timeoutMs };
+  const hasLockfile = await lstat(join(cwd, 'package-lock.json')).then((info) => info.isFile(), () => false);
+  let installLog = '';
+  if (hasLockfile) {
+    const install = await run({ ...common, phase: 'install', command: 'npm ci' });
+    if (install.status !== 'refused') installLog = `${install.log ?? ''}\n`;
+    if (install.status !== 'refused' && !(install.status === 'completed' && install.exitCode === 0)) {
+      return { ok: false, code: Number.isInteger(install.exitCode) ? install.exitCode : -1, contained: true, mechanism: 'docker', output: `${installLog}[verify] the contained npm ci failed (${install.reason ?? install.error ?? `exit ${install.exitCode}`})` };
+    }
+  }
+  const result = await run({ ...common, phase: 'validate', command });
   if (result.status === 'refused') {
     return { ok: false, code: -1, contained: false, output: `[verify] refused: no enforced containment for the verify command — ${bubblewrapReason}; Docker containment unavailable — ${result.reason}` };
   }
@@ -622,7 +635,7 @@ async function runDockerVerify(command, cwd, { dataDir, homeDir, timeoutMs, dock
   return {
     ok: result.status === 'completed' && result.exitCode === 0,
     code: Number.isInteger(result.exitCode) ? result.exitCode : -1,
-    output: `${result.log ?? ''}${note}`,
+    output: `${installLog}${result.log ?? ''}${note}`,
     contained: true,
     mechanism: 'docker',
   };

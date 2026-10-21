@@ -45,7 +45,7 @@ export function clipDiagnostic(text) {
  * or `--host Y`) prefix every command so a run lands on the engine the
  * resolver verified. Tests pass a fake with the same methods.
  */
-export function createDockerCli(bin, { globalArgs = [], stream = null } = {}) {
+function createDockerCli(bin, { globalArgs = [], stream = null } = {}) {
   const env = { ...process.env };
   // The explicit endpoint below must win over anything the server inherited.
   if (globalArgs.length) { delete env.DOCKER_HOST; delete env.DOCKER_CONTEXT; }
@@ -59,7 +59,7 @@ export function createDockerCli(bin, { globalArgs = [], stream = null } = {}) {
 }
 
 /** Path of the local docker CLI, or null when it is not installed. */
-export async function findDockerBinary({ which = whichFirst, exists = existsSync } = {}) {
+async function findDockerBinary({ which = whichFirst, exists = existsSync } = {}) {
   return await which('docker') || DOCKER_FALLBACK_PATHS.find((path) => exists(path)) || null;
 }
 
@@ -93,14 +93,14 @@ export async function probeDocker(cli) {
 }
 
 /** `local` for unix/npipe endpoints, `remote` for tcp/ssh/anything else, null when empty. */
-export function classifyDockerEndpoint(endpoint) {
+function classifyDockerEndpoint(endpoint) {
   const text = String(endpoint ?? '').trim();
   if (!text) return null;
   return /^(unix|npipe):\/\//i.test(text) ? 'local' : 'remote';
 }
 
 /** Parse `docker context ls --format '{{json .}}'` (one object per line). */
-export function parseDockerContexts(stdout) {
+function parseDockerContexts(stdout) {
   return String(stdout || '').split('\n').flatMap((line) => {
     let row;
     try { row = JSON.parse(line); } catch { return []; }
@@ -115,7 +115,7 @@ export function parseDockerContexts(stdout) {
  * the active context, then `default` (native dockerd's socket on Linux). An
  * operator-set `DOCKER_HOST` is the only candidate — it is what they chose.
  */
-export function dockerEngineCandidates({ contexts = [], dockerHost = null } = {}) {
+function dockerEngineCandidates({ contexts = [], dockerHost = null } = {}) {
   if (dockerHost) return [{ name: null, current: true, endpoint: dockerHost, globalArgs: ['--host', dockerHost] }];
   // A CLI too old for contexts still has the native socket.
   if (contexts.length === 0) return [{ name: null, current: true, endpoint: NATIVE_DOCKER_ENDPOINT, globalArgs: ['--host', NATIVE_DOCKER_ENDPOINT] }];
@@ -130,7 +130,7 @@ export function dockerEngineCandidates({ contexts = [], dockerHost = null } = {}
 }
 
 /** `desktop` (Docker Desktop), `native` (a local dockerd), or `other` (Colima, OrbStack, …). */
-export function dockerEngineKind({ platformName, endpoint, contextName }) {
+function dockerEngineKind({ platformName, endpoint, contextName }) {
   if (/docker desktop/i.test(String(platformName ?? '')) || contextName === DOCKER_DESKTOP_CONTEXT) return 'desktop';
   if (/^unix:\/\/\/(var\/)?run\/docker\.sock$/.test(String(endpoint ?? ''))) return 'native';
   return 'other';
@@ -143,7 +143,7 @@ const ENGINE_LABELS = { desktop: 'Docker Desktop', native: 'Docker Engine', othe
  * docker-missing, docker-stopped, docker-unsupported, docker-remote-refused,
  * ready. `cli` (bound to the chosen endpoint) is present only when ready.
  */
-export function evaluateDockerEngine({ installed, candidates = [], probes = [], platform = process.platform }) {
+function evaluateDockerEngine({ installed, candidates = [], probes = [], platform = process.platform }) {
   const verdict = (state, message, extra = {}) => ({ state, ready: state === 'ready', message, engine: null, cli: null, ...extra });
   if (!installed) {
     return verdict('docker-missing', 'Docker is not installed. Install Docker Desktop (macOS/Windows) or Docker Engine (Linux) and start it — PortOS never installs or reconfigures Docker for you.');
@@ -186,9 +186,11 @@ export function evaluateDockerEngine({ installed, candidates = [], probes = [], 
  * @param {string|null} [deps.bin] - docker binary (undefined → discover)
  * @param {(bin: string, opts: object) => object} [deps.createCli]
  * @param {Record<string,string|undefined>} [deps.env]
+ * @param {Function} [deps.which] - PATH lookup (test seam)
+ * @param {Function} [deps.exists] - fallback-path probe (test seam)
  */
-export async function resolveDockerEngine({ bin, createCli = createDockerCli, env = process.env, platform = process.platform } = {}) {
-  const dockerBin = bin === undefined ? await findDockerBinary() : bin;
+export async function resolveDockerEngine({ bin, createCli = createDockerCli, env = process.env, platform = process.platform, which, exists } = {}) {
+  const dockerBin = bin === undefined ? await findDockerBinary({ which, exists }) : bin;
   if (!dockerBin) return evaluateDockerEngine({ installed: false, platform });
   const dockerHost = String(env.DOCKER_HOST ?? '').trim() || null;
   let contexts = [];

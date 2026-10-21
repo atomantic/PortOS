@@ -67,7 +67,7 @@ const refusal = (reason, state = 'unavailable', extra = {}) => ({
 });
 
 /** The configured image for a Node major: a digest-pinned operator override, else the shipped pin. */
-export function dockerContainmentImages(settings = {}) {
+function dockerContainmentImages(settings = {}) {
   const overrides = settings?.imageOverrides && typeof settings.imageOverrides === 'object' ? settings.imageOverrides : {};
   const images = { ...DOCKER_CONTAINMENT_NODE_IMAGES };
   for (const [major, ref] of Object.entries(overrides)) {
@@ -387,17 +387,22 @@ const parseRows = (stdout) => String(stdout || '').split('\n').filter(Boolean).m
 
 /**
  * Remove containers, networks and volumes a run left behind (a crash, a
- * restart mid-run). Live runs of this process are skipped; the shared egress
- * network and npm cache stay unless `all` (the feature was turned off).
+ * restart mid-run). Live runs are skipped; the shared egress network and npm
+ * cache stay unless `all` (the feature was turned off).
  */
-export async function sweepDockerContainmentOrphans({ engine, all = false, now = Date.now } = {}) {
+async function sweepDockerContainmentOrphans({ engine, all = false, now = Date.now } = {}) {
   const { cli } = engine;
   const active = new Set(activeRuns.keys());
   const activeWorktrees = new Set([...activeRuns.values()].map((run) => run.worktreeKey));
   const label = DOCKER_CONTAINMENT_LABEL;
   const removed = { containers: 0, networks: 0, volumes: 0 };
 
-  const containers = await capture(cli, ['ps', '--all', '--filter', `label=${label}`, '--format', `{{.Names}}\t{{.Label "${label}"}}`]);
+  // Another process (the autofixer daemon, the server) may own a running
+  // container, so outside a full teardown only stopped ones are orphans; a
+  // running one is bounded by its owner's wall-time kill and `--rm`. Docker
+  // itself refuses to remove a network or volume a live container uses.
+  const states = all ? [] : ['created', 'exited', 'dead'].flatMap((state) => ['--filter', `status=${state}`]);
+  const containers = await capture(cli, ['ps', '--all', '--filter', `label=${label}`, ...states, '--format', `{{.Names}}\t{{.Label "${label}"}}`]);
   for (const [name, runId] of parseRows(containers.stdout)) {
     if (active.has(runId)) continue;
     if ((await forceRemoveContainer(cli, name)).success) removed.containers += 1;

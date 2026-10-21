@@ -5,7 +5,6 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { evaluateDockerEngine } from '../services/dockerEngine.js';
 
 const gate = vi.hoisted(() => ({ enabled: false, settings: {}, resolveEngine: null, spawn: null }));
 vi.mock('../services/instanceFeatures.js', () => ({ isInstanceFeatureEnabled: vi.fn(async () => gate.enabled) }));
@@ -17,6 +16,20 @@ vi.mock('../services/dockerEngine.js', async (importOriginal) => ({
 vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal(), spawn: (...args) => gate.spawn(...args) }));
 
 const { default: router } = await import('./dockerContainment.js');
+const { resolveDockerEngine } = await vi.importActual('../services/dockerEngine.js');
+
+/** Real resolver verdicts for an absent, a stopped and a remote-only Docker. */
+const dockerVerdict = (kind) => {
+  if (kind === 'absent') return resolveDockerEngine({ bin: null });
+  const endpoint = kind === 'remote' ? 'ssh://builder@example.com' : 'unix:///var/run/docker.sock';
+  const createCli = () => ({
+    capture: async (args) => (args[0] === 'context'
+      ? { success: true, stdout: JSON.stringify({ Name: 'example', Current: true, DockerEndpoint: endpoint }) }
+      : { success: false, stdout: '', stderr: 'Cannot connect to the Docker daemon' }),
+  });
+  return resolveDockerEngine({ bin: '/usr/bin/docker', createCli, env: {}, platform: 'linux' });
+};
+
 const app = express();
 app.use(express.json());
 app.use('/api/docker-containment', router);
@@ -44,17 +57,14 @@ describe('Docker containment routes', () => {
     expect(gate.spawn).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['absent', () => evaluateDockerEngine({ installed: false })],
-    ['stopped', () => evaluateDockerEngine({ installed: true, candidates: [{ name: 'default', current: true, endpoint: 'unix:///var/run/docker.sock' }],
-      probes: [{ candidate: { name: 'default' }, docker: { running: false, error: 'Cannot connect to the Docker daemon' } }] })],
-    ['remote', () => evaluateDockerEngine({ installed: true, candidates: [{ name: 'build-box', current: true, endpoint: 'ssh://builder@example.com' }], probes: [] })],
-  ])('refuses a run with the resolver reason when Docker is %s, executing nothing', async (_label, engine) => {
+  it.each([['absent', 'docker-missing'], ['stopped', 'docker-stopped'], ['remote', 'docker-remote-refused']])('refuses a run with the resolver reason when Docker is %s, executing nothing', async (kind, state) => {
     gate.enabled = true;
-    gate.resolveEngine = vi.fn(engine);
+    const verdict = await dockerVerdict(kind);
+    expect(verdict.state).toBe(state);
+    gate.resolveEngine = vi.fn(() => verdict);
     const res = await request(app).post('/api/docker-containment/run').send({ worktree, phase: 'install', command: 'npm ci' });
     expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ status: 'refused', code: 'CONTAINMENT_UNAVAILABLE', reason: engine().message, contained: false });
+    expect(res.body).toMatchObject({ status: 'refused', code: 'CONTAINMENT_UNAVAILABLE', reason: verdict.message, contained: false });
     expect(gate.spawn).not.toHaveBeenCalled();
   });
 

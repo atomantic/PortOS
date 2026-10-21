@@ -286,14 +286,40 @@ describe('runVerifyCommand — contained, credential-free verify', () => {
     expect(failed).toMatchObject({ ok: false, code: -1, contained: true, output: 'partial\n[verify] timed out after 10ms' });
   });
 
+  it('installs a locked npm project contained before verifying, and fails the verify when that install fails', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'autofix-docker-verify-'));
+    try {
+      await writeFile(join(worktree, 'package-lock.json'), '{}');
+      const run = vi.fn(async ({ phase }) => ({ status: 'completed', exitCode: 0, log: `${phase} ok`, contained: true }));
+      const result = await runVerifyCommand('npm test', worktree, { probe: noBubblewrap, docker: { enabled: true, run } });
+      expect(run.mock.calls.map(([opts]) => [opts.phase, opts.command])).toEqual([['install', 'npm ci'], ['validate', 'npm test']]);
+      expect(result).toMatchObject({ ok: true, contained: true, output: 'install ok\nvalidate ok' });
+      run.mockImplementationOnce(async () => ({ status: 'completed', exitCode: 1, log: 'ERESOLVE', contained: true }));
+      const broken = await runVerifyCommand('npm test', worktree, { probe: noBubblewrap, docker: { enabled: true, run } });
+      expect(broken).toMatchObject({ ok: false, code: 1, contained: true });
+      expect(broken.output).toContain('the contained npm ci failed');
+      expect(run).toHaveBeenCalledTimes(3);
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
   it('refuses with the Docker resolver reason, executing nothing, when Docker is stopped or absent', async () => {
     const { runContained } = await import('../server/services/dockerContainment.js');
-    const { evaluateDockerEngine } = await import('../server/services/dockerEngine.js');
-    for (const engine of [
-      evaluateDockerEngine({ installed: false }),
-      evaluateDockerEngine({ installed: true, candidates: [{ name: 'default', current: true, endpoint: 'unix:///var/run/docker.sock' }],
-        probes: [{ candidate: { name: 'default' }, docker: { running: false, error: 'Cannot connect to the Docker daemon' } }] }),
-    ]) {
+    const { resolveDockerEngine } = await import('../server/services/dockerEngine.js');
+    /** Real resolver verdicts for an absent, a stopped and a remote-only Docker. */
+    const dockerVerdict = (kind) => {
+      if (kind === 'absent') return resolveDockerEngine({ bin: null });
+      const endpoint = kind === 'remote' ? 'ssh://builder@example.com' : 'unix:///var/run/docker.sock';
+      const createCli = () => ({
+        capture: async (args) => (args[0] === 'context'
+          ? { success: true, stdout: JSON.stringify({ Name: 'example', Current: true, DockerEndpoint: endpoint }) }
+          : { success: false, stdout: '', stderr: 'Cannot connect to the Docker daemon' }),
+      });
+      return resolveDockerEngine({ bin: '/usr/bin/docker', createCli, env: {}, platform: 'linux' });
+    };
+    for (const engine of [await dockerVerdict('absent'), await dockerVerdict('stopped')]) {
+      expect(engine.ready).toBe(false);
       const result = await runVerifyCommand('npm test', '/example/worktree', {
         probe: noBubblewrap, docker: { enabled: true, run: (opts) => runContained({ ...opts, deps: { engine } }) },
       });

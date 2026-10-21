@@ -12,7 +12,7 @@ unavailable.
 | Code Animation worker | Seatbelt (macOS), bubblewrap + seccomp (Linux); single process, no fork | macOS, Linux | `server/lib/codeAnimationContainment.js` / `server/services/codeAnimation/containedWorker.js` | Code Animation production renders ([CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md)) |
 | Autofix verify (bubblewrap) | bubblewrap namespaces + seccomp (no network, no AF_UNIX, PID namespace) | Linux | `server/lib/autofixVerifyContainment.js` / `autofixer/sandbox.js#runVerifyCommand` | Autofixer verify command — first choice on Linux |
 | SuperCollider runtime | Docker, PortOS-built image, `--network none` | Any host with a local Linux Docker engine | `server/lib/superColliderRuntime.js` / `server/services/superColliderRuntime.js` | Music Designer SuperCollider renders ([SUPERCOLLIDER.md](./SUPERCOLLIDER.md)) |
-| **Docker containment** | Docker, digest-pinned official Node image, two-phase network | macOS (Docker Desktop), Linux (Docker Engine) | `server/lib/dockerContainment.js` / `server/services/dockerContainment.js` | Autofixer verify when bubblewrap is unavailable (always on macOS); `scripts/contained-run.js`; the `dependency-updates` scheduled task |
+| **Docker containment** | Docker, digest-pinned official Node image, two-phase network | macOS (Docker Desktop), Linux (Docker Engine) | `server/lib/dockerContainment.js` / `server/services/dockerContainment.js` | Autofixer verify when bubblewrap is unavailable (always on macOS; a repo with `package-lock.json` gets a contained `npm ci` first); `scripts/contained-run.js`; the `dependency-updates` scheduled task |
 
 macOS has no bubblewrap and Seatbelt cannot keep a test runner's detached
 descendants from outliving the run, so without Docker containment the autofixer
@@ -88,9 +88,11 @@ reads it bounded and only applies it when asked (`contained-run.js
 
 A run is serialized per worktree and bounded by a wall-time limit (20 minutes
 for install, 30 for validate, configurable). On timeout or cancel the
-container is force-removed and its work volume deleted. A boot and toggle-time
-sweep removes containers, networks and volumes a crash left behind; idle work
-volumes expire after 24 hours.
+container is force-removed and its work volume deleted. A boot, toggle-time and
+per-run sweep removes stopped containers, networks and volumes a crash left
+behind (a running container belongs to another process's run and is bounded by
+its own wall limit); idle work volumes expire after 24 hours. Turning the
+feature off removes everything, running or not.
 
 ### Images
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DOCKER_FALLBACK_PATHS, findDockerBinary, resolveDockerEngine } from './dockerEngine.js';
+import { DOCKER_FALLBACK_PATHS, resolveDockerEngine } from './dockerEngine.js';
 
 const version = ({ os = 'linux', platform = null } = {}) => JSON.stringify({
   Client: { Version: '29.0.0' },
@@ -24,12 +24,13 @@ function fakeDocker({ contexts = [], answering = {}, contextLsFails = false }) {
 
 describe('resolveDockerEngine', () => {
   it('finds the CLI on PATH, else in the Docker Desktop bundle', async () => {
-    expect(await findDockerBinary({ which: async () => '/usr/bin/docker', exists: () => false })).toBe('/usr/bin/docker');
+    const docker = fakeDocker({ contexts: [contextRow('default', 'unix:///var/run/docker.sock', true)], answering: { default: version() } });
+    const resolve = (which, exists) => resolveDockerEngine({ which, exists, createCli: docker.createCli, env: {}, platform: 'linux' });
+    expect((await resolve(async () => '/usr/bin/docker', () => false)).cli.bin).toBe('/usr/bin/docker');
     const bundle = '/Applications/Docker.app/Contents/Resources/bin/docker';
     expect(DOCKER_FALLBACK_PATHS).toContain(bundle);
-    expect(await findDockerBinary({ which: async () => null, exists: (path) => path === bundle })).toBe(bundle);
-    expect(await findDockerBinary({ which: async () => null, exists: () => false })).toBeNull();
-    expect(await resolveDockerEngine({ bin: null })).toMatchObject({ state: 'docker-missing', ready: false, cli: null });
+    expect((await resolve(async () => null, (path) => path === bundle)).cli.bin).toBe(bundle);
+    expect(await resolve(async () => null, () => false)).toMatchObject({ state: 'docker-missing', ready: false, cli: null });
   });
 
   it('prefers a running Docker Desktop over the active native context, and pins the run to it', async () => {

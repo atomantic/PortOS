@@ -13,7 +13,7 @@
  */
 
 /** True when `address` (IPv4 or IPv6 literal) is not publicly routable. */
-export function isNonPublicAddress(address) {
+function isNonPublicAddress(address) {
   const text = String(address ?? '').toLowerCase().replace(/^\[|\]$/g, '');
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(text);
   const v4 = mapped ? mapped[1] : text;
@@ -38,7 +38,7 @@ export function isNonPublicAddress(address) {
  * Parse a CONNECT authority (`host:port`) and decide it against the
  * allowlist. Returns `{ host, port }` when allowed, else `{ refused }`.
  */
-export function decideEgressConnect(authority, { allow, ports }) {
+function decideEgressConnect(authority, { allow, ports }) {
   const match = /^([a-z0-9.-]+):(\d{1,5})$/i.exec(String(authority ?? '').trim());
   if (!match) return { refused: 'malformed or IP-literal CONNECT target' };
   const host = match[1].toLowerCase().replace(/\.$/, '');
@@ -87,6 +87,9 @@ function egressProxyMain(env) {
   });
   server.listen(listenPort, listenHost, () => console.log(`🛡️ portos-egress-proxy ready on ${server.address().port} for ${allow.join(',')}`));
 }
+
+/** Test hook: the allow decisions the proxy program embeds. */
+export const __egressProxyPolicy = Object.freeze({ isNonPublicAddress, decideEgressConnect });
 
 /** The marker line the executor waits for before starting the install container. */
 export const DOCKER_EGRESS_PROXY_READY = 'portos-egress-proxy ready';

@@ -232,7 +232,7 @@ export function assertDockerMountSource(source, { dataDir = null, realHome = nul
  * applies; nothing comes from the host). The proxy variables exist only in
  * the install phase.
  */
-export function buildDockerContainmentEnv({ phase, proxyUrl = null }) {
+function buildDockerContainmentEnv({ phase, proxyUrl = null }) {
   const { home, tmp, cache } = DOCKER_CONTAINMENT_PATHS;
   const env = {
     CI: '1',

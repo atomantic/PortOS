@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import { connect, createServer } from 'node:net';
 import { request } from 'node:http';
-import { DOCKER_EGRESS_PROXY_READY, DOCKER_EGRESS_PROXY_SOURCE, decideEgressConnect, isNonPublicAddress } from './dockerEgressProxy.js';
+import { DOCKER_EGRESS_PROXY_READY, DOCKER_EGRESS_PROXY_SOURCE, __egressProxyPolicy } from './dockerEgressProxy.js';
+
+const { decideEgressConnect, isNonPublicAddress } = __egressProxyPolicy;
 
 describe('egress proxy decisions', () => {
   it.each([
