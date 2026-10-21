@@ -1209,6 +1209,29 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(checkoutRetirementFenceReason(fenced)).toBe(null);
   });
 
+  // #12764: resolveMergeTarget's `git fetch origin --prune` still ran inside the
+  // second critical section (completionHold via verifyRemoval, and the branch
+  // cleanup), so a hung fetch could starve every claim bind queued behind the lock.
+  it.each(['present', 'missing'])('fetches the merge target with the ownership queue free for a %s checkout', async state => {
+    if (state === 'missing') existsSync.mockReturnValue(false);
+    const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+    const scripted = execGitMock.getMockImplementation();
+    const fetches = [];
+    execGitMock.mockImplementation(async (args, ...rest) => {
+      if (args[0] === 'fetch') {
+        const probe = withClaimOwnershipLock(() => 'free');
+        fetches.push(await Promise.race([probe, new Promise(resolve => setTimeout(() => resolve('held'), 25))]));
+      }
+      return scripted(args, ...rest);
+    });
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+    expect(result.removed).toBe(true);
+    expect(fetches.length).toBeGreaterThan(0);
+    expect(fetches.every(outcome => outcome === 'free')).toBe(true);
+    // One refresh serves the pre-removal check, the post-removal verify and the branch cleanup.
+    expect(fetches).toHaveLength(1);
+  });
+
   it('keeps a lockfile-only checkout that changed while its pre-cleanup snapshot was archived', async () => {
     scriptGit({ porcelain: ' M package-lock.json' });
     const scripted = execGitMock.getMockImplementation();

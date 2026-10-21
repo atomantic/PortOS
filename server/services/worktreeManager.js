@@ -1307,7 +1307,7 @@ async function resolveMergeTarget(sourceWorkspace, defaultBranch) {
 // arrive after the first removed the directory but preserved unpublished work;
 // every successful removal path must apply the same branch-retention policy.
 async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
-  hasUnmergedCommits = false, warnings, expectedHead,
+  hasUnmergedCommits = false, warnings, expectedHead, target: resolvedTarget,
 }) {
   const present = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
   if (present?.exitCode === 1) return;
@@ -1333,7 +1333,10 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
     if (localRef?.exitCode === 1) return;
     const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
     const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
-    const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
+    // A caller holding the claim-ownership lock passes a target it resolved earlier:
+    // the fetch must not run under that lock (#12764), and merge evidence against a
+    // ref fetched moments ago stays valid.
+    const target = resolvedTarget || await resolveMergeTarget(sourceWorkspace, defaultBranch);
     // Patch-equivalence recognizes squash/rebase merges; a failed probe keeps
     // the branch. Ask the refreshed remote target so a landed PR is not resumed
     // just because this install's local default branch has not advanced.
@@ -1414,6 +1417,9 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     warnings.push(`Worktree preserved — ${reason}`);
     return { merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
   };
+  // Fetched with the lock released (archive phase, or before the first section) and
+  // reused by every check under the lock: a branch merged into origin/<default> stays merged.
+  let mergeTarget;
   const completionHold = async (expectedHead) => {
     const owner = await ownershipHold();
     if (owner) return owner;
@@ -1424,10 +1430,10 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     const base = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
     if (!base) return 'default-branch-unavailable';
     if (PROTECTED_BRANCHES.includes(branchName) || branchName === base) return 'protected-branch';
-    const target = await resolveMergeTarget(sourceWorkspace, base);
+    mergeTarget ||= await resolveMergeTarget(sourceWorkspace, base);
     const head = (await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace).catch(() => null))?.stdout?.trim();
     if (!head || (expectedHead && head !== expectedHead)) return 'branch-head-changed-or-unavailable';
-    return await hasBranchMergeEvidence(sourceWorkspace, head, target).catch(() => false) ? null : 'merge-evidence-unavailable';
+    return await hasBranchMergeEvidence(sourceWorkspace, head, mergeTarget).catch(() => false) ? null : 'merge-evidence-unavailable';
   };
   const preserve = async () => {
     const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
@@ -1463,10 +1469,17 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
       return false;
     }
     await cleanupWorktreeBranch(sourceWorkspace, branchName, {
-      hasUnmergedCommits: options.merge && !merged && (commitsAhead > 0 || mergeRefused), warnings, expectedHead,
+      hasUnmergedCommits: options.merge && !merged && (commitsAhead > 0 || mergeRefused), warnings, expectedHead, target: mergeTarget,
     });
     return true;
   };
+
+  if (!existsSync(worktreePath)) {
+    // The already-gone path deletes the branch under the lock; fetch before taking it.
+    const { getDefaultBranch } = await import('./git.js');
+    const base = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
+    if (base) mergeTarget = await resolveMergeTarget(sourceWorkspace, base);
+  }
 
   const inspected = await withClaimOwnershipLock(async () => {
     const { getDefaultBranch } = await import('./git.js');
