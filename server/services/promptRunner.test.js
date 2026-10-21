@@ -1332,6 +1332,25 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
   });
 
+  it('resolves a function timeout against each provider that runs, fallback included', async () => {
+    mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'Process exited with code 1' });
+    });
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('fallback content');
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: primaryCli, prompt: 'p', source: 'test',
+      timeout: (provider) => (provider.type === 'api' ? 900000 : 0),
+    });
+
+    expect(runner.executeCliRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 0 }));
+    expect(runner.executeApiRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 900000 }));
+  });
+
   it('threads screenshot capability into retry selection and the fallback run', async () => {
     const status = mockToolkitWithFallback();
     runner.executeApiRun

@@ -411,6 +411,12 @@ export async function pageCodeAnimationJobs({ limit = JOB_PAGE_SIZE, cursor } = 
 const canAttachImages = (provider) => provider.type === 'api'
   || isVisionCapableCliProvider(provider) || isVisionCapableCodexTuiProvider(provider);
 
+// Resolved per attempt, so a fallback of another type gets its own bound.
+const CODE_ANIMATION_API_STALL_MS = 15 * 60 * 1000;
+const codeAnimationRunTimeout = (provider) => (provider?.type === 'api'
+  ? Math.max(provider.timeout || 0, CODE_ANIMATION_API_STALL_MS)
+  : 0);
+
 async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
   const promptRunner = await import('../promptRunner.js');
   const { runPromptThroughProvider } = promptRunner;
@@ -426,7 +432,12 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
     // Every provider that can read images gets them as attachments; a
     // non-vision CLI keeps only the on-disk paths written into the prompt.
     screenshots: canAttachImages(provider) ? referencePaths : [],
-    timeout: Math.max(provider.timeout || 0, 15 * 60 * 1000),
+    // Authoring a whole animation can legitimately run for hours, so no
+    // total-runtime cap: a cap here failed long runs over and benched a
+    // healthy provider for everyone. CLI/TUI read `timeout` as that cap
+    // (0 = unbounded); API runs read it as a no-progress bound, which stays.
+    timeout: codeAnimationRunTimeout,
+    absoluteTimeoutMs: 0,
   });
   // A fallback to a non-vision provider must not silently drop the references.
   if (referencePaths.length && canAttachImages(provider)) promptRunner.assertVisionRunUsedImages(result, provider);

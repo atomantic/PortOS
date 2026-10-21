@@ -673,9 +673,12 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
  *   base64-encode each into `image_url` blocks. Codex and Claude Code CLI
  *   providers receive staged file attachments through executeCliRun. Other CLI
  *   and all TUI providers are rejected before a run record is created.
- * @param {number} [args.timeout] — per-call timeout in ms; falls back to
- *   `provider.timeout`, then DEFAULT_TIMEOUT_MS. Callers like the loop
- *   runner expose a user-configurable timeout that isn't a provider attr.
+ * @param {number|((provider: object) => number)} [args.timeout] — per-call
+ *   timeout in ms; falls back to `provider.timeout`, then DEFAULT_TIMEOUT_MS.
+ *   Callers like the loop runner expose a user-configurable timeout that isn't
+ *   a provider attr. A function is resolved against the provider that actually
+ *   runs (fallbacks included), for callers whose bound depends on its type:
+ *   CLI/TUI treat it as a total cap, API runs as a no-progress (stall) bound.
  * @param {number} [args.outputReserveTokens=8000] — expected completion budget
  *   included in fallback context admission. Callers with a tighter known
  *   output budget may lower it.
@@ -1592,7 +1595,8 @@ async function executeProviderRunOnce({
   // original provider's timeout against a fallback would either time out
   // a still-working run early or let a stuck one hang past its
   // intended cap.
-  const effectiveTimeout = timeoutOverride ?? effectiveProvider?.timeout ?? DEFAULT_TIMEOUT_MS;
+  const resolvedTimeoutOverride = typeof timeoutOverride === 'function' ? timeoutOverride(effectiveProvider) : timeoutOverride;
+  const effectiveTimeout = resolvedTimeoutOverride ?? effectiveProvider?.timeout ?? DEFAULT_TIMEOUT_MS;
 
   // Gate concurrent in-flight calls to a LOCAL endpoint on the EFFECTIVE
   // provider — the one that ACTUALLY runs after createRun's proactive swap
