@@ -2138,6 +2138,15 @@ describe('createPromptSubmissionGate', () => {
     expect(settled(gate, 31_000)).toBe(0);
   });
 
+  it('reports awaitingSubmit only while a chip looks unsubmitted and Enters remain', () => {
+    const gate = createPromptSubmissionGate({ settleMs: 20_000, maxAttempts: 1 });
+    expect(gate.awaitingSubmit).toBe(false);
+    gate.noteInput(0, CHIP);
+    expect(gate.awaitingSubmit).toBe(true);
+    expect(settled(gate)).toBe(1);
+    expect(gate.awaitingSubmit, 'an exhausted budget hands the screen back to idle completion').toBe(false);
+  });
+
   it('treats in-flight chrome as a started turn, however soon it went quiet', () => {
     const gate = createPromptSubmissionGate({ settleMs: 20_000, workEvidenceMs: 30_000 });
     gate.noteInput(0, CHIP);

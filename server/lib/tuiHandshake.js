@@ -1884,6 +1884,9 @@ const SELECTOR_AFTER_PASTE_PATTERN = /enter\s*to\s*(?:select|confirm)|↑\s*\/\s
  * - `worked` — whether the run ever painted in-flight chrome or produced output
  *   that was not the echo of a PortOS keystroke. A run whose stall-nudge budget runs out with this still
  *   false never started, and the caller fails it rather than parking it.
+ * - `awaitingSubmit` — the chip still looks unsubmitted and an Enter remains in
+ *   the budget, so a quiet screen is not an answer yet (the one-shot runner's
+ *   idle-completion must not scrape the composer as the response).
  *
  * @param {{ promptMarkerCount?: number, settleMs?: number, maxAttempts?: number, workEvidenceMs?: number }} [options]
  */
@@ -1927,6 +1930,9 @@ export function createPromptSubmissionGate({
       return enters;
     },
     get worked() { return worked; },
+    get awaitingSubmit() {
+      return !worked && inputAt !== null && enters < maxAttempts && holdsUnsubmittedPaste();
+    },
   };
 }
 
