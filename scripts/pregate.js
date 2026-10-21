@@ -676,16 +676,22 @@ async function main() {
 
   const dependencyProblems = dependencyConsistencyProblems(REPO_ROOT);
   if (dependencyProblems.length > 0) {
-    const gitCommonDir = git(['rev-parse', '--git-common-dir']);
-    const gitDir = git(['rev-parse', '--git-dir']);
-    const isLinkedWorktree = resolve(REPO_ROOT, gitCommonDir) !== resolve(REPO_ROOT, gitDir);
-    const primaryCheckout = isLinkedWorktree ? resolve(REPO_ROOT, gitCommonDir, '..') : null;
+    let primaryCheckout = null;
+    try {
+      const gitCommonDir = git(['rev-parse', '--git-common-dir']);
+      const gitDir = git(['rev-parse', '--git-dir']);
+      if (resolve(REPO_ROOT, gitCommonDir) !== resolve(REPO_ROOT, gitDir)) {
+        primaryCheckout = resolve(REPO_ROOT, gitCommonDir, '..');
+      }
+    } catch {
+      // ignore git error
+    }
 
     console.error('❌ Dependency consistency preflight failed; lint/tests have not run.');
     for (const { label, linked, owner, issues } of dependencyProblems) {
       console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
-      if (isLinkedWorktree && (!linked || issues.some(i => i.includes('missing') || i.includes('unreadable')))) {
-        console.error(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout || '<primary-checkout>'} ${REPO_ROOT}`);
+      if (primaryCheckout && (linked || issues.some(i => i.includes('missing') || i.includes('unreadable')))) {
+        console.error(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout} ${REPO_ROOT}`);
       } else {
         console.error(linked
           ? `    Reconcile dependencies in the owning source checkout (${owner}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
