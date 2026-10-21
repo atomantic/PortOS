@@ -111,6 +111,13 @@ describe('GitHub accounts API', () => {
       expect(res.body).toEqual(expect.objectContaining({ status: 'not-authenticated', command: 'gh auth login --hostname github.example.com --web --clipboard' }));
     });
 
+    it('reports a missing gh binary instead of a sign-out for a named login', async () => {
+      const { body: account } = await request(app).post('/api/github/accounts').send({ host: 'github.example.com', login: 'alice' });
+      vi.mocked(execGh).mockRejectedValue(Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }));
+      const res = await request(app).get(`/api/github/accounts/${account.id}/status`);
+      expect(res.body).toEqual(expect.objectContaining({ status: 'not-installed', command: null }));
+    });
+
     it('flags an active login that differs from the configured one', async () => {
       await request(app).put('/api/github/accounts/github-com').send({ login: 'octocat' });
       vi.mocked(execGh).mockImplementation(async (args) => (args[0] === 'auth' ? 'gho_example' : 'someone-else'));

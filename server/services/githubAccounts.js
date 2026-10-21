@@ -168,30 +168,42 @@ export function deleteAccount(id) {
 
 const loginCommand = (host) => `gh auth login --hostname ${host} --web --clipboard`;
 
-/**
- * The environment that makes `gh` act as THIS account, or `null` when `gh`
- * holds no credential for the named login. A named login is pinned through its
- * own token so a second login on the same host works without `gh auth switch`;
- * an account with no login uses whichever login is active on that host.
- */
-async function resolveGitHubAccountEnv(account, { baseEnv = process.env } = {}) {
-  const env = { ...baseEnv, GH_HOST: account.host };
-  if (!account.login) return env;
-  const token = await execGh(
-    ['auth', 'token', '--hostname', account.host, '--user', account.login],
-    STATUS_TIMEOUT_MS,
-    { env },
-  ).catch(() => null);
-  if (!token) return null;
-  return account.host === GITHUB_DOT_COM
-    ? { ...env, GH_TOKEN: token }
-    : { ...env, GH_ENTERPRISE_TOKEN: token };
-}
-
 function classifyError(error) {
   if (error?.ghExitCode !== undefined) return classifyGhProbe({ code: error.ghExitCode, stderr: error.ghStderr });
   if (error?.code) return classifyGhProbe({ spawnError: error });
   return classifyGhProbe({ code: null, stderr: error?.message });
+}
+
+// `gh auth token` only reads gh's local credential store, so a non-zero exit
+// means "no credential for that login" — unless gh itself is missing or the
+// call never finished, which must not be reported as signed out.
+const TOKEN_LOOKUP_FAULTS = new Set(['not-installed', 'unreachable']);
+
+/**
+ * `{ env }` that makes `gh` act as THIS account, or `{ status }` when it can't.
+ * A named login is pinned through its own token so a second login on the same
+ * host works without `gh auth switch`; an account with no login uses whichever
+ * login is active on that host.
+ */
+async function resolveGitHubAccountEnv(account, { baseEnv = process.env } = {}) {
+  const env = { ...baseEnv, GH_HOST: account.host };
+  if (!account.login) return { env };
+  const lookup = await execGh(
+    ['auth', 'token', '--hostname', account.host, '--user', account.login],
+    STATUS_TIMEOUT_MS,
+    { env },
+  )
+    .then((token) => ({ token, error: null }))
+    .catch((error) => ({ token: null, error }));
+  if (!lookup.token) {
+    const { status } = classifyError(lookup.error);
+    return { status: TOKEN_LOOKUP_FAULTS.has(status) ? status : 'not-authenticated' };
+  }
+  return {
+    env: account.host === GITHUB_DOT_COM
+      ? { ...env, GH_TOKEN: lookup.token }
+      : { ...env, GH_ENTERPRISE_TOKEN: lookup.token },
+  };
 }
 
 /**
@@ -202,7 +214,10 @@ export async function getAccountStatus(id) {
   const account = await getAccount(id);
   const { host, login } = account;
   const checkedAt = new Date().toISOString();
-  const env = await resolveGitHubAccountEnv(account);
+  const { env, status: lookupStatus } = await resolveGitHubAccountEnv(account);
+  if (lookupStatus && lookupStatus !== 'not-authenticated') {
+    return { id, host, status: lookupStatus, login: null, checkedAt, remedy: ghRemedy(lookupStatus, { hostname: host }), command: null };
+  }
   if (!env) {
     return {
       id, host, status: 'not-authenticated', login: null, checkedAt,
