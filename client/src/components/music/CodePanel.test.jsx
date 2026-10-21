@@ -192,6 +192,7 @@ describe('<CodePanel>', () => {
     await mountReady({ trackId: null, draftKey: 'job-2', resolveTrackId: vi.fn(), scene: 'Long film', fixedLengthSec: 150 });
     expect(screen.getByRole('alert').textContent).toContain('The film is 150s; coded audio renders at most 120s');
     expect(screen.getByRole('button', { name: /Save as take/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Write from scratch/ })).toBeDisabled();
   });
 
   it('lets Stop cancel a recording that is waiting on the audio unlock', async () => {

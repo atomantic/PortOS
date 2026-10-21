@@ -232,7 +232,7 @@ export default function CodePanel({
   const sentPreview = useModelInputPreview(previewMusicCode, {
     description: description.trim(), lyrics: lyrics.trim(), scene, guidance, language,
     ...(fixedLengthSec ? { durationSec: fixedLengthSec } : {}),
-  }, { enabled: !!brief });
+  }, { enabled: !!brief && !filmTooLong });
 
   return (
     <div className="space-y-4">
@@ -295,12 +295,12 @@ export default function CodePanel({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => write('fresh')} disabled={disabled || busy || !brief} className={hasCode ? GHOST_BTN : PRIMARY_BTN}>
+        <button type="button" onClick={() => write('fresh')} disabled={disabled || busy || !brief || filmTooLong} className={hasCode ? GHOST_BTN : PRIMARY_BTN}>
           {writing === 'fresh' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Code2 className="h-4 w-4" />}
           <span>{writing === 'fresh' ? 'Writing…' : hasCode ? 'Write from scratch' : 'Write the code'}</span>
         </button>
         {hasCode && (
-          <button type="button" onClick={() => write('revise')} disabled={disabled || busy || !brief} className={PRIMARY_BTN}>
+          <button type="button" onClick={() => write('revise')} disabled={disabled || busy || !brief || filmTooLong} className={PRIMARY_BTN}>
             {writing === 'revise' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
             <span>{writing === 'revise' ? 'Revising…' : 'Revise code'}</span>
           </button>
