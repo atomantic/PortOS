@@ -10,6 +10,43 @@ const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})
 const safePath = value => typeof value === 'string' && value.length > 0 && !value.includes('\0') && !value.startsWith('/') && !value.split('/').some(part => part === '..' || part === '.');
 const git = (args, cwd) => execGit(args, cwd, { maxBuffer: 4 * 1024 * 1024 }).then(r => r.stdout);
 
+/** Selects the merged PR for an exact local tip. Selection is not proof: callers
+ * re-read the PR with `readRetirementForgeEvidence` before acting on it.
+ * `mergedAt` is the forge's merge time, or null for a historical-branch match.
+ */
+export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccount = null } = {}) {
+  const [{ execGh }, { resolveForgeExecOptions }, { githubRepoSpec }] = await Promise.all([
+    import('./github.js'), import('./forgeExecOptions.js'), import('../lib/workTracker.js'),
+  ]);
+  const origin = await getOriginInfo(repoPath);
+  const spec = githubRepoSpec(origin);
+  if (!spec) throw new Error('retirement-forge-unsupported');
+  const options = await resolveForgeExecOptions(repoPath, { forgeAccount });
+  if (!oid(tip)) throw new Error('retirement-pr-ambiguous');
+  // Query the exact commit, not an unbounded reused-branch history. A capped
+  // association result cannot establish uniqueness and stays held.
+  const rows = JSON.parse(await execGh(['api', '--hostname', origin.host,
+    `repos/${origin.fullName}/commits/${tip}/pulls?per_page=100`], undefined, options));
+  if (!Array.isArray(rows) || rows.length >= 100
+    || new Set(rows.map(row => row?.html_url)).size !== rows.length
+    || rows.some(row => {
+      const parsed = parsePullRequestUrl(row?.html_url);
+      return !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName
+        || typeof row.head?.ref !== 'string' || !oid(row.head?.sha);
+    })) throw new Error('retirement-pr-ambiguous');
+  const matches = rows.filter(row => row.head.sha === tip && row.head.ref === branch
+    && row.head.repo?.full_name === origin.fullName && row.base?.repo?.full_name === origin.fullName
+    && row.state === 'closed' && typeof row.merged_at === 'string' && Number.isFinite(Date.parse(row.merged_at)));
+  if (matches.length > 1) throw new Error('retirement-pr-ambiguous');
+  if (matches.length === 1) return { url: matches[0].html_url, mergedAt: matches[0].merged_at };
+  // Preserve historical review of an older local tip only when branch history
+  // itself has exactly one candidate. Never choose among mismatching heads.
+  const historical = JSON.parse(await execGh(['pr', 'list', '--repo', spec, '--head', branch, '--state', 'merged',
+    '--limit', '2', '--json', 'url'], undefined, options));
+  if (!Array.isArray(historical) || historical.length !== 1 || typeof historical[0]?.url !== 'string') throw new Error('retirement-pr-ambiguous');
+  return { url: historical[0].url, mergedAt: null };
+}
+
 export async function readRetirementForgeEvidence(repoPath, branch, prUrl, { forgeAccount = null, exactAliasHead = null } = {}) {
   const origin = await getOriginInfo(repoPath);
   const parsed = parsePullRequestUrl(prUrl);

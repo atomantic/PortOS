@@ -1,4 +1,7 @@
-vi.mock('./completedCheckoutEvidence.js', () => ({ hasCompletedCheckoutEvidence: vi.fn(async records => records.some(agent => agent.result?.success === true)) }));
+vi.mock('./completedCheckoutEvidence.js', () => ({
+  hasCompletedCheckoutEvidence: vi.fn(async records => records.some(agent => agent.result?.success === true)),
+  readMergedClaimEvidence: vi.fn(async () => null),
+}));
 vi.mock('./branchCompletionPolicy.js', async () => ({
   ...await vi.importActual('./branchCompletionPolicy.js'),
   readBranchCompletionPolicies: vi.fn(async () => (await wt.listWorktrees()).map(tree => ({ id: 'completed-owner', status: 'completed', result: { success: true }, metadata: { sourceWorkspace: '/repo', worktreeBranch: tree.branch?.replace('refs/heads/', '') } }))),
