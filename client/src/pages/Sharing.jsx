@@ -148,7 +148,7 @@ function SharingBuckets({ selectedId }) {
   const activity = useListResource(fetchActivity, { enabled: !!selectedId });
   // Socket handlers subscribe once; they read the latest hook state through this ref.
   const liveRef = useRef(null);
-  liveRef.current = { selectedId, inbox, activity };
+  useEffect(() => { liveRef.current = { selectedId, inbox, activity }; });
 
   const { isConfirming: isRemoveArmed, requestDelete: armRemove, cancelDelete: cancelRemove, confirmDelete: confirmRemove } = useConfirmDelete();
 
@@ -288,7 +288,7 @@ function SharingBuckets({ selectedId }) {
       return null;
     });
     if (!result) return;
-    inbox.setItems((items) => items.filter((it) => it.manifestId !== manifestId));
+    if (bucketId === liveRef.current.selectedId) inbox.setItems((items) => items.filter((it) => it.manifestId !== manifestId));
     const applied = result.outcome?.applied ?? 0;
     toast.success(`Imported — ${applied} record${applied === 1 ? '' : 's'}`);
   };
@@ -299,7 +299,7 @@ function SharingBuckets({ selectedId }) {
       return null;
     });
     if (!result) return;
-    inbox.setItems((items) => items.filter((it) => it.manifestId !== manifestId));
+    if (bucketId === liveRef.current.selectedId) inbox.setItems((items) => items.filter((it) => it.manifestId !== manifestId));
   };
 
   const selected = buckets.find((b) => b.id === selectedId) || null;
