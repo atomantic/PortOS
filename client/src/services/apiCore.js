@@ -1,4 +1,5 @@
 import toast from '../components/ui/Toast';
+import { trackRequest } from './actionFeedback.js';
 
 export const API_BASE = '/api'; // exported for sub-modules that use fetch() directly
 
@@ -48,7 +49,13 @@ export async function throwApiError(response) {
   throw err;
 }
 
-export async function request(endpoint, options = {}) {
+// A request started from a tap marks the tapped button busy until it settles
+// (services/actionFeedback.js), so every action responds at once.
+export function request(endpoint, options = {}) {
+  return trackRequest(performRequest(endpoint, options));
+}
+
+async function performRequest(endpoint, options = {}) {
   const { silent, responseType, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
   // Skip the JSON content-type header for FormData bodies — the browser must

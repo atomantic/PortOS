@@ -2113,3 +2113,42 @@ input[type="color"],
   0%, 100% { transform: translateY(0) scale(1); opacity: 0.3; }
   50% { transform: translateY(-10px) scale(1.5); opacity: 0.8; }
 }
+
+/* A button whose tap started a request still in flight (services/actionFeedback.js).
+   A sweeping highlight rather than a spinner: it needs no layout room, no
+   positioning context, and works on every button shape. */
+[data-pending="true"] {
+  cursor: progress;
+  background-image: linear-gradient(100deg, transparent 35%, rgb(255 255 255 / 0.22) 50%, transparent 65%);
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  animation: portos-pending-sweep 1.1s linear infinite;
+}
+
+@keyframes portos-pending-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: -150% 0; }
+}
+
+.action-activity-bar__fill {
+  animation: portos-activity-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes portos-activity-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-pending="true"] {
+    animation: none;
+    background-image: none;
+    opacity: 0.7;
+  }
+
+  .action-activity-bar__fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.6;
+  }
+}

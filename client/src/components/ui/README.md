@@ -8,6 +8,7 @@ accessibility). Feature-specific components live under their own feature directo
 
 | Component | What it's for |
 | --- | --- |
+| `ActionActivityBar` | Thin indeterminate bar at the top of the app while a tap-started request (`services/actionFeedback.js`) runs past 300ms. Mounted once in `Layout`. |
 | `AutoSizeTextarea` | Controlled `<textarea>` that grows to fit its content — no internal scroll, no hand-resize. |
 | `Banner` | Toned alert block (icon + content + actions) for warnings, errors, and info callouts. |
 | `SettingsLoadError` | Inline "failed to load saved settings" banner with Retry; pair with a disabled Save so defaults are never written over stored values. |
