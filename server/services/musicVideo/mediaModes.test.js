@@ -1,12 +1,15 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 // Aggregate fixed phase names only: no fixture paths, record ids or error text.
+// A stall fails with its own classification: pregate and CI set PORTOS_TEST_QUIET,
+// which turns console output into a no-op, so a console report never reaches the log.
 const importPhases = vi.hoisted(() => {
   let phases = null;
+  const summarize = () => [...phases].map(([name, phase]) =>
+    `${name}:calls=${phase.calls},pending=${phase.pending},pendingMs=${phase.pending ? Math.round(performance.now() - phase.pendingSince) : 0},maxMs=${Math.round(phase.maxMs)}`).join('; ');
   return {
-    start: () => { phases = new Map(); },
     async run(name, work) {
       if (!phases) return work();
       const phase = phases.get(name) ?? { calls: 0, pending: 0, maxMs: 0, pendingSince: 0 };
@@ -21,13 +24,25 @@ const importPhases = vi.hoisted(() => {
         phase.maxMs = Math.max(phase.maxMs, performance.now() - started);
       }
     },
-    report() {
-      if (!phases) return;
-      const summary = [...phases].map(([name, phase]) =>
-        `${name}:calls=${phase.calls},pending=${phase.pending},pendingMs=${phase.pending ? Math.round(performance.now() - phase.pendingSince) : 0},maxMs=${Math.round(phase.maxMs)}`).join('; ');
-      const log = [...phases.values()].some(phase => phase.pending) ? console.error : console.log;
-      log(`🧭 Media admission awaited phases ${summary}`);
-      phases = null;
+    // Rejects inside the 30s test budget with what separates the stall causes: a phase still
+    // pending with a quiet loop is an awaited operation that never settled; a long loop delay
+    // with little CPU is a paused or starved process; a long delay with CPU is synchronous work.
+    async guard(budgetMs, work) {
+      const { monitorEventLoopDelay } = process.getBuiltinModule('node:perf_hooks');
+      const { loadavg } = process.getBuiltinModule('node:os');
+      phases = new Map();
+      const loop = monitorEventLoopDelay({ resolution: 10 });
+      loop.enable();
+      const cpuAtStart = process.cpuUsage();
+      let timer;
+      const stalled = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const cpu = process.cpuUsage(cpuAtStart);
+          reject(new Error(`Media admission exceeded ${budgetMs}ms: cpuMs=${Math.round((cpu.user + cpu.system) / 1000)},maxLoopDelayMs=${Math.round(loop.max / 1e6)},load1=${loadavg()[0].toFixed(1)}; ${summarize()}`));
+        }, budgetMs);
+      });
+      try { return await Promise.race([work(), stalled]); }
+      finally { clearTimeout(timer); loop.disable(); phases = null; }
     },
   };
 });
@@ -51,11 +66,12 @@ vi.mock('../../lib/backupSnapshotBoundary.js', async (original) => {
 });
 vi.mock('./projects.js', async (original) => {
   const store = await original();
-  return { ...store, mutateProjectRecord: (...args) =>
-    importPhases.run('persist', () => store.mutateProjectRecord(...args)),
-  listProjects: (...args) => importPhases.run('prune-list', () => store.listProjects(...args)) };
+  return { ...store,
+    createProject: (...args) => importPhases.run('create', () => store.createProject(...args)),
+    getProject: (...args) => importPhases.run('read', () => store.getProject(...args)),
+    mutateProjectRecord: (...args) => importPhases.run('persist', () => store.mutateProjectRecord(...args)),
+    listProjects: (...args) => importPhases.run('prune-list', () => store.listProjects(...args)) };
 });
-afterEach(() => importPhases.report());
 vi.mock('../../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-media-policy-') }));
 vi.mock('./devArtifactStore.js', async (original) => {
   const store = await original();
@@ -101,8 +117,7 @@ describe('whole-workflow media modes', () => {
     await expect(projects.createProject({ name: 'Invalid', mediaMode: 'code-only', visualSpec: { references: [{ imageId: 'example.png' }] } })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
   });
 
-  it('refuses raster and embedded image documents before activation, accepts code+local fonts', async () => {
-    importPhases.start();
+  it('refuses raster and embedded image documents before activation, accepts code+local fonts', () => importPhases.guard(25_000, async () => {
     const project = await projects.createProject({ name: 'Document', mediaMode: 'code-only' });
     const dir = join(PATHS.data, 'candidate'); await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'index.html'), '<img src="data:image/png;base64,AAAA">');
@@ -122,7 +137,7 @@ describe('whole-workflow media modes', () => {
     await writeFile(join(dir, 'example.woff2'), 'synthetic font');
     await writeFile(join(dir, 'photo.png'), 'synthetic raster');
     await expect(importDocumentDirectory(project.id, 'candidate')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
-  });
+  }));
 });
 
 it('rejects embedded raster planning guides through the same policy as final documents', async () => {
