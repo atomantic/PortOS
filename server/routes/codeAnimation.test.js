@@ -748,6 +748,39 @@ describe('POST /api/code-animation/generate', () => {
     await vi.waitFor(() => expect(captureCodeAnimationPoster).toHaveBeenCalledWith(job.id));
   });
 
+  it('forks a finished animation: its HTML rides the prompt and the new job records what it extends', async () => {
+    const baseId = '00000000-0000-4000-8000-000000000004';
+    const baseHtml = '<!DOCTYPE html><html><body><script>const DURATION = 20;</script></body></html>';
+    codeAnimationRecords.set(baseId, { id: baseId, status: 'completed', title: 'Lantern', frame: { durationSeconds: 20 } });
+    codeAnimationHtml.set(baseId, baseHtml);
+    getProviderById.mockResolvedValue({ id: 'api-1', type: 'api', enabled: true });
+    runPromptThroughProvider.mockResolvedValue({ text: '```html\n<!DOCTYPE html><html></html>\n```', provider: { id: 'api-1' } });
+    const app = makeApp();
+    const extend = { ...brief, providerId: 'api-1', baseJobId: baseId, format: { durationSeconds: 120 } };
+    const res = await request(app).post('/api/code-animation/generate').send(extend);
+    expect(res.status).toBe(202);
+    expect(res.body.base).toEqual({ jobId: baseId, title: 'Lantern', durationSeconds: 20 });
+    expect(res.body.prompt).toContain('BASE ANIMATION');
+    expect(res.body.prompt).toContain(baseHtml);
+    expect(res.body.prompt).toMatch(/finished 20s cut[\s\S]*120s version/);
+    await pollUntilSettled(app, res.body.id);
+    expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain(baseHtml);
+    expect(codeAnimationRecords.get(res.body.id).input.baseJobId).toBe(baseId);
+
+    // Unfinished, unknown, and oversized bases are refused before any run.
+    runPromptThroughProvider.mockClear();
+    const { providerId: _provider, ...forPrompt } = extend;
+    codeAnimationRecords.set(baseId, { ...codeAnimationRecords.get(baseId), status: 'running' });
+    expect((await request(app).post('/api/code-animation/prompt').send(forPrompt)).body.code).toBe('CODE_ANIMATION_BASE_NOT_COMPLETED');
+    codeAnimationRecords.set(baseId, { ...codeAnimationRecords.get(baseId), status: 'completed' });
+    codeAnimationHtml.set(baseId, 'x'.repeat(400_001));
+    const large = await request(app).post('/api/code-animation/prompt').send(forPrompt);
+    expect(large.body.code).toBe('CODE_ANIMATION_BASE_TOO_LARGE');
+    expect(large.body.error).toMatch(/400,001 characters.*up to 400,000/);
+    expect((await request(app).post('/api/code-animation/prompt').send({ ...forPrompt, baseJobId: '00000000-0000-4000-8000-000000000099' })).body.code).toBe('CODE_ANIMATION_BASE_NOT_FOUND');
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
   it('attaches the references for a vision-capable CLI provider instead of only naming their paths', async () => {
     getProviderById.mockResolvedValue({ id: 'cli-claude', type: 'cli', command: 'claude', enabled: true });
     runPromptThroughProvider.mockResolvedValue({ text: '```html\n<!DOCTYPE html><html></html>\n```', provider: { id: 'cli-claude', type: 'cli', command: 'claude' } });

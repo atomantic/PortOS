@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { currentContainmentMechanism, runContainedWorker, runTrustedLocalWorker } from './containedWorker.js';
+import { currentContainmentMechanism, processAlive, runContainedWorker, runTrustedLocalWorker } from './containedWorker.js';
 
 // Real-mechanism suite: these run only where the enforced sandbox exists. The
 // adversarial boundary and limit checks run end to end through the probe route
@@ -142,7 +142,7 @@ setInterval(() => {}, 1000);
     const evidence = JSON.parse(result.stdout.trim());
     expect(evidence.child).toBeGreaterThan(0);
     expect(evidence.token).toBe(false);
-    expect(() => process.kill(evidence.child, 0)).toThrow();
+    expect(processAlive(evidence.child)).toBe(false);
     expect(await readdir(root)).toEqual([]);
   }, 20000);
 });

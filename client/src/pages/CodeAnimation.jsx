@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, FileCode2, Film, Globe, Images, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
+import { Copy, FileCode2, GitFork, Film, Globe, Images, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
@@ -50,6 +50,8 @@ const DEFAULT_DRAFT = {
   format: { durationSeconds: 20, aspectRatio: '16:9', resolution: '1080p', fps: 30 },
   renderer: 'auto',
   interactive: false,
+  // The finished animation this draft forks and extends: { jobId, title, durationSeconds }.
+  base: null,
 };
 
 // Brief fields where a blank from the brief writer means "nothing to add"
@@ -57,6 +59,10 @@ const DEFAULT_DRAFT = {
 const KEEP_ON_BLANK = new Set(['styleNotes', 'cast']);
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const readBase = (value) => (isRecord(value) && typeof value.jobId === 'string' && value.jobId
+  ? { jobId: value.jobId, title: typeof value.title === 'string' ? value.title : '', durationSeconds: Number.isFinite(value.durationSeconds) ? value.durationSeconds : null }
+  : null);
 
 const loadDraft = () => {
   const stored = safeReadJsonStorage(DRAFT_KEY, null);
@@ -118,6 +124,7 @@ const loadDraft = () => {
     },
     renderer: stringField('renderer'),
     interactive: typeof stored.interactive === 'boolean' ? stored.interactive : DEFAULT_DRAFT.interactive,
+    base: readBase(stored.base),
   };
 };
 
@@ -164,6 +171,7 @@ function toBrief(draft) {
           notes: draft.audio.notes,
         }
       : null,
+    ...(draft.base ? { baseJobId: draft.base.jobId } : {}),
     ...moodBoardSelection(draft),
   };
 }
@@ -232,6 +240,7 @@ function draftFromJob(job) {
     format: { ...DEFAULT_DRAFT.format, ...(input.format || {}) },
     renderer: input.renderer || 'auto',
     interactive: input.interactive === true,
+    base: readBase(job.base),
   };
 }
 
@@ -509,6 +518,18 @@ function FastCodeAnimation() {
     navigate(`/code-animation/${encodeURIComponent(started.id)}`);
   };
 
+  // Fork a finished animation: keep its brief, extend its code. The new run is
+  // a separate job, so leave the job route; the draft carries everything.
+  const handleFork = () => {
+    if (!job || job.status !== 'completed') return;
+    const forked = draftFromJob(job);
+    // A soundtrack generated at the old length would not fit the longer cut.
+    const audio = forked.audio?.trackId && forked.audio.trackId === job.soundtrack?.trackId ? null : forked.audio;
+    setDraft({ ...forked, audio, base: { jobId: job.id, title: job.title || '', durationSeconds: job.frame?.durationSeconds ?? null } });
+    navigate('/code-animation');
+    toast.success('Forked. Set the new duration and write what happens next, then Generate animation.');
+  };
+
   const handlePreviewPasted = () => {
     if (!pastedHtml.trim()) return;
     setPreview({ html: pastedHtml, audioUrl: built?.audioUrl ?? draft.audio?.url ?? null, frame: built?.frame ?? null });
@@ -590,6 +611,17 @@ function FastCodeAnimation() {
                 Write brief
               </button>
             </div>
+            {draft.base && (
+              <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border border-port-accent/40 bg-port-accent/10 p-2 text-xs text-gray-200">
+                <GitFork className="h-4 w-4 shrink-0 text-port-accent" aria-hidden="true" />
+                <span className="min-w-0 flex-1">
+                  Extending <span className="font-semibold">{draft.base.title || 'an animation'}</span>
+                  {draft.base.durationSeconds ? ` (${draft.base.durationSeconds}s)` : ''}. Its code is sent with the prompt; set the new duration in Format.
+                  {draft.base.durationSeconds && draft.format.durationSeconds <= draft.base.durationSeconds ? ' The duration is not longer than the original yet.' : ''}
+                </span>
+                <button type="button" onClick={() => update({ base: null })} className="text-gray-400 hover:text-white">Stop extending</button>
+              </div>
+            )}
             <ProviderModelSelector
               providers={briefProviders}
               selectedProviderId={briefProviderId}
@@ -793,6 +825,11 @@ function FastCodeAnimation() {
                 audioGlobal={options.audioGlobal}
                 title={draft.title || draft.concept.slice(0, 40)}
               />
+            )}
+            {preview?.jobId && job?.id === preview.jobId && job.status === 'completed' && (
+              <button type="button" onClick={handleFork} className={buttonSecondary}>
+                <GitFork className="h-4 w-4" /> Fork &amp; extend
+              </button>
             )}
             {preview?.jobId && job?.id === preview.jobId && job.status === 'completed' && (
               <CodeAnimationSoundtrack

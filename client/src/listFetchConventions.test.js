@@ -68,11 +68,7 @@ export const LIST_COLLAPSE = new RegExp(
  * Files still carrying a collapse, with how many. Lower or remove a row when a
  * site is migrated to `useListResource`; never raise one.
  */
-const KNOWN = Object.freeze({
-  // Named-parameter, multi-statement spelling (#12807); migrated under #12819.
-  'src/components/loraTraining/CharacterLoraChip.jsx': 1,
-  'src/components/meatspace/post/MemoryPractice.jsx': 1,
-});
+const KNOWN = Object.freeze({});
 
 /**
  * Sites that match on purpose, each with the reason it is not a list collapse.

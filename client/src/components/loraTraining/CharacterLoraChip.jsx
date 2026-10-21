@@ -5,31 +5,33 @@
  * that find-or-creates the character's dataset and navigates to it.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router';
 import { Sparkles, GraduationCap, Loader2 } from 'lucide-react';
 import { getCharacterLoras, createLoraDataset, listLoraDatasets } from '../../services/api';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 
 export default function CharacterLoraChip({ entryId, ingredientId, universeId, showDatasetButton = true }) {
   const navigate = useNavigate();
-  const [loras, setLoras] = useState(null);
   // Existing dataset (looked up by ingredientId) — the link target on
   // surfaces like the catalog detail page that don't know the universe
   // entryId and therefore can't find-or-create.
   const [existingDataset, setExistingDataset] = useState(null);
   const [opening, setOpening] = useState(false);
 
-  useEffect(() => {
-    if (!entryId && !ingredientId) return undefined;
-    let active = true;
-    getCharacterLoras({ entryId, ingredientId }, { silent: true })
-      .then((list) => { if (active) setLoras(Array.isArray(list) ? list : []); })
-      .catch(err => {
-        console.warn('⚠️ Failed to load character LoRAs: ' + err.message);
-        if (active) setLoras([]);
-      });
-    return () => { active = false; };
-  }, [entryId, ingredientId]);
+  const fetchLoras = useCallback(
+    () => getCharacterLoras({ entryId, ingredientId }, { silent: true }),
+    [entryId, ingredientId],
+  );
+  const {
+    items: loras,
+    state: lorasState,
+    error: lorasError,
+    retry: retryLoras,
+  } = useListResource(fetchLoras, {
+    enabled: Boolean(entryId || ingredientId),
+  });
 
   const canCreate = !!(universeId && entryId);
   useEffect(() => {
@@ -55,6 +57,9 @@ export default function CharacterLoraChip({ entryId, ingredientId, universeId, s
 
   return (
     <div className="flex items-center gap-2 flex-wrap text-xs">
+      {lorasState === 'error' && (
+        <ListLoadError what="character LoRAs" error={lorasError} onRetry={retryLoras} />
+      )}
       {lora && (
         <Link
           to="/models/loras"
@@ -65,7 +70,7 @@ export default function CharacterLoraChip({ entryId, ingredientId, universeId, s
           LoRA{lora.triggerWords?.[0] ? ` · ${lora.triggerWords[0]}` : ''}
         </Link>
       )}
-      {showDatasetButton && canCreate && (
+      {showDatasetButton && canCreate && lorasState === 'ready' && (
         <button
           type="button"
           onClick={openDataset}

@@ -130,6 +130,8 @@ const briefSchema = z.object({
     note: z.string().trim().max(L.referenceNoteMax).default(''),
   }).strict().nullable().optional(),
   audio: audioSchema,
+  // A finished animation this one forks and extends (its HTML rides the prompt).
+  baseJobId: z.string().uuid().nullable().optional(),
 }).strict();
 
 const generateSchema = briefSchema.extend({
@@ -180,8 +182,8 @@ router.post('/brief', asyncHandler(async (req, res) => {
 
 router.post('/prompt', asyncHandler(async (req, res) => {
   const input = validateRequest(briefSchema, req.body ?? {});
-  const { prompt, frame, attachments, audioUrl, moodBoardId } = await buildCodeAnimationRequest(input);
-  res.json({ prompt, frame, attachments, audioUrl, moodBoardId });
+  const { prompt, frame, attachments, audioUrl, moodBoardId, base } = await buildCodeAnimationRequest(input);
+  res.json({ prompt, frame, attachments, audioUrl, moodBoardId, base });
 }));
 
 router.post('/generate', asyncHandler(async (req, res) => {
