@@ -6,13 +6,14 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import vm from 'node:vm';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-composition-setup-diagnostics-'),
 }));
 
-const owner = vi.hoisted(() => ({ order: [], transport: null, sent: null }));
+const owner = vi.hoisted(() => ({ order: [], transport: null, sent: null, expressions: [] }));
 vi.mock('./ownedBrowser.js', () => ({
   launchCompositionBrowser: async () => ({
     transport: owner.transport,
@@ -39,7 +40,8 @@ function scriptedTransport(stallOn, replies = {}) {
     readyState: 1,
     send(text, callback) {
       callback?.();
-      const { id, method } = JSON.parse(text);
+      const { id, method, params } = JSON.parse(text);
+      if (method === 'Runtime.evaluate') owner.expressions.push(params.expression);
       if (method === stallOn) return stalled();
       setImmediate(() => emitter.emit('message', Buffer.from(JSON.stringify({ id, result: replies[method] ?? REPLIES[method] ?? {} }))));
     },
@@ -52,7 +54,7 @@ function scriptedTransport(stallOn, replies = {}) {
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { openComposition } = await import('./browser.js');
 
-afterEach(() => { vi.useRealTimers(); owner.order = []; });
+afterEach(() => { vi.useRealTimers(); owner.order = []; owner.expressions = []; });
 afterAll(() => cleanupTempDataRoots());
 
 describe('composition CDP setup timeout evidence', () => {
@@ -108,5 +110,30 @@ describe('composition CDP setup timeout evidence', () => {
 
     expect(error.message).toMatch(/^Composition document load stalled: loading after \d+ms while the page stayed responsive \(phase=document-load,/);
     expect(error.message).not.toContain('Browser command timed out');
+    // sentMs is when the wait began, not the moment of failure.
+    expect(error.message).toMatch(/sentMs=\d+, timeoutMs=\d+/);
+  });
+
+  it('sends a load wait that resolves on a complete document or the load event and gives up with the readyState at the deadline', async () => {
+    const { directory } = await openStagedComposition('load-script', scriptedTransport(null, { 'Runtime.evaluate': { result: { value: 'loaded' } } }));
+    const page = await openComposition(directory, { ownedBrowser: true });
+    await page.close();
+    const expression = owner.expressions[0];
+    expect(expression).toContain('27000');
+
+    const run = (readyState) => {
+      const timers = [];
+      const listeners = [];
+      const sandbox = { document: { readyState }, addEventListener: (_name, listener) => listeners.push(listener), setTimeout: (callback, ms) => timers.push({ callback, ms }) };
+      return { result: vm.runInNewContext(expression, sandbox), timers, listeners };
+    };
+    await expect(run('complete').result).resolves.toBe('loaded');
+    const loading = run('loading');
+    loading.listeners[0]();
+    await expect(loading.result).resolves.toBe('loaded');
+    const stuck = run('interactive');
+    expect(stuck.timers.map(timer => timer.ms)).toEqual([27000]);
+    stuck.timers[0].callback();
+    await expect(stuck.result).resolves.toBe('stalled:interactive');
   });
 });
