@@ -41,6 +41,16 @@ describe('a shot\'s Cast guides picker', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: { ingredientId: 'cat-chr-x', era: 'teen' }, frameReferenceIds: ['r1'] });
   });
 
+  // Uniquely catches a guide-only pick turning into [] (an explicit "send nothing") on a variant change.
+  it('returns a guide-only pick to Auto when the variant changes or is cleared', () => {
+    const onSave = vi.fn();
+    render(<SceneCastVariant project={project} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-x' }, frameReferenceIds: ['mvr-guide-a.png'] }} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.change(screen.getByLabelText('Era'), { target: { value: 'teen' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: { ingredientId: 'cat-chr-x', era: 'teen' }, frameReferenceIds: null });
+    fireEvent.change(screen.getByLabelText('Cast guides'), { target: { value: '' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: null, frameReferenceIds: null });
+  });
+
   it('renders nothing when no subject is saved to Casting', () => {
     const { container } = render(<SceneCastVariant project={{ concept: { subjects: [project.concept.subjects[1]] } }} scene={{ sceneId: 's1' }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
     expect(container.firstChild).toBeNull();

@@ -35,6 +35,13 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
       .toHaveLength(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
   });
 
+  // Uniquely catches a guide the image route would reject (400) taking a slot a sendable guide should fill.
+  it('skips guides a frame render cannot name, letting the next candidate take the slot', () => {
+    const media = { [CAST_ID]: [guide('child.gif', 7), guide('nested/child.png', 7), guide('teen.png', 17)] };
+    expect(ids(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID, age: 7 } }, media)))
+      .toEqual(['teen.png', 'lead.png', 'set.png']);
+  });
+
   it('is unchanged without a variant or before the cast media loads', () => {
     const today = ids(musicVideoConditioningReferences(project(authored), {}));
     expect(today).toEqual(['lead.png', 'set.png']);
