@@ -5,6 +5,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import {
   createPrivacyOrg, updatePrivacyOrg, getOrgHoldings, setOrgHoldings, getSocialAccounts,
 } from '../../services/api';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import { ORG_CATEGORIES, ORG_TRUST_LEVELS, ORG_STATUSES, VAULT_TYPES, INPUT_CLS, labelFor } from './constants';
 
@@ -12,6 +13,9 @@ const EMPTY = {
   name: '', category: 'other', website: '', trust: 'trusted', status: 'active',
   contactEmail: '', contactPhone: '', notes: '', socialAccountId: '',
 };
+
+const HOLDINGS_READY = Object.freeze({ state: 'ready', error: null });
+const HOLDINGS_LOADING = Object.freeze({ state: 'loading', error: null });
 
 // Human label for a Digital Twin social account in the picker.
 const accountLabel = (a) => {
@@ -24,10 +28,15 @@ const accountLabel = (a) => {
 // picker is a checkbox list over the user's vault records (masked values only).
 // Holdings are saved via the replace-set endpoint after the org exists (on
 // create we POST the org first, then set holdings against the returned id).
-export default function OrgDrawer({ open, org, subjectId, vaultRecords, onClose, onSaved }) {
+export default function OrgDrawer({ open, org, subjectId, vaultRecords, vaultError = null, onRetryVault, onClose, onSaved }) {
   const editing = !!org;
   const [form, setForm] = useState(EMPTY);
   const [selected, setSelected] = useState(() => new Set()); // vaultRecordId set
+  // The replace-set write is only safe once the org's stored holdings are in
+  // `selected`: saving while that read is pending or failed would send [] and
+  // erase every holding the org has.
+  const [holdingsLoad, setHoldingsLoad] = useState(HOLDINGS_READY);
+  const [holdingsAttempt, setHoldingsAttempt] = useState(0);
   const [socialAccounts, setSocialAccounts] = useState([]); // Digital Twin accounts for the cross-link picker
 
   useEffect(() => {
@@ -47,12 +56,6 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, onClose,
       }
       : { ...EMPTY });
     setSelected(new Set());
-    // Load existing holdings for an org being edited.
-    if (org?.id) {
-      getOrgHoldings(org.id, { silent: true })
-        .then((h) => { if (active) setSelected(new Set((h || []).map((x) => x.vaultRecordId))); })
-        .catch(() => {});
-    }
     // Load Digital Twin social accounts for the cross-link picker (#2147). Degrades
     // to no picker options if the twin has none — never blocks org editing.
     getSocialAccounts()
@@ -60,6 +63,23 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, onClose,
       .catch(() => { if (active) setSocialAccounts([]); });
     return () => { active = false; };
   }, [open, org]);
+
+  useEffect(() => {
+    if (!open || !org?.id) {
+      setHoldingsLoad(HOLDINGS_READY);
+      return undefined;
+    }
+    let active = true;
+    setHoldingsLoad(HOLDINGS_LOADING);
+    getOrgHoldings(org.id, { silent: true })
+      .then((h) => {
+        if (!active) return;
+        setSelected(new Set((h || []).map((x) => x.vaultRecordId)));
+        setHoldingsLoad(HOLDINGS_READY);
+      })
+      .catch((error) => { if (active) setHoldingsLoad({ state: 'error', error }); });
+    return () => { active = false; };
+  }, [open, org, holdingsAttempt]);
 
   const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
   const toggleHolding = (id) => setSelected((prev) => {
@@ -94,9 +114,10 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, onClose,
       : await createPrivacyOrg({ ...payload, subjectId }, { silent: true });
     if (!savedOrg) return null;
 
-    // Persist holdings (replace-set). Skip the call on create when nothing is selected.
+    // Persist holdings (replace-set). Skip the call on create when nothing is
+    // selected, and on edit until the stored holdings have loaded.
     const holdings = [...selected].map((vaultRecordId) => ({ vaultRecordId }));
-    if (editing || holdings.length > 0) {
+    if (editing ? holdingsLoad.state === 'ready' : holdings.length > 0) {
       await setOrgHoldings(savedOrg.id, holdings, { silent: true }).catch(() => {
         toast.error('Organization saved, but holdings could not be updated');
       });
@@ -175,7 +196,13 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, onClose,
 
         <div>
           <span className="block text-sm text-gray-400 mb-1">Holdings — which vault records does this org have?</span>
-          {(!vaultRecords || vaultRecords.length === 0) ? (
+          {holdingsLoad.state === 'error' ? (
+            <ListLoadError what="this organization's holdings" error={holdingsLoad.error} onRetry={() => setHoldingsAttempt((n) => n + 1)} />
+          ) : holdingsLoad.state === 'loading' ? (
+            <p className="text-xs text-gray-500">Loading holdings…</p>
+          ) : vaultError ? (
+            <ListLoadError what="vault records" error={vaultError} onRetry={onRetryVault} />
+          ) : (!vaultRecords || vaultRecords.length === 0) ? (
             <p className="text-xs text-gray-500">No vault records yet. Add records in the Vault tab first.</p>
           ) : (
             <div className="max-h-52 overflow-y-auto border border-port-border rounded divide-y divide-port-border">

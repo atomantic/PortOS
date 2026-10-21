@@ -39,6 +39,32 @@ const renderAnalyzed = async () => {
   await screen.findByRole('button', { name: /Patterns Detected/i });
 };
 
+describe('ListEnrichment saved list read', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows a failed read as a retryable error instead of a blank list a save would replace', async () => {
+    api.getEnrichmentListItems.mockRejectedValueOnce(new Error('boom'));
+    api.getEnrichmentListItems.mockResolvedValue([{ title: 'Example Book', note: '' }]);
+    render(
+      <ListEnrichment
+        categoryId="favorite_books"
+        onBack={() => {}}
+        onRefresh={() => {}}
+        providers={[]}
+        selectedProvider={null}
+        setSelectedProvider={() => {}}
+      />
+    );
+
+    expect(await screen.findByText(/Could not load your saved list/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Analyze & Generate/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByDisplayValue('Example Book')).toBeInTheDocument();
+    expect(api.getEnrichmentListItems).toHaveBeenCalledWith('favorite_books', { silent: true });
+  });
+});
+
 describe('ListEnrichment analysis disclosures', () => {
   beforeEach(() => vi.clearAllMocks());
 

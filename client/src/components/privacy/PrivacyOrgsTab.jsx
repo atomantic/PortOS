@@ -3,6 +3,7 @@ import { Plus, Pencil, Trash2, ExternalLink, Building2 } from 'lucide-react';
 import {
   getPrivacyOrgs, deletePrivacyOrg, getVaultRecords, getOrgHoldings,
 } from '../../services/api';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import OrgDrawer from './OrgDrawer';
@@ -40,6 +41,8 @@ function ChipFilter({ label, options, value, onChange }) {
 export default function PrivacyOrgsTab({ subjectId }) {
   const [orgs, setOrgs] = useState([]);
   const [vaultRecords, setVaultRecords] = useState([]);
+  const [orgsError, setOrgsError] = useState(null);
+  const [vaultError, setVaultError] = useState(null);
   const [holdingsByOrg, setHoldingsByOrg] = useState({}); // orgId -> [holdings]
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ trust: null, category: null, status: null });
@@ -51,9 +54,11 @@ export default function PrivacyOrgsTab({ subjectId }) {
   const load = useCallback(() => {
     const isCurrent = beginRequest();
     setLoading(true);
+    setOrgsError(null);
+    setVaultError(null);
     // Holdings depend only on the org list, so they chain off it directly — the
     // vault read runs alongside rather than gating the fan-out.
-    const orgsThenHoldings = getPrivacyOrgs({}, { subjectId })
+    const orgsThenHoldings = getPrivacyOrgs({}, { subjectId, silent: true })
       .then(async (orgList) => {
         if (!isCurrent()) return;
         setOrgs(orgList);
@@ -64,11 +69,11 @@ export default function PrivacyOrgsTab({ subjectId }) {
         }));
         if (isCurrent()) setHoldingsByOrg(Object.fromEntries(entries));
       })
-      .catch(() => { if (isCurrent()) { setOrgs([]); setHoldingsByOrg({}); } });
+      .catch((err) => { if (isCurrent()) { setOrgs([]); setHoldingsByOrg({}); setOrgsError(err); } });
 
-    const vault = getVaultRecords(undefined, { subjectId })
+    const vault = getVaultRecords(undefined, { subjectId, silent: true })
       .then((v) => { if (isCurrent()) setVaultRecords(v || []); })
-      .catch(() => { if (isCurrent()) setVaultRecords([]); });
+      .catch((err) => { if (isCurrent()) { setVaultRecords([]); setVaultError(err); } });
 
     Promise.all([orgsThenHoldings, vault]).then(() => { if (isCurrent()) setLoading(false); });
   }, [subjectId, beginRequest]);
@@ -125,6 +130,8 @@ export default function PrivacyOrgsTab({ subjectId }) {
 
       {loading ? (
         <div className="text-gray-500 text-sm py-8 text-center">Loading organizations…</div>
+      ) : orgsError ? (
+        <ListLoadError what="organizations" error={orgsError} onRetry={load} />
       ) : visible.length === 0 ? (
         <div className="border border-dashed border-port-border rounded-lg p-8 text-center text-gray-500 text-sm">
           {orgs.length === 0
@@ -206,6 +213,8 @@ export default function PrivacyOrgsTab({ subjectId }) {
         org={editing}
         subjectId={subjectId}
         vaultRecords={vaultRecords}
+        vaultError={vaultError}
+        onRetryVault={load}
         onClose={() => setDrawerOpen(false)}
         onSaved={handleSaved}
       />

@@ -516,7 +516,7 @@ export const updateTool = (id, data, options) => request(`/tools/${id}`, {
 });
 
 // DataDog
-export const getDatadogInstances = () => request('/datadog/instances');
+export const getDatadogInstances = (options) => request('/datadog/instances', options);
 export const searchDatadogErrors = (instanceId, serviceName, environment, fromTime, options) =>
   request(`/datadog/instances/${instanceId}/search-errors`, {
     method: 'POST',

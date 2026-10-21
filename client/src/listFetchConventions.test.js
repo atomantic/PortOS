@@ -15,8 +15,10 @@
  * The rule is a ratchet. `KNOWN` records how many such sites each page still
  * carries today; a NEW site, or a higher count in a listed page, fails. So does
  * a count that DROPPED, so the row is lowered or removed and the baseline
- * stays honest. The remaining sites are tracked by surface in the follow-up
- * issues #12040 names; the app detail tabs (#12591) are already at zero.
+ * stays honest. The page sweeps (#12169–#12171) and the app detail tabs
+ * (#12591) are done; the remaining component sites are tracked by surface in
+ * #12783 (Digital Twin), #12784 (Brain/MeatSpace/Messages/Privacy/Tribe),
+ * #12785 (creative panels) and #12786 (settings/sharing/CoS/providers).
  *
  * ## What this guard CANNOT see
  *
@@ -56,7 +58,6 @@ export const LIST_COLLAPSE = /\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{?\s*set[A-Z]\
 const KNOWN = Object.freeze({
   'src/components/FeatureProviderPicker.jsx': 1,
   'src/components/QuickTaskWidget.jsx': 2,
-  'src/components/apps/EditAppDrawer.jsx': 2,
   'src/components/apps/JiraConfigPanel.jsx': 1,
   'src/components/brain/IdeaLoomLists.jsx': 1,
   'src/components/brain/YoutubeIngestSettings.jsx': 1,
@@ -67,7 +68,6 @@ const KNOWN = Object.freeze({
   'src/components/cos/tabs/JobsTab.jsx': 1,
   'src/components/cos/tabs/ProviderStatusCard.jsx': 1,
   'src/components/cos/tabs/RunsTab.jsx': 1,
-  'src/components/digital-twin/ListEnrichment.jsx': 1,
   'src/components/digital-twin/ObservedTasteEvidence.jsx': 1,
   'src/components/digital-twin/tabs/AccountsTab.jsx': 3,
   'src/components/digital-twin/tabs/AutobiographyTab.jsx': 3,
@@ -95,7 +95,6 @@ const KNOWN = Object.freeze({
   'src/components/media/UniverseMoodBoardPicker.jsx': 3,
   'src/components/messages/DraftsTab.jsx': 1,
   'src/components/messages/IMessageTab.jsx': 1,
-  'src/components/models/ProviderFallbacks.jsx': 1,
   'src/components/music/AlbumsManager.jsx': 2,
   'src/components/music/ChiptunePanel.jsx': 1,
   'src/components/music/TracksManager.jsx': 2,

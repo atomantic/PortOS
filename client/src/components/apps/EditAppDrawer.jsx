@@ -7,7 +7,9 @@ import { PORTOS_APP_ID } from '../../services/apiCore';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
+import ListLoadError from '../ui/ListLoadError';
 import useDrawerTab from '../../hooks/useDrawerTab';
+import useListResource from '../../hooks/useListResource';
 import { copyToClipboard } from '../../lib/clipboard';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
@@ -36,6 +38,10 @@ const TABS = [
   { id: 'features', label: 'Features', icon: ToggleLeft }
 ];
 const TAB_IDS = TABS.map(t => t.id);
+
+// Silent: the DataDog section renders its own error row with Retry.
+const loadDatadogInstances = () => api.getDatadogInstances({ silent: true })
+  .then(data => (data?.instances ? Object.values(data.instances) : []));
 
 // Port fields that must be validated on save even when their tab is unmounted.
 const PORT_FIELDS = [
@@ -135,13 +141,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     }
   };
   const [workTrackerInfo, setWorkTrackerInfo] = useState(null);
-  const [datadogInstances, setDatadogInstances] = useState([]);
-
-  useEffect(() => {
-    api.getDatadogInstances()
-      .then(data => setDatadogInstances(data?.instances ? Object.values(data.instances) : []))
-      .catch(() => setDatadogInstances([]));
-  }, []);
+  const datadogInstances = useListResource(loadDatadogInstances);
 
   useEffect(() => {
     let cancelled = false;
@@ -162,12 +162,14 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     setLiError(false);
     Promise.all([
       api.getAppLayeredIntelligence(app.id),
-      api.getProviders({ silent: true }).catch(() => ({ providers: [] })),
+      api.getProviders({ silent: true }),
       // Scheduling (enabled/interval/provider/model) lives in the per-app task
       // override now (#2322); behavior (sources/scopes/rules/handoff) stays in the
       // layeredIntelligence config. Merge the override on top so the tab shows the
-      // scheduling source of truth.
-      api.getAppTaskTypes(app.id).catch(() => ({ taskTypeOverrides: {} }))
+      // scheduling source of truth. A failed override read fails the whole tab:
+      // defaulting it would show a running loop as off, and toggling "off" then
+      // diffs as no change, so the loop could not be stopped from here.
+      api.getAppTaskTypes(app.id, { silent: true })
     ]).then(([li, provData, taskTypes]) => {
       if (cancelled) return;
       const behavior = li?.config || null;
@@ -836,7 +838,11 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
 
                         {formData.datadogEnabled && (
                           <>
-                            {datadogInstances.length === 0 ? (
+                            {datadogInstances.state === 'error' ? (
+                              <ListLoadError what="DataDog instances" error={datadogInstances.error} onRetry={datadogInstances.retry} />
+                            ) : datadogInstances.state === 'loading' ? (
+                              <p className="text-sm text-gray-500">Loading DataDog instances…</p>
+                            ) : datadogInstances.items.length === 0 ? (
                               <Banner tone="warning" size="md">
                                 No DataDog instances configured. <Link to="/devtools/datadog" className="underline hover:text-white">Configure DataDog</Link> first.
                               </Banner>
@@ -851,7 +857,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                                   >
                                     <option value="">Select instance...</option>
-                                    {datadogInstances.map(inst => (
+                                    {datadogInstances.items.map(inst => (
                                       <option key={inst.id} value={inst.id}>{inst.name} ({inst.site})</option>
                                     ))}
                                   </select>

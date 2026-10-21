@@ -98,6 +98,20 @@ describe.skipIf(!runDb)('privacy orgs DB round-trip', () => {
     expect(after[0]).toMatchObject({ vaultRecordId: r1.id, status: 'update_pending' });
   });
 
+  it('keeps a held record\'s stored status when the replace-set omits it', async () => {
+    const held = await vault.createVaultRecord({ type: 'address', label: 'Old home', value: '2 Example Rd' });
+    const added = await vault.createVaultRecord({ type: 'email', label: 'Alt', value: 'alt@example.com' });
+    createdVaultRecords.push(held.id, added.id);
+    const org = await orgs.createOrg({ name: 'Example Insurer' });
+    createdOrgs.push(org.id);
+
+    await orgs.setOrgHoldings(org.id, [{ vaultRecordId: held.id, status: 'update_pending' }]);
+    // The org editor sends ids only — an unrelated edit must not reset the mark.
+    await orgs.setOrgHoldings(org.id, [{ vaultRecordId: held.id }, { vaultRecordId: added.id }]);
+    const byRecord = Object.fromEntries((await orgs.getHoldingsForOrg(org.id)).map((h) => [h.vaultRecordId, h.status]));
+    expect(byRecord).toEqual({ [held.id]: 'update_pending', [added.id]: 'current' });
+  });
+
   it('cascades: deleting the org drops its holdings', async () => {
     const record = await vault.createVaultRecord({ type: 'custom', label: 'Misc', value: 'x' });
     createdVaultRecords.push(record.id);

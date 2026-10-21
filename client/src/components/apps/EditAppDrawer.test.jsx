@@ -9,6 +9,7 @@ vi.mock('../../services/api', () => ({
   getInstanceFeatures: vi.fn(),
   getAppWorkTracker: vi.fn(),
   getAppLayeredIntelligence: vi.fn(),
+  getAppLayeredIntelligenceOutcomes: vi.fn(),
   getAppTaskTypes: vi.fn(),
   updateAppTaskTypeOverride: vi.fn(),
   getProviders: vi.fn(),
@@ -73,6 +74,7 @@ beforeEach(() => {
       allowedScopes: ['app-improvement', 'app-data-gap'],
     },
   });
+  api.getAppLayeredIntelligenceOutcomes.mockResolvedValue({ stats: {}, recent: [] });
   api.getProviders.mockResolvedValue({ providers: [] });
   // Scheduling (enabled/interval/provider/model) is read from the per-app task
   // override now (#2322); default to an empty override.
@@ -348,5 +350,35 @@ describe('EditAppDrawer required-field validation across tabs', () => {
     );
     expect(api.updateApp).not.toHaveBeenCalled();
     expect(await screen.findByLabelText('UI Port')).toBeInTheDocument();
+  });
+});
+
+describe('EditAppDrawer failed reads', () => {
+  it('fails the Intelligence tab, not the loop state, when the schedule override read fails', async () => {
+    // A defaulted override would render an enabled loop as off, and unticking it
+    // would then diff as no change — the loop could not be stopped from here.
+    api.getAppTaskTypes.mockRejectedValueOnce(new Error('boom'));
+    api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: { 'layered-intelligence': { enabled: true } } });
+    renderDrawer();
+    await openTab('Intelligence');
+
+    expect(await screen.findByText(/Couldn.t load the Layered Intelligence config/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Enable the self-improvement loop for this app')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Enable the self-improvement loop for this app')).toBeChecked();
+  });
+
+  it('shows a retryable error instead of "no instances configured" when the DataDog read fails', async () => {
+    api.getDatadogInstances.mockRejectedValueOnce(new Error('boom'));
+    api.getDatadogInstances.mockResolvedValue({ instances: { dd1: { id: 'dd1', name: 'Prod', site: 'datadoghq.com' } } });
+    renderDrawer({ app: { ...APP, datadog: { enabled: true, instanceId: 'dd1' } } });
+    await openTab('Features');
+
+    expect(await screen.findByText(/Could not load DataDog instances/)).toBeInTheDocument();
+    expect(screen.queryByText(/No DataDog instances configured/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('DataDog Instance')).toHaveValue('dd1');
   });
 });

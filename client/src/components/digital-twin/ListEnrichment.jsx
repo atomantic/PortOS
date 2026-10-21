@@ -11,6 +11,7 @@ import {ArrowLeft,
   Check} from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
 import BrailleSpinner from '../BrailleSpinner';
 import { FormField } from '../ui/FormField';
 import TwinProviderPicker from './TwinProviderPicker.jsx';
@@ -40,6 +41,7 @@ export default function ListEnrichment({
   // List items state
   const [items, setItems] = useState(() => [mkItem()]);
   const [loadingItems, setLoadingItems] = useState(true);
+  const [itemsError, setItemsError] = useState(null);
 
   // Analysis state
   const [analyzing, setAnalyzing] = useState(false);
@@ -57,10 +59,14 @@ export default function ListEnrichment({
 
   const loadExistingItems = useCallback(async () => {
     setLoadingItems(true);
-    const existingItems = await api.getEnrichmentListItems(categoryId).catch(() => []);
-    if (existingItems && existingItems.length > 0) {
+    setItemsError(null);
+    // A failed read must not seed a blank editor: saving from it replaces the
+    // stored list and its document with whatever was retyped.
+    const existingItems = await api.getEnrichmentListItems(categoryId, { silent: true })
+      .catch((err) => { setItemsError(err); return null; });
+    if (existingItems?.length > 0) {
       setItems(existingItems.map(({ title, note }) => mkItem(title, note)));
-    } else {
+    } else if (existingItems) {
       setItems([mkItem()]);
     }
     setLoadingItems(false);
@@ -152,6 +158,21 @@ export default function ListEnrichment({
     return (
       <div className="flex items-center justify-center h-64">
         <BrailleSpinner text="Loading" />
+      </div>
+    );
+  }
+
+  if (itemsError) {
+    return (
+      <div className="max-w-3xl mx-auto px-1 space-y-4">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 text-gray-400 hover:text-white py-2 min-h-[44px]"
+        >
+          <ArrowLeft size={18} />
+          Back to categories
+        </button>
+        <ListLoadError what="your saved list" error={itemsError} onRetry={loadExistingItems} />
       </div>
     );
   }
