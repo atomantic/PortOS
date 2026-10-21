@@ -4,6 +4,7 @@ import {
   Clapperboard, Loader2, Users, MapPin as MapPinIcon,
   ListTree, SlidersHorizontal, Package,
 } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import {
   listWritersRoomAnalyses,
@@ -12,6 +13,7 @@ import {
 import { getSettings, patchSettingsSlice, listImageStylePresets } from '../../services/apiSystem';
 import { listImageModels } from '../../services/apiImageVideo';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends';
+import useListResource from '../../hooks/useListResource';
 import useMounted from '../../hooks/useMounted';
 import Drawer from '../Drawer';
 import TabPills from '../ui/TabPills';
@@ -42,6 +44,9 @@ const RUN_LABEL = {
   evaluate: 'Editorial pass',
   format: 'Format pass',
 };
+
+const fetchImageModels = () => listImageModels({ silent: true });
+const fetchStylePresets = () => listImageStylePresets({ silent: true });
 
 // Memoized (#3387): this is a heavy sibling of the WorkEditor prose textarea
 // with no dependency on the body text, so a per-keystroke `setBody` in the
@@ -105,8 +110,11 @@ function StoryboardPanel({
   const [latestFailure, setLatestFailure] = useState(null);
   const [loading, setLoading] = useState(false);
   const [imageCfg, setImageCfg] = useState(WR_IMAGE_DEFAULTS);
-  const [models, setModels] = useState([]);
-  const [stylePresets, setStylePresets] = useState([]);
+  const modelList = useListResource(fetchImageModels);
+  const presetList = useListResource(fetchStylePresets);
+  const models = modelList.items;
+  const stylePresets = presetList.items;
+  const [loadError, setLoadError] = useState(null);
   const [sysSettings, setSysSettings] = useState(null);
   const mountedRef = useMounted();
   // All three backends emit started/progress/completed via imageGenEvents →
@@ -135,15 +143,9 @@ function StoryboardPanel({
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      getSettings().catch(() => ({})),
-      listImageModels().catch(() => []),
-      listImageStylePresets().catch(() => []),
-    ]).then(([s, modelList, presets]) => {
+    getSettings().catch(() => ({})).then((s) => {
       if (cancelled) return;
       applyFreshSettings(s);
-      setModels(Array.isArray(modelList) ? modelList : []);
-      setStylePresets(Array.isArray(presets) ? presets : []);
     });
     return () => { cancelled = true; };
   }, [applyFreshSettings]);
@@ -161,8 +163,18 @@ function StoryboardPanel({
 
   const loadLatestScript = useCallback(async () => {
     setLoading(true);
-    const list = await listWritersRoomAnalyses(work.id).catch(() => []);
-    if (!mountedRef.current) return;
+    setLoadError(null);
+    // A failed read is an error with Retry — never the "no storyboard yet" an
+    // empty list would render.
+    const failed = (err) => {
+      if (mountedRef.current) {
+        setLoadError(err instanceof Error ? err : new Error('Request failed'));
+        setLoading(false);
+      }
+      return null;
+    };
+    const list = await listWritersRoomAnalyses(work.id, { silent: true }).catch(failed);
+    if (!list || !mountedRef.current) return;
     // listAnalyses is sorted createdAt desc, so the first match per status is
     // also the most-recent one. Track failures only when newer than the latest
     // success — a stale failure under a newer success is just history.
@@ -178,8 +190,8 @@ function StoryboardPanel({
       return;
     }
     // listAnalyses returns metadata only — fetch the full snapshot for scenes + sceneImages.
-    const full = await getWritersRoomAnalysis(work.id, latestSucceeded.id).catch(() => null);
-    if (!mountedRef.current) return;
+    const full = await getWritersRoomAnalysis(work.id, latestSucceeded.id, { silent: true }).catch(failed);
+    if (!full || !mountedRef.current) return;
     setLatestScript(full);
     setLoading(false);
   }, [work.id]);
@@ -299,6 +311,17 @@ function StoryboardPanel({
     return () => registerSceneImageMerge(null);
   }, [registerSceneImageMerge]);
 
+  const catalogErrors = (
+    <>
+      {modelList.state === 'error' && (
+        <ListLoadError className="mx-3 mt-3" what="the local model catalog" error={modelList.error} onRetry={modelList.retry} />
+      )}
+      {presetList.state === 'error' && (
+        <ListLoadError className="mx-3 mt-3" what="style presets" error={presetList.error} onRetry={presetList.retry} />
+      )}
+    </>
+  );
+
   return (
     <div className="flex flex-col h-full">
       <TabPills
@@ -377,7 +400,11 @@ function StoryboardPanel({
         {tab === TAB.SCENES && (
           <StoryboardScenesTab activeDraft={activeDraft} onJumpToScene={onJumpToScene} />
         )}
-        {tab === TAB.BOARDS && (
+        {tab === TAB.BOARDS && catalogErrors}
+        {tab === TAB.BOARDS && loadError && (
+          <ListLoadError className="mx-3 mt-3" what="the storyboard" error={loadError} onRetry={loadLatestScript} />
+        )}
+        {tab === TAB.BOARDS && !(loadError && !latestScript) && (
           <StoryboardBoardsTab
             work={work}
             scenes={scenes}
@@ -411,6 +438,7 @@ function StoryboardPanel({
             dirty={dirty}
           />
         )}
+        {tab === TAB.CONFIG && catalogErrors}
         {tab === TAB.CONFIG && (
           <StoryboardConfigTab
             imageCfg={imageCfg}

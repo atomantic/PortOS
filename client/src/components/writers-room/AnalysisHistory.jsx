@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Check, Clapperboard, FileSignature, MapPin, RotateCcw, Sparkles, Users } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import { listWritersRoomAnalyses, getWritersRoomAnalysis } from '../../services/apiWritersRoom';
 import { timeAgo, formatCount } from '../../utils/formatters';
+import useListResource from '../../hooks/useListResource';
 import useMounted from '../../hooks/useMounted';
 
 // Icon + label maps must include every kind from `ANALYSIS_KINDS`. Adding a
@@ -22,25 +24,18 @@ const SEVERITY_COLOR = {
 // `onApplyFormat` is the only mutation hook — Format-pass results call it
 // with the cleaned text and the caller decides what to do with it.
 export default function AnalysisHistory({ work, activeHash, onApplyFormat }) {
-  const [analyses, setAnalyses] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const fetchAnalyses = useCallback(() => listWritersRoomAnalyses(work.id, { silent: true }), [work.id]);
+  const {
+    items: analyses, state, error, retry: refresh,
+  } = useListResource(fetchAnalyses);
+  const loading = state === 'loading';
   const [details, setDetails] = useState({});
   const [expanded, setExpanded] = useState(null);
   const mountedRef = useMounted();
 
-  const refresh = async () => {
-    setLoading(true);
-    const list = await listWritersRoomAnalyses(work.id).catch(() => []);
-    if (!mountedRef.current) return;
-    setLoading(false);
-    setAnalyses(list);
-  };
-
   useEffect(() => {
-    setAnalyses([]);
     setExpanded(null);
     setDetails({});
-    refresh();
   }, [work.id]);
 
   const expand = async (analysis) => {
@@ -70,7 +65,8 @@ export default function AnalysisHistory({ work, activeHash, onApplyFormat }) {
           <RotateCcw size={12} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
-      {analyses.length === 0 && !loading && (
+      {state === 'error' && <ListLoadError what="analyses" error={error} onRetry={refresh} />}
+      {state === 'ready' && analyses.length === 0 && (
         <div className="text-gray-500 italic">No analyses yet — run one from the work menu.</div>
       )}
       <ul className="space-y-1.5">

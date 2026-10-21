@@ -66,3 +66,18 @@ it('blocks server body mutations during a draft transition and reports pending r
   expect(busy).toHaveBeenLastCalledWith(false);
   expect(revert).toBeEnabled();
 });
+
+it('shows a load error with Retry — not the empty-snapshots copy — when the snapshot read fails', async () => {
+  getWritersRoomPolishStatus.mockResolvedValue({ active: false });
+  listWritersRoomPolishSnapshots.mockRejectedValueOnce(new Error('Server unavailable'));
+  render(<PolishPanel work={{ id: 'work-1' }} dirty={false} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load snapshots — Server unavailable');
+  expect(screen.queryByText(/No snapshots yet/)).toBeNull();
+
+  listWritersRoomPolishSnapshots.mockResolvedValueOnce([
+    { id: 'snap-1', cycle: 1, label: 'Cycle 1', wordCount: 1200, createdAt: new Date().toISOString() },
+  ]);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByRole('button', { name: /revert/i })).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).toBeNull();
+});

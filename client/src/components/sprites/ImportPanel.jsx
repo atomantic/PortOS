@@ -5,32 +5,31 @@
  * it can refresh the library (and the open detail).
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Download, X, RefreshCw } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import Modal from '../ui/Modal.jsx';
 import AppContextPicker from '../AppContextPicker.jsx';
 import { importSprites } from '../../services/apiSprites.js';
 import { getApps } from '../../services/apiApps.js';
 import { pluralize } from '../../lib/textUtils';
+import useListResource from '../../hooks/useListResource';
+
+// Sprite sources are managed apps (we import/sync from an app's checkout), so
+// the picker is the source of truth for the path — no free-text root. Archived
+// apps and apps with no repoPath can't be a source.
+const fetchSourceApps = () => getApps({ silent: true })
+  .then((list) => (list || []).filter((a) => a.repoPath && !a.archived));
 
 export default function ImportPanel({ onImported }) {
   const [open, setOpen] = useState(false);
-  const [apps, setApps] = useState([]);
   const [appId, setAppId] = useState('');
   const [includeProps, setIncludeProps] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importErrors, setImportErrors] = useState([]);
 
-  // Sprite sources are managed apps (we import/sync from an app's checkout),
-  // so the picker is the source of truth for the path — no free-text root.
-  // Archived apps and apps with no repoPath can't be a source.
-  useEffect(() => {
-    if (!open) return;
-    getApps({ silent: true })
-      .then((list) => setApps((list || []).filter((a) => a.repoPath && !a.archived)))
-      .catch(() => setApps([]));
-  }, [open]);
+  const { items: apps, state: appsState, error: appsError, retry: retryApps } = useListResource(fetchSourceApps, { enabled: open });
 
   const sourceRoot = apps.find((a) => a.id === appId)?.repoPath || '';
 
@@ -76,6 +75,7 @@ export default function ImportPanel({ onImported }) {
             Pick the managed app holding the sprite pipeline (expects <code>art-pipeline/characters/</code> and/or <code>game/assets/sprites/</code>
             in its repo). Only approved/final assets import — reference candidates and raw run intermediates stay behind.
           </p>
+          {appsState === 'error' && <ListLoadError what="managed apps" error={appsError} onRetry={retryApps} />}
           <AppContextPicker
             apps={apps}
             value={appId}

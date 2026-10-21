@@ -35,6 +35,7 @@ import { composeCleanPlatePrompt } from '../../../lib/cleanPlatePrompt';
 import { universeStylePreset } from '../../../lib/universeStylePreset';
 import { buildUniverseSectionRenderTag } from '../../../lib/universeRunTag';
 import useMounted from '../../../hooks/useMounted';
+import useListResource from '../../../hooks/useListResource';
 import useUniverse from '../../../hooks/useUniverse';
 import { useCanonPatch } from '../../../hooks/useCanonPatch';
 import useHydratedPreviewRoute from '../../../hooks/useHydratedPreviewRoute';
@@ -44,6 +45,7 @@ import MediaPreview from '../../media/MediaPreview';
 import { normalizeImage } from '../../media/normalize';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
+import ListLoadError from '../../ui/ListLoadError';
 import {
   applyRecordRenderPin, deriveAvailableBackends, renderTargetPin, RENDER_TARGET,
 } from '../../../lib/imageGenBackends';
@@ -87,13 +89,15 @@ const KINDS = [
   },
 ];
 
+const fetchImageModels = () => listImageModels({ silent: true });
+
 export default function NounsStage({ issue, series, onStageUpdate }) {
   const mountedRef = useMounted();
   const prose = (issue.stages?.prose?.output || '').trim();
   const proseReady = prose.length > 0;
 
   const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
-  const [imageModels, setImageModels] = useState([]);
+  const imageModelList = useListResource(fetchImageModels);
   const [sysSettings, setSysSettings] = useState(null);
   // Linked universe — reference renders inherit its stylePrompt + negativePrompt
   // so ref images stay visually coherent with the comic-page renderer. `setUniverse`
@@ -166,18 +170,14 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      // `null` on failure, NOT `{}` — a `{}` stand-in derives an empty backend
-      // list, which `renderPinLadder` reads as "loaded, nothing enabled" and
-      // uses to suppress every pin. A settings fetch that failed must not look
-      // like an install with no backends.
-      getSettings().catch(() => null),
-      listImageModels().catch(() => []),
-    ]).then(([s, modelList]) => {
+    // `null` on failure, NOT `{}` — a `{}` stand-in derives an empty backend
+    // list, which `renderPinLadder` reads as "loaded, nothing enabled" and
+    // uses to suppress every pin. A settings fetch that failed must not look
+    // like an install with no backends.
+    getSettings().catch(() => null).then((s) => {
       if (cancelled || !mountedRef.current) return;
       setSysSettings(s);
       setImageCfg(readPipelineImageSettings(s));
-      setImageModels(Array.isArray(modelList) ? modelList : []);
     });
     return () => { cancelled = true; };
   }, [mountedRef]);
@@ -609,10 +609,13 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
       ))}
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Reference image gen" size="md">
+        {imageModelList.state === 'error' && (
+          <ListLoadError className="mb-3" what="the local model catalog" error={imageModelList.error} onRetry={imageModelList.retry} />
+        )}
         <ImageGenSettingsForm
           value={imageCfg}
           onChange={persistImageCfg}
-          models={imageModels}
+          models={imageModelList.items}
           availableBackends={availableBackends}
           grouped
         />

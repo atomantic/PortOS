@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Timer, Play, StopCircle, X, FilePlus } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import {
   listWritersRoomExercises,
@@ -11,6 +12,7 @@ import {
 import { formatCount, formatCountdown } from '../../utils/formatters';
 import { countWords } from '../../lib/textUtils';
 import { FormField } from '../ui/FormField';
+import useListResource from '../../hooks/useListResource';
 import useMounted from '../../hooks/useMounted';
 
 const DURATION_PRESETS = [
@@ -21,7 +23,6 @@ const DURATION_PRESETS = [
 ];
 
 export default function ExercisePanel({ activeWork, onClose, editorDirty = false, onWorkChange, draftMutation = null, beginDraftMutation, endDraftMutation }) {
-  const [history, setHistory] = useState([]);
   const [duration, setDuration] = useState(600);
   const [prompt, setPrompt] = useState('');
   const [active, setActive] = useState(null); // { id, startedAt, durationSeconds, startingWords }
@@ -36,18 +37,13 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
   const ownerKeyRef = useRef(ownerKey);
   ownerKeyRef.current = ownerKey;
 
-  const refresh = useCallback(async () => {
-    // Capture the workId we asked for so a slow response from the previous
-    // work can't overwrite the just-loaded history when the user switches
-    // works rapidly.
-    const requestedFor = activeWork?.id ?? null;
-    const all = await listWritersRoomExercises(requestedFor).catch(() => []);
-    if (!mountedRef.current) return;
-    if (requestedFor !== (activeWork?.id ?? null)) return; // stale response
-    setHistory(all);
-  }, [activeWork?.id]);
-
-  useEffect(() => { refresh(); }, [refresh]);
+  // `useListResource` drops a response from a superseded work, so a slow
+  // answer for the previous work can't overwrite the just-loaded history.
+  const workId = activeWork?.id ?? null;
+  const fetchHistory = useCallback(() => listWritersRoomExercises(workId, { silent: true }), [workId]);
+  const {
+    items: history, state: historyState, error: historyError, retry: refresh,
+  } = useListResource(fetchHistory);
 
   // 1Hz tick while a session is running
   useEffect(() => {
@@ -229,7 +225,8 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
 
       <div className="border-t border-port-border bg-port-bg/40 px-3 py-2 max-h-40 overflow-y-auto">
         <h4 className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Recent sessions</h4>
-        {history.length === 0 && <p className="text-[11px] text-gray-600">No sessions yet</p>}
+        {historyState === 'error' && <ListLoadError what="sessions" error={historyError} onRetry={refresh} />}
+        {historyState === 'ready' && history.length === 0 && <p className="text-[11px] text-gray-600">No sessions yet</p>}
         <ul className="space-y-1">
           {history.slice(0, 8).map((ex) => (
             <li key={ex.id} className="text-[11px] flex items-center gap-2">

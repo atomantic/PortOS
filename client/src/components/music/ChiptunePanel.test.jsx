@@ -103,6 +103,19 @@ describe('ChiptunePanel', () => {
     expect(screen.getByRole('button', { name: /render take/i })).toBeDisabled();
   });
 
+  it('shows a load error with Retry — not the "no managed apps" copy — when the publish targets cannot be read', async () => {
+    api.getApps.mockRejectedValueOnce(new Error('Server unavailable'));
+    render(<ChiptunePanel track={TRACK} onTrackUpdate={vi.fn()} />);
+
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /publish to app/i })); });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load managed apps — Server unavailable');
+    expect(screen.queryByText(/No managed apps with a repo path/)).toBeNull();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(await screen.findByLabelText(/target app/i)).toBeInTheDocument();
+  });
+
   describe('stale publish-target guard', () => {
     it('clears a saved publish target that no longer appears in the fresh apps list', async () => {
       // The saved prefs point at an app that has since been deleted/archived —

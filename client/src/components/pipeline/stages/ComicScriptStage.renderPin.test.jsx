@@ -116,3 +116,21 @@ describe('ComicScriptStage — series render pin (#3840)', () => {
     expect(body.mode).toBe('codex');
   });
 });
+
+describe('ComicScriptStage — image model catalog', () => {
+  it('shows a catalog error with Retry in the settings drawer when the model read fails', async () => {
+    getSettings.mockResolvedValue({ imageGen: CLOUD_ON });
+    listImageModels.mockRejectedValueOnce(new Error('Models unavailable'));
+    render(
+      <MemoryRouter initialEntries={['/?settings=comic-image']}>
+        <ComicScriptStage issue={issue} series={series} onStageUpdate={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the local model catalog — Models unavailable');
+
+    listImageModels.mockResolvedValueOnce([{ id: 'model-a', name: 'Model A' }]);
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+});

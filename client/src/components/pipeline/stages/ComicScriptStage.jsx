@@ -30,12 +30,14 @@ import { listImageModels } from '../../../services/apiImageVideo';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import useSlotInFlight from '../../../hooks/useSlotInFlight';
+import useListResource from '../../../hooks/useListResource';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
 import useHydratedPreviewRoute from '../../../hooks/useHydratedPreviewRoute';
 import { normalizeImage } from '../../media/normalize';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
+import ListLoadError from '../../ui/ListLoadError';
 import ExtractCanonButton from './ExtractCanonButton';
 import {
   applyRecordRenderPin, deriveAvailableBackends, IMAGE_GEN_MODE, renderTargetPin, RENDER_TARGET,
@@ -168,6 +170,8 @@ function panelsToMarkdown(panels, pageNumber) {
   return lines.join('\n').trim();
 }
 
+const fetchImageModels = () => listImageModels({ silent: true });
+
 export default function ComicScriptStage({ issue, series, onStageUpdate, actionsGated = false }) {
   const script = issue.stages?.comicScript || { status: 'empty', output: '' };
   const comicPages = issue.stages?.comicPages || { status: 'empty', pages: [] };
@@ -193,7 +197,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   // persist their choice to settings.pipeline.imageGen so it sticks across
   // page reloads.
   const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
-  const [imageModels, setImageModels] = useState([]);
+  const imageModelList = useListResource(fetchImageModels);
   const [sysSettings, setSysSettings] = useState(null);
   // Shared lightbox state. PageRow reports its rendered filename up via
   // `onFilenameKnown` so the parent can build a navigable items list keyed by
@@ -250,18 +254,14 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      // `null` on failure, NOT `{}` — a `{}` stand-in derives an empty backend
-      // list, which `renderPinLadder` reads as "loaded, nothing enabled" and
-      // uses to suppress every pin. A settings fetch that failed must not look
-      // like an install with no backends.
-      getSettings().catch(() => null),
-      listImageModels().catch(() => []),
-    ]).then(([s, modelList]) => {
+    // `null` on failure, NOT `{}` — a `{}` stand-in derives an empty backend
+    // list, which `renderPinLadder` reads as "loaded, nothing enabled" and
+    // uses to suppress every pin. A settings fetch that failed must not look
+    // like an install with no backends.
+    getSettings().catch(() => null).then((s) => {
       if (cancelled) return;
       setSysSettings(s);
       setImageCfg(readPipelineImageSettings(s));
-      setImageModels(Array.isArray(modelList) ? modelList : []);
     });
     return () => { cancelled = true; };
   }, []);
@@ -778,10 +778,13 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
       ) : null}
 
       <Drawer open={settingsOpen} onClose={closeImageSettings} title="Comic page image gen" size="md">
+        {imageModelList.state === 'error' && (
+          <ListLoadError className="mb-3" what="the local model catalog" error={imageModelList.error} onRetry={imageModelList.retry} />
+        )}
         <ImageGenSettingsForm
           value={imageCfg}
           onChange={persistImageCfg}
-          models={imageModels}
+          models={imageModelList.items}
           availableBackends={availableBackends}
           grouped
         />

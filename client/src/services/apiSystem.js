@@ -479,9 +479,9 @@ export const generateImage = (data, options = {}) => request('/image-gen/generat
 // promise and reuse it for the lifetime of the page. Eliminates the repeat
 // fetch when the user navigates ImageGen → VideoGen → Writers Room.
 let stylePresetsPromise = null;
-export const listImageStylePresets = () => {
+export const listImageStylePresets = (options = {}) => {
   if (!stylePresetsPromise) {
-    stylePresetsPromise = request('/image-gen/style-presets').catch((err) => {
+    stylePresetsPromise = request('/image-gen/style-presets', options).catch((err) => {
       stylePresetsPromise = null;
       throw err;
     });
