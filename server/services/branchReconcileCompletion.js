@@ -13,8 +13,17 @@ export async function settleBranchReconcileRun(agent) {
   const task = await getTaskById(agent.taskId);
   // The task holds the resolved per-app toggles. Missing records cannot grant cleanup.
   if (!task?.metadata || task.metadata.cleanupMerged === false) return null;
-  const app = await getAppById(agent.metadata.taskApp);
-  if (!app?.repoPath) throw new Error('Branch reconciliation completion target unavailable');
+  const app = agent.metadata.taskApp ? await getAppById(agent.metadata.taskApp) : null;
+  if (!app?.repoPath) {
+    // A missing target is an explained refusal, not a defect: record it and stop.
+    const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    await recordBranchReconcileOutcome(agent.metadata.taskApp || null, {
+      status: 'incomplete', reason: 'no-managed-app-target',
+      nextAction: 'Run branch reconciliation against a managed app.',
+    });
+    emitLog('warn', 'Branch reconciliation skipped: no managed app target', { taskId: agent.taskId });
+    return null;
+  }
   const agents = await readClaimOwnershipAgents();
   if (!Array.isArray(agents)) throw new Error('Branch reconciliation ownership state unavailable');
   // Branches queued for the pr-watcher merge coordinator count as owned (#12258).
