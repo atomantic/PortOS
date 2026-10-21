@@ -397,12 +397,13 @@ describe('subAgentSpawner — runner connection events', () => {
     vi.clearAllMocks();
   });
 
-  it('warns once when the runner drops, rather than once per held task', () => {
+  // A runner restart is routine, so the hold is announced on stdout (info), once.
+  it('announces once when the runner drops, rather than once per held task', () => {
     runnerHandlers.get('connection:lost')();
 
-    const warnings = emitLog.mock.calls.filter(([level]) => level === 'warn');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0][1]).toMatch(/CoS Runner disconnected/);
+    const notices = emitLog.mock.calls.filter(([, message]) => /CoS Runner disconnected/.test(message));
+    expect(notices.map(([level]) => level)).toEqual(['info']);
+    expect(emitLog.mock.calls.filter(([level]) => level === 'warn' || level === 'error')).toEqual([]);
   });
 
   it('re-runs the dequeue when the runner returns, so held tasks spawn', async () => {
