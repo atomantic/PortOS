@@ -272,26 +272,30 @@ describe('Code Animation page', () => {
     expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(1);
   });
 
-  it('shows saved posters, draws a missing one once, and labels unfinished jobs', async () => {
+  it('shows saved posters, draws missing ones once each and one at a time, and labels unfinished jobs', async () => {
     listCodeAnimationJobPage.mockResolvedValue({ items: [
       { id: 'job-a', status: 'completed', title: 'With poster', posterVersion: 11, createdAt: '2026-01-03T00:00:00.000Z' },
       { id: 'job-b', status: 'completed', title: 'Needs poster', createdAt: '2026-01-02T00:00:00.000Z' },
+      { id: 'job-d', status: 'completed', title: 'Also needs poster', createdAt: '2026-01-02T00:00:00.000Z' },
       { id: 'job-c', status: 'running', title: 'Still going', createdAt: '2026-01-01T00:00:00.000Z' },
-    ], total: 3, counts: { running: 1, completed: 2 }, nextCursor: null });
-    let drawPoster;
-    requestCodeAnimationPoster.mockImplementation(() => new Promise((resolve) => { drawPoster = resolve; }));
+    ], total: 4, counts: { running: 1, completed: 3 }, nextCursor: null });
+    const draws = [];
+    requestCodeAnimationPoster.mockImplementation(() => new Promise((resolve) => { draws.push(resolve); }));
     const { container } = await renderPage('/code-animation/gallery');
     await waitFor(() => expect(screen.getByRole('link', { name: /With poster/ })).toHaveAttribute('href', '/code-animation/job-a'));
     expect(container.querySelector('img[src="/posters/job-a.jpg?v=11"]')).not.toBeNull();
-    expect(screen.getByText('Drawing thumbnail…')).toBeInTheDocument();
+    expect(screen.getAllByText('Drawing thumbnail…')).toHaveLength(2);
     expect(screen.getAllByText('In progress').length).toBeGreaterThan(0);
-    expect(requestCodeAnimationPoster).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(requestCodeAnimationPoster).toHaveBeenCalledTimes(1));
     expect(requestCodeAnimationPoster).toHaveBeenCalledWith('job-b', { silent: true });
-    await act(async () => drawPoster({ posterVersion: 22 }));
+    await act(async () => draws[0]({ posterVersion: 22 }));
     expect(container.querySelector('img[src="/posters/job-b.jpg?v=22"]')).not.toBeNull();
+    await waitFor(() => expect(requestCodeAnimationPoster).toHaveBeenCalledTimes(2));
+    expect(requestCodeAnimationPoster).toHaveBeenLastCalledWith('job-d', { silent: true });
+    await act(async () => draws[1]({ posterVersion: null }));
     expect(screen.queryByText('Drawing thumbnail…')).not.toBeInTheDocument();
     await emitSocket('code-animation:changed', { id: 'job-c' });
-    expect(requestCodeAnimationPoster).toHaveBeenCalledTimes(1);
+    expect(requestCodeAnimationPoster).toHaveBeenCalledTimes(2);
   });
 
   it('loads one compact page, stays idle, and refreshes on durable changes and reconnect', async () => {

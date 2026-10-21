@@ -75,11 +75,14 @@ export default function CodeAnimationGallery() {
   }, [refreshFirst]);
 
   // A completed job with no poster (one from before posters existed, or whose
-  // capture was interrupted) gets one request per visit; the server draws them
-  // one at a time. The mount guard is lifetime-scoped on purpose: this effect
-  // re-runs on every items change, which must not drop an in-flight answer.
+  // capture was interrupted) gets one request per visit. Requests go one at a
+  // time: each is held open while the server draws, and a burst would occupy
+  // every browser connection to this origin. The mount guard is lifetime-scoped
+  // on purpose: this effect re-runs on every items change, which must not drop
+  // an in-flight answer.
   const mounted = useMounted();
   const requested = useRef(new Set());
+  const queue = useRef(Promise.resolve());
   const [capturing, setCapturing] = useState(() => new Set());
   useEffect(() => {
     const missing = items.filter((item) => item.status === 'completed' && !item.posterVersion && !requested.current.has(item.id));
@@ -87,14 +90,17 @@ export default function CodeAnimationGallery() {
     setCapturing((previous) => new Set([...previous, ...missing.map((item) => item.id)]));
     for (const { id } of missing) {
       requested.current.add(id);
-      requestCodeAnimationPoster(id, { silent: true })
-        .then(({ posterVersion }) => posterVersion)
-        .catch(() => null)
-        .then((posterVersion) => {
-          if (!mounted.current) return;
-          setCapturing((previous) => { const next = new Set(previous); next.delete(id); return next; });
-          if (posterVersion) setItems((previous) => previous.map((entry) => (entry.id === id ? { ...entry, posterVersion } : entry)));
-        });
+      queue.current = queue.current.then(() => {
+        if (!mounted.current) return null;
+        return requestCodeAnimationPoster(id, { silent: true })
+          .then(({ posterVersion }) => posterVersion)
+          .catch(() => null)
+          .then((posterVersion) => {
+            if (!mounted.current) return;
+            setCapturing((previous) => { const next = new Set(previous); next.delete(id); return next; });
+            if (posterVersion) setItems((previous) => previous.map((entry) => (entry.id === id ? { ...entry, posterVersion } : entry)));
+          });
+      });
     }
   }, [items, setItems, mounted]);
 
