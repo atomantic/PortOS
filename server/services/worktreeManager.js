@@ -17,6 +17,7 @@ import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fi
 import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
+import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
@@ -1113,25 +1114,86 @@ async function releaseIdleSiblingNextHolderAdmitted(sourceWorkspace, branchName,
     .map(f => stat(join(gitDir, f)).then(s => s.mtimeMs, () => 0)));
   if (nowMs - Math.max(...mtimes) < idleMs) return null;
 
+  if (!await detachCleanPushedHolder(holder.path, branchName, { allowUntracked })) return null;
+  console.log(`🌳 Released ${branchName} from idle /do:next worktree ${holder.path} (HEAD detached in place)`);
+  return { path: holder.path };
+}
+
+/**
+ * Detach `holderPath`'s HEAD in place iff the tree holds nothing the branch ref
+ * does not: tracked/staged state clean (untracked files too unless
+ * `allowUntracked`; git-ignored caches never count) and HEAD already on the
+ * remote. A detached HEAD keeps every file where it is and `git switch <branch>`
+ * restores it. Any unreadable check refuses (false).
+ */
+async function detachCleanPushedHolder(holderPath, branchName, { allowUntracked = false } = {}) {
+  const git = (args) => execGit(args, holderPath).then(r => r.stdout.trim());
   // Stricter than `classifyWorktreeDirt` on purpose: this tree isn't PortOS's,
   // so no path counts as disposable scratch.
   const porcelain = await git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all']).catch(() => null);
-  if (porcelain === null) return null;
-  if (allowUntracked ? porcelain.split('\n').some(l => l && !l.startsWith('?? ')) : porcelain !== '') return null;
+  if (porcelain === null) return false;
+  if (allowUntracked ? porcelain.split('\n').some(l => l && !l.startsWith('?? ')) : porcelain !== '') return false;
   const remoteRef = await git(['rev-parse', '--verify', '--quiet', `${branchName}@{upstream}`])
     .catch(() => git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branchName}`]))
     .catch(() => null);
-  if (!remoteRef) return null;
-  const pushed = await execGit(['merge-base', '--is-ancestor', 'HEAD', remoteRef], holder.path)
+  if (!remoteRef) return false;
+  const pushed = await execGit(['merge-base', '--is-ancestor', 'HEAD', remoteRef], holderPath)
     .then(() => true, () => false);
-  if (!pushed) return null;
+  if (!pushed) return false;
 
-  const detached = await execGit(['switch', '--detach', '--quiet'], holder.path).then(() => true, (err) => {
-    console.warn(`⚠️ Could not detach ${holder.path} to release ${branchName}: ${err.message}`);
+  const detached = await execGit(['switch', '--detach', '--quiet'], holderPath).then(() => true, (err) => {
+    console.warn(`⚠️ Could not detach ${holderPath} to release ${branchName}: ${err.message}`);
     return false;
   });
-  if (!detached) return null;
-  console.log(`🌳 Released ${branchName} from idle /do:next worktree ${holder.path} (HEAD detached in place)`);
+  return detached;
+}
+
+/**
+ * Free `branchName` from a worktree PortOS did not create and nothing owns
+ * anymore — typically one a terminal agent session cut under its own scratchpad
+ * and left behind after pushing its PR (#12845). Detaches the holder in place
+ * (never moves or deletes it), so no content can be lost; the caller then
+ * retries `git worktree add`.
+ *
+ * Refuses (null) unless ALL hold, each failing closed when unreadable: the
+ * holder is a linked worktree (never the primary checkout) OUTSIDE the managed
+ * `data/cos/worktrees/` root, unlocked, with no branch/repository owner or
+ * running/paused agent registered in or on it; no process has its cwd inside it
+ * (`hasProcessInside`); it is clean (git-ignored caches excepted) and its HEAD
+ * is already on the remote.
+ *
+ * @param {string} sourceWorkspace
+ * @param {string} branchName
+ * @param {{ activeWorkspacePaths?: string[], agents?: object[]|null, requestingAgentId?: string, hasProcessInside?: (dir: string) => Promise<boolean> }} [options]
+ * @returns {Promise<{ path: string }|null>} the released holder, or null
+ */
+export async function releaseOwnerlessForeignHolder(sourceWorkspace, branchName, options = {}) {
+  if (!sourceWorkspace || !branchName || PROTECTED_BRANCHES.includes(branchName)) return null;
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(sourceWorkspace, () => releaseOwnerlessForeignHolderAdmitted(sourceWorkspace, branchName, options));
+}
+
+async function releaseOwnerlessForeignHolderAdmitted(sourceWorkspace, branchName, {
+  activeWorkspacePaths = [],
+  agents = null,
+  requestingAgentId = null,
+  hasProcessInside = hasProcessCwdInside,
+} = {}) {
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
+  if (!claimBranchAdmission({
+    branchName, agentId: requestingAgentId, sourceWorkspace, worktrees, agents,
+  }).admit) return null;
+  const holderIndex = worktrees.findIndex(wt => wt.branch?.replace('refs/heads/', '') === branchName);
+  // Index 0 is the main worktree — the user's own checkout is never released.
+  if (holderIndex <= 0) return null;
+  const holder = worktrees[holderIndex];
+  if (holder.locked || holder.prunable || !existsSync(holder.path)) return null;
+  // Managed trees have their own owners and reapers (adoption, claim cleanup).
+  if (isPathInsideDir(WORKTREES_DIR, holder.path)) return null;
+  if (activeWorkspacePaths.some(p => p && (pathsEqual(p, holder.path) || isPathInsideDir(holder.path, p)))) return null;
+  if (await hasProcessInside(holder.path).catch(() => true)) return null;
+  if (!await detachCleanPushedHolder(holder.path, branchName)) return null;
+  console.log(`🌳 Released ${branchName} from ownerless foreign worktree ${holder.path} (HEAD detached in place)`);
   return { path: holder.path };
 }
 
