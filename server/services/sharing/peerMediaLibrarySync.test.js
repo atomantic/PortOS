@@ -139,17 +139,8 @@ describe('peer library index recovery', () => {
     const first = syncMediaLibraryFromPeer(sources[0]);
     await readFinished.promise;
     advertise(sources, ['repair-after.png']);
-    const fourthDiffSettled = deferred();
-    let settledDiffCount = vi.mocked(diffAssetManifestAgainstLocal).mock.settledResults.length;
-    const origDiff = vi.mocked(diffAssetManifestAgainstLocal).getMockImplementation();
-    vi.mocked(diffAssetManifestAgainstLocal).mockImplementation(async (...args) => {
-      const res = await origDiff(...args);
-      settledDiffCount++;
-      if (settledDiffCount === 4) fourthDiffSettled.resolve();
-      return res;
-    });
     const second = syncMediaLibraryFromPeer(sources[1]);
-    await fourthDiffSettled.promise;
+    await vi.waitFor(() => expect(vi.mocked(diffAssetManifestAgainstLocal).mock.settledResults.filter(result => result.type === 'fulfilled')).toHaveLength(4), { timeout: 10000 });
     await new Promise(resolve => setImmediate(resolve));
     expect(rows.has('repair-after.png')).toBe(false);
     finishFirst.resolve();
