@@ -58,10 +58,15 @@ const NON_COMMITTING_COORDINATOR_METADATA = { useWorktree: false, openPR: false,
 // release options (RELEASE_OPTION_KEYS — finish in-flight work, merge dependency
 // updates, resolve blockers, make routine decisions) are seeded ON and stay
 // operator-editable, globally and per app; each is ON unless explicitly false.
+// `stallNudge: false` because a release run's longest quiet stretch is waiting
+// on its own release PR's CI, and a nudge there made agent runs quit INCOMPLETE
+// with the PR still open. loadSchedule's default deep-merge carries it into
+// existing installs that never set the key.
 const DO_RELEASE_METADATA = {
   ...NON_COMMITTING_COORDINATOR_METADATA,
   slashdoCommand: 'release',
   ...Object.fromEntries(RELEASE_OPTION_KEYS.map((key) => [key, true])),
+  stallNudge: false,
 };
 // Migration 274 removes branch-cleanup from new schedules, but a partially
 // upgraded install may still load its stored task before the migration runs.

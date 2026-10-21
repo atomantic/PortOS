@@ -41,6 +41,7 @@ import { createContentRefusalDetector, createClaudeSessionLimitBannerDetector, c
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand, isOpencodeCommand } from '../../lib/providerModels.js';
+import { isFalsyMeta } from '../../lib/metadataFlags.js';
 import { createCodexModelRejectionGate } from './codexModelRejection.js';
 import {
   READY_POLL_INTERVAL_MS,
@@ -1962,6 +1963,13 @@ export function createTuiSessionController({
       // validation/fix work. Silence alone must not inject another turn or badge
       // it as stalled. Explicit provider failures and terminal signals above stay active.
       if (sessionPhase !== 'running' || !promptSubmittedAt || securityScanGrant?.timeLimitSeconds === 'unlimited') return;
+      // The task's schedule turned the nudge off (taskMetadata.stallNudge). Its
+      // quiet stretches are waits it owns — do-release parks on its release PR's
+      // CI — so silence there is not a stall to interrupt. Only once the prompt
+      // has started a turn: before that, these nudges are what detects a prompt
+      // that never ran and fails it (prompt-not-submitted) instead of holding
+      // its lane forever.
+      if (promptGate.worked && isFalsyMeta(task?.metadata?.stallNudge)) return;
       const stalled = stallNudgeGate.takeNudge(now, lastOutputAt);
       if (!stalled) return;
       // Read the sentinel here rather than on every tick: its watcher polls on its

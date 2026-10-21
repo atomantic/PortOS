@@ -608,6 +608,18 @@ describe('taskSchedule', () => {
       expect(schedule.executions['task:do-release']).toMatchObject({ count: 2 })
     })
 
+    it('turns the stall nudge off for a stored do-release schedule that never set it, and keeps an explicit choice', async () => {
+      mockSchedule({
+        tasks: { 'do-release': { type: 'on-demand', enabled: true, taskMetadata: { slashdoCommand: 'release', finishInFlight: true } } }
+      })
+      expect((await loadSchedule()).tasks['do-release'].taskMetadata).toMatchObject({ stallNudge: false, finishInFlight: true })
+
+      mockSchedule({
+        tasks: { 'do-release': { type: 'on-demand', enabled: true, taskMetadata: { slashdoCommand: 'release', stallNudge: true } } }
+      })
+      expect((await loadSchedule()).tasks['do-release'].taskMetadata.stallNudge).toBe(true)
+    })
+
     it('should load and return existing v2 schedule', async () => {
       mockSchedule({
         tasks: { 'security': { type: 'weekly', enabled: true, providerId: 'p1', model: 'm1', prompt: null } }
