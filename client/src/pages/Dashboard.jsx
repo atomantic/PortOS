@@ -1,14 +1,14 @@
-import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
+import { memo, useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import { Link } from 'react-router';
 import BrailleSpinner from '../components/BrailleSpinner';
-import PageSkeleton from '../components/ui/PageSkeleton';
 import LayoutPicker from '../components/dashboard/LayoutPicker';
 import LayoutEditor from '../components/dashboard/LayoutEditor';
 import DashboardGrid, { readingOrderIds, reconcileGrid, synthesizeGrid } from '../components/dashboard/DashboardGrid.jsx';
 import { WIDGETS_BY_ID, FALLBACK_LAYOUT } from '../components/dashboard/widgetRegistry.jsx';
+import { readLayoutCache, streamsForWidgets, writeLayoutCache } from '../components/dashboard/dashboardBoot.js';
 import WidgetSkeleton from '../components/dashboard/WidgetSkeleton';
 import FirstRunCard from '../components/onboarding/FirstRunCard.jsx';
-import { DASHBOARD_LAYOUT_CHANGED, INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
+import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 import PageHeader from '../components/PageHeader';
 import { ChevronsDownUp, GripHorizontal, Monitor, Move, Save, X } from 'lucide-react';
 import * as api from '../services/api';
@@ -19,28 +19,51 @@ import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
 export const isAppsLoading = (appsReadSettled) => !appsReadSettled;
 
+// Optional dashboardState streams, fetched only when a visible widget `needs`
+// one. Health (the header dot) and the Daily Driver read (it records the
+// first-visit-of-day signal, #2666) are always fetched; apps has its own error
+// and settled tracking below.
+const OPTIONAL_STREAMS = {
+  tribeCare: () => api.getTribeCareSummary({ silent: true }),
+  feeds: () => api.getFeedStats({ silent: true }),
+  meatspaceLogging: () => api.getMeatspaceLoggingStats({ silent: true }),
+  calendarAgenda: () => api.getCalendarAgenda({ silent: true }),
+  brainOnThisDay: () => api.getBrainOnThisDay({ silent: true }),
+};
+
+// Renders one widget body. Memoized so a widget that declares no `needs`
+// (and so receives no dashboardState) skips the re-render each stream's
+// arrival triggers in the page.
+const WidgetBody = memo(function WidgetBody({ Component, dashboardState }) {
+  return dashboardState ? <Component dashboardState={dashboardState} /> : <Component />;
+});
+
 export default function Dashboard() {
+  // Read once: the cached copy of the last confirmed layouts paints the grid
+  // before the layouts GET returns (see dashboardBoot.js).
+  const [layoutCache] = useState(readLayoutCache);
   // null means the first apps read has not completed. Keep that distinct from
   // a successful empty response so the Apps tile cannot flash its empty-state
   // CTA while an existing installation is still being read.
   const [apps, setApps] = useState(null);
   const [appsReadSettled, setAppsReadSettled] = useState(false);
-  const [health, setHealth] = useState(null);
-  const [tribeCare, setTribeCare] = useState(null);
-  const [feeds, setFeeds] = useState(null);
-  const [meatspaceLogging, setMeatspaceLogging] = useState(null);
-  const [calendarAgenda, setCalendarAgenda] = useState(null);
-  const [brainOnThisDay, setBrainOnThisDay] = useState(null);
+  // undefined = first read pending; null = read failed; object = online.
+  const [health, setHealth] = useState(undefined);
+  const [streams, setStreams] = useState({});
   const [dailyDriver, setDailyDriver] = useState(null);
-  const [dailyActions, setDailyActions] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState(null);
   const [layoutsError, setLayoutsError] = useState(null);
 
-  const [layouts, setLayouts] = useState([]);
+  const [layouts, setLayouts] = useState(() => layoutCache?.layouts ?? []);
   const [layoutsLoading, setLayoutsLoading] = useState(true);
+  // True once the server has answered a layouts read this mount. Until then a
+  // cached layout is display-only: layout edits stay hidden so nothing saves
+  // a grid the server may have moved past.
+  const [layoutsConfirmed, setLayoutsConfirmed] = useState(false);
   const [layoutLimits, setLayoutLimits] = useState(null);
-  const [activeLayoutId, setActiveLayoutId] = useState(null);
+  const [activeLayoutId, setActiveLayoutId] = useState(() => (
+    layoutCache ? pickActiveLayoutId(layoutCache.activeLayoutId, layoutCache.layouts, false) : null
+  ));
   // Last active-layout id the SERVER confirmed (initial GET, a successful
   // setActive PUT, or a delete response). Failed optimistic switches revert
   // to this — never to a `previousId` snapshot, which can itself be an
@@ -85,73 +108,27 @@ export default function Dashboard() {
 
   const refreshHealth = useCallback(async () => {
     // Keep the last good snapshot visible when a manual refresh hits a
-    // transient failure. `undefined` is the failed-to-fetch sentinel; a real
-    // response is always an object, even when some of its collections are empty.
+    // transient failure; only a failed FIRST read marks the server offline.
     const data = await api.getSystemHealth({ silent: true }).catch(() => undefined);
     if (data) setHealth(data);
+    else setHealth((prev) => (prev === undefined ? null : prev));
     return data;
   }, []);
 
-  const fetchDailyActions = useCallback(
-    () => api.getDailyActions({ silent: true }).catch(() => null),
-    [],
-  );
+  // Health and the Daily Driver are always-on reads, and apps has its own
+  // fetcher, so names without an OPTIONAL_STREAMS entry are skipped here.
+  const fetchStreams = useCallback((names) => Promise.all(names
+    .filter((name) => Object.hasOwn(OPTIONAL_STREAMS, name))
+    .map((name) => OPTIONAL_STREAMS[name]()
+      .catch(() => null)
+      .then((value) => setStreams((prev) => ({ ...prev, [name]: value }))))), []);
 
-  const fetchData = useCallback(async () => {
-    setDataError(null);
-    // The shell and layout have their own loading states. Release the page
-    // immediately so a slow PM2/apps read cannot hold the entire dashboard
-    // behind a single network response.
-    setLoading(false);
-    // Apps and the remaining widgets are independent hydration streams. Health
-    // and daily-actions in particular can involve slow subsystem/database work
-    // that should not hold every widget behind one Promise.all barrier.
-    const appsRead = api.getApps({ includeQuality: true })
-      .catch((err) => { setDataError(err.message); return null; })
-      .finally(() => setAppsReadSettled(true));
-    const secondaryRead = Promise.all([
-      refreshHealth(),
-      api.getTribeCareSummary({ silent: true }).catch(() => null).then(setTribeCare),
-      api.getFeedStats({ silent: true }).catch(() => null).then(setFeeds),
-      api.getMeatspaceLoggingStats({ silent: true }).catch(() => null).then(setMeatspaceLogging),
-      api.getCalendarAgenda({ silent: true }).catch(() => null).then(setCalendarAgenda),
-      api.getBrainOnThisDay({ silent: true }).catch(() => null).then(setBrainOnThisDay),
-      // GET records the first-visit-of-day signal (issue #2666); a failure just
-      // hides the Daily Driver card via its gate. No LLM calls here.
-      api.getDailyDriverState().catch(() => null).then(setDailyDriver),
-      fetchDailyActions().then(setDailyActions),
-    ]);
-    const appsData = await appsRead;
-    if (Array.isArray(appsData)) setApps(appsData);
-    await secondaryRead;
-  }, [fetchDailyActions, refreshHealth]);
-
-  useEffect(() => {
-    fetchData();
-    const handleAppsChanged = () => fetchData();
-    socket.on('apps:changed', handleAppsChanged);
-    return () => {
-      socket.off('apps:changed', handleAppsChanged);
-    };
-  }, [fetchData]);
-
-  // Daily Actions is a dashboard-state consumer rather than a feature-aware
-  // widget. Refresh it when the shared feature hook applies a toggle so a
-  // POST action cannot remain visible after POST is disabled (or stay absent
-  // after it is enabled) until an unrelated dashboard refresh.
-  useEffect(() => {
-    let active = true;
-    const handleFeaturesChanged = () => {
-      fetchDailyActions().then((data) => {
-        if (active) setDailyActions(data);
-      });
-    };
-    window.addEventListener(INSTANCE_FEATURES_CHANGED, handleFeaturesChanged);
-    return () => {
-      active = false;
-      window.removeEventListener(INSTANCE_FEATURES_CHANGED, handleFeaturesChanged);
-    };
-  }, [fetchDailyActions]);
+  const fetchApps = useCallback(() => api.getApps({ includeQuality: true })
+    .then((appsData) => {
+      setDataError(null);
+      if (Array.isArray(appsData)) setApps(appsData);
+    }, (err) => setDataError(err.message))
+    .finally(() => setAppsReadSettled(true)), []);
 
   // One-shot per mount — guards against re-evaluation stomping manual picks.
   // Serialization across concurrent writers (auto-window + manual pick +
@@ -200,6 +177,7 @@ export default function Dashboard() {
             });
         }
         if (data.limits) setLayoutLimits(data.limits);
+        setLayoutsConfirmed(true);
         setLayoutsError(null);
       })
       .catch((err) => { if (!cancelled) setLayoutsError(err.message); })
@@ -240,11 +218,6 @@ export default function Dashboard() {
     unknown: activeApps.filter((a) => a.degraded || a.overallStatus === 'unknown').length,
   }), [activeApps]);
 
-  const dashboardState = useMemo(
-    () => ({ apps: appList, appsLoading, sortedApps, activeApps, appStats, health, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, dailyActions, instanceFeatures, refetch: fetchData, refetchHealth: refreshHealth }),
-    [appList, appsLoading, sortedApps, activeApps, appStats, health, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, dailyActions, instanceFeatures, fetchData, refreshHealth]
-  );
-
   // Falls back to a local minimal layout only AFTER the initial fetch has
   // settled so the spinner isn't rendered alongside a flash of fallback
   // widgets. A failed refresh preserves the prior `layouts` (the .catch()
@@ -255,6 +228,64 @@ export default function Dashboard() {
     if (found) return found;
     return layoutsLoading ? undefined : FALLBACK_LAYOUT;
   }, [layouts, activeLayoutId, layoutsLoading]);
+
+  // Refresh the first-paint copy whenever the server-confirmed view changes.
+  useEffect(() => {
+    if (layoutsConfirmed) writeLayoutCache(layouts, activeLayoutId);
+  }, [layoutsConfirmed, layouts, activeLayoutId]);
+
+  // Data reads start only once a layout is known (instantly from the cache) and
+  // only for streams its widgets need, so the layouts read is never queued
+  // behind them on a phone's handful of connections.
+  const layoutKnown = !!activeLayout;
+  const neededStreams = useMemo(() => streamsForWidgets(activeLayout?.widgets), [activeLayout]);
+  const neededKey = neededStreams.join(',');
+  const neededRef = useRef(neededStreams);
+  neededRef.current = neededStreams;
+  const fetchedStreamsRef = useRef(new Set());
+
+  const fetchData = useCallback(async () => {
+    const needed = neededRef.current;
+    needed.forEach((name) => fetchedStreamsRef.current.add(name));
+    await Promise.all([
+      refreshHealth(),
+      // GET records the first-visit-of-day signal (issue #2666); a failure just
+      // hides the Daily Driver card via its gate. No LLM calls here.
+      api.getDailyDriverState().catch(() => null).then(setDailyDriver),
+      needed.includes('apps') ? fetchApps() : null,
+      fetchStreams(needed),
+    ]);
+  }, [fetchApps, fetchStreams, refreshHealth]);
+
+  const initialFetchDoneRef = useRef(false);
+  useEffect(() => {
+    if (!layoutKnown) return;
+    if (!initialFetchDoneRef.current) {
+      initialFetchDoneRef.current = true;
+      fetchData();
+      return;
+    }
+    // A layout switch that adds a widget fetches just the streams it brings.
+    const added = neededRef.current.filter((name) => !fetchedStreamsRef.current.has(name));
+    if (added.length === 0) return;
+    added.forEach((name) => fetchedStreamsRef.current.add(name));
+    if (added.includes('apps')) fetchApps();
+    fetchStreams(added);
+  }, [layoutKnown, neededKey, fetchData, fetchApps, fetchStreams]);
+
+  useEffect(() => {
+    const handleAppsChanged = () => { if (neededRef.current.includes('apps')) fetchApps(); };
+    socket.on('apps:changed', handleAppsChanged);
+    return () => {
+      socket.off('apps:changed', handleAppsChanged);
+    };
+  }, [fetchApps]);
+
+  const { tribeCare = null, feeds = null, meatspaceLogging = null, calendarAgenda = null, brainOnThisDay = null } = streams;
+  const dashboardState = useMemo(
+    () => ({ apps: appList, appsLoading, sortedApps, activeApps, appStats, health: health ?? null, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, instanceFeatures, refetch: fetchData, refetchHealth: refreshHealth }),
+    [appList, appsLoading, sortedApps, activeApps, appStats, health, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, instanceFeatures, fetchData, refreshHealth]
+  );
 
   const visibleWidgets = useMemo(
     () => (activeLayout?.widgets ?? [])
@@ -294,7 +325,7 @@ export default function Dashboard() {
     // Per-cell Suspense so a slow widget can't block sibling cells.
     return (
       <Suspense fallback={<WidgetSkeleton label={meta.label} />}>
-        <meta.Component dashboardState={dashboardState} />
+        <WidgetBody Component={meta.Component} dashboardState={meta.needs ? dashboardState : undefined} />
       </Suspense>
     );
   }, [dashboardState]);
@@ -415,17 +446,9 @@ export default function Dashboard() {
     toast.success('Layout deleted');
   };
 
-  if (loading) {
-    return (
-      <PageSkeleton
-        label="Loading dashboard"
-        headerRowClass="flex flex-row items-center justify-between gap-2 sm:gap-4"
-        titleWidthClass="w-40"
-        layout="grid"
-        cards={6}
-      />
-    );
-  }
+  // Grey while the first health read is pending, so a slow read on a phone
+  // doesn't flash "offline" red at a server that is up.
+  const healthLabel = health ? 'Server online' : health === undefined ? 'Checking server' : 'Server offline';
 
   return (
     <div className="space-y-6">
@@ -439,17 +462,17 @@ export default function Dashboard() {
           <>
             <span
               className="relative inline-flex h-2.5 w-2.5"
-              title={health ? 'Server online' : 'Server offline'}
-              aria-label={health ? 'Server online' : 'Server offline'}
+              title={healthLabel}
+              aria-label={healthLabel}
             >
               {health && (
                 <span className="absolute inline-flex h-full w-full rounded-full bg-port-success opacity-60 animate-ping" />
               )}
               <span
-                className={`relative inline-flex rounded-full h-2.5 w-2.5 ${health ? 'bg-port-success shadow-[0_0_8px_rgb(var(--port-success))]' : 'bg-port-error shadow-[0_0_8px_rgb(var(--port-error))]'}`}
+                className={`relative inline-flex rounded-full h-2.5 w-2.5 ${health ? 'bg-port-success shadow-[0_0_8px_rgb(var(--port-success))]' : health === undefined ? 'bg-gray-600' : 'bg-port-error shadow-[0_0_8px_rgb(var(--port-error))]'}`}
               />
             </span>
-            {layouts.length > 0 && !editingGrid && (
+            {layoutsConfirmed && layouts.length > 0 && !editingGrid && (
               <LayoutPicker
                 layouts={layouts}
                 activeLayoutId={activeLayoutId}
@@ -457,7 +480,7 @@ export default function Dashboard() {
                 onEdit={() => setEditorOpen(true)}
               />
             )}
-            {!editingGrid && activeLayout && visibleWidgets.length > 0 && (
+            {layoutsConfirmed && !editingGrid && activeLayout && visibleWidgets.length > 0 && (
               <button
                 onClick={startGridEdit}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px]"
@@ -511,7 +534,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {layoutsLoading && !layoutsError && (
+      {layoutsLoading && !layoutsError && !activeLayout && (
         <div className="flex items-center justify-center h-24">
           <BrailleSpinner text="Loading layout" />
         </div>
@@ -556,7 +579,7 @@ export default function Dashboard() {
         </>
       )}
 
-      {editorOpen && layouts.length > 0 && (
+      {editorOpen && layoutsConfirmed && layouts.length > 0 && (
         <LayoutEditor
           layouts={layouts}
           activeLayoutId={activeLayoutId}
