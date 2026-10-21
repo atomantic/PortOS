@@ -7,7 +7,7 @@
  * job whose prompt carries the brief as a labeled addition, and its landing
  * makes the painted image the thumbnail, bare.
  */
-import { describe, expect, it, vi, afterAll } from 'vitest';
+import { describe, expect, it, vi, afterAll, beforeAll } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -25,6 +25,13 @@ const { buildPublishPayload } = await import('./publish/payloads.js');
 const sharp = (await import('sharp')).default;
 
 afterAll(() => cleanupTempDataRoots());
+
+// The first text render pays one-time renderer setup (fontconfig builds its font cache on a cold
+// Windows runner, which once outlasted the 30s test timeout on the first lettering test, #12802).
+// Pay it here, under its own hook budget, so no test's budget carries it.
+beforeAll(async () => {
+  await sharp({ text: { text: 'Example Song', rgba: true } }).png().toBuffer();
+}, 120_000);
 
 async function projectWithFrame() {
   const { id } = await projects.createProject({ name: 'Example Song' });
