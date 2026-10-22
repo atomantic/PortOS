@@ -12,6 +12,9 @@ import { drainBrowserProcessGroup } from '../server/services/htmlComposition/bro
 // prevent both execution and delivery of these logs; that remains inconclusive.
 export async function watchTests(scope, {
   env = process.env, deadlineMs = 12 * 60_000, progressMs = 60_000, graceMs = 5000, settleMs = 5000,
+  // Test seam: the deadline clock starts when this resolves instead of at spawn,
+  // so a fixture can exclude variable launcher startup. Production omits it.
+  deadlineGate,
 } = {}) {
   if (process.platform === 'win32') throw Error('Browser test supervision requires POSIX process groups.');
   if (!['server', 'client'].includes(scope)) throw Error('Expected a server or client test workspace.');
@@ -69,11 +72,19 @@ export async function watchTests(scope, {
     console.log(`CI test watchdog: ${Math.floor((Date.now() - started) / 1000)}s elapsed; deadline=${deadlineMs / 1000}s.`);
     collect().catch(() => console.error('CI test watchdog: progress unavailable.'));
   }, progressMs);
-  const deadline = setTimeout(() => {
-    timedOut = true;
-    console.error('CI test watchdog: subordinate deadline exceeded; this step will fail.');
-    requestStop();
-  }, deadlineMs);
+  let deadline, gateSettled = false;
+  const armDeadline = () => {
+    if (gateSettled) return;
+    gateSettled = true;
+    deadline = setTimeout(() => {
+      timedOut = true;
+      console.error('CI test watchdog: subordinate deadline exceeded; this step will fail.');
+      requestStop();
+    }, deadlineMs);
+  };
+  // A failed gate arms the deadline at once: supervision never fails open.
+  if (deadlineGate) Promise.resolve().then(deadlineGate).then(armDeadline, armDeadline);
+  else armDeadline();
   try {
     const { error } = await completed;
     if (error) throw error;
@@ -92,6 +103,7 @@ export async function watchTests(scope, {
     if (spawnError) throw spawnError;
     return timedOut ? 124 : interrupted ? 143 : leftovers ? 1 : closeResult.code ?? 1;
   } finally {
+    gateSettled = true;
     clearInterval(progress);
     clearTimeout(deadline);
     process.removeListener('SIGINT', interrupt);

@@ -31,6 +31,8 @@ describe.skipIf(process.platform === 'win32')('independent browser test watchdog
         const orphan = ${orphan} ? spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');"], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }) : null;
         writeFileSync(${JSON.stringify(join(root, 'owned.json'))}, JSON.stringify({ worker: process.pid, launcher: process.ppid, orphan: orphan?.pid }));
         if (orphan) { await new Promise(resolve => orphan.once('message', resolve)); orphan.disconnect(); orphan.unref(); }
+        // Fixture handshake complete: the scenario deadline starts here.
+        writeFileSync(${JSON.stringify(join(root, 'ready'))}, '');
         if (${stalled}) {
           // Stop the launcher's event loop: its own signal handler cannot help.
           // The independent supervisor must retire the inherited known group.
@@ -41,13 +43,22 @@ describe.skipIf(process.platform === 'win32')('independent browser test watchdog
       `);
       writeFileSync(join(root, 'npm'), `#!${process.execPath}\nimport(${JSON.stringify(pathToFileURL(npm).href)});`, { mode: 0o755 });
       const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { existsSync } from 'node:fs';
         import { watchTests } from ${JSON.stringify(supervisor)};
         const kill = process.kill;
         if (${denied}) process.kill = (pid, signal) => {
           if (pid < 0 && signal === 'SIGKILL') throw Object.assign(Error('synthetic denied signal'), { code: 'EPERM' });
           return kill(pid, signal);
         };
-        try { process.exitCode = await watchTests('server', { deadlineMs: 1500, progressMs: 300, graceMs: 200 }); }
+        // Launcher startup under load is not the behavior under test: the deadline
+        // clock starts at the fixture's ready marker. Only the stalled scenarios
+        // depend on the deadline firing (124); the others get headroom so teardown
+        // after the worker exits cannot race it. A gate that never opens is bounded.
+        const deadlineGate = async () => {
+          const until = Date.now() + 8000;
+          while (!existsSync(${JSON.stringify(join(root, 'ready'))}) && Date.now() < until) await new Promise(r => setTimeout(r, 20));
+        };
+        try { process.exitCode = await watchTests('server', { deadlineMs: ${stalled ? 1500 : 5000}, progressMs: 300, graceMs: 200, deadlineGate }); }
         catch (error) { console.error('Synthetic supervisor failed closed: ' + error.message); process.exitCode = 1; }
       `], { encoding: 'utf8', timeout: 10_000, env: { ...process.env,
         PATH: `${root}${delimiter}${process.env.PATH}`, PORTOS_CI_DIAGNOSTICS_DIR: reports,
@@ -91,8 +102,10 @@ describe.skipIf(process.platform === 'win32')('independent browser test watchdog
         catch (error) { if (error.code !== 'ESRCH') throw error; }
         const until = Date.now() + 5000;
         while (true) {
+          // macOS answers EPERM while a killed group leader is a not-yet-reaped
+          // zombie; it settles to ESRCH, so keep polling inside the bounded wait.
           try { process.kill(-launcher, 0); }
-          catch (error) { if (error.code === 'ESRCH') break; throw error; }
+          catch (error) { if (error.code === 'ESRCH') break; if (error.code !== 'EPERM') throw error; }
           if (Date.now() >= until) throw Error('Synthetic watchdog group settlement unverified; scratch retained.');
           await delay(25);
         }
