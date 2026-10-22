@@ -105,6 +105,16 @@ describe('request() error path (now delegating to throwApiError)', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it('toasts a host-control refusal even for a silent caller, unless the read is marked optional', async () => {
+    const refusal = { error: 'Host control requires an operator session.', code: 'HOST_CONTROL_FORBIDDEN' };
+    global.fetch.mockResolvedValue(makeResponse({ status: 403, json: refusal }));
+    await expect(request('/x', { silent: true })).rejects.toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN', status: 403 });
+    expect(toast.error).toHaveBeenCalledWith(refusal.error);
+    toast.error.mockClear();
+    await expect(request('/x', { silent: true, hostControlOptional: true })).rejects.toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it('rejects with SERVER_UNREACHABLE code when fetch fails to connect', async () => {
     global.fetch.mockRejectedValue(new Error('Connection refused'));
     await expect(request('/x', { silent: true })).rejects.toMatchObject({

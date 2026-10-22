@@ -61,10 +61,21 @@ import * as notifications from '../services/notifications.js';
 describe('CoS Insight Routes', () => {
   let app;
 
+  // A password-free install: the loopback test client is a local operator.
+  const appFor = (address) => {
+    const instance = express();
+    instance.use((req, _res, next) => {
+      if (address) Object.defineProperty(req.socket, 'remoteAddress', { value: address });
+      req.portosAuthContext = { enabled: false };
+      next();
+    });
+    instance.use(express.json());
+    instance.use('/api/cos', insightRoutes);
+    return instance;
+  };
+
   beforeEach(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api/cos', insightRoutes);
+    app = appFor();
     vi.clearAllMocks();
     getPendingAgentFeedbackCount.mockResolvedValue(0);
     // clearAllMocks keeps implementations, so a per-test override would leak
@@ -117,6 +128,16 @@ describe('CoS Insight Routes', () => {
       expect(runHealthCheck).not.toHaveBeenCalled();
       expect(response.body.insights).toEqual([]);
       expect(response.body.unavailableSources).toEqual([]);
+    });
+
+    it('reads the recorded health snapshot for a caller without host control instead of running the PM2 sweep', async () => {
+      getAllTasks.mockResolvedValue({ user: null, cos: null });
+      taskLearning.getLearningInsights.mockResolvedValue(null);
+      getHealthStatus.mockResolvedValue({ issues: [] });
+      const response = await request(appFor('192.0.2.10')).get('/api/cos/actionable-insights');
+      expect(response.status).toBe(200);
+      expect(getHealthStatus).toHaveBeenCalledTimes(1);
+      expect(runHealthCheck).not.toHaveBeenCalled();
     });
 
     it('should return actionable insights sorted by priority', async () => {

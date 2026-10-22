@@ -17,6 +17,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parsePagination, validateRequest } from '../lib/validation.js';
 import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
+import { requestHasHostControl } from '../services/authGate.js';
 
 const router = Router();
 
@@ -33,10 +34,13 @@ router.get('/activity-calendar', asyncHandler(async (req, res) => {
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
   const { cachedHealth } = validateRequest(z.object({ cachedHealth: z.literal('1').optional() }), req.query);
+  // The live check is the PM2 sweep that restarts errored processes, the work
+  // POST /api/cos/health/check gates; anyone else reads the last snapshot (#13097).
+  const liveHealth = !cachedHealth && requestHasHostControl(req);
   const [tasksData, learningSummary, healthCheck, notificationsModule, pendingFeedbackCount, leftoverFindings, agents] = await Promise.all([
     getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
-    (cachedHealth ? getHealthStatus() : runHealthCheck()).catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return null; }),
+    (liveHealth ? runHealthCheck() : getHealthStatus()).catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return null; }),
     import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
     getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; }),
     detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; }),
