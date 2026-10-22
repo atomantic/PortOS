@@ -14,6 +14,7 @@ import { sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 
 vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
+  listProjectPage: vi.fn(),
   getProject: vi.fn(),
   createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
   cloneProject: vi.fn(async (id, options) => ({
@@ -115,6 +116,11 @@ describe('musicVideo routes', () => {
     app.use(express.json());
     app.use('/api/music-video', musicVideoRoutes);
     vi.clearAllMocks();
+    svc.listProjectPage.mockImplementation(async ({ limit, offset, compare }) => {
+      const projects = [...await svc.listProjects()];
+      if (compare) projects.sort(compare);
+      return { items: projects.slice(offset, offset + limit), total: projects.length, limit, offset };
+    });
   });
 
   it('GET / lists projects', async () => {
@@ -244,6 +250,20 @@ describe('musicVideo routes', () => {
     expect(r2.body.nextCursor).toBeNull();
     expect(r2.body.items).toHaveLength(1);
     expect(r2.body.items[0].id).toBe('mv-older');
+  });
+
+  it('presents only the requested summary page, including cursor precedence and an empty page', async () => {
+    const readOffPage = vi.fn(() => { throw new Error('Off-page detail was inspected'); });
+    const older = { id: 'older', createdAt: '2026-01-01', get scenes() { return readOffPage(); } };
+    const newer = { id: 'newer', createdAt: '2026-02-01', scenes: [] };
+    svc.listProjects.mockResolvedValue([older, newer]);
+
+    const first = await request(app).get('/api/music-video?summary=1&limit=1&offset=1&cursor=0');
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ total: 2, offset: 0, nextCursor: '1', items: [{ id: 'newer' }] });
+    const empty = await request(app).get('/api/music-video?summary=1&limit=1&cursor=2');
+    expect(empty.body).toMatchObject({ total: 2, offset: 2, nextCursor: null, items: [] });
+    expect(readOffPage).not.toHaveBeenCalled();
   });
 
   it('GET /:id 404s when missing', async () => {

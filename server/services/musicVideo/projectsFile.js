@@ -19,7 +19,7 @@ const store = createProjectFileStore({
 });
 
 export const {
-  loadAll, saveAll, loadAllAndIndex, listProjects, getProject, getProjectsByIds, listProjectIds,
+  loadAll, saveAll, loadAllAndIndex, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds,
 } = store;
 
 // Every mutator below is a load → modify → save of the ONE projects file, so

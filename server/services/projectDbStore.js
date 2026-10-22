@@ -60,6 +60,19 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     return result.rows.map(rowToProject);
   }
 
+  // Sort the small headers with the caller's legacy comparator before loading
+  // detail JSONB. Timestamp fallbacks need not match the mirrored SQL columns.
+  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare } = {}) {
+    const where = includeDeleted ? '' : ' WHERE deleted = FALSE';
+    const { rows: headers } = await query(`SELECT id, data->'createdAt' AS "createdAt", data->'updatedAt' AS "updatedAt"
+      FROM ${table}${where} ORDER BY created_at ASC`);
+    if (compare) headers.sort(compare);
+    const page = headers.slice(offset, offset + limit);
+    const projects = new Map((await getProjectsByIds(page.map(({ id }) => id), { includeDeleted }))
+      .map(project => [project.id, project]));
+    return { items: page.map(({ id }) => projects.get(id)).filter(Boolean), total: headers.length, limit, offset };
+  }
+
   async function getProject(id, { includeDeleted = false } = {}) {
     const result = await query(`SELECT id, data FROM ${table} WHERE id = $1`, [id]);
     const project = rowToProject(result.rows[0]);
@@ -171,6 +184,7 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     rowToProject,
     persist,
     listProjects,
+    listProjectPage,
     getProject,
     getProjectsByIds,
     listProjectIds,
