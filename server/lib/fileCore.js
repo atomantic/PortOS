@@ -39,6 +39,9 @@ const WIN_RETRY_DELAY_MS = 10;
 // rename(2) failures that mean "the destination is momentarily locked", not
 // "this rename can never work".
 const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
+// copyfile(2) has no EEXIST case (the destination is overwritten); a held
+// source or destination surfaces as one of these.
+const WIN_COPY_LOCK_CODES = ['EPERM', 'EACCES', 'EBUSY'];
 const FILE_WATCH_FALLBACK_POLL_MS = 5000;
 
 // Directories whose fsync already failed once this process, so a filesystem
@@ -369,10 +372,24 @@ export async function appendFileGuarded(filePath, data, options) {
   return appendFile(filePath, data, options);
 }
 
-/** Guarded `fs/promises.copyFile` — the DESTINATION is what gets written. */
-export async function copyFileGuarded(src, dest, mode) {
+/**
+ * Guarded `fs/promises.copyFile` — the DESTINATION is what gets written. On
+ * Windows a transient lock (AV scan, indexer) on either file is retried a
+ * bounded number of times; a persistent lock rethrows the original error.
+ */
+export async function copyFileGuarded(src, dest, mode, {
+  attempts = WIN_RETRY_ATTEMPTS,
+  delayMs = WIN_RETRY_DELAY_MS,
+} = {}) {
   if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(dest, 'copyFile');
-  return copyFile(src, dest, mode);
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await copyFile(src, dest, mode);
+    } catch (err) {
+      if (!isWindows() || attempt >= attempts || !WIN_COPY_LOCK_CODES.includes(err.code)) throw err;
+      await sleep(delayMs);
+    }
+  }
 }
 
 /** Guarded `fs/promises.rename` — the DESTINATION is what gets replaced. */
