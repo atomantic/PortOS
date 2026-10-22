@@ -301,9 +301,6 @@ function MoodBoardEditor({ id }) {
     if (itemType === 'image') {
       if (!imageUrl.trim()) { toast.error('Enter an image URL'); return; }
       payload.imageUrl = imageUrl.trim();
-      // Words typed here are the user's own, so they ride as the pin's prompt;
-      // a URL pin's caption alone never reaches a model.
-      if (caption.trim()) payload.prompt = caption.trim();
     } else {
       if (!text.trim()) { toast.error('Enter some text'); return; }
       payload.text = text.trim();
@@ -371,9 +368,6 @@ function MoodBoardEditor({ id }) {
       }
     } else {
       patch.caption = nextText || null;
-      // Typed words on a pin are the user's own prompt; an imported pin's
-      // caption alone never reaches a model.
-      if (item.type === 'image' || item.type === 'video') patch.prompt = nextText || null;
     }
     const updated = await updateMoodBoardItem(id, item.id, patch, { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
