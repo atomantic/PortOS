@@ -1254,6 +1254,10 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // at applyIncomingPush via compareSchemaVersions /
       // RECORD_KIND_SCHEMA_CATEGORIES.deck.
       'decks',
+      // Storyboards → per-record peer-push only (no 60s file-snapshot category;
+      // the board carries its beats/panels/takes). Gated at applyIncomingPush
+      // via compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.storyboard.
+      'storyboards',
       // FableLoom stories → per-record peer-push only (no 60s snapshot
       // category). Gated at applyIncomingPush via compareSchemaVersions /
       // RECORD_KIND_SCHEMA_CATEGORIES.fableLoom.
