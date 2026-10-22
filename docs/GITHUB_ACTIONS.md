@@ -1029,6 +1029,13 @@ Vitest itself is never given `--shard`.
 **CI seeding.** The server, client, browser and Windows jobs restore
 `${{ runner.temp }}/portos-test-memo` with `actions/cache/restore` under a
 per-job, per-shard key prefix (`test-memo-<os>-<arch>-<job>-<shard>of<n>-`).
+Server, client and Windows restores prefer that partition, then fall back to
+the newest memo from any shard of the same OS, architecture and job. Trusted
+full runs never seed a scoped `1of1` lineage, so an exact-partition-only lookup
+would leave those jobs permanently cold. A fallback contains only one shard's
+entries: matching content keys may skip those tests; all other selected tests
+still run. Partitioning happens before memo lookup, so changing the memo's
+source shard cannot omit or duplicate a selected test.
 Pull requests only read. The scheduled nightly, `workflow_dispatch` and
 `workflow_call` runs on the default/release branches save a new entry keyed
 by run id, and only when the test step itself succeeded, so the cache holds

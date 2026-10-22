@@ -145,6 +145,27 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
   });
 
+  it('reuses a full-run shard memo in a scoped partition and reruns changed or unseeded files', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-repo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-store-'));
+    writeRepo(root, FILES);
+
+    const seed = plan({ shard: { index: 1, count: 2 } });
+    recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: seed, passed: seed.slice, source: 'ci' });
+
+    const scoped = plan({ shard: { index: 1, count: 1 } });
+    expect(scoped.skipped.map(({ test }) => test).sort()).toEqual([...seed.slice].sort());
+    expect(scoped.run).toEqual(scoped.selected.filter(test => !seed.slice.includes(test)));
+    expect([...scoped.run, ...scoped.skipped.map(({ test }) => test)].sort()).toEqual(scoped.selected);
+    expect(plan({ nodeVersion: '24.2.0' }).skipped).toEqual([]);
+
+    const changed = seed.slice[0];
+    writeFileSync(join(root, changed), `${FILES[changed]}\n// Changed after the trusted full run.\n`);
+    const after = plan({ shard: { index: 1, count: 1 } });
+    expect(after.run).toContain(changed);
+    expect(after.skipped.map(({ test }) => test).sort()).toEqual(seed.slice.filter(test => test !== changed).sort());
+  });
+
   it('hashes the forward-slashed root-relative path on every platform, like Vitest', () => {
     // pathe's resolve slashes before the slice, so a Windows root yields the same tail as a POSIX one.
     expect(vitestShardHashInput('server/lib/x.test.js', { repoRoot: '/repo', scope: 'server', path: posix })).toBe('/lib/x.test.js');
