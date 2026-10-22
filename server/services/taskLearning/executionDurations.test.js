@@ -41,8 +41,10 @@ const emptyData = () => ({
 
 const TASK = { id: 't1', description: '[self-improvement] release-check - verify the release', taskType: 'scheduled' };
 
+// Each fixture is a distinct run: the recorder dedupes on agent id (#13095).
+let agentSeq = 0;
 const agentOn = ({ providerId = 'ollama', model = 'local-coder', effort = 'low', duration, errorCategory = null } = {}) => ({
-  id: 'agent-x',
+  id: `agent-x-${++agentSeq}`,
   startedAt: '2026-09-01T10:00:00.000Z',
   completedAt: '2026-09-01T10:10:00.000Z',
   metadata: {

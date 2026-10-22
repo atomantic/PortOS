@@ -23,6 +23,8 @@ import {
   buildRecurrenceInsight,
   recurrenceMilestoneReached,
   appendRecentOutcome,
+  hasCountedAgent,
+  markAgentCounted,
   computeWindowedStats,
   executionDurationKey,
   DEFAULT_WINDOW_MAX_COUNT,
@@ -440,7 +442,8 @@ export function buildLiExecutionVerdict({ liProposal, success, validationPassed,
 /**
  * Record a completed task for learning.
  *
- * Returns the persisted learning data, or `null` when the run was SKIPPED —
+ * Returns the persisted learning data, or `null` when the run was SKIPPED or its
+ * agent id was already counted (#13095) —
  * `result.validationPassed` carrying `SKIP_LEARNING_VERDICT` means nothing ever
  * evaluated it, so there is no honest outcome to bank (#4107). Callers ignore
  * the return today; the null is the machine-readable form of "no write happened".
@@ -476,6 +479,12 @@ export async function recordTaskCompletion(agent, task) {
   let liExecPayload = null;
   const result = await withLock(async () => {
   const data = await loadLearningData();
+
+  // Idempotence (#13095): an agent already folded into the aggregates (by the live
+  // listener or an earlier backfill) is not counted again. Checked under the lock
+  // before any derived payload is captured, so a repeat writes nothing at all.
+  const countedAgentId = agent.agentId || agent.id;
+  if (hasCountedAgent(data, countedAgentId)) return null;
 
   const taskType = telemetry.taskType;
   const modelTier = agent.metadata?.modelTier || 'unknown';
@@ -713,6 +722,7 @@ export async function recordTaskCompletion(agent, task) {
     Object.assign(data.totals, calculateDurationETA(data.totals));
   }
 
+  markAgentCounted(data, countedAgentId);
   await saveLearningData(data);
 
   const { provider, model, component, routingReason } = telemetry.executionContext;

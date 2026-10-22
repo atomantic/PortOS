@@ -366,6 +366,26 @@ export async function loadLearningData() {
   return data;
 }
 
+// Ledger of agent ids already folded into the aggregates (#13095). Both the live
+// `agent:completed` listener and `backfillFromHistory` feed `recordTaskCompletion`,
+// so the ledger lives beside the metrics it protects and is checked under the same
+// lock. Bounded FIFO: ids are short, and the newest runs are the ones a repeated
+// backfill or a replayed completion can plausibly re-present.
+export const COUNTED_AGENT_IDS_CAP = 10000;
+
+export function hasCountedAgent(data, agentId) {
+  return !!agentId && Array.isArray(data.countedAgentIds) && data.countedAgentIds.includes(agentId);
+}
+
+export function markAgentCounted(data, agentId) {
+  if (!agentId) return;
+  if (!Array.isArray(data.countedAgentIds)) data.countedAgentIds = [];
+  data.countedAgentIds.push(agentId);
+  if (data.countedAgentIds.length > COUNTED_AGENT_IDS_CAP) {
+    data.countedAgentIds = data.countedAgentIds.slice(-COUNTED_AGENT_IDS_CAP);
+  }
+}
+
 /**
  * Save learning data to file
  */
