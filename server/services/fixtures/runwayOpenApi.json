@@ -781,6 +781,522 @@
           }
         }
       }
+    },
+    "/v1/video_to_video": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promptText": {
+                        "description": "A non-empty and optional string describing what should appear in the output.",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "keyframes": {
+                        "description": "Timed guidance images placed at specific points in the input video.\nUp to 5 keyframes.",
+                        "title": "Keyframes",
+                        "minItems": 1,
+                        "maxItems": 5,
+                        "type": "array",
+                        "items": {
+                          "title": "Keyframe",
+                          "x-stainless-variantName": "Keyframe",
+                          "anyOf": [
+                            {
+                              "title": "KeyframeWithSeconds",
+                              "x-stainless-variantName": "KeyframeWithSeconds",
+                              "type": "object",
+                              "properties": {
+                                "uri": {
+                                  "description": "A HTTPS URL, Runway or data URI containing an encoded image.\nSee [our docs](/assets/inputs#images) on image inputs for more information.",
+                                  "example": "https://example.com/image.jpg",
+                                  "anyOf": [
+                                    {
+                                      "description": "A HTTPS URL, Runway upload URI, or base64 data URI (e.g. `data:image/png;base64,...`, up to 5MB) containing an encoded image. See [our docs](/assets/inputs#images) on image inputs for more information.",
+                                      "example": "https://example.com/image.jpg",
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 2048,
+                                      "pattern": "^https:\\/\\/.*"
+                                    },
+                                    {
+                                      "description": "A Runway upload URI.\nSee https://docs.dev.runwayml.com/assets/uploads for more information.",
+                                      "example": "runway://<token>",
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5000,
+                                      "pattern": "^runway:\\/\\/.*"
+                                    },
+                                    {
+                                      "description": "A data URI containing encoded media, up to 5MB.",
+                                      "example": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5242880,
+                                      "pattern": "^data:image\\/.*"
+                                    }
+                                  ]
+                                },
+                                "seconds": {
+                                  "description": "Absolute timestamp in seconds from the start of the input video when this guidance image should apply.",
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "maximum": 30
+                                },
+                                "range": {
+                                  "description": "Optional edit window.\nWhen set, the edit applies only to this time range and the keyframe timestamp must fall within it.\nAll keyframes must either set a range or none may.",
+                                  "title": "KeyframeRange",
+                                  "type": "object",
+                                  "properties": {
+                                    "start_seconds": {
+                                      "description": "Start of the edit window in whole seconds from the start of the input video.",
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "end_seconds": {
+                                      "description": "End of the edit window (exclusive) in whole seconds from the start of the input video.",
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "start_seconds",
+                                    "end_seconds"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "uri",
+                                "seconds"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "title": "KeyframeWithAt",
+                              "x-stainless-variantName": "KeyframeWithAt",
+                              "type": "object",
+                              "properties": {
+                                "uri": {
+                                  "description": "A HTTPS URL, Runway or data URI containing an encoded image.\nSee [our docs](/assets/inputs#images) on image inputs for more information.",
+                                  "example": "https://example.com/image.jpg",
+                                  "anyOf": [
+                                    {
+                                      "description": "A HTTPS URL, Runway upload URI, or base64 data URI (e.g. `data:image/png;base64,...`, up to 5MB) containing an encoded image. See [our docs](/assets/inputs#images) on image inputs for more information.",
+                                      "example": "https://example.com/image.jpg",
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 2048,
+                                      "pattern": "^https:\\/\\/.*"
+                                    },
+                                    {
+                                      "description": "A Runway upload URI.\nSee https://docs.dev.runwayml.com/assets/uploads for more information.",
+                                      "example": "runway://<token>",
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5000,
+                                      "pattern": "^runway:\\/\\/.*"
+                                    },
+                                    {
+                                      "description": "A data URI containing encoded media, up to 5MB.",
+                                      "example": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5242880,
+                                      "pattern": "^data:image\\/.*"
+                                    }
+                                  ]
+                                },
+                                "at": {
+                                  "description": "Position as a fraction [0.0, 1.0] of the input video duration when this guidance image should apply.",
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "maximum": 1
+                                },
+                                "range": {
+                                  "description": "Optional edit window.\nWhen set, the edit applies only to this time range and the keyframe timestamp must fall within it.\nAll keyframes must either set a range or none may.",
+                                  "title": "KeyframeRange",
+                                  "type": "object",
+                                  "properties": {
+                                    "start_seconds": {
+                                      "description": "Start of the edit window in whole seconds from the start of the input video.",
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "end_seconds": {
+                                      "description": "End of the edit window (exclusive) in whole seconds from the start of the input video.",
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "start_seconds",
+                                    "end_seconds"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "uri",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "videoUri": {
+                        "description": "The input video to edit.\nMust be 30 seconds or shorter.",
+                        "example": "https://example.com/video.mp4",
+                        "anyOf": [
+                          {
+                            "description": "A HTTPS URL, Runway upload URI, or base64 data URI (e.g. `data:video/mp4;base64,...`, up to 5MB) containing an encoded video. See [our docs](/assets/inputs#videos) on video inputs for more information.",
+                            "example": "https://example.com/video.mp4",
+                            "type": "string",
+                            "minLength": 13,
+                            "maxLength": 2048,
+                            "pattern": "^https:\\/\\/.*"
+                          },
+                          {
+                            "description": "A Runway upload URI.\nSee https://docs.dev.runwayml.com/assets/uploads for more information.",
+                            "example": "runway://<token>",
+                            "type": "string",
+                            "minLength": 13,
+                            "maxLength": 5000,
+                            "pattern": "^runway:\\/\\/.*"
+                          },
+                          {
+                            "description": "A data URI containing encoded media, up to 5MB.",
+                            "example": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                            "type": "string",
+                            "minLength": 13,
+                            "maxLength": 5242880,
+                            "pattern": "^data:video\\/.*"
+                          }
+                        ]
+                      },
+                      "seed": {
+                        "description": "If unspecified, a random number is chosen.\nVarying the seed integer is a way to get different results for the same other request parameters. Using the same seed integer for an identical request will produce similar results.",
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      "ratio": {
+                        "deprecated": true,
+                        "type": "string"
+                      },
+                      "targetAspectRatio": {
+                        "description": "Target aspect ratio for expand/outpaint.\nLetterboxes the input video and keyframes before generation.",
+                        "type": "string",
+                        "enum": [
+                          "16:9",
+                          "4:3",
+                          "3:2",
+                          "1:1",
+                          "2:3",
+                          "3:4",
+                          "9:16",
+                          "21:9"
+                        ]
+                      },
+                      "contentModeration": {
+                        "description": "Settings that affect the behavior of the content moderation system.",
+                        "type": "object",
+                        "properties": {
+                          "publicFigureThreshold": {
+                            "description": "When set to `low`, the content moderation system will be less strict about preventing generations that include recognizable public figures.",
+                            "type": "string",
+                            "enum": [
+                              "auto",
+                              "low"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "outputFormat": {
+                        "description": "The container/encoding of the output.\n`mp4` (default) returns an H.264 .mp4. `prores` returns a ProRes .mov. `png_sequence` returns a .zip of PNG frames. `sdr_rec709_10bit` returns a 10-bit Rec.709 HEVC .mp4 for SDR grading pipelines.\nNon-mp4 formats incur an additional surcharge: 5 credits per second for `prores` and `png_sequence`, and 20 credits per second for `sdr_rec709_10bit` — 40 credits per second when the output is larger than 4 megapixels — includes anything larger than 1440p, up through 4K.",
+                        "type": "string",
+                        "enum": [
+                          "mp4",
+                          "prores",
+                          "png_sequence",
+                          "sdr_rec709_10bit"
+                        ]
+                      },
+                      "proresProfile": {
+                        "description": "The ProRes profile to use. Only valid when `outputFormat` is `prores`. Defaults to `4444`.\nNote: generated content contains no transparency — the alpha channel in `4444` / `4444 XQ` outputs is present but fully opaque; choose these tiers for 12-bit 4:4:4 color fidelity, not for mattes.",
+                        "type": "string",
+                        "enum": [
+                          "422",
+                          "4444",
+                          "422 Proxy",
+                          "422 LT",
+                          "422 HQ",
+                          "4444 XQ"
+                        ]
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "aleph2"
+                      }
+                    },
+                    "required": [
+                      "videoUri",
+                      "model"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/character_performance": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "title": "act_two",
+                    "type": "object",
+                    "properties": {
+                      "seed": {
+                        "description": "If unspecified, a random number is chosen.\nVarying the seed integer is a way to get different results for the same other request parameters. Using the same seed integer for an identical request will produce similar results.",
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      "character": {
+                        "description": "The character to control. You can either provide a video or an image. A visually recognizable face must be visible and stay within the frame.",
+                        "oneOf": [
+                          {
+                            "title": "CharacterImage",
+                            "description": "An image of your character.\nIn the output, the character will use the reference video performance in its original static environment.",
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "image"
+                              },
+                              "uri": {
+                                "description": "A HTTPS URL, Runway or data URI containing an encoded image. See [our docs](/assets/inputs#images) on image inputs for more information.",
+                                "example": "https://example.com/image.jpg",
+                                "anyOf": [
+                                  {
+                                    "description": "A HTTPS URL, Runway upload URI, or base64 data URI (e.g.\n`data:image/png;base64,...`, up to 5MB) containing an encoded image. See [our docs](/assets/inputs#images) on image inputs for more information.",
+                                    "example": "https://example.com/image.jpg",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 2048,
+                                    "pattern": "^https:\\/\\/.*"
+                                  },
+                                  {
+                                    "description": "A Runway upload URI.\nSee https://docs.dev.runwayml.com/assets/uploads for more information.",
+                                    "example": "runway://<token>",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 5000,
+                                    "pattern": "^runway:\\/\\/.*"
+                                  },
+                                  {
+                                    "description": "A data URI containing encoded media, up to 5MB.",
+                                    "example": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 5242880,
+                                    "pattern": "^data:image\\/.*"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "uri"
+                            ]
+                          },
+                          {
+                            "title": "CharacterVideo",
+                            "description": "A video of your character.\nIn the output, the character will use the reference video performance in its original animated environment and some of the character's own movements.",
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "video"
+                              },
+                              "uri": {
+                                "description": "A HTTPS URL, Runway or data URI containing an encoded video. See [our docs](/assets/inputs#videos) on video inputs for more information.",
+                                "example": "https://example.com/video.mp4",
+                                "anyOf": [
+                                  {
+                                    "description": "A HTTPS URL, Runway upload URI, or base64 data URI (e.g.\n`data:video/mp4;base64,...`, up to 5MB) containing an encoded video. See [our docs](/assets/inputs#videos) on video inputs for more information.",
+                                    "example": "https://example.com/video.mp4",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 2048,
+                                    "pattern": "^https:\\/\\/.*"
+                                  },
+                                  {
+                                    "description": "A Runway upload URI.\nSee https://docs.dev.runwayml.com/assets/uploads for more information.",
+                                    "example": "runway://<token>",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 5000,
+                                    "pattern": "^runway:\\/\\/.*"
+                                  },
+                                  {
+                                    "description": "A data URI containing encoded media, up to 5MB.",
+                                    "example": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 5242880,
+                                    "pattern": "^data:video\\/.*"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "uri"
+                            ]
+                          }
+                        ],
+                        "discriminator": {
+                          "propertyName": "type"
+                        }
+                      },
+                      "reference": {
+                        "description": "The reference video containing the performance to apply to the character.",
+                        "example": {
+                          "type": "video",
+                          "uri": "https://example.com/reference-performance.mp4"
+                        },
+                        "oneOf": [
+                          {
+                            "title": "CharacterReferenceVideo",
+                            "description": "A video of a person performing in the manner that you would like your character to perform.\nThe video must be between 3 and 30 seconds in duration.",
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "video"
+                              },
+                              "uri": {
+                                "description": "A video of a person performing in the manner that you would like your character to perform. The video must be between 3 and 30 seconds in duration.\nSee [our docs](/assets/inputs#videos) on video inputs for more information.",
+                                "example": "https://example.com/reference-performance.mp4",
+                                "anyOf": [
+                                  {
+                                    "description": "A HTTPS URL, Runway upload URI, or base64 data URI (e.g. `data:video/mp4;base64,...`, up to 5MB) containing an encoded video.\nSee [our docs](/assets/inputs#videos) on video inputs for more information.",
+                                    "example": "https://example.com/video.mp4",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 2048,
+                                    "pattern": "^https:\\/\\/.*"
+                                  },
+                                  {
+                                    "description": "A Runway upload URI.\nSee https://docs.dev.runwayml.com/assets/uploads for more information.",
+                                    "example": "runway://<token>",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 5000,
+                                    "pattern": "^runway:\\/\\/.*"
+                                  },
+                                  {
+                                    "description": "A data URI containing encoded media, up to 5MB.",
+                                    "example": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                                    "type": "string",
+                                    "minLength": 13,
+                                    "maxLength": 5242880,
+                                    "pattern": "^data:video\\/.*"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "uri"
+                            ]
+                          }
+                        ],
+                        "discriminator": {
+                          "propertyName": "type"
+                        }
+                      },
+                      "bodyControl": {
+                        "description": "A boolean indicating whether to enable body control.\nWhen enabled, non-facial movements and gestures will be applied to the character in addition to facial expressions.",
+                        "example": true,
+                        "type": "boolean"
+                      },
+                      "expressionIntensity": {
+                        "description": "An integer between 1 and 5 (inclusive).\nA larger value increases the intensity of the character's expression.",
+                        "example": 3,
+                        "default": 3,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      },
+                      "ratio": {
+                        "description": "The resolution of the output video.",
+                        "example": "1280:720",
+                        "type": "string",
+                        "enum": [
+                          "1280:720",
+                          "720:1280",
+                          "960:960",
+                          "1104:832",
+                          "832:1104",
+                          "1584:672"
+                        ]
+                      },
+                      "contentModeration": {
+                        "description": "Settings that affect the behavior of the content moderation system.",
+                        "example": {
+                          "publicFigureThreshold": "auto"
+                        },
+                        "type": "object",
+                        "properties": {
+                          "publicFigureThreshold": {
+                            "description": "When set to `low`, the content moderation system will be less strict about preventing generations that include recognizable public figures.",
+                            "type": "string",
+                            "enum": [
+                              "auto",
+                              "low"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "act_two"
+                      }
+                    },
+                    "required": [
+                      "character",
+                      "reference",
+                      "model"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

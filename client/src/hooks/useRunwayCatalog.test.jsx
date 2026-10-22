@@ -5,7 +5,7 @@ import { request } from '../services/apiCore.js';
 import { useRunwayCatalog } from './useRunwayCatalog.js';
 
 const initial = {
-  available: { text_to_image: ['gen4_image', 'gpt_image_2'], image_to_video: ['gen4.5', 'gen4_turbo', 'veo3.1'], text_to_video: ['gen4.5', 'veo3.1'] },
+  available: { text_to_image: ['gen4_image', 'gpt_image_2'], image_to_video: ['gen4.5', 'gen4_turbo', 'veo3.1'], text_to_video: ['gen4.5', 'veo3.1'], video_to_video: ['aleph2'], character_performance: ['act_two'] },
   unsupported: [{ id: 'act_two', reason: 'Requires performance inputs' }], stale: false,
 };
 describe('Runway form catalog lifecycle', () => {
@@ -13,10 +13,14 @@ describe('Runway form catalog lifecycle', () => {
     request.mockResolvedValue(initial);
     const image = renderHook(() => useRunwayCatalog());
     const video = renderHook(() => useRunwayCatalog(true, 'text'));
+    const edit = renderHook(() => useRunwayCatalog(true, 'video-edit'));
+    const performance = renderHook(() => useRunwayCatalog(true, 'character-performance'));
     await waitFor(() => expect(image.result.current.stale).toBe(false));
     expect(request).toHaveBeenCalledTimes(1);
     expect(image.result.current.imageModels.map((m) => m.id)).toEqual(['gen4_image', 'gpt_image_2']);
     expect(video.result.current.videoModels.map((m) => m.id)).toEqual(['gen4.5', 'veo3.1']);
+    expect(edit.result.current.videoModels.map((m) => m.id)).toEqual(['aleph2']);
+    expect(performance.result.current.videoModels.map((m) => m.id)).toEqual(['act_two']);
     image.unmount();
     const reopened = renderHook(() => useRunwayCatalog());
     expect(request).toHaveBeenCalledTimes(1);

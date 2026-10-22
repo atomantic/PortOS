@@ -9,6 +9,8 @@ needs no API key.
 
 The bundled capability snapshot was verified on 2026-10-22. It offers 19 image
 models and 24 image-to-video models; 23 of the video models also accept text alone.
+Video edit adds Aleph 2 and Character performance adds Act-Two, for 26 distinct
+video models across these workflows.
 Selectors filter by the active operation. Gen-4 Image Turbo requires a reference;
 Gen-4 Turbo video requires a start frame. The builder validates each model's prompt,
 reference and seed constraints and emits supported parameters only. Models accepting
@@ -49,12 +51,30 @@ before a paid POST. Generation does not perform a separate discovery lookup.
 
 ## Workflow limits
 
-Aleph 2 (`aleph2`) needs video-to-video editing inputs and Act-Two (`act_two`) needs
-character/performance inputs. They are identified in the catalog UI but are not
-runnable through the existing text/image forms. These are PortOS workflow limits,
-not missing Runway APIs. Upscaling, HDR, avatars, source-video/audio references and
-other specialized controls are also outside these forms. This integration does not
-claim to expose every Runway API operation.
+Video Gen's Runway lane offers **Video edit** (`aleph2`) and **Character performance**
+(`act_two`) alongside Text and Image. Aleph takes a 2–30 second source video at up
+to 30 FPS, an optional prompt (1000 characters including the negative prompt), an
+optional guidance image at the start, and optional expand aspect ratio. It uses
+the default MP4 delivery and preserves source resolution up to 1080p. Act-Two takes
+a 3–30 second performance clip plus one character image or video, body-control and
+expression-intensity controls, and an optional supported canvas. It follows the
+performance rather than a text prompt. Video durations and streams are probed
+before upload; invalid or unreadable inputs fail before generation.
+
+Uploads are staged durably using the normal queue ownership/cleanup rules. The
+worker creates [ephemeral Runway uploads](https://docs.dev.runwayml.com/assets/uploads/)
+at dispatch time, propagates cancellation through registration and storage POST,
+and submits only after every upload succeeds. Video files must be 512 bytes–200 MB.
+Only local input paths are queued; 24-hour upload URIs are never persisted as retry
+inputs, and replay creates fresh uploads. Storage POSTs receive signed upload fields,
+not the Runway API key. Local owned inputs are cleaned on success/failure/cancel;
+Runway's remote uploads expire automatically. Reloaded forms require video files to
+be selected again before a new submission.
+
+Specialized models stay out of text/image-only Music Video and Creative Director
+selectors. Other models' advanced video-reference controls, multiple timed Aleph
+keyframes, non-MP4 delivery, upscaling, HDR and avatars remain outside these forms.
+This integration does not claim to expose every Runway API operation.
 
 Tests use public schema excerpts and mocked transport, including refresh, cache
 restart/expiry, source failures and capability-specific request bodies. No paid

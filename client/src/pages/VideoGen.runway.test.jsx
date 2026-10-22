@@ -18,6 +18,52 @@ describe('VideoGen Runway text lane', () => {
     state.generateVideo.mockResolvedValue({ jobId: 'job-1' });
   });
 
+  it.each([
+    ['Video edit', 'aleph2', 'Source video'],
+    ['Character performance', 'act_two', 'Performance video'],
+  ])('submits %s through its own model and video inputs without inventing a prompt', async (label, modelId, videoLabel) => {
+    await renderVideoGenPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Runway' }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Video generation mode' })).getByRole('button', { name: label }));
+    const model = await screen.findByLabelText('Runway model');
+    expect([...model.options].map((o) => o.value)).toEqual([modelId]);
+    const source = new File([new Uint8Array(1024)], 'performance.mp4', { type: 'video/mp4' });
+    expect(screen.getByRole('button', { name: /Add to queue/ })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(videoLabel), { target: { files: [source] } });
+    if (modelId === 'act_two') {
+      expect(screen.queryByLabelText('Prompt')).toBeNull();
+      expect(screen.getByRole('button', { name: /Add to queue/ })).toBeDisabled();
+      fireEvent.change(screen.getByLabelText('Character video (instead of an image)'), { target: { files: [source] } });
+      fireEvent.change(screen.getByLabelText('Expression intensity'), { target: { value: '4' } });
+    }
+    fireEvent.click(await findEnabledByRole('button', { name: /Add to queue/ }));
+    await waitFor(() => expect(state.generateVideo).toHaveBeenCalled());
+    expect(state.generateVideo.mock.calls[0][0]).toMatchObject({ backend: 'runway', runwayModelId: modelId, runwayVideo: source, prompt: '', mode: modelId === 'aleph2' ? 'video-edit' : 'character-performance' });
+    if (modelId === 'act_two') expect(state.generateVideo.mock.calls[0][0]).toMatchObject({ runwayCharacterVideo: source, runwayExpressionIntensity: 4 });
+  });
+
+  it('clears file selections when switching special workflows and allows reselecting the same file', async () => {
+    await renderVideoGenPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Runway' }));
+    const modes = within(screen.getByRole('group', { name: 'Video generation mode' }));
+    fireEvent.click(modes.getByRole('button', { name: 'Video edit' }));
+    const firstInput = screen.getByLabelText('Source video');
+    const source = new File([new Uint8Array(1024)], 'source.mp4', { type: 'video/mp4' });
+    fireEvent.change(firstInput, { target: { files: [source] } });
+    await findEnabledByRole('button', { name: /Add to queue/ });
+    fireEvent.click(modes.getByRole('button', { name: 'Character performance' }));
+    expect(screen.getByLabelText('Performance video')).not.toBe(firstInput);
+    expect(screen.getByLabelText('Performance video').files).toHaveLength(0);
+    fireEvent.click(modes.getByRole('button', { name: 'Video edit' }));
+    const resetInput = screen.getByLabelText('Source video');
+    expect(resetInput.files).toHaveLength(0);
+    expect(screen.getByRole('button', { name: /Add to queue/ })).toBeDisabled();
+    fireEvent.change(resetInput, { target: { files: [source] } });
+    fireEvent.click(await findEnabledByRole('button', { name: /Add to queue/ }));
+    await waitFor(() => expect(state.generateVideo).toHaveBeenCalled());
+    expect(state.generateVideo.mock.calls[0][0]).toMatchObject({ runwayVideo: source });
+  });
+
   it('switches from an image-only model to a priced text-capable model and submits without a frame', async () => {
     await renderVideoGenPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Runway' }));

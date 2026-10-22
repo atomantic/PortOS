@@ -972,3 +972,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 - `manuscriptLocate.js`: `locateFind` / `locateFindSpan` — the manuscript `find` locator (nearest-to-`anchorQuote` occurrence, then whitespace-tolerant regex fallback). The one implementation behind both the server accept path (`services/pipeline/manuscriptFix.js`) and the client highlight/impact preview (`client/src/lib/manuscriptAnchors.js` re-exports it), so the preview selects the span an accept replaces. Pure / browser-safe.
 
 | `runwayCatalogSnapshot.js` | Shared Runway model catalog capabilities and cached model selection. |
+
+| `runwaySpecialVideoModels.js` | Aleph 2 video-edit and Act-Two character-performance capabilities, schema compatibility and request validation. |

@@ -31,6 +31,7 @@ export function useVideoGenFieldState({
   const [runwayModelId, setRunwayModelId] = useState('');
   const [runwayDuration, setRunwayDuration] = useState('');
   const [runwayResolution, setRunwayResolution] = useState('');
+  const [runwayInputs, setRunwayInputs] = useState({});
   const [reactorClipId, setReactorClipId] = useState('');
   const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
   const [reactorSeed, setReactorSeed] = useState('');
@@ -107,6 +108,7 @@ export function useVideoGenFieldState({
     runwayModelId, setRunwayModelId,
     runwayDuration, setRunwayDuration,
     runwayResolution, setRunwayResolution,
+    runwayInputs, setRunwayInputs,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,

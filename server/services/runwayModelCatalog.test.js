@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createRunwayModelCatalog } from './runwayModelCatalog.js';
+import { _createRunwayModelCatalog } from './runwayModelCatalog.js';
 
 // Real public OpenAPI excerpts (2026-10-22), descriptions removed; no generation endpoint is called.
 const fixture = JSON.parse(await readFile(new URL('./fixtures/runwayOpenApi.json', import.meta.url), 'utf8'));
@@ -15,7 +15,7 @@ async function setup() {
   let time = 1_000_000;
   const fetchSchema = vi.fn(async () => ({ ok: true, json: async () => structuredClone(fixture) }));
   const options = { cachePath, fetchSchema, now: () => time };
-  return { cache: createRunwayModelCatalog(options), options, fetchSchema, advance: (ms) => { time += ms; } };
+  return { cache: _createRunwayModelCatalog(options), options, fetchSchema, advance: (ms) => { time += ms; } };
 }
 describe('Runway public catalog cache', () => {
   it('coalesces form loads, survives restart, expires and honors explicit refresh/removals', async () => {
@@ -24,9 +24,11 @@ describe('Runway public catalog cache', () => {
     expect(first).toEqual(concurrent);
     expect(first.available.text_to_image).toEqual(['gen4_image', 'gpt_image_2']);
     expect(first.available.text_to_video).not.toContain('gen4_turbo');
+    expect(first.available.video_to_video).toEqual(['aleph2']);
+    expect(first.available.character_performance).toEqual(['act_two']);
     expect(fetchSchema).toHaveBeenCalledTimes(1);
     await cache.get();
-    await createRunwayModelCatalog(options).get();
+    await _createRunwayModelCatalog(options).get();
     expect(fetchSchema).toHaveBeenCalledTimes(1);
     advance(24 * 60 * 60 * 1000);
     await cache.get();
@@ -63,7 +65,7 @@ describe('Runway public catalog cache', () => {
     expect(fetchSchema).toHaveBeenCalledTimes(1);
     await writeFile(options.cachePath, JSON.stringify({ version: 'old', fetchedAt: 1_000_000, catalog: { available: {} } }));
     fetchSchema.mockResolvedValue({ ok: true, json: async () => fixture });
-    expect(await createRunwayModelCatalog(options).get()).toMatchObject({ bundled: false, stale: false });
+    expect(await _createRunwayModelCatalog(options).get()).toMatchObject({ bundled: false, stale: false });
   });
   it('does not claim unknown or changed request schemas are runnable and preserves forced refresh during disk load', async () => {
     const { cache, options, fetchSchema } = await setup();
@@ -71,9 +73,10 @@ describe('Runway public catalog cache', () => {
     const changed = structuredClone(fixture);
     const rows = changed.paths['/v1/text_to_image'].post.requestBody.content['application/json'].schema.oneOf;
     delete rows[0].properties.referenceImages.items.properties.tag;
+    changed.paths['/v1/character_performance'].post.requestBody.content['application/json'].schema.oneOf[0].properties.expressionIntensity.maximum = 4;
     rows.push({ properties: { model: { const: 'future_image' } } });
     fetchSchema.mockResolvedValue({ ok: true, json: async () => changed });
-    const restarted = createRunwayModelCatalog(options);
+    const restarted = _createRunwayModelCatalog(options);
     const load = restarted.get();
     const forced = restarted.get({ refresh: true });
     const forcedAgain = restarted.get({ refresh: true });
@@ -82,6 +85,7 @@ describe('Runway public catalog cache', () => {
     expect(await forcedAgain).toEqual(updated);
     expect(fetchSchema).toHaveBeenCalledTimes(2);
     expect(updated.available.text_to_image).toEqual(['gpt_image_2']);
-    expect(updated.unsupported.map((r) => r.id)).toEqual(expect.arrayContaining(['gen4_image', 'future_image', 'aleph2', 'act_two']));
+    expect(updated.available.character_performance).toEqual([]);
+    expect(updated.unsupported.map((r) => r.id)).toEqual(expect.arrayContaining(['gen4_image', 'future_image']));
   });
 });

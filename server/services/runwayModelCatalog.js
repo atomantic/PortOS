@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { PATHS } from '../lib/paths.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { RUNWAY_CATALOG_SNAPSHOT } from '../lib/runwayCatalogSnapshot.js';
+import { runwaySpecialSchemaContract } from '../lib/runwaySpecialVideoModels.js';
 
 export const RUNWAY_CATALOG_SOURCE = 'https://docs.dev.runwayml.com/openapi.json';
 const TTL = 24 * 60 * 60 * 1000;
@@ -11,12 +12,10 @@ const RETRY = 5 * 60 * 1000;
 // A new shipped snapshot invalidates even a fresh disk cache from an older install.
 const VERSION = createHash('sha256').update(JSON.stringify(RUNWAY_CATALOG_SNAPSHOT)).digest('hex');
 const fallback = Object.fromEntries(Object.entries(RUNWAY_CATALOG_SNAPSHOT).map(([endpoint, rows]) => [endpoint, rows.map(({ id }) => id)]));
-const limitations = [
-  { id: 'aleph2', reason: 'Requires video-to-video editing inputs; not supported by these text/image forms.' },
-  { id: 'act_two', reason: 'Requires character and reference performance inputs; not supported by these forms.' },
-];
+const limitations = [];
 
 function compatibleSchema(row, expected) {
+  if (expected.contract) return JSON.stringify(runwaySpecialSchemaContract(row)) === JSON.stringify(expected.contract);
   const p = row.properties;
   const required = row.required || [];
   const allowed = ['model', 'promptText', 'ratio', 'duration', 'promptImage', 'referenceImages'];
@@ -67,7 +66,7 @@ function parseCatalog(spec) {
 /** Public documentation, never an invented /models API or an authenticated generation probe.
  * One bounded, machine-local disposable cache; no user data, credentials or federation.
  */
-export function createRunwayModelCatalog({
+export function _createRunwayModelCatalog({
   fetchSchema = () => fetchWithTimeout(RUNWAY_CATALOG_SOURCE, {}, 15_000),
   cachePath = join(PATHS.installRoot, '.cache', 'runway-model-catalog.json'), now = Date.now,
 } = {}) {
@@ -127,7 +126,7 @@ export function createRunwayModelCatalog({
     },
   };
 }
-const catalog = createRunwayModelCatalog();
+const catalog = _createRunwayModelCatalog();
 export const getRunwayModelCatalog = (options) => catalog.get(options);
 
 /** Refreshed removals/schema changes fail before a paid submission. No catalog lookup per render. */

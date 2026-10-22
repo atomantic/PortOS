@@ -79,6 +79,7 @@ import { videoModeContractError, videoChainUnsupportedError, videoReferenceModeE
 import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runtimes.js';
 import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
+import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
 
 // Retries reuse persisted worker parameters instead of passing through the
 // multipart preparation path. Keep the model/mode gates here so a model edit
@@ -286,6 +287,11 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
 export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
   const settings = await getSettings();
   const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
+  const runwaySpecial = backend === VIDEO_GEN_MODE.RUNWAY && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode);
+  if (!runwaySpecial && (RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode) || uploads.runwayVideo || uploads.runwayCharacterVideo)) {
+    await cleanupMultipartTemp(uploads);
+    throw new ServerError('Runway video inputs require the matching Runway video workflow.', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   // A loose reference (#4874) is a LOCAL-runtime capability. The model gate
   // further down asks whether the chosen model's runtime can honor it — but an
   // explicit `backend: 'grok'` never reaches that runtime at all: grok's
@@ -427,7 +433,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   // rejection point at once, and stays correct as new awaits are added.
   return withStagedRollback(cleanupStaged, () => resolvePreparedParams({
     body, uploads, settings, backend, pythonPath,
-    effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode,
+    effectiveModel: runwaySpecial ? null : effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode,
   }));
 }
 
@@ -435,7 +441,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
 // try/catch so a permission/disk failure here still cleans up the
 // multipart temp uploads instead of leaking them in the OS temp dir.
 async function ensureUploadsDir({ uploads, cleanupStaged }) {
-  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || uploads.icReference)) return;
+  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || uploads.icReference || uploads.runwayVideo || uploads.runwayCharacterVideo)) return;
   try {
     await ensureDir(PATHS.uploads);
   } catch (err) {

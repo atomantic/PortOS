@@ -12,6 +12,8 @@ const compiledVisual = vi.hoisted(() => ({
 }));
 const probeVideoDuration = vi.hoisted(() => vi.fn(async () => 41.041281));
 const probeVideoGeometry = vi.hoisted(() => vi.fn());
+const validateRunwayVideoInput = vi.hoisted(() => vi.fn(async () => ({ durationSec: 4 })));
+vi.mock('../services/videoGen/runwayVideoInputs.js', () => ({ validateRunwayVideoInput }));
 vi.mock('../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   probeVideoDuration,
@@ -876,6 +878,45 @@ describe('videoGen routes', () => {
       imageGen: { grok: { enabled: true, grokPath: '/example/grok', aspectRatio: '16:9' } },
       videoGen: { fal: { apiKey: 'example-fal-key' }, reactor: { apiKey: 'example-reactor-key' } },
     };
+    it.each(['aleph2', 'act_two'])('stages %s inputs durably and preserves the workflow in queued params', async (modelId) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { runway: { apiKey: 'example-key' } } });
+      setPendingUpload({ fieldname: 'runwayVideo', path: '/tmp/performance.mp4', originalname: 'performance.mp4' });
+      const mode = modelId === 'aleph2' ? 'video-edit' : 'character-performance';
+      const response = await request(app).post('/api/video-gen/').send({ backend: 'runway', mode, runwayModelId: modelId, prompt: '',
+        ...(modelId === 'act_two' ? { sourceImageFile: 'character.png', runwayBodyControl: 'false', runwayExpressionIntensity: '4' } : { runwayTargetAspect: '9:16' }),
+      });
+      expect(response.status).toBe(200);
+      const params = mediaJobQueue.enqueueJob.mock.calls[0][0].params;
+      expect(params).toMatchObject({ mode: 'runway', videoMode: mode, modelId, runwayVideoPath: expect.stringContaining('video-runway-video-') });
+      expect(params.uploadedTempPaths).toContain(params.runwayVideoPath);
+      expect(validateRunwayVideoInput).toHaveBeenCalledWith(params.runwayVideoPath, expect.objectContaining({ id: modelId }));
+      expect(JSON.stringify(params)).not.toContain('example-key');
+    });
+
+    it('rolls back the durable video if validation fails and refuses a video workflow on another backend', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { runway: { apiKey: 'example-key' } } });
+      validateRunwayVideoInput.mockRejectedValueOnce(Object.assign(new Error('Video is too long'), { status: 400 }));
+      setPendingUpload({ fieldname: 'runwayVideo', path: '/tmp/source.mp4', originalname: 'source.mp4' });
+      const response = await request(app).post('/api/video-gen/').send({ backend: 'runway', mode: 'video-edit', runwayModelId: 'aleph2', prompt: '' });
+      expect(response.status).toBe(400);
+      expect(unlink).toHaveBeenCalledWith(copyFile.mock.calls[0][1]);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      const mismatch = await request(app).post('/api/video-gen/').send({ backend: 'local', mode: 'character-performance', prompt: 'test' });
+      expect(mismatch.status).toBe(400);
+    });
+
+    it('does not silently drop an unresolved Aleph guidance image', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { runway: { apiKey: 'example-key' } } });
+      resolveGalleryImage.mockReturnValueOnce(null);
+      setPendingUpload({ fieldname: 'runwayVideo', path: '/tmp/source.mp4', originalname: 'source.mp4' });
+      const response = await request(app).post('/api/video-gen/').send({ backend: 'runway', mode: 'video-edit', runwayModelId: 'aleph2', prompt: '', sourceImageFile: 'missing.png' });
+      expect(response.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(copyFile).not.toHaveBeenCalled();
+    });
     const providers = [
       { backend: 'grok', input: { grokDuration: 10 },
         minimal: { grokPath: '/example/grok', aspectRatio: '16:9', width: undefined, height: undefined, duration: undefined },
