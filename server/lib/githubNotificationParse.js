@@ -39,7 +39,20 @@ export function pollIntervalSeconds(value) {
 }
 
 const webHostFor = (host) => (host === 'github.com' ? 'github.com' : host);
-const apiPrefixFor = (host) => (host === 'github.com' ? 'https://api.github.com/repos/' : `https://${host}/api/v3/repos/`);
+const apiRootFor = (host) => (host === 'github.com' ? 'https://api.github.com/' : `https://${host}/api/v3/`);
+const apiPrefixFor = (host) => `${apiRootFor(host)}repos/`;
+
+/**
+ * The `gh api` path for a GitHub API url, only when it is a `repos/...` url on
+ * the account's own API host with plain path segments; null otherwise, so a
+ * url from notification data can never point `gh` at another host or endpoint.
+ */
+export function repoApiPath(url, host) {
+  const prefix = apiPrefixFor(host);
+  if (typeof url !== 'string' || !url.startsWith(prefix)) return null;
+  const path = url.slice(apiRootFor(host).length);
+  return /^repos(?:\/[A-Za-z0-9_.-]{1,100}){3,5}$/.test(path) && !path.split('/').includes('..') ? path : null;
+}
 
 const SUBJECT_PATHS = { issues: 'issues', pulls: 'pull', commits: 'commit', discussions: 'discussions' };
 
@@ -69,6 +82,7 @@ const rawThreadSchema = z.object({
     title: z.string(),
     type: z.string().max(64),
     url: z.string().max(2000).nullable().optional(),
+    latest_comment_url: z.string().max(2000).nullable().optional(),
   }).passthrough(),
   repository: z.object({
     full_name: z.string().max(201),
@@ -91,6 +105,7 @@ export function toNotificationRecord(raw, host) {
     subjectType: subject.type,
     subjectTitle: Array.from(subject.title).slice(0, MAX_TITLE_CHARS).join(''),
     subjectApiUrl: subject.url || null,
+    latestCommentApiUrl: subject.latest_comment_url || null,
     unread,
     ghUpdatedAt: updatedAt,
   };

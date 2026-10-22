@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useParams } from 'react-router';
 import { ExternalLink, RefreshCw } from 'lucide-react';
 import Pill from '../ui/Pill';
+import GitHubThreadDrawer from './GitHubThreadDrawer';
+import { DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
+import socket from '../../services/socket';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
@@ -14,6 +18,7 @@ import {
 
 const VIEWS = [
   { id: 'needs-you', label: 'Needs you' },
+  { id: 'suspect', label: 'Suspect' },
   { id: 'handled', label: 'Handled' },
   { id: 'all', label: 'All' },
 ];
@@ -54,10 +59,18 @@ const chipClass = (active) => `shrink-0 rounded-full border px-3 py-1.5 text-xs 
   : 'border-port-border bg-port-bg text-gray-400'}`;
 
 // Whether a row still belongs in the view after an action moved it.
-const belongsInView = (row, view) => view === 'all' || (view === 'needs-you') === (row.state === 'open');
+const VIEW_MATCHERS = {
+  'needs-you': (row) => row.state === 'open' && !row.suspect,
+  suspect: (row) => row.state === 'open' && row.suspect,
+  handled: (row) => row.state !== 'open',
+  all: () => true,
+};
+const belongsInView = (row, view) => VIEW_MATCHERS[view](row);
 
 function NotificationCard({ notification, accountLabel, busy, onAction }) {
   const handled = notification.state !== 'open';
+  const trust = TRUST_VIEW[notification.trust];
+  const decision = DECISION_VIEW[notification.decision];
   return (
     <article className="min-w-0 rounded-lg border border-port-border bg-port-card p-3">
       <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
@@ -66,10 +79,17 @@ function NotificationCard({ notification, accountLabel, busy, onAction }) {
         <span className="min-w-0 truncate font-mono">{notification.repoFullName}</span>
         {notification.yourRepo && <Pill tone="accent">Your repo</Pill>}
         {notification.repoPrivate && <Pill tone="muted">Private</Pill>}
+        {trust && <Pill tone={trust.tone}>{trust.label}</Pill>}
         {handled && <Pill tone="muted">{STATE_LABELS[notification.state] || notification.state}</Pill>}
         <span className="ml-auto shrink-0">{timeAgo(notification.updatedAt)}</span>
       </div>
-      <p className="mt-1.5 break-words text-sm text-white">{notification.title}</p>
+      <Link
+        to={`/devtools/github/inbox/${encodeURIComponent(notification.accountId)}/${notification.threadId}`}
+        className="mt-1.5 block break-words text-sm text-white hover:underline"
+      >
+        {notification.title}
+      </Link>
+      {decision && <p className="mt-1"><Pill tone={decision.tone}>{decision.label}</Pill></p>}
       {accountLabel && <p className="mt-0.5 text-xs text-gray-500">{accountLabel}</p>}
       <div className="mt-2 flex flex-wrap gap-2">
         {notification.htmlUrl && (
@@ -99,6 +119,7 @@ function NotificationCard({ notification, accountLabel, busy, onAction }) {
 }
 
 export default function GitHubInboxTab() {
+  const { accountId: routeAccountId, threadId } = useParams();
   const [accounts, setAccounts] = useState(null);
   const [accountId, setAccountId] = useState(null);
   const [view, setView] = useState('needs-you');
@@ -139,8 +160,18 @@ export default function GitHubInboxTab() {
     getGitHubAccounts({ silent: true }).then(setAccounts).catch(() => {});
   }, []);
 
-  // Stored rows show at once; each finished sync re-reads them.
+  // Stored rows show at once; each finished sync, and every server-side change
+  // (a scheduled check, an action from another tab), re-reads them.
   useEffect(() => { loadList(); }, [loadList, syncTick]);
+  useEffect(() => {
+    const reload = () => setSyncTick((tick) => tick + 1);
+    socket.on('github:notifications:changed', reload);
+    socket.on('connect', reload);
+    return () => {
+      socket.off('github:notifications:changed', reload);
+      socket.off('connect', reload);
+    };
+  }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
   const handleAction = async (row, action) => {
@@ -213,7 +244,7 @@ export default function GitHubInboxTab() {
 
       {data.notifications.length === 0 ? (
         <p className="rounded-lg border border-port-border bg-port-card p-4 text-sm text-gray-400">
-          {view === 'needs-you' ? 'Nothing needs you right now.' : 'No notifications here.'}
+          {{ 'needs-you': 'Nothing needs you right now.', suspect: 'Nothing suspicious.' }[view] || 'No notifications here.'}
         </p>
       ) : (
         <div className="min-w-0">
@@ -234,6 +265,9 @@ export default function GitHubInboxTab() {
       )}
 
       {lastSyncAt && <p className="text-xs text-gray-500">Checked {timeAgo(lastSyncAt)}</p>}
+      {threadId && routeAccountId && (
+        <GitHubThreadDrawer accountId={routeAccountId} threadId={threadId} />
+      )}
     </div>
   );
 }

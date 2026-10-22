@@ -20,9 +20,25 @@ const mock = vi.hoisted(() => ({
   getGitHubNotifications: vi.fn(),
   syncGitHubNotifications: vi.fn(),
   applyGitHubNotificationAction: vi.fn(),
+  getGitHubNotification: vi.fn(),
+  getGitHubAutomations: vi.fn(),
+  setGitHubNotificationCadence: vi.fn(),
 }));
 
 vi.mock('../services/api', () => mock);
+
+vi.mock('../services/socket', () => {
+  const listeners = new Map();
+  return { default: {
+    on: vi.fn((event, handler) => {
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event).add(handler);
+    }),
+    off: vi.fn((event, handler) => listeners.get(event)?.delete(handler)),
+    emit: (event, payload) => listeners.get(event)?.forEach((handler) => handler(payload)),
+  } };
+});
+import socket from '../services/socket';
 
 import GitHub from './GitHub';
 
@@ -31,6 +47,7 @@ const renderTab = (tab) => render(
     <Routes>
       <Route path="/devtools/github" element={<GitHub />} />
       <Route path="/devtools/github/:tab" element={<GitHub />} />
+      <Route path="/devtools/github/:tab/:accountId/:threadId" element={<GitHub />} />
     </Routes>
   </MemoryRouter>,
 );
@@ -372,5 +389,72 @@ describe('GitHub inbox tab', () => {
     });
     renderTab('inbox');
     expect((await screen.findByRole('alert')).textContent).toContain('not-authenticated');
+  });
+});
+
+describe('GitHub inbox triage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock.getGitHubAccounts.mockResolvedValue([IMPLICIT]);
+    mock.syncGitHubNotifications.mockResolvedValue({ results: [] });
+  });
+
+  it('shows the recorded decision and trust, filters Suspect, and reloads when the server says the inbox changed', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, decision: 'suggest-untrusted-review', trust: 'outside', suspect: false, signals: [] }],
+      sync: {},
+    });
+    renderTab('inbox');
+    expect(await screen.findByText('Suggest Untrusted:Review')).toBeTruthy();
+    expect(screen.getByText('Outside')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Suspect' }));
+    await waitFor(() => expect(mock.getGitHubNotifications).toHaveBeenLastCalledWith({ accountId: null, view: 'suspect' }, { silent: true }));
+
+    const calls = mock.getGitHubNotifications.mock.calls.length;
+    await act(async () => socket.emit('github:notifications:changed', { accountId: 'github-com' }));
+    await waitFor(() => expect(mock.getGitHubNotifications.mock.calls.length).toBeGreaterThan(calls));
+  });
+
+  it('opens a thread drawer with the rule, spam signals and history', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [], sync: {} });
+    mock.getGitHubNotification.mockResolvedValue({
+      ...NOTIFICATION, decision: 'suspect', trust: 'outside', suspect: true, signals: ['new-account'],
+      evidence: { rule: 'spam-signal', actor: 'newcomer', signals: ['new-account'] },
+      events: [{ actor: 'automation', kind: 'triaged', detail: { decision: 'suspect', mode: 'observe' }, at: '2026-10-01T10:05:00.000Z' }],
+    });
+    renderTab('inbox/github-com/101');
+    expect(await screen.findByText('Actor account is less than 30 days old')).toBeTruthy();
+    expect(screen.getByText(/nothing will act on it automatically/)).toBeTruthy();
+    expect(screen.getByText('Triaged: Suspect (observe)')).toBeTruthy();
+    expect(mock.getGitHubNotification).toHaveBeenCalledWith('github-com', '101', { silent: true });
+  });
+});
+
+describe('GitHub automations tab', () => {
+  const OVERVIEW = {
+    cadence: 'off', cronExpression: null, lastSummary: null,
+    accounts: [{ id: 'github-com', label: 'github.com', host: 'github.com', trust: 'public', mode: 'observe', enabled: true, lastSyncAt: null, lastError: null, needsYou: 2, suspect: 1, pending: 0 }],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock.getGitHubAutomations.mockResolvedValue(OVERVIEW);
+    mock.syncGitHubNotifications.mockResolvedValue({ results: [] });
+  });
+
+  it('turns on the weekday check in one tap and runs one account now', async () => {
+    mock.setGitHubNotificationCadence.mockResolvedValue({ ...OVERVIEW, cadence: 'weekdays-15m' });
+    renderTab('automations');
+    expect(await screen.findByText('Only when you tap Run now')).toBeTruthy();
+    expect(screen.getByText(/2 open · 1 suspect/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check every 15 min on weekdays' }));
+    expect(await screen.findByText('Every 15 minutes on weekdays')).toBeTruthy();
+    expect(mock.setGitHubNotificationCadence).toHaveBeenCalledWith('weekdays-15m');
+
+    fireEvent.click(screen.getByRole('button', { name: /Run now/ }));
+    await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
+    await waitFor(() => expect(mock.getGitHubAutomations).toHaveBeenCalledTimes(2));
   });
 });

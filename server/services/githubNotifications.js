@@ -10,6 +10,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
+import { GITHUB_NOTIFICATION_CADENCES } from '../lib/validation.js';
 import {
   linkHeaderHasNext,
   parseGhIncludeOutput,
@@ -18,6 +19,8 @@ import {
 } from '../lib/githubNotificationParse.js';
 import { execGh } from './github.js';
 import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccounts.js';
+import { githubNotificationEvents } from './githubNotificationEvents.js';
+import { triageAccountNotifications } from './githubNotificationTriage.js';
 
 const GH_TIMEOUT_MS = 30_000;
 const PER_PAGE = 50;
@@ -26,7 +29,9 @@ const PER_PAGE = 50;
 const MAX_PAGES = 5;
 const LIST_LIMIT = 200;
 
-export const NOTIFICATION_VIEWS = Object.freeze(['needs-you', 'handled', 'all']);
+export const NOTIFICATION_VIEWS = Object.freeze(['needs-you', 'suspect', 'handled', 'all']);
+// GitHub's floor between notification polls when it sends no X-Poll-Interval.
+const MIN_POLL_SECONDS = 60;
 export const NOTIFICATION_ACTIONS = Object.freeze(['read', 'done', 'reopen', 'mute', 'unsubscribe', 'resubscribe']);
 
 // method + path suffix + fields for each operator action; the state it leaves
@@ -80,8 +85,8 @@ async function fetchPage(account, env, page, ifModifiedSince) {
 
 const UPSERT_SQL = `INSERT INTO github_notifications (
     account_id, thread_id, repo_full_name, repo_owner, repo_private, reason, subject_type,
-    subject_title, subject_api_url, html_url, unread, gh_updated_at
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    subject_title, subject_api_url, html_url, unread, gh_updated_at, latest_comment_api_url
+  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
   ON CONFLICT (account_id, thread_id) DO UPDATE SET
     repo_full_name = EXCLUDED.repo_full_name,
     repo_owner = EXCLUDED.repo_owner,
@@ -91,6 +96,7 @@ const UPSERT_SQL = `INSERT INTO github_notifications (
     subject_title = EXCLUDED.subject_title,
     subject_api_url = EXCLUDED.subject_api_url,
     html_url = EXCLUDED.html_url,
+    latest_comment_api_url = EXCLUDED.latest_comment_api_url,
     unread = EXCLUDED.unread,
     -- New activity brings back a thread marked done, and an unsubscribed one
     -- (GitHub re-subscribes on a fresh mention or review request). Muted stays.
@@ -113,7 +119,10 @@ async function syncAccountNow(account) {
   const first = await fetchPage(account, env, 1, cursor?.last_modified || null);
   if (first.notModified) {
     await query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
-    return { accountId: account.id, changed: false, fetched: 0 };
+    // Threads past the last run's triage cap still need a decision.
+    const triage = await triageAccountNotifications(account, env);
+    if (triage.triaged) githubNotificationEvents.emit('changed', { accountId: account.id });
+    return { accountId: account.id, changed: false, fetched: 0, triage };
   }
   const threads = [...first.threads];
   let page = first;
@@ -130,7 +139,7 @@ async function syncAccountNow(account) {
     for (const r of records) {
       await client.query(UPSERT_SQL, [
         account.id, r.threadId, r.repoFullName, r.repoOwner, r.repoPrivate, r.reason, r.subjectType,
-        r.subjectTitle, r.subjectApiUrl, r.htmlUrl, r.unread, r.ghUpdatedAt,
+        r.subjectTitle, r.subjectApiUrl, r.htmlUrl, r.unread, r.ghUpdatedAt, r.latestCommentApiUrl,
       ]);
     }
     // The listing holds only unread threads; one that dropped out was read
@@ -149,8 +158,10 @@ async function syncAccountNow(account) {
       [account.id, first.headers['last-modified'] || null, pollIntervalSeconds(first.headers['x-poll-interval'])],
     );
   });
-  console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}`);
-  return { accountId: account.id, changed: true, fetched: records.length, truncated };
+  const triage = await triageAccountNotifications(account, env);
+  githubNotificationEvents.emit('changed', { accountId: account.id });
+  console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}, triaged ${triage.triaged}`);
+  return { accountId: account.id, changed: true, fetched: records.length, truncated, triage };
 }
 
 /** Fetch one account's unread notifications, coalescing concurrent requests. */
@@ -175,10 +186,13 @@ export async function syncAllNotifications() {
 }
 
 const VIEW_FILTERS = {
-  'needs-you': "state = 'open'",
+  'needs-you': "state = 'open' AND NOT suspect",
+  suspect: "state = 'open' AND suspect",
   handled: "state <> 'open'",
   all: 'TRUE',
 };
+
+const toIso = (value) => (value instanceof Date ? value.toISOString() : value);
 
 const toApi = (row, accountsById) => {
   const account = accountsById.get(row.account_id);
@@ -195,9 +209,15 @@ const toApi = (row, accountsById) => {
     htmlUrl: row.html_url,
     unread: row.unread,
     state: row.state,
-    updatedAt: row.gh_updated_at instanceof Date ? row.gh_updated_at.toISOString() : row.gh_updated_at,
+    decision: row.decision || null,
+    trust: row.trust || null,
+    suspect: row.suspect === true,
+    rule: row.evidence?.rule || null,
+    signals: Array.isArray(row.evidence?.signals) ? row.evidence.signals : [],
+    updatedAt: toIso(row.gh_updated_at),
   };
 };
+
 
 export async function listNotifications({ accountId = null, view = 'needs-you' } = {}) {
   const accounts = await listAccounts();
@@ -214,7 +234,7 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
   return {
     notifications: rows.rows.map((row) => toApi(row, accountsById)),
     sync: Object.fromEntries(syncRows.rows.map((row) => [row.account_id, {
-      lastSyncAt: row.last_sync_at instanceof Date ? row.last_sync_at.toISOString() : row.last_sync_at,
+      lastSyncAt: toIso(row.last_sync_at),
       lastError: row.last_error || null,
       pollIntervalSeconds: row.poll_interval_seconds,
     }])),
@@ -246,5 +266,126 @@ export async function applyNotificationAction(accountId, threadId, action) {
      WHERE account_id = $1 AND thread_id = $2 RETURNING *`,
     [account.id, threadId, action, spec.state],
   );
+  await query(
+    `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, 'operator', $3, '{}'::jsonb)`,
+    [account.id, threadId, action],
+  );
+  githubNotificationEvents.emit('changed', { accountId: account.id });
   return toApi(result.rows[0], new Map([[account.id, account]]));
+}
+
+/** One thread with its triage evidence and action log, newest event first. */
+export async function getNotification(accountId, threadId) {
+  const account = await getAccount(accountId);
+  const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
+  if (!row) throw new ServerError('Notification not found', { status: 404, code: 'GITHUB_NOTIFICATION_NOT_FOUND' });
+  const events = await query(
+    'SELECT actor, kind, detail, created_at FROM github_notification_events WHERE account_id = $1 AND thread_id = $2 ORDER BY created_at DESC, id DESC LIMIT 50',
+    [account.id, threadId],
+  );
+  return {
+    ...toApi(row, new Map([[account.id, account]])),
+    accountLabel: account.label,
+    evidence: row.evidence || {},
+    events: events.rows.map((event) => ({ actor: event.actor, kind: event.kind, detail: event.detail || {}, at: toIso(event.created_at) })),
+  };
+}
+
+let lastScheduledSummary = null;
+export const readLastScheduledSummary = () => lastScheduledSummary;
+
+/**
+ * The `github-notifications` scheduled pass: sync and triage every enabled
+ * account whose poll interval has elapsed. Observe mode records decisions
+ * only; nothing here writes to GitHub or calls a model.
+ */
+export async function runScheduledNotificationCheck({ now = Date.now() } = {}) {
+  const accounts = (await listAccounts()).filter((account) => account.enabled);
+  const cursors = new Map((await query(
+    'SELECT account_id, last_sync_at, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])',
+    [accounts.map((account) => account.id)],
+  )).rows.map((row) => [row.account_id, row]));
+  const results = [];
+  for (const account of accounts) {
+    const cursor = cursors.get(account.id);
+    const waitMs = Math.max(cursor?.poll_interval_seconds || 0, MIN_POLL_SECONDS) * 1000;
+    if (cursor?.last_sync_at && now - new Date(cursor.last_sync_at).getTime() < waitMs) {
+      results.push({ accountId: account.id, ok: true, skipped: 'poll-interval' });
+      continue;
+    }
+    results.push(await syncAccountNotifications(account.id)
+      .then((result) => ({ ...result, ok: true }))
+      .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
+  }
+  lastScheduledSummary = describeScheduledCheck(results);
+  return results;
+}
+
+export function describeScheduledCheck(results) {
+  const checked = results.filter((result) => result.ok && !result.skipped);
+  const failed = results.filter((result) => !result.ok).length;
+  const fetched = checked.reduce((sum, result) => sum + (result.fetched || 0), 0);
+  const triaged = checked.reduce((sum, result) => sum + (result.triage?.triaged || 0), 0);
+  const parts = [`checked ${checked.length} of ${results.length} account(s)`, `${fetched} new or updated`, `${triaged} triaged`];
+  if (failed) parts.push(`${failed} failed`);
+  return parts.join(', ');
+}
+
+const CADENCE_TASK_TYPE = 'github-notifications';
+
+function cadenceOf(interval) {
+  if (interval?.enabled && interval.type === 'cron' && interval.cronExpression === GITHUB_NOTIFICATION_CADENCES['weekdays-15m']) return 'weekdays-15m';
+  if (interval?.enabled && interval.type === 'cron') return 'custom';
+  return 'off';
+}
+
+/** What the Automations tab shows: the check's cadence and each account's last run. */
+export async function getAutomationsOverview() {
+  const { getTaskInterval } = await import('./taskSchedule.js');
+  const [accounts, interval] = await Promise.all([listAccounts(), getTaskInterval(CADENCE_TASK_TYPE)]);
+  const ids = accounts.map((account) => account.id);
+  const [syncRows, countRows] = await Promise.all([
+    query('SELECT account_id, last_sync_at, last_error, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])', [ids]),
+    query(
+      `SELECT account_id, COUNT(*) FILTER (WHERE NOT suspect)::int AS needs_you, COUNT(*) FILTER (WHERE suspect)::int AS suspect,
+         COUNT(*) FILTER (WHERE decision IS NULL)::int AS pending
+       FROM github_notifications WHERE account_id = ANY($1::text[]) AND state = 'open' GROUP BY account_id`,
+      [ids],
+    ),
+  ]);
+  const syncById = new Map(syncRows.rows.map((row) => [row.account_id, row]));
+  const countsById = new Map(countRows.rows.map((row) => [row.account_id, row]));
+  return {
+    cadence: cadenceOf(interval),
+    cronExpression: interval?.type === 'cron' ? interval.cronExpression || null : null,
+    lastSummary: lastScheduledSummary,
+    accounts: accounts.map((account) => {
+      const sync = syncById.get(account.id);
+      const counts = countsById.get(account.id);
+      return {
+        id: account.id,
+        label: account.label,
+        host: account.host,
+        trust: account.trust,
+        mode: account.mode,
+        enabled: account.enabled,
+        lastSyncAt: toIso(sync?.last_sync_at) || null,
+        lastError: sync?.last_error || null,
+        pollIntervalSeconds: sync?.poll_interval_seconds ?? null,
+        needsYou: counts?.needs_you || 0,
+        suspect: counts?.suspect || 0,
+        pending: counts?.pending || 0,
+      };
+    }),
+  };
+}
+
+/** Turn the weekday 15-minute check on, or back to Run now only. */
+export async function setNotificationCadence(cadence) {
+  const { updateTaskInterval } = await import('./taskSchedule.js');
+  const cron = GITHUB_NOTIFICATION_CADENCES[cadence];
+  await updateTaskInterval(CADENCE_TASK_TYPE, cron
+    ? { type: 'cron', cronExpression: cron, enabled: true }
+    : { type: 'on-demand', cronExpression: null, enabled: true });
+  return getAutomationsOverview();
 }

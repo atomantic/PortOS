@@ -1,7 +1,8 @@
 import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
-  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE } from '../lib/validation.js';
+  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
+  githubNotificationCadenceSchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
 import * as githubNotifications from '../services/githubNotifications.js';
@@ -145,15 +146,41 @@ router.post('/notifications/sync', asyncHandler(async (req, res) => {
   res.json({ results });
 }));
 
+const threadIdParam = (req) => {
+  if (!GITHUB_NOTIFICATION_THREAD_ID_RE.test(req.params.threadId)) {
+    throw new ServerError('Invalid notification thread id', { status: 400 });
+  }
+  return req.params.threadId;
+};
+
+/**
+ * GET /api/github/notifications/:accountId/:threadId — one thread with its triage evidence and action log
+ */
+router.get('/notifications/:accountId/:threadId', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.getNotification(req.params.accountId, threadIdParam(req)));
+}));
+
 /**
  * POST /api/github/notifications/:accountId/:threadId — read / done / reopen / mute / unsubscribe / resubscribe
  */
 router.post('/notifications/:accountId/:threadId', asyncHandler(async (req, res) => {
   const { action } = validateRequest(githubNotificationActionSchema, req.body ?? {});
-  if (!GITHUB_NOTIFICATION_THREAD_ID_RE.test(req.params.threadId)) {
-    throw new ServerError('Invalid notification thread id', { status: 400 });
-  }
-  res.json(await githubNotifications.applyNotificationAction(req.params.accountId, req.params.threadId, action));
+  res.json(await githubNotifications.applyNotificationAction(req.params.accountId, threadIdParam(req), action));
+}));
+
+/**
+ * GET /api/github/automations — the notification check's cadence and each account's last run
+ */
+router.get('/automations', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.getAutomationsOverview());
+}));
+
+/**
+ * PUT /api/github/automations/schedule — weekday 15-minute checks, or Run now only
+ */
+router.put('/automations/schedule', asyncHandler(async (req, res) => {
+  const { cadence } = validateRequest(githubNotificationCadenceSchema, req.body ?? {});
+  res.json(await githubNotifications.setNotificationCadence(cadence));
 }));
 
 export default router;

@@ -969,7 +969,7 @@ export const githubAccountUpdateSchema = githubAccountCreateSchema.partial().str
 // GitHub notifications inbox (#12870).
 export const githubNotificationsQuerySchema = z.object({
   accountId: z.string().trim().min(1).max(100).optional(),
-  view: z.enum(['needs-you', 'handled', 'all']).optional(),
+  view: z.enum(['needs-you', 'suspect', 'handled', 'all']).optional(),
 }).strict();
 
 export const githubNotificationsSyncSchema = z.object({
@@ -981,6 +981,12 @@ export const githubNotificationActionSchema = z.object({
 }).strict();
 
 export const GITHUB_NOTIFICATION_THREAD_ID_RE = /^\d{1,20}$/;
+
+// Automations tab (#12871): the one cadence it offers, or back to Run now only.
+export const GITHUB_NOTIFICATION_CADENCES = Object.freeze({ 'weekdays-15m': '*/15 * * * 1-5', off: null });
+export const githubNotificationCadenceSchema = z.object({
+  cadence: z.enum(Object.keys(GITHUB_NOTIFICATION_CADENCES)),
+}).strict();
 
 // =============================================================================
 // INSIGHTS SCHEMAS

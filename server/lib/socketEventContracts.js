@@ -414,6 +414,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     payloadSchema: { type: 'object', properties: { operationId: { type: 'string' }, sourceId: { type: 'string' }, survivorId: { type: 'string' } },
       required: ['operationId', 'sourceId', 'survivorId'], additionalProperties: false },
   },
+  'github:notifications:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate the GitHub notifications inbox, thread drawer and Automations tab after a sync, triage or action changed stored rows.',
+    payloadSchema: { type: 'object', properties: { accountId: { type: 'string' } }, required: ['accountId'], additionalProperties: false },
+  },
   'code-animation:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate bounded Code Animation job/project galleries and matching details after a durable change; kind "poster" means only the gallery thumbnail changed.',

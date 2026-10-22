@@ -28,6 +28,14 @@ export const githubNotificationsDdl = [
     PRIMARY KEY (account_id, thread_id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_github_notifications_account_updated ON github_notifications (account_id, gh_updated_at DESC)`,
+  // Triage (#12871): computed from metadata only. `triaged_for` is the
+  // gh_updated_at a decision was made for, so new activity re-triages.
+  `ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS latest_comment_api_url TEXT`,
+  `ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS decision TEXT`,
+  `ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS trust TEXT`,
+  `ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS suspect BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS triaged_for TIMESTAMPTZ`,
   `CREATE TABLE IF NOT EXISTS github_notification_sync (
     account_id TEXT PRIMARY KEY,
     last_modified TEXT,
@@ -36,4 +44,15 @@ export const githubNotificationsDdl = [
     last_error TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
+  // Who did what to a thread: the operator's actions and automation decisions.
+  `CREATE TABLE IF NOT EXISTS github_notification_events (
+    id BIGSERIAL PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    actor TEXT NOT NULL CHECK (actor IN ('operator','automation')),
+    kind TEXT NOT NULL,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_github_notification_events_thread ON github_notification_events (account_id, thread_id, created_at DESC)`,
 ];

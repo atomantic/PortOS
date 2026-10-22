@@ -22,7 +22,7 @@
  * instead of forcing every run through the app picker (which would make the
  * install-wide lane unreachable on any install that has apps).
  */
-export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review', 'model-comparison-refresh', 'error-log-triage']);
+export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review', 'model-comparison-refresh', 'error-log-triage', 'github-notifications']);
 
 // Task types that only make sense when pointed at a managed app. Keeping this
 // alongside the install-wide registry gives both the on-demand request gate
@@ -66,6 +66,8 @@ const INSTALL_WIDE_ONLY_TASK_TYPES = new Set([
   'model-comparison-refresh',
   // Triage reads PortOS's own PM2 logs, which belong to no managed app.
   'error-log-triage',
+  // The configured GitHub accounts belong to the machine, not to a managed app.
+  'github-notifications',
   ...PROGRAMMATIC_SCHEDULED_TASK_TYPES,
 ]);
 
