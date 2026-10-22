@@ -12,6 +12,9 @@ import { rmSync } from 'fs';
 import { join } from 'path';
 import { captureMusicVideoEvidence, musicVideoDependencyImpact } from '../../lib/musicVideoDependencies.js';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import * as database from '../../lib/db.js';
+import { toPgJson } from '../../lib/pgJson.js';
+import { compareMusicVideoProjectsNewestFirst } from '../../lib/musicVideoSummary.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
@@ -140,6 +143,47 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
 
     expect(await db.getProject(id)).toMatchObject({ id, name: 'Legacy row' });
     expect((await db.listProjects()).find((item) => item.name === 'Legacy row')?.id).toBe(id);
+  });
+
+  it('hydrates only a requested page while preserving legacy timestamp fallbacks and excluding tombstones', async () => {
+    const records = Array.from({ length: 20 }, (_, i) => ({ id: `mv-page-${i}`,
+      createdAt: i === 19 ? null : `2026-01-${String(i + 1).padStart(2, '0')}`,
+      updatedAt: `2026-02-${String(i + 1).padStart(2, '0')}`,
+      composition: { document: { source: 'x'.repeat(128 * 1024) } } }));
+    for (const record of records) {
+      await query(`INSERT INTO music_video_projects (id, status, data, created_at, updated_at, deleted)
+        VALUES ($1, 'draft', $2::jsonb, '2026-01-01', '2026-01-01', $3)`,
+      [record.id, toPgJson(record), record.id === 'mv-page-18']);
+    }
+    const read = vi.spyOn(database, 'query');
+    try {
+      const all = await db.listProjects();
+      const baselineCalls = [...read.mock.calls];
+      read.mockClear();
+      const expected = [...all].sort(compareMusicVideoProjectsNewestFirst);
+      expect(expected[0].id).toBe('mv-page-19');
+      const page = await db.listProjectPage({ limit: 1, offset: 0, compare: compareMusicVideoProjectsNewestFirst });
+      expect(page).toEqual({ items: expected.slice(0, 1), total: 19, limit: 1, offset: 0 });
+      const rows = (await Promise.all(read.mock.results.map(result => result.value))).flatMap(result => result.rows);
+      expect(rows.filter(row => row.data).map(row => row.id)).toEqual([expected[0].id]);
+      if (process.env.PORTOS_COLLECTION_BENCHMARK === '1') {
+        process.stdout.write(JSON.stringify({ projects: all.length, fullBytes: Buffer.byteLength(toPgJson(all)),
+          pageReadBytes: Buffer.byteLength(toPgJson(rows)), hydratedProjects: rows.filter(row => row.data).length }) + '\n');
+        const calls = [...baselineCalls, ...read.mock.calls];
+        for (const [sql, params] of calls) {
+          const { rows: explained } = await query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, params);
+          const plan = explained[0]['QUERY PLAN'][0];
+          process.stdout.write(JSON.stringify({ operation: sql.includes('ANY') ? 'page' : sql.includes('AS "createdAt"') ? 'headers' : 'full',
+            node: plan.Plan['Node Type'], executionMs: plan['Execution Time'], rows: plan.Plan['Actual Rows'],
+            tempReadBlocks: plan.Plan['Temp Read Blocks'], tempWrittenBlocks: plan.Plan['Temp Written Blocks'] }) + '\n');
+        }
+      }
+      expect(await db.listProjectPage({ limit: 1, offset: 19, compare: compareMusicVideoProjectsNewestFirst }))
+        .toEqual({ items: [], total: 19, limit: 1, offset: 19 });
+      expect((await db.listProjectPage({ limit: 2, offset: 1 })).items).toEqual(all.slice(1, 3));
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it('rejects persistence when the project id is missing', async () => {

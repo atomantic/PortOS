@@ -94,7 +94,7 @@ import {
   musicVideoDocumentCandidateSchema,
   musicVideoMixedMediaRegenerateSchema,
   isPaginationRequested,
-  paginateArray,
+  parsePagination,
 } from '../lib/validation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -104,6 +104,7 @@ import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipe
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import {
   listProjects,
+  listProjectPage,
   getProject,
   createProject,
   cloneProject,
@@ -267,21 +268,20 @@ async function presentProjectForRead(project) {
 
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(musicVideoProjectListQuerySchema, req.query);
-  const projects = await Promise.all((await listProjects()).map((project) => presentProjectForRead(project)));
-  if (query.summary === '1' || query.summary === 'true') {
-    const summaries = projects.sort(compareMusicVideoProjectsNewestFirst)
-      .map((project) => summarizeMusicVideoProject(project, project.productionReadiness));
+  const summary = query.summary === '1' || query.summary === 'true';
+  if (summary || isPaginationRequested(query)) {
     // The cursor is the next page's offset; `cursor` wins over `offset`.
     const cursor = parseInt(query.cursor, 10);
-    const page = paginateArray(summaries, Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
+    const paging = parsePagination(summary && Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
       { defaultLimit: 50, maxLimit: 500 });
-    const next = page.offset + page.items.length;
-    return res.json({ ...page, nextCursor: next < page.total ? String(next) : null });
+    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst } : {}) });
+    const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
+    const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
+    // A deletion between header selection and hydration still consumes its slot.
+    const next = Math.min(page.offset + page.limit, page.total);
+    return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
-  if (!isPaginationRequested(query)) {
-    return res.json(projects);
-  }
-  res.json(paginateArray(projects, query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(await Promise.all((await listProjects()).map((project) => presentProjectForRead(project))));
 }));
 
 // Bounded projection for the Tracks page MIDI read-through (#10203): the newest
