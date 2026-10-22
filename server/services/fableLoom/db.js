@@ -4,7 +4,7 @@
  * list/filter paths; delete markers are mirrored for federated tombstone GC.
  */
 
-import { query } from '../../lib/db.js';
+import { query, withTransaction } from '../../lib/db.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
@@ -16,6 +16,15 @@ export async function readRaw(id) {
 export async function listRaw() {
   const { rows } = await query('SELECT data FROM fableloom_stories ORDER BY updated_at DESC, id ASC');
   return rows.map((row) => row.data);
+}
+
+/** Keep gallery-video ownership stable until a media retirement settles. */
+export function withMediaReferences(work) {
+  return withTransaction(async client => {
+    await client.query('LOCK TABLE fableloom_stories IN SHARE MODE');
+    const { rows } = await client.query('SELECT data FROM fableloom_stories WHERE deleted = FALSE');
+    return work(rows.map(row => row.data));
+  });
 }
 
 /** Every loom id (live AND tombstones) — the service filters. */

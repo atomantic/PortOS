@@ -68,8 +68,8 @@ export async function scanMigrationFiles(migrationsDir) {
  * Read the applied-migrations list. A missing file defaults to [].
  *
  * When `repair` is true and the file is corrupt (mid-write truncation, bad
- * JSON, wrong shape), rename it aside and rebuild the ledger from scratch so
- * corruption does not brick future boots. Non-ENOENT read errors
+ * JSON, wrong shape or invalid migration filenames), rename it aside and
+ * rebuild the ledger from scratch so corruption does not brick future boots. Non-ENOENT read errors
  * propagate in repair mode: treating an unreadable ledger as empty could rerun
  * migrations against live data. When `repair` is false (read-only callers like
  * listPendingMigrations), read errors and corrupt content are treated as `[]`
@@ -89,6 +89,12 @@ export async function readAppliedList(appliedFile, { repair = false } = {}) {
   }
   if (corruptReason === null && !Array.isArray(parsed)) {
     corruptReason = `expected array, got ${typeof parsed}`;
+  }
+  if (corruptReason === null && parsed.some(file => typeof file !== 'string'
+    || !/^\d+-[^/\\]+\.js$/.test(file) || file.endsWith('.test.js'))) {
+    // A nonempty array is the runner's evidence that purge migrations may run.
+    // Invalid entries cannot supply that evidence, even beside valid filenames.
+    corruptReason = 'expected numbered migration filenames';
   }
   if (corruptReason !== null) {
     if (repair) {

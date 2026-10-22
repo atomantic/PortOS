@@ -39,6 +39,7 @@ const { saveHistory, loadHistory } = await import('../videoGen/history.js');
 const { unindexVideo } = await import('../mediaAssetIndex/index.js');
 const { assertSegmentCleanupIdle } = await import('./shotSegments.js');
 const { listBoards } = await import('../moodBoard/db.js');
+const loomStore = await import('../fableLoom/store.js');
 afterAll(cleanupTempDataRoots);
 beforeEach(async () => {
   rmSync(root(), { recursive: true, force: true });
@@ -61,6 +62,39 @@ async function seed(entries) {
 }
 
 describe('derived render retention', () => {
+  it('retains FableLoom scene and playback videos until their saved owner is deleted', async () => {
+    const protectedIds = ['scene', 'entry', 'hold', 'exit'];
+    await seed(['current', ...protectedIds, 'unused'].map(id => entry(id)));
+    const loom = {
+      id: 'loom-example', episodes: [{ nodes: [{ videoHistoryId: 'scene', playbackAssets: {
+        entryVideoHistoryId: 'entry', holdLoopVideoHistoryIds: ['hold'], exitByTransition: { next: 'exit' },
+      } }] }],
+    };
+    await loomStore.writeRaw(loom.id, loom);
+
+    expect((await getRenderCleanup('example-project')).finals.filter(item => !item.reason).map(item => item.id)).toEqual(['unused']);
+    expect(await cleanupSupersededFinals('example-project', { replacementId: 'current' })).toBe(1);
+    expect((await cleanupRenders('example-project')).finals.every(item => item.reason)).toBe(true);
+    expect((await loadHistory()).map(item => item.id)).toEqual(['current', ...protectedIds]);
+    for (const id of protectedIds) expect(existsSync(join(PATHS.videos, `${id}.mp4`))).toBe(true);
+    await loomStore.writeRaw(loom.id, { ...loom, deleted: true });
+    expect(await cleanupSupersededFinals('example-project')).toBe(protectedIds.length);
+  });
+
+  it('keeps history and video bytes when FableLoom ownership cannot be read', async () => {
+    await seed([entry('current'), entry('old')]);
+    const read = vi.spyOn(loomStore, 'withLoomMediaReferences').mockRejectedValueOnce(new Error('Loom store unavailable'));
+    try {
+      await expect(cleanupSupersededFinals('example-project')).rejects.toThrow('Loom store unavailable');
+      expect((await loadHistory()).map(item => item.id)).toEqual(['current', 'old']);
+      expect(existsSync(join(PATHS.videos, 'old.mp4'))).toBe(true);
+      expect(unindexVideo).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
+    expect(await cleanupSupersededFinals('example-project')).toBe(1);
+  });
+
   it('removes superseded composites, posters, proof sheets and index rows, preserving sources and referenced renders', async () => {
     const ids = ['current', 'old', 'take', 'clone', 'collection', 'timeline', 'director', 'derived'];
     await seed([...ids.map(id => entry(id)), entry('source', { modelId: 'video-model' }), entry('other', { musicVideoProjectId: 'another-project' }), entry('child', { sourceId: 'derived', musicVideoProjectId: null })]);

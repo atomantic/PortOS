@@ -355,6 +355,26 @@ export default {
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['197-purge.js']);
   });
 
+  it.each([
+    [null],
+    ['000-earlier.js', null],
+    [''],
+  ])('preserves post-upgrade data when the ledger contains invalid entries: %j', async (...entries) => {
+    const original = JSON.stringify(entries);
+    writeFileSync(appliedFile, original);
+    const learning = { bucket: { legitPostFixRuns: 5 }, keep: 2 };
+    seedLearning(learning);
+
+    expect(await runMigrations({ rootDir, migrationsDir })).toBe(0);
+    expect(readLearning()).toEqual(learning);
+    const parked = readdirSync(dataDir).find(name => name.startsWith('migrations.applied.json.corrupt-'));
+    expect(parked).toBeDefined();
+    expect(readFileSync(join(dataDir, parked), 'utf8')).toBe(original);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf8'))).toEqual(['197-purge.js']);
+    expect(await runMigrations({ rootDir, migrationsDir })).toBe(0);
+    expect(readLearning()).toEqual(learning);
+  });
+
   it('records a purge migration as applied on a fresh install (nothing to purge)', async () => {
     // No learning.json at all — the empty-ledger skip is harmless and still marks
     // it applied so it never fires destructively later.
