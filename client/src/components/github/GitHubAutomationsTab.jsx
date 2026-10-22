@@ -19,10 +19,11 @@ import {
 import { ACTION_LABELS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
 import GitHubAgentRules from './GitHubAgentRules';
 
-const MODE_OPTIONS = ['observe', 'assist', 'autopilot'];
-const MODE_LABELS = { observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
+const MODE_OPTIONS = ['disabled', 'observe', 'assist', 'autopilot'];
+const MODE_LABELS = { disabled: 'Disabled', observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
 
 function modeHint(account) {
+  if (account.mode === 'disabled') return 'This PortOS instance does not fetch or process this account\'s notifications.';
   if (account.mode === 'observe') return 'Records a decision for each notification; changes nothing on GitHub.';
   const where = account.trust === 'private'
     ? 'Text goes only to local AI providers unless you allow others in Accounts.'
