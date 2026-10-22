@@ -29,6 +29,7 @@ import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { shortSummary, localDayKey } from './humanActivity.js';
 import { getSettings } from './settings.js';
+import { fullDiskAccessDetails } from '../lib/fullDiskAccess.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -285,8 +286,6 @@ function isFullDiskAccessError(err) {
   }
 }
 
-const FDA_REMEDIATION = 'Grant Full Disk Access to the process running PortOS (node or the PM2 daemon): System Settings → Privacy & Security → Full Disk Access → enable your terminal / node / pm2, then restart PortOS.';
-
 /**
  * Attempt to open chat.db read-only and run a trivial probe query. Returns a
  * structured report — never throws — so the setup-check route can render an
@@ -306,7 +305,9 @@ export async function checkSetup() {
       dbPath: path,
       error: err?.message || 'Failed to open chat.db',
       fullDiskAccessRequired,
-      remediation: fullDiskAccessRequired ? FDA_REMEDIATION : `Could not read ${path}: ${err?.message || 'unknown error'}`,
+      ...(fullDiskAccessRequired
+        ? await fullDiskAccessDetails()
+        : { remediation: `Could not read ${path}: ${err?.message || 'unknown error'}` }),
     };
   } finally {
     try { db?.close(); } catch { /* already closed / never opened */ }
@@ -417,7 +418,7 @@ async function doRunSync() {
       ok: false,
       error: err?.message || 'Failed to open chat.db',
       fullDiskAccessRequired,
-      remediation: fullDiskAccessRequired ? FDA_REMEDIATION : undefined,
+      ...(fullDiskAccessRequired ? await fullDiskAccessDetails() : {}),
     };
   } finally {
     try { db?.close(); } catch { /* noop */ }
