@@ -83,7 +83,7 @@ function CreativeDirectorProject({ id, basePath }) {
   }, [setSearchParams]);
   const { data: agents } = useSocketResource(
     async () => {
-      const data = await getCosAgents();
+      const data = await getCosAgents({ active: true });
       return (data || []).filter(a => a.status === 'running' && (a.taskId || '').startsWith(`cd-${id}-`));
     },
     { namespace: 'cos', events: AGENT_EVENTS, resourceKey: id,

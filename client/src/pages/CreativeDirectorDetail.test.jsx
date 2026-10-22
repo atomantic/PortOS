@@ -136,6 +136,20 @@ describe('CreativeDirectorDetail route isolation', () => {
     expect(cdApi.deleteCreativeDirectorProject).toHaveBeenCalledWith(projectB.id, { silent: true });
   });
 
+  it('loads only active CoS agents and shows a running agent for this project', async () => {
+    getCosAgents.mockImplementation(({ active } = {}) => Promise.resolve(active
+      ? [{ id: 'agent-a', status: 'running', taskId: 'cd-cd-example-task' }]
+      : [{ id: 'agent-old', status: 'completed', taskId: 'cd-cd-example-old' }]));
+    render(
+      <MemoryRouter initialEntries={['/creative-director/cd-example/overview']}>
+        <Routes><Route path="/creative-director/:id/:tab" element={<CreativeDirectorDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByTestId('agents')).toHaveTextContent('agent-a'));
+    expect(getCosAgents).toHaveBeenCalledWith({ active: true });
+    expect(screen.getByTestId('agents')).not.toHaveTextContent('agent-old');
+  });
+
   it('hides project actions when the response ID differs from the route', async () => {
     cdApi.getCreativeDirectorProject.mockResolvedValue({ ...PROJECT, id: 'wrong-project' });
     render(
