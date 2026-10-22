@@ -266,12 +266,32 @@ describe('activity route validation', () => {
       expect(activityMocks.getActivityTimeline).not.toHaveBeenCalled();
     });
 
+    it('forwards a single action and a comma list as an actions array', async () => {
+      await get('/timeline?action=post');
+      expect(activityMocks.getActivityTimeline).toHaveBeenLastCalledWith(expect.objectContaining({ actions: ['post'] }));
+
+      await get('/timeline?action=mw_say,%20mw_think&before=2026-08-23T00:00:05.000Z');
+      expect(activityMocks.getActivityTimeline).toHaveBeenLastCalledWith(expect.objectContaining({
+        actions: ['mw_say', 'mw_think'],
+        beforeTimestamp: '2026-08-23T00:00:05.000Z',
+      }));
+    });
+
+    it('rejects an over-long action list or an over-long action', async () => {
+      activityMocks.getActivityTimeline.mockClear();
+      const eleven = Array.from({ length: 11 }, (_, i) => `a${i}`).join(',');
+      expect((await get(`/timeline?action=${eleven}`)).status).toBe(400);
+      expect((await get(`/timeline?action=${'x'.repeat(65)}`)).status).toBe(400);
+      expect(activityMocks.getActivityTimeline).not.toHaveBeenCalled();
+    });
+
     it('forwards a valid cursor and coerced limit', async () => {
       const res = await get('/timeline?limit=25&before=2026-08-23T00:00:05.000Z');
       expect(res.status).toBe(200);
       expect(activityMocks.getActivityTimeline).toHaveBeenCalledWith({
         limit: 25,
         agentIds: undefined,
+        actions: undefined,
         beforeTimestamp: '2026-08-23T00:00:05.000Z',
       });
     });
