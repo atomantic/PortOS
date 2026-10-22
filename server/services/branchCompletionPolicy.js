@@ -233,7 +233,28 @@ export async function readBranchCompletionHold(input, deps = {}) {
   if (input.retirement === true && decision.obligation?.prUrl
     && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true, expectedTip: input.tip }).catch(() => null) === tip) return null;
   if (decision.release && await verifiedPolicyTip(input.repoPath, input.branch, decision.release.prUrl).catch(() => null) === tip) return null;
+  if (input.retirement === true && await isVacuousReviewObligation(input, decision, tip)) return null;
   return decision.reason;
+}
+
+/** A review-then-merge run that never opened a PR and left no commit the default
+ * branch lacks has nothing to review or merge, and no later receipt can name a
+ * PR to release it. Every other hold (leave-open, a recorded PR, unmerged
+ * commits, an unresolvable default branch) is kept.
+ */
+async function isVacuousReviewObligation(input, decision, tip) {
+  if (decision.reason !== 'pr-completion-review-required' || input.prUrl
+    || !/^[a-f0-9]{40,64}$/i.test(tip || '')
+    || decision.policies.some(policy => policy.completion === PR_COMPLETIONS.LEAVE_OPEN || retirementPr(policy))) return false;
+  const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
+  const base = await getDefaultBranch(input.repoPath, { strict: true }).catch(() => null);
+  if (!base) return false;
+  // A stale origin/<default> only makes the ancestry check stricter: whatever it
+  // contains the current default contains too.
+  const { execGit } = await import('../lib/execGit.js');
+  const remote = await execGit(['rev-parse', '--verify', `origin/${base}^{commit}`], input.repoPath, { ignoreExitCode: true })
+    .then(result => (result.exitCode === 0 ? `origin/${base}` : null), () => null);
+  return hasBranchMergeEvidence(input.repoPath, tip, remote || base).catch(() => false);
 }
 
 /** Called with task policy and forge-observed identity, never provider prose.
