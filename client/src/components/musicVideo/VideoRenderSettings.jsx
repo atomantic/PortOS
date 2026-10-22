@@ -1,4 +1,5 @@
 import RenderPoolPicker from './RenderPoolPicker.jsx';
+import ListLoadError from '../ui/ListLoadError.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_MUSIC_VIDEO_DEFAULT_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falImageVideoQuotes, falVideoResolutions, getFalVideoModel,
@@ -28,7 +29,7 @@ const runwayOptionLabel = (model, resolution) => {
 // board's displayed setting cannot disagree.
 export default function VideoRenderSettings({ videoSettings, generating, project = null }) {
   const {
-    settings, saving, models, modelsLoading, defaultModel, effectiveModelId,
+    settings, saving, models, modelsLoading, catalogStatus, retryCatalog, defaultModel, effectiveModelId,
     audioReactiveModels, audioReactiveLoras, detectedAudioReactiveLora,
     audioReactiveReady, audioReactiveSelected, change,
   } = videoSettings;
@@ -61,6 +62,9 @@ export default function VideoRenderSettings({ videoSettings, generating, project
   const runwayLengths = runwayVideoLengths(runwayModel);
   return (
     <>
+      {catalogStatus === 'error' && (
+        <ListLoadError what="Video Gen status" onRetry={retryCatalog} className="w-full" />
+      )}
       <RenderPoolPicker settings={settings} change={change} disabled={locked} />
       <label htmlFor="mv-video-backend" className="sr-only">Scene video renderer</label>
       <select
@@ -138,7 +142,9 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 title="Saved audio-reactive LoRA version for this project"
                 className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto sm:max-w-[220px]"
               >
-                {audioReactiveLoras.length === 0 && <option value="">No audio-reactive LoRA installed</option>}
+                {audioReactiveLoras.length === 0 && (
+                  <option value="">{catalogStatus === 'ready' ? 'No audio-reactive LoRA installed' : 'Audio-reactive LoRAs not loaded'}</option>
+                )}
                 {audioReactiveLoras.map((lora) => (
                   <option key={lora.filename} value={lora.filename}>
                     {lora.name || lora.filename}
@@ -162,13 +168,13 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 className={`text-[10px] px-1.5 py-0.5 rounded ${
                   audioReactiveReady
                     ? 'bg-port-success/20 text-port-success'
-                    : (modelsLoading ? 'bg-port-warning/20 text-port-warning' : 'bg-port-error/20 text-port-error')
+                    : (modelsLoading || catalogStatus !== 'ready' ? 'bg-port-warning/20 text-port-warning' : 'bg-port-error/20 text-port-error')
                 }`}
                 title={detectedAudioReactiveLora?.filename || 'Audio-reactive LoRA not installed'}
               >
                 {audioReactiveReady
                   ? 'song-conditioned · no vocals'
-                  : (modelsLoading ? 'checking local runtime…' : 'audio-reactive unavailable')}
+                  : (catalogStatus === 'error' ? 'status unavailable' : modelsLoading || catalogStatus === 'loading' ? 'checking local runtime…' : 'audio-reactive unavailable')}
               </span>
             </>
           )}

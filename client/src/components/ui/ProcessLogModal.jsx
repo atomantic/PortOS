@@ -15,6 +15,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import Modal from './Modal';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from './ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import * as api from '../../services/api';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -22,8 +24,10 @@ import { copyToClipboard } from '../../lib/clipboard';
 // renders a matching option on open rather than a mismatched first entry.
 const TAIL_OPTIONS = [100, 200, 500, 1000, 2000];
 
+const fetchProcesses = () => api.getProcessesList({ silent: true })
+  .then((list) => (Array.isArray(list) ? list : []));
+
 export default function ProcessLogModal({ open, onClose, processName, title = 'System Logs' }) {
-  const [processes, setProcesses] = useState([]);
   const [selected, setSelected] = useState(processName || '');
   const [tailLines, setTailLines] = useState(200);
   const [logs, setLogs] = useState('');
@@ -42,15 +46,8 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
     setError('');
   }, [open, processName]);
 
-  // Load the PM2 process picker options once per open (static across a session).
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    api.getProcessesList({ silent: true })
-      .then((list) => { if (!cancelled) setProcesses(Array.isArray(list) ? list : []); })
-      .catch(() => { if (!cancelled) setProcesses([]); });
-    return () => { cancelled = true; };
-  }, [open]);
+  // PM2 process picker options, reloaded per open.
+  const { items: processes, state: processesState, error: processesError, retry: retryProcesses } = useListResource(fetchProcesses, { enabled: open });
 
   const loadLogs = useCallback(async () => {
     if (!selected) return;
@@ -142,6 +139,9 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
             </button>
           </div>
         </div>
+        {processesState === 'error' && (
+          <ListLoadError what="the process list" error={processesError} onRetry={retryProcesses} className="mx-4 sm:mx-6 my-2" />
+        )}
         <div className="flex-1 overflow-auto bg-port-bg p-3 sm:p-4 min-h-[16rem]">
           {loading && !logs ? (
             <BrailleSpinner text="Loading logs" />

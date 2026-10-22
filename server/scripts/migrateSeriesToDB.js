@@ -37,6 +37,7 @@ import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { readLegacyJSON, legacyDirectory, parkLegacyFile, incompleteImport } from './legacyImport.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const LEGACY_DIRNAME = 'pipeline-series';
 const MARKER_FILENAME = 'pipeline-series.migrated.json';
@@ -58,7 +59,7 @@ export async function importRecord(record, execute = query) {
       typeof record.name === 'string' ? record.name : '',
       typeof record.universeId === 'string' && record.universeId ? record.universeId : null,
       typeof record.writersRoomWorkId === 'string' && record.writersRoomWorkId ? record.writersRoomWorkId : null,
-      JSON.stringify(record),
+      toPgJson(record),
       record.ephemeral === true,
       createdAt,
       mirrorTimestamp(record.updatedAt, createdAt),

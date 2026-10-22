@@ -30,6 +30,7 @@ vi.mock('../../../services/api', () => ({
 }));
 
 vi.mock('./AutoUpdatePanel', () => ({ default: () => null }));
+vi.mock('./NodeRuntimePanel', () => ({ default: () => null }));
 
 const UpdateTab = (await import('./UpdateTab')).default;
 

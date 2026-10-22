@@ -414,6 +414,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     payloadSchema: { type: 'object', properties: { operationId: { type: 'string' }, sourceId: { type: 'string' }, survivorId: { type: 'string' } },
       required: ['operationId', 'sourceId', 'survivorId'], additionalProperties: false },
   },
+  'github:notifications:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate the GitHub notifications inbox, thread drawer and Automations tab after a sync, triage or action changed stored rows.',
+    payloadSchema: { type: 'object', properties: { accountId: { type: 'string' } }, required: ['accountId'], additionalProperties: false },
+  },
   'code-animation:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate bounded Code Animation job/project galleries and matching details after a durable change; kind "poster" means only the gallery thumbnail changed.',
@@ -462,6 +467,39 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
         }, required: ['sentPrompt', 'promptAdditions'], additionalProperties: false },
       },
       required: ['boardId', 'requestId', 'status', 'revision', 'epoch', 'items'], additionalProperties: false,
+    },
+  },
+  'storyboard:make': {
+    direction: 'server-to-client',
+    summary: 'A storyboard panel maker node started, finished, failed, or received a frame; reload the board.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        storyboardId: { type: 'string' },
+        panelId: { type: 'string' },
+        nodeId: { type: 'string' },
+        status: { type: 'string', enum: ['running', 'queued', 'frame', 'done', 'failed'] },
+        error: { type: 'string' },
+      },
+      required: ['storyboardId', 'panelId', 'nodeId', 'status'],
+      additionalProperties: false,
+    },
+  },
+  'storyboard:make-batch': {
+    direction: 'server-to-client',
+    summary: 'Make empty panels progress on a storyboard: panels finished of the total, and when the batch is done.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        storyboardId: { type: 'string' },
+        status: { type: 'string', enum: ['running', 'done'] },
+        total: { type: 'number' },
+        done: { type: 'number' },
+        failed: { type: 'number' },
+        startedAt: { type: 'string' },
+      },
+      required: ['storyboardId', 'status', 'total', 'done', 'failed'],
+      additionalProperties: false,
     },
   },
   'mood-board:item-render': {

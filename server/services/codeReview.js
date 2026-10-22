@@ -1113,7 +1113,7 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
   let attempt = await sendChatCompletion(baseUrl, { model, messages, timeoutMs }, resolvedEffort)
 
   if (!attempt.ok && attempt.status === 400 && resolvedEffort && /does not support thinking/i.test(attempt.text || '')) {
-    console.warn(`⚠️ ${backend} model ${model} ignores reasoning_effort — retried without it`)
+    console.log(`⏭️ ${backend} model ${model} ignores reasoning_effort — retried without it`)
     thinkingUnsupportedModels.set(thinkingCacheKey(backend, model), true)
     resolvedEffort = null
     effortUnsupported = true

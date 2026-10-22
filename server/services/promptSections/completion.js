@@ -12,7 +12,7 @@ import { shellQuote } from '../../lib/shellQuote.js';
 import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
-import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
+import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata, DEFAULT_BRANCH_HEAD_GUIDANCE, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
 
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { agentApiCurl } from '../../lib/agentApiToken.js';
@@ -720,13 +720,14 @@ export function buildAutoMergeCommitStep(baseBranch = null) {
  * `canTypeSlashCommands` alone (no separate `isTui` re-check) tells the two
  * apart from their non-slashdo equivalents.
  */
-export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false }) {
+export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false, headIsDefaultBranch = false }) {
   if (mode === COMPLETION_MODES.AUDIT_FLOW) return AUDIT_FLOW_GUIDANCE;
   if (mode === COMPLETION_MODES.RECONCILE_FLOW) return RECONCILE_FLOW_GUIDANCE;
   if (mode === COMPLETION_MODES.CHECKOUT_RECOVERY) return CHECKOUT_RECOVERY_GUIDANCE;
   if (mode === COMPLETION_MODES.RELEASE_FLOW) return RELEASE_FLOW_GUIDANCE;
   if (discardWorktree) return DISCARD_WORKTREE_NOTE;
   if (claimFlow) return 'The claim workflow in the Completion section owns the push, PR/MR, review, merge or human-handoff, and cleanup steps.';
+  if (headIsDefaultBranch) return DEFAULT_BRANCH_HEAD_GUIDANCE;
   if (isTui) return withNoChangeAuditGuidance('Commit your changes to this branch — see **Completion Workflow** below.', noChangeSuccess);
   if (isWorktreeOnExistingBranch) {
     return withNoChangeAuditGuidance('Commit and **push** any review-fix commits to this branch (the PR points at it). Use `git pull --rebase` before pushing if needed.', noChangeSuccess);

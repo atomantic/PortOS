@@ -87,6 +87,7 @@ export * from './apiContinuousVideo.js';
 export * from './apiSprites.js';
 export * from './apiShell.js';
 export * from './apiMoodBoard.js';
+export * from './apiStoryboards.js';
 export * from './apiDecks.js';
 export * from './apiThreejsModels.js';
 export * from './apiCodeAnimation.js';
@@ -98,6 +99,7 @@ export * from './apiPrivacy.js';
 export * from './apiQuotaBurn.js';
 export * from './apiRapidReader.js';
 export * from './apiRigging.js';
+export * from './apiDockerContainment.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';

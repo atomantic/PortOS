@@ -2,41 +2,10 @@
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 import { agentApiCurl } from '../lib/agentApiToken.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
-import { parsePullRequestUrl } from '../lib/gitForge.js';
 
 async function mergedPrUrl(app, branch, tip) {
-  const [{ execGh }, { resolveForgeExecOptions }, { getOriginInfo }, { githubRepoSpec }] = await Promise.all([
-    import('./github.js'), import('./forgeExecOptions.js'), import('../lib/gitRemote.js'), import('../lib/workTracker.js'),
-  ]);
-  const origin = await getOriginInfo(app.repoPath);
-  const spec = githubRepoSpec(origin);
-  if (!spec) throw new Error('retirement-forge-unsupported');
-  const options = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount ?? null });
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(tip || '')) throw new Error('retirement-pr-ambiguous');
-  // Query the exact commit, not an unbounded reused-branch history. A capped
-  // association result cannot establish uniqueness and stays held.
-  const rows = JSON.parse(await execGh(['api', '--hostname', origin.host,
-    `repos/${origin.fullName}/commits/${tip}/pulls?per_page=100`], undefined, options));
-  if (!Array.isArray(rows) || rows.length >= 100
-    || new Set(rows.map(row => row?.html_url)).size !== rows.length
-    || rows.some(row => {
-      const parsed = parsePullRequestUrl(row?.html_url);
-      return !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName
-        || typeof row.head?.ref !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head?.sha || '');
-    })) throw new Error('retirement-pr-ambiguous');
-  const matches = rows.filter(row => row.head.sha === tip && row.head.ref === branch
-    && row.head.repo?.full_name === origin.fullName && row.base?.repo?.full_name === origin.fullName
-    && row.state === 'closed' && typeof row.merged_at === 'string' && Number.isFinite(Date.parse(row.merged_at)));
-  if (matches.length > 1) throw new Error('retirement-pr-ambiguous');
-  // Selection is not proof: the preview re-reads this exact PR and verifies its
-  // repository, merge, current refs and complete original scope before review.
-  if (matches.length === 1) return matches[0].html_url;
-  // Preserve historical review of an older local tip only when branch history
-  // itself has exactly one candidate. Never choose among mismatching heads.
-  const historical = JSON.parse(await execGh(['pr', 'list', '--repo', spec, '--head', branch, '--state', 'merged',
-    '--limit', '2', '--json', 'url'], undefined, options));
-  if (!Array.isArray(historical) || historical.length !== 1 || typeof historical[0]?.url !== 'string') throw new Error('retirement-pr-ambiguous');
-  return historical[0].url;
+  const { findMergedPullRequest } = await import('./heldCheckoutReview.js');
+  return (await findMergedPullRequest(app.repoPath, branch, tip, { forgeAccount: app.forgeAccount ?? null })).url;
 }
 
 /** Inventory is persisted first: the same preview used by the live endpoint
@@ -50,10 +19,25 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
   const prepare = deps.prepare || (await import('./heldCheckoutRecovery.js')).prepareInventoriedCheckoutRetirement;
   for (const branch of result.wip || []) {
     if (branch.completionPolicyReason !== 'pr-completion-review-required'
-      || branch.openPr || branch.liveOwnerReason || branch.worktreeDirty || branch.worktreeStatusUnavailable) continue;
+      || branch.liveOwnerReason || branch.worktreeDirty || branch.worktreeStatusUnavailable) continue;
+    if (branch.openPr && !staleBehindOpenPr(branch)) continue;
     const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
     if (!tree || tree.managed !== true || tree.locked !== false || tree.head !== branch.tip) continue;
+    // The open PR ships from another checkout; this one has idled behind it.
+    if (branch.openPr && !(await isIdleCheckout(tree.path, deps))) continue;
     const release = { branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
+    // Every commit is already on the default branch, so no PR identity or owner
+    // history is needed to prove nothing is lost: archive and retire it. The
+    // service re-proves merge evidence and ownership under its fence.
+    if (branch.isMerged === true) {
+      const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;
+      const outcome = await retire({ appId: app.id, release },
+        { beforeMutation: assertAutomaticRetirementAllowed, settleMergedReviewObligation: true })
+        .catch(error => ({ ok: false, reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-receipt-unverified' }));
+      if (outcome.ok && outcome.archiveDir && outcome.branchDeleted === true) retired.push(release);
+      else held.push({ ...release, reason: outcome.reason || outcome.branchRetainedReason || 'retirement-receipt-unverified' });
+      continue;
+    }
     try {
       const prUrl = await readPr(app, branch.branch, release.head);
       const prepared = await prepare({ appId: app.id, release, prUrl });
@@ -86,6 +70,22 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
     }
   }
   return { candidates, held, retired };
+}
+
+/** A merged local copy whose open PR head moved on was left behind by the
+ * delivery: everything it holds is on the default branch, and the PR's head is
+ * not this checkout's. An open PR at this tip is the live delivery itself.
+ */
+function staleBehindOpenPr(branch) {
+  const prHead = branch.openPr?.headRefOid;
+  return branch.isMerged === true && !branch.openPr.isDraft
+    && typeof prHead === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(prHead) && prHead !== branch.tip;
+}
+
+async function isIdleCheckout(path, deps) {
+  const { checkoutIdleMs, SHIPPED_CLAIM_IDLE_MS } = await import('./branchReconcile.js');
+  const idle = await (deps.checkoutIdleMs || checkoutIdleMs)(path).catch(() => null);
+  return Number.isFinite(idle) && idle >= SHIPPED_CLAIM_IDLE_MS;
 }
 
 /** Re-read daemon authority at each automatic mutation boundary. Manual API

@@ -26,6 +26,7 @@ import { dirname, join } from 'path';
 // a destructured or defaulted parameter.
 import { extractDeclaration, stripCommentsAndNormalize } from '../lib/mirrorParity.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
+import { createEventLoopLagProbe, __createManualClock } from '../lib/eventLoopLagProbe.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, 'bootstrap.js'), 'utf-8').replace(/\r\n/g, '\n');
@@ -99,6 +100,11 @@ describe('shutdown handler — request drain ordering (#8323)', () => {
     expect(code.indexOf('closeAllConnections')).toBe(-1);
   });
 
+  it('reports requests that outlive the drain window on stdout: closing them is the bounded handling', () => {
+    expect(code).toMatch(/remaining > 0\) console\.log\(`⏱️ /);
+    expect(code).not.toMatch(/remaining > 0\) console\.(warn|error)\(/);
+  });
+
   it('fits the drain window and the close graces inside the shutdown ceiling', () => {
     const constant = (name) => Number(SRC.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
     const closeGrace = Number(SRC.match(/const closeServer = \(server, label, graceMs = (\d+)\)/)?.[1]);
@@ -138,9 +144,9 @@ describe('shutdown handler — IdeaLoom auto-sync flush (#11756)', () => {
 describe('shutdown handler — peer sync stops before the DB pool closes (#12585)', () => {
   const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
 
-  it('calls shutdownSharing() then drains, under a grace, between the HTTP close and the DB pool close', () => {
-    const stopAt = code.indexOf('shutdownSharing()');
-    expect(stopAt, 'shutdownSharing() is not called in shutdown()').toBeGreaterThan(-1);
+  it('stops sharing then drains, under a grace, between the HTTP close and the DB pool close', () => {
+    const stopAt = code.indexOf('quiesceSharingForExit');
+    expect(stopAt, 'quiesceSharingForExit is not called in shutdown()').toBeGreaterThan(-1);
     expect(code).toMatch(/withGrace\('Peer sync', PEER_SYNC_STOP_GRACE_MS,/);
     expect(code.indexOf('drainPeerSyncOperations()')).toBeGreaterThan(stopAt);
     expect(stopAt).toBeGreaterThan(code.indexOf('closeServer('));
@@ -194,11 +200,11 @@ describe('bounded server shutdown', () => {
     await vi.advanceTimersByTimeAsync(1);
     await closing;
     expect(settled).toHaveBeenCalledTimes(1);
-    expect(error.mock.calls).toEqual([['⚠️ HTTP server close exceeded 1000ms — proceeding']]);
+    expect(log.mock.calls).toEqual([['⏱️ HTTP server close exceeded 1000ms — proceeding']]);
     onClose();
     onClose(new Error('late failure'));
-    expect(log).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
   });
 });
 
@@ -251,5 +257,54 @@ describe('shutdown handler — media-job queue quiesce + flush (#8325, #8691)', 
     const awaitAt = code.indexOf('await mediaQueueFlushed');
     expect(awaitAt).toBeGreaterThan(flushAt);
     expect(awaitAt).toBeLessThan(code.indexOf('process.exit(0)'));
+  });
+});
+
+// #12853: closing the share-bucket watchers blocked the main thread for seconds
+// on macOS, starving the marker and media-flush timers and, past PM2's kill
+// window, skipping the rest of the teardown.
+describe('shutdown handler — no blocking teardown at exit (#12853)', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('leaves share-bucket watchers open and starts the durable writes before stopping sharing', () => {
+    expect(code).not.toMatch(/shutdownSharing|shutdownAllWatchers|detachWatcher/);
+    const stopAt = code.indexOf('quiesceSharingForExit');
+    expect(code.indexOf('writeHostShutdownMarker(')).toBeLessThan(stopAt);
+    expect(code.indexOf('flushMediaJobQueue(')).toBeLessThan(stopAt);
+  });
+
+  it('reports a slow shutdown on both exits', () => {
+    const exits = [...code.matchAll(/process\.exit\([01]\)/g)];
+    expect(exits).toHaveLength(2);
+    for (const exit of exits) {
+      expect(code.slice(0, exit.index).trimEnd().endsWith('reportIfSlow();')).toBe(true);
+    }
+  });
+
+  const describeSlowShutdown = runInNewContext(`
+    ${SRC.match(/const SLOW_SHUTDOWN_MS = \d+;/)[0]}
+    ${extractDeclaration(SRC, 'describeSlowShutdown')}
+    describeSlowShutdown;
+  `, {});
+
+  it('names the step that blocked the loop in one numbers-only line, and stays silent when fast', () => {
+    const clock = __createManualClock();
+    const span = createEventLoopLagProbe({ clock }).begin('httpClose');
+    clock.advance(20);
+    span.mark('peerSync');
+    clock.advance(100);
+    clock.stall(6000);
+    clock.advance(100);
+    span.mark('dbPool');
+    clock.advance(30);
+    const line = describeSlowShutdown(span.end(), { marker: 6250, mediaFlush: 6240 });
+    expect(line).toMatch(/^🐢 Graceful shutdown slow totalMs=6250 slowestStep=peerSync /);
+    // Most of the step was loop lag: a synchronous block, not slow I/O.
+    expect(Number(line.match(/ peerSyncMs=6200 peerSyncLagMs=(\d+) /)?.[1])).toBeGreaterThan(5000);
+    expect(line).toContain('markerSettledMs=6250 mediaFlushSettledMs=6240');
+
+    const fast = createEventLoopLagProbe({ clock }).begin('httpClose');
+    clock.advance(300);
+    expect(describeSlowShutdown(fast.end(), {})).toBeNull();
   });
 });

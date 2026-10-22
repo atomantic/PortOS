@@ -476,7 +476,8 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
       .catch(() => ({ reason: 'retirement-review-unavailable' }));
     if (!prepared.retirement) {
       await domain('blocked', prepared.reason);
-      emitLog('warn', `Repo-state retirement retained ${branchName}: ${prepared.reason}`, { agentId, branchName });
+      // The retirement gate declining is its designed outcome; the reason is recorded on the domain above.
+      emitLog('info', `⏸️ Repo-state retirement retained ${branchName}: ${prepared.reason}`, { agentId, branchName });
       return { verified: false, skipReason: prepared.reason, issues, observed, recoveryTaskId: null };
     }
     retirement = prepared.retirement;
@@ -518,7 +519,8 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     await domain('blocked', reason);
     return { verified: false, skipReason: reason, issues, observed, recoveryTaskId: null };
   }
-  emitLog('warn', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
+  // The recovery task filed below is the investigation, so this line only records the divergence; filing failures still warn.
+  emitLog('info', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
     agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),

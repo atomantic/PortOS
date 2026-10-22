@@ -8,7 +8,7 @@ import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { rebuildTrusted, patchInstalledDependencies } from './trusted-rebuilds.js';
+import { rebuildTrusted } from './trusted-rebuilds.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { dependencyWorkspaces, hasLinkedDependencies } from './lib/workspaceDependencies.js';
 // Node refuses to spawn npm's `.cmd` shim under `shell:false` (CVE-2024-27980),
@@ -135,7 +135,7 @@ function install(dir, label) {
 // and only performs installs when run as `node scripts/ensure-deps.js`.
 function main() {
   // Ordinary CoS worktrees borrow the source checkout's dependencies. Refuse
-  // the entire repair before any install, cleanup, patch or receipt write;
+  // the entire repair before any install, cleanup or receipt write;
   // checking inside the repair loop could already mutate an earlier workspace.
   // lstat also catches dangling links and Windows directory junctions.
   for (const { dir, label } of WORKSPACES) {
@@ -212,10 +212,6 @@ function main() {
       process.exit(1);
     }
   }
-
-  // A code-only upgrade can change an install-time patch without changing any
-  // manifest or lockfile. Repair warm trees too, before PM2 is ever started.
-  for (const { dir } of WORKSPACES) patchInstalledDependencies(dir);
 
   if (hashesDirty) saveHashes(storedHashes);
 

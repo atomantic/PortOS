@@ -16,6 +16,7 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
   withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 // Re-sanitize the stored JSONB on read (mirrors the file backend's loadAll →
 // sanitizeTrack). The record was already sanitized on write, so for an in-shape
@@ -42,7 +43,7 @@ async function persist(exec, track) {
     [
       track.id,
       typeof track.title === 'string' ? track.title : '',
-      JSON.stringify(track),
+      toPgJson(track),
       createdAt,
       mirrorTimestamp(track.updatedAt, createdAt),
       track.deleted === true,

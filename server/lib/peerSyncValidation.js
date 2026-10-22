@@ -16,7 +16,7 @@ import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck', 'storyboard']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -279,6 +279,12 @@ const deckPushSchema = z.object({
   kind: z.literal('deck'),
   ...peerSyncPushBase,
 }).strict();
+// Storyboards push the whole board (beats → panels → takes inline); panel art
+// rides the base `assetManifest` as gallery images.
+const storyboardPushSchema = z.object({
+  kind: z.literal('storyboard'),
+  ...peerSyncPushBase,
+}).strict();
 const commissionFeedbackPushSchema = z.object({
   kind: z.literal('commissionFeedback'),
   ...peerSyncPushBase,
@@ -306,13 +312,14 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   commissionFeedbackPushSchema,
   creativeCommissionPushSchema,
   deckPushSchema,
+  storyboardPushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck', 'storyboard']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 

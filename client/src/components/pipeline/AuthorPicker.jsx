@@ -13,23 +13,17 @@
  * until the user picks a persona.
  */
 
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { listAuthors } from '../../services/api';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
+
+const fetchAuthors = () => listAuthors({ silent: true });
 
 export default function AuthorPicker({ id = 'series-author', value, byline, onChange, disabled = false }) {
-  const [authors, setAuthors] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let alive = true;
-    listAuthors({ silent: true })
-      .then((list) => { if (alive) setAuthors(Array.isArray(list) ? list : []); })
-      .catch(() => { if (alive) setAuthors([]); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, []);
+  const { items: authors, state, error, retry } = useListResource(fetchAuthors);
+  const loading = state === 'loading';
 
   const handleChange = (e) => {
     const authorId = e.target.value || null;
@@ -59,8 +53,9 @@ export default function AuthorPicker({ id = 'series-author', value, byline, onCh
           <option key={a.id} value={a.id}>{a.name}</option>
         ))}
       </select>
+      {state === 'error' && <ListLoadError what="author personas" error={error} onRetry={retry} className="mt-1" />}
       <p className="text-[11px] text-gray-500 mt-1">
-        {authors.length === 0 && !loading ? (
+        {state === 'ready' && authors.length === 0 ? (
           <>No author personas yet — <Link to="/authors" className="text-port-accent hover:underline">create one</Link>.</>
         ) : !value && byline ? (
           <>Unlinked byline: <span className="text-gray-400">{byline}</span> — pick a persona to link it.</>

@@ -26,7 +26,7 @@ import {
 // The PR-decision envelope is owned by the module that normalizes and renders
 // it, so stage 3 and the issue-watcher reasoning pass cannot drift apart.
 import { PR_REVIEW_DECISION_CONTRACT } from '../../lib/prReviewReport.js';
-import { REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE } from '../../lib/reviewerConfig.js';
+import { FORGE_REVIEWER_WAIT_NOTE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE } from '../../lib/reviewerConfig.js';
 
 // One pre-claim contract for all supported issue trackers.
 const ISSUE_REVALIDATION_GUIDANCE = `**Current need and project alignment — before any claim, contributor assignment, or epic decomposition:**
@@ -101,6 +101,12 @@ if [ "$GH_HOST" = "ssh.github.com" ]; then GH_HOST="github.com"; fi`;
 // Unified DEFAULT_TASK_PROMPTS — one entry per scheduled task type / pipeline stage
 // All prompts use {appName} and {repoPath} template variables
 // ============================================================
+
+// Mirrors scripts/ci-dependabot-admission.js: CI on a dependency-bot PR is held
+// until a repository writer re-runs it, so the held step's message must stay
+// recognizable to every prompt that triages bot PRs (dependency-updates Phase 1,
+// do-release Step 2).
+const DEPENDABOT_ADMISSION_HOLD_GUIDANCE = 'A failing step that only says the run is `held for maintainer review` is a maintainer-admission hold, not a broken bump: the repository withholds CI from bot commits until a writer inspects them. Confirm the diff is manifest + lockfile only, then release the held run with `gh run rerun <run-id>` (a writer-only re-run keeps the original SHA) and wait for the real result before deciding. Never push a commit onto the bot branch to "fix" a hold — a new commit only re-arms it.';
 
 export const DEFAULT_TASK_PROMPTS = {
   'app-launch-video': APP_LAUNCH_VIDEO_PROMPT,
@@ -525,10 +531,30 @@ Check {appName} dependencies for updates and security vulnerabilities:
 
 Repository: {repoPath}
 
-When this task runs in a CoS-managed worktree, its \`node_modules\` directories are
-intentionally private to that worktree. If validation needs installed packages,
-use the repository's documented package manager from the worktree so installs
-and lockfile regeneration stay isolated from the source checkout.
+You are working in an isolated CoS worktree cut from {repoPath}'s default branch,
+and its \`node_modules\` directories are intentionally private to that worktree
+(no links to the source checkout). If validation needs installed packages, use
+the repository's documented package manager inside this worktree so installs and
+lockfile regeneration stay isolated from the source checkout. Never run an
+install in {repoPath} itself: that is the app's live checkout. If every
+dependency is already current and no alert needs action, leave the worktree
+clean and exit — an empty branch is a successful run, not a missed one.
+
+Freshly bumped packages run lifecycle scripts and test code nobody has reviewed,
+so run installs and validation CONTAINED when this machine can. From the
+checkout you are validating, probe once:
+\`node "{portosRoot}/scripts/contained-run.js" --phase validate -- true\`.
+Exit 0 means Docker containment is ready; then run every install and validation
+step through it instead of on the host:
+- install or lockfile regeneration: \`node "{portosRoot}/scripts/contained-run.js" --phase install --apply-patch -- <install command>\`
+  (registry-only network; \`--apply-patch\` brings back lockfile changes only — edits the
+  container made to any other file are withheld and listed; review \`git diff\` before committing);
+- lint, typecheck, test, build: \`node "{portosRoot}/scripts/contained-run.js" --phase validate -- "<command>"\`
+  (no network; it reuses the node_modules the install left in its container volume).
+Any other exit means containment is not confirmed (2: refused and nothing ran;
+1: the PortOS API or the run failed; 124: timed out): proceed with the host
+commands as before and state in your summary that dependency validation ran
+UNCONTAINED, with the exit code and message. A refusal is never a passing check.
 
 Inventory security alerts first, then resolve open automated dependency PRs before
 making your own bumps. A Dependabot/Renovate PR is a bump already
@@ -587,6 +613,9 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
      \`glab ci trace <job-id>\`) and identify the root cause — a real incompatibility, a
      flaky test, or an unrelated pre-existing failure on the default branch (check that
      before blaming the bump).
+   - ${DEPENDABOT_ADMISSION_HOLD_GUIDANCE} Release a hold only for a patch or minor
+     jump and only after the diff-sanity check below; if the re-run is refused (no
+     write access), the verdict is LEAVE.
    - Mergeability: \`CONFLICTING\` (GitLab: \`cannot_be_merged\`) almost always means
      lockfile/manifest drift from another dependency PR that already merged.
    - Diff sanity: the diff should be manifest + lockfile only. Source-file edits, a new
@@ -607,9 +636,10 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
        branch. Keep it scoped to the breakage — never bundle unrelated work onto a
        bot branch.
      * Either way, work on the bot branch in a THROWAWAY WORKTREE, never by checking
-       it out in {repoPath} — this task usually runs in the app's live checkout, so a
-       \`gh pr checkout\` there hijacks whatever branch the user is on and fails outright
-       on their uncommitted work. The bot branch normally exists only on the remote, so
+       it out in {repoPath} — that is the app's live checkout, so a \`gh pr checkout\`
+       there hijacks whatever branch the user is on and fails outright on their
+       uncommitted work — and never inside this task's own worktree, whose branch is
+       reserved for Phase 2's bumps. The bot branch normally exists only on the remote, so
        name the remote ref explicitly and let \`-b\` create the local branch. Call the
        worktree \`dep-{appSlug}-pr-<n>\` verbatim — {worktreesRoot} is shared by every app
        this install manages, so a bare \`dep-pr-<n>\` collides with another app's PR of
@@ -673,7 +703,10 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
    - Run tests
    - Verify the app starts correctly
 
-7. Commit with a clear explanation and follow the repo's changelog convention.
+7. If you changed anything, commit with a clear explanation and follow the repo's
+   changelog convention. With nothing to change, leave the worktree clean — do not
+   commit a run report or an audit timestamp alone, and never a lockfile churned by a
+   verification install.
 
 8. Re-run affected audits and refresh forge alerts. Report each alert as fixed,
    mitigated (upstream alert still open), blocked, or awaiting merge/rescan, with its
@@ -2295,12 +2328,19 @@ offered.`,
 
 Execute {appName}'s upgrade path and its backup restore against scratch
 installs, and file what breaks. Every command in this run targets a scratch
-directory you create: never the live \`data/\`, never the real Postgres, with
-\`MEMORY_BACKEND=file\` and \`NODE_ENV=test\` in the environment and a free
-loopback port chosen inside the project's documented port band (\`docs/PORTS.md\`)
-and checked free first, never the running server's. A command whose working
-directory, data root, database name, or port is the live install's is out of
-bounds even when it only reads.
+directory or scratch database you create: never the live \`data/\`, never the real Postgres
+(the install's \`PGDATABASE\`, \`portos\`, \`portos_test\`), with
+\`NODE_ENV=test\` in the environment and a free loopback port chosen inside the
+project's documented port band (\`docs/PORTS.md\`) and checked free first, never
+the running server's. The only Postgres databases you may touch are the
+\`portos_rehearsal_<id>_test\` ones that \`node scripts/rehearsal-scratch-db.js
+create\` makes for you; \`MEMORY_BACKEND=file\` is set only on the file-only
+fallback below. Keep each scratch root and its private HOME short (under about
+60 characters): a HOME nested inside another temp directory pushes the pm2
+interactor socket path past the 104-byte macOS limit and the restored boot
+exits with EINVAL, which reads as a restore defect but is not one. A command
+whose working directory, data root, database name, or port is the live
+install's is out of bounds even when it only reads.
 
 Repository: {repoPath}
 
@@ -2330,11 +2370,40 @@ executed-path failures that no static read of one file surfaces.
    scratch root with \`restoreSnapshot\` — dry run first, then execute — and
    verify the manifest: every recorded file present with its recorded hash,
    nothing extra, nothing the current code refuses to read.
-3. **Boot the restored root** the same way and confirm its health endpoint.
+3. **Round-trip Postgres.** Postgres is the primary store and its dump and
+   restore are where restore defects have been found, so exercise them.
+   Run \`node scripts/rehearsal-scratch-db.js create\` (one JSON line on stdout):
+   when \`ok\` is false — no reachable Postgres, or a role that cannot create the
+   base schema's extensions — use the file-only fallback below. Otherwise create
+   two databases, a source and a target, and drop both with
+   \`node scripts/rehearsal-scratch-db.js drop <name>\` however the run ends,
+   success or failure (the helper refuses any other name; list a database you
+   could not drop in the report).
+   - **Back up.** With \`PGDATABASE=<source>\`, \`NODE_ENV=test\` and the source
+     scratch root as the data root, run \`ensureSchema\` (\`server/lib/db.js\`),
+     insert a few synthetic rows, and take the snapshot with \`runBackup\`; the
+     dump (\`dumpPostgres\`) must report \`ok\`, not \`skipped\`.
+   - **Restore.** In a separate process with \`PGDATABASE=<target>\` and the
+     second scratch root as the data root, call \`restorePostgres\` on that
+     snapshot — dry run first, then execute. A restore replays into whatever
+     \`PGDATABASE\` its process holds, so print it and confirm the
+     \`portos_rehearsal_\` prefix before each call.
+   - **Compare.** Row counts per table and the \`schema_migrations\` ledger must
+     match between source and target; any other status than \`ok\`, or a
+     mismatch, is a finding.
+4. **Boot the restored root** the same way and confirm its health endpoint;
+   when step 3 ran, boot it with \`MEMORY_BACKEND=postgres\` and
+   \`PGDATABASE=<target>\`, otherwise with \`MEMORY_BACKEND=file\`.
+
+**File-only fallback.** When no scratch database can be created, run every step
+except 3 with \`MEMORY_BACKEND=file\` and \`NODE_ENV=test\`, and report the
+Postgres dump, \`restorePostgres\`, and the database-backed boot as uncovered,
+quoting the helper's \`error\` text — never as passing.
 
 A repository with a different runner substitutes its documented equivalents;
 one with no migration runner and no backup path reports not-applicable and
-stops. Record every command with its data root so the run can be repeated.
+stops. Record every command with its data root and database name so the run
+can be repeated.
 
 ## Hunt for
 
@@ -2348,8 +2417,11 @@ stops. Record every command with its data root so the run can be repeated.
 - **A restore that does not round-trip** — a file the manifest records but
   the restore skips, a hash mismatch, a restored record the booted server
   rejects.
-- **A boot step the rehearsal could not reach** — one that runs only against
-  the real database stays unexercised; report it as uncovered, never as
+- **A Postgres restore that does not round-trip** — a dump \`restorePostgres\`
+  refuses, a table whose row count or the migration ledger differs between
+  source and target, a restored database the booted server rejects.
+- **A step the rehearsal could not reach** — one that needs a database it
+  could not create stays unexercised; report it as uncovered, never as
   passing.
 
 ## Not yours
@@ -3004,7 +3076,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split the
 3. Push the branch: \`git push -u origin claim/<slug>\`, then confirm \`git log --oneline @{u}..HEAD\` is empty so every review fix from step 2 is in the PR's diff.
 4. Open the PR with \`gh pr create\` — title MUST encode the slug: \`<type>([<slug>]): <description>\`. Body should summarize what shipped + test plan.
 4a. Read the review status back — shell variables do not survive between calls, so run \`REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)"\` and source it. If \`REVIEW_STATUS=review-blocked\` from a required reviewer, preserve the claim branch, leave the PR open, and stop before the PR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
-5. **Satisfy the PR-SIDE reviewers and CI before merging.** Request each \`@<login>\` (\`gh pr edit <num> --add-reviewer <login>\`, drop the \`@\`), poll every 5–15s, and address the findings — push fixes, capped at 3 rounds each; their approval gates the merge. Wait out any auto-requested review bot the same way, then let required CI finish (\`gh pr checks <num> --required --watch --fail-fast\` — REQUIRED checks only, so an optional job can't stall the merge). If a reviewer stays unsatisfied or a required check stays red, comment on the PR naming the failure, remove only the worktree, and leave the branch and PR for reconciliation.
+5. **Satisfy the PR-SIDE reviewers and CI before merging.** Request each \`@<login>\` (\`gh pr edit <num> --add-reviewer <login>\`, drop the \`@\`) and address the findings — push fixes, capped at 3 rounds each; their approval gates the merge. ${FORGE_REVIEWER_WAIT_NOTE} Wait out any auto-requested review bot the same way, then let required CI finish (\`gh pr checks <num> --required --watch --fail-fast\` — REQUIRED checks only, so an optional job can't stall the merge). If a reviewer stays unsatisfied or a required check stays red, comment on the PR naming the failure, remove only the worktree, and leave the branch and PR for reconciliation.
 
 6. **Merge immediately via \`gh pr merge\`** — NEVER a local merge and NEVER \`--auto\`. Select merge, squash or rebase only from verified allowed repository methods. An unreadable state or unconfirmed mutation stops this phase; no write is retried with another method:
    \`\`\`bash
@@ -3259,7 +3331,7 @@ Every local reviewer's fixes are already committed, so the PR opens against fini
 1. Push the branch: \`git push -u origin "claim/issue-\${NUM}"\`. Then confirm \`git log --oneline @{u}..HEAD\` is empty — if it isn't, a Phase 5 review fix never left the machine and the PR would be opened against a stale diff; push again before continuing.
 2. Open the PR with \`gh pr create\`. Summarize what shipped + a short test plan. **Choose the issue trailer deliberately:** if this PR FULLY satisfies the issue's scope, the body MUST contain \`Closes #\${NUM}\` so the merge auto-closes it. If you deliberately shipped only PART of the issue (a valuable slice, with real scope still remaining), use \`Refs #\${NUM}\` instead (NOT \`Closes\`) and add a \`## Remaining\` section listing what's left — Phase 7 reconciles the issue so it is never stranded.
 2a. Read the Phase 5 status back — shell variables do not survive between calls, so run REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)" and source it. If REVIEW_STATUS=review-blocked from a required reviewer, preserve the claim markers and branch, leave the PR open, and stop before the PR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
-3. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (\`gh pr edit <pr-number> --add-reviewer <login>\`, drop the \`@\`), poll every 5–15s for it, and address the findings — push fixes, capped at 3 rounds per reviewer. Their approval gates the merge. If the repo auto-requests a review bot when the PR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
+3. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (\`gh pr edit <pr-number> --add-reviewer <login>\`, drop the \`@\`) and address the findings — push fixes, capped at 3 rounds per reviewer. Their approval gates the merge. ${FORGE_REVIEWER_WAIT_NOTE} If the repo auto-requests a review bot when the PR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
 
    **Review-stuck cleanup** (a PR-side reviewer still unsatisfied after 3 rounds): post one summarizing PR comment (\`gh pr comment\`), preserve the exact worktree and local branch. Leave the open PR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
 4. **Let required CI finish and go green** — \`gh pr checks <pr-number> --required --watch --fail-fast\` (scope the wait to REQUIRED checks so an optional job can't stall a merge branch protection would allow). A red required check is not merge-eligible: fix it and re-push (same 3-round cap), or, if it stays red, stop exactly as the review-stuck cleanup above does.
@@ -3441,7 +3513,7 @@ Every local reviewer's fixes are already committed, so the MR opens against fini
 1. Push the branch: \`git push -u origin "claim/issue-\${NUM}"\`. Then confirm \`git log --oneline @{u}..HEAD\` is empty — if it isn't, a Phase 5 review fix never left the machine and the MR would be opened against a stale diff; push again before continuing.
 2. Open the MR with \`glab mr create --fill --source-branch "claim/issue-\${NUM}" --target-branch "\${DEFAULT_BRANCH}" --yes\`. **Choose the issue trailer deliberately:** if this MR FULLY satisfies the issue's scope, the description MUST contain \`Closes #\${NUM}\` so the merge auto-closes it; if you deliberately shipped only PART of the issue (a valuable slice with real scope remaining), use \`Refs #\${NUM}\` instead (NOT \`Closes\`) and add a \`## Remaining\` section listing what's left — Phase 7 reconciles the issue so it is never stranded. Summarize what shipped + a short test plan (pass \`--description\` if \`--fill\` didn't capture it).
 2a. Read the Phase 5 status back — shell variables do not survive between calls, so run REVIEW_STATUS_FILE="$(git rev-parse --git-path portos-review-status)" and source it. If REVIEW_STATUS=review-blocked from a required reviewer, preserve the claim markers and branch, leave the MR open, and stop before the MR-side review, CI, or merge steps. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If all configured reviewers were optional (~opt), REVIEW_STATUS must not block the merge.
-3. **Satisfy the MR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (resolve \`MR_IID\` from the source branch exactly as step 5 does, then \`glab mr update "\${MR_IID}" --reviewer <login>\`, dropping the \`@\`; if glab rejects the flag, run \`glab mr update --help\` rather than guessing), poll every 5–15s, and address the findings — push fixes, capped at 3 rounds per reviewer. Their approval gates the merge. If the project auto-requests a review bot when the MR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
+3. **Satisfy the MR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review now (resolve \`MR_IID\` from the source branch exactly as step 5 does, then \`glab mr update "\${MR_IID}" --reviewer <login>\`, dropping the \`@\`; if glab rejects the flag, run \`glab mr update --help\` rather than guessing) and address the findings — push fixes, capped at 3 rounds per reviewer. Their approval gates the merge. ${FORGE_REVIEWER_WAIT_NOTE} If the project auto-requests a review bot when the MR opens, wait that round out and address it the same way. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
 
    **Review-stuck cleanup** (an MR-side reviewer still unsatisfied after 3 rounds): post one summarizing MR note (\`glab mr note\`), preserve the exact worktree and local branch. Leave the open MR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
 4. **Let required CI finish and go green** — inspect the MR's pipeline (\`glab ci status\` on the branch, or \`glab mr view "\${MR_IID}"\`). A red required pipeline is not merge-eligible: fix it and re-push (same 3-round cap), or, if it stays red, stop exactly as the review-stuck cleanup above does.
@@ -3633,7 +3705,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. Split the
 
 The local reviewers already ran in Phase 5, so only the reviewers that need an open MR/PR remain.
 
-1. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review on the open MR/PR (GitHub: \`gh pr edit <pr-number> --add-reviewer <login>\`, dropping the \`@\`; GitLab: \`glab mr update <MR_IID> --reviewer <login>\`), poll every 5–15s, and address the findings — push fixes, capped at 3 rounds per reviewer. Wait out any auto-requested review bot the same way. A missing reviewer, timeout, or unresolvable finding is UNSATISFIED, not clean: comment on the MR/PR naming the failure and stop. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
+1. **Satisfy the PR-SIDE reviewers.** For each \`@<login>\` from the Phase 5 split, request the review on the open MR/PR (GitHub: \`gh pr edit <pr-number> --add-reviewer <login>\`, dropping the \`@\`; GitLab: \`glab mr update <MR_IID> --reviewer <login>\`) and address the findings — push fixes, capped at 3 rounds per reviewer. ${FORGE_REVIEWER_WAIT_NOTE} Wait out any auto-requested review bot the same way. A missing reviewer, timeout, or unresolvable finding is UNSATISFIED, not clean: comment on the MR/PR naming the failure and stop. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
 2. **Leave the MR/PR open for a human to land.** Unlike the GitHub/GitLab issue flows, this flow does NOT auto-merge — the ticket is "In Review" and a human reviews + merges. After the reviewers finish, preserve the exact worktree, local \`claim/<KEY>\` branch and open MR/PR for the intentional human handoff. Do not invoke merged retirement while it remains unmerged. **Do NOT \`git merge\`, \`gh pr merge\`, \`glab mr merge\`, or \`git pull\`** — landing the change and moving the ticket to Done is the human's call.
 
 ## Phase 7 — Report
@@ -3909,7 +3981,8 @@ Skip this step when the options above say merging dependency updates is off.
 List open dependency-bot PRs (Dependabot, Renovate, or equivalent): \`gh pr list --repo <OWNER>/<REPO> --state open --search "author:app/dependabot" --json number,title,headRefName,mergeable\` (repeat for \`author:app/renovate\`). For each, oldest first:
 - Read the update's release notes for breaking changes that affect this codebase.
 - Green CI and no breaking change that affects the codebase: merge it.
-- Red CI: check out the branch, fix what the new version broke, push the fix onto the PR branch, wait for CI, then merge. Never pin back or drop a security update to dodge a fix.
+- ${DEPENDABOT_ADMISSION_HOLD_GUIDANCE}
+- Red CI from the bump itself: check out the branch, fix what the new version broke, push the fix onto the PR branch, wait for CI, then merge. Never pin back or drop a security update to dodge a fix.
 - Conflicted or out of date: ask the bot to rebase (\`@dependabot rebase\`), or rebase it yourself, then merge once green.
 - Superseded by a newer bump of the same package: close it.
 
@@ -4203,7 +4276,7 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 - **A branch whose "Do:" line ends in a merge is not finished until it IS merged.** Its sub-agent stays alive through CI — waiting out the check run, fixing what goes red, then merging — and reports back only when the PR is merged or a specific check/review is blocking it. "PR opened, left open for review" is a completed STEP, not a completed branch: the PR just sits green until the next run re-drives it. Do not end your own run while a sub-agent is still waiting on CI.
 - Merging is gated by the "Do:" line itself — required CI green, MERGEABLE, and the review that branch's flow ran (\`/do:pr\`'s reviewer loop for a PR this task opens; the named review for one already in review). That gate, not a blanket ban, is what keeps unreviewed work out of the default branch. Merge only via \`gh pr merge\`, never a local \`git merge\` into the default branch.
 - If a sub-agent reports a branch is incomplete, superseded, or blocked, leave it as-is and note it in your summary.
-- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For REVIEW_RETIREMENT, record the exact reviewed digest and source-backed supersession decision before calling the live retirement API; never substitute a generic SUPERSEDED verdict. For other SUPERSEDED branches, record the verdict and report the remaining preservation hold; a verdict alone does not authorize removal. Name the file(s) and what on the default branch replaced it in your summary. When a PR is left open, name the check or review that blocked it.`,
+- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For REVIEW_RETIREMENT, record the exact reviewed digest and source-backed supersession decision before calling the live retirement API; never substitute a generic SUPERSEDED verdict. For other SUPERSEDED branches, record the verdict; the deterministic pass backs the branch up and retires it, so do not delete it yourself. Name the file(s) and what on the default branch replaced it in your summary. When a PR is left open, name the check or review that blocked it.`,
 
   'issue-reconcile': `[Improvement: {appName}] Trusted Issue Reconciliation
 

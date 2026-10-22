@@ -42,7 +42,8 @@ const APP_CASES = apps.map((app) => [app.name, app]);
 // meaningless for those — scope the heap-cap assertion to the Node-interpreted
 // entries so a future non-Node app doesn't force the guard to be deleted.
 const NODE_APP_CASES = APP_CASES.filter(([, app]) =>
-  app.interpreter === 'node' || (!app.interpreter && /\.[cm]?js$/i.test(app.script)));
+  // `interpreter` is 'node' or the absolute pinned binary (PORTOS_NODE_INTERPRETER).
+  /(^|[\\/])node(\.exe)?$/i.test(app.interpreter || '') || (!app.interpreter && /\.[cm]?js$/i.test(app.script)));
 
 describe('ecosystem.config.cjs memory bounds', () => {
   it('restarts the development UI before CoS reports a 2048 MiB warning', () => {

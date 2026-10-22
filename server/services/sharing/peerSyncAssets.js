@@ -757,6 +757,28 @@ export function referenceDeckAssetManifest(deck) {
   return entries.filter(Boolean);
 }
 
+/**
+ * Hash every gallery image a storyboard's panel takes reference so a peer pulls
+ * the bytes and sees the board's art. A `sketch:` take has no gallery image
+ * (`image` is null) — its sidecars in data/media-sketches stay machine-local.
+ */
+export async function buildStoryboardAssetManifest(board) {
+  return hashAssetReferences(referenceStoryboardAssetManifest(board));
+}
+
+export function referenceStoryboardAssetManifest(board) {
+  const filenames = new Set();
+  for (const beat of Array.isArray(board?.beats) ? board.beats : []) {
+    for (const panel of Array.isArray(beat?.panels) ? beat.panels : []) {
+      for (const take of Array.isArray(panel?.takes) ? panel.takes : []) {
+        const safe = sanitizeAssetFilename(take?.image);
+        if (safe) filenames.add(safe);
+      }
+    }
+  }
+  return [...filenames].map(imageAssetReference).filter(Boolean);
+}
+
 export async function buildAssetManifestForSeries(series, issues, linkedCollection = null) {
   return hashAssetReferences(referenceAssetManifestForSeries(series, issues, linkedCollection));
 }

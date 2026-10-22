@@ -138,3 +138,29 @@ it('retries a deferred world update when the parent becomes ready without anothe
   expect(ready).toHaveBeenCalledTimes(1);
   expect(getEidoverseDestinations).toHaveBeenCalledTimes(1);
 });
+
+it('reports a failed destinations read with Retry and keeps the last known destinations', async () => {
+  const changed = vi.fn();
+  render(<EidoverseTravel enabled travelRef={createRef()} onDestinationsChange={changed} />);
+  await screen.findByRole('button', { name: 'Example world' });
+  getEidoverseDestinations.mockRejectedValueOnce(new Error('destinations unavailable'));
+  await act(async () => socket.receive('connect'));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(/could not load travel destinations.*destinations unavailable/i);
+  expect(screen.getByRole('button', { name: 'Example world' })).toBeInTheDocument();
+  expect(changed).not.toHaveBeenCalled();
+
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Example world' })).toBeInTheDocument();
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(3);
+});
+
+it('shows the load error when the first destinations read fails, not an empty strip', async () => {
+  getEidoverseDestinations.mockRejectedValueOnce(new Error('destinations unavailable'));
+  render(<EidoverseTravel enabled travelRef={createRef()} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent(/destinations unavailable/);
+  expect(screen.queryByRole('button', { name: 'Example world' })).not.toBeInTheDocument();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+  expect(screen.getByRole('button', { name: 'Example world' })).toBeInTheDocument();
+});

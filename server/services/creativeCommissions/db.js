@@ -23,6 +23,7 @@
 
 import { query } from '../../lib/db.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 /** Raw stored record (the `data` JSONB), or null. Live only unless includeDeleted (#2686). */
 export async function readRaw(id, { includeDeleted = false } = {}) {
@@ -81,7 +82,7 @@ export async function writeRaw(id, record) {
       id,
       typeof record?.name === 'string' ? record.name : '',
       record?.enabled !== false,
-      JSON.stringify(record),
+      toPgJson(record),
       createdAt,
       mirrorTimestamp(record?.updatedAt, createdAt),
       deleted,

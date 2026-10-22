@@ -198,13 +198,16 @@ describe('submitSunoSong', () => {
     expect(cleared.fills['input[placeholder="Exclude styles"]']).toBe('');
   });
 
-  it('warns and still creates the song when the version menu lacks the model or an older UI lacks the controls', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('notes the skip and still creates the song when the version menu lacks the model or an older UI lacks the controls', async () => {
+    // An older Suno UI lacking an optional control is a designed skip: stdout, never stderr.
+    const warn = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const stderr = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const page = fakePage({ options: { version: 'v5', menuItems: ['v4.5 Pro', 'v5 Pro'], expanded: true, gender: null } });
       await submitSunoSong(page, { ...fields, model: 'v9', vocalGender: 'male' }, { sleep: noSleep });
       expect(page.actions).toEqual(['open-version-menu', 'key:Escape', 'gender:male', 'create']);
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/model v9 in the version menu/));
+      expect(stderr).not.toHaveBeenCalled();
 
       warn.mockClear();
       const older = fakePage();
@@ -214,8 +217,10 @@ describe('submitSunoSong', () => {
         expect.stringMatching(/model version menu/), expect.stringMatching(/More Options/),
         expect.stringMatching(/Exclude styles/), expect.stringMatching(/Vocal Gender row/), expect.stringMatching(/Max Mode row/),
       ]);
+      expect(stderr).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
+      stderr.mockRestore();
     }
   });
 

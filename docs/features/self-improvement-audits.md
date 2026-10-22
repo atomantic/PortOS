@@ -153,7 +153,12 @@ problem:
   executes them: it builds scratch installs from the fixture shapes the
   migration tests carry, runs the seed step and the migration runner, boots to
   the health endpoint, and restores a backup into a second scratch root — never
-  the live `data/` or the real Postgres — and files only what the executed path
+  the live `data/` or the real Postgres. Postgres is exercised through two
+  throwaway `portos_rehearsal_<id>_test` databases that
+  `scripts/rehearsal-scratch-db.js` creates and drops (the `_test` suffix keeps
+  the `isTestDatabase()` gate armed, and `drop` refuses any other name,
+  including `portos` and `portos_test`); with no creatable scratch database the
+  run reports the Postgres steps as uncovered. It files only what the executed path
   broke, one issue per root cause (#12091).
 - **Defects are split four ways.** `better-runtime-safety` reads source for
   latent defects; `console-errors` collects what actually errors at runtime;

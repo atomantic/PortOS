@@ -42,6 +42,7 @@ import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.
 import { restoreCommissionFeedback } from './creativeCommissions/feedbackStore.js';
 import { restoreCommission } from './creativeCommissions/store.js';
 import { restoreDeck } from './decks.js';
+import { restoreStoryboard } from './storyboards/index.js';
 import { restoreLoom } from './fableLoom/index.js';
 import { codedError } from '../lib/codedError.js';
 
@@ -197,6 +198,11 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // and bumps updatedAt so the restore wins the next LWW and re-pushes. Returns
     // null for a deck already hard-pruned by the tombstone sweep (→ ERR_TARGET_GONE).
     const restored = await restoreDeck(recordId, patch).catch(translateGone);
+    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+  } else if (kind === 'storyboard') {
+    // restoreStoryboard overlays the authored fields, un-tombstones, and bumps
+    // updatedAt so the restore wins the next LWW. Null = already hard-pruned.
+    const restored = await restoreStoryboard(recordId, patch).catch(translateGone);
     if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
   } else if (kind === 'fableLoom') {
     // Restore the authored story graph and playback settings through the normal

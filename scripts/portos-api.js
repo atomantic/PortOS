@@ -148,7 +148,7 @@ const resolveBody = async (body) => {
 
 // Builtin HTTP has no hidden five-minute headers limit. One deadline covers
 // connection, headers and body, and destroying the request also closes its socket.
-const requestApi = (url, { method, headers, body, timeoutMs }) => {
+export const requestApi = (url, { method, headers, body, timeoutMs }) => {
   const target = new URL(url);
   if (!['http:', 'https:'].includes(target.protocol)) throw new Error('PORTOS_URL must use HTTP or HTTPS');
   let timer;

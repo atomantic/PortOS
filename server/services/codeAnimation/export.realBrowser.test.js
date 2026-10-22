@@ -14,7 +14,10 @@ import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 const state = vi.hoisted(() => ({ html: '' }));
 let endpoint;
-vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
+vi.mock('../browserService.js', async importOriginal => ({
+  ...await importOriginal(),
+  cdpRequest: path => fetch(`${endpoint}${path}`),
+}));
 vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-code-animation-export-'),
 }));

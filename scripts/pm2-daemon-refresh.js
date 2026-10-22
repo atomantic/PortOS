@@ -69,9 +69,11 @@ export function daemonEntryFromArgv(argv) {
  * @param {object|null} options.report - the daemon's `getReport` payload
  * @param {string} options.expectedEntry - path to this checkout's pm2 lib/Daemon.js
  * @param {string} options.expectedVersion - this checkout's installed pm2 version
+ * @param {string|null} [options.expectedNodeVersion] - the Node PortOS is pinned
+ *   to (`PORTOS_NODE_INTERPRETER`), or null to leave the daemon's Node alone
  * @returns {{ needed: boolean, reason: string }}
  */
-export function daemonNeedsRefresh({ report, expectedEntry, expectedVersion }) {
+export function daemonNeedsRefresh({ report, expectedEntry, expectedVersion, expectedNodeVersion = null }) {
   if (!report) return { needed: true, reason: 'daemon did not report its identity' };
 
   const entry = daemonEntryFromArgv(report.argv);
@@ -87,6 +89,13 @@ export function daemonNeedsRefresh({ report, expectedEntry, expectedVersion }) {
       needed: true,
       reason: `daemon is pm2 ${report.pm2_version}, this checkout has ${expectedVersion}`,
     };
+  }
+
+  // Only a pinned install asks for this: an unpinned one never chose a Node, and
+  // reloading the shared daemon restarts every co-located app.
+  const daemonNode = report.node_version && report.node_version !== 'N/A' ? String(report.node_version) : null;
+  if (expectedNodeVersion && daemonNode && daemonNode !== expectedNodeVersion) {
+    return { needed: true, reason: `daemon runs Node ${daemonNode}, PortOS is pinned to ${expectedNodeVersion}` };
   }
 
   return { needed: false, reason: 'daemon already runs this checkout of pm2' };
@@ -156,6 +165,9 @@ async function runCli() {
       report: await fetchReport(pm2),
       expectedEntry: join(pm2Dir, 'lib', 'Daemon.js'),
       expectedVersion: JSON.parse(readFileSync(join(pm2Dir, 'package.json'), 'utf8')).version,
+      // launchUpdate exports the pin and puts its bin first on PATH, so this
+      // process already runs on the pinned Node.
+      expectedNodeVersion: process.env.PORTOS_NODE_INTERPRETER ? process.versions.node : null,
     });
   } catch (err) {
     verdict = { needed: true, reason: `daemon probe failed: ${redactPaths(err.message)}` };

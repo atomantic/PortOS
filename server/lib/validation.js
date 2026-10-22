@@ -943,6 +943,57 @@ export const githubSecretSchema = z.object({
   value: z.string().min(1)
 });
 
+// GitHub notifications manager accounts (#12869). A bare hostname (optional
+// :port) whose first character also rules out a value `gh` would parse as a flag.
+export const GITHUB_ACCOUNT_HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/;
+// github.com logins are [A-Za-z0-9-]; Enterprise Managed Users add `_shortcode`.
+export const GITHUB_ACCOUNT_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
+export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
+export const GITHUB_ACCOUNT_MODES = Object.freeze(['observe', 'assist', 'autopilot']);
+
+export const githubAccountCreateSchema = z.object({
+  label: z.string().trim().max(80).optional(),
+  host: z.string().trim().toLowerCase()
+    .transform((value) => value.replace(/^https?:\/\//, '').replace(/\/+$/, ''))
+    .pipe(z.string().min(1).max(253).regex(GITHUB_ACCOUNT_HOST_RE, 'Use a bare hostname such as github.example.com')),
+  login: z.string().trim().regex(GITHUB_ACCOUNT_LOGIN_RE, 'Not a valid GitHub login').nullable().optional(),
+  trust: z.enum(GITHUB_ACCOUNT_TRUST_LEVELS).optional(),
+  // null = the trust level's default (Private: local providers only).
+  allowedProviders: z.array(z.string().trim().min(1).max(128)).max(50).nullable().optional(),
+  mode: z.enum(GITHUB_ACCOUNT_MODES).optional(),
+  // Monthly subscription audit delivered as a PortOS notification (#12874).
+  auditReport: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+}).strict();
+
+export const githubAccountUpdateSchema = githubAccountCreateSchema.partial().strict();
+
+// GitHub notifications inbox (#12870).
+export const githubNotificationsQuerySchema = z.object({
+  accountId: z.string().trim().min(1).max(100).optional(),
+  view: z.enum(['needs-you', 'suspect', 'handled', 'all']).optional(),
+}).strict();
+
+export const githubNotificationsSyncSchema = z.object({
+  accountId: z.string().trim().min(1).max(100).optional(),
+}).strict();
+
+export const githubNotificationActionSchema = z.object({
+  action: z.enum(['read', 'done', 'reopen', 'mute', 'unsubscribe', 'resubscribe']),
+}).strict();
+
+export const GITHUB_NOTIFICATION_THREAD_ID_RE = /^\d{1,20}$/;
+
+// Automations tab (#12871): the one cadence it offers, or back to Run now only.
+export const GITHUB_NOTIFICATION_CADENCES = Object.freeze({ 'weekdays-15m': '*/15 * * * 1-5', off: null });
+export const githubAuditApplySchema = z.object({
+  suggestionId: z.string().trim().min(1).max(300),
+}).strict();
+
+export const githubNotificationCadenceSchema = z.object({
+  cadence: z.enum(Object.keys(GITHUB_NOTIFICATION_CADENCES)),
+}).strict();
+
 // =============================================================================
 // INSIGHTS SCHEMAS
 // =============================================================================

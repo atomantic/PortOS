@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import { FormField } from '../ui/FormField';
 import { INPUT_CLASS } from '../apps/constants';
 import * as api from '../../services/api';
@@ -43,27 +45,22 @@ const transportsDraftFor = (definition) => Object.fromEntries(
   Object.entries(definition?.transports || {}).map(([protocol, transport]) => [protocol, transport.defaultBaseUrl || '']),
 );
 
+const fetchDefinitions = () => api.getProviderServiceDefinitions({ silent: true })
+  .then((data) => (Array.isArray(data?.definitions) ? data.definitions : []));
+
 export default function ProviderServiceForm({ onClose, onCreated }) {
-  const [definitions, setDefinitions] = useState(null); // null = not fetched yet
+  const { items: definitions, state: definitionsState, error: definitionsError, retry: retryDefinitions } = useListResource(fetchDefinitions);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [busy, setBusy] = useState(false);
   const set = (key) => (e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }));
 
-  useEffect(() => {
-    let active = true;
-    api.getProviderServiceDefinitions({ silent: true })
-      .then((data) => { if (active) setDefinitions(Array.isArray(data?.definitions) ? data.definitions : []); })
-      .catch(() => { if (active) setDefinitions([]); });
-    return () => { active = false; };
-  }, []);
-
   const grouped = useMemo(() => FAMILY_ORDER
-    .map((family) => ({ family, rows: (definitions || []).filter((row) => row.family === family) }))
+    .map((family) => ({ family, rows: definitions.filter((row) => row.family === family) }))
     .filter((group) => group.rows.length > 0), [definitions]);
-  const definition = (definitions || []).find((row) => row.id === draft.definitionId) || null;
+  const definition = definitions.find((row) => row.id === draft.definitionId) || null;
 
   const pickDefinition = (definitionId) => {
-    const next = (definitions || []).find((row) => row.id === definitionId) || null;
+    const next = definitions.find((row) => row.id === definitionId) || null;
     setDraft({
       ...EMPTY_DRAFT,
       definitionId,
@@ -113,8 +110,11 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
   return (
     <Drawer open onClose={onClose} title="Add service" size="md" closeLabel="Close add service" closeOnBackdrop={false}>
       <form onSubmit={submit} className="space-y-4">
-        {definitions !== null && definitions.length === 0 && (
-          <Banner tone="error" size="sm">Could not load the service definitions from this server.</Banner>
+        {definitionsState === 'error' && (
+          <ListLoadError what="the service definitions" error={definitionsError} onRetry={retryDefinitions} />
+        )}
+        {definitionsState === 'ready' && definitions.length === 0 && (
+          <Banner tone="warning" size="sm">This server declares no service definitions to add.</Banner>
         )}
         <FormField label="Service *" hint="The backend a harness can be pointed at">
           <select
@@ -124,7 +124,7 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
             required
             className={INPUT_CLASS}
           >
-            <option value="">{definitions === null ? 'Loading…' : 'Choose a service'}</option>
+            <option value="">{definitionsState === 'loading' ? 'Loading…' : 'Choose a service'}</option>
             {grouped.map((group) => (
               <optgroup key={group.family} label={FAMILY_LABEL[group.family]}>
                 {group.rows.map((row) => <option key={row.id} value={row.id}>{row.label}</option>)}

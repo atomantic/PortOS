@@ -16,6 +16,7 @@ export const TASK_READINESS_REASON = Object.freeze({
   CRON_COOLDOWN: 'cron-cooldown',
   FAILURE_COOLDOWN: 'failure-cooldown',
   WAITING_ON_DEPENDENCIES: 'waiting-on-dependencies',
+  INPUTS_UNCHANGED: 'inputs-unchanged',
 });
 
 export const TASK_READINESS_REASONS = Object.freeze(Object.values(TASK_READINESS_REASON));

@@ -520,7 +520,7 @@ contract; the parts that are not obvious:
   own restore-keys, and stays warm across a lockfile bump that misses here.
 - **The key pins the Node major, not the resolved patch.**
   `NODE_MODULE_VERSION` is stable across patch releases, so keying on
-  `steps.node.outputs.node-version` would discard the entry on every Node 24.x
+  `steps.node.outputs.node-version` would discard the entry on every Node 26.x
   release for no ABI benefit; the mark carries the exact ABI as a backstop. A
   test compares the literal against the job's own `node-version:` pin.
   `server/package.json` is in the hash alongside the lockfile so that skipping
@@ -651,6 +651,19 @@ The selected work is split across parallel jobs:
   head tree on every run, so a new dependency is gated without a list edit.
   Non-PR runs and pull requests into `release` always run it. Pregate reports
   it as CI-only.
+- **Docker containment live** — runs the opt-in live suite of the Docker
+  containment profile (`server/services/dockerContainment.live.test.js`,
+  [CONTAINMENT.md](CONTAINMENT.md)) against the ubuntu runner's native Docker
+  Engine: non-root user, no host home or Docker socket, no network in the
+  validate phase, registry-only egress in the install phase, kill-and-remove on
+  timeout, and lifecycle writes kept out of the host worktree. It is part of
+  `CI Gate`. On a pull request it runs only when the
+  `docker_containment_live` output is true: the diff touches the static import
+  closure of the live suite and the server Vitest harness,
+  `server/package.json`, `server/package-lock.json` or `ci.yml`
+  (`DOCKER_CONTAINMENT_LIVE_ENTRIES`, `DOCKER_CONTAINMENT_LIVE_PATH_RE`).
+  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  it as CI-only. CI has no macOS Docker, so Docker Desktop is verified manually.
 - **SuperCollider native containment** — builds `docker/supercollider/`, runs
   `npm run setup:supercollider` twice and executes the opt-in live suite
   (`server/services/superColliderRender.live.test.js`) against real Docker on

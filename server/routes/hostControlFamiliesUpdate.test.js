@@ -23,6 +23,14 @@ const selfUpdate = vi.hoisted(() => ({
 }));
 vi.mock('../services/portosSelfUpdate.js', () => selfUpdate);
 
+const nodeRuntime = vi.hoisted(() => ({
+  getNodeRuntimeStatus: vi.fn(),
+  startNodeUpdate: vi.fn(),
+  startPm2Update: vi.fn(),
+  repairStartup: vi.fn(),
+}));
+vi.mock('../services/nodeRuntime.js', () => nodeRuntime);
+
 const brainService = vi.hoisted(() => ({
   getLinkById: vi.fn(),
 }));
@@ -107,6 +115,9 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742)
     const writes = [
       ['post', '/api/update/execute', {}],
       ['post', '/api/update/sync-fork', {}],
+      ['post', '/api/update/node-runtime', { version: 'v26.12.1' }],
+      ['post', '/api/update/pm2', {}],
+      ['post', '/api/update/node-runtime/startup', {}],
       ['post', '/api/brain/links/link-1/pull', {}],
       ['post', '/api/ask/conv-1/turns/turn-1/promote', { target: 'task' }],
     ];
@@ -115,6 +126,9 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742)
       expectRefused(await call(local(), write, '192.0.2.10'));
     }
     expect(selfUpdate.startPortosSelfUpdate).not.toHaveBeenCalled();
+    expect(nodeRuntime.startNodeUpdate).not.toHaveBeenCalled();
+    expect(nodeRuntime.startPm2Update).not.toHaveBeenCalled();
+    expect(nodeRuntime.repairStartup).not.toHaveBeenCalled();
     expect(updateChecker.getRemoteInfo).not.toHaveBeenCalled();
     expect(repoCloner.pullRepo).not.toHaveBeenCalled();
     expect(askPromote.promoteTurnById).not.toHaveBeenCalled();

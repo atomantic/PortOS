@@ -107,9 +107,12 @@ const STARTUP_SENTINEL_REASONS = new Set(['paste-not-rendered', 'tui-not-ready',
  * consequence, not a second fault. Naming it as "finalized with no sentinel"
  * reads as an agent that finished the task and skipped the done-signal.
  */
-export function missingSentinelLogMessage({ agentId, reason, sentinelPath, mergeGateReprompted = false }) {
+export function missingSentinelLogMessage({ agentId, reason, sentinelPath, mergeGateReprompted = false, command, providerId }) {
   if (STARTUP_SENTINEL_REASONS.has(reason)) {
-    return `${agentId} startup failed (${reason}) before a completion sentinel could be written`;
+    // The TUI identity lets a stderr fingerprint separate one provider's
+    // handshake stall from another's (#12877).
+    const tui = [command && `tui=${command}`, providerId && `provider=${providerId}`].filter(Boolean).join(' ');
+    return `${agentId} startup failed (${reason}${tui ? ` ${tui}` : ''}) before a completion sentinel could be written`;
   }
   if (mergeGateReprompted) {
     return `${agentId} finalized (${reason}) without re-writing its sentinel after the merge-gate nudge — expected ${sentinelPath}`;

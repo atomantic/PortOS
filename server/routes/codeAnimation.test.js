@@ -37,15 +37,22 @@ vi.mock('../services/codeAnimation/jobStore.js', () => ({
   readCodeAnimationHtml: vi.fn(async (id) => codeAnimationHtml.get(id)),
   saveCodeAnimationHtml: vi.fn(async (id, html) => codeAnimationHtml.set(id, html)),
   saveCodeAnimationJobRecord: vi.fn(async (job) => codeAnimationRecords.set(job.id, job)),
+  deleteCodeAnimationJobRecord: vi.fn(async (id) => codeAnimationRecords.delete(id)),
+  codeAnimationJobFiles: vi.fn(async (id) => [
+    ...(codeAnimationHtml.has(id) ? [`/animations/${id}.html`] : []),
+    ...(codeAnimationPosters.has(id) ? [`/animations/${id}.jpg`] : []),
+  ]),
   codeAnimationPosterPath: (id) => `${process.env.PORTOS_TEST_POSTER_DIR}/${id}.jpg`,
   codeAnimationPosterVersions: vi.fn(async (ids) => new Map(ids.filter((id) => codeAnimationPosters.has(id)).map((id) => [id, codeAnimationPosters.get(id)]))),
 }));
+vi.mock('../lib/nativeTrash.js', () => ({ moveToNativeTrash: vi.fn(async () => {}) }));
 vi.mock('../services/codeAnimation/poster.js', () => ({
   captureCodeAnimationPoster: vi.fn(async (id) => {
     writeFileSync(`${process.env.PORTOS_TEST_POSTER_DIR}/${id}.jpg`, 'jpeg-bytes');
     codeAnimationPosters.set(id, 1700000000000);
     return true;
   }),
+  settleCodeAnimationPoster: vi.fn(async () => false),
 }));
 vi.mock('../services/socket.js', () => ({
   // Observe the persisted state at emit time: a notification before a save
@@ -69,7 +76,22 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+vi.mock('../services/pipeline/musicGen.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  isEngineHealthy: vi.fn(async () => true),
+}));
+vi.mock('../services/musicGeneration.js', () => ({
+  queueMusicGeneration: vi.fn(async () => ({ jobId: 'media-audio', position: 1, status: 'queued' })),
+}));
+vi.mock('../services/trackAlbumMembership.js', () => ({
+  createTrackWithAlbum: vi.fn(async (input) => ({ track: { id: 'track-soundtrack', ...input } })),
+}));
+
 import { emitCodeAnimationChanged } from '../services/socket.js';
+import { moveToNativeTrash } from '../lib/nativeTrash.js';
+import { isEngineHealthy } from '../services/pipeline/musicGen.js';
+import { queueMusicGeneration } from '../services/musicGeneration.js';
+import { createTrackWithAlbum } from '../services/trackAlbumMembership.js';
 import { PATHS } from '../lib/paths.js';
 import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
@@ -78,7 +100,7 @@ import { getTrack } from '../services/tracks/index.js';
 import { listCodeAnimationJobPage, listCodeAnimationJobRecords, readCodeAnimationHtml, saveCodeAnimationHtml, saveCodeAnimationJobRecord } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
-import { captureCodeAnimationPoster } from '../services/codeAnimation/poster.js';
+import { captureCodeAnimationPoster, settleCodeAnimationPoster } from '../services/codeAnimation/poster.js';
 import routes from './codeAnimation.js';
 
 const makeApp = () => {
@@ -166,6 +188,107 @@ describe('Code Animation fast-export audio notes', () => {
       } });
     }
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/code-animation/jobs/:id', () => {
+  const id = '00000000-0000-4000-8000-000000000004';
+  const finished = { id, status: 'completed', title: 'Station boot', input: {}, frame: { durationSeconds: 20 } };
+
+  it('moves the files to the Trash before removing the gallery item', async () => {
+    codeAnimationRecords.set(id, finished);
+    codeAnimationHtml.set(id, '<!doctype html>');
+    const app = makeApp();
+    const res = await request(app).delete(`/api/code-animation/jobs/${id}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ id, deleted: true });
+    expect(moveToNativeTrash).toHaveBeenCalledWith([`/animations/${id}.html`]);
+    expect(codeAnimationRecords.has(id)).toBe(false);
+    expect(emitCodeAnimationChanged).toHaveBeenCalledWith(id, 'deleted');
+    expect((await request(app).delete(`/api/code-animation/jobs/${id}`)).status).toBe(404);
+  });
+
+  it('waits for a poster still being drawn, so it goes to the Trash too', async () => {
+    codeAnimationRecords.set(id, finished);
+    codeAnimationHtml.set(id, '<!doctype html>');
+    let drawn;
+    settleCodeAnimationPoster.mockReturnValueOnce(new Promise((resolve) => { drawn = resolve; }));
+    const deleting = request(makeApp()).delete(`/api/code-animation/jobs/${id}`).then((res) => res);
+    await vi.waitFor(() => expect(settleCodeAnimationPoster).toHaveBeenCalledWith(id));
+    codeAnimationPosters.set(id, 1700000000000);
+    drawn(true);
+    expect((await deleting).status).toBe(200);
+    expect(moveToNativeTrash).toHaveBeenCalledWith([`/animations/${id}.html`, `/animations/${id}.jpg`]);
+  });
+
+  it('keeps the item when the Trash refuses its files', async () => {
+    codeAnimationRecords.set(id, finished);
+    codeAnimationHtml.set(id, '<!doctype html>');
+    moveToNativeTrash.mockRejectedValueOnce(Object.assign(new Error('refused'), { code: 'TRASH_REFUSED' }));
+    const res = await request(makeApp()).delete(`/api/code-animation/jobs/${id}`);
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('CODE_ANIMATION_TRASH_FAILED');
+    expect(codeAnimationRecords.has(id)).toBe(true);
+  });
+});
+
+describe('POST /api/code-animation/:id/soundtrack', () => {
+  const id = '00000000-0000-4000-8000-000000000002';
+  const finished = { id, status: 'completed', title: 'Lantern', input: { soundtrack: 'none' },
+    frame: { width: 1920, height: 1080, fps: 24, durationSeconds: 120 }, audioUrl: null };
+  const body = { prompt: 'Warm analog synths', engine: 'acestep15' };
+
+  it('renders a film-length track for a finished animation, which then becomes its audio', async () => {
+    codeAnimationRecords.set(id, finished);
+    codeAnimationHtml.set(id, '<!doctype html><html><head></head><body></body></html>');
+    const app = makeApp();
+    const started = await request(app).post(`/api/code-animation/${id}/soundtrack`).send(body);
+    expect(started.status).toBe(202);
+    expect(started.body).toMatchObject({ trackId: 'track-soundtrack', mediaJobId: 'media-audio', engine: 'acestep15', durationSec: 120, instrumentalOnly: true });
+    expect(createTrackWithAlbum).toHaveBeenCalledWith({ title: 'Lantern soundtrack' }, { preserveUnassigned: true });
+    expect(queueMusicGeneration).toHaveBeenCalledWith({ trackId: 'track-soundtrack', prompt: 'Warm analog synths', instrumentalOnly: true, engine: 'acestep15', durationSec: 120 });
+    expect(codeAnimationRecords.get(id).soundtrack).toMatchObject({ trackId: 'track-soundtrack', mediaJobId: 'media-audio' });
+    expect(emitCodeAnimationChanged).toHaveBeenCalledWith(id);
+
+    // Until the render lands the original (silent) audio stands.
+    getTrack.mockResolvedValue({ id: 'track-soundtrack', title: 'Lantern soundtrack' });
+    expect((await request(app).get(`/api/code-animation/generate/${id}`)).body.audioUrl).toBeNull();
+    getTrack.mockResolvedValue({ id: 'track-soundtrack', title: 'Lantern soundtrack', audioFilename: 'take 1.wav', durationSec: 120 });
+    const read = await request(app).get(`/api/code-animation/generate/${id}`);
+    expect(read.body.audioUrl).toBe('/data/music/take%201.wav');
+    expect(read.body.input.audio).toMatchObject({ source: 'track', trackId: 'track-soundtrack' });
+
+    // Regenerating renders a new take on the same track.
+    expect((await request(app).post(`/api/code-animation/${id}/soundtrack`).send({ ...body, prompt: 'Softer' })).status).toBe(202);
+    expect(createTrackWithAlbum).toHaveBeenCalledTimes(1);
+    expect(queueMusicGeneration).toHaveBeenLastCalledWith(expect.objectContaining({ trackId: 'track-soundtrack', prompt: 'Softer' }));
+  });
+
+  it('refuses a model that cannot render the whole film, an uninstalled one, and an unfinished animation', async () => {
+    codeAnimationRecords.set(id, finished);
+    const app = makeApp();
+    const short = await request(app).post(`/api/code-animation/${id}/soundtrack`).send({ ...body, engine: 'musicgen' });
+    expect(short.status).toBe(400);
+    expect(short.body.code).toBe('CODE_ANIMATION_SOUNDTRACK_TOO_LONG');
+    expect(short.body.error).toMatch(/120s.*at most 30s/);
+    isEngineHealthy.mockResolvedValueOnce(false);
+    expect((await request(app).post(`/api/code-animation/${id}/soundtrack`).send(body)).body.code).toBe('CODE_ANIMATION_SOUNDTRACK_ENGINE_NOT_READY');
+    codeAnimationRecords.set(id, { ...finished, status: 'running' });
+    expect((await request(app).post(`/api/code-animation/${id}/soundtrack`).send(body)).status).toBe(409);
+    expect(queueMusicGeneration).not.toHaveBeenCalled();
+  });
+
+  it('gives a coded score one soundtrack track, created on first use and reused after', async () => {
+    codeAnimationRecords.set(id, finished);
+    const app = makeApp();
+    const first = await request(app).post(`/api/code-animation/${id}/soundtrack/track`);
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual({ trackId: 'track-soundtrack' });
+    expect(codeAnimationRecords.get(id).soundtrack).toMatchObject({ trackId: 'track-soundtrack', mediaJobId: null });
+    getTrack.mockResolvedValue({ id: 'track-soundtrack', title: 'Lantern soundtrack' });
+    expect((await request(app).post(`/api/code-animation/${id}/soundtrack/track`)).body).toEqual({ trackId: 'track-soundtrack' });
+    expect(createTrackWithAlbum).toHaveBeenCalledTimes(1);
+    expect(queueMusicGeneration).not.toHaveBeenCalled();
   });
 });
 
@@ -685,6 +808,39 @@ describe('POST /api/code-animation/generate', () => {
     expect(call.screenshots).toEqual([join(PATHS.imageRefs, 'style-ref.png'), join(PATHS.images, 'pin.png'), join(PATHS.imageRefs, 'sheet.png')]);
     expect(call.prompt).toContain('attached to this request');
     await vi.waitFor(() => expect(captureCodeAnimationPoster).toHaveBeenCalledWith(job.id));
+  });
+
+  it('forks a finished animation: its HTML rides the prompt and the new job records what it extends', async () => {
+    const baseId = '00000000-0000-4000-8000-000000000004';
+    const baseHtml = '<!DOCTYPE html><html><body><script>const DURATION = 20;</script></body></html>';
+    codeAnimationRecords.set(baseId, { id: baseId, status: 'completed', title: 'Lantern', frame: { durationSeconds: 20 } });
+    codeAnimationHtml.set(baseId, baseHtml);
+    getProviderById.mockResolvedValue({ id: 'api-1', type: 'api', enabled: true });
+    runPromptThroughProvider.mockResolvedValue({ text: '```html\n<!DOCTYPE html><html></html>\n```', provider: { id: 'api-1' } });
+    const app = makeApp();
+    const extend = { ...brief, providerId: 'api-1', baseJobId: baseId, format: { durationSeconds: 120 } };
+    const res = await request(app).post('/api/code-animation/generate').send(extend);
+    expect(res.status).toBe(202);
+    expect(res.body.base).toEqual({ jobId: baseId, title: 'Lantern', durationSeconds: 20 });
+    expect(res.body.prompt).toContain('BASE ANIMATION');
+    expect(res.body.prompt).toContain(baseHtml);
+    expect(res.body.prompt).toMatch(/finished 20s cut[\s\S]*120s version/);
+    await pollUntilSettled(app, res.body.id);
+    expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain(baseHtml);
+    expect(codeAnimationRecords.get(res.body.id).input.baseJobId).toBe(baseId);
+
+    // Unfinished, unknown, and oversized bases are refused before any run.
+    runPromptThroughProvider.mockClear();
+    const { providerId: _provider, ...forPrompt } = extend;
+    codeAnimationRecords.set(baseId, { ...codeAnimationRecords.get(baseId), status: 'running' });
+    expect((await request(app).post('/api/code-animation/prompt').send(forPrompt)).body.code).toBe('CODE_ANIMATION_BASE_NOT_COMPLETED');
+    codeAnimationRecords.set(baseId, { ...codeAnimationRecords.get(baseId), status: 'completed' });
+    codeAnimationHtml.set(baseId, 'x'.repeat(400_001));
+    const large = await request(app).post('/api/code-animation/prompt').send(forPrompt);
+    expect(large.body.code).toBe('CODE_ANIMATION_BASE_TOO_LARGE');
+    expect(large.body.error).toMatch(/400,001 characters.*up to 400,000/);
+    expect((await request(app).post('/api/code-animation/prompt').send({ ...forPrompt, baseJobId: '00000000-0000-4000-8000-000000000099' })).body.code).toBe('CODE_ANIMATION_BASE_NOT_FOUND');
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
   });
 
   it('attaches the references for a vision-capable CLI provider instead of only naming their paths', async () => {

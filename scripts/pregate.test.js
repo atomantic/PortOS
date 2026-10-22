@@ -56,6 +56,7 @@ const planWith = (overrides = {}) => ({
   promptHistory: false,
   linuxContainment: false,
   supercolliderLive: false,
+  dockerContainmentLive: false,
   ...overrides,
 });
 
@@ -444,6 +445,18 @@ describe('pregate hidden-content invocation', () => {
     // Later stages are not fixtures here; only the scan stage's outcome matters.
     expect(result.stdout).toContain('hidden-content scan passed');
     expect(result.stderr).toContain('Stage "hidden-content scan" exited with processes still running in its group; killed them.');
+  });
+
+  // #12833: a stage's exit status is its only verdict; a failing provisioning
+  // command must never be recorded as `passed` in the receipt.
+  it('records a stage that exits non-zero as failed and ends with its status', () => {
+    write('scripts/scan-diff-hidden-content.js', "console.error('fixture provisioning failure'); process.exit(3);\n");
+    const result = run('--skip-lint');
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain('hidden-content scan failed after');
+    expect(result.stdout).not.toContain('Pregate passed');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.stages[0]).toMatchObject({ name: 'hidden-content scan', status: 'failed', exitCode: 3 });
   });
 
   it.skipIf(process.platform === 'win32')('reports a stage child signal as incomplete rather than an ordinary assertion failure', () => {
@@ -936,6 +949,8 @@ describe('uncoveredSuites', () => {
       .toEqual([{ suite: 'linuxContainment', reason: 'needs a Linux host with bubblewrap namespaces', remedy: UNCOVERED_SUITES.linuxContainment }]);
     expect(uncoveredSuites(planWith({ supercolliderLive: true })))
       .toEqual([{ suite: 'supercolliderLive', reason: 'needs a native Linux Docker engine on amd64 and arm64', remedy: UNCOVERED_SUITES.supercolliderLive }]);
+    expect(uncoveredSuites(planWith({ dockerContainmentLive: true })))
+      .toEqual([{ suite: 'dockerContainmentLive', reason: 'needs a real Docker engine and pulls the pinned Node image', remedy: UNCOVERED_SUITES.dockerContainmentLive }]);
     expect(uncoveredSuites(planWith())).toEqual([]);
   });
 

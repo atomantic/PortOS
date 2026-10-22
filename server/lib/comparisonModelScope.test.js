@@ -119,7 +119,7 @@ describe('providerCatalogSlugs', () => {
     expect(matched.length).toBeGreaterThan(20);
     // Keep coverage anchored across a subscription model and a free provider.
     expect(matched).toContain('grok-4.7');
-    expect(matched).toContain('muse-spark-1.3');
+    expect(matched).toContain('deepseek-v4.1-flash');
   });
 });
 

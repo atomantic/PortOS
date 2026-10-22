@@ -428,6 +428,27 @@ export const BRANCHES_PER_AGENT_OPTIONS = [1, 2, 3, 4, 5, 6].map((value) => ({
   description: `Give each branch-reconcile coordinator up to ${value} prioritized branch${value === 1 ? '' : 'es'} per run`
 }));
 
+// error-log-triage run caps (taskMetadata integers). Values and defaults mirror
+// ERROR_LOG_TRIAGE_LIMITS in server/lib/cosValidation.js; the server drops a
+// value outside them.
+export const LOG_TRIAGE_TASK_TYPES = new Set(['error-log-triage']);
+export const LOG_TRIAGE_CAPS = [
+  {
+    field: 'triageMinOccurrences',
+    label: 'Occurrences before investigating',
+    defaultValue: 3,
+    options: [1, 2, 3, 5, 10, 25].map((value) => ({ value, label: `${value} occurrence${value === 1 ? '' : 's'}` })),
+    description: 'A new fault with no matching issue queues an investigation agent once it has been logged this many times',
+  },
+  {
+    field: 'triageMaxInvestigations',
+    label: 'Investigations per run',
+    defaultValue: 2,
+    options: [0, 1, 2, 3, 5, 10].map((value) => ({ value, label: value === 0 ? 'None (dedupe only)' : `Up to ${value}` })),
+    description: 'Most investigation agents one pass may queue; the busiest new faults go first',
+  },
+];
+
 // do-release options (taskMetadata booleans, each ON unless explicitly false).
 // Fields mirror RELEASE_OPTION_KEYS in server/lib/cosValidation.js — the
 // server drops any key outside that list.
@@ -438,6 +459,14 @@ export const RELEASE_OPTIONS = [
   { field: 'resolveBlockers', label: 'Resolve blockers', description: 'Fix failing tests, red CI, and blocking bugs (delegating to a sub-agent) instead of stopping to report them' },
   { field: 'autoDecide', label: 'Make decisions', description: 'Make routine design and preference decisions and list them for your review, instead of stopping to ask' },
 ];
+
+// The idle stall nudge (taskMetadata.stallNudge), ON unless explicitly false.
+// Shown for every scheduled task; do-release ships with it off because its
+// long quiet stretch is waiting on its own release PR's CI.
+export const STALL_NUDGE_OPTION = {
+  label: 'Stall nudge',
+  description: 'After 10 quiet minutes, paste a reminder into the agent session to keep working. Turn off for tasks that wait a long time on work they started, such as CI on a release PR.',
+};
 
 // better-dependency-freedom's removal bar — the slashdo `/do:depfree` modes.
 // Values mirror DEPFREE_MODES in server/lib/cosValidation.js; the server drops

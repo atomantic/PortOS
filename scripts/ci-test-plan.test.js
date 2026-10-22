@@ -37,6 +37,7 @@ import {
   splitByRunner,
   structuralTestsFor,
   SUPERCOLLIDER_LIVE_ENTRIES,
+  DOCKER_CONTAINMENT_LIVE_ENTRIES,
   WINDOWS_CONTRACT_TESTS,
   WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
@@ -1964,8 +1965,8 @@ describe('path-gated single-purpose jobs', () => {
   let staticInputs;
   const realPlan = (changedFiles) => {
     staticInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd: repo });
-    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs } = staticInputs;
-    return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs });
+    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = staticInputs;
+    return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs });
   };
   const gates = (plan) => ({
     promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
@@ -2090,6 +2091,23 @@ describe('path-gated single-purpose jobs', () => {
     expect(jobs.gate).toMatch(/needs: \[[^\]]*\bsupercollider-live\]/);
     expect(jobs.gate).toContain('CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}');
     expect(existsSync(join(repo, '.github/workflows/supercollider-live.yml'))).toBe(false);
+
+    // The Docker containment live suite (#12844) is planner-gated the same way.
+    expect(jobs.impact).toContain('docker_containment_live: ${{ steps.plan.outputs.docker_containment_live }}');
+    expect(jobs['docker-containment-live']).toContain("if: needs.impact.outputs.docker_containment_live == 'true'");
+    expect(jobs['docker-containment-live']).toContain("PORTOS_DOCKER_CONTAINMENT_LIVE: '1'");
+    expect(jobs['docker-containment-live']).toContain(`vitest run ${DOCKER_CONTAINMENT_LIVE_ENTRIES[0].replace('server/', '')}`);
+    expect(jobs.gate).toMatch(/needs: \[[^\]]*\bdocker-containment-live\b/);
+    expect(jobs.gate).toContain('CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}');
+  });
+
+  it('selects the Docker containment live job for the profile, executor and engine resolver only', () => {
+    for (const file of ['server/lib/dockerContainment.js', 'server/lib/dockerEgressProxy.js', 'server/services/dockerContainment.js', 'server/services/dockerEngine.js', 'server/lib/bufferedSpawn.js']) {
+      expect(realPlan([file]).dockerContainmentLive, file).toBe(true);
+    }
+    expect(realPlan(['client/src/App.jsx']).dockerContainmentLive).toBe(false);
+    expect(realPlan(['docs/CONTAINMENT.md']).dockerContainmentLive).toBe(false);
+    expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).dockerContainmentLive).toBe(true);
   });
 });
 

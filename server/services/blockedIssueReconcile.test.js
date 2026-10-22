@@ -115,43 +115,74 @@ describe('classifyBlockedIssues', () => {
 });
 
 describe('gatherBlockedIssueState (GitHub)', () => {
+  const blockedIssue = (body = 'Blocked by #10', login = 'maintainer') =>
+    ({ number: 5, author: { login }, title: 'Feature X', body, url: 'u' });
+  // Routes by argv: the blocked-issue list, `api repos/.../issues/N` blocker
+  // lookups (value or Error per number), and the trust helper's user lookup.
+  const mockGh = (list, blockers = {}) => {
+    execGhMock.mockImplementation(async (args) => {
+      if (args[0] === 'issue') return JSON.stringify(list);
+      if (args[0] === 'api' && args[1].startsWith('repos/')) {
+        const hit = blockers[Number(args[1].split('/').pop())];
+        if (hit instanceof Error) throw hit;
+        return hit === undefined ? '{}' : JSON.stringify(hit);
+      }
+      return args.at(-1) === 'user' ? JSON.stringify({ login: 'maintainer' }) : '[]';
+    });
+  };
+  const ready = async () => (await gatherBlockedIssueState('/repo')).ready;
+
   it('returns ready=[] when the blocked list is empty', async () => {
-    execGhMock.mockResolvedValueOnce('[]').mockResolvedValueOnce('[]');
+    mockGh([]);
     const result = await gatherBlockedIssueState('/repo');
     expect(result.forge).toBe('github');
     expect(result.ready).toEqual([]);
-    expect(execGhMock.mock.calls.slice(0, 2).map(([, , options]) => options)).toEqual([
-      { backoffKey: 'github.com/atomantic/PortOS' },
-      { backoffKey: 'github.com/atomantic/PortOS' },
-    ]);
+    expect(execGhMock.mock.calls[0][2]).toEqual({ backoffKey: 'github.com/atomantic/PortOS' });
   });
 
   it('resolves a blocked issue whose named blocker is now closed', async () => {
-    execGhMock
-      .mockResolvedValueOnce(JSON.stringify([{ number: 5, author: { login: 'maintainer' }, title: 'Feature X', body: 'Blocked by #10', url: 'u' }]))
-      .mockResolvedValueOnce(JSON.stringify([{ number: 10, state: 'CLOSED' }, { number: 5, state: 'OPEN' }]));
-    const result = await gatherBlockedIssueState('/repo');
-    expect(result.ready).toEqual([
+    mockGh([blockedIssue()], { 10: { state: 'closed' } });
+    expect(await ready()).toEqual([
       expect.objectContaining({ number: 5, blockingNumbers: [10], closedBlockers: [10], openBlockers: [] }),
     ]);
+    const lookup = execGhMock.mock.calls.find(([args]) => args[0] === 'api' && args[1].startsWith('repos/'));
+    expect(lookup[0].slice(1)).toEqual(['repos/atomantic/PortOS/issues/10', '--hostname', 'github.com']);
+    expect(lookup[2]).toEqual({ backoffKey: 'github.com/atomantic/PortOS' });
+  });
+
+  it('unblocks on a merged PR blocker but not an open or closed-unmerged one', async () => {
+    const pr = (state, merged_at) => ({ state, pull_request: { merged_at } });
+    mockGh([blockedIssue('Blocked by #11')], { 11: pr('closed', '2026-10-01T00:00:00Z') });
+    expect(await ready()).toHaveLength(1);
+    mockGh([blockedIssue('Blocked by #11')], { 11: pr('open', null) });
+    expect(await ready()).toEqual([]);
+    mockGh([blockedIssue('Blocked by #11')], { 11: pr('closed', null) });
+    expect(await ready()).toEqual([]);
+  });
+
+  it('requires every named blocker, issue or PR, to be satisfied', async () => {
+    mockGh([blockedIssue('Blocked by #10, #11')], {
+      10: { state: 'closed' }, 11: { state: 'open', pull_request: { merged_at: null } },
+    });
+    expect(await ready()).toEqual([]);
+  });
+
+  it('leaves the issue blocked when a blocker lookup fails', async () => {
+    mockGh([blockedIssue('Blocked by #10, #11')], { 10: { state: 'closed' }, 11: new Error('gh blip') });
+    expect(await ready()).toEqual([]);
   });
 
   it('does not unblock externally authored or unknown-author issues even with closed dependencies', async () => {
-    execGhMock
-      .mockResolvedValueOnce(JSON.stringify([
-        { number: 5, author: { login: 'external' }, body: 'Blocked by #10' },
-        { number: 6, body: 'Blocked by #10' },
-      ]))
-      .mockResolvedValueOnce(JSON.stringify([{ number: 10, state: 'CLOSED' }]));
-    expect((await gatherBlockedIssueState('/repo')).ready).toEqual([]);
+    mockGh([
+      blockedIssue('Blocked by #10', 'external'),
+      { number: 6, body: 'Blocked by #10' },
+    ], { 10: { state: 'closed' } });
+    expect(await ready()).toEqual([]);
   });
 
   it('leaves a blocked issue out of ready when its blocker is still open', async () => {
-    execGhMock
-      .mockResolvedValueOnce(JSON.stringify([{ number: 5, author: { login: 'maintainer' }, title: 'Feature X', body: 'Blocked by #10', url: 'u' }]))
-      .mockResolvedValueOnce(JSON.stringify([{ number: 10, state: 'OPEN' }]));
-    const result = await gatherBlockedIssueState('/repo');
-    expect(result.ready).toEqual([]);
+    mockGh([blockedIssue()], { 10: { state: 'open' } });
+    expect(await ready()).toEqual([]);
   });
 
   it('returns null (skip, not "nothing to unblock") when gh is unreachable', async () => {

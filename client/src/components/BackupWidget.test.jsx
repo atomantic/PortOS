@@ -380,6 +380,22 @@ describe('BackupWidget snapshots', () => {
     ));
   });
 
+  it('announces the migrations a pre-split restore runs through the split and reports them afterwards', async () => {
+    const migrations = { through: '200-split-example.js', names: ['081-example.js', '200-split-example.js'] };
+    mockRestoreBackup
+      .mockResolvedValueOnce({ dryRun: true, changedFiles: ['brain/journals.json'], restoredLegacyMigrations: { status: 'pending', ...migrations } })
+      .mockResolvedValueOnce({ changedFiles: ['brain/journals.json'], restoredLegacyMigrations: { status: 'applied', ...migrations } });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/predates 2 data migrations up to 200-split-example\.js.*runs them right away, in order/);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'File restore complete — 1 file(s) restored. Ran the 2 data migrations the snapshot predates through 200-split-example.js',
+    ));
+  });
+
   it('announces a pre-May-2026 ledger adoption and asks for a restart afterwards', async () => {
     mockRestoreBackup
       .mockResolvedValueOnce({

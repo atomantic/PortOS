@@ -35,6 +35,9 @@ vi.mock('../services/api', () => ({
   generateCodeAnimationBrief: vi.fn(),
   getCodeAnimationJob: vi.fn(),
   getCodeAnimationOptions: vi.fn(),
+  generateCodeAnimationSoundtrack: vi.fn(),
+  listMusicEngines: vi.fn().mockResolvedValue({ engines: [] }),
+  previewMusicPrompt: vi.fn(),
   getFilmStyle: vi.fn(),
   listFilmStyles: vi.fn(),
   listCodeAnimationJobPage: vi.fn().mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null }),
@@ -456,6 +459,28 @@ describe('Code Animation page', () => {
     await emitSocket('code-animation:changed', { id: 'job-1' });
 
     expect(screen.getByLabelText(/^title/i)).toHaveValue('Edited after submit');
+  });
+
+  it('forks a finished animation into a new, longer one that sends the original as its base', async () => {
+    const user = userEvent.setup();
+    getCodeAnimationJob.mockResolvedValue({ ...completedJob, audioUrl: null, input: { ...completedJob.input, format: { durationSeconds: 20 } } });
+    startCodeAnimationGeneration.mockResolvedValueOnce({ id: 'job-2', status: 'running', prompt: 'Extended prompt', input: {} });
+    await renderPage('/code-animation/job-1', ['/code-animation/job-2']);
+    await user.click(await screen.findByRole('button', { name: /fork & extend/i }));
+    expect(await screen.findByText(/Extending/)).toHaveTextContent('Extending Example animation (20s)');
+    expect(screen.getByText(/not longer than the original yet/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/what happens/i)).toHaveValue('A lantern rises');
+    const duration = screen.getByLabelText(/duration/i);
+    await user.clear(duration);
+    await user.type(duration, '120');
+    expect(screen.queryByText(/not longer than the original yet/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /generate animation/i }));
+    await waitFor(() => expect(startCodeAnimationGeneration).toHaveBeenCalledOnce());
+    expect(startCodeAnimationGeneration.mock.calls[0][0]).toMatchObject({ baseJobId: 'job-1', format: { durationSeconds: 120 } });
+
+    // Stop extending sends a fresh animation again.
+    await user.click(screen.getByRole('button', { name: 'Stop extending' }));
+    expect(screen.queryByText(/Extending/)).not.toBeInTheDocument();
   });
 
   it('picks a film style, shows its moves, and sends the id with the brief and the prompt request', async () => {

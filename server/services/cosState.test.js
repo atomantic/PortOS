@@ -485,11 +485,20 @@ describe('live CoS restore boundary', () => {
 // #12329: a slow state operation must separate durable-write stages and
 // event-loop lag, logging only bounded numbers.
 describe('state operation slow diagnostics', () => {
-  it('reports each persistence stage and splits a slow write into I/O wait and loop lag', async () => {
+  it('reports each persistence stage, splits a slow write into I/O wait and loop lag, and attributes only lag over 1 s', async () => {
     const store = await freshModule();
     const clock = __createManualClock();
-    store.__setCosStateDiagnosticsClockForTests(clock);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Process/host counters a test moves by hand alongside the clock (#12852).
+    const counters = { cpuUs: 0, gcMs: 0, switches: 0 };
+    const resources = {
+      cpuUsage: () => ({ user: counters.cpuUs, system: 0 }),
+      loadavg: () => [7.5, 6, 5],
+      cpus: () => 8,
+      involuntaryContextSwitches: () => counters.switches,
+      gc: { begin: () => { const since = counters.gcMs; return { ms: () => counters.gcMs - since, end: () => {} }; } },
+    };
+    store.__setCosStateDiagnosticsClockForTests(clock, resources);
+    const warn = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const stages = [];
       await store.saveState(await store.loadState(), { onStage: (stage) => {
@@ -505,8 +514,13 @@ describe('state operation slow diagnostics', () => {
       warn.mockClear();
       await store.withStateLock(async () => clock.advance(200));
       expect(warn).not.toHaveBeenCalled();
-      await store.withStateLock(async () => clock.stall(1200));
-      expect(warn.mock.calls.map(([line]) => line)).toEqual(['🐢 CoS state queue slow hold heldMs=1200 waitMs=0 loopLagMs=1100 loopLagMaxMs=1100']);
+      // Over 1 s of lag, the line attributes it: here the process itself was
+      // busy (cpuMs near heldMs), a quarter of it in GC.
+      await store.withStateLock(async () => {
+        clock.stall(1200);
+        Object.assign(counters, { cpuUs: counters.cpuUs + 1_150_000, gcMs: counters.gcMs + 300, switches: counters.switches + 42 });
+      });
+      expect(warn.mock.calls.map(([line]) => line)).toEqual(['🐢 CoS state queue slow hold heldMs=1200 waitMs=0 loopLagMs=1100 loopLagMaxMs=1100 cpuMs=1150 load1=7.5 cpus=8 gcMs=300 invCtx=42']);
     } finally {
       store.__setCosStateDiagnosticsClockForTests(null);
       warn.mockRestore();

@@ -474,7 +474,7 @@ const TUPLES = [
     id: 'opencode-zen-cli', harnessId: 'opencode', method: 'cli', service: { definitionId: 'opencode-zen', credentials: { apiKey: 'placeholder' } },
     overrides: {
       name: 'OpenCode Zen CLI', enabled: false,
-      models: ['opencode/big-pickle', 'opencode/ling-3.0-flash-fin-free', 'opencode/mimo-v2.5-free', 'opencode/muse-spark-1.2-contributor-free', 'opencode/muse-spark-1.3-contributor-free', 'opencode/nemotron-3-ultra-free', 'opencode/nemotron-3.5-lightning-free'],
+      models: ['opencode/big-pickle', 'opencode/deepseek-v4.1-flash-free', 'opencode/mimo-v2.6-flash-free', 'opencode/glm-5.3-flash-free', 'opencode/minimax-m3.1-flash-free', 'opencode/nemotron-3-ultra-free', 'opencode/nemotron-3.5-lightning-free'],
       defaultModel: 'opencode/big-pickle',
       apiKey: OMIT,
       envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: 'allow' }), OPENCODE_API_KEY: OMIT },
@@ -484,7 +484,7 @@ const TUPLES = [
     id: 'opencode-zen-tui', harnessId: 'opencode', method: 'tui', service: { definitionId: 'opencode-zen', credentials: { apiKey: 'placeholder' } },
     overrides: {
       name: 'OpenCode Zen TUI', enabled: false,
-      models: ['opencode/big-pickle', 'opencode/ling-3.0-flash-fin-free', 'opencode/mimo-v2.5-free', 'opencode/muse-spark-1.2-contributor-free', 'opencode/muse-spark-1.3-contributor-free', 'opencode/nemotron-3-ultra-free', 'opencode/nemotron-3.5-lightning-free'],
+      models: ['opencode/big-pickle', 'opencode/deepseek-v4.1-flash-free', 'opencode/mimo-v2.6-flash-free', 'opencode/glm-5.3-flash-free', 'opencode/minimax-m3.1-flash-free', 'opencode/nemotron-3-ultra-free', 'opencode/nemotron-3.5-lightning-free'],
       defaultModel: 'opencode/big-pickle',
       tuiIdleTimeoutMs: 180000,
       apiKey: OMIT,

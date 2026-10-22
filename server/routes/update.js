@@ -4,6 +4,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
+import { getNodeRuntimeStatus, repairStartup, startNodeUpdate, startPm2Update } from '../services/nodeRuntime.js';
 import { startPortosSelfUpdate } from '../services/portosSelfUpdate.js';
 import {
   AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
@@ -19,6 +20,10 @@ const router = Router();
 
 const ignoreSchema = z.object({
   version: z.string().min(1, 'version is required')
+});
+
+const nodeUpdateSchema = z.object({
+  version: z.string().regex(/^v\d+\.\d+\.\d+$/, 'version must look like v26.12.1')
 });
 
 const syncForkSchema = z.object({
@@ -190,6 +195,37 @@ router.post('/execute', asyncHandler(async (req, res) => {
   });
 
   res.json({ started, tag });
+}));
+
+// GET /api/update/node-runtime — the Node.js PortOS runs on, newer stable and
+// security releases, nvm, pm2 (shipped, daemon, terminal CLI) and the boot script.
+router.get('/node-runtime', asyncHandler(async (req, res) => {
+  res.json(await getNodeRuntimeStatus());
+}));
+
+// POST /api/update/node-runtime — install an offered Node with nvm and restart
+// PortOS on it. Refuses while anything a restart would kill is running.
+// Progress streams on `portos:update:step`.
+router.post('/node-runtime', asyncHandler(async (req, res) => {
+  const { version } = validateRequest(nodeUpdateSchema, req.body || {});
+  res.status(202).json(await startNodeUpdate({ version, io: req.app.get('io') }));
+}));
+
+// POST /api/update/node-runtime/startup — repoint the macOS pm2 LaunchAgent at
+// PortOS's Node. No restart; launchd reads it at the next login.
+router.post('/node-runtime/startup', asyncHandler(async (req, res) => {
+  const fixed = Boolean(await repairStartup());
+  if (!fixed) {
+    throw new ServerError('Start-on-boot can\'t be updated from PortOS here. Run the command shown instead.', { status: 409, code: 'STARTUP_NOT_FIXABLE' });
+  }
+  req.app.get('io')?.emit('portos:node-runtime:changed', { reason: 'startup' });
+  res.json({ fixed });
+}));
+
+// POST /api/update/pm2 — align the terminal's pm2 CLI and the daemon with the
+// pm2 PortOS ships; restarts PortOS only when the daemon is behind.
+router.post('/pm2', asyncHandler(async (req, res) => {
+  res.status(202).json(await startPm2Update({ io: req.app.get('io') }));
 }));
 
 export default router;

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import LoomProductionPanel from './LoomProductionPanel';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
@@ -92,12 +92,12 @@ describe('LoomProductionPanel', () => {
   it('renders plan summary and allows switching mode', async () => {
     render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
 
-    await waitFor(() => {
-      expect(screen.getByText('Episodic Production Plan')).toBeInTheDocument();
-    });
+    expect(await screen.findByText('Episodic Production Plan')).toBeInTheDocument();
 
-    expect(screen.getByText('3')).toBeInTheDocument(); // storyboard images only by default
-    expect(screen.getByText('Generate Storyboard Images')).toBeInTheDocument();
+    // The summary cards render only once the plan response lands, which can trail the heading.
+    const plannedCard = (await screen.findByText('Planned Assets')).parentElement;
+    expect(within(plannedCard).getByText('3')).toBeInTheDocument(); // storyboard images only by default
+    expect(await screen.findByText('Generate Storyboard Images')).toBeInTheDocument();
 
     const modeSelect = screen.getByLabelText('Mode:');
     fireEvent.change(modeSelect, { target: { value: 'exact_inputs' } });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import ArtistPicker from './ArtistPicker';
 
@@ -49,5 +50,23 @@ describe('ArtistPicker', () => {
     renderPicker({ value: 'ar1', name: 'The Kestrels' });
     await screen.findByRole('option', { name: 'The Kestrels' });
     expect(screen.getAllByRole('option', { name: 'The Kestrels' })).toHaveLength(1);
+  });
+
+  it('shows a load error with Retry, not the empty-personas copy, when the read fails', async () => {
+    listArtists.mockRejectedValueOnce(new Error('Artists unavailable'));
+    renderPicker({ value: '', name: '' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load artist personas — Artists unavailable');
+    expect(screen.queryByText(/No artist personas yet/)).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('option', { name: 'The Kestrels' });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the empty-personas copy only once an empty list loaded', async () => {
+    listArtists.mockResolvedValueOnce([]);
+    renderPicker({ value: '', name: '' });
+    expect(await screen.findByText(/No artist personas yet/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

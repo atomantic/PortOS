@@ -317,6 +317,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: result.archiveDir });
   });
 
+  it('settles a stale inventory row whose checkout was already removed instead of refusing it', async () => {
+    const { path, release } = await heldCheckout('already-gone');
+    await recordBranchReconcileOutcome('app-1', {
+      status: 'incomplete', remaining: [{ ...release, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
+    });
+    await execGit(['worktree', 'unlock', path], repo);
+    await execGit(['worktree', 'remove', '--force', path], repo);
+
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners }))
+      .toEqual({ ok: true, alreadyRetired: true });
+    expect((await getBranchReconcileOutcome('app-1')).remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
+  });
+
   it('refuses a release that does not name a row of the last inventory', async () => {
     const { path, release } = await heldCheckout('not-inventoried');
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, lockReason: 'older lock text' }] });
@@ -682,6 +695,28 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/restored-legacy'], repo);
     expect((await execGit(['rev-parse', 'restored-legacy'], repo)).stdout.trim()).toBe(c.release.head);
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
+  });
+
+  it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
+    const c = await reviewedCheckout('settled', { normalMerge: true, superseded: true });
+    await execGit(['worktree', 'unlock', c.path], repo);
+    const release = { ...c.release, locked: false, lockReason: null };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'pr-completion-review-required' }] });
+    const retire = (more = {}) => retireInventoriedCheckout({ appId: 'app-1', release }, { ...c.opts, ...more });
+    // A reused branch: the obligation names an earlier PR, not this head.
+    injected.policies[0].metadata.branchCompletionPolicy = {
+      branch: release.branch, completion: 'review-then-merge', prUrl: 'https://github.com/example/repo/pull/41', tip: null,
+    };
+    injected.policies[0].metadata.branchCompletionPolicy.completion = 'leave-open';
+    expect(await retire({ settleMergedReviewObligation: true })).toMatchObject({ ok: false, reason: 'pr-completion-human-handoff' });
+    injected.policies[0].metadata.branchCompletionPolicy.completion = 'review-then-merge';
+    expect(await retire()).toMatchObject({ ok: false, reason: 'pr-completion-review-required' });
+    expect(await registered(release.path)).toBe(true);
+    const result = await retire({ settleMergedReviewObligation: true });
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(await registered(release.path)).toBe(false);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/restored-settled'], repo);
+    expect((await execGit(['rev-parse', 'restored-settled'], repo)).stdout.trim()).toBe(release.head);
   });
 
   function reusedBranchOwners(c) {

@@ -379,6 +379,7 @@ describe('errorHandler.js', () => {
     // spy into sibling tests.
     let noopErrorListener;
     let errorSpy;
+    let logSpy;
     let testListeners;
     // Register an errorEvents 'error' listener that this describe will remove.
     const trackListener = (fn) => { testListeners.push(fn); errorEvents.on('error', fn); };
@@ -388,11 +389,13 @@ describe('errorHandler.js', () => {
       noopErrorListener = () => {};
       errorEvents.on('error', noopErrorListener);
       errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     });
     afterEach(() => {
       errorEvents.off('error', noopErrorListener);
       for (const fn of testListeners) errorEvents.off('error', fn);
       errorSpy.mockRestore();
+      logSpy.mockRestore();
     });
 
     it('catches a thrown ServerError, emits, and responds with status + body', async () => {
@@ -513,8 +516,8 @@ describe('errorHandler.js', () => {
       })(req, res, vi.fn());
       await flushMicrotasks();
 
-      expect(errorSpy).toHaveBeenCalledTimes(1);
-      const [line, ...extraArgs] = errorSpy.mock.calls[0];
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      const [line, ...extraArgs] = logSpy.mock.calls[0];
       expect(extraArgs).toEqual([]);
       expect(line).not.toContain('\n');
       expect(line).not.toContain('[{');
@@ -538,7 +541,7 @@ describe('errorHandler.js', () => {
       })(req, res, vi.fn());
       await flushMicrotasks();
 
-      const line = errorSpy.mock.calls[0][0];
+      const line = logSpy.mock.calls[0][0];
       expect(line).not.toContain('\n');
       expect(line).toContain('pg_dump: error: connection to server failed');
       expect(line).not.toContain('trailing');
@@ -554,7 +557,34 @@ describe('errorHandler.js', () => {
       })(req, res, vi.fn());
       await flushMicrotasks();
 
-      expect(errorSpy.mock.calls[0][0]).toBe('❌ Route error [GET /api/thing]: Validation failed');
+      expect(logSpy.mock.calls[0][0]).toBe('🚫 Route refused [GET /api/thing] 400: Validation failed');
+    });
+
+    // stderr is reserved for faults worth investigating: a 4xx is the server
+    // refusing a request (a guard's 409, validation, not-found), so it stays on
+    // stdout unless the thrower marked it critical.
+    it('routes a 4xx refusal to stdout and only 5xx/critical to stderr', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        for (const status of [400, 404, 409]) {
+          await asyncHandler(async () => { throw new ServerError('kept', { status }); })(makeReqRes(null).req, makeReqRes(null).res, vi.fn());
+        }
+        await flushMicrotasks();
+        expect(errorSpy).not.toHaveBeenCalled();
+        expect(warnSpy).not.toHaveBeenCalled();
+        expect(logSpy.mock.calls.map(([line]) => line)).toEqual([
+          '🚫 Route refused [GET /api/thing] 400: kept',
+          '🚫 Route refused [GET /api/thing] 404: kept',
+          '🚫 Route refused [GET /api/thing] 409: kept',
+        ]);
+
+        await asyncHandler(async () => { throw new ServerError('bad', { status: 409, severity: 'critical' }); })(makeReqRes(null).req, makeReqRes(null).res, vi.fn());
+        await flushMicrotasks();
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        expect(errorSpy.mock.calls[0][0]).toBe('❌ Route error [GET /api/thing]: bad');
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
     // The 500 branch logs the stack, not `details` — it must stay untouched.
@@ -616,7 +646,7 @@ describe('errorHandler.js', () => {
       })(req, res, vi.fn());
       await flushMicrotasks();
 
-      const line = errorSpy.mock.calls[0][0];
+      const line = logSpy.mock.calls[0][0];
       expect(line).not.toContain('[object Object]');
       expect(line).toContain('ahead=[{"universe":"core","version":13}]');
       expect(line).toContain('behind=[]');
@@ -638,8 +668,8 @@ describe('errorHandler.js', () => {
       })(req, res, vi.fn());
       await flushMicrotasks();
 
-      expect(errorSpy).toHaveBeenCalledTimes(1);
-      const line = errorSpy.mock.calls[0][0];
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      const line = logSpy.mock.calls[0][0];
       expect(line).toContain('bad=[unserializable]');
     });
   });

@@ -5,6 +5,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
 import Banner from '../../ui/Banner';
 import AutoUpdatePanel from './AutoUpdatePanel';
+import NodeRuntimePanel from './NodeRuntimePanel';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import { formatDateTime, formatDateNumeric, formatTimeOfDaySeconds } from '../../../utils/formatters';
@@ -15,6 +16,10 @@ const STATUS_EVENTS = ['portos:update:checked', 'portos:update:available', 'port
 
 const STEP_LABELS = {
   starting: 'Starting update',
+  'node-install': 'Installing Node.js',
+  'node-default': 'Setting nvm default',
+  'pm2-cli': 'Installing pm2 CLI',
+  'node-pin': 'Pinning PortOS to Node',
   'git-pull': 'Pulling latest changes',
   'pm2-stop': 'Stopping apps',
   'npm-install': 'Installing dependencies',
@@ -93,7 +98,9 @@ export default function UpdateTab() {
   // `fromStatus` lets callers (e.g. handleSyncForkAndUpdate) pass the freshly
   // fetched status object instead of relying on the closure capture — `setStatus`
   // only schedules a render; the action passes its fresh response directly.
-  const runUpdate = useCallback(async (opts = {}, fromStatus = null) => {
+  // `launch` lets the Node runtime panel start its restart through the same
+  // baseline, step list and restart watch as a release update.
+  const runUpdate = useCallback(async (opts = {}, fromStatus = null, launch = api.executePortosUpdate) => {
     const s = fromStatus || status;
     // Record the version and uptime of the still-running server, so even an
     // instant restart (whose first post-restart poll already reports a small
@@ -102,11 +109,14 @@ export default function UpdateTab() {
     setUpdating(true);
     setSteps([]);
     setUpdateError(null);
-    return api.executePortosUpdate(opts).catch(err => {
+    const result = await launch(opts).catch(err => {
       setUpdateError(err.message);
       setUpdating(false);
       return null;
     });
+    // A pm2 CLI refresh finishes without restarting PortOS.
+    if (result?.restart === false) setUpdating(false);
+    return result;
   }, [captureBaseline, status]);
 
   const handleUpdate = () => runUpdate();
@@ -458,6 +468,11 @@ export default function UpdateTab() {
           Last checked: {formatDateTime(status.lastCheck)}
         </div>
       )}
+
+      <NodeRuntimePanel
+        busy={updating || polling || syncingFork}
+        onLaunch={(call) => runUpdate({}, null, call)}
+      />
 
       {/* Update Progress */}
       {steps.length > 0 && (

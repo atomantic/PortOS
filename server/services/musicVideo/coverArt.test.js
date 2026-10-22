@@ -5,7 +5,7 @@
  * image job, and its completion composes the cover from the result, or
  * records why it failed. The lettering itself renders through real sharp once.
  */
-import { describe, expect, it, vi, afterAll, beforeEach } from 'vitest';
+import { describe, expect, it, vi, afterAll, beforeAll, beforeEach } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -22,6 +22,13 @@ const cover = await import('./coverArt.js');
 const { composeCoverArt } = await import('./coverArtCompose.js');
 
 afterAll(() => cleanupTempDataRoots());
+
+// The first text render pays one-time renderer setup (fontconfig builds its font cache on a cold
+// Windows runner, #12802). Pay it here, under its own hook budget, not inside the lettering test.
+beforeAll(async () => {
+  const sharp = (await import('sharp')).default;
+  await sharp({ text: { text: 'Example Song', rgba: true } }).png().toBuffer();
+}, 120_000);
 
 const compose = vi.fn(async ({ out }) => { await writeFile(out, 'jpeg'); return { width: 3000, height: 3000 }; });
 const enqueue = vi.fn(async () => ({ jobId: 'job-example' }));

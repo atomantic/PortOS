@@ -83,6 +83,11 @@ async function capture(id) {
   }
 }
 
+/** Resolves once a capture in flight (or queued) for `id` has finished writing. */
+export function settleCodeAnimationPoster(id) {
+  return inFlight.get(id) || Promise.resolve(false);
+}
+
 /**
  * Capture a completed job's poster. Resolves true when a poster was written;
  * never rejects, because the completion path runs it detached.

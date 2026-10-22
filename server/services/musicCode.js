@@ -37,19 +37,26 @@ const MAX_DESCRIPTION = 8000;
 const MAX_LYRICS = 20000;
 const MAX_GUIDANCE = 4000;
 
+const MAX_SCENE = 20000;
+
 const section = (label, body) => (body ? `\n\n${label}:\n${body}` : '');
 
+// The piece's brief, shared by every language's contract. `scene` is the
+// script of an animation the piece scores; `durationSec` is its fixed length.
+function briefSections({ description, lyrics, scene, durationSec, guidance, current }) {
+  return [
+    section('MUSIC TO WRITE', trimTo(description, MAX_DESCRIPTION) || (scene ? '(score the animation below)' : '(none given)')),
+    section('ANIMATION THIS SCORES (a soundtrack for the film, not a standalone song: unless the description says otherwise, write sound design synced to what happens on screen, such as whirrs, blips, sweeps, risers and impacts built from synths and noise at the moments they occur, over a musical bed that follows its mood and pacing; nothing is sung)', trimTo(scene, MAX_SCENE)),
+    durationSec ? section('LENGTH', `The piece plays for exactly ${durationSec} seconds. Shape intro, build, peak and ending to fit that length, and land the ending at ${durationSec}s.`) : '',
+    section('LYRICS / THEME (mood only; nothing is sung, so instruments carry the melody)', trimTo(lyrics, MAX_LYRICS)),
+    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
+    current ? section('CURRENT CODE (revise it per the request above; keep what works, change what is asked)', current) : '',
+  ].join('');
+}
+
 /** The Strudel writing contract sent to the LLM. */
-function buildStrudelPrompt({ description, lyrics, guidance, current }) {
-  return `You are a composer who writes music as Strudel code (the JavaScript port of TidalCycles, strudel.cc). The code runs in a browser with the @strudel/web bundle and is the whole piece: there is no audio model and no DAW.${
-    section('MUSIC TO WRITE', trimTo(description, MAX_DESCRIPTION) || '(none given)')
-  }${
-    section('LYRICS / THEME (mood only; nothing is sung, so instruments carry the melody)', trimTo(lyrics, MAX_LYRICS))
-  }${
-    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE))
-  }${
-    current ? section('CURRENT CODE (revise it per the request above; keep what works, change what is asked)', current) : ''
-  }
+function buildStrudelPrompt(input) {
+  return `You are a composer who writes music as Strudel code (the JavaScript port of TidalCycles, strudel.cc). The code runs in a browser with the @strudel/web bundle and is the whole piece: there is no audio model and no DAW.${briefSections(input)}
 
 Return ONLY the Strudel code: no prose and no markdown fence. It is evaluated exactly like the strudel.cc REPL:
 - Set the tempo first with setcps(BPM / 60 / 4), e.g. setcps(0.5) for 120 BPM in 4/4.
@@ -65,16 +72,8 @@ Compose real music: a memorable melody, a bassline that moves, harmony, and perc
 }
 
 /** The Tone.js writing contract sent to the LLM. */
-function buildTonejsPrompt({ description, lyrics, guidance, current }) {
-  return `You are a composer who writes music as plain JavaScript against the Tone.js library (tonejs.github.io/), running against the global \`Tone\`. The code IS the whole piece: there is no audio model and no DAW, and it runs once per play.${
-    section('MUSIC TO WRITE', trimTo(description, MAX_DESCRIPTION) || '(none given)')
-  }${
-    section('LYRICS / THEME (mood only; nothing is sung, so instruments carry the melody)', trimTo(lyrics, MAX_LYRICS))
-  }${
-    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE))
-  }${
-    current ? section('CURRENT CODE (revise it per the request above; keep what works, change what is asked)', current) : ''
-  }
+function buildTonejsPrompt(input) {
+  return `You are a composer who writes music as plain JavaScript against the Tone.js library (tonejs.github.io/), running against the global \`Tone\`. The code IS the whole piece: there is no audio model and no DAW, and it runs once per play.${briefSections(input)}
 
 Return ONLY the JavaScript: no prose and no markdown fence. Rules for the code:
 - The host has already unlocked audio and reset the transport before your code runs; do not call Tone.start().
@@ -90,16 +89,8 @@ Compose real music: a memorable melody, a bassline that moves, harmony, and perc
 }
 
 /** The SuperCollider writing contract sent to the LLM (rendered offline by a trusted, contained runner). */
-function buildSupercolliderPrompt({ description, lyrics, guidance, current }) {
-  return `You are a composer who writes music as SuperCollider (sclang) code. The code is the whole piece: it is compiled and rendered OFFLINE by a trusted runner in a sandbox, never played live, and there is no audio model and no DAW.${
-    section('MUSIC TO WRITE', trimTo(description, MAX_DESCRIPTION) || '(none given)')
-  }${
-    section('LYRICS / THEME (mood only; nothing is sung, so instruments carry the melody)', trimTo(lyrics, MAX_LYRICS))
-  }${
-    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE))
-  }${
-    current ? section('CURRENT CODE (revise it per the request above; keep what works, change what is asked)', current) : ''
-  }
+function buildSupercolliderPrompt(input) {
+  return `You are a composer who writes music as SuperCollider (sclang) code. The code is the whole piece: it is compiled and rendered OFFLINE by a trusted runner in a sandbox, never played live, and there is no audio model and no DAW.${briefSections(input)}
 
 Return ONLY the sclang code: no prose and no markdown fence. Rules for the code:
 - Define instruments with SynthDef(\\name, { |out=0, freq=440, amp=0.2, gate=1| ... }) using ONLY stock UGens (SinOsc, Saw, Pulse, LFTri, WhiteNoise, PinkNoise, RLPF, RHPF, LPF, HPF, EnvGen, Env, Pan2, FreeVerb, CombL, Splay, Mix, ...), finish each with Out.ar(out, signal) in stereo, and register it with .add (e.g. SynthDef(\\lead, { ... }).add;). Give every sustained instrument an envelope that frees it (doneAction: 2), gated by gate when it has one.
@@ -112,6 +103,33 @@ Compose real music: a memorable melody, a bassline that moves, harmony, and perc
 }
 
 const PROMPT_BUILDERS = { strudel: buildStrudelPrompt, tonejs: buildTonejsPrompt, supercollider: buildSupercolliderPrompt };
+
+const LANGUAGE_LABELS = { strudel: 'Strudel', tonejs: 'Tone.js', supercollider: 'SuperCollider' };
+
+/** The exact prompt writeMusicCode sends for `input`. */
+function buildMusicCodePrompt({ language = 'strudel', current, ...input } = {}) {
+  const buildPrompt = PROMPT_BUILDERS[language] || buildStrudelPrompt;
+  return buildPrompt({ ...input, current: trimTo(current, MUSIC_CODE_MAX) });
+}
+
+/**
+ * What writing the code would send (#11317): the sent prompt, plus everything
+ * in it beyond the description as labeled additions. Pure; no provider call.
+ */
+export function previewMusicCodePrompt(input = {}) {
+  const language = PROMPT_BUILDERS[input.language] ? input.language : 'strudel';
+  const sentPrompt = buildMusicCodePrompt({ ...input, language });
+  const rules = buildMusicCodePrompt({ language }).replace(briefSections({}), '');
+  const promptAdditions = [
+    ['code-rules', `${LANGUAGE_LABELS[language]} writing rules`, rules],
+    ['animation-script', 'Animation script', trimTo(input.scene, MAX_SCENE)],
+    ['length', 'Length', input.durationSec ? `${input.durationSec} seconds` : ''],
+    ['lyrics', 'Lyrics / theme', trimTo(input.lyrics, MAX_LYRICS)],
+    ['guidance', 'Code guidance', trimTo(input.guidance, MAX_GUIDANCE)],
+    ['current', 'Current code (revise)', trimTo(input.current, MUSIC_CODE_MAX)],
+  ].filter(([, , text]) => text).map(([id, label, text]) => ({ id, label, text }));
+  return { sentPrompt, promptAdditions };
+}
 
 // A reply usually arrives bare, but a fenced block (with or without prose
 // around it) is common. Take the first fence's body when there is one.
@@ -126,16 +144,15 @@ function extractCode(text) {
  * Ask the chosen provider to write the piece as code. `current` (the code in
  * the editor) turns the call into a revision of it.
  */
-export async function writeMusicCode({ description, lyrics, guidance, current, language = 'strudel', providerId, model, effort } = {}) {
+export async function writeMusicCode({ language = 'strudel', providerId, model, effort, ...brief } = {}) {
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to write the music code', code: 'NO_PROVIDER' });
 
-  const buildPrompt = PROMPT_BUILDERS[language] || buildStrudelPrompt;
   const run = await runPromptThroughProvider({
     provider,
     model: selectedModel ?? undefined,
     effort,
-    prompt: buildPrompt({ description, lyrics, guidance, current: trimTo(current, MUSIC_CODE_MAX) }),
+    prompt: buildMusicCodePrompt({ ...brief, language }),
     source: 'music-code',
   });
 

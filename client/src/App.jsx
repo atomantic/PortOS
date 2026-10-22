@@ -85,6 +85,8 @@ const Sprites = lazyWithReload(() => import('./pages/Sprites'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
 const CodeAnimation = lazyWithReload(() => import('./pages/CodeAnimation'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
+const Storyboards = lazyWithReload(() => import('./pages/Storyboards'));
+const StoryboardDetail = lazyWithReload(() => import('./pages/StoryboardDetail'));
 const Decks = lazyWithReload(() => import('./pages/Decks'));
 const DeckDetail = lazyWithReload(() => import('./pages/DeckDetail'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
@@ -300,6 +302,8 @@ export default function App() {
           <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/flows" element={<FlowsDoc />} />
           <Route path="devtools/github" element={<GitHub />} />
+          <Route path="devtools/github/:tab" element={<GitHub />} />
+          <Route path="devtools/github/:tab/:accountId/:threadId" element={<GitHub />} />
           <Route path="devtools/history" element={<HistoryPage />} />
           <Route path="devtools/image-clean" element={<ImageClean />} />
           <Route path="devtools/quota-burn" element={<QuotaBurn />} />
@@ -630,6 +634,9 @@ export default function App() {
           <Route path="code-animation/production/:projectId" element={<CodeAnimation />} />
           <Route path="mood-boards" element={<MoodBoards />} />
           <Route path="mood-boards/:id" element={<MoodBoardDetail />} />
+          <Route path="storyboards" element={<Storyboards />} />
+          <Route path="storyboards/:id" element={<StoryboardDetail />} />
+          <Route path="storyboards/:id/panel/:panelId" element={<StoryboardDetail />} />
           <Route path="decks" element={<Decks />} />
           <Route path="decks/:id" element={<DeckDetail />} />
           <Route path="universes" element={<Universes />} />

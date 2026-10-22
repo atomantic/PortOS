@@ -724,6 +724,18 @@ describe('claim reviewer round-trip (prompt CSV ↔ persisted metadata)', () => 
     expect(claimSafeReviewers(undefined)).toEqual(['codex']);
   });
 
+  it('keeps a forge-reviewer-only claim roster through persistence instead of falling back to an AI reviewer', () => {
+    const defaults = { reviewers: ['claude'], usernames: [] };
+    const persisted = reviewerConfigMetadata({ reviewers: [], usernames: ['@reviewer-one'] });
+    expect(persisted).toEqual({ reviewers: [], usernames: ['reviewer-one'] });
+    const config = resolveClaimReviewerConfig(persisted, defaults, defaults.reviewers);
+    expect(config.reviewers).toEqual([]);
+    expect(config.csv).toBe('@reviewer-one');
+    // An empty list with no forge reviewer still means "inherit", never "no review".
+    expect(reviewerConfigMetadata({ reviewers: [], usernames: [] })).toEqual({ usernames: [] });
+    expect(resolveClaimReviewerConfig({ reviewers: [] }, defaults, defaults.reviewers).reviewers).toEqual(['claude']);
+  });
+
   it('stably prioritizes tool-free local reviewers ahead of tool-enabled reviewers', () => {
     expect(prioritizeToolFreeReviewers(['codex', 'ollama', 'copilot', 'lmstudio', 'claude']))
       .toEqual(['ollama', 'lmstudio', 'codex', 'copilot', 'claude']);

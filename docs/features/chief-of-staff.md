@@ -117,7 +117,12 @@ repair the exact existing backlink rather than minting another merge authority.
 Missing tasks, unreadable state, active owners and explicit leave-open policy
 never grant recovery permission. GitHub auto-merge enabled alone is unfinished.
 
-When cleanup is enabled, completed local review obligations become bounded
+When cleanup is enabled, a clean, unlocked, ownerless checkout held only by a
+review obligation whose commits are already on the default branch (ancestor or
+patch-equivalent) is archived and retired directly: no PR identity, owner
+history or agent review is needed to show nothing is lost, and the retirement
+service re-proves merge evidence and ownership under its fence. Human handoffs
+and unreadable policy stay held. Other completed local review obligations become bounded
 `REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,
 checkout identity and ownership. The task records the exact release and review
 digest, reads the complete original/current code comparison, and uses the live
@@ -136,9 +141,13 @@ It joins the pending-merge coordinator, does not spend its periodic tick budget,
 and leaves remote-only receipts and concurrent replacement receipts untouched.
 A single locked checkout no longer labels unrelated review holds as live owners.
 
-Routine reconciliation retains superseded but unmerged branches. Their separate
-backup-and-retire workflow requires explicit `reapSuperseded: true`; merged cleanup
-does not enable it.
+A branch with a fresh SUPERSEDED verdict (its replacement still on the default
+branch, its tip and dirty paths unchanged) is backed up under
+`data/cos/abandoned-worktree-backups/` and retired by the scheduled
+reconciliation, behind the same owner and lock gates as merged cleanup. The
+per-app `reapSuperseded` toggle (on unless `false`, and off whenever
+`cleanupMerged` is off) keeps such branches instead; direct `reconcile()`
+callers still opt in explicitly.
 
 The Git page's merged badge is a display hint. Delete merged branches and
 completion cleanup use the same retirement path: resolve the current checkout,
@@ -154,7 +163,17 @@ merge without a checkout. Cleanup reports locked, dirty, active, unmanaged,
 unverified manual claim, changed-head and archive-failure holds explicitly.
 An absent live registry entry alone cannot waive a manual claim hold; a
 successful completion receipt bound to the current checkout path, head and
-filesystem incarnation is required. Older records cannot release a reused claim. Initialized submodules currently retain
+filesystem incarnation is required, or for a manual session the forge's merged
+PR at the exact head. A merged manual claim with no PR at its exact head (a
+reused branch, or a checkout left behind while the branch shipped from
+elsewhere) retires once a GitHub read finds no open PR for the branch and the
+checkout's directory, index and HEAD log have been untouched for an hour. A
+merged checkout under a review obligation whose open PR head has moved past it
+(the delivery continues from another checkout) is archived and retired after
+the same hour idle; an open PR at the checkout's own tip stays a live delivery.
+After a claim checkout retires, its issue markers are never written; a GitHub
+read showing the issue closed, or open with no `in-progress` label and no
+assignee, settles the reservation report, and any other answer keeps it held. Older records cannot release a reused claim. Initialized submodules currently retain
 the checkout because their complete content is not supported by the archive.
 A held merged receipt names a recovery task when policy and source ownership
 permit it; intentional human handoffs stay with their existing owner. The recovery

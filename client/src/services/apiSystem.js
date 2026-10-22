@@ -69,6 +69,15 @@ export const executePortosUpdate = (opts) => {
   const body = opts && Object.keys(opts).length ? JSON.stringify(opts) : undefined;
   return request('/update/execute', body ? { method: 'POST', body } : { method: 'POST' });
 };
+// Node.js runtime: version, newer stable/security releases, nvm, pm2 and the
+// boot script; the two actions restart PortOS through the update lifecycle.
+export const getNodeRuntimeStatus = (options) => request('/update/node-runtime', options);
+export const updateNodeRuntime = (version) => request('/update/node-runtime', {
+  method: 'POST',
+  body: JSON.stringify({ version })
+});
+export const updatePm2Runtime = () => request('/update/pm2', { method: 'POST' });
+export const repairNodeStartup = () => request('/update/node-runtime/startup', { method: 'POST' });
 export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/sync-fork', {
   method: 'POST',
   body: JSON.stringify(opts),

@@ -181,7 +181,7 @@ function reportPushFailure(sub, peer, reason, detail) {
   // An unreachable peer is routine (asleep, off the tailnet). Retryable
   // failures schedule the bounded walk; a peer the probe has marked offline
   // is left for `peer:online`. A peer that answered and refused is not retried.
-  if (reason === 'network') console.warn(`⚠️ peerSync: push ${target} unreachable${suffix}`);
+  if (reason === 'network') console.log(`🔌 peerSync: push ${target} unreachable${suffix}`);
   else console.error(`❌ peerSync: push ${target} rejected with ${reason}${suffix}`);
 }
 
@@ -313,8 +313,9 @@ export async function pushRecordToPeer(sub, options = {}) {
     // never explains. It clears on the next successful push once the peer
     // upgrades (same recovery as the 409 path).
     await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
-    console.warn(
-      `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
+    // Same class as a schema-version refusal: the peer is behind, the block is persisted, and re-tries pause.
+    console.log(
+      `⏸️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
       `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
     );
     return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
@@ -345,8 +346,8 @@ export async function pushRecordToPeer(sub, options = {}) {
         peerPortosVersion: typeof details.receiverPortosVersion === 'string' ? details.receiverPortosVersion : null,
         peerSchemaVersions: isPlainObject(details.receiverSchemaVersions) ? details.receiverSchemaVersions : null,
       });
-      console.warn(
-        `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — peer is on an older PortOS schema. ` +
+      console.log(
+        `⏸️ peerSync: ${peer.name || peer.instanceId} rejected push — peer is on an older PortOS schema. ` +
         `Re-tries will pause until they upgrade. ${formatVersionGap({ ahead: details.ahead || [], behind: details.behind || [] })}`,
       );
       return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };

@@ -32,6 +32,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // reach here.
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cos.js';
+import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderUnavailable } from './providerStatus.js';
 import { resolveProviderBench } from '../lib/providerCooldown.js';
@@ -539,6 +540,13 @@ async function verifyLandedChangeRequest(refs, forge, workspacePath) {
  * every existing caller, persisted payload and test sees exactly what it saw
  * before this indirection existed.
  */
+async function hasUncommittedLockfileDeliverable(task, workspacePath) {
+  if (resolveTaskHookType(task) !== 'dependency-updates') return false;
+  const { readWorktreeStatus, classifyWorktreeDirt } = await import('./worktreeManager.js');
+  const status = await readWorktreeStatus(workspacePath).catch(() => null);
+  return status !== null && classifyWorktreeDirt(status, { preserveLockfiles: true }).hasRealChanges;
+}
+
 function prVerdictFromObservation(observation) {
   const policy = PR_OBSERVATION_POLICY[observation.outcome];
   const verdict = { ok: policy.completionOk };
@@ -646,6 +654,11 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
     // Deliberately gated on an EXPLICIT 0: an unreadable count is not evidence
     // of an empty branch, so it leaves the miss standing.
     const ahead = await countCommitsAhead(workspacePath).catch(() => null);
+    // A dependency-updates run can leave its deliverable (a lockfile-only change)
+    // uncommitted; cleanup preserves it, so the empty branch is not "already current".
+    if (ahead === 0 && await hasUncommittedLockfileDeliverable(task, workspacePath)) {
+      return prObservation(PR_OBSERVATION.MISSING_PR, { branch, commitsAhead: 0, inconclusive: false });
+    }
     if (ahead === 0) return prObservation(PR_OBSERVATION.EMPTY_BRANCH, { branch });
     // The stand-down a parallel claim produces: the branch holds this run's
     // (now redundant) commits, the forge holds no change request for it, and
@@ -778,6 +791,13 @@ ${JSON.stringify({ title: issue.title, body })}`;
 const noFidelityVerdict = (error = null) => ({ verdict: null, review: null, error });
 
 /**
+ * A run the gate declines to grade because a diff cannot answer its objective.
+ * That is the designed outcome, not a reviewer fault, so `skipped` keeps it off
+ * the stderr path a bare `error` takes.
+ */
+const fidelityNotJudged = (reason) => ({ verdict: null, review: null, error: reason, skipped: true });
+
+/**
  * The goal-fidelity answer for a run whose objective is to LAND a change
  * request (`mergeOutcomeObjective`), established from forge state instead of
  * from a model's read of a diff.
@@ -856,7 +876,8 @@ async function hasEmptyDependencyInventories(workspacePath) {
  * no gate: it would convert an ollama restart into a queue of runs marked
  * needs-attention.
  *
- * @returns {Promise<{verdict: string|null, review: Object|null, error: string|null}>}
+ * @returns {Promise<{verdict: string|null, review: Object|null, error: string|null, skipped?: boolean}>}
+ *   `skipped` marks a deliberate decline (see `fidelityNotJudged`); a bare `error` is a fault.
  */
 async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   if (!workspacePath || !task?.id) return noFidelityVerdict();
@@ -902,7 +923,9 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       }
     }
   }
-  if (!objective) return noFidelityVerdict(claimFlow ? 'Claimed issue requirements unavailable; claim workflow is not a code objective.' : null);
+  if (!objective) return claimFlow
+    ? fidelityNotJudged('Claimed issue requirements unavailable; claim workflow is not a code objective.')
+    : noFidelityVerdict();
 
   // Retain the actual compared commits for an investigator on another checkout.
   // Pin before reading the diff so a moving HEAD cannot misattribute the review.
@@ -925,11 +948,11 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   if (!claimFlow && resolveTaskHookType(task) === 'dependency-updates'
       && isDependencyAuditSummaryDiff({ diff, truncated })
       && await hasEmptyDependencyInventories(workspacePath).catch(() => false)) {
-    return noFidelityVerdict('Dependency audit summary is not judgeable from a diff: independent forge queries found no open alerts or PRs, but the diff cannot verify the audit execution or scanner coverage.');
+    return fidelityNotJudged('Dependency audit summary is not judgeable from a diff: independent forge queries found no open alerts or PRs, but the diff cannot verify the audit execution or scanner coverage.');
   }
 
   if (!claimFlow && isForgeRemediationTestFixDiff({ analysisType: resolveTaskHookType(task), diff })) {
-    return noFidelityVerdict('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
+    return fidelityNotJudged('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
   }
 
   const result = await runLocalGoalFidelityReview({
@@ -1764,6 +1787,8 @@ export async function finalizeAgent({
     emitLog(fidelityDowngrade ? 'warn' : 'info', `${goalFidelityLogMarker(fidelity.review)} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
       agentId, taskId: task?.id, verdict: fidelity.verdict
     });
+  } else if (fidelity.skipped) {
+    emitLog('info', `⏭️ Goal-fidelity review skipped for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   } else if (fidelity.error) {
     emitLog('warn', `Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   }
@@ -1895,7 +1920,7 @@ export async function finalizeAgent({
     if (taskUpdate.metadata) delete taskUpdate.metadata.privateSecurityScope;
   }
   const taskResult = await updateTask(task.id, taskUpdate, taskType);
-  if (taskResult?.error) {
+  if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
   }
@@ -2025,6 +2050,27 @@ async function publishAppSnapshotFileAfterAudit(appId) {
   }
 }
 
+// A run is a clean baseline only when it succeeded, recorded its assessment and
+// that assessment verified no material finding (worstSeverity 0) from a real
+// scan; anything else drops the baseline so the next launch runs.
+async function recordInputGateBaseline({ task, taskType, agentId, success, auditAssessment, workspacePath }) {
+  const appId = task?.metadata?.app;
+  const { TASK_INPUT_PATHS } = await import('./taskScheduleRegistry.js');
+  if (!appId || !TASK_INPUT_PATHS[taskType]) return;
+  const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+  const { parseAuditQualityReport } = await import('../lib/auditQuality.js');
+  const path = workspacePath ? doneSentinelPath(workspacePath, agentId) : null;
+  const report = success && auditAssessment.status === 'recorded' && path
+    ? parseAuditQualityReport(parseSentinelPayload(await tryReadFile(path)).summary, taskType) : null;
+  const clean = report?.worstSeverity === 0 && report.scannedFiles > 0;
+  const { readHead } = await import('./taskInputGate.js');
+  const { recordCleanInputBaseline } = await import('./taskSchedule.js');
+  const head = clean ? await readHead(workspacePath) : null;
+  await recordCleanInputBaseline(taskType, appId, head).catch(err => {
+    emitLog('warn', `⚠️ Input-gate baseline was not saved for ${taskType}: ${err.message}`, { taskType, agentId });
+  });
+}
+
 /**
  * Where a hook's `.agent-done` payload may be read from. A live completion falls
  * back to the task's repoPath; a recovery run trusts only the persisted
@@ -2134,6 +2180,8 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
         return { status: 'persistence-failed' };
       });
     const recorded = auditAssessment.status === 'recorded';
+    await recordInputGateBaseline({ task, taskType, agentId, success, auditAssessment, workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
+      .catch(err => emitLog('warn', `⚠️ Input-gate baseline failed for ${agentId}: ${err.message}`, { agentId }));
     // A review-only run must not land a separate snapshot behind the user's back.
     if (!isLegacyDeepAudit(task.metadata) && recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
       await publishAppSnapshotFileAfterAudit(task?.metadata?.app);

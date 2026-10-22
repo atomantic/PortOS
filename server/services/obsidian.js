@@ -202,7 +202,7 @@ export async function detectVaults() {
 async function readNoteContent(fullPath, skipped) {
   return readIfMaterialized(fullPath, { label: 'Obsidian note' }).catch((err) => {
     if (err.code === ICLOUD_NOT_MATERIALIZED) {
-      console.warn(`⚠️ Obsidian note evicted from local storage; skipping: ${fullPath}`);
+      console.log(`☁️ Obsidian note evicted from local storage; skipping: ${fullPath}`);
       if (skipped) skipped.count += 1;
       return null;
     }

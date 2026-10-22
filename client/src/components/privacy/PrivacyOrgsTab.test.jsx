@@ -34,4 +34,19 @@ describe('PrivacyOrgsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Acme Bank')).toBeInTheDocument();
   });
+
+  it('shows a holdings error instead of "No holdings recorded" when a badge read fails, and Retry restores it', async () => {
+    api.getPrivacyOrgs.mockResolvedValue([{ id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active' }]);
+    api.getVaultRecords.mockResolvedValue([]);
+    api.getOrgHoldings.mockRejectedValueOnce(new Error('holdings down'));
+    api.getOrgHoldings.mockResolvedValue([{ vaultRecordId: 'v1', status: 'current' }]);
+    render(<PrivacyOrgsTab subjectId="self" />);
+
+    expect(await screen.findByText(/Could not load holdings/)).toBeInTheDocument();
+    expect(screen.queryByText('No holdings recorded')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/1 current/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load holdings/)).not.toBeInTheDocument();
+  });
 });

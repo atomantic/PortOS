@@ -1,4 +1,7 @@
-vi.mock('./completedCheckoutEvidence.js', () => ({ hasCompletedCheckoutEvidence: vi.fn(async records => records.some(agent => agent.result?.success === true)) }));
+vi.mock('./completedCheckoutEvidence.js', () => ({
+  hasCompletedCheckoutEvidence: vi.fn(async records => records.some(agent => agent.result?.success === true)),
+  readMergedClaimEvidence: vi.fn(async () => null),
+}));
 vi.mock('./branchCompletionPolicy.js', async () => ({
   ...await vi.importActual('./branchCompletionPolicy.js'),
   readBranchCompletionPolicies: vi.fn(async () => (await wt.listWorktrees()).map(tree => ({ id: 'completed-owner', status: 'completed', result: { success: true }, metadata: { sourceWorkspace: '/repo', worktreeBranch: tree.branch?.replace('refs/heads/', '') } }))),
@@ -359,13 +362,35 @@ const mockOwnedClaim = () => execGh.mockImplementation(async (args) => {
 describe('unverified issue reservations in reconcile', () => {
   it('retires the local checkout while leaving possible same-account peer markers untouched before its first commit', async () => {
     mockOwnedClaim();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'github.example.com', fullName: 'example/app' });
     wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
     git.getBranches.mockResolvedValue([]);
     const result = await reconcile('/repo', { forgeAccount: 'app-account' });
+    // Leaving unverified peer markers alone is the designed policy on every local retirement: stdout.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('issue #42 markers untouched'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('markers untouched'));
     expect(result.cleaned).toEqual(['claim/issue-42']);
     expect(result.claimMarkersHeld).toEqual([{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' }]);
-    expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' || args[0] === 'api')).toBe(false);
+    expect(execGh.mock.calls.some(([args]) => args[0] === 'api' || (args[0] === 'issue' && args[1] !== 'view'))).toBe(false);
+  });
+
+  it.each([
+    [{ state: 'CLOSED', labels: [{ name: 'in-progress' }], assignees: [] }, false],
+    [{ state: 'OPEN', labels: [], assignees: [] }, false],
+    [{ state: 'OPEN', labels: [{ name: 'in-progress' }], assignees: [] }, true],
+    [{ state: 'OPEN', labels: [], assignees: [{ login: 'example-peer' }] }, true],
+    [{ state: 'OPEN' }, true],
+  ])('reads the issue to settle a reservation nobody holds: %j', async (view, held) => {
+    execGh.mockImplementation(async (args) => args[0] === 'issue' ? JSON.stringify(view) : '[]');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'github.com', fullName: 'example/app' });
+    wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
+    git.getBranches.mockResolvedValue([]);
+    const result = await reconcile('/repo');
+    expect(result.claimMarkersHeld.map(hold => hold.issue)).toEqual(held ? [42] : []);
+    expect(execGh.mock.calls.filter(([args]) => args[0] === 'issue').map(([args]) => args.slice(0, 2))).toEqual([['issue', 'view']]);
   });
 
   it('reports unverified reservations separately even when the forge is unavailable', async () => {
@@ -1235,6 +1260,42 @@ describe('reconcile', () => {
     // not "waiting on a protected worktree".
     expect(describeIdleReconcilePark(res.skipped, res.wip).reason).toBe('no-in-flight-branches');
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-4348', expect.any(Object));
+  });
+
+  // A reused claim branch, or a checkout left behind while the branch shipped
+  // from another checkout, has no merged PR at its exact head. Merge evidence
+  // plus a forge read with no open PR and an idle checkout proves it finished.
+  it.each([
+    ['idle with no open PR', {}, true],
+    ['an open PR', { openPr: true }, false],
+    ['recent checkout activity', { mtime: Date.now() - 60 * 1000 }, false],
+    ['an unreadable checkout', { gitDir: '' }, false],
+  ])('retires a merged manual claim with no exact-head PR only when idle: %s', async (_label, { openPr = false, mtime = Date.now() - 4 * 60 * 60 * 1000, gitDir = '/repo/.git/worktrees/claim-issue-4348' }, cleaned) => {
+    hasCompletedCheckoutEvidence.mockResolvedValue(false);
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-4348', isDefault: false, current: false, tracking: '', merged: true }
+    ]);
+    wt.listWorktrees.mockResolvedValue([
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-4348', branch: 'refs/heads/claim/issue-4348' }
+    ]);
+    execGh.mockResolvedValue(openPr
+      ? JSON.stringify([{ number: 7, headRefName: 'claim/issue-4348', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }])
+      : '[]');
+    execGit.mockImplementation(async (args) => pinnedRef(args) ? { stdout: RETIRE_HEAD, exitCode: 0 }
+      : args[0] === 'rev-parse' && args[1] === '--absolute-git-dir' ? { stdout: gitDir, exitCode: 0 }
+      : args[0] === 'ls-remote' ? { stdout: 'abc123\trefs/heads/main\n', exitCode: 0 }
+      : { stdout: '', exitCode: 0 });
+    worktreeMtimeMs = mtime;
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+
+    const res = await reconcile('/repo');
+    if (cleaned) {
+      expect(res.cleaned).toEqual(['claim/issue-4348']);
+      expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-4348', expect.any(Object));
+    } else {
+      expect(res.cleaned).toEqual([]);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    }
   });
 
   // The fail-safe half of the same signal: "we could not read origin" must never

@@ -33,7 +33,7 @@ import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js'
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { issueNumberFromRef } from './issueReconcile.js';
-import { forgeDispatchLabels } from '../lib/dispatchLabels.js';
+import { forgeDispatchLabels, IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -298,7 +298,7 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
   const raw = await execGh([
     'pr', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
-    '--json', 'number,headRefName,mergeable,isDraft,url'
+    '--json', 'number,headRefName,headRefOid,mergeable,isDraft,url'
   ], undefined, { cwd, env, backoffKey: repoSpec }).catch((err) => {
     if (isForgeNoAccessError(err)) {
       // Permanent until credentials change — one actionable line naming the
@@ -322,7 +322,8 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
         number: pr.number,
         mergeable: pr.mergeable || 'UNKNOWN',
         isDraft: pr.isDraft === true,
-        url: pr.url || ''
+        url: pr.url || '',
+        headRefOid: typeof pr.headRefOid === 'string' ? pr.headRefOid : null
       });
     }
   }
@@ -1099,15 +1100,33 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
 // A local checkout can be retired without owning the global issue reservation.
 // Peer installs share a forge login, and a peer may reserve before its first
 // commit/push. Neither that login nor an absent remote branch proves release
-// authority. Leave issue markers untouched and report their unverified state.
-async function retainedClaimMarkers(repoPath, branch, { origin } = {}) {
+// authority, so markers are never written here. A read that shows no
+// reservation to own (a closed issue, or an open one with no claim label and
+// no assignee) settles the report; anything else stays a visible hold.
+async function retainedClaimMarkers(repoPath, branch, { origin, forgeExec = null } = {}) {
   const issue = /^claim\/issue-([1-9]\d*)$/.exec(branch)?.[1];
   if (!issue) return null;
   const target = origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : origin;
   if (target && !githubRepoSpec(target)) return null;
+  if (await claimIssueUnreserved(target, issue, forgeExec)) {
+    console.log(`⏭️ branch-reconcile: issue #${issue} has no reservation left; markers untouched`);
+    return null;
+  }
   const hold = { branch, issue: Number(issue), reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' };
-  console.warn(`🔒 branch-reconcile: issue #${issue} markers untouched; reservation owner/state unverified`);
+  console.log(`🔒 branch-reconcile: issue #${issue} markers untouched; reservation owner/state unverified`);
   return hold;
+}
+
+/** True only on a parsed forge answer; an unreadable issue keeps the hold. */
+async function claimIssueUnreserved(target, issue, forgeExec) {
+  const repoSpec = githubRepoSpec(target);
+  if (!repoSpec || !forgeExec) return false;
+  const raw = await execGh(['issue', 'view', issue, '--repo', repoSpec, '--json', 'state,labels,assignees'],
+    undefined, { cwd: forgeExec.cwd, env: forgeExec.env }).catch(() => null);
+  const view = safeJSONParse(raw, null);
+  if (!view || !Array.isArray(view.labels) || !Array.isArray(view.assignees)) return false;
+  if (view.state === 'CLOSED') return true;
+  return view.state === 'OPEN' && view.assignees.length === 0 && !view.labels.some(label => label?.name === IN_PROGRESS_LABEL);
 }
 
 /**
@@ -1117,7 +1136,11 @@ async function retainedClaimMarkers(repoPath, branch, { origin } = {}) {
  *   2. the branch's worktree (if any) has no real uncommitted changes.
  *   3. that worktree (if any) lives in a managed root and is unlocked.
  *   4. fresh ownership and completion policy permit retirement under the claim
- *      binding lock; manual claims have an exact successful checkout receipt.
+ *      binding lock; a claim checkout has an exact successful run receipt, or
+ *      the forge reports its exact head merged and it has idled past
+ *      SHIPPED_CLAIM_IDLE_MS, or (no PR at that head) the forge reports no open
+ *      PR for the branch and the checkout has been untouched that long (see
+ *      manualClaimShippedHold).
  *   5. recovery archives verify before removal and exact-head ref deletion.
  * A failed gate skips the branch with a reason. Age, an absent upstream, and
  * a cached merged flag never substitute for successful completion evidence.
@@ -1146,6 +1169,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       claimOwners,
       mergedRetirement: true,
       mergeTarget: defaultBranch,
+      forgeAccount,
       label: `🔀 branch-reconcile: remove worktree for ${b.branch}`,
     });
     if (!retired.ok) {
@@ -1153,7 +1177,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       skipped.push({ branch: b.branch, ...(b.worktreePath && { path: b.worktreePath }), ...failure });
       continue;
     }
-    const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin });
+    const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin, forgeExec });
     if (markerHold) claimMarkersHeld.push(markerHold);
     cleaned.push(b.branch);
   }
@@ -1347,7 +1371,7 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -1358,6 +1382,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
   const policyHold = await readPolicyHold();
   if (policyHold) return stop({ ok: false, reason: policyHold });
   let archiveTree = null;
+  let claimCompletion = null;
   const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
   if (mergedRetirement) {
@@ -1403,25 +1428,73 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
       const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
       const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
       // Registry absence cannot prove a manual CLI or external task finished.
-      // Require a recorded completed owner before waiving its claim hold.
+      // Waive the claim hold only on a recorded completed owner or, for a
+      // manual session that records none, the forge's merged exact head (or,
+      // with no PR at that head, a forge-confirmed idle checkout).
       const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
-      const completed = records && await hasCompletedCheckoutEvidence(records, {
+      if (!records) return stop({ ok: false, reason: 'claim-ownership-unreadable' });
+      if (await hasCompletedCheckoutEvidence(records, {
         repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
-      });
-      if (!completed) return stop({ ok: false, reason: records ? 'claim-completion-unverified' : 'claim-ownership-unreadable' });
+      })) claimCompletion = 'receipt';
+      else {
+        const hold = await manualClaimShippedHold(repoPath, b, expectedHead, forgeAccount);
+        if (hold) return stop(hold);
+        // Removal re-proves merge evidence, and the archive's byte check
+        // refuses a checkout that changed after this admission.
+        claimCompletion = 'forge-merged';
+      }
     }
     const tree = (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
     if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
     archiveTree = tree;
   }
-  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement };
+  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement, claimCompletion };
+}
+
+/**
+ * Why a merged manual `claim-*` checkout without a run receipt is still held, or
+ * null once the forge proves it shipped (#12849). A manual /claim session never
+ * records the receipt a CoS claim run does, so without this its checkouts were
+ * held forever. The forge must report a merged PR whose head is exactly
+ * `head`; the clean-tree, lock, owner and merge gates have already run. What
+ * neither proof shows is a session still tearing down, so SHIPPED_CLAIM_IDLE_MS
+ * must have passed since the checkout was created AND since the merge.
+ */
+async function manualClaimShippedHold(repoPath, b, head, forgeAccount) {
+  // No retryAt: the idle window is not the only gate, so no clock lifts this.
+  const unverified = { ok: false, reason: 'claim-completion-unverified' };
+  if (!Number.isFinite(b.worktreeAgeMs) || b.worktreeAgeMs < SHIPPED_CLAIM_IDLE_MS) return unverified;
+  const { readMergedClaimEvidence } = await import('./completedCheckoutEvidence.js');
+  const merged = await readMergedClaimEvidence({ repoPath, branch: b.branch, head, forgeAccount }).catch(() => null);
+  if (merged) return Date.now() - Date.parse(merged.mergedAt) < SHIPPED_CLAIM_IDLE_MS ? unverified : null;
+  // A reused claim branch, or a checkout left behind while the branch shipped
+  // from elsewhere, has no PR at its exact head. Its head is already on the
+  // default branch (re-proven by the caller), so the remaining question is
+  // whether a session is still live: no open PR for the branch on a forge read
+  // this cycle, and no checkout activity (directory, index, HEAD log) for the
+  // idle window. A session tearing down or waiting on CI fails one of those.
+  // Only a GitHub origin's PR read is evidence: elsewhere "no open PR" is the default, not an answer.
+  if (b.openPr !== null || b.prStateUnavailable !== false) return unverified;
+  if (!githubRepoSpec(await getOriginInfo(repoPath).catch(() => null))) return unverified;
+  const idle = await checkoutIdleMs(b.worktreePath);
+  return Number.isFinite(idle) && idle >= SHIPPED_CLAIM_IDLE_MS ? null : unverified;
+}
+
+/** Time since the checkout last changed: its directory, index or HEAD log. Null when unreadable. */
+export async function checkoutIdleMs(worktreePath) {
+  const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], worktreePath).catch(() => null))?.stdout?.trim();
+  if (!gitDir) return null;
+  const stamps = await Promise.all([worktreePath, join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]
+    .map(path => stat(path).then(st => st.mtimeMs, error => (error.code === 'ENOENT' ? 0 : null))));
+  if (stamps.some(stamp => stamp === null)) return null;
+  return Math.max(0, Date.now() - Math.max(...stamps));
 }
 
 /**
  * Removal and branch deletion. `preservation` is the archive and `prepared` the
  * `prepare` backup, each taken after admission with the ownership lock released.
  */
-async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement }, { prepared = null, preservation = null } = {}) {
+async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion }, { prepared = null, preservation = null } = {}) {
   if (b.worktreePath) {
     const verifyRemoval = async (holder) => {
       if (!holder || holder.branch !== `refs/heads/${b.branch}` || holder.head !== expectedHead) return 'worktree-holder-changed';
@@ -1432,7 +1505,9 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       }
       const policyHold = await readPolicyHold();
       if (policyHold) return policyHold;
-      if (mergedRetirement && isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
+      // A forge-merged exact head cannot un-merge, and the holder check above
+      // pins that head; only a run receipt can be superseded by a later owner.
+      if (mergedRetirement && isHumanClaimWorktree(worktreeAgentId(b.worktreePath)) && claimCompletion !== 'forge-merged') {
         const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
         const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
         const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
@@ -1703,22 +1778,27 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     ? await resolveForgeExecOptions(repoPath, { forgeAccount })
     : null;
   // The early reaper may have deleted the branch before gather can see it.
-  // Report their global reservation separately, including during forge outages.
-  const claimMarkersHeld = [];
-  for (const entry of worktreeCleanup.reaped || []) {
-    if (!entry?.branchDeleted) continue;
-    const markerHold = await retainedClaimMarkers(repoPath, entry.branch, { origin });
-    if (markerHold) claimMarkersHeld.push(markerHold);
-  }
+  // Report their global reservation separately, including during forge outages
+  // (no issue read then, so each stays held).
+  const readEarlyMarkerHolds = async (markerForge) => {
+    const holds = [];
+    for (const entry of worktreeCleanup.reaped || []) {
+      if (!entry?.branchDeleted) continue;
+      const markerHold = await retainedClaimMarkers(repoPath, entry.branch, { origin, forgeExec: markerForge });
+      if (markerHold) holds.push(markerHold);
+    }
+    return holds;
+  };
   if (forgeExec) {
     const forge = await ensureForgeReachable('branch-reconcile', {
       hostname: githubApiHost(origin.host),
       ...(forgeExec?.customEnv ? { env: forgeExec.customEnv } : {}),
     });
     if (!forge.ok) {
-      return { defaultBranch: null, cleaned: cleanedWorktrees, inFlight: [], wip: [], skipped: [], claimMarkersHeld, forgeUnavailable: true, forgeStatus: forge.status };
+      return { defaultBranch: null, cleaned: cleanedWorktrees, inFlight: [], wip: [], skipped: [], claimMarkersHeld: await readEarlyMarkerHolds(null), forgeUnavailable: true, forgeStatus: forge.status };
     }
   }
+  const claimMarkersHeld = await readEarlyMarkerHolds(forgeExec);
 
   const defaultBranch = await getDefaultBranch(repoPath).catch(() => 'main') || 'main';
   // The gather needs origin's branch list to tell a shipped claim from a live

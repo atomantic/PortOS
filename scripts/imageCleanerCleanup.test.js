@@ -1,16 +1,23 @@
-import { expect, it } from 'vitest';
+import { afterAll, expect, it as vitestIt } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ownTestBodies } from '../server/lib/mockPathsDataRoot.js';
 import { createVitestTempFixture, fixtureReadyFailureSource, runFixtureToCompletion } from './lib/vitestTempRootFixture.js';
 
 // The nested run's own ceiling; the outer budget adds headroom so it is never tighter.
 const RUN_CEILING_MS = 120000;
 
+// A fail-fast failure in another file cancels this body while it awaits the nested
+// run; own it so teardown waits for its `finally` to remove the host (#12924).
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+afterAll(() => owned.drain());
+
 // Hold the real clean route at its first publication write, then let a different
 // worker cancel the test. Its body must finish before its gallery is removed.
-it('drains the image cleaner request before removing its cancelled fixture', async () => {
+it('drains the image cleaner request before removing its cancelled fixture', async ({ signal }) => {
   const host = mkdtempSync(join(tmpdir(), 'image-clean-cancel-'));
   try {
     const fixtureRun = createVitestTempFixture(host, 'server', '');
@@ -69,7 +76,8 @@ it('drains the image cleaner request before removing its cancelled fixture', asy
     args[args.indexOf('--maxWorkers') + 1] = '2';
     args.push('--bail=1', '--reporter=default', '--reporter=json', '--outputFile.json', resultsFile,
       '--reporter=junit', '--outputFile.junit', junitFile);
-    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS);
+    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS, { signal });
+    if (signal.aborted) return;
     const output = `${result.stdout}\n${result.stderr}`;
     expect(result.error, output).toBeUndefined();
     expect(result.status, output).toBe(1);

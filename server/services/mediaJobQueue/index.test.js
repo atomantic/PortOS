@@ -3700,6 +3700,8 @@ describe('pending-job ceiling', () => {
 
   it('admits exactly the ceiling under concurrent submission and refuses the next without touching state', async () => {
     const { MAX_PENDING_MEDIA_JOBS } = mediaJobQueue;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     // A running job holds the only GPU slot, so everything below waits.
     const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'running' } });
     await waitFor(() => mediaJobQueue.getJob(blocker.jobId)?.status === 'running');
@@ -3710,6 +3712,9 @@ describe('pending-job ceiling', () => {
       (_, i) => mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: `wait-${i}` } })));
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(MAX_PENDING_MEDIA_JOBS);
     expect(results.filter((r) => r.status === 'rejected').map((r) => r.reason)).toEqual([expect.objectContaining(queueFull)]);
+    // The refused submission is backpressure answering the caller (429), not a fault: stdout, never stderr.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('media queue full'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('media queue full'));
     expect(waiting()).toBe(MAX_PENDING_MEDIA_JOBS);
     await flush();
 
@@ -3964,6 +3969,29 @@ describe('backup snapshot admission for media completion', () => {
     await waitFor(() => mediaJobQueue.getJob(jobId).status === 'completed');
     await waitFor(() => rows.has(jobId));
     expect(capture(jobId)).toEqual({ files: [`${jobId}.mp4`], queueStatus: 'completed', rows: new Map([[jobId, `${jobId}.mp4`]]) });
+  });
+
+  it('says why a finished render waits while the backup cut holds admission, without alarming stderr', async () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let release;
+    try {
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'synthetic' } });
+      await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenCalledTimes(1));
+      await flush();
+      release = await boundary.acquireBackupSnapshotCut();
+      renderFinishes(jobId);
+      // One notice interval: the hold repeats its reason every minute while the cut is open.
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('media-job completion waiting for the backup to finish'));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('waiting for the backup'));
+    } finally {
+      release?.();
+      await flush();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it('releases a finished provider lane after admission times out and recovers its pending result', async () => {
@@ -4304,6 +4332,8 @@ describe('provider quota cooldowns', () => {
   // empty. Re-importing here would reset modules mid-setup.
 
   it('holds a later render for the same backend instead of dispatching it into the same 429', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
     const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
     await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
@@ -4318,6 +4348,9 @@ describe('provider quota cooldowns', () => {
     expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
     expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
     expect(mediaJobQueue.getJob(second.jobId).statusMsg).toMatch(/resumes at /);
+    // Holding for the provider's quota window is the designed handling: stdout, not stderr.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('codex quota exhausted — holding queued codex renders'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('quota exhausted'));
   });
 
   it('keeps one hold message for the window, then promotes the job without it once the reset passes', async () => {

@@ -23,6 +23,15 @@ function startsRegex(source, at) {
   return before === '' || /[(,=:[!&|?{};>]$/.test(before) || /\breturn$/.test(before);
 }
 
+/**
+ * A quote glued to the end of an identifier cannot open a string literal, so it
+ * is JSX text or prose (`scene's`, `the default's`), not code. Minified `return'x'` is
+ * an accepted blind spot; formatted source puts a space before the quote.
+ */
+function isTextApostrophe(source, at) {
+  return /[\p{L}\p{N}_$]/u.test(source[at - 1] ?? '');
+}
+
 /** Blank comments and string/template text (keeping `${}` code), preserving offsets. */
 export function mask(source) {
   const out = source.split('');
@@ -58,7 +67,7 @@ export function mask(source) {
         }
         blank(i + 1, j);
         i = j + 1;
-      } else if (ch === '\'' || ch === '"') {
+      } else if ((ch === '\'' || ch === '"') && !isTextApostrophe(source, i)) {
         let j = i + 1;
         while (j < source.length && source[j] !== ch) j += source[j] === '\\' ? 2 : 1;
         blank(i + 1, j);

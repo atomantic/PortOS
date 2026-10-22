@@ -282,6 +282,8 @@ describe.skipIf(process.platform === 'win32')('XDG trash adapter', () => {
 
     it('falls back to .Trash-<uid> when the sticky shared .Trash cannot hold a per-user directory', async ({ skip }) => {
       if (!otherRoot) skip();
+      // Root bypasses the mode bits that make the shared .Trash unusable, so the adapter correctly uses .Trash/0.
+      if (process.getuid() === 0) skip('root writes through a 0o1500 .Trash; the fallback cannot be produced');
       const uid = process.getuid();
       const shared = join(other, '.Trash');
       if (await exists(shared)) skip();

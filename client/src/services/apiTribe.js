@@ -42,8 +42,8 @@ export const updateTribePerson = (id, data, options = {}) => request(`/tribe/peo
 
 export const deleteTribePerson = (id, options = {}) => request(`/tribe/people/${id}`, { method: 'DELETE', ...options });
 
-export const getTribeTouchpoints = (personId, limit = 50) =>
-  request(`/tribe/people/${personId}/touchpoints?limit=${limit}`);
+export const getTribeTouchpoints = (personId, limit = 50, options = {}) =>
+  request(`/tribe/people/${personId}/touchpoints?limit=${limit}`, options);
 
 export const createTribeTouchpoint = (personId, data = {}, options = {}) => request(`/tribe/people/${personId}/touchpoints`, {
   method: 'POST',

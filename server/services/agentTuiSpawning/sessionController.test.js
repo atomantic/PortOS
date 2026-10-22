@@ -176,6 +176,26 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining(`${label} drain failed`), { agentId: 'agent-8021' });
   });
 
+  it('holds error analysis and completion until the raw PTY spool drain settles', async () => {
+    let releaseDrain;
+    const drainRaw = vi.fn(() => new Promise((resolve) => { releaseDrain = resolve; }));
+    const { controller, finalizeAgent, resolveErrorAnalysis } = makeController({ spoolerOverrides: { drainRaw } });
+
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    const exited = controller.handleExit({ exitCode: 0, killed: false });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // completeAgent (inside finalizeAgent) archives the run directory; it must
+    // not start while raw.txt still has queued bytes.
+    expect(drainRaw).toHaveBeenCalledTimes(1);
+    expect(resolveErrorAnalysis).not.toHaveBeenCalled();
+    expect(finalizeAgent).not.toHaveBeenCalled();
+
+    releaseDrain();
+    await exited;
+    expect(finalizeAgent).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the run alive when a completion sentinel read fails, then retries it', async () => {
     let reads = 0;
     const { controller, closers, finalizeAgent, watch } = makeController({

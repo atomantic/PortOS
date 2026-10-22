@@ -15,7 +15,7 @@ import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.
 import { runGoalCheckIn } from '../goalCheckIn.js'
 import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
 import { getActiveAgentIds } from '../agentState.js'
-import { sweepStaleDoneSentinels } from '../agentSentinelSweep.js'
+import { sweepStaleDoneSentinels, checkoutDirsOf } from '../agentSentinelSweep.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
 import { runBrainParitySweep } from './brainParitySweep.js'
 
@@ -25,6 +25,16 @@ import { runBrainParitySweep } from './brainParitySweep.js'
 async function eidoverseProjection(options = {}) {
   const { projectEidoverseWorld } = await import('../eidoverseWorld.js')
   return projectEidoverseWorld({ ...options, compact: true })
+}
+
+// Loaded lazily: the inbox pulls in Postgres and the gh client, which this
+// registry must not load at import time. Deterministic, no provider call.
+async function githubNotificationsCheck() {
+  const { describeScheduledCheck, runScheduledNotificationCheck } = await import('../githubNotifications.js')
+  const results = await runScheduledNotificationCheck()
+  const summary = describeScheduledCheck(results)
+  console.log(`📬 GitHub notifications check: ${summary}`)
+  return { summary, accounts: results.length }
 }
 
 /**
@@ -124,7 +134,9 @@ async function agentDataCleanup() {
   // Worktree-less agents run in a REAL checkout — this repo, or a managed app's
   // own repo — so a sentinel their cleanup never reached sits there as untracked
   // dirt in the user's git status forever. Sweep every workspace they can land
-  // in; a worktree-backed sentinel is already carried off with its worktree.
+  // in, and every linked worktree of those repos: a worktree-backed sentinel is
+  // carried off with its worktree only once that worktree is removed, and the
+  // sentinel itself is what keeps a preserved one from being removed.
   // Lazy, like `eidoverseProjection` above: `apps.js` drags the PM2/status
   // subtree into this registry's static graph, and this job only needs the list
   // of repo paths (see the import-budget guard in lib/importScoping.test.js).
@@ -136,7 +148,7 @@ async function agentDataCleanup() {
   // the in-memory map, which is EMPTY after a restart — sweeping on that would
   // delete the resume signal of every paused and interrupted run.
   const sentinelsRemoved = await sweepStaleDoneSentinels(
-    [PATHS.root, ...apps.map(app => app?.repoPath)],
+    await checkoutDirsOf([PATHS.root, ...apps.map(app => app?.repoPath)]),
     storedStatuses ? unfinishedIds : null
   ).catch((err) => {
     console.warn(`⚠️ Stale sentinel sweep failed: ${err.message}`)
@@ -215,7 +227,8 @@ const SCRIPT_HANDLERS = {
   // record-level divergence the cursor-based sync cycle cannot see. Default
   // job ships disabled — deterministic, no LLM calls.
   'brain-parity-sweep': runBrainParitySweep,
-  'eidoverse-projection': eidoverseProjection
+  'eidoverse-projection': eidoverseProjection,
+  'github-notifications': githubNotificationsCheck
   // 'layered-intelligence' retired here (#2322): LI is now a per-app scheduled
   // task, not a global autonomous-job sweep. It runs as a normal reasoning agent
   // with programmatic-I/O hooks — see taskTypeHooks.js +

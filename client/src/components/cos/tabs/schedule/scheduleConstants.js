@@ -178,6 +178,7 @@ export const TASK_READINESS_REASON_RENDERING = Object.freeze({
   [TASK_READINESS_REASON.CRON_COOLDOWN]: 'cadence',
   [TASK_READINESS_REASON.FAILURE_COOLDOWN]: 'cadence',
   [TASK_READINESS_REASON.WAITING_ON_DEPENDENCIES]: 'waiting',
+  [TASK_READINESS_REASON.INPUTS_UNCHANGED]: 'cadence',
 });
 
 // Classify a task config into one status group (mutually exclusive).

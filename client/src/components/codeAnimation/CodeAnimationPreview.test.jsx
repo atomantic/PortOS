@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -36,12 +36,14 @@ const socket = vi.hoisted(() => {
 vi.mock('../../services/socket', () => ({ default: socket }));
 vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn(), exportCodeAnimation: vi.fn(), cancelCodeAnimationExport: vi.fn(), getCodeAnimationPackage: vi.fn(), getCodeAnimationThreeVendor: vi.fn() }));
 vi.mock('../../lib/downloadBlob', () => ({ downloadBlob: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
 vi.mock('../../hooks/useSseProgress', () => ({ useSseProgress: vi.fn(() => ({ latest: null })) }));
 
 import CodeAnimationPreview, { prepareAnimationHtml } from './CodeAnimationPreview';
 import { exportCodeAnimation, getCodeAnimationPackage, getCodeAnimationThreeVendor } from '../../services/api';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { useSseProgress } from '../../hooks/useSseProgress';
+import toast from '../ui/Toast';
 
 const MESSAGES = { ready: 'ca:ready', record: 'ca:record', recorded: 'ca:recorded', progress: 'ca:progress', error: 'ca:error' };
 const HTML = '<!DOCTYPE html><html><head><title>x</title></head><body><canvas></canvas></body></html>';
@@ -139,7 +141,7 @@ describe('CodeAnimationPreview', () => {
     expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(1);
     act(() => {
       for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
-        fn({ requestId: oldOpen.requestId, sessionId: socket.__sessions.get(oldOpen.requestId), index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
+        fn({ requestId: oldOpen.requestId, sessionId: socket.__sessions.get(oldOpen.requestId), status: 'saved', video: { id: 'upload-1', filename: 'upload-1.mp4', url: '/data/videos/upload-1.mp4' } });
       }
     });
     expect(screen.queryByLabelText('Recorded animation')).not.toBeInTheDocument();
@@ -222,23 +224,50 @@ describe('CodeAnimationPreview', () => {
 
     await user.click(screen.getByRole('button', { name: /record \(real-time\)/i }));
     expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({
-      action: 'record', message: { type: MESSAGES.record },
+      action: 'record', message: { type: MESSAGES.record }, title: 'Lantern',
     }));
 
     await act(async () => {
       for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
-        fn({ requestId: 'other', sessionId: 'other', index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
+        fn({ requestId: 'other', sessionId: 'other', status: 'saved', video: { id: 'x', filename: 'x.mp4', url: '/data/videos/x.mp4' } });
       }
     });
     expect(screen.queryByLabelText('Recorded animation')).not.toBeInTheDocument();
 
     await act(async () => {
       for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
-        fn({ requestId: open.requestId, sessionId: socket.__sessions.get(open.requestId), index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
+        fn({ requestId: open.requestId, sessionId: socket.__sessions.get(open.requestId), status: 'saving' });
       }
     });
-    expect(screen.getByLabelText('Recorded animation')).toHaveAttribute('src', 'blob:recorded');
-    expect(screen.getByRole('button', { name: /save to media history/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /saving mp4/i })).toBeDisabled();
+
+    await act(async () => {
+      for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
+        fn({ requestId: open.requestId, sessionId: socket.__sessions.get(open.requestId), status: 'saved', video: { id: 'upload-1', filename: 'upload-1.mp4', url: '/data/videos/upload-1.mp4' } });
+      }
+    });
+    expect(screen.getByLabelText('Recorded animation')).toHaveAttribute('src', '/data/videos/upload-1.mp4');
+    const download = screen.getByRole('link', { name: /download mp4/i });
+    expect(download).toHaveAttribute('href', '/data/videos/upload-1.mp4');
+    expect(download).toHaveAttribute('download', 'lantern.mp4');
+    expect(screen.getByRole('link', { name: /saved to media history/i })).toHaveAttribute('href', '/media/history');
+    expect(screen.getByRole('button', { name: /record \(real-time\)/i })).toBeEnabled();
+  });
+
+  it('reports a recording that could not be saved and lets the user record again', async () => {
+    const user = userEvent.setup();
+    renderPreview();
+    await screen.findByTitle('Code animation preview');
+    const open = previewOpens().at(-1)[1];
+    await user.click(screen.getByRole('button', { name: /record \(real-time\)/i }));
+    await act(async () => {
+      for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
+        fn({ requestId: open.requestId, sessionId: socket.__sessions.get(open.requestId), status: 'failed', message: 'The recording is too large to save.' });
+      }
+    });
+    expect(toast.error).toHaveBeenCalledWith('The recording is too large to save.');
+    expect(screen.queryByLabelText('Recorded animation')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /record \(real-time\)/i })).toBeEnabled();
   });
 
   it('does not read the selected audio until the user allows the isolated preview to use it', async () => {
@@ -274,6 +303,73 @@ describe('CodeAnimationPreview', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(previewOpens().at(-1)[1].withAudio).toBe(false);
     expect(previewOpens().at(-1)[1].audioUrl).toBeUndefined();
+  });
+});
+
+describe('CodeAnimationPreview playhead', () => {
+  beforeEach(() => {
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:frame');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    socket.emit.mockReset();
+    socket.emit.mockImplementation(socket.reply);
+    socket.__handlers.clear();
+    socket.__sessions.clear();
+    socket.connected = true;
+    localStorage.clear();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const seeks = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:seek').map(([, payload]) => payload);
+
+  it('holds the film at the playhead, scrubs it, and plays the soundtrack here in sync', async () => {
+    const user = userEvent.setup();
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    renderPreview({ audioUrl: '/data/music/take.wav', jobId: '00000000-0000-4000-8000-000000000009' });
+    await user.click(screen.getByRole('button', { name: 'Preview without audio' }));
+    // The session opens on the film's own loop; the player takes it over at 0.
+    await waitFor(() => expect(seeks().at(-1)).toMatchObject({ t: 0, playing: false }));
+    expect(screen.getByText(/0\.00s \/ 5\.00s · f0/)).toBeTruthy();
+
+    const scrub = screen.getByLabelText('Playhead');
+    fireEvent.change(scrub, { target: { value: '2.5' } });
+    await waitFor(() => expect(seeks().at(-1)).toMatchObject({ t: 2.5, playing: false }));
+    expect(screen.getByText(/2\.50s \/ 5\.00s · f60/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Mute' }));
+    expect(JSON.parse(localStorage.getItem('portos.codeAnimation.previewAudio'))).toMatchObject({ muted: true });
+    await user.click(screen.getByRole('button', { name: 'Play' }));
+    expect(play).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(screen.getByRole('button', { name: 'Play' })).toBeTruthy();
+  });
+
+  it('leaves the film its own clock while recording, then holds it at the playhead again', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    renderPreview({ audioUrl: '/data/music/take.wav' });
+    await user.click(screen.getByRole('button', { name: 'Preview without audio' }));
+    await waitFor(() => expect(seeks().at(-1)).toMatchObject({ t: 0, playing: false }));
+    const open = previewOpens().at(-1)[1];
+    const sessionId = socket.__sessions.get(open.requestId);
+    fireEvent.change(screen.getByLabelText('Playhead'), { target: { value: '2.5' } });
+    await user.click(screen.getByRole('button', { name: 'Play' }));
+
+    await user.click(screen.getByRole('button', { name: /record \(real-time\)/i }));
+    const recordAt = socket.emit.mock.calls.findIndex(([event, payload]) => event === 'generated-preview:command' && payload.action === 'record');
+    expect(recordAt).toBeGreaterThan(-1);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled());
+    expect(socket.emit.mock.calls.slice(recordAt).some(([event]) => event === 'generated-preview:seek')).toBe(false);
+
+    await act(async () => {
+      for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
+        fn({ requestId: open.requestId, sessionId, status: 'saved', video: { id: 'upload-1', filename: 'upload-1.mp4', url: '/data/videos/upload-1.mp4' } });
+      }
+    });
+    await waitFor(() => expect(socket.emit.mock.calls.slice(recordAt).some(([event, payload]) => event === 'generated-preview:seek' && payload.playing === false)).toBe(true));
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
   });
 });
 

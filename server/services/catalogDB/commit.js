@@ -12,6 +12,7 @@ import { catalogScrapCommitSchema } from '../../lib/catalogValidation.js';
 import { query, withTransaction } from '../../lib/db.js';
 import { createIngredient } from './ingredients.js';
 import { linkIngredientToSource, linkIngredientToRef, linkIngredientRelation, universeRefRoleForType } from './refs.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 // Legacy same-batch `related-to` edges connect a single scrap's extractions into one
 // cluster instead of N isolated nodes (#7615). Bounded: a batch above this
@@ -125,7 +126,7 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
     if (operationKey) {
       await client.query(
         'UPDATE catalog_commit_receipts SET ingredients = $2::jsonb WHERE operation_key = $1',
-        [operationKey, JSON.stringify(created)],
+        [operationKey, toPgJson(created)],
       );
     }
     return created;

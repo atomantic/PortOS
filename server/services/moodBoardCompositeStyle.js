@@ -14,16 +14,19 @@ import { isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, runPromptThroughProvider } from './promptRunner.js';
 import { trimTo } from '../lib/textUtils.js';
-import { collectBoardStyleContext } from './moodBoard/styleContext.js';
+import { collectBoardStyleContext, moodBoardItemCaption } from './moodBoard/styleContext.js';
 
 const PROMPT_MAX = 8000;
 const REASON_MAX = 1200;
 
+// An imported pin's caption is someone else's text, so it never counts.
+const hasItemPrompt = (it) => Boolean((it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim())
+  || (typeof it?.prompt === 'string' && it.prompt.trim())
+  || moodBoardItemCaption(it));
+
 function analyzedItems(board) {
   const items = Array.isArray(board?.items) ? board.items : [];
-  return items.filter((it) => (it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim())
-    || (typeof it?.prompt === 'string' && it.prompt.trim())
-    || (typeof it?.caption === 'string' && it.caption.trim()));
+  return items.filter(hasItemPrompt);
 }
 
 // Analyses/captions first so the context budget spends itself on decomposed prompts
@@ -33,10 +36,7 @@ function withAnalysesFirst(board) {
   const analyzed = [];
   const rest = [];
   for (const it of items) {
-    const hasPrompt = (it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim())
-      || (typeof it?.prompt === 'string' && it.prompt.trim())
-      || (typeof it?.caption === 'string' && it.caption.trim());
-    if (hasPrompt) analyzed.push(it);
+    if (hasItemPrompt(it)) analyzed.push(it);
     else rest.push(it);
   }
   return { ...board, items: [...analyzed, ...rest] };

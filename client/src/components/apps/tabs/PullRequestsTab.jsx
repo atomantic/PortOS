@@ -87,7 +87,7 @@ const ACTION_KINDS = {
       && Number(task.metadata?.reviewLoopPRNumber) === number,
   },
   review: {
-    label: 'PR review',
+    label: 'Untrusted:Review',
     verb: 'run the pr-reviewer task against',
     Icon: ScanSearch,
     field: 'reviewAction',
@@ -345,7 +345,7 @@ export default function PullRequestsTab({ appId, appName }) {
   const [mergeMethod, setMergeMethod] = useState(DEFAULT_MERGE_METHOD);
   const [deleteBranchOnMerge, setDeleteBranchOnMerge] = useState(true);
 
-  // Resolve & merge and Do:Review default to the active provider. PR review
+  // Resolve & merge and Do:Review default to the active provider. Untrusted:Review
   // follows its own scheduled stages unless the user explicitly opts this pin in.
   // Auto remains available for server-side routing. Mirrors the Issues
   // tab's "Run with" picker: a session convenience, never persisted.
@@ -662,7 +662,7 @@ export default function PullRequestsTab({ appId, appName }) {
         </p>
         {offersKind('review') && (
           <p>
-            PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and uses the providers saved on its review stages, so the Code review setting below does not apply to it. The security scan must pass before either review stage runs.
+            Untrusted:Review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and uses the providers saved on its review stages, so the Code review setting below does not apply to it. The security scan must pass before either review stage runs.
           </p>
         )}
         {offersKind('doReview') && (
@@ -728,9 +728,9 @@ export default function PullRequestsTab({ appId, appName }) {
           <div className="text-xs text-gray-400">
             <input id="apply-run-with-to-pr-review" type="checkbox" checked={applyRunWithToPrReview}
               onChange={event => setApplyRunWithToPrReview(event.target.checked)} className="mr-2" />
-            <label htmlFor="apply-run-with-to-pr-review">Also run PR review on the Run with provider</label>
+            <label htmlFor="apply-run-with-to-pr-review">Also run Untrusted:Review on the Run with provider</label>
             <p className="mt-1">
-              Off by default: PR review is a <span className="font-mono">pr-reviewer</span> run, and that task keeps the providers saved on its own stages. Tick this to point its scan and review stages at the provider chosen above instead. Resolve &amp; merge and Do:Review always use it.
+              Off by default: Untrusted:Review is a <span className="font-mono">pr-reviewer</span> run, and that task keeps the providers saved on its own stages. Tick this to point its scan and review stages at the provider chosen above instead. Resolve &amp; merge and Do:Review always use it.
             </p>
           </div>
         )}

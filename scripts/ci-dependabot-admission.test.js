@@ -42,7 +42,7 @@ describe('Dependabot maintainer release', () => {
     expect(ci.impact.indexOf('node scripts/ci-dependabot-admission.js'))
       .toBeLessThan(ci.impact.indexOf('node scripts/ci-base-sha.js'));
     expect(ci.impact).not.toContain('continue-on-error: true');
-    for (const name of ['prompt-history', 'server', 'client', 'lint', 'database', 'browser', 'windows-server', 'node-minimum', 'linux-containment', 'supercollider-live']) {
+    for (const name of ['prompt-history', 'server', 'client', 'lint', 'database', 'browser', 'windows-server', 'node-minimum', 'linux-containment', 'docker-containment-live', 'supercollider-live']) {
       expect(ci[name]).toContain('needs: impact');
     }
     expect(ci.gate).toContain('if: always()');
@@ -51,6 +51,10 @@ describe('Dependabot maintainer release', () => {
     const native = ci['supercollider-live'];
     expect(native.indexOf('node scripts/ci-dependabot-admission.js')).toBeGreaterThan(-1);
     expect(native.indexOf('node scripts/ci-dependabot-admission.js')).toBeLessThan(native.indexOf('actions/setup-node@'));
+    // The Docker containment live suite installs from the public registry inside its container.
+    const contained = ci['docker-containment-live'];
+    expect(contained.indexOf('node scripts/ci-dependabot-admission.js')).toBeGreaterThan(-1);
+    expect(contained.indexOf('node scripts/ci-dependabot-admission.js')).toBeLessThan(contained.indexOf('actions/setup-node@'));
     expect(workflow('ci')).not.toContain('pull_request_target:');
     expect(workflow('ci')).not.toMatch(/(?:contents|actions): write/);
     expect(ci.gate).toContain('supercollider-live]');

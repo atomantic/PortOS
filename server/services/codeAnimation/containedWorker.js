@@ -7,7 +7,7 @@
  * trusted-local entry point requires explicit server-side operator authorization;
  * it reuses supervision but provides no host filesystem/network boundary.
  */
-import { constants } from 'node:fs';
+import { constants, readdirSync, readFileSync } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -140,10 +140,35 @@ async function residentBytes(pid, processGroup = false) {
   return Number.isFinite(kib) ? kib * 1024 : 0;
 }
 
-function processAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+// Linux: [state, pgrp] of a host-visible pid, or null when it is gone or unreadable.
+function procStat(pid) {
+  try {
+    const fields = readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\)\s+/s, '').split(' ');
+    return [fields[0], Number(fields[2])];
+  } catch { return null; }
 }
-const groupAlive = (pgid) => processAlive(-pgid);
+// A reaped-but-unwaited child is a zombie: it holds a pid slot, not a process.
+// Under a PID 1 that never wait()s (a container without an init), killed
+// workers linger as zombies forever, so they must not count as alive.
+const isZombie = (state) => state === 'Z' || state === 'X';
+
+export function processAlive(pid) {
+  try { process.kill(pid, 0); } catch (error) { return error.code === 'EPERM'; }
+  if (process.platform !== 'linux') return true;
+  const stat = procStat(pid);
+  return !stat || !isZombie(stat[0]);
+}
+
+function groupAlive(pgid) {
+  try { process.kill(-pgid, 0); } catch (error) { return error.code === 'EPERM'; }
+  if (process.platform !== 'linux') return true;
+  let pids;
+  try { pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name)); } catch { return true; }
+  return pids.some((pid) => {
+    const stat = procStat(pid);
+    return stat && stat[1] === pgid && !isZombie(stat[0]);
+  });
+}
 
 const tail = () => {
   let text = '';

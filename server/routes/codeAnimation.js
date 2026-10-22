@@ -23,6 +23,7 @@
 
 import { Router } from 'express';
 import { soundAssetSchema, stageProductionSoundAsset } from '../services/codeAnimation/soundAssets.js';
+import { ensureCodeAnimationSoundtrackTrack, startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtrack.js';
 import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -35,6 +36,7 @@ import {
   buildCodeAnimationRequest,
   captureCodeAnimationJobPoster,
   codeAnimationPosterPath,
+  deleteCodeAnimationJob,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   listCodeAnimationJobs,
@@ -129,6 +131,8 @@ const briefSchema = z.object({
     note: z.string().trim().max(L.referenceNoteMax).default(''),
   }).strict().nullable().optional(),
   audio: audioSchema,
+  // A finished animation this one forks and extends (its HTML rides the prompt).
+  baseJobId: z.string().uuid().nullable().optional(),
 }).strict();
 
 const generateSchema = briefSchema.extend({
@@ -179,8 +183,8 @@ router.post('/brief', asyncHandler(async (req, res) => {
 
 router.post('/prompt', asyncHandler(async (req, res) => {
   const input = validateRequest(briefSchema, req.body ?? {});
-  const { prompt, frame, attachments, audioUrl, moodBoardId } = await buildCodeAnimationRequest(input);
-  res.json({ prompt, frame, attachments, audioUrl, moodBoardId });
+  const { prompt, frame, attachments, audioUrl, moodBoardId, base } = await buildCodeAnimationRequest(input);
+  res.json({ prompt, frame, attachments, audioUrl, moodBoardId, base });
 }));
 
 router.post('/generate', asyncHandler(async (req, res) => {
@@ -220,6 +224,12 @@ router.get('/generate/:id', asyncHandler(async (req, res) => {
   const job = await getCodeAnimationJob(req.params.id);
   if (!job) throw new ServerError('Generation job not found', { status: 404, code: 'NOT_FOUND' });
   res.json(job);
+}));
+
+// Delete a gallery item: its files go to the system Trash, then the row.
+router.delete('/jobs/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await deleteCodeAnimationJob(id));
 }));
 
 const projectPageSchema = z.object({
@@ -319,6 +329,28 @@ router.get('/:id/package', asyncHandler(async (req, res) => {
   res.attachment(`code-animation-${id}.json`);
   res.set('X-Content-Type-Options', 'nosniff');
   res.json(pkg);
+}));
+
+// Generate (or regenerate) a soundtrack for a finished animation with a local
+// music engine, without re-running the animation code. 202: the render runs on
+// the audio media lane; progress rides audio-gen:* for `mediaJobId`.
+const soundtrackSchema = z.object({
+  prompt: z.string().max(8000).refine((value) => value.trim().length > 0, 'Describe the soundtrack'),
+  engine: z.string().trim().min(1).max(80),
+  modelId: z.string().trim().min(1).max(256).optional(),
+  instrumentalOnly: z.boolean().default(true),
+}).strict();
+
+router.post('/:id/soundtrack', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.status(202).json(await startCodeAnimationSoundtrack(id, validateRequest(soundtrackSchema, req.body ?? {})));
+}));
+
+// The soundtrack track a coded score (written by a coding model, rendered in
+// the browser or by SuperCollider) saves its take onto. Created on first use.
+router.post('/:id/soundtrack/track', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await ensureCodeAnimationSoundtrackTrack(id));
 }));
 
 // Frame-exact export: the stored HTML renders through the HTML-composition

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
 const openClawApi = vi.hoisted(() => ({
@@ -10,7 +11,8 @@ const openClawApi = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/apiOpenClaw', () => openClawApi);
-vi.mock('../services/api', () => ({ getApps: vi.fn(() => Promise.resolve([])) }));
+const coreApi = vi.hoisted(() => ({ getApps: vi.fn() }));
+vi.mock('../services/api', () => coreApi);
 vi.mock('../hooks/useInstanceFeatures.js', () => ({
   useInstanceFeatures: () => ({ isFeatureEnabled: () => true }),
 }));
@@ -33,6 +35,7 @@ const renderPage = async () => {
 describe('OpenClaw page header', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    coreApi.getApps.mockResolvedValue([]);
     openClawApi.getOpenClawStatus.mockResolvedValue({
       configured: true,
       enabled: true,
@@ -64,5 +67,28 @@ describe('OpenClaw page header', () => {
     expect(bar.className).toContain('px-3');
     expect(bar.className).toContain('sm:px-4');
     expect(bar).toContainElement(screen.getByRole('button', { name: /Refresh/ }));
+  });
+});
+
+describe('OpenClaw app context picker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    openClawApi.getOpenClawStatus.mockResolvedValue({ configured: true, enabled: true, reachable: true, defaultSession: 'session-1' });
+    openClawApi.getOpenClawSessions.mockResolvedValue({ sessions: [{ id: 'session-1', title: 'Example session' }] });
+    openClawApi.getOpenClawMessages.mockResolvedValue({ messages: [] });
+  });
+
+  it('shows a load error with Retry when the app list fails, then offers the apps after Retry', async () => {
+    coreApi.getApps.mockRejectedValueOnce(new Error('Apps unavailable'));
+    await renderPage();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load apps for context — Apps unavailable');
+    expect(screen.queryByRole('option', { name: 'Example App' })).toBeNull();
+
+    coreApi.getApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Example App' }]);
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('option', { name: 'Example App' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

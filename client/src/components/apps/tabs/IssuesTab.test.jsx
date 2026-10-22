@@ -331,8 +331,7 @@ describe('IssuesTab', () => {
     await renderTab({ open: true });
 
     expect(await screen.findByText('codex,claude')).toBeInTheDocument();
-    expect(screen.getByText(/claim-work/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Chief of Staff/ })).toHaveAttribute('href', '/cos/schedule');
+    expect(screen.getByRole('link', { name: 'claim-work override' })).toHaveAttribute('href', '/cos/schedule');
   });
 
   it('points at the Code Reviewers panel when no override is in play', async () => {
@@ -340,7 +339,7 @@ describe('IssuesTab', () => {
 
     expect(await screen.findByText('antigravity')).toBeInTheDocument();
     expect(screen.queryByText(/claim-work/)).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Code Reviewers/ })).toHaveAttribute('href', '/models/code-reviewers');
+    expect(screen.getByRole('link', { name: 'defaults' })).toHaveAttribute('href', '/models/code-reviewers');
   });
 
   it('says nothing about reviewers when the lookup failed, rather than implying none are configured', async () => {
@@ -351,7 +350,7 @@ describe('IssuesTab', () => {
     await renderTab();
 
     expect(await screen.findByText('Crash on save')).toBeInTheDocument();
-    expect(screen.queryByText('Reviewed by')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reviewers')).not.toBeInTheDocument();
   });
 
   it('shows and submits the configured default without touching the override controls', async () => {
@@ -407,7 +406,7 @@ describe('IssuesTab', () => {
 
   it('sends a reviewer effort override without pinning untouched defaults', async () => {
     await renderTab({ open: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit reviewers' }));
     fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
     await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
@@ -420,24 +419,37 @@ describe('IssuesTab', () => {
 
   it('blocks an empty claim review chain, leaves replans alone, and restores inheritance', async () => {
     await renderTab({ open: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit reviewers' }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
     expect(screen.getByRole('button', { name: /Claim/ })).toBeDisabled();
-    expect(screen.getByRole('alert')).toHaveTextContent('Claims require at least one non-Copilot reviewer');
+    expect(screen.getByRole('alert')).toHaveTextContent('Add an AI reviewer or a GitHub/GitLab user');
     fireEvent.click(screen.getByRole('button', { name: /Replan/ }));
     await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
     expect(api.createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewers');
     fireEvent.click(screen.getByRole('button', { name: 'Use configured reviewers' }));
-    expect(screen.getByText('Reviewed by')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Remove Antigravity/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled();
+  });
+
+  it('lets a claim iterate with only a GitHub/GitLab reviewer', async () => {
+    await renderTab({ open: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit reviewers' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Add a GitHub/GitLab reviewer username'), { target: { value: '@reviewer-one' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add reviewer username' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls[0][2]).toMatchObject({ reviewers: [], usernames: ['reviewer-one'] });
   });
 
   it('collapses run settings into a truthful summary that Change expands', async () => {
     await renderTab();
 
     const summary = screen.getByTestId('run-settings-summary');
-    expect(summary).toHaveTextContent(/^Run with: Auto \(default\) · default model · default effort · After PR: .+ · Reviewers: antigravity$/);
+    expect(summary).toHaveTextContent(/^Auto · .+ · antigravity$/);
     expect(screen.queryByLabelText('Provider')).not.toBeInTheDocument();
     const change = screen.getByRole('button', { name: 'Change' });
     expect(change).toHaveAttribute('aria-expanded', 'false');
@@ -446,25 +458,25 @@ describe('IssuesTab', () => {
     await act(async () => {});
     expect(screen.getByRole('button', { name: 'Hide' })).toHaveAttribute('aria-expanded', 'true');
     fireEvent.change(screen.getByLabelText(/Extra context/), { target: { value: 'Keep it small.' } });
-    expect(summary).toHaveTextContent(/· extra context set$/);
+    expect(summary).toHaveTextContent(/· \+ context$/);
   });
 
   it('keeps an invalid review override visible by forcing the settings open', async () => {
     await renderTab({ open: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit reviewers' }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Claims require at least one non-Copilot reviewer');
+    expect(screen.getByRole('alert')).toHaveTextContent('Add an AI reviewer or a GitHub/GitLab user');
     expect(screen.queryByRole('button', { name: 'Hide' })).not.toBeInTheDocument();
   });
 
   it('opens the settings automatically once a code-review override is active', async () => {
     await renderTab({ open: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit reviewers' }));
     fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
 
     expect(screen.queryByRole('button', { name: 'Hide' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Code-review override (active)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use configured reviewers' })).toBeInTheDocument();
   });
 
   it('shows a failed issues load above the run settings', async () => {
@@ -478,10 +490,10 @@ describe('IssuesTab', () => {
 
   it('clears review overrides when switching apps', async () => {
     const view = await renderTab({ open: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit reviewers' }));
     fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
     view.rerender(<MemoryRouter><IssuesTab appId="app-2" appName="Other" /></MemoryRouter>);
-    await screen.findByRole('button', { name: 'Code-review override' });
+    await screen.findByRole('button', { name: 'Edit reviewers' });
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
     await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
     expect(api.createSlashdoTask.mock.calls[0][1]).toBe('app-2');
@@ -1017,13 +1029,13 @@ describe('IssuesTab replan', () => {
   it('allows selecting merge-on-green, hides reviewer controls, and sends prCompletion', async () => {
     await renderTab({ open: true });
 
-    expect(await screen.findByText('Reviewed by')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Code-review override' })).toBeInTheDocument();
+    expect(await screen.findByText('Reviewers')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit reviewers' })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('After opening PR'), { target: { value: 'merge-on-green' } });
+    fireEvent.change(screen.getByLabelText('After PR'), { target: { value: 'merge-on-green' } });
 
-    expect(screen.queryByText('Reviewed by')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Code-review override' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Reviewers')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit reviewers' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
 
@@ -1036,11 +1048,11 @@ describe('IssuesTab replan', () => {
   it('unblocks claim when switching to merge-on-green even after removing all reviewers', async () => {
     await renderTab({ open: true });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit reviewers' }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
     expect(screen.getByRole('button', { name: /Claim/ })).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText('After opening PR'), { target: { value: 'merge-on-green' } });
+    fireEvent.change(screen.getByLabelText('After PR'), { target: { value: 'merge-on-green' } });
     expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));

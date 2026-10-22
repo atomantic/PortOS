@@ -30,6 +30,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { resolveSubjectId } from './privacySubjects.js';
 import { encryptValue, decryptValue, ensureVaultKey } from '../lib/vaultCrypto.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 // Cap on each registry fetch so a hung broker source can't stall a
 // user-triggered refresh indefinitely (both fetchers run under Promise.all).
@@ -239,7 +240,7 @@ async function upsertBroker(client, b, { onlyIfNotCurated = false, onlyIfCurated
        updated_at = NOW()
      ${guard}`,
     [
-      b.id, b.name, JSON.stringify(b.urls), JSON.stringify(b.optout), b.tier,
+      b.id, b.name, toPgJson(b.urls), toPgJson(b.optout), b.tier,
       b.disclosureFields, b.clusterParent, b.preferSuppression, b.antibot,
       b.source, b.confidence, b.lastVerified, b.enabled,
     ],
@@ -517,7 +518,7 @@ async function sealLegacyCaseEvidence() {
     for (const row of rows) {
       const evidence = parseEvidence(row.evidence);
       const stored = await prepareEvidenceForStorage(evidence, { existingEnvelope: evidence[SEALED_EVIDENCE_KEY] ?? null });
-      await client.query(`UPDATE privacy_broker_cases SET evidence = $1 WHERE id = $2`, [JSON.stringify(stored), row.id]);
+      await client.query(`UPDATE privacy_broker_cases SET evidence = $1 WHERE id = $2`, [toPgJson(stored), row.id]);
     }
     if (rows.length) console.log(`🔐 Sealed identity evidence on ${rows.length} legacy broker case(s)`);
     return { converted: rows.length };
@@ -643,7 +644,7 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
   const resolvedSubjectId = resolveSubjectId(subjectId);
   // A fresh scan REPLACES the identity match (a re-scan that no longer finds a
   // listing must not keep the old one), so no existing envelope is carried.
-  const storedEvidence = JSON.stringify(await prepareEvidenceForStorage(evidence));
+  const storedEvidence = toPgJson(await prepareEvidenceForStorage(evidence));
   return withTransaction(async (client) => {
     const broker = await client.query(`SELECT id FROM privacy_brokers WHERE id = $1`, [brokerId]);
     if (!broker.rows[0]) throw new ServerError('Broker not found', { status: 404, code: 'NOT_FOUND' });
@@ -741,7 +742,7 @@ export async function transitionCase(caseId, toState, patch = {}) {
     const clearIdentity = toState === 'confirmed_removed';
     if (patch.evidence !== undefined || clearIdentity) {
       const stored = parseEvidence(existing.rows[0].evidence);
-      add('evidence', JSON.stringify(await prepareEvidenceForStorage(patch.evidence ?? stored, {
+      add('evidence', toPgJson(await prepareEvidenceForStorage(patch.evidence ?? stored, {
         existingEnvelope: stored[SEALED_EVIDENCE_KEY] ?? null, clearIdentity,
       })));
     }

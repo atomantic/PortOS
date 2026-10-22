@@ -57,7 +57,8 @@ import {
   updateEvents,
   isUpdateInProgress,
   setUpdateInProgress,
-  recordUpdateResult
+  recordUpdateResult,
+  startUpdateScheduler
 } from './updateChecker.js';
 
 describe('compareSemver', () => {
@@ -985,5 +986,27 @@ describe('processUpdateMarker', () => {
     await processUpdateMarker();
     expect(atomicWrite).not.toHaveBeenCalled();
     expect(unlink).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('startUpdateScheduler', () => {
+  it('reports a failed scheduled check on stdout: an unreachable GitHub is retried next interval, not a fault', async () => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    readJSONFile
+      .mockResolvedValueOnce({ lastCheck: null, latestRelease: null, ignoredVersions: [], updateInProgress: false, lastUpdateResult: null })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+    execGh.mockRejectedValue(new Error('error connecting to api.github.com'));
+    try {
+      startUpdateScheduler();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Update check failed: error connecting to api.github.com'));
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

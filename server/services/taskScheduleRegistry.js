@@ -6,7 +6,7 @@ import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/pr
  * so app configuration can consume task definitions without forming a cycle.
  */
 
-import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, RELEASE_OPTION_KEYS } from '../lib/cosValidation.js';
+import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cosValidation.js';
 import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import {
@@ -58,10 +58,15 @@ const NON_COMMITTING_COORDINATOR_METADATA = { useWorktree: false, openPR: false,
 // release options (RELEASE_OPTION_KEYS — finish in-flight work, merge dependency
 // updates, resolve blockers, make routine decisions) are seeded ON and stay
 // operator-editable, globally and per app; each is ON unless explicitly false.
+// `stallNudge: false` because a release run's longest quiet stretch is waiting
+// on its own release PR's CI, and a nudge there made agent runs quit INCOMPLETE
+// with the PR still open. loadSchedule's default deep-merge carries it into
+// existing installs that never set the key.
 const DO_RELEASE_METADATA = {
   ...NON_COMMITTING_COORDINATOR_METADATA,
   slashdoCommand: 'release',
   ...Object.fromEntries(RELEASE_OPTION_KEYS.map((key) => [key, true])),
+  stallNudge: false,
 };
 // Migration 274 removes branch-cleanup from new schedules, but a partially
 // upgraded install may still load its stored task before the migration runs.
@@ -204,7 +209,8 @@ const TASK_INTERVAL_DEFAULTS = {
   // resolveConflicts / autoMerge / finishAbandoned) are per-app taskMetadata
   // booleans (each ON unless explicitly false); `finishAbandoned` covers the work
   // a dead agent left UNCOMMITTED in its worktree — commit + ship it, or report it
-  // as unfinished. `branchesPerAgent` bounds each coordinator prompt to a
+  // as unfinished; `reapSuperseded` retires a branch with a fresh SUPERSEDED
+  // verdict after writing its recoverable backup. `branchesPerAgent` bounds each coordinator prompt to a
   // prioritized batch so a large backlog drains across several agents. It is
   // independently overridable per app. useWorktree/openPR are LOCKED off
   // (MANAGED_AGENT_OPTIONS):
@@ -214,7 +220,7 @@ const TASK_INTERVAL_DEFAULTS = {
   // SIBLING worktrees, never in its own cwd — hence the shared non-committing
   // -coordinator posture above. On-demand by default — a manual Run is the
   // explicit consent to drive PRs; choosing a cadence enables scheduled runs.
-  'branch-reconcile':    { type: INTERVAL_TYPES.ON_DEMAND, perpetual: true, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true, finishAbandoned: true, branchesPerAgent: DEFAULT_BRANCHES_PER_AGENT } },
+  'branch-reconcile':    { type: INTERVAL_TYPES.ON_DEMAND, perpetual: true, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, cleanupMerged: true, reapSuperseded: true, openPr: true, resolveConflicts: true, autoMerge: true, finishAbandoned: true, branchesPerAgent: DEFAULT_BRANCHES_PER_AGENT } },
   // issue-reconcile heals ZOMBIE issues: open + `in-progress` (claimed) yet with
   // their PR already MERGED and no live claim anywhere — a partial ship left the
   // claim marker on, so the queue (which skips `in-progress`) never re-picks the
@@ -239,7 +245,20 @@ const TASK_INTERVAL_DEFAULTS = {
   // needs no model and runs every pass regardless of whether any zombie exists.
   'issue-reconcile':     { type: INTERVAL_TYPES.ON_DEMAND, perpetual: true, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, autoClose: true } },
   'console-errors':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'dependency-updates':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null },
+  // dependency-updates runs package-manager installs, so it ALWAYS gets an
+  // isolated CoS worktree whose node_modules are private to it
+  // (agentWorkspacePrep passes `linkDependencies: false`). In the live checkout
+  // an `npm install` follows the shared-dependency symlinks into the source
+  // tree and, for PortOS itself, rewrites the running server's node_modules on
+  // whatever branch the user has checked out, then commits there. `useWorktree`
+  // is therefore LOCKED (MANAGED_AGENT_OPTIONS). `openPR` is the shipped
+  // delivery so a bump is validated by CI instead of merged back locally (a
+  // local merge-back lands the new lockfile in the live checkout while its
+  // node_modules stay at the old versions until a reinstall), but the operator
+  // may flip it. `noChangeSuccess`: dependencies that are already
+  // current are the common outcome — the run ends with an empty branch and is
+  // still a success (lib/noChangeCompletion.js admits this type explicitly).
+  'dependency-updates':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, noChangeSuccess: true } },
   'documentation':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'ui-bugs':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'mobile-responsive':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
@@ -413,6 +432,14 @@ const TASK_INTERVAL_DEFAULTS = {
   // global-ledger review PER app) and scheduled dispatch has no global lane
   // for install-wide types yet — see #5629.
   'user-action-review':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  // error-log-triage (#12851) triages new stderr lines from PortOS's own PM2
+  // processes. Off by default the way every shipped task is: ON_DEMAND is never
+  // clock-due, so a manual Run or a cadence the user picks is the consent for
+  // the investigation agents it files on providerId/model below. The
+  // collect/fingerprint/dedupe pass itself makes no provider call, and its
+  // buildTaskInput hook never spawns a coordinator agent — hence no prompt.
+  // taskMetadata holds the run caps (lib/cosValidation.js clamps them).
+  'error-log-triage': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: Object.fromEntries(Object.entries(ERROR_LOG_TRIAGE_LIMITS).map(([key, limit]) => [key, limit.default])) },
   // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). On-demand
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the
   // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
@@ -464,6 +491,23 @@ export const DEFAULT_TASK_INTERVALS = Object.fromEntries(
   ])
 );
 
+// Repo paths whose change makes a repeat of an expensive executed audit worth
+// buying. An automatic launch is skipped (`inputs-unchanged`) while none differ
+// from the HEAD of the last clean run (#12907); a user-origin launch always runs.
+// Git pathspecs relative to the app's repo root. The prompt version stands in
+// for the prompt body: a body change requires a bump.
+export const TASK_INPUT_PATHS = Object.freeze({
+  'upgrade-rehearsal': Object.freeze([
+    'scripts/run-migrations.js',
+    'scripts/lib/',
+    'scripts/migrations/',
+    'data.reference/',
+    'server/services/backup.js',
+    'server/services/backupRestore*',
+    'server/services/taskPromptDefaults/versions.js',
+  ]),
+});
+
 // Agent-options that a task manages internally — UI locks the toggle, and
 // loadSchedule/updateTaskInterval enforce the default value regardless of
 // what's persisted or POSTed. The reasoning lives next to each task above
@@ -481,6 +525,9 @@ export const MANAGED_AGENT_OPTIONS = {
   // even when a global/per-app metadata override tries to make it writable.
   'issue-watcher': ['useWorktree', 'openPR', 'readOnly', 'worktreeChangesExpected'],
   'pr-watcher': ['prAuthorFilter'],
+  // Package-manager installs are never safe in the live checkout (see the task's
+  // entry above), so isolation is not an operator choice; `openPR` stays free.
+  'dependency-updates': ['useWorktree'],
   // The non-committing coordinators (NON_COMMITTING_COORDINATOR_METADATA above) all
   // run in the app's LIVE checkout and ship no code, so a CoS-managed worktree is at
   // best unused and at worst harmful — branch-reconcile needs to see the sibling
@@ -627,6 +674,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
   'media-render-research': 'Research local Apple Silicon image/video models, runtimes and settings; file ready-to-work issues for improvements (no code)',
   'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
+  'error-log-triage': 'Triage new stderr lines from PortOS processes — fingerprint and dedupe against issues, then queue one investigation agent per new fault',
   'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code",
   'development-watchdog': 'Inspect maintainer repository ownership and queue eligible work without an inference call',
   'music-video-autopilot': 'Turn the next unused Brain idea into a fully autonomous music video — lyrics, Suno song, mood board and video. No agent',
@@ -657,6 +705,10 @@ export const TASK_TYPE_PROMPT_INFO = Object.freeze({
   'issue-watcher': Object.freeze({
     mode: 'runtime-generated',
     description: 'Three enforced server phases: screen external issue activity, analyze it through a text-only API with no tools or private context, then validate current content before replies or assignments. Configure the source policy in Models → LLMs → Abuse Guard.'
+  }),
+  'error-log-triage': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'PortOS reads its own stderr logs, fingerprints and redacts each new fault, and dedupes it against the issue tracker with no model call. Each new fault seen at least the configured number of times queues one investigation agent on the provider and model below, up to the per-run cap; that prompt is generated from the redacted excerpt.'
   }),
   'layered-intelligence': Object.freeze({
     mode: 'runtime-generated',

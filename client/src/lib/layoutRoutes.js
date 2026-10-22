@@ -55,6 +55,7 @@ const EXACT_FULL_WIDTH_PATHS = [
   '/decks',
   '/fableloom',
   '/mood-boards',
+  '/storyboards',
   '/creative-commission',
   '/creative-commission/new',
   '/importer',
@@ -68,6 +69,8 @@ const FULL_WIDTH_PATH_PREFIXES = [
   '/x/',
   '/privacy/',
   '/code-animation/',
+  // The storyboard editor owns its scroll (header over a flex-1 overflow-auto body).
+  '/storyboards/',
   '/ask/',
   '/calendar',
   // Catalog detail (/catalog/{type}/{id}) and Ingest (/catalog/ingest)

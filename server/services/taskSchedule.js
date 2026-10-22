@@ -21,6 +21,7 @@
 
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
 import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
+import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
@@ -30,7 +31,7 @@ import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
 import { DAY, safeDate } from '../lib/fileUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js';
+import { getAppById, isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -47,6 +48,7 @@ import {
 } from './taskScheduleConstants.js';
 import {
   DEFAULT_TASK_INTERVALS,
+  TASK_INPUT_PATHS,
   INSTALL_WIDE_TASK_TYPES,
   MANAGED_APP_TARGET_TASK_TYPES,
   MANAGED_AGENT_OPTIONS,
@@ -59,6 +61,7 @@ import {
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
 import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
+import { inputsUnchangedSince } from './taskInputGate.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { recordUserAction } from './userActions.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
@@ -367,6 +370,31 @@ export async function recordRecommendedAudits(taskType, appId, items) {
     };
     return { result: schedule.executions[key].recommendedAudits, changed: true };
   });
+}
+
+/**
+ * Baseline for the `inputs-unchanged` gate: the repo HEAD of the last clean run
+ * of an input-gated task. A failed or finding-producing run passes `null`, which
+ * drops the baseline so the next automatic launch runs.
+ */
+export async function recordCleanInputBaseline(taskType, appId, head) {
+  if (!TASK_INPUT_PATHS[taskType] || !appId) return false;
+  return updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, taskType, appId);
+    if ((record.lastCleanHead ?? null) === (head ?? null)) return { result: false, changed: false };
+    if (head) record.lastCleanHead = head;
+    else delete record.lastCleanHead;
+    return { result: true, changed: true };
+  });
+}
+
+// True when the task declares input paths and none changed since its last clean run.
+async function inputsUnchangedForTask(taskType, appId, schedule) {
+  const inputPaths = TASK_INPUT_PATHS[taskType];
+  const lastCleanHead = inputPaths && appId ? resolveExecutionRecord(schedule, taskType, appId)?.lastCleanHead : null;
+  if (!lastCleanHead) return false;
+  const app = await getAppById(appId).catch(() => null);
+  return inputsUnchangedSince({ repoPath: app?.repoPath, lastCleanHead, inputPaths });
 }
 
 // ============================================================
@@ -785,6 +813,32 @@ export async function getBranchReconcileOutcome(appId) {
   return resolveExecutionRecord(schedule, 'branch-reconcile', appId)?.branchReconcileOutcome ?? null;
 }
 
+/** Remove stored inventory rows (display data only; obligations are untouched). */
+export async function dropInventoryRows(appId, rows) {
+  return updateSchedule(async (schedule) => {
+    const outcome = ensureExecutionRecord(schedule, 'branch-reconcile', appId).branchReconcileOutcome;
+    if (!Array.isArray(outcome?.remaining)) return { result: outcome ?? null, changed: false };
+    const kept = outcome.remaining.filter(entry => !rows.some(row => sameRetirementCheckout(row, entry)));
+    if (kept.length === outcome.remaining.length) return { result: outcome, changed: false };
+    outcome.remaining = kept;
+    return { result: outcome, changed: true };
+  });
+}
+
+/**
+ * Drop stored inventory rows whose checkout or branch no longer exists, so the
+ * Schedule view never offers an action on something already cleaned up.
+ * Returns the outcome as it now stands.
+ */
+async function pruneGoneInventory(appId, outcome) {
+  if (!appId || !outcome?.remaining?.length) return outcome;
+  const app = await getAppById(appId).catch(() => null);
+  if (!app?.repoPath) return outcome;
+  const gone = await findGoneInventoryRows(app.repoPath, outcome.remaining).catch(() => []);
+  if (!gone.length) return outcome;
+  return await dropInventoryRows(appId, gone).catch(() => null) ?? outcome;
+}
+
 const RETIRED_CHECKOUTS_KEPT = 20;
 
 /**
@@ -1190,6 +1244,10 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
     }
   }
 
+  if (result.shouldRun && await inputsUnchangedForTask(taskType, appId, schedule)) {
+    return { shouldRun: false, reason: TASK_READINESS_REASON.INPUTS_UNCHANGED };
+  }
+
   return result;
 }
 
@@ -1300,6 +1358,11 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   // the schedule interval and the app's own per-app override.
   const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
   const manual = isManualOnDemandRequest({ origin, burn: burnProvenance });
+  // Unattended launches (burn, refill) of an input-gated audit are declined while
+  // nothing it reads changed since its last clean run; a human Run always goes.
+  if (!manual && await inputsUnchangedForTask(taskType, appId, await loadSchedule())) {
+    return { error: `Task type '${taskType}' inputs are unchanged since its last clean run`, reason: TASK_READINESS_REASON.INPUTS_UNCHANGED };
+  }
   const request = await updateSchedule(async (schedule) => {
     const tasks = schedule.tasks || {};
     const config = Object.prototype.hasOwnProperty.call(tasks, taskType) ? tasks[taskType] : null;
@@ -1315,9 +1378,10 @@ export async function triggerOnDemandTask(taskType, appId = null, {
       // Per-app enablement is a rung for an UNATTENDED origin only. A human
       // pressing Run is deliberately overriding the app's cadence switch — the
       // drain's applyOnDemandRunResets exists for exactly that — while a burn
-      // picks its own step and must respect the switch the user set. Omitted,
+      // or a notification hand-off picks its own target and must respect the
+      // switch the user set. Omitted,
       // the ladder skips the rung.
-      appIds: origin === ON_DEMAND_ORIGINS.QUOTA_BURN && !manual
+      appIds: (origin === ON_DEMAND_ORIGINS.QUOTA_BURN || origin === ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION) && !manual
         ? enabledAppIdsByTaskType(await getActiveApps().catch(() => [])).get(taskType) || []
         : undefined,
     } : null;
@@ -1675,11 +1739,14 @@ export async function getScheduleStatus() {
     }
 
     if (taskType === 'branch-reconcile') {
-      taskStatus.reconcileOutcomes = Object.fromEntries([
+      const outcomes = [
         ...(execution.branchReconcileOutcome ? [[null, execution.branchReconcileOutcome]] : []),
         ...Object.entries(execution.perApp || {}).filter(([, record]) => record.branchReconcileOutcome)
           .map(([appId, record]) => [appId, record.branchReconcileOutcome]),
-      ]);
+      ];
+      taskStatus.reconcileOutcomes = Object.fromEntries(
+        await mapWithConcurrency(outcomes, 8, async ([appId, outcome]) => [appId, await pruneGoneInventory(appId, outcome)])
+      );
     }
     status.tasks[taskType] = taskStatus;
 

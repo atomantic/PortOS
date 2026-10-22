@@ -551,14 +551,14 @@ export function startUpdateScheduler() {
   startupTimeout = setTimeout(() => {
     startupTimeout = null;
     checkForUpdate().catch(err => {
-      console.warn(`⚠️ Update check failed: ${err.message}`);
+      console.log(`🔌 Update check failed: ${err.message}`);
     });
   }, STARTUP_DELAY_MS);
 
   // Periodic checks
   schedulerInterval = setInterval(() => {
     checkForUpdate().catch(err => {
-      console.warn(`⚠️ Update check failed: ${err.message}`);
+      console.log(`🔌 Update check failed: ${err.message}`);
     });
   }, CHECK_INTERVAL_MS);
 

@@ -26,7 +26,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * the inline code did.
  */
 
-import { basename, join } from 'path';
+import { basename, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import { execGit } from '../lib/execGit.js';
 import { emitLog } from './cosEvents.js';
@@ -36,7 +36,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch } from '../lib/taskTargetBranch.js';
@@ -111,7 +111,7 @@ export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/tas
  *
  * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|{ refused: string }|null>}
  */
-async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true, reviewTarget = null }) {
+async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true, reviewTarget = null, preserveLockfiles = false }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
@@ -122,6 +122,9 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
   });
   if (!Array.isArray(agents)) return { refused: 'ownership-unreadable' };
   const worktrees = await listWorktrees(workspacePath).catch(() => null);
+  // A branch the primary checkout holds is never adopted, released or waited out:
+  // `createWorktree` attaches detached at its head instead.
+  if (worktrees?.some(wt => resolve(wt.path) === resolve(workspacePath) && wt.branch?.replace(/^refs\/heads\//, '') === branchName)) return null;
   const admission = claimBranchAdmission({
     branchName, preferredPath: allowLiveClaim ? preferredPath : null,
     agentId, sourceWorkspace: workspacePath, agents, worktrees,
@@ -152,13 +155,35 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
     const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: holder.path, requireCheckout: true, launchTaskId: taskId });
     if (refused) return { refused };
   }
-  const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName, ...(deepResume ? [{ deepResume: true }] : [])).catch(err => {
+  const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName, ...(deepResume || preserveLockfiles ? [{ ...(deepResume && { deepResume }), ...(preserveLockfiles && { preserveLockfiles }) }] : [])).catch(err => {
     if (err.code === 'DEEP_RESUME_PRESERVED') return { refused: err.message };
     emitLog('warn', `🌳 Could not adopt ${holder.path} holding ${branchName} for task ${taskId}: ${err.message}`, { taskId });
     return null;
   });
   if (worktreeInfo?.refused) return { refused: worktreeInfo.refused, deepPreserved: true };
   return worktreeInfo ? { worktreeInfo, adoptedFrom: holder.agentId } : null;
+}
+
+/**
+ * Free the branch from an ownerless foreign worktree so `createWorktree` can
+ * attach. Fails closed: an unreadable agent list is "somebody may own it".
+ * @returns {Promise<boolean>} true when the holder was released
+ */
+async function releaseOwnerlessForeignHolderForTask({ workspacePath, branchName, agentId, taskId }) {
+  const { getAgents } = await import('./cos.js');
+  const agents = await getAgents().catch(() => null);
+  if (!Array.isArray(agents)) return false;
+  const activeIds = protectedAgentIds(agents);
+  const released = await releaseOwnerlessForeignHolder(workspacePath, branchName, {
+    agents,
+    requestingAgentId: agentId,
+    activeWorkspacePaths: agents.filter(a => activeIds.has(a.id)).map(a => a.workspacePath || a.metadata?.workspacePath),
+  }).catch(err => {
+    emitLog('warn', `🌳 Could not release ${branchName} from its foreign worktree for task ${taskId}: ${err.message}`, { taskId });
+    return null;
+  });
+  if (released) emitLog('info', `🌳 Released ${branchName} from ownerless worktree ${released.path} for task ${taskId}`, { taskId, branch: branchName });
+  return Boolean(released);
 }
 
 /**
@@ -245,6 +270,7 @@ async function prepareRequestedWorktree({
       // can prove both. Releasing an idle sibling holder in place stays allowed.
       adopt: !pinnedHead,
       reviewTarget,
+      preserveLockfiles: isolateDependencies,
     })
     : Promise.resolve(null);
 
@@ -277,7 +303,7 @@ async function prepareRequestedWorktree({
 
   // The failure reason decides whether the task is unrunnable or merely early.
   let worktreeError = null;
-  const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
+  const create = () => createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
     ...(baseCommit ? { baseCommit } : {}),
     existingBranch: resolveTaskRemoteBranch(task.metadata) || undefined,
@@ -287,11 +313,31 @@ async function prepareRequestedWorktree({
     expectedHeadSha: pinnedHead || reviewTarget?.headSha || undefined,
     planId: task.metadata?.planId || undefined,
     linkDependencies: !isolateDependencies,
-  }).catch(err => {
+  });
+  let worktreeInfo = takeover?.worktreeInfo || await create().catch(err => {
     worktreeError = err;
-    emitLog('warn', `🌳 Worktree creation failed for task ${task.id}: ${err.message}`, { taskId: task.id });
     return null;
   });
+  // A foreign checkout (a terminal session's own worktree) that holds the branch
+  // is never reaped by anything, so waiting out the cooldown cannot free it. If it
+  // is ownerless, clean and fully pushed, detach it in place and retry at once.
+  if (!worktreeInfo && existingBranch && isBranchCheckedOutElsewhereError(worktreeError?.message)
+    && await releaseOwnerlessForeignHolderForTask({ workspacePath, branchName: existingBranch, agentId, taskId: task.id })) {
+    worktreeError = null;
+    worktreeInfo = await create().catch(err => {
+      worktreeError = err;
+      return null;
+    });
+  }
+  // A branch still checked out in another worktree is a transient the timed
+  // `worktree-busy` pause below retries (and reports at info). Only a failure
+  // nothing retries is a fault worth stderr.
+  const retriesBusyBranch = Boolean(worktreeError) && !allowSharedWorkspaceFallback
+    && worktreeError.code !== PINNED_HEAD_MOVED
+    && isBranchCheckedOutElsewhereError(worktreeError.message) && attempt <= WORKTREE_BUSY_MAX_ATTEMPTS;
+  if (worktreeError && !retriesBusyBranch) {
+    emitLog('warn', `🌳 Worktree creation failed for task ${task.id}: ${worktreeError.message}`, { taskId: task.id });
+  }
 
   if (worktreeInfo) {
     const nextWorkspacePath = worktreeInfo.worktreePath;
@@ -323,7 +369,7 @@ async function prepareRequestedWorktree({
     return { outcome: 'ready', workspacePath, worktreeInfo: null };
   }
 
-  if (isBranchCheckedOutElsewhereError(worktreeError?.message) && attempt <= WORKTREE_BUSY_MAX_ATTEMPTS) {
+  if (retriesBusyBranch) {
     // The branch is checked out in ANOTHER worktree. Routinely that other
     // worktree is the previous agent's, still being torn down by the very
     // cleanup that spawned this task, so waiting it out lands the pull

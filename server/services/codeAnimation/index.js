@@ -26,6 +26,8 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { SUPPORTED_AUDIO_EXTENSIONS } from '../pipeline/musicLibrary.js';
 import { resolveMoodBoardStyleSource as resolveMoodBoard, resolveUniverseStyleSource as resolveUniverse } from '../creativeStyleSources.js';
 import {
+  codeAnimationJobFiles,
+  deleteCodeAnimationJobRecord,
   getCodeAnimationJobRecord,
   isCodeAnimationJobId,
   listCodeAnimationJobRecords,
@@ -212,6 +214,20 @@ async function resolveAudio(audio) {
   };
 }
 
+// The finished animation a fork extends: its HTML is sent whole, so an
+// oversized file is refused with its size rather than truncated.
+async function resolveBaseAnimation(baseJobId) {
+  if (!baseJobId) return null;
+  const job = isCodeAnimationJobId(baseJobId) ? await getCodeAnimationJobRecord(baseJobId) : null;
+  if (!job) throw new ServerError('The animation to extend was not found', { status: 400, code: 'CODE_ANIMATION_BASE_NOT_FOUND' });
+  if (job.status !== 'completed') throw new ServerError('Only a finished animation can be extended', { status: 409, code: 'CODE_ANIMATION_BASE_NOT_COMPLETED' });
+  const html = await readCodeAnimationHtml(job.id);
+  if (html.length > CODE_ANIMATION_LIMITS.baseHtmlMax) {
+    throw new ServerError(`The animation to extend is ${html.length.toLocaleString('en-US')} characters of HTML; extending sends it whole, up to ${CODE_ANIMATION_LIMITS.baseHtmlMax.toLocaleString('en-US')}.`, { status: 400, code: 'CODE_ANIMATION_BASE_TOO_LARGE' });
+  }
+  return { jobId: job.id, title: job.title || '', durationSeconds: job.frame?.durationSeconds ?? null, html };
+}
+
 /**
  * Resolve every configuration a brief references and build its prompt.
  * `delivery` decides how reference images are described to the model
@@ -244,6 +260,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
       : Math.max(0, CODE_ANIMATION_LIMITS.referenceImagesMax - videoImages.length - uploads.length - universeImages.length),
   });
   const referenceImages = [...videoImages, ...uploads, ...universeImages, ...boardImages];
+  const base = await resolveBaseAnimation(input.baseJobId);
   const promptInput = {
     title: input.title,
     concept: input.concept,
@@ -260,6 +277,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     moodBoard: board,
     referenceImages,
     referenceVideo,
+    base,
   };
   const prompt = buildCodeAnimationPrompt({ ...promptInput, delivery });
   return {
@@ -272,6 +290,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     // Absolute paths never leave the server — the client gets served URLs only.
     attachments: referenceImages.map(({ label, origin, url }) => ({ label, origin, url })),
     audioUrl: audio?.url || null,
+    base: base ? { jobId: base.jobId, title: base.title, durationSeconds: base.durationSeconds } : null,
     referencePaths: referenceImages.map((image) => image.path),
   };
 }
@@ -359,6 +378,41 @@ async function reconcileJob(job) {
   await saveCodeAnimationJobRecord(interrupted);
   emitCodeAnimationChanged(job.id);
   return interrupted;
+}
+
+/**
+ * Delete a gallery item. Its HTML and poster go to the system Trash (Finder
+ * Put Back on macOS) before the row is removed, so a refused trash leaves the
+ * item intact. Exports in Media History and its soundtrack track are separate
+ * library items and stay.
+ */
+export async function deleteCodeAnimationJob(id, { moveToTrash } = {}) {
+  const job = await getCodeAnimationJobRecord(id);
+  if (!job) throw new ServerError('Code Animation job not found', { status: 404, code: 'NOT_FOUND' });
+  if (job.status === 'running' && activeJobs.has(id)) {
+    throw new ServerError('This animation is still generating. Delete it once it finishes.', { status: 409, code: 'CODE_ANIMATION_RUNNING' });
+  }
+  // A poster drawn just after completion must land before the files are
+  // listed, or it would be written after the row is gone.
+  await (await import('./poster.js')).settleCodeAnimationPoster(id);
+  // Files and row leave together, as they were published (#9982), so a
+  // snapshot never holds a completed row whose HTML is gone.
+  let files = [];
+  await withBackupAssetPublication(async () => {
+    files = await codeAnimationJobFiles(id);
+    if (files.length) {
+      const trash = moveToTrash || (await import('../../lib/nativeTrash.js')).moveToNativeTrash;
+      await trash(files).catch((error) => {
+        throw new ServerError(`Could not move the animation files to the Trash (${error.code || error.message}). Nothing was deleted.`, {
+          status: 500, code: 'CODE_ANIMATION_TRASH_FAILED',
+        });
+      });
+    }
+    await deleteCodeAnimationJobRecord(id);
+  });
+  emitCodeAnimationChanged(id, 'deleted');
+  console.log(`🗑️ Code animation ${id.slice(0, 8)} deleted (${files.length} file(s) to Trash)`);
+  return { id, deleted: true };
 }
 
 export async function listCodeAnimationJobs() {
@@ -475,6 +529,7 @@ export async function startCodeAnimationGeneration(input) {
     prompt: built.copyPrompt,
     attachments: built.attachments,
     moodBoardId: built.moodBoardId,
+    ...(built.base ? { base: built.base } : {}),
     error: null,
     runId: null,
     createdAt: now,
@@ -548,7 +603,8 @@ export async function getCodeAnimationJob(id) {
   let job = await reconcileJob(record);
   if (job.status !== 'completed') return { ...job, html: null };
   try {
-    return { ...job, html: await readCodeAnimationHtml(job.id) };
+    const { withGeneratedSoundtrack } = await import('./soundtrack.js');
+    return { ...await withGeneratedSoundtrack(job), html: await readCodeAnimationHtml(job.id) };
   } catch (error) {
     if (error?.code !== 'CODE_ANIMATION_OUTPUT_MISSING') throw error;
     const completedAt = new Date().toISOString();

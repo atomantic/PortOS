@@ -13,8 +13,17 @@ export async function settleBranchReconcileRun(agent) {
   const task = await getTaskById(agent.taskId);
   // The task holds the resolved per-app toggles. Missing records cannot grant cleanup.
   if (!task?.metadata || task.metadata.cleanupMerged === false) return null;
-  const app = await getAppById(agent.metadata.taskApp);
-  if (!app?.repoPath) throw new Error('Branch reconciliation completion target unavailable');
+  const app = agent.metadata.taskApp ? await getAppById(agent.metadata.taskApp) : null;
+  if (!app?.repoPath) {
+    // A missing target is an explained refusal, not a defect: record it and stop.
+    const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
+    await recordBranchReconcileOutcome(agent.metadata.taskApp || null, {
+      status: 'incomplete', reason: 'no-managed-app-target',
+      nextAction: 'Run branch reconciliation against a managed app.',
+    });
+    emitLog('warn', 'Branch reconciliation skipped: no managed app target', { taskId: agent.taskId });
+    return null;
+  }
   const agents = await readClaimOwnershipAgents();
   if (!Array.isArray(agents)) throw new Error('Branch reconciliation ownership state unavailable');
   // Branches queued for the pr-watcher merge coordinator count as owned (#12258).
@@ -22,6 +31,7 @@ export async function settleBranchReconcileRun(agent) {
   const pendingMergeBranches = new Set(readPendingMergePrs(app).map((entry) => entry?.prBranch).filter(Boolean));
   const result = await reconcile(app.repoPath, {
     cleanup: true,
+    reapSuperseded: task.metadata.reapSuperseded !== false,
     pendingMergeBranches,
     activeAgentIds: buildActiveOwnerIds(getActiveAgentIds(), agents),
     claimOwners: { agents, readAgents: readClaimOwnershipAgents },
@@ -63,7 +73,8 @@ export async function settleBranchReconcileRun(agent) {
   const uncertain = unverifiedRetirements.length > 0 || result.forgeUnavailable || result.prStateUnavailable
     || result.worktreeInventory == null || result.orphanRemotes?.remoteUnavailable;
   const remaining = inFlightBranches.size + holds.remaining.length;
-  emitLog(uncertain || remaining ? 'warn' : 'info',
+  // Branches left to live owners are the normal outcome; only an incomplete scan is an anomaly.
+  emitLog(uncertain ? 'warn' : 'info',
     `Branch reconciliation completion: cleaned ${result.cleaned.length}, superseded ${result.reapedSuperseded?.length || 0}, remaining ${remaining}${uncertain ? '; scan incomplete' : ''}`,
     { appId: app.id, analysisType: type, counts: holds.counts, skipCauses: holds.skipCauses });
   return result;

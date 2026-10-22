@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { query, withTransaction } from '../../lib/db.js';
 import { snapshot, lockCatalog, ingredient, assertUnlocked, buildPlan, hash, fail, validateSnapshot } from './snapshots.js';
 import { localIdentity, identityPeer, readEvidence, revalidateEvidence } from './transport.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 const db = { query };
 const idsOf = row => [row.source_id, row.survivor_id];
@@ -49,7 +50,7 @@ async function update(client, row, state, epoch, extra = {}) {
   const columns = { state, epoch, ...extra };
   const values = [row.id];
   const sets = Object.entries(columns).map(([key, value]) => {
-    values.push(value && typeof value === 'object' ? JSON.stringify(value) : value);
+    values.push(value && typeof value === 'object' ? toPgJson(value) : value);
     return `${key} = $${values.length}`;
   });
   await client.query(`UPDATE catalog_identity_operations SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, values);
@@ -60,10 +61,10 @@ async function writeContent(client, row, original = false) {
   const content = original ? ingredient(row.before_state, row.survivor_id) : row.plan.proposed;
   await client.query(`UPDATE catalog_ingredients SET name = $2, payload = $3::jsonb, tags = $4,
     embedding = NULL, embedding_model = NULL WHERE id = $1`,
-  [row.survivor_id, content.name, JSON.stringify(content.payload), content.tags]);
+  [row.survivor_id, content.name, toPgJson(content.payload), content.tags]);
   await client.query(`INSERT INTO catalog_ingredient_revisions (id, ingredient_id, name, payload, tags, source, actor)
     VALUES ($1, $2, $3, $4::jsonb, $5, 'user', $6)`,
-  [`cat-rev-${randomUUID()}`, row.survivor_id, content.name, JSON.stringify(content.payload), content.tags,
+  [`cat-rev-${randomUUID()}`, row.survivor_id, content.name, toPgJson(content.payload), content.tags,
     original ? 'catalog-identity-recovery' : 'catalog-shared-identity']);
 }
 async function adoptContent(client, row, content) {
@@ -72,7 +73,7 @@ async function adoptContent(client, row, content) {
   // snapshot retain the actual revision identity and owner timestamp.
   await client.query(`UPDATE catalog_ingredients SET name=$2,payload=$3::jsonb,tags=$4,updated_at=$5,
     embedding=NULL,embedding_model=NULL WHERE id=$1`,
-  [row.survivor_id, content.name, JSON.stringify(content.payload), content.tags, content.updated_at]);
+  [row.survivor_id, content.name, toPgJson(content.payload), content.tags, content.updated_at]);
 }
 export async function listIdentityOperations({ ingredientId, limit = 20, offset = 0 } = {}) {
   const { rows } = await query(`SELECT id, source_id, survivor_id, source_owner, survivor_owner, local_owner,
@@ -127,7 +128,7 @@ export async function createIdentity(input) {
     await client.query(`INSERT INTO catalog_identity_operations
       (id, source_id, survivor_id, source_owner, survivor_owner, local_owner, state, plan, plan_hash)
       VALUES ($1,$2,$3,$4,$5,$6,'proposed',$7::jsonb,$8)`,
-    [id, plan.sourceId, plan.survivorId, plan.sourceOwner, plan.survivorOwner, self, JSON.stringify(plan), preview.planHash]);
+    [id, plan.sourceId, plan.survivorId, plan.sourceOwner, plan.survivorOwner, self, toPgJson(plan), preview.planHash]);
     return present(await load(client, id));
   });
 }
@@ -156,7 +157,7 @@ export async function importIdentity({ peerId, operationId }) {
     await client.query(`INSERT INTO catalog_identity_operations
       (id,source_id,survivor_id,source_owner,survivor_owner,local_owner,state,plan,plan_hash)
       VALUES ($1,$2,$3,$4,$5,$6,'proposed',$7::jsonb,$8)`,
-    [operationId, remote.sourceId, remote.survivorId, self, peerId, self, JSON.stringify(remote.plan), remote.planHash]);
+    [operationId, remote.sourceId, remote.survivorId, self, peerId, self, toPgJson(remote.plan), remote.planHash]);
     return present(await load(client, operationId));
   });
 }

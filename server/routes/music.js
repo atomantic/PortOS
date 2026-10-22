@@ -46,7 +46,7 @@ import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from
 import { listMusicEngineCapabilities } from '../services/musicEngineCapabilities.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
 import { drawWaveSketch } from '../services/musicWaveform.js';
-import { MUSIC_CODE_LANGUAGES, MUSIC_CODE_MAX, writeMusicCode } from '../services/musicCode.js';
+import { MUSIC_CODE_LANGUAGES, MUSIC_CODE_MAX, previewMusicCodePrompt, writeMusicCode } from '../services/musicCode.js';
 import { PAINTED_CANVAS_LIMITS } from '../lib/paintedCanvas.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
@@ -384,15 +384,21 @@ router.post('/waveform', asyncHandler(async (req, res) => {
   res.json(await drawWaveSketch(body));
 }));
 
-const codeSchema = z.object({
-  description: z.string().trim().min(1, 'description is required').max(8000),
+const codeShape = z.object({
+  description: z.string().trim().max(8000).optional(),
   lyrics: z.string().trim().max(20000).optional(),
+  // The script of an animation the piece scores, and that film's length.
+  scene: z.string().max(20000).optional().transform(blankToUndefined),
+  durationSec: z.number().int().min(1).max(600).optional(),
   // The code in the editor, to revise. It is prompt input for an authorized
   // authoring provider; playback uses the language's separate render boundary.
   current: z.string().max(MUSIC_CODE_MAX).optional().transform(blankToUndefined),
   language: z.enum(MUSIC_CODE_LANGUAGES).optional().default('strudel'),
   ...designerPickerShape,
 }).omit({ template: true });
+const codeSchema = codeShape.refine((body) => !!body.description || !!body.scene, {
+  message: 'description is required', path: ['description'],
+});
 
 // POST /api/music/code — have the LLM write the piece in the selected language.
 // The selected provider or fallback can execute a coding agent on the host;
@@ -400,6 +406,11 @@ const codeSchema = z.object({
 router.post('/code', asyncHandler(async (req, res) => {
   const body = validateRequest(codeSchema, req.body ?? {});
   res.json(await writeMusicCode(body));
+}));
+
+// POST /api/music/code/preview — the prompt /code would send; no provider work.
+router.post('/code/preview', asyncHandler(async (req, res) => {
+  res.json(previewMusicCodePrompt(validateRequest(codeShape, req.body ?? {})));
 }));
 
 const captionField = z.string().max(8000).refine((value) => value.trim().length > 0, 'prompt is required');

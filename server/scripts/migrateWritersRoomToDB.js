@@ -35,6 +35,7 @@ import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { readLegacyJSON, legacyDirectory, parkLegacyFile, incompleteImport } from './legacyImport.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const ROOT_DIRNAME = 'writers-room';
 const MARKER_FILENAME = 'writers-room.migrated.json';
@@ -53,7 +54,7 @@ export async function importFolder(folder, execute = query) {
       typeof folder.parentId === 'string' && folder.parentId ? folder.parentId : null,
       String(folder.name ?? ''),
       Number.isInteger(folder.sortOrder) ? folder.sortOrder : 0,
-      JSON.stringify(folder),
+      toPgJson(folder),
       createdAt,
       mirrorTimestamp(folder.updatedAt, createdAt),
     ],
@@ -71,7 +72,7 @@ export async function importExercise(exercise, execute = query) {
       exercise.id,
       typeof exercise.workId === 'string' && exercise.workId ? exercise.workId : null,
       typeof exercise.status === 'string' ? exercise.status.slice(0, 16) : null,
-      JSON.stringify(exercise),
+      toPgJson(exercise),
       mirrorTimestamp(exercise.startedAt, null),
       mirrorTimestamp(exercise.finishedAt, null),
     ],
@@ -106,7 +107,7 @@ export async function importWork(manifest, execute = query) {
       typeof manifest.pipelineIssueId === 'string' ? manifest.pipelineIssueId : null,
       typeof manifest.cdProjectId === 'string' ? manifest.cdProjectId : null,
       typeof manifest.mediaCollectionId === 'string' ? manifest.mediaCollectionId : null,
-      JSON.stringify(workData),
+      toPgJson(workData),
       createdAt,
       mirrorTimestamp(manifest.updatedAt, createdAt),
     ],
@@ -125,9 +126,9 @@ export async function importWork(manifest, execute = query) {
         String(draft.contentFile ?? ''),
         typeof draft.contentHash === 'string' ? draft.contentHash : null,
         Number.isInteger(draft.wordCount) ? draft.wordCount : 0,
-        JSON.stringify(Array.isArray(draft.segmentIndex) ? draft.segmentIndex : []),
+        toPgJson(Array.isArray(draft.segmentIndex) ? draft.segmentIndex : []),
         typeof draft.createdFromVersionId === 'string' ? draft.createdFromVersionId : null,
-        JSON.stringify(draft),
+        toPgJson(draft),
         mirrorTimestamp(draft.createdAt, createdAt),
       ],
     );

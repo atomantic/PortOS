@@ -61,6 +61,7 @@ import {
 import { getCommissionFeedbackForSync, mergeCommissionFeedbackFromSync } from '../creativeCommissions/feedbackStore.js';
 import { getCommissionForSync, mergeCommissionsFromSync } from '../creativeCommissions/store.js';
 import { getDeckForSync, mergeDecksFromSync } from '../decks.js';
+import { getStoryboardForSync, mergeStoryboardsFromSync } from '../storyboards/index.js';
 import {
   buildAssetManifest,
   buildAssetManifestForSeries,
@@ -74,6 +75,7 @@ import {
   buildBoardAssetManifest,
   buildFableLoomAssetManifest,
   buildDeckAssetManifest,
+  buildStoryboardAssetManifest,
   referenceCollectionAssetManifest,
   referenceAuthorAssetManifest,
   referenceArtistAssetManifest,
@@ -84,6 +86,7 @@ import {
   referenceFableLoomAssetManifest,
   referenceBoardAssetManifest,
   referenceDeckAssetManifest,
+  referenceStoryboardAssetManifest,
   referenceAssetManifestForSeries,
   referenceAssetManifestWithCollection,
 } from './peerSyncAssets.js';
@@ -223,6 +226,15 @@ export const RECORD_KINDS = Object.freeze({
     merge: mergeDecksFromSync,
     buildAssetManifest: buildDeckAssetManifest,
     referencedAssets: referenceDeckAssetManifest,
+    hasEphemeral: false,
+  },
+  storyboard: {
+    // The loader surfaces tombstones (a delete must push); the whole board is
+    // one record, so the generic manifest builder reads its takes directly.
+    load: (id) => getStoryboardForSync(id),
+    merge: mergeStoryboardsFromSync,
+    buildAssetManifest: buildStoryboardAssetManifest,
+    referencedAssets: referenceStoryboardAssetManifest,
     hasEphemeral: false,
   },
 });

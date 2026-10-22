@@ -257,8 +257,8 @@ async function assertSchemaVersionGate({ kind, record, issues, linkedCollection,
   const versionDiff = scopeVersionDiff(fullDiff, [...relevantCategories]);
   const catalogBehind = versionDiff.behind.some((gap) => gap.category === 'catalog');
   if (versionDiff.ahead.length > 0 || catalogBehind) {
-    console.warn(
-      `⚠️ peerSync: rejecting push from ${sourceInstanceId} — ${formatVersionGap(versionDiff)} (sender PortOS ${senderPortosVersion || 'unknown'})`,
+    console.log(
+      `⏸️ peerSync: rejecting push from ${sourceInstanceId} — ${formatVersionGap(versionDiff)} (sender PortOS ${senderPortosVersion || 'unknown'})`,
     );
     // Surface the receiver's PortOS version so the sender can show the user
     // *which* version their peer is on (the label the user thinks of as "the

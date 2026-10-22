@@ -47,6 +47,7 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
   withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 // `data` JSONB is the whole record; name/created_at/updated_at mirror into
 // columns (kept in lockstep on every write) for the live-list sort. Reads
@@ -71,7 +72,7 @@ async function persist(exec, board) {
     [
       board.id,
       board.name,
-      JSON.stringify(board),
+      toPgJson(board),
       createdAt,
       mirrorTimestamp(board.updatedAt, createdAt),
       board.deleted === true,

@@ -33,9 +33,21 @@ describe('branch reconciliation completion', () => {
   it('settles a non-perpetual run immediately using fresh ownership and its target account', async () => {
     expect(await settleBranchReconcileRun(agent)).toMatchObject({ cleaned: ['merged'], reapedSuperseded: ['superseded'] });
     expect(reconcile).toHaveBeenCalledWith('/example/repo', {
-      cleanup: true, pendingMergeBranches: new Set(['claim/queued']), activeAgentIds: new Set(['active']),
+      cleanup: true, reapSuperseded: true, pendingMergeBranches: new Set(['claim/queued']), activeAgentIds: new Set(['active']),
       claimOwners: { agents: [], readAgents: readClaimOwnershipAgents }, forgeAccount: 'example-account'
     });
+  });
+  it('keeps superseded branches when the task turns reapSuperseded off', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-example', metadata: { reapSuperseded: false } });
+    await settleBranchReconcileRun(agent);
+    expect(reconcile).toHaveBeenCalledWith('/example/repo', expect.objectContaining({ cleanup: true, reapSuperseded: false }));
+  });
+  it('records an incomplete outcome instead of throwing when the run has no managed app', async () => {
+    const appless = { ...agent, metadata: { ...agent.metadata, taskApp: null } };
+    expect(await settleBranchReconcileRun(appless)).toBeNull();
+    expect(getAppById).not.toHaveBeenCalled();
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith(null, expect.objectContaining({ status: 'incomplete', reason: 'no-managed-app-target' }));
   });
   it('requires an exact persisted archive receipt after the review task reports success', async () => {
     const release = { branch: 'claim/issue-42', path: '/example/checkout', head: 'a'.repeat(40) };
@@ -61,7 +73,7 @@ describe('branch reconciliation completion', () => {
       claimMarkersHeld: [{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified' }],
     });
     await settleBranchReconcileRun(agent);
-    expect(emitLog).toHaveBeenLastCalledWith('warn', expect.stringContaining('remaining 3'), expect.objectContaining({
+    expect(emitLog).toHaveBeenLastCalledWith('info', expect.stringContaining('remaining 3'), expect.objectContaining({
       counts: { heldBranches: 1, heldDetached: 1, heldClaims: 1 },
       skipCauses: { 'worktree-locked': 1, 'checkout-retained': 1, 'claim-reservation-owner-unverified': 1 },
     }));
@@ -77,7 +89,7 @@ describe('branch reconciliation completion', () => {
       ],
     });
     await settleBranchReconcileRun(agent);
-    expect(emitLog).toHaveBeenLastCalledWith('warn', expect.stringContaining('remaining 2'), expect.objectContaining({
+    expect(emitLog).toHaveBeenLastCalledWith('info', expect.stringContaining('remaining 2'), expect.objectContaining({
       counts: { heldBranches: 1, heldDetached: 0, heldBackMerged: 1 },
       skipCauses: { 'worktree-locked': 1 },
     }));
@@ -108,11 +120,12 @@ describe('branch reconciliation completion', () => {
     await settleBranchReconcileRun(agent);
     expect(reconcile).not.toHaveBeenCalled();
   });
-  it('fails closed on unreadable ownership or a missing target', async () => {
+  it('fails closed on unreadable ownership and records an unresolvable app target', async () => {
     readClaimOwnershipAgents.mockRejectedValueOnce(new Error('unreadable'));
     await expect(settleBranchReconcileRun(agent)).rejects.toThrow('unreadable');
     getAppById.mockResolvedValueOnce(null);
-    await expect(settleBranchReconcileRun(agent)).rejects.toThrow('target unavailable');
+    expect(await settleBranchReconcileRun(agent)).toBeNull();
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('example', expect.objectContaining({ reason: 'no-managed-app-target' }));
     expect(reconcile).not.toHaveBeenCalled();
   });
   it('ignores other completed task types', async () => {

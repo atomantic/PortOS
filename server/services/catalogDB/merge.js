@@ -8,6 +8,7 @@ import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { listSheetPointers } from '../../lib/sheetPointers.js';
 import { sanitizeBiblePayload } from './shared.js';
 import { catalogMergeSchema } from '../../lib/catalogValidation.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 const TABLES = Object.freeze({
   ingredients: ['catalog_ingredients', 'id = ANY($1)'],
@@ -123,7 +124,7 @@ export async function mergeIngredients(input) {
 
     await client.query(`UPDATE catalog_ingredients SET name = $2, payload = $3::jsonb, tags = $4,
       embedding = NULL, embedding_model = NULL WHERE id = $1`,
-    [survivorId, proposed.name, JSON.stringify(proposed.payload), proposed.tags]);
+    [survivorId, proposed.name, toPgJson(proposed.payload), proposed.tags]);
     // Copy only live associations; retain the original rows and collision
     // provenance in the receipt rather than overwriting survivor captions/spans.
     await client.query(`INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role, created_at)
@@ -158,7 +159,7 @@ export async function mergeIngredients(input) {
       await client.query(`INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption, metadata, created_at, library)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb)
         ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE SET deleted = false, deleted_at = NULL`,
-      [survivorId, row.media_key, row.kind, row.role, row.caption, JSON.stringify(row.metadata), row.created_at, JSON.stringify(row.library || {})]);
+      [survivorId, row.media_key, row.kind, row.role, row.caption, toPgJson(row.metadata), row.created_at, toPgJson(row.library || {})]);
     }
     await client.query(`INSERT INTO catalog_ingredient_relations (from_id, to_id, kind, created_at)
       SELECT CASE WHEN from_id = $1 THEN $2 ELSE from_id END,
@@ -168,12 +169,12 @@ export async function mergeIngredients(input) {
       ON CONFLICT (from_id, to_id, kind) DO UPDATE SET deleted = false, deleted_at = NULL`, [sourceId, survivorId, ids]);
     await client.query(`INSERT INTO catalog_ingredient_revisions (id, ingredient_id, name, payload, tags, source, actor)
       VALUES ($1, $2, $3, $4::jsonb, $5, 'user', 'catalog-merge')`,
-    [`cat-rev-${randomUUID()}`, survivorId, proposed.name, JSON.stringify(proposed.payload), proposed.tags]);
+    [`cat-rev-${randomUUID()}`, survivorId, proposed.name, toPgJson(proposed.payload), proposed.tags]);
     const after = await snapshot(client, ids);
     const id = randomUUID();
     await client.query(`INSERT INTO catalog_ingredient_merges
       (id, source_id, survivor_id, before_state, after_fingerprint) VALUES ($1, $2, $3, $4::jsonb, $5)`,
-    [id, sourceId, survivorId, JSON.stringify({ ...before, decision: { scope: 'local', fieldChoices, proposed } }), fingerprint(after)]);
+    [id, sourceId, survivorId, toPgJson({ ...before, decision: { scope: 'local', fieldChoices, proposed } }), fingerprint(after)]);
     return { id, sourceId, survivorId, merged: true, scope: 'local' };
   });
 }
@@ -227,19 +228,19 @@ export async function recoverIngredientMerge(id) {
       const updates = columns.filter(column => !keys.includes(column)).map(column => `${column} = EXCLUDED.${column}`);
       await client.query(`INSERT INTO ${table} (${columns.join(', ')})
         SELECT ${columns.join(', ')} FROM jsonb_populate_recordset(NULL::${table}, $1::jsonb)
-        ON CONFLICT (${keys.join(', ')}) DO UPDATE SET ${updates.join(', ')}`, [JSON.stringify(rows)]);
+        ON CONFLICT (${keys.join(', ')}) DO UPDATE SET ${updates.join(', ')}`, [toPgJson(rows)]);
     }
     // Keep the merge revision as an audit event. Recovery adds a new snapshot;
     // the receipt retains the complete before/after identity history.
     for (const row of receipt.before_state.ingredients) {
       await client.query(`UPDATE catalog_ingredients SET name = $2, payload = $3::jsonb, tags = $4,
         embedding = $5, embedding_model = $6, deleted = $7, deleted_at = $8 WHERE id = $1`,
-      [row.id, row.name, JSON.stringify(row.payload), row.tags, row.embedding, row.embedding_model, row.deleted, row.deleted_at]);
+      [row.id, row.name, toPgJson(row.payload), row.tags, row.embedding, row.embedding_model, row.deleted, row.deleted_at]);
     }
     for (const row of receipt.before_state.ingredients) {
       await client.query(`INSERT INTO catalog_ingredient_revisions (id, ingredient_id, name, payload, tags, source, actor)
         VALUES ($1, $2, $3, $4::jsonb, $5, 'user', 'catalog-merge-recovery')`,
-      [`cat-rev-${randomUUID()}`, row.id, row.name, JSON.stringify(row.payload), row.tags]);
+      [`cat-rev-${randomUUID()}`, row.id, row.name, toPgJson(row.payload), row.tags]);
     }
     return { id, restored: true };
   });

@@ -545,6 +545,39 @@ describe('generic own-PR delivery merges inside repository admission (#11435)', 
   });
 });
 
+describe('review-loop follow-up on a PR whose head is the default branch (#12855)', () => {
+  const metadata = {
+    reviewLoopFollowUp: true,
+    reviewLoopReviewers: [],
+    reviewLoopMergeOnly: true,
+    reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+    reviewLoopPRBranch: 'main',
+    reviewLoopPRNumber: 9,
+    reviewLoopPROwner: 'o',
+    reviewLoopPRRepo: 'r',
+    sourceTaskId: 'task-src-release',
+  };
+  const detached = { branchName: 'main', worktreePath: '/tmp/wt', existingBranch: true, detached: true, headIsDefaultBranch: true };
+  const build = (light, worktreeInfo) => light
+    ? buildLightContextPrompt(makeTask({ metadata }), '/repo', worktreeInfo, { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude', agentId: 'agent-1' })
+    : buildAgentPrompt(makeTask({ metadata }), {}, '/repo', worktreeInfo, { providerType: 'api', agentId: 'agent-1' });
+
+  it.each([true, false])('forbids pushing to the head branch and routes a fix through a new PR on the %s light/full path', async (light) => {
+    const prompt = await build(light, detached);
+    expect(prompt).toContain('NEVER push to the head branch');
+    expect(prompt).toContain('open its own PR against the default branch');
+    expect(prompt).toContain('DETACHED at the PR head commit');
+    // The ordinary existing-branch instruction would tell the agent to push review fixes to `main`.
+    expect(prompt).not.toContain('Commit and **push** any review-fix commits to this branch');
+  });
+
+  it.each([true, false])('keeps the push-to-branch contract for an ordinary PR branch on the %s light/full path', async (light) => {
+    const prompt = await build(light, { branchName: 'main', worktreePath: '/tmp/wt', existingBranch: true });
+    expect(prompt).not.toContain('NEVER push to the head branch');
+    expect(prompt).not.toContain('DETACHED at the PR head commit');
+  });
+});
+
 describe('claim-flow completion handoff', () => {
   it.each([true, false])('honors leave-open on the %s light/full claim path', async (light) => {
     const task = makeTask({ metadata: { analysisType: 'claim-issue', claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'leave-open' } });

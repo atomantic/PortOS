@@ -21,6 +21,7 @@
 
 import { query } from '../../../lib/db.js';
 import { mirrorTimestamp } from '../../../lib/pgTimestamp.js';
+import { toPgJson } from '../../../lib/pgJson.js';
 
 /** Raw on-disk-equivalent record (the `data` JSONB), or null. No sanitize. */
 export async function readRaw(id) {
@@ -115,7 +116,7 @@ export async function writeRaw(id, record) {
       typeof record?.name === 'string' ? record.name : '',
       typeof record?.universeId === 'string' && record.universeId ? record.universeId : null,
       typeof record?.writersRoomWorkId === 'string' && record.writersRoomWorkId ? record.writersRoomWorkId : null,
-      JSON.stringify(record),
+      toPgJson(record),
       record?.ephemeral === true,
       createdAt,
       mirrorTimestamp(record?.updatedAt, createdAt),

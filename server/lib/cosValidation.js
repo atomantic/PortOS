@@ -918,7 +918,8 @@ export const MAX_TOTAL_SPAWNS = 5;
 // `cleanupMerged` / `openPr` / `resolveConflicts` / `autoMerge` /
 // `finishAbandoned` are the per-app action toggles for the `branch-reconcile`
 // task type (`finishAbandoned` governs committing + shipping the uncommitted
-// work left in a dead agent's worktree); `autoClose` is
+// work left in a dead agent's worktree; `reapSuperseded` governs backup-first
+// retirement of branches with a fresh SUPERSEDED verdict); `autoClose` is
 // the `issue-reconcile` toggle (ON unless explicitly false — OFF forbids the
 // coordinator from closing an issue or filing a follow-up, leaving it to only
 // comment + release the claim). Each lives in the shared task-metadata
@@ -949,7 +950,7 @@ export { DEPFREE_MODES, DEFAULT_DEPFREE_MODE } from './auditCatalog.js';
 
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly', 'claimFlow',
-  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'finishAbandoned', 'autoClose',
+  'cleanupMerged', 'reapSuperseded', 'openPr', 'resolveConflicts', 'autoMerge', 'finishAbandoned', 'autoClose',
   // repo-sync's action toggles (REPO_SYNC_ACTION_KEYS above): publish branches
   // strictly ahead of their upstream, fast-forward the default branch, return the
   // checkout to it, delete merged branches, drop provably-redundant stashes, and
@@ -978,9 +979,10 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // against a GitHub/GitLab/JIRA work tracker files its proposals as issues and,
   // per the prompt, edits no application code, so a clean worktree is expected.
   'worktreeChangesExpected',
-  // Allows a PortOS-owned audit's verified-empty-branch contract to survive
-  // app task-type override sanitization. The finalizer also requires the
-  // autonomous-job marker and a live forge proof before honoring it.
+  // Allows a verified-empty-branch contract to survive app task-type override
+  // sanitization. The finalizer honors it only for the producers
+  // lib/noChangeCompletion.js admits (autonomous job, investigation, catalog
+  // audit, allow-listed scheduled type) and only with a live forge proof.
   'noChangeSuccess',
   // Audit-type toggle: file tracker issues (no code) vs implement the fix.
   // Dispatch stamps `noCodeOutput` when this is true. See server/lib/auditCatalog.js.
@@ -997,7 +999,13 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // `universe-bible-images`: hold canon entries that have no description yet
   // out of the render batch, so image quota isn't spent on a name with nothing
   // behind it. See services/scheduledHandlers/universeBibleImages.js.
-  'requireDescribed'
+  'requireDescribed',
+  // Whether PortOS pastes its stall nudge into a TUI session that has sat quiet
+  // for STALL_NUDGE_IDLE_MS (lib/tuiHandshake.js). ON unless explicitly `false`.
+  // A task that legitimately waits a long time on work it started — do-release
+  // parking on its release PR's CI watch — turns it off, because the nudge lands
+  // mid-wait and reads as "wrap up now".
+  'stallNudge'
 ];
 
 // The params bag for the PROGRAMMATIC scheduled handlers
@@ -1109,6 +1117,14 @@ export const SWARM_COUNT_MAX = 12;
 // when the key is absent so old task records remain compatible.
 export const BRANCHES_PER_AGENT_MIN = 1;
 export const BRANCHES_PER_AGENT_MAX = 6;
+
+// error-log-triage run caps (#12851): how many occurrences make a fault worth
+// an investigation agent, and how many investigations one pass may queue.
+// `0` investigations keeps the deterministic dedupe and parks investigation.
+export const ERROR_LOG_TRIAGE_LIMITS = Object.freeze({
+  triageMinOccurrences: Object.freeze({ min: 1, max: 100, default: 3 }),
+  triageMaxInvestigations: Object.freeze({ min: 0, max: 10, default: 2 }),
+});
 
 // POST /api/cos/tasks/slashdo — a `/do:*` button click from an app's Agent
 // Operations panel. The run-settings fields are PICKED from createCosTaskSchema
@@ -1245,7 +1261,10 @@ export function sanitizeTaskMetadata(raw) {
       const normalized = REVIEWER_ALIASES[r] || r;
       if (isReviewer(normalized) && !seen.has(normalized)) { seen.add(normalized); list.push(normalized); }
     }
-    if (list.length) { clean.reviewers = list; hasKeys = true; }
+    // Explicitly empty survives only beside forge reviewers: that is the
+    // username-only roster (`usernameOnlyRoster`), not "inherit the defaults".
+    const usernameOnly = !list.length && Array.isArray(raw.usernames) && normalizeReviewUsernames(raw.usernames).length > 0;
+    if (list.length || usernameOnly) { clean.reviewers = list; hasKeys = true; }
   }
   // `usernames` is the arbitrary GitHub reviewer-username list — normalize to
   // shell-safe, deduped, capped tokens (strips `@`, drops bogus entries). Unlike
@@ -1345,6 +1364,12 @@ export function sanitizeTaskMetadata(raw) {
       && raw.branchesPerAgent <= BRANCHES_PER_AGENT_MAX) {
     clean.branchesPerAgent = raw.branchesPerAgent;
     hasKeys = true;
+  }
+  for (const [key, { min, max }] of Object.entries(ERROR_LOG_TRIAGE_LIMITS)) {
+    if (Number.isInteger(raw[key]) && raw[key] >= min && raw[key] <= max) {
+      clean[key] = raw[key];
+      hasKeys = true;
+    }
   }
   // The programmatic bible handlers' params bag (BIBLE_HANDLER_* above). Each
   // key is dropped when it doesn't match, so a bad value falls back to the

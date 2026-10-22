@@ -650,7 +650,9 @@ describe('handoff follow-up poll', () => {
     await minutes(prWatcher.HANDOFF_FOLLOW_UP_CAP_MS / 60000);
     expect(vi.getTimerCount()).toBe(0);
     expect(pending()).toEqual([expect.objectContaining({ ticks: 0 })]);
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('the timer sweep owns 1 entry'));
+    // Handing back to the timer sweep at the cap is the designed bounded wait, not a fault: stdout.
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('the timer sweep owns 1 entry'));
+    expect(console.warn).not.toHaveBeenCalled();
     const finalReads = forgeViews();
     await minutes(60);
     expect(forgeViews()).toBe(finalReads);
@@ -662,12 +664,13 @@ describe('handoff follow-up poll', () => {
     gate.mockResolvedValue('daemon paused');
     await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
     expect(forgeViews()).toBe(reads);
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('skipped: daemon paused'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('skipped: daemon paused'));
+    expect(console.warn).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(1);
   });
 
   it('stops when the daemon stops', async () => {
-    await handOffPending();
+    const armed = await handOffPending();
     const reads = forgeViews();
     prWatcher.cancelHandoffFollowUps();
     expect(vi.getTimerCount()).toBe(0);
@@ -677,6 +680,11 @@ describe('handoff follow-up poll', () => {
     // A receipt while the daemon is stopped leaves the entry to the timer sweep.
     await handOffPending();
     expect(vi.getTimerCount()).toBe(0);
+    // Declining to arm is the designed handoff to the timer sweep: stdout, not stderr.
+    await prWatcher.followUpHandoffReceipt('app1', armed.receipt.id);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('not armed: CoS daemon is stopped'));
+    expect(console.warn).not.toHaveBeenCalled();
   });
 
   it('owns a throwing poll and keeps polling', async () => {
@@ -692,5 +700,25 @@ describe('handoff follow-up poll', () => {
     await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
     expect(mergePrMock).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Both ends of the bounded wait hand the entry to the timer sweep: designed, so stdout.
+  it('drops the poll without a fault when the gate reports the daemon stopped', async () => {
+    await handOffPending();
+    gate.mockResolvedValue('daemon-stopped');
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_INTERVAL_MS / 60000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('stopped: CoS daemon is stopped'));
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('hands a poll that keeps throwing back to the timer sweep at the cap, logging each throw as an error', async () => {
+    await handOffPending();
+    f.apps.get = () => { throw new Error('apps store unreadable'); };
+    await minutes(prWatcher.HANDOFF_FOLLOW_UP_CAP_MS / 60000 + prWatcher.HANDOFF_FOLLOW_UP_BACKOFF_MS / 60000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('apps store unreadable'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('reached its cap; the timer sweep owns its entries'));
+    expect(console.warn).not.toHaveBeenCalled();
   });
 });

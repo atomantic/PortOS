@@ -12,10 +12,10 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
+import { queueableImageParams } from '../imageGen/queueableParams.js';
 import * as store from './db.js';
 
 export const MOOD_BOARD_RENDER_TAG = 'moodBoardRender';
@@ -26,7 +26,9 @@ const deps = {
   getSettings: async () => (await import('../settings.js')).getSettings(),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
   getJob: async (jobId) => (await import('../mediaJobQueue/index.js')).getJob(jobId),
-  imageParams: (settings, route, common) => itemRenderParams(settings, route, common),
+  imageParams: (settings, route, common) => queueableImageParams(settings, route, common, {
+    what: 'board notes', code: 'MOOD_BOARD_RENDER_UNAVAILABLE',
+  }),
   emit: (payload) => import('../socket.js')
     .then(({ getIo }) => getIo()?.emit('mood-board:item-render', payload))
     .catch((err) => console.error(`❌ mood-board item-render emit failed: ${err.message}`)),
@@ -48,26 +50,6 @@ function buildItemRenderPrompt(board, item) {
       promptAddition('board-style', 'Board style', style && `Visual style: ${style}`),
     ].filter(Boolean),
   };
-}
-
-/** Job params for the chosen backend: a cloud provider bag, or the local model. */
-async function itemRenderParams(settings, { mode = null, model = null, target = null }, common) {
-  const [{ resolveRenderTargetConfig }, { resolveImageCleaners }] = await Promise.all([
-    import('../imageGen/cloudProviderConfig.js'),
-    import('../../lib/imageCleanDefaults.js'),
-  ]);
-  const resolved = resolveRenderTargetConfig(settings, target, { mode, model, usableInstallFallback: true });
-  if ((mode && resolved.mode !== mode) || !QUEUEABLE_IMAGE_MODES.includes(resolved.mode)) {
-    throw new ServerError(`The ${mode || resolved.mode} image backend cannot render board notes`, {
-      status: 409, code: 'MOOD_BOARD_RENDER_UNAVAILABLE',
-    });
-  }
-  if (resolved.cloud && !resolved.cloud.enabled) throw resolved.cloud.disabledError;
-  const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, resolved.mode);
-  if (resolved.cloud) return { ...resolved.cloud.jobParams, ...common, cleanC2PA, denoise };
-  const { resolveLocalImageModel } = await import('../imageGen/prepareParams.js');
-  const { pythonPath, selectedModel } = resolveLocalImageModel(settings, { modelId: model || undefined });
-  return { ...common, cleanC2PA, denoise, pythonPath, ...(selectedModel?.id ? { modelId: selectedModel.id } : {}) };
 }
 
 // Also used before prompt writing, so a disabled renderer never spends an LLM run.

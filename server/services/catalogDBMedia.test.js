@@ -158,6 +158,25 @@ describe('upsertMediaFromPeer', () => {
     expect(params).toEqual(['i1', 'a.png', 'portrait', 'r', 'c', 't', false, null, 't', JSON.stringify(metadata)]);
   });
 
+  it('binds the Casting library JSONB as a $n parameter, not an integer literal', async () => {
+    const library = { guide: true };
+    await catalogDB.upsertMediaFromPeer({
+      ingredientId: 'i1', mediaKey: 'a.png', kind: 'reference',
+      createdAt: 't', deleted: false, deletedAt: null, library,
+    });
+    const { sql, params } = calls[0];
+    expect(sql.replace(/\s+/g, ' ')).toMatch(/\$9, \$10\)/);
+    expect(params).toHaveLength(10);
+    expect(JSON.parse(params[9])).toMatchObject(library);
+
+    calls.length = 0;
+    await catalogDB.upsertMediaFromPeer({
+      ingredientId: 'i1', mediaKey: 'b.png', kind: 'reference', createdAt: 't', library,
+    });
+    expect(calls[0].sql.replace(/\s+/g, ' ')).toMatch(/\$6, \$7\)/);
+    expect(calls[0].params).toHaveLength(7);
+  });
+
   it('uses the tombstone-less INSERT (preserve local state) when the keys are absent', async () => {
     await catalogDB.upsertMediaFromPeer({
       ingredientId: 'i1', mediaKey: 'a.png', kind: 'portrait', createdAt: 't',

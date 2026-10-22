@@ -4,8 +4,6 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { discoverWorkspaces } from '../scripts/trusted-rebuilds.js';
-import { BRACES_PATCH_TARGET_VERSION } from '../scripts/lib/bracesDepthPatch.js';
-import { GET_URI_PATCH_TARGET_VERSION } from '../scripts/lib/getUriFtpPatch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -134,7 +132,10 @@ describe('dependency override parity across manifests (#2848)', () => {
       // server/ only, so the parity assertion above never sees it — this floor is
       // the sole guard against a downgrade back onto the vulnerable 0.34.x line
       // that @huggingface/transformers still requests.
-      'sharp': '0.35.0'
+      'sharp': '0.35.0',
+      // GHSA-8r9p-f939-6h3c and GHSA-q3jh-wrc6-jgq8 (credential headers leak across
+      // cross-origin redirects); 1.16.0 was itself the fix for the previous advisory.
+      'follow-redirects': '1.16.1'
     };
 
     const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
@@ -169,6 +170,15 @@ describe('dependency override parity across manifests (#2848)', () => {
     expect(stale).toEqual([]);
   });
 
+  // PortOS dropped its local braces depth guard (#9906) once pm2 7.1.0 stopped
+  // pulling braces in. A dependency that brings it back would run unguarded, so
+  // the guard has to return with it.
+  it.each(['package.json', 'server/package.json'])('%s resolves no braces install', rel => {
+    const resolved = Object.keys(readLockPackages(lockfileFor(rel)))
+      .filter((path) => packageNameFromLockPath(path) === 'braces');
+    expect(resolved).toEqual([]);
+  });
+
   // The three mechanisms that govern a dependency tree — the manifest `overrides`
   // block, a Dependabot entry, and the assertions above — were all hardcoded to
   // root/server/client, so `autofixer/` (a fourth npm install prefix with its own
@@ -177,36 +187,6 @@ describe('dependency override parity across manifests (#2848)', () => {
   // (issue #5658). MANIFESTS is a hand-written list; this derives the roster from
   // the same `discoverWorkspaces()` the install-script allowlist uses, so a fifth
   // workspace added later fails here instead of silently inheriting no governance.
-  it.each(['package.json', 'server/package.json'])('%s patches the get-uri FTP consumer (#9444)', rel => {
-    expect(readOverrides(rel)['get-uri']).toEqual({ 'basic-ftp': '6.2.1' });
-    const resolved = Object.entries(readLockPackages(lockfileFor(rel)))
-      .filter(([path]) => packageNameFromLockPath(path) === 'basic-ftp');
-    expect(resolved.length).toBeGreaterThan(0);
-    expect(resolved.map(([, metadata]) => metadata.version)).toEqual(
-      resolved.map(() => '6.2.1')
-    );
-  });
-
-  // scripts/lib/getUriFtpPatch.js edits get-uri's dist/ftp.js by exact anchor. A
-  // lockfile move to another get-uri would leave installs unpatched (the patcher
-  // skips a release it does not recognize), so the bump must re-verify the anchor.
-  it.each(['package.json', 'server/package.json'])('%s resolves the get-uri release the FTP LIST date patch targets (#9462)', rel => {
-    const resolved = Object.entries(readLockPackages(lockfileFor(rel)))
-      .filter(([path]) => packageNameFromLockPath(path) === 'get-uri');
-    expect(resolved.length).toBeGreaterThan(0);
-    expect(resolved.map(([, metadata]) => metadata.version)).toEqual(
-      resolved.map(() => GET_URI_PATCH_TARGET_VERSION)
-    );
-  });
-
-  it.each(['package.json', 'server/package.json'])('%s pins the braces install the depth patch guards (#9906)', rel => {
-    const resolved = Object.entries(readLockPackages(lockfileFor(rel)))
-      .filter(([path]) => packageNameFromLockPath(path) === 'braces');
-    expect(resolved.map(([path, metadata]) => [path, metadata.version])).toEqual([
-      ['node_modules/braces', BRACES_PATCH_TARGET_VERSION],
-    ]);
-  });
-
   it('governs every workspace manifest that ships its own lockfile', () => {
     const tracked = trackedLockfiles();
     const ungoverned = discoverWorkspaces()

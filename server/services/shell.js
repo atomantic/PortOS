@@ -140,7 +140,7 @@ function refusedForSessionCap() {
     if (!session.external) owned += 1;
   }
   if (owned < MAX_TOTAL_SESSIONS) return false;
-  console.warn(`🐚 Max total sessions reached (${MAX_TOTAL_SESSIONS})`);
+  console.log(`🐚 Max total sessions reached (${MAX_TOTAL_SESSIONS})`);
   return true;
 }
 

@@ -39,4 +39,17 @@ describe('PromotionPlanPanel', () => {
     expect(await screen.findByRole('link', { name: 'Answer replies' })).toBeTruthy();
     expect(getMusicVideoPromotionPlan).toHaveBeenCalledWith('mv-1', { silent: true });
   });
+
+  it('shows a load error with Retry and blocks re-planning when the saved plan cannot be read', async () => {
+    getMusicVideoPromotionPlan.mockRejectedValueOnce(new Error('Plan unavailable'));
+    renderPanel();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the scheduled steps — Plan unavailable');
+    expect(screen.getByRole('button', { name: /Plan promotion/ })).toBeDisabled();
+
+    getMusicVideoPromotionPlan.mockResolvedValueOnce({ steps: [{ id: 't9', title: 'Answer replies', dueAt: '2026-10-07T16:30:00.000Z' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('link', { name: 'Answer replies' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: /Plan again/ })).not.toBeDisabled();
+  });
 });

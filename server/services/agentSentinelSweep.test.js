@@ -1,11 +1,13 @@
 import { mkdtemp, readdir, utimes, writeFile } from 'fs/promises';
-import { rmSync } from 'fs';
+import { realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { sweepStaleDoneSentinels, STALE_SENTINEL_MIN_AGE_MS } from './agentSentinelSweep.js';
+import { sweepStaleDoneSentinels, checkoutDirsOf, STALE_SENTINEL_MIN_AGE_MS } from './agentSentinelSweep.js';
+import { execGit } from '../lib/execGit.js';
+import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 
 const tempRoots = [];
 let dir;
@@ -76,5 +78,27 @@ describe('sweepStaleDoneSentinels', () => {
     await writeAged('.agent-done-agent-dead', OLD);
 
     expect(await sweepStaleDoneSentinels([join(dir, 'nope'), dir, null, ''], new Set())).toBe(1);
+  });
+});
+
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('sweeping a repo\'s linked worktrees', () => {
+  it('removes a stale sentinel stranded in a linked worktree and leaves a live run\'s alone', async () => {
+    const repo = join(dir, 'repo');
+    await materializeGitRepo(repo, { identity: { email: 'test@example.com', name: 'Test' } });
+    const tree = join(dir, 'linked');
+    await execGit(['worktree', 'add', '-b', 'feature/done', tree, 'main'], repo);
+    for (const name of ['.agent-done-agent-dead', '.agent-done-agent-live']) {
+      await writeFile(join(tree, name), 'summary');
+      const when = new Date(Date.now() - OLD);
+      await utimes(join(tree, name), when, when);
+    }
+
+    const dirs = await checkoutDirsOf([repo]);
+    // Git prints the long, forward-slash form; Windows temp dirs arrive as 8.3 short names.
+    expect(dirs.map(d => realpathSync.native(d))).toContain(realpathSync.native(tree));
+    expect(await sweepStaleDoneSentinels(dirs, new Set(['agent-live']))).toBe(1);
+    expect(await readdir(tree)).toContain('.agent-done-agent-live');
+    expect(await readdir(tree)).not.toContain('.agent-done-agent-dead');
+    expect((await execGit(['status', '--porcelain'], tree)).stdout).not.toContain('agent-dead');
   });
 });

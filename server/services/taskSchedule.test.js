@@ -65,10 +65,13 @@ vi.mock('./apps.js', () => ({
   getAppTaskTypeInterval: vi.fn().mockResolvedValue(null),
   getAppTaskTypeIntervalMs: vi.fn().mockResolvedValue(null),
   getActiveApps: vi.fn().mockResolvedValue([]),
+  getAppById: vi.fn().mockResolvedValue(null),
   getAppTaskTypeOverrides: vi.fn().mockResolvedValue({}),
   clearAllPrWatcherState: vi.fn().mockResolvedValue({ changed: false }),
   clearAllIssueWatcherState: vi.fn().mockResolvedValue({ changed: false })
 }))
+
+vi.mock('./taskInputGate.js', () => ({ inputsUnchangedSince: vi.fn().mockResolvedValue(false), readHead: vi.fn() }))
 
 vi.mock('./instanceFeatures.js', () => ({
   isInstanceFeatureEnabled: vi.fn().mockResolvedValue(true),
@@ -189,7 +192,8 @@ import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromp
 // — the posture guard below iterates it so the two can't drift apart.
 import { NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js'
 import { enforceManagedAgentOptions } from './taskScheduleRegistry.js'
-import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_TASK_TYPES } from '../lib/auditCatalog.js'
+import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_TASK_TYPES, isAuditTaskType } from '../lib/auditCatalog.js'
+import { NO_CHANGE_SCHEDULED_TYPES } from '../lib/noChangeCompletion.js'
 
 import { loadState } from './cosState.js'
 
@@ -201,6 +205,8 @@ import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun } from './eventScheduler.js'
 import { addNotification, exists as notificationExists, removeByMetadata } from './notifications.js'
 import { isInstanceFeatureEnabled } from './instanceFeatures.js'
+import { inputsUnchangedSince } from './taskInputGate.js'
+import { getAppById } from './apps.js'
 
 const mockSchedule = ({ tasks = {}, executions = {}, templates = [], onDemandRequests = [] } = {}) => {
   readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates, onDemandRequests })
@@ -298,8 +304,9 @@ describe('taskSchedule', () => {
   describe('INSTALL_WIDE_TASK_TYPES', () => {
     it('names only task types that really sweep the whole install', () => {
       // repo-sync sweeps every managed checkout; user-action-review reads the
-      // install-wide operator-action ledger — neither is a per-app run.
-      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review', 'model-comparison-refresh'])
+      // install-wide operator-action ledger; error-log-triage reads PortOS's own
+      // PM2 logs — none is a per-app run.
+      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review', 'model-comparison-refresh', 'error-log-triage'])
     })
 
     it('every install-wide type is a registered task type', () => {
@@ -311,7 +318,7 @@ describe('taskSchedule', () => {
 
   describe('managed-app target task types', () => {
     it('keeps app-required scope explicit and separate from install-wide scope', () => {
-      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['private-security-assessment', 'pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile'])
+      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['private-security-assessment', 'pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile', 'branch-reconcile'])
       expect(requiresManagedAppTarget('pr-reviewer')).toBe(true)
       expect(requiresManagedAppTarget('security')).toBe(false)
       expect(requiresManagedAppTarget('repo-sync')).toBe(false)
@@ -507,6 +514,38 @@ describe('taskSchedule', () => {
     });
   });
 
+  describe('dependency-updates isolation posture', () => {
+    // Rationale lives on the registry entry: installs are never safe in the live checkout.
+    it('ships worktree + PR delivery with the no-change marker and locks only useWorktree', () => {
+      expect(DEFAULT_TASK_INTERVALS['dependency-updates'].taskMetadata).toEqual({ useWorktree: true, openPR: true, noChangeSuccess: true });
+      expect(MANAGED_AGENT_OPTIONS['dependency-updates']).toEqual(['useWorktree']);
+    });
+
+    it('loadSchedule re-isolates an install whose stored config predates the lock', async () => {
+      mockSchedule({
+        tasks: {
+          'dependency-updates': { type: 'cron', cronExpression: '0 6 * * 1', enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false } }
+        }
+      })
+      const meta = (await loadSchedule()).tasks['dependency-updates'].taskMetadata
+      expect(meta.useWorktree).toBe(true)
+      // Backfilled from the defaults by the taskMetadata deep-merge.
+      expect(meta.openPR).toBe(true)
+      expect(meta.noChangeSuccess).toBe(true)
+    })
+
+    // The finalizer admits a non-audit scheduled type to the no-change exemption by
+    // name (lib/noChangeCompletion.js), while the schedule default is what tells the
+    // agent a clean exit is allowed. Keep the two in parity so a type cannot carry
+    // the marker without the exemption, or the exemption without the marker.
+    it('keeps the no-change allowlist in parity with the shipped noChangeSuccess defaults', () => {
+      const marked = Object.entries(DEFAULT_TASK_INTERVALS)
+        .filter(([type, interval]) => !isAuditTaskType(type) && interval.taskMetadata?.noChangeSuccess === true)
+        .map(([type]) => type)
+      expect(new Set(marked)).toEqual(NO_CHANGE_SCHEDULED_TYPES)
+    })
+  });
+
   describe('pr-reviewer (layered public-content review task)', () => {
     it('describes the preflight-owned prompt and ships the optional three-stage pipeline read-only', () => {
       expect(TASK_TYPE_PROMPT_INFO['pr-reviewer']).toMatchObject({ mode: 'runtime-generated' });
@@ -606,6 +645,18 @@ describe('taskSchedule', () => {
       expect(schedule.tasks['do-release']).toMatchObject({ enabled: false, prompt: 'custom release prompt' })
       expect(schedule.tasks).not.toHaveProperty('release-check')
       expect(schedule.executions['task:do-release']).toMatchObject({ count: 2 })
+    })
+
+    it('turns the stall nudge off for a stored do-release schedule that never set it, and keeps an explicit choice', async () => {
+      mockSchedule({
+        tasks: { 'do-release': { type: 'on-demand', enabled: true, taskMetadata: { slashdoCommand: 'release', finishInFlight: true } } }
+      })
+      expect((await loadSchedule()).tasks['do-release'].taskMetadata).toMatchObject({ stallNudge: false, finishInFlight: true })
+
+      mockSchedule({
+        tasks: { 'do-release': { type: 'on-demand', enabled: true, taskMetadata: { slashdoCommand: 'release', stallNudge: true } } }
+      })
+      expect((await loadSchedule()).tasks['do-release'].taskMetadata.stallNudge).toBe(true)
     })
 
     it('should load and return existing v2 schedule', async () => {
@@ -2108,6 +2159,48 @@ describe('taskSchedule', () => {
   describe('triggerOnDemandTask', () => {
     beforeEach(() => {
       loadState.mockResolvedValue({ config: { improvementEnabled: true } })
+    })
+
+    describe('inputs-unchanged gate (#12907)', () => {
+      const HEAD = 'a'.repeat(40)
+      const gated = (lastCleanHead) => mockSchedule({
+        tasks: { 'upgrade-rehearsal': { type: 'on-demand', enabled: true } },
+        executions: { 'task:upgrade-rehearsal': { perApp: { 'app-1': { lastRun: null, count: 0, ...(lastCleanHead ? { lastCleanHead } : {}) } } } }
+      })
+      beforeEach(() => {
+        getAppById.mockResolvedValue({ id: 'app-1', repoPath: '/repo' })
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        inputsUnchangedSince.mockReset().mockResolvedValue(true)
+      })
+
+      it('declines unattended launches while no declared input changed since the clean baseline, but never a user Run', async () => {
+        gated(HEAD)
+        const refill = await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })
+        expect(refill).toMatchObject({ reason: 'inputs-unchanged' })
+        expect(inputsUnchangedSince).toHaveBeenCalledWith(expect.objectContaining({ repoPath: '/repo', lastCleanHead: HEAD }))
+        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1')).toMatchObject({ taskType: 'upgrade-rehearsal', origin: ON_DEMAND_ORIGINS.USER })
+      })
+
+      it('launches when an input changed or no clean baseline exists', async () => {
+        gated(HEAD)
+        inputsUnchangedSince.mockResolvedValue(false)
+        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })).toMatchObject({ taskType: 'upgrade-rehearsal' })
+        gated(null)
+        inputsUnchangedSince.mockClear()
+        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })).toMatchObject({ taskType: 'upgrade-rehearsal' })
+        expect(inputsUnchangedSince).not.toHaveBeenCalled()
+      })
+
+      it('reports inputs-unchanged from readiness instead of a due cron slot', async () => {
+        mockSchedule({
+          tasks: { 'upgrade-rehearsal': { type: 'cron', enabled: true, cronExpression: '* * * * *' } },
+          executions: { 'task:upgrade-rehearsal': { perApp: { 'app-1': { lastRun: null, count: 0, lastCleanHead: HEAD } } } }
+        })
+        parseCronToNextRun.mockReturnValue(new Date(Date.now() - 1000))
+        expect(await shouldRunTask('upgrade-rehearsal', 'app-1')).toMatchObject({ shouldRun: false, reason: 'inputs-unchanged' })
+        inputsUnchangedSince.mockResolvedValue(false)
+        expect(await shouldRunTask('upgrade-rehearsal', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
+      })
     })
 
     it('keeps model research global for both scheduled and manual dispatch', async () => {

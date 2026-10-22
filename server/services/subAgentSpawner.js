@@ -313,7 +313,7 @@ async function runInitSpawner() {
     // otherwise still announce "resuming held agent tasks" and drive a dequeue
     // cycle into a runner that is gone again. A reconnect re-arms it.
     clearTimeout(reconnectDequeueTimer);
-    emitLog('warn', '⏸️ CoS Runner disconnected — staying in runner mode, holding agent tasks until it returns');
+    emitLog('info', '⏸️ CoS Runner disconnected — staying in runner mode, holding agent tasks until it returns');
   });
 
   onCosRunnerEvent('connection:ready', () => {

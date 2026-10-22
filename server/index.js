@@ -154,6 +154,7 @@ import musicVideoCharacterStyleRoutes from './routes/musicVideoCharacterStyles.j
 import humanActionRoutes from './routes/humanActions.js';
 import spriteRoutes from './routes/sprites.js';
 import moodBoardRoutes from './routes/moodBoard.js';
+import storyboardRoutes from './routes/storyboards.js';
 import deckRoutes from './routes/decks.js';
 import threejsModelsRoutes from './routes/threejsModels.js';
 import filmStylesRoutes from './routes/filmStyles.js';
@@ -170,6 +171,7 @@ import albumsRoutes from './routes/albums.js';
 import tracksRoutes from './routes/tracks.js';
 import musicRoutes from './routes/music.js';
 import superColliderRoutes from './routes/superCollider.js';
+import dockerContainmentRoutes from './routes/dockerContainment.js';
 import conflictJournalRoutes from './routes/conflictJournal.js';
 import pipelineRoutes from './routes/pipeline/index.js';
 import importerRoutes from './routes/importer.js';
@@ -190,6 +192,7 @@ import remoteDesktopRoutes from './routes/remoteDesktop.js';
 import remoteDesktopViewerRoutes from './routes/remoteDesktopViewer.js';
 import { initSocket } from './services/socket.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';
+import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
 import { bootstrapServices, runBootSequence, registerShutdownHandlers } from './services/bootstrap.js';
 import { errorMiddleware } from './lib/errorHandler.js';
@@ -238,6 +241,8 @@ const io = new Server(httpServer, {
 // request input. Mount the HTTPS server and its optional loopback HTTP mirror.
 remoteDesktopBroker.mountWebSocket(httpServer);
 remoteDesktopBroker.mountWebSocket(localHttpServer);
+// Viewer tokens obey the same revocation contract as every other session credential.
+authEvents.on('sessions:revoked-all', () => remoteDesktopBroker.revokeAll('PortOS sessions revoked'));
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);
@@ -470,6 +475,7 @@ app.use('/api/music-video/character-styles', musicVideoCharacterStyleRoutes);
 app.use('/api/music-video', musicVideoRoutes);
 app.use('/api/sprites', spriteRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);
+app.use('/api/storyboards', storyboardRoutes);
 app.use('/api/decks', deckRoutes);
 app.use('/api/threejs-models', threejsModelsRoutes);
 app.use('/api/film-styles', filmStylesRoutes);
@@ -485,6 +491,7 @@ app.use('/api/artists', artistsRoutes);
 app.use('/api/albums', albumsRoutes);
 app.use('/api/tracks', tracksRoutes);
 app.use('/api/music/supercollider', superColliderRoutes);
+app.use('/api/docker-containment', dockerContainmentRoutes);
 app.use('/api/music', musicRoutes);
 app.use('/api/pipeline', pipelineRoutes);
 app.use('/api/conflict-journal', conflictJournalRoutes);

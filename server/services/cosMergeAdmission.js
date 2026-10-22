@@ -11,7 +11,7 @@ import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 import { repositoryCleanupMergeTarget } from '../lib/recoveryMergeTarget.js';
-import { createEventLoopLagProbe, phaseGroup, roundMs, systemClock } from '../lib/eventLoopLagProbe.js';
+import { createEventLoopLagProbe, formatLoadAttribution, phaseGroup, roundMs, systemClock } from '../lib/eventLoopLagProbe.js';
 
 const retryAfterMs = 5000;
 export const ADMISSION_QUEUE_TIMEOUT_MS = 15_000;
@@ -49,10 +49,10 @@ export const SLOW_ADMISSION_MS = 1000;
 let clock = systemClock;
 let lagProbe = createEventLoopLagProbe({ clock });
 
-/** Inject a deterministic clock; `null` restores the system clock. */
-export function __setMergeAdmissionClockForTests(next) {
+/** Inject a deterministic clock and optional resource counters; `null` restores the system ones. */
+export function __setMergeAdmissionClockForTests(next, resources) {
   clock = next ?? systemClock;
-  lagProbe = createEventLoopLagProbe({ clock });
+  lagProbe = createEventLoopLagProbe({ clock, resources });
 }
 
 const REPORTED_PHASES = ['queue', 'trustedState', 'stateLoad', 'origin', 'ownerRecovery', 'persistence'];
@@ -82,11 +82,13 @@ async function transaction(work, operation) {
   const report = (status) => {
     const summary = status === 'pending' ? span.snapshot() : span.end();
     if (status === 'settled' && summary.totalMs < SLOW_ADMISSION_MS) return;
+    // Same contract as claim ownership: a queue-timeout or pending report only appears during the
+    // event-loop stalls #12852 reopens on, so it stays on stderr; a slow settle is telemetry.
     const log = status === 'failed' ? console.error : status === 'settled' ? console.log : console.warn;
     const phases = REPORTED_PHASES.map((name) => `${name}Ms=${phaseGroup(summary, name).ms}`);
     const stages = REPORTED_STAGES.map(([name, stage]) => `${stage}Ms=${summary.phases[`${name}.${stage}`]?.ms ?? 0}`);
     const lag = REPORTED_LAG_PHASES.map((name) => `${name}LagMs=${phaseGroup(summary, name).lagMs}`);
-    log(`🚦 Merge admission operation=${operation} status=${status} phase=${summary.phase.split('.')[0]} phaseMs=${summary.phaseMs} totalMs=${summary.totalMs} ${phases.join(' ')} ${stages.join(' ')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} ${lag.join(' ')} timerLateMs=${timerLateMs}`);
+    log(`🚦 Merge admission operation=${operation} status=${status} phase=${summary.phase.split('.')[0]} phaseMs=${summary.phaseMs} totalMs=${summary.totalMs} ${phases.join(' ')} ${stages.join(' ')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} ${lag.join(' ')} timerLateMs=${timerLateMs}${formatLoadAttribution(summary.load)}`);
   };
   const measure = async (name, fn) => {
     span.mark(name);

@@ -182,6 +182,12 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // app's tree. Its buildTaskInput hook (userActionReviewHooks.js) skips the
   // dispatch entirely when the ledger is empty, so no provider call is burned.
   'user-action-review',
+  // Reads new stderr lines from PortOS's own PM2 error logs, fingerprints and
+  // dedupes them against the tracker (evidence comments, regression issues),
+  // and files one investigation task per new fingerprint above a threshold.
+  // Install-wide only; its buildTaskInput hook (errorLogTriageHooks.js) does
+  // the whole pass deterministically and never spawns a coordinator agent.
+  'error-log-triage',
   // layered-intelligence is a PROGRAMMATIC-I/O task: it spawns a NORMAL reasoning
   // agent (visible in the CoS queue + Active Agents, TUI-attachable) with two
   // deterministic hooks around it — buildTaskInput gathers the app's goals +

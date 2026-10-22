@@ -1,0 +1,71 @@
+/**
+ * PostgreSQL leaf I/O for storyboards. The full sanitized record lives in
+ * `data` JSONB; name/universe_id/updated_at are mirrored for the list sort and
+ * universe filter, and the tombstone pair keeps a later federation additive.
+ */
+
+import { query } from '../../lib/db.js';
+import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+import { toPgJson } from '../../lib/pgJson.js';
+
+export async function readRaw(id) {
+  const { rows } = await query('SELECT data FROM storyboards WHERE id = $1', [id]);
+  return rows[0]?.data ?? null;
+}
+
+export async function listRaw() {
+  const { rows } = await query('SELECT data FROM storyboards ORDER BY updated_at DESC, id ASC');
+  return rows.map((row) => row.data);
+}
+
+export async function writeRaw(id, record) {
+  const now = new Date().toISOString();
+  const createdAt = mirrorTimestamp(record?.createdAt, now);
+  await query(
+    `INSERT INTO storyboards (id, name, universe_id, data, created_at, updated_at, deleted, deleted_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       universe_id = EXCLUDED.universe_id,
+       data = EXCLUDED.data,
+       updated_at = EXCLUDED.updated_at,
+       deleted = EXCLUDED.deleted,
+       deleted_at = EXCLUDED.deleted_at`,
+    [
+      id,
+      record.name,
+      record.universeId ?? null,
+      toPgJson(record),
+      createdAt,
+      mirrorTimestamp(record?.updatedAt, createdAt),
+      record.deleted === true,
+      mirrorTimestamp(record.deletedAt, null),
+    ],
+  );
+  return record;
+}
+
+export async function deleteRaw(id) {
+  await query('DELETE FROM storyboards WHERE id = $1', [id]);
+}
+
+/** Every board id (live AND tombstones). */
+export async function listIds() {
+  const { rows } = await query('SELECT id FROM storyboards');
+  return rows.map((row) => row.id);
+}
+
+/** Live board ids only — id-only projection hitting idx_storyboards_live. */
+export async function listLiveIds() {
+  const { rows } = await query('SELECT id FROM storyboards WHERE deleted = FALSE');
+  return rows.map((row) => row.id);
+}
+
+/** Tombstoned board ids deleted before `beforeMs` — the GC candidate scan. */
+export async function listTombstoneIdsBefore(beforeMs) {
+  const { rows } = await query(
+    'SELECT id FROM storyboards WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1',
+    [new Date(beforeMs).toISOString()],
+  );
+  return rows.map((row) => row.id);
+}

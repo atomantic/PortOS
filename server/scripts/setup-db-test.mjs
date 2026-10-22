@@ -25,6 +25,7 @@ import pg from 'pg';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { describeSetupFailure } from './setupDbTestFailure.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TEST_DB = process.env.PGTESTDATABASE || 'portos_test';
@@ -43,25 +44,36 @@ const conn = {
   password: process.env.PGPASSWORD || 'portos',
 };
 
-// 1. Create the database if absent (from a maintenance connection — CREATE
-//    DATABASE cannot run inside the target DB or a transaction).
-const admin = new pg.Client({ ...conn, database: process.env.PGADMINDATABASE || 'portos' });
-await admin.connect();
-const exists = await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [TEST_DB]);
-if (exists.rowCount === 0) {
-  await admin.query(`CREATE DATABASE ${TEST_DB}`);
-  console.log(`🗄️ Created test database '${TEST_DB}'`);
-} else {
-  console.log(`🗄️ Test database '${TEST_DB}' already exists`);
-}
-await admin.end();
+async function provision() {
+  // 1. Create the database if absent (from a maintenance connection — CREATE
+  //    DATABASE cannot run inside the target DB or a transaction).
+  const admin = new pg.Client({ ...conn, database: process.env.PGADMINDATABASE || 'portos' });
+  await admin.connect();
+  const exists = await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [TEST_DB]);
+  if (exists.rowCount === 0) {
+    await admin.query(`CREATE DATABASE ${TEST_DB}`);
+    console.log(`🗄️ Created test database '${TEST_DB}'`);
+  } else {
+    console.log(`🗄️ Test database '${TEST_DB}' already exists`);
+  }
+  await admin.end();
 
-// 2. Apply the schema. node-postgres runs a multi-statement string in one
-//    simple-query call (no params), so the whole init-db.sql — including the $$
-//    function bodies — applies as a single batch.
-const sql = readFileSync(join(HERE, 'init-db.sql'), 'utf8');
-const client = new pg.Client({ ...conn, database: TEST_DB });
-await client.connect();
-await client.query(sql);
-await client.end();
-console.log(`✅ Schema applied to '${TEST_DB}'. Run the DB suites with: npm run test:db --prefix server`);
+  // 2. Apply the schema. node-postgres runs a multi-statement string in one
+  //    simple-query call (no params), so the whole init-db.sql — including the $$
+  //    function bodies — applies as a single batch.
+  const sql = readFileSync(join(HERE, 'init-db.sql'), 'utf8');
+  const client = new pg.Client({ ...conn, database: TEST_DB });
+  await client.connect();
+  await client.query(sql);
+  await client.end();
+  console.log(`✅ Schema applied to '${TEST_DB}'. Run the DB suites with: npm run test:db --prefix server`);
+}
+
+// A failure must end the process non-zero with one readable line: pregate and CI
+// treat the exit status as the only provisioning verdict.
+try {
+  await provision();
+} catch (error) {
+  console.error(`❌ Failed to provision '${TEST_DB}': ${describeSetupFailure(error, TEST_DB)}`);
+  process.exit(1);
+}

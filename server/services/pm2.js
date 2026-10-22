@@ -9,6 +9,7 @@ import { homedir } from 'os';
 import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
+import { beginLoadSample, formatLoadAttribution, roundMs } from '../lib/eventLoopLagProbe.js';
 import { PATHS } from '../lib/paths.js';
 import { serverSecretEnvKeys, withoutServerSecretsEnv } from '../lib/processEnv.js';
 // The leaf, not readinessNotify.js: its observer's lazy imports would join
@@ -47,16 +48,17 @@ export function clearJlistCache(pm2Home = null) {
  * Record a PM2 read failure and log it only on state change or reason change.
  * @param {string|null} pm2Home The PM2 home being read
  * @param {string} errorReason Formatted error description
+ * @param {string} [attribution] Numbers appended to the line, never part of the dedupe key
  * @private
  */
-function logJlistFailure(pm2Home, errorReason) {
+function logJlistFailure(pm2Home, errorReason, attribution = '') {
   const key = cacheKey(pm2Home);
   const state = jlistFailureState.get(key);
   const homeDesc = pm2Home ? 'custom' : 'default';
 
   // Log only if no prior state, or if the reason changed
   if (!state || state.lastError !== errorReason) {
-    console.error(`❌ PM2 read failed (home=${homeDesc}): ${errorReason}`);
+    console.error(`❌ PM2 read failed (home=${homeDesc}): ${errorReason}${attribution}`);
     jlistFailureState.set(key, { lastError: errorReason });
   }
 }
@@ -501,6 +503,10 @@ function fetchJlist(pm2Home = null) {
   const inflight = jlistInflight.get(key);
   if (inflight) return inflight;
 
+  // A timed-out read is the usual first symptom of a stalled loop, so it carries
+  // its own busy-versus-starved attribution (#12852).
+  const startedAt = performance.now();
+  const sample = beginLoadSample();
   // Defer the read until the single-flight entry exists, even for a sync callback.
   const promise = Promise.resolve().then(() => pm2Home
     ? execPm2(['jlist'], { env: buildEnv(pm2Home), timeoutMs: JLIST_TIMEOUT_MS })
@@ -514,9 +520,13 @@ function fetchJlist(pm2Home = null) {
     jlistCache.set(key, { data: list, ts: Date.now() });
     return list;
   }).catch(error => {
-    logJlistFailure(pm2Home, error.message || String(error));
+    const attribution = error?.timedOut
+      ? ` wallMs=${roundMs(performance.now() - startedAt)}${formatLoadAttribution(sample.read())}`
+      : '';
+    logJlistFailure(pm2Home, error.message || String(error), attribution);
     return null;
   }).finally(() => {
+    sample.end();
     if (jlistInflight.get(key) === promise) jlistInflight.delete(key);
   });
 
@@ -552,6 +562,21 @@ export async function listProcessesStrict(pm2Home = null) {
   const list = await fetchJlist(pm2Home);
   if (!list) return null;
   return list.map(mapProcess);
+}
+
+/**
+ * The running daemon's own pm2 and Node versions — what the Node runtime panel
+ * compares against the pm2 PortOS ships. Only those two fields leave this
+ * function: the daemon's report also carries its whole environment.
+ * @returns {Promise<{pm2Version: string|null, nodeVersion: string|null}|null>} null when unreachable
+ */
+export async function getDaemonIdentity() {
+  const report = await connectAndRun(client => new Promise((resolve, reject) => {
+    client.Client.executeRemote('getReport', {}, (error, value) => error ? reject(error) : resolve(value));
+  }), JLIST_TIMEOUT_MS).catch(() => null);
+  if (!report) return null;
+  const text = (value) => (typeof value === 'string' && value && value !== 'N/A' ? value : null);
+  return { pm2Version: text(report.pm2_version), nodeVersion: text(report.node_version) };
 }
 
 /** Internal maintenance inventory: fresh daemon read, no UI cache or env dump. */

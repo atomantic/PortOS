@@ -225,7 +225,7 @@ describe('ci.yml server node_modules cache', () => {
   it('pins the key to the Node major the jobs actually install', () => {
     // The major, not the resolved patch: NODE_MODULE_VERSION is stable across
     // patch releases, so keying on the patch would discard a ~570 MB entry on
-    // every Node 24.x release for no ABI benefit. The tradeoff is that the
+    // every Node 26.x release for no ABI benefit. The tradeoff is that the
     // literal has to be kept honest, which is what this asserts.
     for (const [id, body] of installers) {
       const pinned = body.match(/node-version: (?<major>\d+)\.x/);

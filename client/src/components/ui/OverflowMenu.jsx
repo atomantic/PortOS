@@ -31,8 +31,21 @@ const TONES = {
 const ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
 const MENU_WIDTH = 176;
 
-export default function OverflowMenu({ label, items = [], className = '', triggerRef: externalTriggerRef }) {
-  const [open, setOpen] = useState(false);
+// `open` + `onOpenChange` make it controlled, for a host that also opens the
+// menu another way (a right-click or long-press on the card it belongs to).
+// An item's optional `shortcut` text shows at the row's end.
+export default function OverflowMenu({
+  label, items = [], className = '', triggerRef: externalTriggerRef, open: openProp, onOpenChange,
+}) {
+  const [innerOpen, setInnerOpen] = useState(false);
+  const open = openProp ?? innerOpen;
+  const openRef = useRef(open);
+  openRef.current = open;
+  const setOpen = useCallback((next) => {
+    const value = typeof next === 'function' ? next(openRef.current) : next;
+    if (onOpenChange) onOpenChange(value);
+    else setInnerOpen(value);
+  }, [onOpenChange]);
   const wrapperRef = useRef(null);
   // Callers that dismiss follow-up UI opened from an item (an inline confirm)
   // pass `triggerRef` so they can hand focus back to the trigger it came from.
@@ -48,7 +61,7 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
   const close = useCallback((refocus) => {
     setOpen(false);
     if (refocus) triggerRef.current?.focus();
-  }, []);
+  }, [setOpen]);
 
   useClickOutside([wrapperRef, popoverRef], open, () => setOpen(false));
   useEscapeKey(open, () => close(true));
@@ -122,6 +135,7 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
               <>
                 {item.icon ? <item.icon size={14} aria-hidden="true" /> : null}
                 <span>{item.label}</span>
+                {item.shortcut ? <span className="ml-auto text-[10px] text-gray-500">{item.shortcut}</span> : null}
               </>
             );
             // A navigating item is an anchor, not a button. Hand focus back to

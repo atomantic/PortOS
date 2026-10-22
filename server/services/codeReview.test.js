@@ -2372,12 +2372,17 @@ describe('codeReview helpers', () => {
         .mockResolvedValueOnce(mockTextResponse(thinkingRejectedBody, { ok: false, status: 400 }))
         .mockResolvedValueOnce(mockJsonResponse({ choices: [{ message: { content: 'No findings.' } }] }))
 
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const r = await runLocalCodeReview({ backend: 'ollama', model: 'nonthinking-model', diff: 'd', effort: 'low' })
 
       expect(global.fetch).toHaveBeenCalledTimes(2)
       const secondBody = JSON.parse(global.fetch.mock.calls[1][1].body)
       expect('reasoning_effort' in secondBody).toBe(false)
       expect(r).toMatchObject({ ok: true, effort: null, effortUnsupported: true, findings: 'No findings.' })
+      // A model without a thinking mode is a capability the call adapts to, not a fault: stdout.
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('nonthinking-model ignores reasoning_effort'))
+      expect(warn).not.toHaveBeenCalled()
     })
 
     it('does not retry a 400 that is unrelated to thinking', async () => {

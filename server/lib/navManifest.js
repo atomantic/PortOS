@@ -78,6 +78,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.music-video-cleanup', path: '/music-video/cleanup', label: 'Music Video Cleanup', section: 'Create', aliases: ['music-video-cleanup', 'mv-cleanup', 'music video cleanup'], keywords: ['superseded', 'renders', 'film looks', 'disk', 'cleanup'] },
   { id: 'nav.create.decks', path: '/decks', label: 'Decks', section: 'Create', aliases: ['decks', 'deck', 'card-deck', 'playing-cards', 'tarot', 'tarot-deck', 'cards'], keywords: ['playing cards', 'tarot', 'card deck', 'card design', 'suits', 'arcana', 'style guide', 'batch render', 'card art'] },
   { id: 'nav.create.mood-boards', path: '/mood-boards', label: 'Mood Boards', section: 'Create', aliases: ['mood-boards', 'mood-board', 'moodboard', 'mood', 'inspiration', 'references'], keywords: ['inspiration', 'reference', 'pin', 'visual', 'canvas', 'collect', 'pinboard', 'palette', 'ideas'] },
+  { id: 'nav.create.storyboards', path: '/storyboards', label: 'Storyboards', section: 'Create', aliases: ['storyboards', 'storyboard', 'story-board', 'shot-planner', 'beat-board'], keywords: ['story beats', 'panels', 'shots', 'animatic', 'plan', 'film', 'music video', 'sketch', 'shot list', 'previs'] },
   // Promoted out of the Media Gen tabs to a top-level Create page (#2930).
   // The id stays `nav.media.sprites` — it's opaque and stored in palette
   // history, so renaming it would orphan those entries.
@@ -219,6 +220,12 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.devtools.datadog', path: '/devtools/datadog', label: 'DataDog', section: 'Dev Tools', feature: 'datadog', previousPaths: ['/datadog'], aliases: ['datadog', 'devtools-datadog'] },
   { id: 'nav.devtools.flows', path: '/devtools/flows', label: 'Flows', section: 'Dev Tools', aliases: ['flows', 'integration-flows', 'workflows'], keywords: ['architecture', 'diagram', 'data flow', 'integrations', 'how it works'] },
   { id: 'nav.devtools.github', path: '/devtools/github', label: 'GitHub', section: 'Dev Tools', aliases: ['github', 'devtools-github'] },
+  // ⌘K / voice only — no sidebar row: tabs of the GitHub page.
+  { id: 'nav.devtools.github-accounts', path: '/devtools/github/accounts', label: 'GitHub Accounts', section: 'Dev Tools', aliases: ['github-accounts', 'github-enterprise'], keywords: ['github', 'enterprise', 'ghes', 'gh auth', 'login', 'trust', 'notifications'] },
+  { id: 'nav.devtools.github-inbox', path: '/devtools/github/inbox', label: 'GitHub Inbox', section: 'Dev Tools', aliases: ['github-inbox', 'github-notifications'], keywords: ['github', 'notifications', 'inbox', 'mentions', 'review requests', 'mute', 'unsubscribe'] },
+  { id: 'nav.devtools.github-audit', path: '/devtools/github/audit', label: 'GitHub Notification Audit', section: 'Dev Tools', aliases: ['github-audit', 'notification-audit'], keywords: ['github', 'notifications', 'unwatch', 'unsubscribe', 'subscriptions', 'noise'] },
+  { id: 'nav.devtools.github-automations', path: '/devtools/github/automations', label: 'GitHub Automations', section: 'Dev Tools', aliases: ['github-automations', 'github-triage'], keywords: ['github', 'notifications', 'schedule', 'triage', 'observe', 'run now'] },
+  { id: 'nav.devtools.github-repos', path: '/devtools/github/repos', label: 'GitHub Repos', section: 'Dev Tools', aliases: ['github-repos', 'github-secrets'], keywords: ['github', 'repositories', 'secrets', 'archive', 'npm'] },
   { id: 'nav.devtools.history', path: '/devtools/history', label: 'History', section: 'Dev Tools', aliases: ['devtools-history'] },
   { id: 'nav.devtools.image-clean', path: '/devtools/image-clean', label: 'Image Cleaner', section: 'Dev Tools', aliases: ['image-clean', 'image-cleaner'], keywords: ['metadata', 'c2pa', 'content-credentials', 'sharp', 'denoise'] },
   { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', feature: 'jira', previousPaths: ['/jira'], aliases: ['jira', 'devtools-jira'] },

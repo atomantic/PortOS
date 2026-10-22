@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -12,7 +12,11 @@ import ModelSelect from '../../ModelSelect';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { useVideoFileSrc } from '../../../hooks/useVideoFileSrc';
+import useListResource from '../../../hooks/useListResource';
+import ListLoadError from '../../ui/ListLoadError';
 import { sceneShotWarnings } from '../../../lib/shotContinuity';
+
+const fetchVideoModels = () => listVideoModels({ silent: true });
 
 const PROJECT_EVENTS = ['creative-director:project:changed'];
 
@@ -32,7 +36,7 @@ const STATUS_LABEL = {
 // the video-model list loaded) the video model. Rendered identically in the
 // initial-start and restart-confirm toolbars so the two paths can't drift.
 const SELECT_CLS = 'bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300';
-function RenderControls({ aspectRatio, setAspectRatio, quality, setQuality, modelId, setModelId, videoModels, disabled }) {
+function RenderControls({ aspectRatio, setAspectRatio, quality, setQuality, modelId, setModelId, videoModels, modelsError, onRetryModels, disabled }) {
   return (
     <>
       <select
@@ -72,6 +76,7 @@ function RenderControls({ aspectRatio, setAspectRatio, quality, setQuality, mode
           className={`${SELECT_CLS} max-w-[180px]`}
         />
       )}
+      {modelsError && <ListLoadError what="video models" error={modelsError} onRetry={onRetryModels} />}
     </>
   );
 }
@@ -106,17 +111,9 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
   // (set after a render starts) restores the user's prior choice on reload.
   const [modelId, setModelId] = useState(stage.modelId || '');
 
-  // Load the video-model list once for the picker. Secondary control — a fetch
-  // failure just hides the model select (the user still gets the server
-  // default), so swallow the error rather than toasting.
-  const [videoModels, setVideoModels] = useState([]);
-  useEffect(() => {
-    let cancelled = false;
-    listVideoModels({ silent: true })
-      .then((models) => { if (!cancelled) setVideoModels(Array.isArray(models) ? models : []); })
-      .catch(() => { if (!cancelled) setVideoModels([]); });
-    return () => { cancelled = true; };
-  }, []);
+  // Secondary control: on a failed read the picker is replaced by an inline
+  // error with Retry; rendering still works against the server default model.
+  const { items: videoModels, state: modelsState, error: modelsError, retry: retryModels } = useListResource(fetchVideoModels);
 
   const { data: rawCdProject } = useSocketResource(
     () => cdProjectId ? getCreativeDirectorProject(cdProjectId, { slim: true }) : null,
@@ -215,7 +212,8 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
               aspectRatio={aspectRatio} setAspectRatio={setAspectRatio}
               quality={quality} setQuality={setQuality}
               modelId={modelId} setModelId={setModelId}
-              videoModels={videoModels} disabled={submitting}
+              videoModels={videoModels} modelsError={modelsState === 'error' ? modelsError : null} onRetryModels={retryModels}
+              disabled={submitting}
             />
             <button
               type="button"
@@ -235,7 +233,8 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
               aspectRatio={aspectRatio} setAspectRatio={setAspectRatio}
               quality={quality} setQuality={setQuality}
               modelId={modelId} setModelId={setModelId}
-              videoModels={videoModels} disabled={submitting}
+              videoModels={videoModels} modelsError={modelsState === 'error' ? modelsError : null} onRetryModels={retryModels}
+              disabled={submitting}
             />
             <button
               type="button"

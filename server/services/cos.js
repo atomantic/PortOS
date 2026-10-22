@@ -348,7 +348,7 @@ export function start() {
 
 async function runStart() {
   if (isDaemonRunning()) {
-    emitLog('warn', 'CoS already running');
+    emitLog('info', '⏭️ CoS already running');
     return { success: false, error: 'Already running' };
   }
 
@@ -513,7 +513,8 @@ async function bootDaemon(state) {
       if (learningInsights?.recommendations?.length > 0) {
         const recommendations = learningInsights.recommendations.slice(0, 3);
         for (const rec of recommendations) {
-          const level = rec.type === 'warning' ? 'warn' : rec.type === 'action' ? 'info' : 'debug';
+          // A recommendation is advice re-announced every cycle, not a fault — stdout only.
+          const level = rec.type === 'warning' || rec.type === 'action' ? 'info' : 'debug';
           emitLog(level, `🧠 Learning: ${rec.message}`, { recommendationType: rec.type });
         }
         cosEvents.emit('learning:recommendations', {
@@ -1443,6 +1444,8 @@ export function perpetualRefillPlan(agent, schedule) {
     // a task queued before the field existed is.
     const origin = agent?.metadata?.taskOnDemandOrigin || ON_DEMAND_ORIGINS.USER;
     if (!DRAINABLE_ON_DEMAND_ORIGINS.has(origin)) return { lane: 'skip' };
+    // Reconciliation is per-repository: an app-less legacy run would re-issue itself forever.
+    if (agentScheduledType(agent) === 'branch-reconcile' && !agent?.metadata?.taskApp) return { lane: 'skip' };
     return { lane: 'onDemand', taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null };
   }
   return { lane: 'queue' };

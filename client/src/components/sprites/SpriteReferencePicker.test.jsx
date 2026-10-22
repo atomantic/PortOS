@@ -111,10 +111,15 @@ describe('SpriteReferencePicker', () => {
     expect(await screen.findByText(/No sprites with a locked main reference yet/)).toBeInTheDocument();
   });
 
-  it('falls back to an empty list when the fetch fails', async () => {
-    listSpriteReferenceSources.mockRejectedValue(new Error('offline'));
+  it('reports a failed fetch with Retry instead of claiming nothing is locked', async () => {
+    listSpriteReferenceSources.mockRejectedValueOnce(new Error('offline'));
     renderPicker();
-    expect(await screen.findByText(/No sprites with a locked main reference yet/)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load reference sprites/);
+    expect(screen.queryByText(/No sprites with a locked main reference yet/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Field Medic')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('refetches on each open and resets the search on close', async () => {

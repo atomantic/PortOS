@@ -6,6 +6,7 @@ import {
   createPrivacyOrg, updatePrivacyOrg, getOrgHoldings, setOrgHoldings, getSocialAccounts,
 } from '../../services/api';
 import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import toast from '../ui/Toast';
 import { ORG_CATEGORIES, ORG_TRUST_LEVELS, ORG_STATUSES, VAULT_TYPES, INPUT_CLS, labelFor } from './constants';
 
@@ -13,6 +14,9 @@ const EMPTY = {
   name: '', category: 'other', website: '', trust: 'trusted', status: 'active',
   contactEmail: '', contactPhone: '', notes: '', socialAccountId: '',
 };
+
+// Digital Twin accounts for the cross-link picker (#2147); the component owns the error UI.
+const fetchSocialAccounts = () => getSocialAccounts({}, { silent: true }).then((res) => res?.accounts || []);
 
 const HOLDINGS_READY = Object.freeze({ state: 'ready', error: null });
 const HOLDINGS_LOADING = Object.freeze({ state: 'loading', error: null });
@@ -37,11 +41,10 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, vaultErr
   // erase every holding the org has.
   const [holdingsLoad, setHoldingsLoad] = useState(HOLDINGS_READY);
   const [holdingsAttempt, setHoldingsAttempt] = useState(0);
-  const [socialAccounts, setSocialAccounts] = useState([]); // Digital Twin accounts for the cross-link picker
+  const { items: socialAccounts, state: accountsState, error: accountsError, retry: retryAccounts } = useListResource(fetchSocialAccounts, { enabled: open });
 
   useEffect(() => {
     if (!open) return undefined;
-    let active = true;
     setForm(org
       ? {
         name: org.name ?? '',
@@ -56,12 +59,7 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, vaultErr
       }
       : { ...EMPTY });
     setSelected(new Set());
-    // Load Digital Twin social accounts for the cross-link picker (#2147). Degrades
-    // to no picker options if the twin has none — never blocks org editing.
-    getSocialAccounts()
-      .then((res) => { if (active) setSocialAccounts(res?.accounts || []); })
-      .catch(() => { if (active) setSocialAccounts([]); });
-    return () => { active = false; };
+    return undefined;
   }, [open, org]);
 
   useEffect(() => {
@@ -172,14 +170,17 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, vaultErr
             className={INPUT_CLS}
           >
             <option value="">— None —</option>
-            {/* Preserve a stale link (account since deleted) so the select isn't blank. */}
+            {/* Preserve the current link so the select isn't blank; it is only "unavailable" once the list actually loaded without it. */}
             {form.socialAccountId && !socialAccounts.some((a) => a.id === form.socialAccountId) && (
-              <option value={form.socialAccountId}>Linked account (unavailable)</option>
+              <option value={form.socialAccountId}>{accountsState === 'ready' ? 'Linked account (unavailable)' : 'Linked account'}</option>
             )}
             {socialAccounts.map((a) => (
               <option key={a.id} value={a.id}>{accountLabel(a)}</option>
             ))}
           </select>
+          {accountsState === 'error' && (
+            <ListLoadError what="Digital Twin social accounts" error={accountsError} onRetry={retryAccounts} className="mt-1" />
+          )}
           <p className="text-[11px] text-gray-500 mt-1">
             Cross-links this org to one of your Digital Twin social accounts — the account shows an &ldquo;in org registry&rdquo; badge in return.
           </p>

@@ -142,6 +142,6 @@ export async function dropUnsupportedOllamaThinking(provider, model, effort = nu
   if (!await ollamaModelRejectsThinking(provider, model)) return keep
 
   const { effort: _requestedEffort, thinking: _requestedThinking, ...rest } = provider
-  console.warn(`⚠️ ${model} does not support thinking — running without a reasoning effort`)
+  console.log(`⏭️ ${model} does not support thinking — running without a reasoning effort`)
   return { provider: { ...rest, thinking: false }, effort: null, dropped: true }
 }

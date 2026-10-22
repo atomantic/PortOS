@@ -466,6 +466,9 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   };
   const result = await reconcile(app.repoPath, {
     cleanup: actions.cleanupMerged !== false,
+    // A fresh SUPERSEDED verdict is terminal: nothing else retires the branch,
+    // so holding it only re-reports it. Backup-first, behind the same owner gates.
+    reapSuperseded: actions.cleanupMerged !== false && metadata.reapSuperseded !== false,
     ...(pendingMergeBranches !== undefined && { pendingMergeBranches }),
     activeAgentIds,
     claimOwners: { agents: liveAgents, readAgents: readClaimOwnershipAgents },
@@ -509,9 +512,9 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   if (result.reapedSuperseded?.length) {
     emitLog('info', `🔀 branch-reconcile ${app.name}: reaped ${result.reapedSuperseded.length} verified-superseded branch(es) (backed up under data/cos/abandoned-worktree-backups)`, { appId: app.id, analysisType: taskType });
   }
-  // Verified-superseded branches are reaped by the reconciler itself and counted
-  // in `cleaned`. What is left in `superseded` is the reap's leftovers — held by a
-  // lock or a live agent — so name them rather than letting them
+  // Verified-superseded branches are reaped by the reconciler itself (reported in
+  // `reapedSuperseded`). What is left in `superseded` is the reap's leftovers —
+  // held by a lock, a live agent, or the reapSuperseded toggle — so name them rather than letting them
   // vanish into a quiet park; the invisibility is the same failure mode as a
   // lingering worktree reported as "cleaned 0".
   const supersededSuffix = countSuffix(result.superseded, 'branch(es) verified superseded, reap held back', (b) => b.holdReason);

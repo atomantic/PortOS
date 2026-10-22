@@ -132,6 +132,26 @@ describe('completed branch archival boundary', () => {
     expect(beforeMutation).toHaveBeenCalledTimes(2);
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'prune')).toBe(false);
   });
+  it('reports a caller gate that keeps the checkout on stdout, since that cleanup is retryable by design', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await forceRemoveWorktreeDir('/repo', '/checkout', { label: 'cleanup', verifyRemoval: async () => 'retirement-forge-unavailable' }))
+      .toMatchObject({ removed: false, reason: 'retirement-forge-unavailable' });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Worktree cleanup incomplete'));
+    expect(warn).not.toHaveBeenCalled();
+  });
+  it('warns when Git itself refused to remove a checkout that survives', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    execGitMock.mockImplementation(async args => {
+      if (args[0] === 'worktree' && args[1] === 'remove') throw new Error('Permission denied');
+      return { stdout: '', exitCode: 0 };
+    });
+    expect(await forceRemoveWorktreeDir('/repo', '/checkout', { label: 'cleanup', verifyRemoval: async () => null }))
+      .toMatchObject({ removed: false, reason: 'worktree-removal-refused' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Worktree cleanup incomplete'));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Worktree cleanup incomplete'));
+  });
   it.each(['archive failure', 'archive verification failure'])('never sends the deletion when there is an %s', async failure => {
     if (failure === 'archive failure') preserveBranchMock.mockRejectedValue(new Error('archive disk full'));
     else preserveBranchMock.mockResolvedValue({ archiveDir: '/branch-archive', verify: async () => false });
@@ -231,6 +251,11 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
     expect(r.clean).toBe(false);
     expect(r.hasRealChanges).toBe(true);
     expect(r.lockfileOnly).toBe(false);
+  });
+
+  it('preserveLockfiles reports lockfiles as real changes', () => {
+    const r = classifyWorktreeDirt(' M package-lock.json\n', { preserveLockfiles: true });
+    expect(r).toMatchObject({ lockfileOnly: false, hasRealChanges: true, realChangePaths: ['package-lock.json'], lockfilePaths: [] });
   });
 
   it('recognizes a lockfile-only working tree and extracts paths', () => {
@@ -860,6 +885,17 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(calledWith(['checkout', '--', 'package-lock.json'])).toBe(false);
   });
 
+  it('dependency-updates lockfile-only dirt is preserved, not discarded', async () => {
+    scriptGit({ porcelain: ' M package-lock.json' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false, preserveLockfiles: true });
+
+    expect(result).toMatchObject({ removed: false, merged: false });
+    expect(result.warnings.join(' ')).toMatch(/uncommitted changes detected.*package-lock\.json/);
+    expect(calledWith(['checkout', '--', 'package-lock.json'])).toBe(false);
+    expect(calledWith(['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'])).toBe(false);
+  });
+
   it('restores a modified tracked lockfile with checkout before removal', async () => {
     scriptGit({ porcelain: ' M pnpm-lock.yaml' });
 
@@ -939,6 +975,8 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     afterEach(() => { rm.mockReset().mockResolvedValue(undefined); });
 
     it('reports removed:false with a retryable warning, keeps the branch, and flags cleanupIncomplete', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       present();
       failRemoval();
 
@@ -946,6 +984,10 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
       expect(result).toMatchObject({ merged: false, removed: false, cleanupIncomplete: true });
       expect(result.warnings.join(' ')).toMatch(/cleanup incomplete.*directory still present.*retryable/);
+      // Git refusing the removal is a fault, so the cleanup warning reaches stderr; the "branch kept"
+      // consequence is already explained by it and follows on stdout.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Worktree cleanup incomplete'));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Worktree for agent-x was not removed — branch cos/task-1/agent-x kept'));
       expect(execGitMock.mock.calls.some(([args]) => args[0] === 'push' && args.includes(':refs/heads/cos/task-1/agent-x'))).toBe(false);
     });
 

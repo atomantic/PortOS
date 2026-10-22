@@ -183,6 +183,13 @@ const summarizeDetails = (details) => {
 };
 
 /**
+ * stderr means "investigate" (root AGENTS.md). A 4xx is the server refusing a
+ * request (validation, auth, not-found, a guard's 409): an answered request, so
+ * stdout. Only a 5xx or a `critical` error is a fault and reaches stderr.
+ */
+const isServerFault = (error) => error.status >= 500 || error.severity === 'critical';
+
+/**
  * Handle rejected route promises with logging, Socket.IO events and the shared
  * HTTP error envelope; delegate failures after streaming starts to middleware.
  */
@@ -203,22 +210,23 @@ export function asyncHandler(fn) {
       // Log the error (skip stack traces for upstream platform issues)
       const route = `${req.method} ${routePath(req)}`;
       const suffix = causeSuffix(error);
-      const logMsg = `❌ Route error [${route}]: ${errorMessage(error)}${suffix}`;
       if (error.code === 'PLATFORM_UNAVAILABLE') {
-        console.warn(`⚠️ Platform unavailable [${route}]: ${error.message}${suffix}`);
+        // An upstream outage, not a defect here — the response already says so.
+        console.log(`🌩️ Platform unavailable [${route}]: ${error.message}${suffix}`);
       } else if (error.severity === 'warning') {
         // Expected high-volume 404s (e.g. speculative media-job archive
         // lookups) — already classified as benign; don't pollute server logs.
-      } else if (error.status >= 500) {
+      } else if (isServerFault(error)) {
         // Use the original Error's stack (from before normalization) when available
         // so diagnostics point to the actual throwing function, not normalizeError.
         const stack = error.originalStack || error.stack;
-        console.error(logMsg, stack ? stack : '');
+        console.error(`❌ Route error [${route}]: ${errorMessage(error)}${suffix}`, stack ? stack : '');
       } else {
         // An empty `[]`/`{}` is truthy but summarizes to nothing — gate on the
         // summary so the line can't end in a dangling colon.
         const summary = error.context?.details ? summarizeDetails(error.context.details) : '';
-        console.error(summary ? `${logMsg}: ${summary}` : logMsg);
+        const logMsg = `🚫 Route refused [${route}] ${error.status}: ${errorMessage(error)}${suffix}`;
+        console.log(summary ? `${logMsg}: ${summary}` : logMsg);
       }
 
       return sendErrorResponse(res, error, { io });
@@ -443,12 +451,11 @@ export function errorMiddleware(err, req, res, next) {
 
   // Log the error
   const route = `${req.method} ${routePath(req)}`;
-  const logMsg = `❌ Server error [${route}]: ${errorMessage(error)}${causeSuffix(error)}`;
-  if (error.status >= 500) {
-    console.error(logMsg);
+  if (isServerFault(error)) {
+    console.error(`❌ Server error [${route}]: ${errorMessage(error)}${causeSuffix(error)}`);
     if (err.stack) console.error(err.stack);
   } else {
-    console.error(logMsg);
+    console.log(`🚫 Server refused [${route}] ${error.status}: ${errorMessage(error)}${causeSuffix(error)}`);
   }
 
   // Emit the socket event and send the shared envelope — synchronous handlers

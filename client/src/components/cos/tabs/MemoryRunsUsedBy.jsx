@@ -1,25 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useCallback } from 'react';
 import { Link } from 'react-router';
 import * as api from '../../../services/api';
 import { formatDateTime } from '../../../utils/formatters';
+import useListResource from '../../../hooks/useListResource';
+import ListLoadError from '../../ui/ListLoadError';
 
 /**
  * "Used by recent runs" — agent runs whose prompt included this memory, from a
  * bounded scan of recent run records (GET /api/memory/:id/runs, #10495).
  */
 export default function MemoryRunsUsedBy({ memoryId }) {
-  const [runs, setRuns] = useState(null);
+  const fetchRuns = useCallback(
+    () => api.getMemoryRuns(memoryId, { silent: true }).then(res => res?.runs || []),
+    [memoryId],
+  );
+  const { items: runs, state, error, retry } = useListResource(fetchRuns);
 
-  useEffect(() => {
-    let active = true;
-    setRuns(null);
-    api.getMemoryRuns(memoryId, { silent: true })
-      .then(res => { if (active) setRuns(res?.runs || []); })
-      .catch(() => { if (active) setRuns([]); });
-    return () => { active = false; };
-  }, [memoryId]);
-
-  if (!runs || runs.length === 0) return null;
+  if (state === 'error') return <ListLoadError what="recent runs that used this memory" error={error} onRetry={retry} />;
+  if (runs.length === 0) return null;
   return (
     <div>
       <span className="block text-sm text-gray-400 mb-2">Used by recent runs</span>

@@ -9,7 +9,9 @@
  * `onUniverseChange` handler should reset it.
  */
 
-import { useState, useEffect } from 'react';
+import { useCallback } from 'react';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 import { listUniverses, getUniverse } from '../../services/api';
 
 const ENTRY_KINDS = [
@@ -17,6 +19,7 @@ const ENTRY_KINDS = [
   { value: 'objects', label: 'Object', empty: 'No objects in this universe', pick: 'Pick an object' },
   { value: 'places', label: 'Place', empty: 'No places in this universe', pick: 'Pick a place' },
 ];
+const fetchUniverses = () => listUniverses({ silent: true });
 const kindConfig = (entryKind) => ENTRY_KINDS.find((k) => k.value === entryKind) || ENTRY_KINDS[0];
 
 export default function UniverseCharacterPicker({
@@ -29,33 +32,13 @@ export default function UniverseCharacterPicker({
   idPrefix = 'ucp',
   disabledEntryIds = [],
 }) {
-  const [universes, setUniverses] = useState(null);
-  const [universe, setUniverse] = useState(null);
-  const [entries, setEntries] = useState(null);
-
-  useEffect(() => {
-    listUniverses().then((list) => setUniverses(Array.isArray(list) ? list : []))
-      .catch(err => { console.warn('⚠️ Failed to load universes: ' + err.message); setUniverses([]); });
-  }, []);
-
-  useEffect(() => {
-    if (!universeId) { setUniverse(null); setEntries(null); return undefined; }
-    let active = true;
-    setUniverse(null);
-    setEntries(null);
-    getUniverse(universeId, { silent: true })
-      .then((u) => { if (active) setUniverse(u || {}); })
-      .catch(err => {
-        console.warn('⚠️ Failed to load universe: ' + err.message);
-        if (active) setUniverse({});
-      });
-    return () => { active = false; };
-  }, [universeId]);
-
-  useEffect(() => {
-    if (!universeId || !universe) return;
-    setEntries(Array.isArray(universe?.[entryKind]) ? universe[entryKind] : []);
-  }, [universeId, universe, entryKind]);
+  const { items: universes, state: universesState, error: universesError, retry: retryUniverses } = useListResource(fetchUniverses);
+  // One universe is a single object; a one-item list gives its read the same
+  // loading | ready | error states, so a failed read never renders as an empty
+  // subject list.
+  const fetchUniverse = useCallback(() => getUniverse(universeId, { silent: true }).then((u) => [u || {}]), [universeId]);
+  const { items: universeItems, state: universeState, error: universeError, retry: retryUniverse } = useListResource(fetchUniverse, { enabled: !!universeId });
+  const entries = universeState === 'ready' && Array.isArray(universeItems[0]?.[entryKind]) ? universeItems[0][entryKind] : [];
 
   const disabled = new Set(disabledEntryIds);
   const kind = kindConfig(entryKind);
@@ -70,9 +53,10 @@ export default function UniverseCharacterPicker({
           onChange={(e) => onUniverseChange(e.target.value)}
           className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white"
         >
-          <option value="">{universes === null ? 'Loading…' : 'Pick a universe'}</option>
-          {(universes || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          <option value="">{universesState === 'loading' ? 'Loading…' : 'Pick a universe'}</option>
+          {universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
+        {universesState === 'error' && <ListLoadError className="mt-1" what="universes" error={universesError} onRetry={retryUniverses} />}
       </div>
       {universeId && (
         <>
@@ -95,13 +79,16 @@ export default function UniverseCharacterPicker({
               onChange={(e) => onEntryChange(e.target.value)}
               className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white"
             >
-              <option value="">{entries === null ? 'Loading…' : entries.length ? kind.pick : kind.empty}</option>
-              {(entries || []).map((entry) => (
+              <option value="">
+                {universeState === 'loading' ? 'Loading…' : universeState === 'error' ? 'Unavailable' : entries.length ? kind.pick : kind.empty}
+              </option>
+              {entries.map((entry) => (
                 <option key={entry.id} value={entry.id} disabled={disabled.has(entry.id)}>
                   {entry.name || entry.slugline || entry.id}{disabled.has(entry.id) ? ' (current)' : ''}
                 </option>
               ))}
             </select>
+            {universeState === 'error' && <ListLoadError className="mt-1" what="the universe" error={universeError} onRetry={retryUniverse} />}
           </div>
         </>
       )}

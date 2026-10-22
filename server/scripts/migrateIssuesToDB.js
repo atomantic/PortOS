@@ -26,6 +26,7 @@ import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { readLegacyJSON, legacyDirectory, incompleteImport } from './legacyImport.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const LEGACY_DIRNAME = 'pipeline-issues';
 const IMPORTED_DIRNAME = 'pipeline-issues.imported';
@@ -47,7 +48,7 @@ export async function importRecord(record, execute = query) {
       typeof record.seasonId === 'string' && record.seasonId ? record.seasonId : null,
       Number.isFinite(record.number) ? Math.floor(record.number) : null,
       typeof record.status === 'string' && record.status ? record.status.slice(0, 32) : null,
-      JSON.stringify(record),
+      toPgJson(record),
       record.ephemeral === true,
       createdAt,
       mirrorTimestamp(record.updatedAt, createdAt),

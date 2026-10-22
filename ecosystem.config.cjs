@@ -39,6 +39,20 @@ const PG_HOST = databaseSettings.host;
 // Express bind for portos-server only: nonempty exported HOST → .env → all interfaces (#10946).
 const SERVER_HOST = process.env.HOST || envValue('HOST') || '0.0.0.0';
 
+// The Node binary every PortOS app runs on. A bare 'node' is resolved against
+// the pm2 DAEMON's PATH, which is how an install ends up running an older
+// Homebrew node while nvm and the terminal report a newer one. The Node
+// runtime panel pins an absolute path here (exported env, then .env); a value
+// that is not an absolute path to an existing node binary is ignored so a
+// removed nvm version falls back to PATH instead of stranding pm2. Same rule as
+// server/lib/nodeInterpreterPin.js.
+const isUsableNodeInterpreter = (candidate) => typeof candidate === 'string'
+  && path.isAbsolute(candidate)
+  && ['node', 'node.exe'].includes(path.basename(candidate).toLowerCase())
+  && require('fs').existsSync(candidate);
+const NODE_INTERPRETER = [process.env.PORTOS_NODE_INTERPRETER, envValue('PORTOS_NODE_INTERPRETER')]
+  .find(isUsableNodeInterpreter) || 'node';
+
 // pm2 restarts portos-server when its RSS crosses this — originally a memory-leak
 // safety valve. The committed default stays modest so the guard still fires on a
 // small install (a fork on an 8 GB box), but it's overridable per-machine via
@@ -179,7 +193,7 @@ module.exports = {
       name: 'portos-server',
       script: 'server/start.js',
       cwd: __dirname,
-      interpreter: 'node',
+      interpreter: NODE_INTERPRETER,
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
       env: {
@@ -266,7 +280,7 @@ module.exports = {
       name: 'portos-cos',
       script: 'server/cos-runner/index.js',
       cwd: __dirname,
-      interpreter: 'node',
+      interpreter: NODE_INTERPRETER,
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
       // CoS Agent Runner - isolated process for spawning Claude CLI agents
@@ -306,7 +320,7 @@ module.exports = {
       // Explicit, unlike the inferred-from-.js default the other apps could rely
       // on: this is the one script PortOS does not own, so pin the interpreter
       // that node_args attach to rather than let a Vite release change it.
-      interpreter: 'node',
+      interpreter: NODE_INTERPRETER,
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
       args: `--configLoader runner --host 0.0.0.0 --port ${PORTS.UI}`,
@@ -336,7 +350,7 @@ module.exports = {
       name: 'portos-autofixer',
       script: 'autofixer/server.js',
       cwd: __dirname,
-      interpreter: 'node',
+      interpreter: NODE_INTERPRETER,
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
       env: {
@@ -355,7 +369,7 @@ module.exports = {
       name: 'portos-autofixer-ui',
       script: 'autofixer/ui.js',
       cwd: __dirname,
-      interpreter: 'node',
+      interpreter: NODE_INTERPRETER,
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
       env: {
@@ -373,7 +387,7 @@ module.exports = {
       name: 'portos-browser',
       script: 'browser/server.js',
       cwd: __dirname,
-      interpreter: 'node',
+      interpreter: NODE_INTERPRETER,
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
       // Security: CDP binds to 127.0.0.1 by default (set CDP_HOST=0.0.0.0 to expose)

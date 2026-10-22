@@ -33,7 +33,7 @@ vi.mock('./db/schema/index.js', async () => {
   };
 });
 
-const { checkHealth, ensureSchema, close, POOL_CONFIG, SCHEMA_DDL_ADVISORY_LOCK_KEY } = await import('./db.js');
+const { checkHealth, ensureSchema, close, query, withTransaction, POOL_CONFIG, SCHEMA_DDL_ADVISORY_LOCK_KEY } = await import('./db.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -108,5 +108,33 @@ describe.skipIf(!runDb)('ensureSchema() boot DDL advisory lock (#5977)', () => {
 
     // A failed forced repair clears readiness, so a later valid call retries.
     await expect(ensureSchema()).resolves.toBeUndefined();
+  });
+});
+
+// PostgreSQL refuses a lone surrogate in jsonb and NUL in jsonb/text; the pool
+// and the withTransaction client repair bound parameters in one place (#12815).
+describe.skipIf(!runDb)('bound parameter repair', () => {
+  const split = '😀'.slice(0, 1);
+  const runners = {
+    'query()': (sql, params) => query(sql, params),
+    'withTransaction client': (sql, params) => withTransaction((client) => client.query(sql, params)),
+  };
+
+  describe.each(Object.entries(runners))('%s', (_name, run) => {
+    it('repairs a string parameter and leaves the characters \\^@ alone', async () => {
+      const { rows: [row] } = await run('SELECT $1::text AS bad, $2::text AS literal', [`x${split}y\0z`, 'a\\^@b']);
+      expect(row.bad).toBe('x\uFFFDy\uFFFDz');
+      expect(row.literal).toBe('a\\^@b');
+    });
+
+    it('repairs every string in an array parameter', async () => {
+      const { rows: [row] } = await run('SELECT $1::text[] AS items', [['ok', `a${split}`, 'b\0']]);
+      expect(row.items).toEqual(['ok', 'a\uFFFD', 'b\uFFFD']);
+    });
+
+    it('serializes a plain-object parameter as repaired jsonb, keys included', async () => {
+      const { rows: [row] } = await run('SELECT $1::jsonb AS doc', [{ [`k${split}`]: [`v${split}`, 'n\0'], nested: { ok: 1 } }]);
+      expect(row.doc).toEqual({ 'k\uFFFD': ['v\uFFFD', 'n\uFFFD'], nested: { ok: 1 } });
+    });
   });
 });

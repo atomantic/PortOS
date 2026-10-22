@@ -9,26 +9,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, X, RefreshCw } from 'lucide-react';
 import Modal from '../ui/Modal';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import SpritePreview from './SpritePreview.jsx';
 import { listSpriteReferenceSources } from '../../services/apiSprites.js';
 
-export default function SpriteReferencePicker({ open, onClose, onSelect, excludeId }) {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState('');
+const fetchSources = () => listSpriteReferenceSources({ silent: true });
 
-  // Refetch each open so a sprite whose main was just locked shows up; reset the
-  // search on close so a re-open starts clean.
-  useEffect(() => {
-    if (!open) { setQuery(''); return undefined; }
-    let cancelled = false;
-    setLoading(true);
-    listSpriteReferenceSources({ silent: true })
-      .then((list) => { if (!cancelled) setItems(Array.isArray(list) ? list : []); })
-      .catch(() => { if (!cancelled) setItems([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [open]);
+export default function SpriteReferencePicker({ open, onClose, onSelect, excludeId }) {
+  const [query, setQuery] = useState('');
+  // Refetch each open so a sprite whose main was just locked shows up.
+  const { items, state, error, retry } = useListResource(fetchSources, { enabled: open });
+
+  // Reset the search on close so a re-open starts clean.
+  useEffect(() => { if (!open) setQuery(''); }, [open]);
 
   const filtered = useMemo(() => {
     const pool = items.filter((it) => it.id !== excludeId);
@@ -81,10 +75,12 @@ export default function SpriteReferencePicker({ open, onClose, onSelect, exclude
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">
-        {loading ? (
+        {state === 'loading' ? (
           <div className="flex items-center justify-center gap-2 text-xs text-gray-400 py-10">
             <RefreshCw className="w-4 h-4 animate-spin" /> Loading reference sprites…
           </div>
+        ) : state === 'error' ? (
+          <ListLoadError what="reference sprites" error={error} onRetry={retry} />
         ) : filtered.length === 0 ? (
           <div className="text-xs text-gray-500 py-10 text-center">
             {items.length === 0

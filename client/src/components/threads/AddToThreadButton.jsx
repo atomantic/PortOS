@@ -15,11 +15,18 @@ import { ListTodo, X } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import EntityCombobox from '../EntityCombobox';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import useClickOutside from '../../hooks/useClickOutside';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition';
 import useEscapeKey from '../../hooks/useEscapeKey.js';
 import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { THREAD_ACTIVE_STATUSES } from '../../lib/brainThreads';
+
+const ACTIVE_THREAD_STATUS = THREAD_ACTIVE_STATUSES.join(',');
+
+const fetchActiveThreads = () => api.listThreads({ status: ACTIVE_THREAD_STATUS }, { silent: true })
+  .then((res) => (Array.isArray(res?.threads) ? res.threads : Array.isArray(res) ? res : []));
 
 export default function AddToThreadButton({
   refItem,
@@ -37,10 +44,11 @@ export default function AddToThreadButton({
   tooltip
 }) {
   const [open, setOpen] = useState(false);
-  const [threads, setThreads] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [query, setQuery] = useState('');
+  // Match-or-create needs the real thread list: a failed read must not offer "No open threads yet" and invite a duplicate.
+  const { items: threads, state: threadsState, error: threadsError, retry: retryThreads } = useListResource(fetchActiveThreads, { enabled: open });
+  const loading = threadsState === 'loading';
 
   const computedRef = useMemo(() => {
     const base = refItem || threadRef;
@@ -55,25 +63,6 @@ export default function AddToThreadButton({
     };
   }, [refItem, threadRef, kind, id, label, title]);
 
-  useEffect(() => {
-    if (!open) return;
-    let active = true;
-    setLoading(true);
-    api.listThreads({ status: THREAD_ACTIVE_STATUSES.join(',') }, { silent: true })
-      .then((res) => {
-        if (!active) return;
-        const list = Array.isArray(res?.threads) ? res.threads : Array.isArray(res) ? res : [];
-        setThreads(list);
-      })
-      .catch(() => {
-        if (active) setThreads([]);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => { active = false; };
-  }, [open]);
-
   const comboboxItems = useMemo(() => {
     return threads.map((t) => ({
       id: t.id,
@@ -87,7 +76,7 @@ export default function AddToThreadButton({
     width: 320,
     minWidth: 260,
     position: 'below',
-    contentDeps: [comboboxItems.length, loading, attaching]
+    contentDeps: [comboboxItems.length, threadsState, attaching]
   });
   const menuVisible = open && Boolean(menuStyle);
 
@@ -194,20 +183,24 @@ export default function AddToThreadButton({
           )}
 
           <label htmlFor="add-to-thread-search" className="sr-only">Search threads</label>
-          <EntityCombobox
-            items={comboboxItems}
-            value={query}
-            onChange={setQuery}
-            onPick={handlePick}
-            onCreate={handleCreate}
-            busy={loading || attaching}
-            inputId="add-to-thread-search"
-            noun="thread"
-            placeholder="Search open threads or type name…"
-            createPrefix="New thread"
-            emptyNoItems="No open threads yet — type a name to create one."
-            className="w-full"
-          />
+          {threadsState === 'error' ? (
+            <ListLoadError what="your open threads" error={threadsError} onRetry={retryThreads} />
+          ) : (
+            <EntityCombobox
+              items={comboboxItems}
+              value={query}
+              onChange={setQuery}
+              onPick={handlePick}
+              onCreate={handleCreate}
+              busy={loading || attaching}
+              inputId="add-to-thread-search"
+              noun="thread"
+              placeholder="Search open threads or type name…"
+              createPrefix="New thread"
+              emptyNoItems="No open threads yet — type a name to create one."
+              className="w-full"
+            />
+          )}
         </div>,
         document.body
       )}

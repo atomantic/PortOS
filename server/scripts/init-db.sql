@@ -1086,6 +1086,34 @@ CREATE INDEX IF NOT EXISTS idx_mood_boards_updated ON mood_boards (updated_at DE
 -- Partial index for the live-list filter (deleted = FALSE).
 CREATE INDEX IF NOT EXISTS idx_mood_boards_live ON mood_boards (deleted) WHERE deleted = FALSE;
 
+-- Storyboards (Create › Storyboards): beats → panels → art takes inline in
+-- `data` JSONB. Mirrors the storyboards block in db/schema/media.js.
+CREATE TABLE IF NOT EXISTS storyboards (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  universe_id TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE;
+
+-- Saved storyboard recipes (the Make tab's library). Mirrors the
+-- storyboard_recipes block in db/schema/media.js.
+CREATE TABLE IF NOT EXISTS storyboard_recipes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_storyboard_recipes_updated ON storyboard_recipes (updated_at DESC);
+
 -- Media asset index (Phase 3.2, issue #1000). One row per generated image or
 -- video. The bytes stay on disk (data/images, data/videos) and the image
 -- sidecars + data/video-history.json remain authoritative — this table is a
@@ -1913,6 +1941,82 @@ CREATE TABLE IF NOT EXISTS x_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_x_drafts_account_state ON x_drafts (account_id, state, created_at DESC);
 
+-- GitHub notifications inbox (#12870): machine-local, never federated.
+CREATE TABLE IF NOT EXISTS github_notifications (
+  account_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  repo_full_name TEXT NOT NULL,
+  repo_owner TEXT NOT NULL DEFAULT '',
+  repo_private BOOLEAN NOT NULL DEFAULT FALSE,
+  reason TEXT NOT NULL DEFAULT '',
+  subject_type TEXT NOT NULL DEFAULT '',
+  subject_title TEXT NOT NULL DEFAULT '',
+  subject_api_url TEXT,
+  html_url TEXT NOT NULL DEFAULT '',
+  unread BOOLEAN NOT NULL DEFAULT TRUE,
+  gh_updated_at TIMESTAMPTZ NOT NULL,
+  state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','done','muted','unsubscribed')),
+  state_changed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (account_id, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_github_notifications_account_updated ON github_notifications (account_id, gh_updated_at DESC);
+
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS latest_comment_api_url TEXT;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS decision TEXT;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS trust TEXT;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS suspect BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS triaged_for TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS github_notification_sync (
+  account_id TEXT PRIMARY KEY,
+  last_modified TEXT,
+  poll_interval_seconds INTEGER,
+  last_sync_at TIMESTAMPTZ,
+  last_error TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS github_notification_events (
+  id BIGSERIAL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  actor TEXT NOT NULL CHECK (actor IN ('operator','automation')),
+  kind TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_github_notification_events_thread ON github_notification_events (account_id, thread_id, created_at DESC);
+-- Learned rules (#12872): the operator's own corrections ('' actor = any).
+CREATE TABLE IF NOT EXISTS github_notification_rules (
+  id BIGSERIAL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  repo_full_name TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  decision TEXT NOT NULL CHECK (decision IN ('surface','suggest-done','suggest-mute')),
+  hits INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (account_id, repo_full_name, reason, actor)
+);
+-- Subscription audit (#12873): changes applied from audit cards, for Undo.
+CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
+  id BIGSERIAL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('unwatch','mute-handled')),
+  repo_full_name TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  applied_at TIMESTAMPTZ DEFAULT NOW(),
+  undone_at TIMESTAMPTZ
+);
+
+-- Monthly audit report (#12874): when each account's report last went out.
+CREATE TABLE IF NOT EXISTS github_notification_audit_reports (
+  account_id TEXT PRIMARY KEY,
+  last_sent_at TIMESTAMPTZ NOT NULL
+);
+
 -- Beeper conversation mirror (#27). Machine-local mirror of the Beeper Desktop
 -- API — accounts, conversations, messages, participants, attachment metadata,
 -- and per-chat sync cursors. NEVER FEDERATED: no sync_sequence column, no
@@ -2206,6 +2310,10 @@ DROP TRIGGER IF EXISTS trg_fableloom_stories_audit ON fableloom_stories;
 CREATE TRIGGER trg_fableloom_stories_audit AFTER UPDATE OR DELETE ON fableloom_stories FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_mood_boards_audit ON mood_boards;
 CREATE TRIGGER trg_mood_boards_audit AFTER UPDATE OR DELETE ON mood_boards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_storyboards_audit ON storyboards;
+CREATE TRIGGER trg_storyboards_audit AFTER UPDATE OR DELETE ON storyboards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_storyboard_recipes_audit ON storyboard_recipes;
+CREATE TRIGGER trg_storyboard_recipes_audit AFTER UPDATE OR DELETE ON storyboard_recipes FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;
 CREATE TRIGGER trg_lora_training_runs_audit AFTER UPDATE OR DELETE ON lora_training_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_authors_audit ON authors;

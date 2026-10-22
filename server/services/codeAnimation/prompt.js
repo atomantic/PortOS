@@ -77,6 +77,8 @@ export const CODE_ANIMATION_LIMITS = Object.freeze({
   referenceVideoImageSlots: 3,
   referenceNoteMax: 300,
   audioNotesMax: 1_500,
+  // The forked animation's HTML rides the extend prompt whole; a larger file is refused, never cut.
+  baseHtmlMax: 400_000,
 });
 
 // The host vendors three.js and a fixed set of addons next to the page and
@@ -275,6 +277,7 @@ ${interactive ? '10' : '9'}. Hold ${fps}fps: pre-render static layers and textur
  * @param {object|null} [input.universe] - `{ name, embrace, avoid, styleNotes, styleReferences }`
  * @param {object|null} [input.moodBoard] - `collectBoardStyleContext` output
  * @param {Array<{ label: string, origin: 'upload'|'universe'|'mood-board', note?: string, path?: string }>} [input.referenceImages]
+ * @param {{ title?: string, durationSeconds: number, html: string }|null} [input.base] - a finished animation this one extends
  * @param {'copy'|'api'|'cli'} [input.delivery] - how reference images reach the model
  * @returns {string}
  */
@@ -294,6 +297,7 @@ export function buildCodeAnimationPrompt({
   moodBoard = null,
   referenceImages = [],
   referenceVideo = null,
+  base = null,
   delivery = 'copy',
 }) {
   const { width, height } = resolveFrameSize(format.aspectRatio, format.resolution);
@@ -302,6 +306,7 @@ export function buildCodeAnimationPrompt({
     `You are the director, animator, rigger, compositor, sound designer, and render engineer of a ${durationSeconds}-second animated short made entirely in code. Write ONE complete, self-contained HTML file that renders it — no image, video, font, or library assets. Every shape, texture, character, and effect is drawn procedurally in the browser, in the art style below. The bar: it looks like a real studio short that people share, not a tech demo.`,
     `BRIEF${isNonBlankStr(title) ? ` — "${trimTo(title, 200)}"` : ''}:\n${trimTo(concept, CODE_ANIMATION_LIMITS.conceptMax)}`,
   ];
+  if (base) sections.push(baseSection(base, durationSeconds));
   if (isNonBlankStr(cast)) sections.push(castSection(cast));
   if (isNonBlankStr(onScreenText)) {
     sections.push(`ON-SCREEN TEXT / NARRATION BEATS (render typography procedurally, timed to the story; system fonts only):\n${trimTo(onScreenText, CODE_ANIMATION_LIMITS.textMax)}`);
@@ -320,6 +325,20 @@ export function buildCodeAnimationPrompt({
   sections.push(SELF_REVIEW);
   sections.push(`OUTPUT: Return ONLY the finished HTML document in a single \`\`\`html fenced code block, starting with <!DOCTYPE html>. No explanation before or after it.${delivery === 'cli' ? ' Do not create or edit any files — print the document as your final answer.' : ''}`);
   return sections.join('\n\n');
+}
+
+// A fork extends a finished animation: its HTML is the first cut to build on.
+function baseSection({ title, durationSeconds: baseSeconds, html }, durationSeconds) {
+  return [
+    `BASE ANIMATION — EXTEND THIS FILM${isNonBlankStr(title) ? ` ("${trimTo(title, 200)}")` : ''}: the HTML below is a finished ${baseSeconds ? `${baseSeconds}s ` : ''}cut of this film. Write the ${durationSeconds}s version by extending it, not by starting over.`,
+    '- Keep its art style, palette, characters, rigs, typography, and code architecture. Reuse and extend its drawing, rig, and timeline code rather than rewriting it, so the extended film is recognisably the same.',
+    `- Its existing beats open the film in their original order unless the BRIEF says otherwise; the BRIEF describes the full ${durationSeconds}s story, including what the base already shows.`,
+    `- Update ANIMATION_META, the timeline, and every duration constant to ${durationSeconds}s; nothing may stop, loop, or freeze at the old ${baseSeconds ? `${baseSeconds}s ` : ''}end.`,
+    '- Everything in the runtime contract below still applies to the extended file.',
+    '```html',
+    html,
+    '```',
+  ].join('\n');
 }
 
 /**

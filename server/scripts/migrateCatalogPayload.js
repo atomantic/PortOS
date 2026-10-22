@@ -30,6 +30,7 @@
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { CATALOG_TYPES, currentPayloadSchemaVersion, upgradePayload } from '../lib/catalogTypes.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const MARKER_FILENAME = 'catalog-payload.applied.json';
 
@@ -70,7 +71,7 @@ async function migrateType(type) {
     const next = upgradePayload(type.id, row.payload || {});
     await query(
       `UPDATE catalog_ingredients SET payload = $2::jsonb WHERE id = $1`,
-      [row.id, JSON.stringify(next)],
+      [row.id, toPgJson(next)],
     );
     upgraded++;
   }

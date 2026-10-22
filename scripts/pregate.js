@@ -80,6 +80,7 @@ export const UNCOVERED_SUITES = Object.freeze({
   windows: 'CI is the only proof',
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
   supercolliderLive: 'a native amd64/arm64 Linux Docker engine: npm run setup:supercollider -- --yes, then PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js from server/',
+  dockerContainmentLive: 'a local Docker engine with Linux containers and npm registry access: PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run services/dockerContainment.live.test.js from server/',
 });
 
 /** Remedy when a prerequisite probe ran but failed (timeout, teardown): nothing indicates a missing install. */
@@ -124,6 +125,9 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
   }
   if (suiteSelected(plan, 'supercolliderLive')) {
     uncovered.push({ suite: 'supercolliderLive', reason: 'needs a native Linux Docker engine on amd64 and arm64', remedy: UNCOVERED_SUITES.supercolliderLive });
+  }
+  if (suiteSelected(plan, 'dockerContainmentLive')) {
+    uncovered.push({ suite: 'dockerContainmentLive', reason: 'needs a real Docker engine and pulls the pinned Node image', remedy: UNCOVERED_SUITES.dockerContainmentLive });
   }
   return uncovered;
 }
@@ -646,6 +650,7 @@ async function main() {
     promptHistory: raw.prompt_history,
     linuxContainment: raw.linux_containment,
     supercolliderLive: raw.supercollider_live,
+    dockerContainmentLive: raw.docker_containment_live,
     suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
   };
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);

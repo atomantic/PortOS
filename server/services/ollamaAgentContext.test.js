@@ -101,11 +101,15 @@ describe('dropUnsupportedOllamaThinking', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
   })
 
   it('drops the effort when the model reports no thinking capability', async () => {
     getModelCapabilities.mockResolvedValue(['completion', 'vision'])
     const result = await dropUnsupportedOllamaThinking({ ...opencodeOllama, effort: 'medium' }, 'gemma3:27b', 'medium')
+    // The model lacking a capability is a designed fallback, not a fault: stdout.
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('gemma3:27b does not support thinking'))
+    expect(console.warn).not.toHaveBeenCalled()
     expect(result.dropped).toBe(true)
     expect(result.effort).toBeNull()
     expect(result.provider.effort).toBeUndefined()

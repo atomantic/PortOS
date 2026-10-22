@@ -61,6 +61,7 @@ jobs:
       prompt_history: ${{ steps.plan.outputs.prompt_history }}
       linux_containment: ${{ steps.plan.outputs.linux_containment }}
       supercollider_live: ${{ steps.plan.outputs.supercollider_live }}
+      docker_containment_live: ${{ steps.plan.outputs.docker_containment_live }}
       windows: ${{ steps.plan.outputs.windows }}
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
@@ -168,6 +169,7 @@ jobs:
           PROMPT_HISTORY_MODE: ${{ steps.plan.outputs.prompt_history }}
           LINUX_CONTAINMENT_MODE: ${{ steps.plan.outputs.linux_containment }}
           SUPERCOLLIDER_LIVE_MODE: ${{ steps.plan.outputs.supercollider_live }}
+          DOCKER_CONTAINMENT_LIVE_MODE: ${{ steps.plan.outputs.docker_containment_live }}
           NODE_MINIMUM_MODE: ${{ steps.node-minimum.outputs.run }}
           WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
           WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
@@ -192,6 +194,7 @@ jobs:
             echo "- Shipped prompt history: \`${PROMPT_HISTORY_MODE}\`"
             echo "- Linux worker containment: \`${LINUX_CONTAINMENT_MODE}\`"
             echo "- SuperCollider live containment: \`${SUPERCOLLIDER_LIVE_MODE}\`"
+            echo "- Docker containment live: \`${DOCKER_CONTAINMENT_LIVE_MODE}\`"
             echo "- Node minimum compatibility: \`${NODE_MINIMUM_MODE}\`"
             echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
@@ -238,10 +241,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
 
       - name: Check shipped stage-prompt history
         run: node scripts/migrations/check-shipped-prompt-history.js
@@ -274,10 +277,10 @@ jobs:
       - name: Resolve the pull-request diff base
         run: node scripts/ci-base-sha.js
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
 
@@ -292,7 +295,7 @@ jobs:
       # manifest-vs-lockfile check, and the key carries the Node *major* rather
       # than the resolved patch, because NODE_MODULE_VERSION is stable across
       # patches and keying on the patch would discard the entry on every Node
-      # 24.x release. The transform-artifact cache below keeps its own key and
+      # 26.x release. The transform-artifact cache below keeps its own key and
       # its own restore-keys; this one is about dependencies.
       #
       # Hit rate comes from the nightly full run: there is no push trigger on
@@ -304,7 +307,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       # A restored tree is only reusable if it was rebuilt before it was saved,
       # and that is not answerable by looking at the tree — with today's
@@ -471,10 +474,10 @@ jobs:
       - name: Resolve the pull-request diff base
         run: node scripts/ci-base-sha.js
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: client/package-lock.json
 
@@ -498,7 +501,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
         if: steps.client-modules.outputs.cache-hit != 'true'
@@ -592,10 +595,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: client/package-lock.json
 
@@ -619,7 +622,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
         if: steps.client-modules.outputs.cache-hit != 'true'
@@ -667,10 +670,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
 
@@ -682,7 +685,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       # A restored tree is only reusable if it was rebuilt before it was saved,
       # and that is not answerable by looking at the tree — with today's
@@ -819,10 +822,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
 
@@ -834,7 +837,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       # A restored tree is only reusable if it was rebuilt before it was saved,
       # and that is not answerable by looking at the tree — with today's
@@ -941,7 +944,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
         if: steps.client-modules.outputs.cache-hit != 'true'
@@ -1016,10 +1019,10 @@ jobs:
       - name: Resolve the pull-request diff base
         run: node scripts/ci-base-sha.js
 
-      - name: Use Node.js 24.x
+      - name: Use Node.js 26.x
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
 
@@ -1031,7 +1034,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       # A restored tree is only reusable if it was rebuilt before it was saved,
       # and that is not answerable by looking at the tree — with today's
@@ -1206,7 +1209,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
       - name: Install the containment prerequisite
@@ -1221,6 +1224,37 @@ jobs:
         # Keep this list equal to the impact planner's LINUX_CONTAINMENT_TESTS:
         # the job is gated on those files' import closure.
         run: npm test --prefix server -- --run ../autofixer/sandbox.verify.test.js lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
+
+  docker-containment-live:
+    name: Docker containment live
+    needs: impact
+    # Path-gated by the impact planner's static import closure of the live
+    # suite (DOCKER_CONTAINMENT_LIVE_ENTRIES), and part of CI Gate.
+    if: needs.impact.outputs.docker_containment_live == 'true'
+    # Native Docker Engine on a hosted runner. Docker Desktop on macOS is
+    # verified manually (docs/CONTAINMENT.md); CI has no macOS Docker.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require maintainer release for Dependabot
+        run: node scripts/ci-dependabot-admission.js
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.x
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix server
+      - name: Prove the profile under a real engine
+        working-directory: server
+        env:
+          PORTOS_DOCKER_CONTAINMENT_LIVE: '1'
+        run: npx --no-install vitest run services/dockerContainment.live.test.js
 
   supercollider-live:
     name: SuperCollider native ${{ matrix.arch }}
@@ -1259,7 +1293,7 @@ jobs:
         run: node scripts/ci-dependabot-admission.js
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.x
+          node-version: 26.x
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -1346,7 +1380,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment, supercollider-live]
+    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment, docker-containment-live, supercollider-live]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # READ only: the reporter lists this run's jobs to name the one whose STEP
@@ -1387,6 +1421,7 @@ jobs:
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
           CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}
           CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}
+          CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}
           CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}
         run: node scripts/ci-gate-report.js
 

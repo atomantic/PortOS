@@ -139,10 +139,15 @@ export async function observeAgentChurn(agent, task, {
 
   const analysisType = scheduledTypeOf(task);
   const appId = appIdOf(task);
-  console.warn(`⚠️ CoS churn: ${taskType} ${churn.reason} (${churn.windowCompleted} runs in ${formatWindow(churn.windowMs)})`);
+  // A coordinator looping fast enough to be parked is a workflow fault; a burst
+  // of quick user tasks is just a busy hour and nothing acts on it.
+  const looping = NON_COMMITTING_COORDINATOR_TASK_TYPES.has(analysisType);
+  const summary = `CoS churn: ${taskType} ${churn.reason} (${churn.windowCompleted} runs in ${formatWindow(churn.windowMs)})`;
+  if (looping) console.warn(`⚠️ ${summary}`);
+  else console.log(`🔁 ${summary}`);
 
   let parked = false;
-  if (NON_COMMITTING_COORDINATOR_TASK_TYPES.has(analysisType)) {
+  if (looping) {
     const parkFn = park || (async (...args) => {
       const { parkPerpetual } = await import('./taskSchedule.js');
       return parkPerpetual(...args);

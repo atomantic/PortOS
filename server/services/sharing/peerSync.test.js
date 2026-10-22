@@ -203,6 +203,13 @@ vi.mock('../creativeCommissions/store.js', async (importOriginal) => ({
   getCommissionForSync: vi.fn(),
   mergeCommissionsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
+vi.mock('../storyboards/index.js', () => ({
+  listStoryboardsForSync: vi.fn().mockResolvedValue([]),
+  listStoryboardIdsForSync: vi.fn().mockResolvedValue([]),
+  getStoryboardForSync: vi.fn(),
+  mergeStoryboardsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
+  pruneTombstonedStoryboards: vi.fn().mockResolvedValue({ pruned: 0 }),
+}));
 vi.mock('../decks.js', () => ({
   listDecksForSync: vi.fn().mockResolvedValue([]),
   listDeckIdsForSync: vi.fn().mockResolvedValue([]),
@@ -315,6 +322,7 @@ import { diffWorkBibleManifest } from '../writersRoom/bibleSync.js';
 import { listCommissionFeedbackForSync, getCommissionFeedbackForSync, mergeCommissionFeedbackFromSync } from '../creativeCommissions/feedbackStore.js';
 import { listCommissionsForSync, getCommissionForSync, mergeCommissionsFromSync } from '../creativeCommissions/store.js';
 import { getDeckForSync, mergeDecksFromSync } from '../decks.js';
+import { getStoryboardForSync, mergeStoryboardsFromSync } from '../storyboards/index.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
@@ -517,7 +525,7 @@ describe('peerSync', () => {
       // caught — this list is canonical and its order can affect iteration
       // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
       // subscriptions; direct issue subs are intentionally rejected (Stage 2).
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck']);
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck', 'storyboard']);
     });
   });
 
@@ -2480,13 +2488,25 @@ describe('peerSync', () => {
     });
 
     it('handles a network-level failure without throwing (returns pushed:false)', async () => {
-      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
-      vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
-      const result = await pushRecordToPeer({
-        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
-      });
-      expect(result.pushed).toBe(false);
-      expect(result.reason).toBe('network');
+      // The once-per-cause ledger would swallow the line if an earlier test already logged this cause.
+      __resetPushFailureLogForTests();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
+        const result = await pushRecordToPeer({
+          id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        });
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('network');
+        // An asleep or offline peer is routine: stdout, not stderr.
+        expect(logSpy.mock.calls.some(([line]) => /peerSync: push universe\/u1 .* unreachable/.test(line))).toBe(true);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
     });
 
     it('logs a rejected push once per peer and cause, then logs recovery', async () => {
@@ -4025,12 +4045,14 @@ describe('peerSync', () => {
       expect(result.missingAssets).toEqual(manifest.slice(0, 3));
     });
 
-    it('admits track render history and deck images but drops other asset kinds', async () => {
+    it('admits track render history, deck and storyboard images but drops other asset kinds', async () => {
       for (const [kind, record, own] of [
         ['track', { id: 'track-1', audioFilename: 'active.mp3', renders: [{ audioFilename: 'older.mp3' }] },
           [{ kind: 'music', filename: 'active.mp3' }, { kind: 'music', filename: 'older.mp3' }]],
         ['deck', { id: 'deck-1', cards: [{ primaryImageRef: 'card.png', imageRefs: ['render.png'] }], samples: [{ imageRef: 'style.png' }] },
           ['card.png', 'render.png', 'style.png'].map((filename) => ({ kind: 'image', filename }))],
+        ['storyboard', { id: 'sb-1', beats: [{ panels: [{ takes: [{ image: 'panel.png' }, { sketchKey: 'sketch:abc' }] }] }] },
+          [{ kind: 'image', filename: 'panel.png' }]],
       ]) {
         const result = await applyIncomingPush({ kind, record, sourceInstanceId: 'peer-a',
           assetManifest: [...own, { kind: 'audio', filename: 'unrelated.mp3' }] });
@@ -5129,7 +5151,14 @@ describe('peerSync', () => {
         const sub = await subscribePeer({
           peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
         }, { adoptedFromReverse: true });
+        const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const result = await pushRecordToPeer(sub);
+        // A peer that is merely behind is handled by the persisted block: stdout, not stderr.
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("doesn't recognize the 'universe' record kind"));
+        expect(warnSpy).not.toHaveBeenCalled();
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
         expect(result.pushed).toBe(false);
         expect(result.reason).toBe('peer-schema-behind');
         expect(result.blockedBySchema).toBe(true);
@@ -5970,6 +5999,7 @@ describe('media-library federation (#1566)', () => {
       commissionFeedback: { get: getCommissionFeedbackForSync, merge: mergeCommissionFeedbackFromSync },
       creativeCommission: { get: getCommissionForSync, merge: mergeCommissionsFromSync },
       deck: { get: getDeckForSync, merge: mergeDecksFromSync },
+      storyboard: { get: getStoryboardForSync, merge: mergeStoryboardsFromSync },
     };
 
     it('every PEER_SUBSCRIBABLE_KINDS entry has a test fixture (guards the parity suite itself against a silently-skipped kind)', () => {

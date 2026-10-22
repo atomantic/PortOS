@@ -1,0 +1,329 @@
+/**
+ * Storyboard panel recipes — the node graph the panel maker runs (Make tab).
+ *
+ * A recipe is a small graph: input nodes (the panel's own words, a system
+ * prompt, reference images) feed LLM nodes (prompt writer / enhancer) that
+ * feed an image node, whose frames land on the panel as takes. The recipe is
+ * the board's template (`board.recipe`, null = the default below); what a run
+ * produced for one panel — the written prompt, the frames, the exact text sent
+ * — lives on that panel as `panel.make.nodes[nodeId]`.
+ *
+ * Every node's value is visible in its card, so nothing reaches a model the
+ * user cannot read (#11317): the text node shows the panel words it carries,
+ * the system prompt is its own editable node, and a run records the exact
+ * prompt it sent with each block PortOS added listed separately.
+ *
+ * Browser-safe: the client resolves the same values to draw the chain.
+ */
+
+import { newStoryboardEntityId } from './storyboardVocabulary.js';
+
+export const RECIPE_NODE_TYPES = Object.freeze(['text', 'system', 'llm', 'references', 'image', 'panel']);
+export const RECIPE_TEXT_SOURCES = Object.freeze(['panel', 'beat', 'custom']);
+export const RECIPE_NODE_STATUSES = Object.freeze(['idle', 'running', 'queued', 'done', 'failed']);
+
+// Port kinds: an input accepts one edge from an output of the same kind.
+export const RECIPE_NODE_PORTS = Object.freeze({
+  text: { inputs: {}, output: 'text' },
+  system: { inputs: {}, output: 'text' },
+  llm: { inputs: { prompt: 'text', system: 'text' }, output: 'text' },
+  references: { inputs: {}, output: 'images' },
+  image: { inputs: { prompt: 'text', images: 'images' }, output: 'frames' },
+  panel: { inputs: { frames: 'frames' }, output: null },
+});
+
+export const RECIPE_PORT_LABELS = Object.freeze({ prompt: 'Prompt', system: 'System prompt', images: 'References', frames: 'Frames' });
+
+export const RECIPE_TYPE_TITLES = Object.freeze({
+  text: 'Text', system: 'System prompt', llm: 'Prompt writer', references: 'References', image: 'Image', panel: 'Panel',
+});
+
+export const RECIPE_LIMITS = Object.freeze({
+  nodes: 24,
+  title: 80,
+  text: 8000,
+  images: 12,
+  frames: 4,
+  sentPrompt: 24000,
+  additions: 12,
+  error: 500,
+  // The image job route refuses a longer prompt; the Run is refused with the
+  // count rather than cutting the model's words.
+  imagePrompt: 4000,
+});
+
+// Render size per board aspect, on 64 px multiples the local and cloud
+// backends all accept.
+export const STORYBOARD_RENDER_SIZES = Object.freeze({
+  '16:9': { width: 1344, height: 768 },
+  '9:16': { width: 768, height: 1344 },
+  '1:1': { width: 1024, height: 1024 },
+  '4:5': { width: 896, height: 1152 },
+  '2.39:1': { width: 1536, height: 640 },
+});
+
+const ART_STYLE_WORDS = Object.freeze({
+  pencil: 'a rough pencil storyboard sketch: loose graphite lines, light blue perspective guides, white paper',
+  'clean-line': 'clean black ink storyboard line art, no shading, white background',
+  'grey-marker': 'a grey marker storyboard frame: quick tonal shading, bold ink outlines',
+  color: 'a full color storyboard concept frame, painterly, cinematic light',
+});
+
+/** The default system prompt for a board's art style (shown and editable in its node). */
+function defaultSystemPrompt(artStyle) {
+  const style = ART_STYLE_WORDS[artStyle] || ART_STYLE_WORDS.pencil;
+  return [
+    'You write one prompt for an image model.',
+    `The image is ${style}.`,
+    'From the shot description you are given, describe what is in frame: who, where, the action, the framing and camera angle.',
+    'Keep it under 80 words. Answer with the prompt only.',
+  ].join(' ');
+}
+
+/** Text → Prompt writer (with System prompt) → Image (with References) → Panel. */
+function defaultPanelRecipe(board = {}) {
+  return {
+    nodes: [
+      { id: 'node-text', type: 'text', title: 'Shot description', x: 40, y: 40, text: '', settings: { source: 'panel' } },
+      { id: 'node-system', type: 'system', title: 'Storyboard style', x: 40, y: 260, text: defaultSystemPrompt(board.artStyle), settings: {} },
+      { id: 'node-writer', type: 'llm', title: 'Prompt writer', x: 360, y: 120, text: '', settings: { providerId: '', model: '', effort: '' } },
+      { id: 'node-refs', type: 'references', title: 'References', x: 360, y: 340, text: '', settings: { linked: true }, images: [] },
+      { id: 'node-image', type: 'image', title: 'Image', x: 680, y: 160, text: '', settings: { imageMode: null, imageModelId: null, count: 4 } },
+      { id: 'node-panel', type: 'panel', title: 'Panel', x: 1000, y: 160, text: '', settings: {} },
+    ],
+    edges: [
+      { from: 'node-text', to: 'node-writer', toPort: 'prompt' },
+      { from: 'node-system', to: 'node-writer', toPort: 'system' },
+      { from: 'node-writer', to: 'node-image', toPort: 'prompt' },
+      { from: 'node-refs', to: 'node-image', toPort: 'images' },
+      { from: 'node-image', to: 'node-panel', toPort: 'frames' },
+    ],
+  };
+}
+
+const NODE_ID_PATTERN = /^node-[A-Za-z0-9-]{1,80}$/;
+const TYPE_SET = new Set(RECIPE_NODE_TYPES);
+const SOURCE_SET = new Set(RECIPE_TEXT_SOURCES);
+const STATUS_SET = new Set(RECIPE_NODE_STATUSES);
+const IMAGE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
+
+const str = (value, max) => (typeof value === 'string' ? value.slice(0, max) : '');
+const optStr = (value, max) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : '');
+const coord = (value) => (Number.isFinite(value) ? Math.round(Math.max(-10000, Math.min(value, 10000))) : 0);
+
+function imageList(value, max = RECIPE_LIMITS.images) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of value) {
+    const image = typeof item?.image === 'string' && IMAGE_NAME_PATTERN.test(item.image) ? item.image : null;
+    if (!image || seen.has(image)) continue;
+    seen.add(image);
+    out.push({ image, label: optStr(item.label, RECIPE_LIMITS.title) });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function sanitizeSettings(type, raw = {}) {
+  const s = raw && typeof raw === 'object' ? raw : {};
+  if (type === 'text') return { source: SOURCE_SET.has(s.source) ? s.source : 'panel' };
+  if (type === 'llm') return { providerId: optStr(s.providerId, 128), model: optStr(s.model, 256), effort: optStr(s.effort, 64) };
+  if (type === 'references') return { linked: s.linked !== false };
+  if (type === 'image') {
+    const count = Number.isInteger(s.count) ? Math.max(1, Math.min(s.count, RECIPE_LIMITS.frames)) : 4;
+    return { imageMode: optStr(s.imageMode, 64) || null, imageModelId: optStr(s.imageModelId, 256) || null, count };
+  }
+  return {};
+}
+
+function sanitizeNode(raw) {
+  if (!raw || typeof raw !== 'object' || !TYPE_SET.has(raw.type)) return null;
+  const id = typeof raw.id === 'string' && NODE_ID_PATTERN.test(raw.id) ? raw.id : newStoryboardEntityId('node');
+  return {
+    id,
+    type: raw.type,
+    title: optStr(raw.title, RECIPE_LIMITS.title) || RECIPE_TYPE_TITLES[raw.type],
+    x: coord(raw.x),
+    y: coord(raw.y),
+    text: raw.type === 'text' || raw.type === 'system' ? str(raw.text, RECIPE_LIMITS.text) : '',
+    settings: sanitizeSettings(raw.type, raw.settings),
+    ...(raw.type === 'references' ? { images: imageList(raw.images) } : {}),
+  };
+}
+
+/**
+ * Normalize a recipe, or null for "use the default". Edges must join an
+ * existing output to a matching input; an input keeps its first edge, and an
+ * edge that would close a cycle is dropped (runs walk the graph upstream).
+ */
+export function sanitizeRecipe(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.nodes)) return null;
+  const nodes = [];
+  const byId = new Map();
+  for (const item of raw.nodes) {
+    if (nodes.length >= RECIPE_LIMITS.nodes) break;
+    const node = sanitizeNode(item);
+    if (!node || byId.has(node.id)) continue;
+    byId.set(node.id, node);
+    nodes.push(node);
+  }
+  const edges = [];
+  const taken = new Set();
+  for (const edge of Array.isArray(raw.edges) ? raw.edges : []) {
+    const from = byId.get(edge?.from);
+    const to = byId.get(edge?.to);
+    if (!from || !to || from === to) continue;
+    const kind = RECIPE_NODE_PORTS[to.type].inputs[edge.toPort];
+    if (!kind || RECIPE_NODE_PORTS[from.type].output !== kind) continue;
+    const slot = `${to.id}:${edge.toPort}`;
+    if (taken.has(slot)) continue;
+    const next = { from: from.id, to: to.id, toPort: edge.toPort };
+    if (reaches([...edges, next], to.id, from.id)) continue;
+    taken.add(slot);
+    edges.push(next);
+  }
+  return { nodes, edges };
+}
+
+function reaches(edges, start, target) {
+  const stack = [start];
+  const seen = new Set();
+  while (stack.length) {
+    const id = stack.pop();
+    if (id === target) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const edge of edges) if (edge.from === id) stack.push(edge.to);
+  }
+  return false;
+}
+
+/** The recipe a board runs: its own, else the default for its art style. */
+export const effectiveRecipe = (board) => sanitizeRecipe(board?.recipe) || defaultPanelRecipe(board);
+
+/** The node wired into `nodeId`'s `port`, or null. */
+export function upstreamNode(recipe, nodeId, port) {
+  const edge = recipe.edges.find((e) => e.to === nodeId && e.toPort === port);
+  return edge ? recipe.nodes.find((n) => n.id === edge.from) || null : null;
+}
+
+/** Nodes in run order: every node after the nodes that feed it. */
+export function recipeRunOrder(recipe) {
+  const order = [];
+  const placed = new Set();
+  const visit = (node, trail = new Set()) => {
+    if (placed.has(node.id) || trail.has(node.id)) return;
+    trail.add(node.id);
+    for (const edge of recipe.edges) {
+      if (edge.to !== node.id) continue;
+      const from = recipe.nodes.find((n) => n.id === edge.from);
+      if (from) visit(from, trail);
+    }
+    placed.add(node.id);
+    order.push(node);
+  };
+  for (const node of recipe.nodes) visit(node);
+  return order;
+}
+
+/**
+ * The words a text node carries for one panel: the panel's own fields (each
+ * on a labeled line), the beat's description, or the node's custom text.
+ */
+export function textNodeValue(node, { beat, panel } = {}) {
+  const source = node?.settings?.source;
+  if (source === 'custom') return node.text || '';
+  if (source === 'beat') return [beat?.what, beat?.why].filter((v) => v && v.trim()).join('\n');
+  return [
+    panel?.action,
+    panel?.framing ? `Framing: ${panel.framing}` : '',
+    panel?.camera ? `Camera: ${panel.camera}` : '',
+    panel?.dialogue ? `Dialogue or lyric: ${panel.dialogue}` : '',
+  ].filter((v) => v && v.trim()).join('\n');
+}
+
+/** A panel's per-node run state for `nodeId` (never null). */
+export const panelNodeState = (panel, nodeId) => panel?.make?.nodes?.[nodeId] || EMPTY_NODE_STATE;
+
+const EMPTY_NODE_STATE = Object.freeze({
+  text: '', status: 'idle', error: '', sentPrompt: '', promptAdditions: [], providerId: '', model: '',
+  runId: '', frameCount: 0, jobIds: [], failedJobIds: [], takeIds: [], excludedRefs: [], extraRefs: [], sentRefs: [], runAt: null,
+});
+
+/**
+ * The value flowing out of a node for one panel: text for text-kind outputs,
+ * an image list for references, take ids for an image node.
+ * `linkedRefs` are the panel's catalog images the server resolved.
+ */
+function nodeOutputValue(recipe, node, { beat, panel, linkedRefs = [] } = {}) {
+  if (!node) return null;
+  const state = panelNodeState(panel, node.id);
+  if (node.type === 'text') return textNodeValue(node, { beat, panel });
+  if (node.type === 'system') return node.text || '';
+  if (node.type === 'llm') return state.text || '';
+  if (node.type === 'references') {
+    const excluded = new Set(state.excludedRefs);
+    const linked = node.settings?.linked ? linkedRefs.filter((ref) => !excluded.has(ref.image)) : [];
+    return imageList([...(node.images || []), ...linked, ...state.extraRefs], RECIPE_LIMITS.images);
+  }
+  if (node.type === 'image') return state.takeIds;
+  return null;
+}
+
+/** The value arriving at `nodeId`'s `port` for one panel ('' / [] when unwired). */
+export function nodeInputValue(recipe, nodeId, port, context) {
+  const from = upstreamNode(recipe, nodeId, port);
+  const value = nodeOutputValue(recipe, from, context);
+  if (value !== null) return value;
+  return RECIPE_NODE_PORTS[recipe.nodes.find((n) => n.id === nodeId)?.type]?.inputs[port] === 'text' ? '' : [];
+}
+
+function sanitizeAdditions(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((a) => a && typeof a.id === 'string' && typeof a.label === 'string' && typeof a.text === 'string')
+    .slice(0, RECIPE_LIMITS.additions)
+    .map((a) => ({ id: a.id.slice(0, 80), label: a.label.slice(0, 120), text: a.text.slice(0, RECIPE_LIMITS.text) }));
+}
+
+const idList = (value, max, pattern = /^[A-Za-z0-9:_-]{1,128}$/) => (Array.isArray(value)
+  ? [...new Set(value.filter((v) => typeof v === 'string' && pattern.test(v)))].slice(0, max)
+  : []);
+
+function sanitizeNodeState(raw, takeIds) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    text: str(raw.text, RECIPE_LIMITS.text),
+    status: STATUS_SET.has(raw.status) ? raw.status : 'idle',
+    error: str(raw.error, RECIPE_LIMITS.error),
+    sentPrompt: str(raw.sentPrompt, RECIPE_LIMITS.sentPrompt),
+    promptAdditions: sanitizeAdditions(raw.promptAdditions),
+    providerId: optStr(raw.providerId, 128),
+    model: optStr(raw.model, 256),
+    runId: optStr(raw.runId, 128),
+    // Frames an image run asked for; the node settles when that many landed or failed.
+    frameCount: Number.isInteger(raw.frameCount) ? Math.max(0, Math.min(raw.frameCount, RECIPE_LIMITS.frames)) : 0,
+    jobIds: idList(raw.jobIds, RECIPE_LIMITS.frames),
+    failedJobIds: idList(raw.failedJobIds, RECIPE_LIMITS.frames),
+    // Frames point at the panel's takes; a removed take drops out.
+    takeIds: idList(raw.takeIds, RECIPE_LIMITS.frames).filter((id) => takeIds.has(id)),
+    excludedRefs: idList(raw.excludedRefs, 40, IMAGE_NAME_PATTERN),
+    extraRefs: imageList(raw.extraRefs),
+    // The reference images an image run sent, beside its exact prompt.
+    sentRefs: imageList(raw.sentRefs),
+    runAt: typeof raw.runAt === 'string' && Number.isFinite(Date.parse(raw.runAt)) ? raw.runAt : null,
+  };
+}
+
+/** Normalize `panel.make` against the panel's takes; null when empty. */
+export function sanitizePanelMake(raw, takeIds = new Set()) {
+  if (!raw || typeof raw !== 'object' || !raw.nodes || typeof raw.nodes !== 'object') return null;
+  const nodes = {};
+  for (const [nodeId, state] of Object.entries(raw.nodes).slice(0, RECIPE_LIMITS.nodes)) {
+    if (!NODE_ID_PATTERN.test(nodeId)) continue;
+    const clean = sanitizeNodeState(state, takeIds);
+    if (clean) nodes[nodeId] = clean;
+  }
+  return Object.keys(nodes).length ? { nodes } : null;
+}

@@ -21,7 +21,8 @@
  *                              worktree; only a validated diff is ever promoted
  *                              back to the live checkout.
  *  - `runVerifyCommand`      — run the verify command over the agent-edited
- *                              worktree under OS containment, never on the host.
+ *                              worktree under OS containment (bubblewrap, else
+ *                              the opt-in Docker profile), never on the host.
  *
  * Node builtins plus dependency-light `server/lib` modules, so the standalone
  * autofixer package — which installs only `express` — can import it.
@@ -555,8 +556,11 @@ function runGroup(file, args, { cwd, env, timeoutMs, seccomp = null }) {
  * so it runs only under OS containment (`autofixVerifyContainment.js`): no
  * network or host Unix sockets, writes confined to the worktree and a private scratch dir, no reads
  * of the PortOS data directory or host credential stores, and an environment
- * built from nothing — no provider key or PortOS token. Without an enforced
- * mechanism the verify is refused, which blocks promotion.
+ * built from nothing — no provider key or PortOS token. Linux bubblewrap is
+ * the first choice; without it (always on macOS) the Docker containment
+ * profile runs the verify in its validate phase when the operator turned that
+ * feature on (`opts.docker`). Without an enforced mechanism the verify is
+ * refused, which blocks promotion — it never runs on the host.
  *
  * @param {string} command  user-configured shell command
  * @param {string} cwd      worktree path
@@ -565,11 +569,13 @@ function runGroup(file, args, { cwd, env, timeoutMs, seccomp = null }) {
  * @param {number} [opts.timeoutMs=300000]
  * @param {string} [opts.homeDir]  host home whose credential stores are hidden (default: os.homedir())
  * @param {() => Promise<{ id: string|null, supported: boolean, reason: string|null }>} [opts.probe]
+ * @param {{ enabled: boolean, settings?: object, run?: Function }} [opts.docker]  the Docker containment feature flag and settings slice
  * @returns {Promise<{ ok: boolean, code: number, output: string, contained: boolean, mechanism?: string }>}
  */
-export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir = homedir(), timeoutMs = 300000, probe = probeVerifyContainment } = {}) {
+export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir = homedir(), timeoutMs = 300000, probe = probeVerifyContainment, docker = null } = {}) {
   const mechanism = await probe();
   if (!mechanism.supported || mechanism.id !== 'linux-bubblewrap') {
+    if (docker?.enabled) return runDockerVerify(command, cwd, { dataDir, homeDir, timeoutMs, docker, bubblewrapReason: mechanism.reason });
     return { ok: false, code: -1, contained: false, output: `[verify] refused: no enforced containment for the verify command — ${mechanism.reason}` };
   }
   const scratchDir = await mkdtemp(join(tmpdir(), 'portos-autofix-verify-'));
@@ -601,6 +607,42 @@ export async function runVerifyCommand(command, cwd, { dataDir = null, homeDir =
   } finally {
     await rm(scratchDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+// The Docker validate phase: no network, the worktree read-only, and a work
+// copy in a throwaway volume. Loaded lazily so the bubblewrap path (and its
+// Linux CI job) does not pull the Docker executor in.
+// A disposable worktree has no node_modules, so a repo with an npm lockfile
+// gets a contained `npm ci` (registry-only network) into the same work volume
+// first, under the install phase's own wall limit (the verify timeout bounds
+// the verify command alone); the verify then runs with no network over it.
+// The install allowlist includes the worktree's .npmrc registries; that file
+// is the repository's committed one, because validateProposedDiff refuses any
+// .npmrc edit before a verify runs.
+async function runDockerVerify(command, cwd, { dataDir, homeDir, timeoutMs, docker, bubblewrapReason }) {
+  const run = docker.run ?? (await import('../server/services/dockerContainment.js')).runContained;
+  const common = { worktree: cwd, settings: docker.settings ?? {}, dataDir, homeDir };
+  const hasLockfile = await lstat(join(cwd, 'package-lock.json')).then((info) => info.isFile(), () => false);
+  let installLog = '';
+  if (hasLockfile) {
+    const install = await run({ ...common, phase: 'install', command: 'npm ci' });
+    if (install.status !== 'refused') installLog = `${install.log ?? ''}\n`;
+    if (install.status !== 'refused' && !(install.status === 'completed' && install.exitCode === 0)) {
+      return { ok: false, code: Number.isInteger(install.exitCode) ? install.exitCode : -1, contained: true, mechanism: 'docker', output: `${installLog}[verify] the contained npm ci failed (${install.reason ?? install.error ?? `exit ${install.exitCode}`})` };
+    }
+  }
+  const result = await run({ ...common, phase: 'validate', command, timeoutMs });
+  if (result.status === 'refused') {
+    return { ok: false, code: -1, contained: false, output: `[verify] refused: no enforced containment for the verify command — ${bubblewrapReason}; Docker containment unavailable — ${result.reason}` };
+  }
+  const note = result.status === 'terminated' ? `\n[verify] ${result.reason === 'timeout' ? `timed out after ${timeoutMs}ms` : 'cancelled'}` : result.error ? `\n[verify] ${result.error}` : '';
+  return {
+    ok: result.status === 'completed' && result.exitCode === 0,
+    code: Number.isInteger(result.exitCode) ? result.exitCode : -1,
+    output: `${installLog}${result.log ?? ''}${note}`,
+    contained: true,
+    mechanism: 'docker',
+  };
 }
 
 /**

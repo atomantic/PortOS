@@ -18,6 +18,7 @@
  * failure leaves the checkout, its lock and its branch exactly as found.
  */
 
+import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { createReadStream, realpathSync } from 'node:fs';
 import { lstat, stat, readlink, readdir, readFile, chmod } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
@@ -411,7 +412,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
 const isAncestor = (repoPath, sha, ref) => execGit(['merge-base', '--is-ancestor', sha, ref], repoPath, { ignoreExitCode: true })
   .then(r => r.exitCode === 0, () => false);
 
-async function ownerReason({ repoPath, tree, branch, readAgents, reviewed = false }) {
+async function ownerReason({ repoPath, tree, branch, readAgents, reviewed = false, mergedObligationSettled = false }) {
   const agents = await readAgents().catch(() => null);
   if (!Array.isArray(agents)) return 'claim-ownership-unreadable';
   const claim = claimCheckoutOwnerReason({ branchName: branch || 'HEAD', holderPath: tree.path, sourceWorkspace: repoPath, agents });
@@ -425,7 +426,10 @@ async function ownerReason({ repoPath, tree, branch, readAgents, reviewed = fals
   if (live) return live;
   if (!branch || reviewed) return null;
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-  return readBranchCompletionHold({ repoPath, branch, retirement: true }).catch(() => 'pr-completion-policy-unavailable');
+  const hold = await readBranchCompletionHold({ repoPath, branch, retirement: true }).catch(() => 'pr-completion-policy-unavailable');
+  // A review obligation is moot once every commit is already on the default
+  // branch (re-proven under the fence). Human handoffs and unreadable policy stay held.
+  return mergedObligationSettled && hold === 'pr-completion-review-required' ? null : hold;
 }
 
 /** Fresh registration that still matches the release, or the reason it does not. */
@@ -468,6 +472,8 @@ export async function inspectCheckoutRetirementOwnership({ repoPath, release, re
  */
 async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
   const { cosDir = PATHS.cos, readAgents = readClaimOwnershipAgents } = opts;
+  // Only the unattended merged-retirement caller sets this, and only without a review.
+  const mergedObligationSettled = !review && opts.settleMergedReviewObligation === true;
   const branch = release.branch ?? null;
   if (branch && PROTECTED_BRANCHES.includes(branch)) return { ok: false, reason: 'protected-branch' };
   const defaultBranch = await getDefaultBranch(repoPath, { allowRemote: false, strict: true }).catch(() => null);
@@ -492,7 +498,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl }, opts) : null;
       if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed');
       if (reviewed?.review.comparison.disposition === 'review-supersession' && review.acceptSuperseded !== true) return refuse('retirement-supersession-not-accepted');
-      const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review) });
+      const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
       if (owner) return refuse(owner);
       return { fence: { repoPath, path: tree.path, branch }, tree, reviewed };
     },
@@ -503,12 +509,12 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       console.error(`❌ held-checkout recovery: archive failed for ${tree.path}, checkout kept: ${archive.error.message}`);
       return { result: { ok: false, reason: 'archive-failed', detail: archive.error.message } };
     },
-    finish: ({ tree, reviewed }, archive) => finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive }, opts),
+    finish: ({ tree, reviewed }, archive) => finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, mergedObligationSettled }, opts),
   });
 }
 
 /** The second critical section: re-prove the release, ownership and archived bytes, then remove. */
-async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive }, opts) {
+async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewed, tree, branch, archive, mergedObligationSettled = false }, opts) {
   const { readAgents = readClaimOwnershipAgents } = opts;
   // Archiving takes time; never unlock a lock that changed hands meanwhile.
   const second = await matchRelease(repoPath, release);
@@ -522,7 +528,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh] = await Promise.all([
-      ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review) }),
+      ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
       review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, unlocked: release.locked }, opts) : null,
     ]);
     if (fresh && (!fresh.ok || fresh.review.digest !== review.digest)) return fresh.reason || 'retirement-review-changed';
@@ -547,7 +553,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   console.log(`🧹 held-checkout recovery: retired ${tree.path} (archive: ${archive.dir})`);
   if (!branch) return { ok: true, archiveDir: archive.dir, branchDeleted: false };
 
-  const hold = await ownerReason({ repoPath, tree: { ...tree, path: null }, branch, readAgents, reviewed: Boolean(review) });
+  const hold = await ownerReason({ repoPath, tree: { ...tree, path: null }, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
   if (hold) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: hold };
   if (review) {
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
@@ -641,6 +647,15 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   if (!outcome?.remaining?.some?.(entry => sameRelease(entry, release))) return { ok: false, reason: 'release-not-in-inventory' };
   const inventoryCurrent = async () => (await taskSchedule.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
   const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null });
+  // The row was stale: something else already removed the checkout. That is the
+  // outcome the operator asked for, so settle the row instead of refusing it.
+  if (!result.ok && result.reason === 'checkout-not-found') {
+    const gone = await findGoneInventoryRows(app.repoPath, [release]).catch(() => []);
+    if (gone.length) {
+      await taskSchedule.dropInventoryRows(appId, gone);
+      return { ok: true, alreadyRetired: true };
+    }
+  }
   if (result.ok) {
     await taskSchedule.recordHeldCheckoutRetirement(appId, {
       path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted, archiveDir: result.archiveDir,

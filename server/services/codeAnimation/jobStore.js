@@ -9,6 +9,7 @@ import { query } from '../../lib/db.js';
 import { PATHS } from '../../lib/paths.js';
 import { atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ANIMATIONS_DIR = join(PATHS.data, 'code-animations');
@@ -81,9 +82,23 @@ export async function saveCodeAnimationJobRecord(job) {
        model = EXCLUDED.model,
        data = EXCLUDED.data,
        updated_at = EXCLUDED.updated_at`,
-    [job.id, job.status, job.title, job.input?.concept || '', job.providerId, job.model, JSON.stringify(job), job.createdAt, job.updatedAt],
+    [job.id, job.status, job.title, job.input?.concept || '', job.providerId, job.model, toPgJson(job), job.createdAt, job.updatedAt],
   );
   return job;
+}
+
+/** Remove the job's row; the audit trigger keeps a copy of it. */
+export async function deleteCodeAnimationJobRecord(id) {
+  if (!isCodeAnimationJobId(id)) return false;
+  const { rowCount } = await query('DELETE FROM code_animation_jobs WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
+/** The job's on-disk files (HTML, poster) that exist. */
+export async function codeAnimationJobFiles(id) {
+  const paths = [htmlPath(id), codeAnimationPosterPath(id)];
+  const found = await Promise.all(paths.map(async (path) => ((await stat(path).catch(() => null))?.isFile() ? path : null)));
+  return found.filter(Boolean);
 }
 
 export async function saveCodeAnimationHtml(id, html) {

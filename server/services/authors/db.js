@@ -21,6 +21,7 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
   withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 function rowToAuthor(row) {
   return row ? row.data : null;
@@ -41,7 +42,7 @@ async function persist(exec, author) {
     [
       author.id,
       typeof author.name === 'string' ? author.name : '',
-      JSON.stringify(author),
+      toPgJson(author),
       createdAt,
       mirrorTimestamp(author.updatedAt, createdAt),
       author.deleted === true,

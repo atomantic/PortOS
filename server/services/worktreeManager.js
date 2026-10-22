@@ -17,6 +17,7 @@ import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fi
 import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
+import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
@@ -443,6 +444,9 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
     .catch(error => ({ removed: false, reason: error.message, warning: 'Checkout retained: repository reservation unavailable' }));
 }
 
+// Hold reasons that mean the cleanup could not even decide, rather than a gate declining.
+const REMOVAL_FAULT_HOLDS = new Set(['worktree-ownership-unreadable', 'worktree-removal-refused']);
+
 async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, beforeMutation = async () => {} } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
@@ -483,7 +487,13 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
   });
   const outcome = removalOutcome(worktreePath, await probeWorktreeRemoval(repo, worktreePath), heldReason || lastFailure);
   if (heldReason) outcome.reason = heldReason;
-  if (!outcome.removed && label) console.warn(`⚠️ ${outcome.warning}`);
+  if (!outcome.removed && label) {
+    // A gate keeping the checkout is the cleanup working as designed (the warning
+    // says "retryable"); an unreadable registry or a removal Git refused is a fault.
+    const designedHold = heldReason && !REMOVAL_FAULT_HOLDS.has(heldReason);
+    if (designedHold) console.log(`⏸️ ${outcome.warning}`);
+    else console.warn(`⚠️ ${outcome.warning}`);
+  }
   return outcome;
 }
 
@@ -542,6 +552,7 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  *   statically, notably one run's own `.agent-done-<agentId>` sentinel. Matched
  *   as roots: a directory entry also covers everything under it. They are still
  *   removed only when the rest of the tree is safe to remove.
+ * @param {{ ignoredPaths?: string[], preserveLockfiles?: boolean }} [opts] - `preserveLockfiles` classifies lockfiles as real changes
  * @returns {{ clean: boolean, lockfileOnly: boolean, lockfilePaths: string[], untrackedLockfilePaths: string[], realChangePaths: string[], hasRealChanges: boolean }}
  *   - clean: no changes at all
  *   - lockfileOnly: every change is an auto-generated lockfile (safe to discard)
@@ -553,7 +564,7 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  *     superseded while it sat uncommitted.
  *   - hasRealChanges: at least one non-lockfile change (worktree must be preserved)
  */
-export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
+export function classifyWorktreeDirt(porcelain, { ignoredPaths = [], preserveLockfiles = false } = {}) {
   const ignored = [...AGENT_SCRATCH_PATHS, ...ignoredPaths];
   // Git's porcelain v1 output C-quotes paths with spaces and several other
   // characters. Decode those paths before comparing them with scratch roots or
@@ -609,7 +620,9 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
   if (lines.length === 0) {
     return { clean: true, lockfileOnly: false, lockfilePaths: [], untrackedLockfilePaths: [], realChangePaths: [], hasRealChanges: false };
   }
-  const isLockfile = (line) => AUTO_GENERATED_LOCKFILES.some(f => toPath(line).endsWith(f));
+  // `dependency-updates` can legitimately deliver a lockfile-only diff (`npm audit
+  // fix`, a transitive bump), so there a lockfile is work, never churn.
+  const isLockfile = (line) => !preserveLockfiles && AUTO_GENERATED_LOCKFILES.some(f => toPath(line).endsWith(f));
   // `R old -> new` (rename) names two paths; the post-rename path is the one
   // that exists on disk and the one a diff against the default branch reports.
   const lockfileLines = lines.filter(isLockfile);
@@ -786,8 +799,9 @@ function pinnedHeadMoved(branchName, pinnedHead, actual) {
  * names its destination so the tracking ref cannot stay stale under a narrow
  * refspec. The checkout uses the SHA, so a ref update after the check cannot
  * swap code in; an existing local branch must already name that exact commit.
+ * `detach` checks the commit out with no branch at all (see `holdsCheckedOutBranch`).
  */
-async function attachPinnedHead(sourceWorkspace, worktreePath, branchName, remoteBranch, remote, pinnedHead, localExists) {
+async function attachPinnedHead(sourceWorkspace, worktreePath, branchName, remoteBranch, remote, pinnedHead, localExists, { detach = false } = {}) {
   const listed = await execGit(['ls-remote', '--exit-code', remote, `refs/heads/${remoteBranch}`], sourceWorkspace, { ignoreExitCode: true });
   // `--exit-code` answers 2 for "no such ref"; anything else non-zero is a
   // transport failure, which proves nothing about the branch.
@@ -801,7 +815,9 @@ async function attachPinnedHead(sourceWorkspace, worktreePath, branchName, remot
   const fetched = (await execGit(['rev-parse', '--verify', `${trackingRef}^{commit}`], sourceWorkspace)).stdout.trim();
   if (fetched !== pinnedHead) throw pinnedHeadMoved(branchName, pinnedHead, fetched);
 
-  if (localExists) {
+  if (detach) {
+    await addWorktreeWithRetry(['worktree', 'add', '--detach', worktreePath, pinnedHead], sourceWorkspace);
+  } else if (localExists) {
     const localHead = (await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace)).stdout.trim();
     if (localHead !== pinnedHead) {
       throw new Error(`Cannot attach worktree to ${branchName}: the local branch differs from the reviewed head; preserving it without reset`);
@@ -813,6 +829,39 @@ async function attachPinnedHead(sourceWorkspace, worktreePath, branchName, remot
   // A concurrent external ref write must not hand unreviewed code to the agent.
   const attached = (await execGit(['rev-parse', '--verify', 'HEAD'], worktreePath)).stdout.trim();
   if (attached !== pinnedHead) throw pinnedHeadMoved(branchName, pinnedHead, attached);
+}
+
+/**
+ * Is `branch` one a second worktree must never attach to by name: the repository's
+ * default branch, or whatever the primary checkout has checked out? Git refuses the
+ * second case outright, and the first is the branch a review fix must never be
+ * pushed to without its own pull request (a release PR's head IS the default branch).
+ */
+async function holdsCheckedOutBranch(sourceWorkspace, branch, baseBranch) {
+  const { getDefaultBranch } = await import('./git.js');
+  const defaultBranch = baseBranch || await getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null);
+  if (branch === defaultBranch) return { held: true, isDefault: true };
+  const current = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace, { ignoreExitCode: true }).catch(() => null))?.stdout?.trim();
+  return { held: current === branch, isDefault: false };
+}
+
+/**
+ * Detached worktree at the reviewed head of a branch the primary checkout owns.
+ * The follow-up can read, test and gate that exact commit; with no branch checked
+ * out there is nothing for `git push` to default to and nothing for another
+ * worktree to collide with. Fork heads never come here: they attach under their
+ * own `fork/<owner>/<branch>` name.
+ */
+async function attachDetachedHead(sourceWorkspace, worktreePath, branch, pinnedHead, fetchSucceeded) {
+  if (pinnedHead) {
+    await attachPinnedHead(sourceWorkspace, worktreePath, branch, branch, 'origin', pinnedHead, false, { detach: true });
+    return pinnedHead;
+  }
+  const head = await execGit(['rev-parse', '--verify', `refs/remotes/origin/${branch}^{commit}`], sourceWorkspace, { ignoreExitCode: true })
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() : ''), () => '');
+  if (!head) throw new Error(`Cannot attach worktree to ${branch}: origin/${branch} unavailable${fetchSucceeded ? '' : ' (fetch failed)'}`);
+  await addWorktreeWithRetry(['worktree', 'add', '--detach', worktreePath, head], sourceWorkspace);
+  return head;
 }
 
 /**
@@ -837,7 +886,7 @@ async function attachPinnedHead(sourceWorkspace, worktreePath, branchName, remot
  * @param {object} options - Optional configuration
  * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
  * @param {string} options.baseCommit - Exact server-owned source commit for a fresh Deep resume
- * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
+ * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy). When it is the default branch or the primary checkout's own branch the worktree is DETACHED at the branch's reviewed head instead (`detached: true` in the result).
  * @param {string} options.resumeBranch - Exact preserved local branch from a retry, including pre-namespace fork branches
  * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives for a fork PR; checked out as fork/<owner>/<branch>.
  * @param {string} options.expectedHeadSha - Attach only at the reviewed remote tip; existing local work is never reset.
@@ -886,6 +935,22 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
     const pinnedHead = options.expectedHeadSha === undefined ? null : requirePinnedHeadSha(options.expectedHeadSha);
     const forkHead = normalizeForkHead(options.forkHead);
     if (options.forkHead && !forkHead) throw new Error('Invalid fork head coordinates');
+    const checkedOut = forkHead || options.resumeBranch
+      ? { held: false, isDefault: false }
+      : await holdsCheckedOutBranch(sourceWorkspace, remoteBranch, options.baseBranch);
+    if (checkedOut.held) {
+      const headSha = await attachDetachedHead(sourceWorkspace, worktreePath, remoteBranch, pinnedHead, fetchSucceeded);
+      if (options.linkDependencies === false) {
+        await unlinkWorktreeDependencies(sourceWorkspace, worktreePath);
+      } else {
+        await linkWorktreeDependencies(sourceWorkspace, worktreePath);
+      }
+      console.log(`🌳 Created detached worktree for ${agentId} at ${worktreePath} on ${remoteBranch}@${headSha.slice(0, 12)} (primary checkout holds the branch)`);
+      return {
+        worktreePath, branchName: remoteBranch, baseBranch: null, existingBranch: true, instanceId,
+        detached: true, headSha, headIsDefaultBranch: checkedOut.isDefault,
+      };
+    }
     const branchName = options.resumeBranch || forkLocalBranch(remoteBranch, forkHead);
     const localExists = (await execGit(['branch', '--list', branchName], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
     if (options.resumeBranch && !localExists) throw new Error(`Cannot resume missing local branch ${branchName}`);
@@ -1113,25 +1178,86 @@ async function releaseIdleSiblingNextHolderAdmitted(sourceWorkspace, branchName,
     .map(f => stat(join(gitDir, f)).then(s => s.mtimeMs, () => 0)));
   if (nowMs - Math.max(...mtimes) < idleMs) return null;
 
+  if (!await detachCleanPushedHolder(holder.path, branchName, { allowUntracked })) return null;
+  console.log(`🌳 Released ${branchName} from idle /do:next worktree ${holder.path} (HEAD detached in place)`);
+  return { path: holder.path };
+}
+
+/**
+ * Detach `holderPath`'s HEAD in place iff the tree holds nothing the branch ref
+ * does not: tracked/staged state clean (untracked files too unless
+ * `allowUntracked`; git-ignored caches never count) and HEAD already on the
+ * remote. A detached HEAD keeps every file where it is and `git switch <branch>`
+ * restores it. Any unreadable check refuses (false).
+ */
+async function detachCleanPushedHolder(holderPath, branchName, { allowUntracked = false } = {}) {
+  const git = (args) => execGit(args, holderPath).then(r => r.stdout.trim());
   // Stricter than `classifyWorktreeDirt` on purpose: this tree isn't PortOS's,
   // so no path counts as disposable scratch.
   const porcelain = await git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all']).catch(() => null);
-  if (porcelain === null) return null;
-  if (allowUntracked ? porcelain.split('\n').some(l => l && !l.startsWith('?? ')) : porcelain !== '') return null;
+  if (porcelain === null) return false;
+  if (allowUntracked ? porcelain.split('\n').some(l => l && !l.startsWith('?? ')) : porcelain !== '') return false;
   const remoteRef = await git(['rev-parse', '--verify', '--quiet', `${branchName}@{upstream}`])
     .catch(() => git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branchName}`]))
     .catch(() => null);
-  if (!remoteRef) return null;
-  const pushed = await execGit(['merge-base', '--is-ancestor', 'HEAD', remoteRef], holder.path)
+  if (!remoteRef) return false;
+  const pushed = await execGit(['merge-base', '--is-ancestor', 'HEAD', remoteRef], holderPath)
     .then(() => true, () => false);
-  if (!pushed) return null;
+  if (!pushed) return false;
 
-  const detached = await execGit(['switch', '--detach', '--quiet'], holder.path).then(() => true, (err) => {
-    console.warn(`⚠️ Could not detach ${holder.path} to release ${branchName}: ${err.message}`);
+  const detached = await execGit(['switch', '--detach', '--quiet'], holderPath).then(() => true, (err) => {
+    console.warn(`⚠️ Could not detach ${holderPath} to release ${branchName}: ${err.message}`);
     return false;
   });
-  if (!detached) return null;
-  console.log(`🌳 Released ${branchName} from idle /do:next worktree ${holder.path} (HEAD detached in place)`);
+  return detached;
+}
+
+/**
+ * Free `branchName` from a worktree PortOS did not create and nothing owns
+ * anymore — typically one a terminal agent session cut under its own scratchpad
+ * and left behind after pushing its PR (#12845). Detaches the holder in place
+ * (never moves or deletes it), so no content can be lost; the caller then
+ * retries `git worktree add`.
+ *
+ * Refuses (null) unless ALL hold, each failing closed when unreadable: the
+ * holder is a linked worktree (never the primary checkout) OUTSIDE the managed
+ * `data/cos/worktrees/` root, unlocked, with no branch/repository owner or
+ * running/paused agent registered in or on it; no process has its cwd inside it
+ * (`hasProcessInside`); it is clean (git-ignored caches excepted) and its HEAD
+ * is already on the remote.
+ *
+ * @param {string} sourceWorkspace
+ * @param {string} branchName
+ * @param {{ activeWorkspacePaths?: string[], agents?: object[]|null, requestingAgentId?: string, hasProcessInside?: (dir: string) => Promise<boolean> }} [options]
+ * @returns {Promise<{ path: string }|null>} the released holder, or null
+ */
+export async function releaseOwnerlessForeignHolder(sourceWorkspace, branchName, options = {}) {
+  if (!sourceWorkspace || !branchName || PROTECTED_BRANCHES.includes(branchName)) return null;
+  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+  return withCheckoutPublication(sourceWorkspace, () => releaseOwnerlessForeignHolderAdmitted(sourceWorkspace, branchName, options));
+}
+
+async function releaseOwnerlessForeignHolderAdmitted(sourceWorkspace, branchName, {
+  activeWorkspacePaths = [],
+  agents = null,
+  requestingAgentId = null,
+  hasProcessInside = hasProcessCwdInside,
+} = {}) {
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
+  if (!claimBranchAdmission({
+    branchName, agentId: requestingAgentId, sourceWorkspace, worktrees, agents,
+  }).admit) return null;
+  const holderIndex = worktrees.findIndex(wt => wt.branch?.replace('refs/heads/', '') === branchName);
+  // Index 0 is the main worktree — the user's own checkout is never released.
+  if (holderIndex <= 0) return null;
+  const holder = worktrees[holderIndex];
+  if (holder.locked || holder.prunable || !existsSync(holder.path)) return null;
+  // Managed trees have their own owners and reapers (adoption, claim cleanup).
+  if (isPathInsideDir(WORKTREES_DIR, holder.path)) return null;
+  if (activeWorkspacePaths.some(p => p && (pathsEqual(p, holder.path) || isPathInsideDir(holder.path, p)))) return null;
+  if (await hasProcessInside(holder.path).catch(() => true)) return null;
+  if (!await detachCleanPushedHolder(holder.path, branchName)) return null;
+  console.log(`🌳 Released ${branchName} from ownerless foreign worktree ${holder.path} (HEAD detached in place)`);
   return { path: holder.path };
 }
 
@@ -1267,7 +1393,7 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
   const porcelain = await execGit(['status', '--porcelain'], targetPath)
     .then(r => r.stdout.trim())
     .catch(() => '');
-  const dirt = classifyWorktreeDirt(porcelain);
+  const dirt = classifyWorktreeDirt(porcelain, { preserveLockfiles: options.preserveLockfiles === true });
   if (dirt.lockfileOnly) {
     console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in adopted worktree ${agentId}`);
     await discardLockfileChanges(targetPath, dirt).catch(err => {
@@ -1380,6 +1506,8 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
  * @param {string} branchName - The worktree branch to clean up
  * @param {object} options
  * @param {boolean} [options.merge] - attempt to merge the branch back first
+ * @param {boolean} [options.preserveLockfiles] - keep a lockfile-only change (a
+ *   `dependency-updates` deliverable) instead of discarding it as install churn
  * @param {boolean} [options.discardDirt] - remove even when the tree is dirty.
  *   The dirty-abort exists to protect work that might still be wanted; the
  *   throwaway-worktree posture has already declared this tree's contents
@@ -1435,15 +1563,29 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     if (!head || (expectedHead && head !== expectedHead)) return 'branch-head-changed-or-unavailable';
     return await hasBranchMergeEvidence(sourceWorkspace, head, mergeTarget).catch(() => false) ? null : 'merge-evidence-unavailable';
   };
+  // A follow-up on a branch the primary checkout owns runs DETACHED (createWorktree):
+  // there is no branch to protect, merge or delete, so only its commits matter.
+  // Probed lazily: every early refusal above the archive step is a pure-status exit.
+  let detachedProbe = null;
+  const detachedCheckout = () => detachedProbe ||= listWorktrees(sourceWorkspace)
+    .then(trees => trees.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath) && wt.detached && !wt.branch) || null, () => null);
+  const detachedHold = async (head) => {
+    const owner = await ownershipHold();
+    if (owner) return owner;
+    const contained = await execGit(['branch', '-r', '--contains', head], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+    return contained?.exitCode === 0 && contained.stdout.trim() ? null : 'detached-head-unpublished';
+  };
   const preserve = async () => {
     const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
-    if (!tree || tree.branch !== `refs/heads/${branchName}`) throw new Error('worktree-holder-changed');
+    const detached = Boolean(await detachedCheckout());
+    if (!tree || (detached ? !tree.detached || tree.branch : tree.branch !== `refs/heads/${branchName}`)) throw new Error('worktree-holder-changed');
     const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
-    const hold = await completionHold(tree.head);
+    const checkHold = detached ? detachedHold : completionHold;
+    const hold = await checkHold(tree.head);
     if (hold) throw new Error(hold);
     const archive = await preserveMergedCheckout(sourceWorkspace, tree, null);
     return { ...archive, head: tree.head,
-      verify: async holder => await completionHold(tree.head) || await archive.verify(holder) };
+      verify: async holder => await checkHold(tree.head) || await archive.verify(holder) };
   };
   // One archive between two critical sections. `admit` (under the lock, after the
   // owner re-read) returns a result to stop before fencing; `finish` runs under the
@@ -1486,7 +1628,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
     const protectedReason = PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch
       ? 'protected-branch' : !defaultBranch ? 'default-branch-unavailable' : null;
-    if (protectedReason) return { result: held(protectedReason) };
+    if (protectedReason && !await detachedCheckout()) return { result: held(protectedReason) };
     // A retirement archiving this checkout with the lock released owns it until removal.
     const owner = checkoutRetirementFenceReason(fence) || await ownershipHold();
     if (owner) return { result: held(owner) };
@@ -1535,7 +1677,8 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     // name, plus the legacy shared one a pre-upgrade run may have left — and no
     // other agent's.
     const dirt = classifyWorktreeDirt(dirtyFiles, {
-      ignoredPaths: [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)]
+      ignoredPaths: [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)],
+      preserveLockfiles: options.preserveLockfiles === true
     });
     if (!dirt.clean && options.discardDirt) {
       // Throwaway posture: the caller has already established that nothing in this
@@ -1606,7 +1749,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
 
   return retire({
     admit: async () => {
-      if (!options.merge) return null;
+      if (!options.merge || await detachedCheckout()) return null;
       const currentBranch = (await execGit(
         ['rev-parse', '--abbrev-ref', 'HEAD'],
         sourceWorkspace
@@ -1666,14 +1809,15 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
         // deleting it would fail, and `removed: true` would tell the caller it may
         // queue work onto a branch the old worktree still owns. Report the truth with
         // a retryable warning; `merged` stays accurate for the publication outcome.
-        console.warn(`⚠️ Worktree for ${agentId} was not removed — branch ${branchName} kept`);
+        // `forceRemoveWorktreeDir` above already reported why on the right stream.
+        console.log(`⏸️ Worktree for ${agentId} was not removed — branch ${branchName} kept`);
         warnings.push(removal.warning);
         return { merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
       }
 
       // Merge evidence and completion policy were checked before removal; the
       // branch helper checks them again before its leased local deletion.
-      if (await cleanupBranch(preservation.head)) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
+      if (await detachedCheckout() || await cleanupBranch(preservation.head)) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
       return { merged, removed: true, uncommittedSaved: false, warnings };
     },
   });

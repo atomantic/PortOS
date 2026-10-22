@@ -16,6 +16,7 @@ import { join } from 'node:path';
 
 import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { identityFromHandle, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
+import { fullDiskAccessDetails } from '../lib/fullDiskAccess.js';
 
 const DEFAULT_AB_ROOT = '~/Library/Application Support/AddressBook';
 const CACHE_FILE = 'contacts-cache.json';
@@ -370,14 +371,15 @@ export async function checkSetup() {
   try {
     paths = discoverAddressBookPaths(root);
   } catch (err) {
+    const fullDiskAccessRequired = isPermissionError(err);
     return {
       ok: false,
       root,
       error: err?.message || 'Failed to scan AddressBook directory',
-      fullDiskAccessRequired: isPermissionError(err),
-      remediation: isPermissionError(err)
-        ? 'Grant Full Disk Access to the process running PortOS (System Settings → Privacy & Security → Full Disk Access), then restart PortOS.'
-        : `Could not scan ${root}: ${err?.message || 'unknown error'}`,
+      fullDiskAccessRequired,
+      ...(fullDiskAccessRequired
+        ? await fullDiskAccessDetails()
+        : { remediation: `Could not scan ${root}: ${err?.message || 'unknown error'}` }),
     };
   }
   if (paths.length === 0) {
@@ -405,9 +407,7 @@ export async function checkSetup() {
       paths,
       error: probe.error,
       fullDiskAccessRequired: probe.permission,
-      remediation: probe.permission
-        ? 'Grant Full Disk Access to the process running PortOS (System Settings → Privacy & Security → Full Disk Access), then restart PortOS.'
-        : probe.error,
+      ...(probe.permission ? await fullDiskAccessDetails() : { remediation: probe.error }),
     };
   }
   // Count across all sources (cheap open).

@@ -9,7 +9,7 @@ import { readFile, readdir, rm, rename, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { createEventLoopLagProbe, roundMs, systemClock } from '../lib/eventLoopLagProbe.js';
+import { createEventLoopLagProbe, formatLoadAttribution, roundMs, systemClock } from '../lib/eventLoopLagProbe.js';
 import { ensureDirs, safeJSONParse, readJSONFileStrict, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
@@ -65,10 +65,10 @@ export const SLOW_STATE_OPERATION_MS = 1000;
 let stateClock = systemClock;
 let stateLagProbe = createEventLoopLagProbe({ clock: stateClock });
 
-/** Inject a deterministic clock; `null` restores the system clock. */
-export function __setCosStateDiagnosticsClockForTests(clock) {
+/** Inject a deterministic clock and optional resource counters; `null` restores the system ones. */
+export function __setCosStateDiagnosticsClockForTests(clock, resources) {
   stateClock = clock ?? systemClock;
-  stateLagProbe = createEventLoopLagProbe({ clock: stateClock });
+  stateLagProbe = createEventLoopLagProbe({ clock: stateClock, resources });
 }
 
 export function withStateLock(fn) {
@@ -79,9 +79,9 @@ export function withStateLock(fn) {
     try {
       return await fn();
     } finally {
-      const { totalMs, lagMs, lagMaxMs } = span.end();
+      const { totalMs, lagMs, lagMaxMs, load } = span.end();
       if (totalMs >= SLOW_STATE_OPERATION_MS) {
-        console.warn(`🐢 CoS state queue slow hold heldMs=${totalMs} waitMs=${waitMs} loopLagMs=${lagMs} loopLagMaxMs=${lagMaxMs}`);
+        console.log(`🐢 CoS state queue slow hold heldMs=${totalMs} waitMs=${waitMs} loopLagMs=${lagMs} loopLagMaxMs=${lagMaxMs}${formatLoadAttribution(load)}`);
       }
     }
   });
@@ -726,7 +726,7 @@ export async function saveState(state, { onStage, changedAgentIds } = {}) {
     const summary = span.end();
     if (summary.totalMs >= SLOW_STATE_OPERATION_MS) {
       const ms = (name) => summary.phases[name]?.ms ?? 0;
-      console.warn(`🐢 CoS state write slow outcome=${outcome} totalMs=${summary.totalMs} prepareMs=${ms('prepare')} agentsMs=${ms('agents')} serializeMs=${ms('serialize')} writeMs=${ms('write')} replaceMs=${ms('replace')} dirSyncMs=${ms('dirSync')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} sizeKiB=${Math.round(bytes / 1024)}`);
+      console.log(`🐢 CoS state write slow outcome=${outcome} totalMs=${summary.totalMs} prepareMs=${ms('prepare')} agentsMs=${ms('agents')} serializeMs=${ms('serialize')} writeMs=${ms('write')} replaceMs=${ms('replace')} dirSyncMs=${ms('dirSync')} loopLagMs=${summary.lagMs} loopLagMaxMs=${summary.lagMaxMs} sizeKiB=${Math.round(bytes / 1024)}${formatLoadAttribution(summary.load)}`);
     }
   }
   stateCache = stampGeneration(state, stateRecovery);

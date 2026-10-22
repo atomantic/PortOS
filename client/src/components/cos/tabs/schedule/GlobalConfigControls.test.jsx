@@ -175,6 +175,17 @@ describe('GlobalConfigControls — branch-reconcile batch size', () => {
   });
 });
 
+describe('GlobalConfigControls — error-log-triage run caps', () => {
+  it('shows the shipped caps and persists a changed cap beside the other one', () => {
+    const onUpdate = renderControls({ taskType: 'error-log-triage', taskMetadata: { triageMaxInvestigations: 2 } });
+    expect(screen.getByLabelText('Occurrences before investigating')).toHaveValue('3');
+    fireEvent.change(screen.getByLabelText('Investigations per run'), { target: { value: '0' } });
+    expect(onUpdate).toHaveBeenCalledWith('error-log-triage', {
+      taskMetadata: { triageMaxInvestigations: 0 }
+    });
+  });
+});
+
 describe('GlobalConfigControls — dependency-freedom removal bar', () => {
   it('is hidden for other audits', () => {
     renderControls({ taskType: 'better-complexity' });
@@ -297,6 +308,22 @@ describe('GlobalConfigControls — release options', () => {
     const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { resolveBlockers: false } });
     fireEvent.click(screen.getByRole('button', { name: 'Enable resolve blockers' }));
     expect(onUpdate).toHaveBeenCalledWith('do-release', { taskMetadata: { resolveBlockers: true } });
+  });
+});
+
+describe('GlobalConfigControls — stall nudge', () => {
+  it('shows the nudge ON for a task that never set it and writes an explicit false when turned off', () => {
+    const onUpdate = renderControls({ taskMetadata: { useWorktree: true } });
+    expect(screen.getByRole('button', { name: 'Disable stall nudge' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Disable stall nudge' }));
+    expect(onUpdate).toHaveBeenCalledWith('feature-ideas', { taskMetadata: { useWorktree: true, stallNudge: false } });
+  });
+
+  it('shows do-release with the nudge off and turns it back on', () => {
+    const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { slashdoCommand: 'release', stallNudge: false } });
+    expect(screen.getByRole('button', { name: 'Enable stall nudge' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Enable stall nudge' }));
+    expect(onUpdate).toHaveBeenCalledWith('do-release', { taskMetadata: { slashdoCommand: 'release', stallNudge: true } });
   });
 });
 

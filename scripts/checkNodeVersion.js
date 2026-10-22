@@ -22,7 +22,7 @@
  * react-router requires Node 22.22, while the Babel toolchain and the
  * dependency graph's supported Node 24 line require later patches. Node 23 and
  * 25 are intentionally excluded by dependencies with even-major ranges.
- * `.nvmrc`/CI at 24 remains the preferred LTS, while the minimum CI job proves
+ * `.nvmrc`/CI at 26 is the preferred LTS, while the minimum CI job proves
  * the lower supported Node 22 line.
  */
 

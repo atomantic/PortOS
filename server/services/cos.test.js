@@ -2330,6 +2330,11 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
     )).toEqual({ lane: 'onDemand', taskType: 'claim-issue', appId: 'app-42' });
   });
 
+  it('does not refill an app-less branch-reconcile drain (its completion has no repository target)', () => {
+    expect(perpetualRefillPlan(agent({ taskAnalysisType: 'branch-reconcile', taskOnDemand: true, taskApp: null }), schedule))
+      .toEqual({ lane: 'skip' });
+  });
+
   it('routes a cron-scheduled perpetual drain to the on-demand lane when the run was manual', () => {
     expect(perpetualRefillPlan(
       agent({ taskAnalysisType: 'branch-reconcile', taskOnDemand: true, taskApp: 'app-1' }),

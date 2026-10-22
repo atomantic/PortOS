@@ -107,7 +107,6 @@ describe('importPrivatePinterestBoard', () => {
     expect(downloadPinImage).toHaveBeenCalledWith(expect.objectContaining({ ...secondPin, pinUrl: secondPin.source }));
     expect(store.appendImportedItems).toHaveBeenCalledWith('mb-example', [{
       imageUrl: '/data/images/pinterest-example.jpg',
-      caption: secondPin.caption,
       source: secondPin.source,
     }]);
     expect(result).toMatchObject({ added: 1, found: 2, skipped: 1 });

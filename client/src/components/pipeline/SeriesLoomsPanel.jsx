@@ -10,12 +10,14 @@
  * series' universe, so the AI lanes inherit its canon) and lands in the editor.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Loader2, Plus, Waypoints } from 'lucide-react';
 import Pill from '../ui/Pill';
 import { FormField } from '../ui/FormField.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 import { timeAgo } from '../../utils/formatters';
 import { createLoom, listLooms } from '../../services/api';
 import { fieldClass, labelClass } from '../fableloom/fieldStyles';
@@ -37,20 +39,12 @@ const countLabel = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 export default function SeriesLoomsPanel({ series }) {
   const navigate = useNavigate();
   const seriesId = series?.id;
-  const [looms, setLooms] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [participationMode, setParticipationMode] = useState('helper');
   const [communicationMedium, setCommunicationMedium] = useState('');
 
-  useEffect(() => {
-    if (!seriesId) return undefined;
-    let canceled = false;
-    setLooms(null);
-    listLooms({ seriesId, silent: true })
-      .then((rows) => { if (!canceled) setLooms(Array.isArray(rows) ? rows : []); })
-      .catch(() => { if (!canceled) setLooms([]); });
-    return () => { canceled = true; };
-  }, [seriesId]);
+  const fetchLooms = useCallback(() => listLooms({ seriesId, silent: true }), [seriesId]);
+  const { items: looms, state, error, retry } = useListResource(fetchLooms, { enabled: !!seriesId });
 
   const [runCreate, creating] = useAsyncAction(async () => {
     const loom = await createLoom({
@@ -138,11 +132,13 @@ export default function SeriesLoomsPanel({ series }) {
         </div>
       )}
 
-      {looms === null ? (
+      {state === 'loading' ? (
         <div className="flex items-center gap-2 text-xs text-gray-500">
           <Loader2 size={12} className="animate-spin" aria-hidden="true" />
           Loading branching narratives…
         </div>
+      ) : state === 'error' ? (
+        <ListLoadError what="branching narratives" error={error} onRetry={retry} />
       ) : looms.length === 0 ? (
         <p className="text-xs text-gray-600">
           None yet. A branching narrative stays its own record — it just carries this series&apos; canon and shows up here.

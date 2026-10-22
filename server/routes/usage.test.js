@@ -14,7 +14,8 @@ vi.mock('../services/usage.js', () => ({
 }));
 
 vi.mock('../services/peerUsage.js', () => ({
-  getFleetUsage: vi.fn(async () => ({ instances: [], totals: null }))
+  getFleetUsage: vi.fn(async () => ({ instances: [], totals: null })),
+  getFleetRollingCost: vi.fn(async () => ({ windowDays: 30, instanceCount: 1, points: [] }))
 }));
 
 vi.mock('../services/usageFleetBilling.js', () => ({
@@ -124,7 +125,8 @@ describe('usage routes', () => {
       totalSessions: 4,
       providers: ['anthropic'],
       subscriptionSavings: { configured: false, families: [] },
-      fleet: { instances: [], totals: null }
+      fleet: { instances: [], totals: null },
+      rollingCost: { windowDays: 30, instanceCount: 1, points: [] }
     });
     const arg = usage.getUsageSummary.mock.calls[0][0];
     expect(arg.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);

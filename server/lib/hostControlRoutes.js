@@ -563,6 +563,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music/setup/runtime-install',
   'POST /api/video-gen/setup/runtime-install',
   'POST /api/music/supercollider/setup',
+  // Docker containment pulls an image and runs repository code in a container
+  // (#12844); the status GET stays open.
+  'POST /api/docker-containment/pull',
+  'POST /api/docker-containment/run',
 
   // Image-to-3D (TRELLIS.2 / Pixal3D) installers git-clone and build engines,
   // the MuScriptor installer builds a venv via the setup script, and the
@@ -605,6 +609,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music/code',
   // Local music generation spawns neural-audio Python on the host (#11077).
   'POST /api/music/generate',
+  'POST /api/code-animation/:id/soundtrack',
   'POST /api/tracks/:id/waveform/draw',
   'POST /api/music-video/autonomous',
   'POST /api/music-video/:id/autonomous/resume',
@@ -977,6 +982,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/github/repos/:fullName/unarchive',
   'PUT /api/github/secrets/:name',
   'POST /api/github/secrets/:name/sync',
+  // Resolve with agent queues CoS agent work against the thread's app.
+  'POST /api/github/notifications/:accountId/:threadId/agent',
 
   // Beeper outbox creation records approved send intent; send spends the
   // operator's saved connection, and breaker reset re-arms that capability.
@@ -1009,6 +1016,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // record a preference — left open.
   'POST /api/update/execute',
   'POST /api/update/sync-fork',
+  // Node runtime (nvm install + global pm2 + restart) and pm2 alignment.
+  'POST /api/update/node-runtime',
+  'POST /api/update/node-runtime/startup',
+  'POST /api/update/pm2',
 
   // Brain links (#8742): git clone/pull in the linked repo, opening a host
   // app, or queuing a CoS malware-scan/repo-study agent. `buckets` CRUD,
@@ -1062,7 +1073,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
 /**
  * `PUT /api/settings` slices that set what runs or the guardrails around it:
- * Autofixer repair policy, harness enablement and wrapper CLIs, the Code Animation worker tools, the
+ * Autofixer repair policy, Docker containment images/egress, harness enablement and wrapper CLIs, the Code Animation worker tools, the
  * code-review chain, the untrusted content screen in front of agent work,
  * scheduled self-update, scheduled series autopilots, and backup destination/
  * recovery policy, and whole-root voice policy replacement. The store is
@@ -1079,6 +1090,8 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'codeAnimationExecution',
   'codeReview',
   'credentialBootstraps',
+  // Image overrides pick what untrusted code runs in; extra hosts widen install egress.
+  'dockerContainment',
   'harnesses',
   'seriesAutopilot',
   'telegram',

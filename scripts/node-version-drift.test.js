@@ -3,7 +3,7 @@
  *
  * The supported range is owned by scripts/checkNodeVersion.js. This test keeps
  * manifests, setup entrypoints, README, CI, and the committed dependency graph
- * aligned with that owner. CI still runs the preferred Node 24 line, while a
+ * aligned with that owner. CI runs the preferred Node 26 line, while a
  * dedicated minimum job exercises the lower supported Node 22 line.
  */
 import { describe, it, expect } from 'vitest';

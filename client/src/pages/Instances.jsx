@@ -33,6 +33,7 @@ import PeerSyncSecretEditor from '../components/instances/PeerSyncSecretEditor';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
+import ListLoadError from '../components/ui/ListLoadError';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT, DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
 import PeerAdministrationPanel from '../components/instances/PeerAdministrationPanel';
@@ -583,13 +584,14 @@ const SYNC_CATEGORY_META = [
   { key: 'creativeCommissions', label: 'Commissions', icon: Target, description: 'Creative Commission briefs (name + intent + genre + generation settings) — the schedule + run history stay machine-local (PostgreSQL)' },
   { key: 'commissionFeedback', label: 'Commission Feedback', icon: Target, description: 'Creative Commission taste reactions that steer the next run — the schedule stays machine-local (PostgreSQL)' },
   { key: 'decks', label: 'Decks', icon: Spade, description: 'Card decks: style guide, samples, per-card prompts + rendered card art — the image/LLM pins stay machine-local (PostgreSQL)' },
+  { key: 'storyboards', label: 'Storyboards', icon: Clapperboard, description: 'Storyboards: beats, panels, panel-maker recipes and gallery-image art — sketch drawings and in-flight renders stay machine-local (PostgreSQL)' },
   { key: 'catalog', label: 'Catalog', icon: Library, description: 'Creative ingredients catalog: orphan ingredients + ref links (PostgreSQL)' }
 ];
 
 // Snapshot categories — exclude the per-record / delta-based categories that
 // have no 60s snapshot checksum: brain + memory (delta), catalog, and creative
 // record kinds handled by the per-record peer-push pipeline.
-const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'fableLoom', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions', 'decks']);
+const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'fableLoom', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions', 'decks', 'storyboards']);
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
 
 // Video-history rows have no toggle of their own: they are the metadata half of
@@ -1220,6 +1222,10 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   const [confirmRemove, setConfirmRemove] = useState(false);
   // Outbound subscriptions inform per-record schema compatibility.
   const [peerSubs, setPeerSubs] = useState([]);
+  // A failed read keeps the last good subscriptions and surfaces an error row,
+  // so a hidden "peer is behind" warning is never mistaken for "no mismatch".
+  const [peerSubsError, setPeerSubsError] = useState(null);
+  const [peerSubsAttempt, setPeerSubsAttempt] = useState(0);
   // Live sync activity, driven by the `sync:progress` socket event. `syncing`
   // is true between this peer's `start` and `complete`; while it's true every
   // enabled category badge shows "syncing…". On `complete` it clears and the
@@ -1256,15 +1262,18 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   useEffect(() => {
     if (!peer.instanceId) {
       setPeerSubs([]);
+      setPeerSubsError(null);
       return;
     }
     let cancelled = false;
     const refetch = () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
       .then((r) => {
-        if (!cancelled) setPeerSubs(r?.subscriptions || []);
+        if (cancelled) return;
+        setPeerSubs(r?.subscriptions || []);
+        setPeerSubsError(null);
       })
-      .catch(() => {
-        if (!cancelled) setPeerSubs([]);
+      .catch((err) => {
+        if (!cancelled) setPeerSubsError(err instanceof Error ? err : new Error('Request failed'));
       });
     refetch();
     // When a per-record schema block is persisted server-side, the
@@ -1295,7 +1304,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
       socket.off('peerSync:subscription-unblocked', handleSchemaSubChange);
       socket.off('peerSync:subscription:created', handleSchemaSubChange);
     };
-  }, [peer.instanceId]);
+  }, [peer.instanceId, peerSubsAttempt]);
 
   const StatusIcon = STATUS_ICONS[peer.status] || CircleDot;
   const isInboundOnly = peer.directions?.includes('inbound') && !peer.directions?.includes('outbound');
@@ -1526,6 +1535,14 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
       )}
 
       <SchemaGapBadge peer={peer} peerSubs={peerSubs} />
+      {peerSubsError && (
+        <ListLoadError
+          what="subscriptions used for schema-compatibility warnings"
+          error={peerSubsError}
+          onRetry={() => setPeerSubsAttempt((n) => n + 1)}
+          className="mt-2"
+        />
+      )}
 
       <PeerMediaProviderPanel peer={peer} onRefresh={onRefresh} />
       <PeerAdministrationPanel peer={peer} />
