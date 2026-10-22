@@ -99,12 +99,12 @@ export default function FeatureAgents() {
               <RefreshCw size={16} />
             </button>
             {(loading || loadFailed || agents.length > 0) && (
-            <Link
-              to="/feature-agents/create"
-              className="flex items-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm font-medium hover:bg-port-accent/80 transition-colors"
-            >
-              <Plus size={16} /> New Agent
-            </Link>
+              <Link
+                to="/feature-agents/create"
+                className="flex items-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm font-medium hover:bg-port-accent/80 transition-colors"
+              >
+                <Plus size={16} /> New Agent
+              </Link>
             )}
           </>
         }

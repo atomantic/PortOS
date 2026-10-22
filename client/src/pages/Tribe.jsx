@@ -244,15 +244,15 @@ function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, sav
           <h2 className="text-sm font-semibold text-white truncate">{isExisting ? 'Relationship' : 'New Relationship'}</h2>
         </div>
         {isExisting && (
-        <button
-          type="button"
-          onClick={onNew}
-          title="New relationship"
-          aria-label="New relationship"
-          className="inline-flex h-9 w-9 items-center justify-center rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/40"
-        >
-          <Plus size={16} aria-hidden="true" />
-        </button>
+          <button
+            type="button"
+            onClick={onNew}
+            title="New relationship"
+            aria-label="New relationship"
+            className="inline-flex h-9 w-9 items-center justify-center rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/40"
+          >
+            <Plus size={16} aria-hidden="true" />
+          </button>
         )}
       </div>
 
