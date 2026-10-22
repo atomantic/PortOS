@@ -24,10 +24,11 @@ const GH_TIMEOUT_MS = 20_000;
 // Each thread costs a few API calls; the rest wait for the next run.
 const MAX_THREADS_PER_RUN = 25;
 // Open threads a rules-version bump re-decides without new activity: version 2
-// only changed your own PRs. A thread already handed off keeps its hand-off,
-// and one an Assist model sorted is not read again.
-const REDECIDE_SQL = `(state = 'open' AND reason = 'author' AND subject_type = 'PullRequest' AND NOT (evidence ? 'handoff')
-  AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')`;
+// changed your own PRs and finished threads (now marked done, not just read).
+// A thread already handed off keeps its hand-off, and one an Assist model
+// sorted is not read again.
+const REDECIDE_SQL = `(state = 'open' AND NOT (evidence ? 'handoff') AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%'
+  AND ((reason = 'author' AND subject_type = 'PullRequest') OR decision = 'suggest-mark-read'))`;
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 

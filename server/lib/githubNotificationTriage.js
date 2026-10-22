@@ -38,9 +38,10 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 // open threads triaged under an older version are triaged again.
 export const TRIAGE_RULES_VERSION = 2;
 
-// Decisions that mean something else already has the thread. They leave the
-// Needs you view for Handled even before anything acts on GitHub.
-export const ELSEWHERE_DECISIONS = Object.freeze(['handled-by-pr-workflow', 'duplicate', 'handed-off']);
+// Decisions that leave nothing for you: something else has the thread, or it
+// is already closed or merged. They sit under Handled instead of Needs you,
+// even in Observe before anything acts on GitHub.
+export const HANDLED_DECISIONS = Object.freeze(['handled-by-pr-workflow', 'duplicate', 'handed-off', 'suggest-mark-read']);
 
 const NEW_ACCOUNT_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -152,14 +153,17 @@ export function applyLearnedRule(result, learned) {
 
 /**
  * The one GitHub write Assist may make for a thread, or null to leave it for
- * the operator. Outside and Suspect threads are never acted on; a mute needs a
- * trusted source or the operator's own learned rule.
+ * the operator. Suspect threads are never acted on. Outside threads are acted
+ * on only when the forge reports them closed or merged, which no content can
+ * fake; a mute needs a trusted source or the operator's own learned rule.
  */
-export function assistAction({ decision, rule, trust, suspect = false, unread = true, state = 'open' }) {
-  if (suspect || state !== 'open' || trust === 'outside') return null;
+export function assistAction({ decision, rule, trust, suspect = false, state = 'open' }) {
+  if (suspect || state !== 'open') return null;
+  // A closed or merged thread has nothing left to do, so it is done, not just read.
+  if (decision === 'suggest-mark-read') return 'done';
+  if (trust === 'outside') return null;
   const vouched = trust === 'yours' || trust === 'trusted' || rule === 'learned';
   if (decision === 'handled-by-pr-workflow') return 'done';
-  if (decision === 'suggest-mark-read') return unread ? 'read' : null;
   if (decision === 'suggest-done' && vouched) return 'done';
   if (decision === 'suggest-mute' && vouched) return 'mute';
   return null;

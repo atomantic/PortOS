@@ -59,16 +59,16 @@ const chipClass = (active) => `shrink-0 rounded-full border px-3 py-1.5 text-xs 
   ? 'border-port-accent/40 bg-port-accent/20 text-port-accent'
   : 'border-port-border bg-port-bg text-gray-400'}`;
 
-// Mirrors ELSEWHERE_DECISIONS in server/lib/githubNotificationTriage.js:
-// something else already has these threads, so they sit under Handled.
-const ELSEWHERE_DECISIONS = new Set(['handled-by-pr-workflow', 'duplicate', 'handed-off']);
-const isElsewhere = (row) => !row.suspect && ELSEWHERE_DECISIONS.has(row.decision);
+// Mirrors HANDLED_DECISIONS in server/lib/githubNotificationTriage.js:
+// nothing is left for you on these threads, so they sit under Handled.
+const HANDLED_DECISIONS = new Set(['handled-by-pr-workflow', 'duplicate', 'handed-off', 'suggest-mark-read']);
+const nothingLeft = (row) => !row.suspect && HANDLED_DECISIONS.has(row.decision);
 
 // Whether a row still belongs in the view after an action moved it.
 const VIEW_MATCHERS = {
-  'needs-you': (row) => row.state === 'open' && !row.suspect && !isElsewhere(row),
+  'needs-you': (row) => row.state === 'open' && !row.suspect && !nothingLeft(row),
   suspect: (row) => row.state === 'open' && row.suspect,
-  handled: (row) => row.state !== 'open' || isElsewhere(row),
+  handled: (row) => row.state !== 'open' || nothingLeft(row),
   all: () => true,
 };
 const belongsInView = (row, view) => VIEW_MATCHERS[view](row);

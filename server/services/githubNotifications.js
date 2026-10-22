@@ -23,7 +23,7 @@ import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccou
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
-import { agentHandoff, ELSEWHERE_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
+import { agentHandoff, HANDLED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -204,13 +204,13 @@ export async function syncAllNotifications() {
   return results;
 }
 
-// A thread something else already has (the PR workflow, an agent, a newer
-// duplicate) is Handled while it is still open on GitHub.
-const ELSEWHERE_SQL = `decision IN (${ELSEWHERE_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
+// A thread with nothing left for you (something else has it, or it is closed
+// or merged) is Handled while it is still open on GitHub.
+const HANDLED_SQL = `decision IN (${HANDLED_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
 const VIEW_FILTERS = {
-  'needs-you': `state = 'open' AND NOT suspect AND (decision IS NULL OR NOT ${ELSEWHERE_SQL})`,
+  'needs-you': `state = 'open' AND NOT suspect AND (decision IS NULL OR NOT ${HANDLED_SQL})`,
   suspect: "state = 'open' AND suspect",
-  handled: `(state <> 'open' OR (NOT suspect AND ${ELSEWHERE_SQL}))`,
+  handled: `(state <> 'open' OR (NOT suspect AND ${HANDLED_SQL}))`,
   all: 'TRUE',
 };
 

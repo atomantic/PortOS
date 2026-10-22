@@ -6,7 +6,7 @@ export const DECISION_VIEW = {
   surface: { tone: 'accent', label: 'Worth a look' },
   'suggest-review': { tone: 'accent', label: 'Suggest Do:Review' },
   'suggest-untrusted-review': { tone: 'warning', label: 'Suggest Untrusted:Review' },
-  'suggest-mark-read': { tone: 'muted', label: 'Suggest mark read' },
+  'suggest-mark-read': { tone: 'muted', label: 'Closed or merged' },
   'handled-by-pr-workflow': { tone: 'success', label: 'PR workflow has it' },
   duplicate: { tone: 'muted', label: 'Duplicate' },
   'suggest-done': { tone: 'muted', label: 'Suggest done' },

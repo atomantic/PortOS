@@ -109,9 +109,10 @@ describe('Assist inputs', () => {
     expect(applyLearnedRule(tabled, { decision: 'surface', hits: 1 })).toEqual({ decision: 'surface', rule: 'learned' });
   });
 
-  it('acts automatically only on non-outside, non-suspect threads', () => {
+  it('acts automatically only on non-outside, non-suspect threads, except to finish a closed one', () => {
     expect(assistAction({ decision: 'handled-by-pr-workflow', trust: 'unknown' })).toBe('done');
-    expect(assistAction({ decision: 'suggest-mark-read', trust: 'yours', unread: false })).toBeNull();
+    expect(assistAction({ decision: 'suggest-mark-read', trust: 'outside' })).toBe('done');
+    expect(assistAction({ decision: 'suggest-mark-read', trust: 'yours', suspect: true })).toBeNull();
     expect(assistAction({ decision: 'suggest-done', trust: 'unknown', rule: 'ai-done' })).toBeNull();
     expect(assistAction({ decision: 'suggest-mute', trust: 'trusted' })).toBe('mute');
     for (const thread of [{ trust: 'outside' }, { trust: 'trusted', suspect: true }, { trust: 'trusted', state: 'muted' }]) {

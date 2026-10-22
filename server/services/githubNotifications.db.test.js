@@ -327,13 +327,17 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
 
     await updateAccount(account.id, { mode: 'assist' });
     const result = await syncAccountNotifications(account.id);
-    expect(result.assist).toEqual({ sorted: 2, acted: 2, handedOff: 0, agentRuns: 0 });
+    expect(result.assist).toEqual({ sorted: 2, acted: 3, handedOff: 0, agentRuns: 0 });
     expect(runUntrustedContentAnalysis).toHaveBeenCalledTimes(3);
     // Same activity time on every thread, so compare without order.
-    expect([...actions].sort()).toEqual([['DELETE', 'notifications/threads/903'], ['PATCH', 'notifications/threads/901']]);
+    // Closed or merged threads are done, even an outside one: the forge reports
+    // that state, so no content can fake it.
+    expect([...actions].sort()).toEqual([
+      ['DELETE', 'notifications/threads/901'], ['DELETE', 'notifications/threads/902'], ['DELETE', 'notifications/threads/903'],
+    ]);
 
     const byId = Object.fromEntries((await listNotifications({ accountId: account.id, view: 'all' })).notifications.map((row) => [row.threadId, row]));
-    expect(byId['902']).toMatchObject({ decision: 'suggest-mark-read', trust: 'outside', unread: true });
+    expect(byId['902']).toMatchObject({ decision: 'suggest-mark-read', trust: 'outside', state: 'done' });
     expect(byId['903']).toMatchObject({ decision: 'suggest-done', rule: 'ai-done', state: 'done' });
     // The injected comment got a verdict but no action and no change of trust.
     expect(byId['904']).toMatchObject({ decision: 'suggest-done', trust: 'outside', state: 'open', suspect: false });
@@ -342,9 +346,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
 
     const activity = await listAutomationActivity();
     const mine = activity.filter((entry) => entry.accountId === account.id);
-    expect(mine.map((entry) => [entry.threadId, entry.action, entry.undoable]).sort()).toEqual([['901', 'read', false], ['903', 'done', true]]);
+    expect(mine.map((entry) => [entry.threadId, entry.action, entry.undoable]).sort()).toEqual([['901', 'done', true], ['902', 'done', true], ['903', 'done', true]]);
     const byThread = Object.fromEntries(mine.map((entry) => [entry.threadId, entry]));
-    await expect(undoAutomationAction(byThread['901'].id)).rejects.toMatchObject({ status: 409 });
     await undoAutomationAction(byThread['903'].id);
     expect(await getNotification(account.id, '903')).toMatchObject({ state: 'open', decision: 'surface', rule: 'learned' });
     expect((await listLearnedRules()).filter((rule) => rule.accountId === account.id)).toEqual([
