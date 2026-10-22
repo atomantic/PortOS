@@ -53,6 +53,10 @@ export const codeAnimationPosterUrl = (id, version) =>
 export const requestCodeAnimationPoster = (id, options) =>
   request(`/code-animation/jobs/${encodeURIComponent(id)}/poster`, { method: 'POST', ...options });
 
+// Its HTML and poster go to the system Trash; Media History exports stay.
+export const deleteCodeAnimationJob = (id, options) =>
+  request(`/code-animation/jobs/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+
 export const getCodeAnimationJob = (id, options) =>
   request(`/code-animation/generate/${encodeURIComponent(id)}`, options);
 

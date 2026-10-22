@@ -26,6 +26,8 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { SUPPORTED_AUDIO_EXTENSIONS } from '../pipeline/musicLibrary.js';
 import { resolveMoodBoardStyleSource as resolveMoodBoard, resolveUniverseStyleSource as resolveUniverse } from '../creativeStyleSources.js';
 import {
+  codeAnimationJobFiles,
+  deleteCodeAnimationJobRecord,
   getCodeAnimationJobRecord,
   isCodeAnimationJobId,
   listCodeAnimationJobRecords,
@@ -376,6 +378,41 @@ async function reconcileJob(job) {
   await saveCodeAnimationJobRecord(interrupted);
   emitCodeAnimationChanged(job.id);
   return interrupted;
+}
+
+/**
+ * Delete a gallery item. Its HTML and poster go to the system Trash (Finder
+ * Put Back on macOS) before the row is removed, so a refused trash leaves the
+ * item intact. Exports in Media History and its soundtrack track are separate
+ * library items and stay.
+ */
+export async function deleteCodeAnimationJob(id, { moveToTrash } = {}) {
+  const job = await getCodeAnimationJobRecord(id);
+  if (!job) throw new ServerError('Code Animation job not found', { status: 404, code: 'NOT_FOUND' });
+  if (job.status === 'running' && activeJobs.has(id)) {
+    throw new ServerError('This animation is still generating. Delete it once it finishes.', { status: 409, code: 'CODE_ANIMATION_RUNNING' });
+  }
+  // A poster drawn just after completion must land before the files are
+  // listed, or it would be written after the row is gone.
+  await (await import('./poster.js')).settleCodeAnimationPoster(id);
+  // Files and row leave together, as they were published (#9982), so a
+  // snapshot never holds a completed row whose HTML is gone.
+  let files = [];
+  await withBackupAssetPublication(async () => {
+    files = await codeAnimationJobFiles(id);
+    if (files.length) {
+      const trash = moveToTrash || (await import('../../lib/nativeTrash.js')).moveToNativeTrash;
+      await trash(files).catch((error) => {
+        throw new ServerError(`Could not move the animation files to the Trash (${error.code || error.message}). Nothing was deleted.`, {
+          status: 500, code: 'CODE_ANIMATION_TRASH_FAILED',
+        });
+      });
+    }
+    await deleteCodeAnimationJobRecord(id);
+  });
+  emitCodeAnimationChanged(id, 'deleted');
+  console.log(`🗑️ Code animation ${id.slice(0, 8)} deleted (${files.length} file(s) to Trash)`);
+  return { id, deleted: true };
 }
 
 export async function listCodeAnimationJobs() {
