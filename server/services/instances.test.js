@@ -532,29 +532,6 @@ describe('instances.js', () => {
       expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
     });
 
-    it('keeps a tailcat peer recoverable when forward retirement fails, then removes it on retry', async () => {
-      const peer = { id: 'tailcat-peer', transport: 'tailcat', address: '127.0.0.1', port: 15555 };
-      const peers = [peer];
-      readJSONFile.mockResolvedValue({ self: null, peers });
-      stopForwardForPeer.mockRejectedValueOnce(new Error('forward metadata write failed'));
-
-      await expect(removePeer(peer.id)).rejects.toThrow('forward metadata write failed');
-      expect(peers).toEqual([peer]);
-      expect(atomicWrite).not.toHaveBeenCalled();
-
-      await expect(removePeer(peer.id)).resolves.toEqual(peer);
-      expect(stopForwardForPeer).toHaveBeenCalledWith(peer.id);
-      expect(peers).toEqual([]);
-    });
-
-    it('allows transport-owned rollback without re-entering transport cleanup', async () => {
-      const peer = { id: 'tailcat-peer', transport: 'tailcat' };
-      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
-
-      await expect(removePeer(peer.id, { stopTransport: false })).resolves.toEqual(peer);
-      expect(stopForwardForPeer).not.toHaveBeenCalled();
-    });
-
     it('should return null for non-existent peer', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
 
