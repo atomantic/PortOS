@@ -6,6 +6,7 @@ import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { getStoryboardPanelMake } from '../../services/api';
+import { formatCount } from '../../utils/formatters';
 import { newStoryboardEntityId } from '../../../../server/lib/storyboardVocabulary.js';
 import {
   effectiveRecipe, nodeInputValue, panelNodeState, RECIPE_LIMITS, RECIPE_NODE_PORTS, RECIPE_PORT_LABELS, RECIPE_TYPE_TITLES,
@@ -63,7 +64,7 @@ function InputRow({ recipe, node, port, onWire }) {
 function ImageStrip({ images, onRemove, label }) {
   if (!images.length) return <p className="text-xs text-gray-500">No images.</p>;
   return (
-    <ul className="grid grid-cols-4 gap-1.5" aria-label={label}>
+    <ul className="grid grid-cols-3 sm:grid-cols-4 gap-1.5" aria-label={label}>
       {images.map((ref) => (
         <li key={ref.image} className="relative">
           <img src={takeSrc(ref)} alt={ref.label || ''} loading="lazy" className="w-full aspect-square object-cover rounded border border-port-border" />
@@ -92,6 +93,7 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
   const recipe = useMemo(() => effectiveRecipe(board), [board]);
   const order = useMemo(() => recipeRunOrder(recipe), [recipe]);
   const [linkedRefs, setLinkedRefs] = useState([]);
+  const [linkedError, setLinkedError] = useState(false);
   const [runningId, setRunningId] = useState(null);
   const [runningAll, setRunningAll] = useState(false);
   const [pickingRefsFor, setPickingRefsFor] = useState(null);
@@ -105,9 +107,11 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
       setLinkedRefs([]);
       return undefined;
     }
+    setLinkedError(false);
     getStoryboardPanelMake(board.id, panel.id, { silent: true })
       .then((res) => { if (active) setLinkedRefs(Array.isArray(res?.linkedRefs) ? res.linkedRefs : []); })
-      .catch(() => { if (active) setLinkedRefs([]); });
+      // A failed read says so; it must not look like a panel with no cast images.
+      .catch(() => { if (active) setLinkedError(true); });
     return () => { active = false; };
   }, [board.id, panel.id, linkKey]);
 
@@ -189,7 +193,7 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
             <CommitField id={`out-${node.id}`} multiline minHeightClass="min-h-[5rem]" value={state.text} maxLength={RECIPE_LIMITS.text}
               placeholder="Run to write it" onCommit={(text) => handlers.onNodePatch(node.id, { text })} />
           </div>
-          {state.error && state.status === 'failed' && <p className="text-xs text-port-error">{state.error}</p>}
+          {state.error && state.status === 'failed' && <p className="text-xs text-port-error" role="alert">{state.error}</p>}
           {state.providerId && <p className="text-[11px] text-gray-500">Last run: {state.providerId}{state.model ? ` · ${state.model}` : ''}</p>}
           <SentPromptPanel prompt={nodeInputValue(recipe, node.id, 'prompt', context)} sentPrompt={state.sentPrompt || null} additions={state.promptAdditions} />
         </>
@@ -204,6 +208,7 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
           {node.settings.linked && (
             <div>
               <span className={labelClass}>This panel's cast and sets</span>
+              {linkedError && <p className="text-xs text-port-warning" role="status">Couldn't load the cast and set images; reopen the panel to retry.</p>}
               <ImageStrip label="Linked cast and sets" images={linked} onRemove={(ref) => handlers.onNodePatch(node.id, { excludedRefs: [...state.excludedRefs, ref.image] })} />
               {state.excludedRefs.length > 0 && (
                 <button type="button" onClick={() => handlers.onNodePatch(node.id, { excludedRefs: [] })} className="mt-1 min-h-[44px] inline-flex items-center gap-1 text-xs text-gray-400 hover:text-white">
@@ -230,10 +235,10 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
         <>
           {inputs}
           <p className={`text-[11px] ${over ? 'text-port-error' : 'text-gray-500'}`}>
-            {prompt ? `Prompt ${prompt.length.toLocaleString()} / ${RECIPE_LIMITS.imagePrompt.toLocaleString()} characters` : 'No prompt yet: run the node that feeds it.'}
+            {prompt ? `Prompt ${formatCount(prompt.length)} / ${formatCount(RECIPE_LIMITS.imagePrompt)} characters` : 'No prompt yet: run the node that feeds it.'}
           </p>
           {state.status === 'queued' && <p className="text-xs text-gray-300" role="status">{settled} of {state.jobIds.length} frames back</p>}
-          {state.error && <p className="text-xs text-port-error">{state.error}</p>}
+          {state.error && <p className="text-xs text-port-error" role="alert">{state.error}</p>}
           <SentPromptPanel prompt={prompt} sentPrompt={state.sentPrompt || null} additions={[]} />
           {state.sentRefs.length > 0 && <ImageStrip label="References sent" images={state.sentRefs} />}
         </>
