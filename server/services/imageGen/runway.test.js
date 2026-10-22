@@ -1,3 +1,5 @@
+import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
+import { existsSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -46,7 +48,15 @@ afterEach(async () => {
 
 describe('Runway image workflow', () => {
   it('reuses the video credential, files a text-only still as PNG and records the exact sent prompt and price', async () => {
-    const job = await runway.generateImage({ prompt: '  A garden  ', width: 1920, height: 1080 });
+    const releaseCut = await acquireBackupSnapshotCut();
+    let job;
+    try {
+      job = await runway.generateImage({ prompt: '  A garden  ', width: 1920, height: 1080 });
+      await vi.waitFor(() => expect(calls.some((call) => call.url === 'https://example.com/result')).toBe(true));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(existsSync(join(PATHS.images, job.filename))).toBe(false);
+      expect(terminals.has(job.jobId)).toBe(false);
+    } finally { releaseCut(); }
     expect(await terminal(job.jobId)).toMatchObject({ type: 'completed', mode: 'runway' });
     expect(calls[0]).toMatchObject({ method: 'POST', url: 'https://api.dev.runwayml.com/v1/text_to_image', body: { model: 'gen4_image', promptText: '  A garden  ', ratio: '1280:720' }, headers: { Authorization: 'Bearer test-key' } });
     expect(await sharp(join(PATHS.images, job.filename)).metadata()).toMatchObject({ format: 'png' });
