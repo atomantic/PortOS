@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -10,7 +10,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makeProxy(actual);
 });
 
-const { cleanupOldActivity, getActivityTimeline } = await import('./agentActivity.js');
+const { cleanupOldActivity, getActivityTimeline, getTodayActionCount, logActivity } = await import('./agentActivity.js');
 
 const activityRoot = join(tempRoot, 'agents', 'activity');
 
@@ -158,5 +158,33 @@ describe('cleanupOldActivity', () => {
 
     await expect(cleanupOldActivity(3650)).resolves.toBe(0);
     await expect(dayFiles()).resolves.toEqual([`${old}.json`, `${today}.json`].sort());
+  });
+});
+
+describe('logActivity concurrency', () => {
+  beforeEach(async () => {
+    await rm(activityRoot, { recursive: true, force: true });
+  });
+
+  // Fire-and-forget bursts (WebSocket frames) must not lose entries to a
+  // load → push → save race on the same agent/day file.
+  it('persists every entry from an unawaited burst for one agent and day', async () => {
+    const accountId = 'burst-account';
+    const timestamp = new Date().toISOString();
+    const writes = Array.from({ length: 20 }, (_, index) => logActivity({
+      agentId: 'agent-burst',
+      accountId,
+      action: 'burst-action',
+      status: 'completed',
+      params: { index },
+      timestamp,
+    }));
+    await Promise.all(writes);
+
+    const dayFile = (await readdir(join(activityRoot, 'agent-burst')))[0];
+    const { activities } = JSON.parse(await readFile(join(activityRoot, 'agent-burst', dayFile), 'utf-8'));
+    expect(activities).toHaveLength(20);
+    expect(new Set(activities.map(a => a.params.index)).size).toBe(20);
+    await expect(getTodayActionCount(accountId, 'burst-action')).resolves.toBe(20);
   });
 });
