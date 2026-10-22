@@ -2,6 +2,7 @@
 import { randomUUID } from 'crypto';
 import { estimateTokens } from '../lib/contextBudget.js';
 import { estimateCostUsd, isFreeProvider, pricingAsOfForModel, resolveModelRates } from '../lib/modelPricing.js';
+import { isLoopbackEndpoint } from '../lib/localEndpoint.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { isCodexTextTransportEnabled } from '../lib/codexTurn.js';
@@ -49,7 +50,7 @@ export const isLocalProvider = provider => Boolean(provider && (
   provider.servicePlan === 'local'
   || provider.ollamaBacked || provider.lmstudioBacked || provider.mtplxBacked
   || provider.llamaBacked || provider.vllmBacked || provider.sglangBacked
-  || /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i.test(provider.endpoint || '')
+  || isLoopbackEndpoint(provider.endpoint)
   || /^(?:ollama|lm[-_]?studio|mtplx|llama|vllm|sglang)(?:[-_.]|$)/i.test(provider.id || '')
   || /^(?:ollama|lm[-_]?studio|mtplx|llama|vllm|sglang)(?:[-_.]|$)/i.test(commandBasename(provider.command))
 ));

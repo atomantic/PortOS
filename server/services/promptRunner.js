@@ -1,3 +1,4 @@
+import { isLoopbackEndpoint } from '../lib/localEndpoint.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Shared LLM runner wrapper.
@@ -144,9 +145,7 @@ export function buildRequestCapabilities({ prompt, screenshots, outputReserveTok
 // lands on a local backend after a remote/CLI primary fails. Gating only the
 // outer stageRunner call missed the fallback path — a failure storm could still
 // fire N concurrent calls at one local endpoint.
-const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
-export const isLocalEndpoint = (endpoint) =>
-  typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
+export const isLocalEndpoint = isLoopbackEndpoint;
 
 export { LOCAL_LLM_MAX_CONCURRENCY };
 const localEndpointGates = new Map(); // endpoint -> { active: number, queue: (()=>void)[] }

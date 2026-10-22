@@ -29,6 +29,8 @@
  * answered so the UI can flag approximate rows.
  */
 
+import { isLoopbackEndpoint } from './localEndpoint.js';
+
 export const PRICING_AS_OF = '2026-09-01';
 
 // Newer model launch rates are tracked separately so the baseline date above
@@ -301,11 +303,8 @@ export function resolveModelRates(providerId, model) {
   return { ...withCacheRates(FALLBACK_RATES), matched: 'fallback' };
 }
 
-// Mirrors promptRunner.js's LOCAL_ENDPOINT_RE (scheme optional, unbracketed
-// ::1 accepted) so the concurrency gate and the cost report agree on what
-// "local" means. Duplicated rather than imported because modelPricing must
-// stay a leaf module — promptRunner pulls in the whole runner/provider graph.
-const LOCALHOST_ENDPOINT = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
+// The concurrency gate and the cost report share isLoopbackEndpoint's answer
+// for what "local" means; localEndpoint.js is dependency-free so this stays a leaf.
 const FREE_ID = /ollama|lmstudio|lm-studio/i;
 
 // A record derived from a service instance (#7563) carries the plan the user
@@ -400,7 +399,7 @@ export function isFreeProvider(providerOrId) {
   if (p.ollamaBacked === true || p.lmstudioBacked === true || p.mtplxBacked === true || p.llamaBacked === true || p.vllmBacked === true || p.sglangBacked === true) return true;
   if (FREE_ID.test(p.id || '') || FREE_ID.test(p.command || '')) return true;
   if (ZEN_PROVIDER_ID.test(p.id || '')) return true;
-  if (typeof p.endpoint === 'string' && (LOCALHOST_ENDPOINT.test(p.endpoint.trim()) || ZEN_ENDPOINT.test(p.endpoint.trim()))) return true;
+  if (typeof p.endpoint === 'string' && (isLoopbackEndpoint(p.endpoint) || ZEN_ENDPOINT.test(p.endpoint.trim()))) return true;
   return false;
 }
 
