@@ -41,6 +41,8 @@ describe('Browser recovery', () => {
     const user = userEvent.setup();
     render(<BrowserPage />);
     expect(await screen.findByText('Chrome is not reachable')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Browser' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit configuration' })).toBeInTheDocument();
     expect(screen.getByText('Health check returned 503')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Show logs' }));
     expect(await screen.findByText('Chrome binary not found')).toBeInTheDocument();

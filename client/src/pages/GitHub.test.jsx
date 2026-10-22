@@ -95,6 +95,8 @@ describe('GitHub account setup', () => {
     const signIn = await screen.findByRole('link', { name: 'Sign in with GitHub' });
     expect(decodeURIComponent(signIn.getAttribute('href'))).toContain('/shell?cmd=gh auth login');
     expect(screen.getByRole('button', { name: 'Sync Repos' })).toBeDisabled();
+    expect(screen.getByRole('heading', { level: 1, name: 'GitHub' })).toBeInTheDocument();
+    expect(screen.getByLabelText('GitHub views')).toBeInTheDocument();
   });
 
   it('describes a signed-out legacy cache without rendering a null account', async () => {

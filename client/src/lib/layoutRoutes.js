@@ -16,6 +16,17 @@ const EXACT_FULL_WIDTH_PATHS = [
   // also swallow the `/datadog` redirect route.
   '/data',
   '/devtools/flows',
+  // Dev Tools pages share one PageHeader bar over a `flex-1 overflow-auto` body (#13011).
+  '/browser',
+  '/uploads',
+  '/security',
+  '/devtools/agents',
+  '/devtools/datadog',
+  '/devtools/history',
+  '/devtools/image-clean',
+  '/devtools/jira',
+  '/devtools/processes',
+  '/devtools/video-download',
   '/ask',
   // OpenClaw lives under the Settings nav group; it's a full-bleed
   // chat surface (sidebar + message pane) that owns its own internal
@@ -126,6 +137,8 @@ const FULL_WIDTH_PATH_PREFIXES = [
   '/writers-room',
   '/agents',
   '/shell/',
+  // GitHub tabs and thread deep links (/devtools/github/:tab/...).
+  '/devtools/github',
   '/timeline/',
   // Every SongBook route — index (/songbook), import (/songbook/import),
   // and viewer (/songbook/:id) — is full-bleed and owns its own scroll

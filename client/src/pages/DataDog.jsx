@@ -1,3 +1,4 @@
+import { Dog } from 'lucide-react';
 import IntegrationInstancesPage from '../components/integrations/IntegrationInstancesPage';
 
 const SITE_OPTIONS = [
@@ -19,7 +20,7 @@ const initialForm = { id: '', name: '', site: 'api.datadoghq.com', apiKey: '', a
 export default function DataDog() {
   return <IntegrationInstancesPage
     title="DataDog" apiBase="/datadog" feature="datadog" fields={fields} initialForm={initialForm}
-    heading={<h1 className="text-xl sm:text-2xl font-bold text-white">DataDog Integration</h1>}
+    icon={Dog}
     skeletonWidth="w-56" emptyDescription="Add a DataDog instance to enable error monitoring for your apps."
     deleteDescription="This will remove the stored keys."
     summarize={instance => <>

@@ -27,6 +27,8 @@ describe('Uploads inventory states', () => {
     render(<Uploads />);
     expect(await screen.findByText('Uploads could not be loaded')).toBeTruthy();
     expect(screen.getByText('Upload totals unavailable')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'File Uploads' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Refresh')).toBeTruthy();
     expect(screen.queryByText('No files uploaded yet')).toBeNull();
     expect(screen.queryByText(/0 files/)).toBeNull();
 

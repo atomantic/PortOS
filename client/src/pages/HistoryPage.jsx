@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Trash2 } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
+import { History, Trash2 } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -83,6 +84,9 @@ export function HistoryPage() {
   if (loading) {
     return (
       <PageSkeleton
+        header="bar"
+        fullHeight
+        padded
         label="Loading history"
         titleWidthClass="w-48"
         showAction={false}
@@ -94,8 +98,13 @@ export function HistoryPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Action History</h1>
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={History}
+        title="Action History"
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+      <div className="space-y-6">
 
       {/* Stats */}
       {stats && (
@@ -336,6 +345,8 @@ export function HistoryPage() {
             ))}
           </div>
         )}
+      </div>
+    </div>
       </div>
     </div>
   );

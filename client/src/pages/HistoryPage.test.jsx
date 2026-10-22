@@ -47,6 +47,7 @@ describe('HistoryPage list resources (#12171)', () => {
 
     const select = await screen.findByLabelText('Filter by action type');
     expect(within(select).getByRole('option', { name: 'No actions available' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Action History' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

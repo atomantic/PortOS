@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import PageHeader from '../components/PageHeader';
 import { Eraser, Upload, Download, ShieldCheck, Sparkles, Brush, Square, Undo2, X, Cpu, Zap, Save } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
@@ -378,29 +379,25 @@ export default function ImageClean() {
   ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-            <Eraser size={24} className="text-port-accent" />
-            Image Cleaner
-          </h2>
-          <p className="text-gray-500 text-sm">
-            Composable, opt-in pipeline: strip provenance/identifying metadata and/or reduce AI-generation artifacts.
-          </p>
-          <p className="text-gray-500 text-xs mt-1">
-            <span className="text-port-warning">Note:</span>{' '}
-            the metadata and median/sharpen passes do NOT defeat SynthID — gpt-image / Imagen / Gemini renders stay detectable by their
-            vendor watermark checkers (e.g.{' '}
-            <a href="https://openai.com/synthid" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
-              openai.com/synthid
-            </a>
-            ), since SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode. The <strong>diffusion pass</strong>{' '}
-            is the only step that perturbs SynthID's carriers — best-effort, and it <em>disrupts</em> rather than guarantees removal (never verified against
-            Google's detector).
-          </p>
-        </div>
-      </div>
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={Eraser}
+        title="Image Cleaner"
+        subtitle="Composable, opt-in pipeline: strip provenance/identifying metadata and/or reduce AI-generation artifacts."
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+      <div className="space-y-6">
+        <p className="text-gray-500 text-xs">
+          <span className="text-port-warning">Note:</span>{' '}
+          the metadata and median/sharpen passes do NOT defeat SynthID — gpt-image / Imagen / Gemini renders stay detectable by their
+          vendor watermark checkers (e.g.{' '}
+          <a href="https://openai.com/synthid" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
+            openai.com/synthid
+          </a>
+          ), since SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode. The <strong>diffusion pass</strong>{' '}
+          is the only step that perturbs SynthID's carriers — best-effort, and it <em>disrupts</em> rather than guarantees removal (never verified against
+          Google's detector).
+        </p>
 
       {!original && (
         <div
@@ -779,6 +776,8 @@ export default function ImageClean() {
           </div>
         </div>
       )}
+    </div>
+      </div>
     </div>
   );
 }
