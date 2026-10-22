@@ -7,6 +7,8 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
 import { FormField } from '../ui/FormField';
+import ListLoadError from '../ui/ListLoadError';
+import useListResource from '../../hooks/useListResource';
 import {
   getGitHubAccounts,
   createGitHubAccount,
@@ -50,13 +52,11 @@ const payloadFromForm = (form) => ({
   allowedProviders: form.trust === 'private' && form.allowedProviders.length ? form.allowedProviders : null,
 });
 
+const fetchApiProviders = () => getProviders({ silent: true })
+  .then((data) => (data?.providers || []).filter((provider) => provider.type === 'api'));
+
 function AllowedProviders({ form, setForm }) {
-  const [providers, setProviders] = useState(null);
-  useEffect(() => {
-    getProviders({ silent: true })
-      .then((data) => setProviders((data?.providers || []).filter((provider) => provider.type === 'api')))
-      .catch(() => setProviders([]));
-  }, []);
+  const { items: providers, state, error, retry } = useListResource(fetchApiProviders);
   const toggle = (id) => setForm((prev) => ({
     ...prev,
     allowedProviders: prev.allowedProviders.includes(id) ? prev.allowedProviders.filter((value) => value !== id) : [...prev.allowedProviders, id],
@@ -65,9 +65,10 @@ function AllowedProviders({ form, setForm }) {
     <fieldset className="space-y-1">
       <legend className="text-sm text-gray-300">AI providers allowed to read this account's notifications</legend>
       <p className="text-xs text-gray-500">None ticked keeps it to local providers on this machine.</p>
-      {providers === null && <p className="text-xs text-gray-500">Loading providers…</p>}
-      {providers?.length === 0 && <p className="text-xs text-gray-500">No API providers configured.</p>}
-      {providers?.map((provider) => {
+      {state === 'loading' && <p className="text-xs text-gray-500">Loading providers…</p>}
+      {state === 'error' && <ListLoadError what="AI providers" error={error} onRetry={retry} />}
+      {state === 'ready' && providers.length === 0 && <p className="text-xs text-gray-500">No API providers configured.</p>}
+      {providers.map((provider) => {
         const id = `github-allowed-${provider.id}`;
         return (
           <div key={provider.id} className="flex items-center gap-2">

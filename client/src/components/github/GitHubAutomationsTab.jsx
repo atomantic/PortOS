@@ -118,7 +118,7 @@ function RuleList({ rules, onDelete }) {
             {' → '}<span className="text-white">{LEARNED_DECISION_LABELS[rule.decision] || rule.decision}</span>
             {rule.hits > 1 ? ` (${rule.hits}×)` : ''}
           </p>
-          <button type="button" onClick={() => onDelete(rule.id)} className="shrink-0 rounded p-1 text-gray-400 hover:text-white" aria-label={`Forget rule for ${rule.repoFullName}`}>
+          <button type="button" onClick={() => onDelete(rule.id)} className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-gray-400 hover:text-white" aria-label={`Forget rule for ${rule.repoFullName}`}>
             <X size={14} aria-hidden="true" />
           </button>
         </li>
