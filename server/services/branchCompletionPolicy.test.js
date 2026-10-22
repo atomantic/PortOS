@@ -20,7 +20,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   getAgentRecord: async id => runtime.agents[id],
   updateAgent: async (id, patch) => { runtime.agents[id].metadata = { ...runtime.agents[id].metadata, ...patch.metadata }; },
 }));
-vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn(async args => ({ exitCode: 0,
+vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn(async args => ({ exitCode: args[0] === 'merge-base' && !runtime.merged ? 1 : 0,
   stdout: args[0] === 'rev-parse' ? runtime.tip : args[0] === 'rev-list' ? '0\t1' : '',
 })) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'example/repository' }) }));
@@ -37,7 +37,7 @@ vi.mock('./github.js', () => ({
 vi.mock('./cos.js', () => ({ addTask: async task => ({ ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }), forceSpawnTask: vi.fn(), getAgents: async () => [], updateTask: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./cosAgentIndex.js', () => ({ removeDanglingAgentIndexEntries: vi.fn(async ids => ids.length) }));
-vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tracking: 'origin/feature/handoff' }], hasBranchMergeEvidence: async () => runtime.merged }));
+vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main', hasBranchMergeEvidence: async () => runtime.merged }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classifyWorktreeDirt: () => ({ hasRealChanges: false, realChangePaths: [] }) }));
 
 import { spawnReviewLoopFollowUp } from './agentWorktreeCleanup.js';
@@ -133,6 +133,32 @@ describe('completion policy across lifecycle and reconciliation boundaries', () 
     runtime.agents['agent-review'].result.success = success;
     await recordBranchCompletionPolicy({ agentId: 'agent-review', task: assigned, repoPath, branch, prUrl });
     expect(await recheck()).toEqual({ admitted: false, reason: 'pr-completion-review-required' });
+  });
+
+  describe('retirement of a review-then-merge branch that never opened a PR', () => {
+    const retire = () => readBranchCompletionHold({ repoPath, branch, retirement: true });
+
+    it('releases the vacuous obligation only when the branch tip is already on the default branch', async () => {
+      register('agent-audit', 'review-then-merge');
+      runtime.merged = true;
+      expect(await retire()).toBeNull();
+      // Outside retirement the obligation still holds.
+      expect(await readBranchCompletionHold({ repoPath, branch })).toBe('pr-completion-review-required');
+      runtime.merged = false;
+      expect(await retire()).toBe('pr-completion-review-required');
+    });
+
+    it('keeps a leave-open handoff and a recorded PR held even when the tip is merged', async () => {
+      runtime.merged = true;
+      const handoff = register('agent-human', 'leave-open');
+      await recordBranchCompletionPolicy({ agentId: 'agent-human', task: handoff, repoPath, branch, prUrl });
+      expect(await retire()).toBe('pr-completion-human-handoff');
+      runtime.agents = {};
+      register('agent-review', 'review-then-merge');
+      expect(await retire()).toBeNull();
+      runtime.agents['agent-review'].metadata.branchCompletionPolicy = { branch, prUrl, completion: 'review-then-merge', tip: null };
+      expect(await retire()).toBe('pr-completion-review-required');
+    });
   });
 
   it.each(['claimBranches', 'claimReleasedBranches'])('holds malformed archived %s instead of losing a known policy scope', async field => {

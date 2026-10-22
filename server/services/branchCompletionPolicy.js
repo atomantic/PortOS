@@ -233,7 +233,33 @@ export async function readBranchCompletionHold(input, deps = {}) {
   if (input.retirement === true && decision.obligation?.prUrl
     && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true, expectedTip: input.tip }).catch(() => null) === tip) return null;
   if (decision.release && await verifiedPolicyTip(input.repoPath, input.branch, decision.release.prUrl).catch(() => null) === tip) return null;
+  if (input.retirement === true && await isVacuousReviewObligation(input, decision, tip)) return null;
   return decision.reason;
+}
+
+/** A review-then-merge run that never opened a PR and left no commit the default
+ * branch lacks has nothing to review or merge, and no later receipt can name a
+ * PR to release it. Strict ancestry, not patch equivalence: a squash- or
+ * rebase-merged tip had a PR whose legacy record may simply lack its URL, and
+ * that case still needs the scoped operator review. Every other hold (leave-open,
+ * a recorded PR, unmerged commits, an unresolvable default branch) is kept.
+ */
+async function isVacuousReviewObligation(input, decision, tip) {
+  if (decision.reason !== 'pr-completion-review-required' || input.prUrl
+    || !/^[a-f0-9]{40,64}$/i.test(tip || '')
+    || decision.policies.some(policy => policy.completion === PR_COMPLETIONS.LEAVE_OPEN || retirementPr(policy))) return false;
+  const { getDefaultBranch } = await import('./git.js');
+  const base = await getDefaultBranch(input.repoPath, { strict: true }).catch(() => null);
+  if (!base) return false;
+  const { execGit } = await import('../lib/execGit.js');
+  // A stale origin/<default> only makes the check stricter: whatever it
+  // contains the current default contains too.
+  for (const target of [`origin/${base}`, base]) {
+    const ancestor = await execGit(['merge-base', '--is-ancestor', tip, target], input.repoPath, { ignoreExitCode: true })
+      .then(result => result.exitCode === 0, () => false);
+    if (ancestor) return true;
+  }
+  return false;
 }
 
 /** Called with task policy and forge-observed identity, never provider prose.
