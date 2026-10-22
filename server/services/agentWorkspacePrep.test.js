@@ -33,10 +33,10 @@ vi.mock('./git.js', () => ({
   ensureLatest: vi.fn(),
   isRepo: vi.fn().mockResolvedValue(true),
   notGitRepoMessage: (name) => `${name} is not a git repository — run \`git init\``,
-  fetchOrigin: vi.fn(),
+  fetchOrigin: vi.fn().mockResolvedValue(undefined),
   getRepoBranches: vi.fn().mockResolvedValue({ baseBranch: 'main' }),
-  checkout: vi.fn(),
-  createBranch: vi.fn(),
+  checkout: vi.fn().mockResolvedValue(undefined),
+  createBranch: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./taskConflict.js', () => ({ detectConflicts: vi.fn().mockResolvedValue({ recommendation: 'proceed' }) }));
 // `isBranchCheckedOutElsewhereError` is imported from the REAL module: it is a
@@ -59,7 +59,7 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   releaseIdleSiblingNextHolder: vi.fn().mockResolvedValue(null),
   releaseOwnerlessForeignHolder: vi.fn().mockResolvedValue(null),
   listWorktrees: vi.fn().mockResolvedValue([]),
-  mergeBaseIntoFeatureWorktree: vi.fn(),
+  mergeBaseIntoFeatureWorktree: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./agentAppWorkspace.js', () => ({
   getAppWorkspace: vi.fn().mockResolvedValue('/repos/app-x'),
@@ -80,16 +80,26 @@ const handBackPrRemediationMock = vi.fn().mockResolvedValue(true);
 vi.mock('./prRemediationFollowUp.js', () => ({ handBackPrRemediation: (...args) => handBackPrRemediationMock(...args) }));
 
 vi.mock('./deepAudit.js', () => ({ getDeepAuditSourceRevision: vi.fn().mockResolvedValue('a'.repeat(40)) }));
+vi.mock('./featureAgents.js', () => ({ getFeatureAgent: vi.fn().mockResolvedValue(null) }));
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 import { updateTask, addTask, getAgents } from './cos.js';
 import { emitLog } from './cosEvents.js';
-import { ensureLatest, isRepo, fetchOrigin } from './git.js';
+import { ensureLatest, isRepo, fetchOrigin, createBranch } from './git.js';
+import { getAppDataForTask } from './agentAppWorkspace.js';
+import { createJiraTicketForTask } from './promptSections/appContext.js';
+import { getFeatureAgent } from './featureAgents.js';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
-import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, mergeBaseIntoFeatureWorktree, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
@@ -346,6 +356,77 @@ describe('prepareAgentWorkspace', () => {
     expect(r.outcome).toBe('ready');
     expect(r.worktreeInfo).toBeNull();
     expect(detectConflicts).toHaveBeenCalled();
+  });
+
+  describe('a shared-checkout task the conflict scan isolates', () => {
+    const task = () => ({ id: 't-busy', taskType: 'user', metadata: {} });
+    beforeEach(() => {
+      ensureLatest.mockResolvedValue({ success: true, upToDate: true });
+      detectConflicts.mockResolvedValueOnce({ hasConflict: true, recommendation: 'worktree', reason: 'workspace-has-uncommitted-changes' });
+    });
+
+    it('cuts a worktree when another agent is already working in the checkout', async () => {
+      createWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-busy', branchName: 'cos/t-busy/agent-busy', baseBranch: 'main' });
+      const r = await prepareAgentWorkspace({ agentId: 'agent-busy', task: task() });
+      expect(r).toMatchObject({ outcome: 'ready', workspacePath: '/mock/worktrees/agent-busy', explicitWorktree: false });
+      expect(r.worktreeInfo.branchName).toBe('cos/t-busy/agent-busy');
+    });
+
+    it('stays in the shared checkout when that worktree cannot be created', async () => {
+      createWorktree.mockRejectedValue(new Error('disk full'));
+      const r = await prepareAgentWorkspace({ agentId: 'agent-busy', task: task() });
+      expect(r).toMatchObject({ outcome: 'ready', worktreeInfo: null, workspacePath: PATHS.root });
+    });
+  });
+
+  describe('a JIRA-enabled app', () => {
+    const jiraTask = () => ({ id: 't-jira', taskType: 'user', description: 'Fix the Widget!', metadata: { app: 'app-x', createJiraTicket: true } });
+    beforeEach(() => {
+      getAppWorkspace.mockResolvedValue(process.cwd());
+      ensureLatest.mockResolvedValue({ success: true, upToDate: true });
+      getAppDataForTask.mockResolvedValueOnce({ jira: { enabled: true, instanceId: 'jira-1', createPR: false } });
+      createJiraTicketForTask.mockResolvedValueOnce({ ticketId: 'EX-7', ticketUrl: 'https://jira.example.com/browse/EX-7' });
+    });
+
+    it('creates the ticket and its feature branch in the app checkout instead of a worktree', async () => {
+      const task = jiraTask();
+      const r = await prepareAgentWorkspace({ agentId: 'agent-jira', task });
+      expect(r).toMatchObject({ outcome: 'ready', jiraBranchName: 'feature/EX-7-fix-the-widget', worktreeInfo: null });
+      expect(r.jiraTicket.ticketId).toBe('EX-7');
+      expect(createBranch).toHaveBeenCalledWith(process.cwd(), 'feature/EX-7-fix-the-widget');
+      expect(task.metadata).toMatchObject({
+        jiraTicketId: 'EX-7', jiraBranch: 'feature/EX-7-fix-the-widget', jiraInstanceId: 'jira-1', jiraCreatePR: false,
+      });
+      expect(detectConflicts).not.toHaveBeenCalled();
+      expect(createWorktree).not.toHaveBeenCalled();
+    });
+
+    it('keeps the ticket but falls back to the ordinary shared-checkout path when the branch cannot be created', async () => {
+      createBranch.mockRejectedValueOnce(new Error('branch exists'));
+      const task = jiraTask();
+      const r = await prepareAgentWorkspace({ agentId: 'agent-jira', task });
+      expect(r).toMatchObject({ outcome: 'ready', jiraBranchName: null });
+      expect(r.jiraTicket.ticketId).toBe('EX-7');
+      expect(task.metadata).toMatchObject({ jiraTicketId: 'EX-7', jiraBranch: null });
+      expect(detectConflicts).toHaveBeenCalled();
+    });
+  });
+
+  it('runs a feature-agent task in its persistent worktree and merges its base first', async () => {
+    ensureLatest.mockResolvedValue({ success: true, upToDate: true });
+    getFeatureAgent.mockResolvedValueOnce({ id: 'fa-1', name: 'Example Agent', git: { branchName: 'feature/fa-1', baseBranch: 'dev', autoMergeBase: true } });
+    const faWorktree = join(PATHS.cos, 'feature-agents', 'fa-1', 'worktree');
+    const realExistsSync = existsSync.getMockImplementation();
+    existsSync.mockImplementation(path => path === faWorktree || realExistsSync(path));
+    const task = { id: 't-fa', taskType: 'internal', metadata: { featureAgentRun: true, featureAgentId: 'fa-1' } };
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-fa', task })
+      .finally(() => existsSync.mockImplementation(realExistsSync));
+
+    expect(r).toMatchObject({ outcome: 'ready', workspacePath: faWorktree });
+    expect(r.worktreeInfo).toEqual({ worktreePath: faWorktree, branchName: 'feature/fa-1', baseBranch: 'dev', isPersistentWorktree: true });
+    expect(mergeBaseIntoFeatureWorktree).toHaveBeenCalledWith('fa-1', 'dev');
+    expect(createWorktree).not.toHaveBeenCalled();
   });
 });
 

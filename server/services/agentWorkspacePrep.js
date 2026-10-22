@@ -12,8 +12,8 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * creation.
  *
  * Side effects that don't touch spawn-local state (creating a conflict task,
- * flipping the task to pending/blocked, creating worktrees, mutating
- * `task.metadata` with JIRA fields) happen inline. Outcomes that the caller
+ * flipping the task to pending/blocked, creating worktrees, recording JIRA
+ * fields on `task.metadata`) happen inline. Outcomes that the caller
  * must finish are returned as a discriminated result so the caller can fire
  * `cleanupOnError` + the matching `agent:deferred` / `agent:error` event:
  *
@@ -551,7 +551,12 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
   return withCheckoutPublication(workspacePath, prepareAndRegister);
 }
 
-async function prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly }) {
+/**
+ * Refuse a launch whose recovery target or remediation pin no longer matches the
+ * task, before any checkout is touched.
+ * @returns {Promise<object|null>} the blocked outcome, or null to proceed
+ */
+async function refuseUnsafeLaunchTarget({ task, workspacePath, isReadOnly }) {
   const recoveryTarget = task.metadata?.cleanupReviewTarget;
   if (recoveryTarget) {
     const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
@@ -568,48 +573,263 @@ async function prepareResolvedWorkspace({ agentId, task, workspacePath, resolved
     || !resolveTaskRemoteBranch(task.metadata))) {
     return refusePinnedAttach(task, workspacePath, `Task ${task.id} has no valid reviewed head and branch; refusing an unpinned remediation workspace`);
   }
+  return null;
+}
 
-  let jiraTicket = null;
-  let jiraBranchName = null;
-  let worktreeInfo = null;
-  // A relaunched claim keeps the `claim-*` directory the previous run cut.
-  // Moving it (the ordinary adopt path) would rename it to `agent-<id>` and
-  // break the claim prompt's own cleanup path. Use it where it sits, and skip
-  // every later provisioner so a checked-out claim branch cannot fall through
-  // to the shared checkout.
-  const claimWorkspace = remediationPin !== null ? null : claimContinuationWorkspace({
+/**
+ * A relaunched claim keeps the `claim-*` directory the previous run cut. Moving
+ * it (the ordinary adopt path) would rename it to `agent-<id>` and break the
+ * claim prompt's own cleanup path, so it is used where it sits.
+ *
+ * The pointer is a cached answer, not authority: confirm the holder, the branch
+ * and the absence of another live owner NOW, and wait (bounded) when that cannot
+ * be established rather than entering someone's checkout.
+ *
+ * @returns {Promise<{ workspacePath: string, worktreeInfo: object }|object|null>}
+ *   the claim checkout, a blocked outcome, or null when the task continues no claim
+ */
+async function admitClaimWorkspace({ task, agentId, workspacePath }) {
+  const claimWorkspace = claimContinuationWorkspace({
     metadata: task.metadata,
     pathExists: existsSync,
     worktreesRoot: PATHS.worktrees,
   });
-  if (claimWorkspace) {
-    // The pointer is a cached answer, not authority: confirm the holder, the
-    // branch and the absence of another live owner NOW, and wait (bounded) when
-    // that cannot be established rather than entering someone's checkout.
-    const admission = await admitClaimContinuation({ task, agentId, sourceWorkspace: workspacePath, claimWorkspace });
-    if (!admission.admit) {
-      const attempt = (Number(task.metadata?.worktreeBusyAttempts) || 0) + 1;
-      const detail = `The claim worktree for ${claimWorkspace.worktreeInfo.branchName} cannot be confirmed free (${admission.reason}); nothing in it was touched`;
-      if (attempt <= WORKTREE_BUSY_MAX_ATTEMPTS) {
-        emitLog('info', `🌳 ${detail}; retrying after a short cooldown (attempt ${attempt}/${WORKTREE_BUSY_MAX_ATTEMPTS})`, { taskId: task.id, branch: claimWorkspace.worktreeInfo.branchName, reason: admission.reason });
-        await blockTask(task, `${detail}; retrying after a short cooldown`, 'worktree-busy', {
-          cooldownUntil: new Date(Date.now() + WORKTREE_BUSY_COOLDOWN_MS).toISOString(),
-          worktreeBusyAttempts: attempt,
-        });
-        return { outcome: 'blocked', reason: detail };
-      }
-      emitLog('warn', `🌳 ${detail}; giving up after ${WORKTREE_BUSY_MAX_ATTEMPTS} attempts`, { taskId: task.id, branch: claimWorkspace.worktreeInfo.branchName, reason: admission.reason });
-      await blockTask(task, `${detail}. Resolve who owns the checkout, then re-run this task.`, 'worktree-failed');
-      return { outcome: 'blocked', reason: detail };
+  if (!claimWorkspace) return null;
+  const { branchName } = claimWorkspace.worktreeInfo;
+  const admission = await admitClaimContinuation({ task, agentId, sourceWorkspace: workspacePath, claimWorkspace });
+  if (admission.admit) {
+    emitLog('info', `🌳 Agent ${agentId} is continuing the claim worktree ${branchName}`, {
+      agentId, taskId: task.id, worktreePath: claimWorkspace.workspacePath, branchName,
+    });
+    return { workspacePath: claimWorkspace.workspacePath, worktreeInfo: claimWorkspace.worktreeInfo };
+  }
+  const attempt = (Number(task.metadata?.worktreeBusyAttempts) || 0) + 1;
+  const detail = `The claim worktree for ${branchName} cannot be confirmed free (${admission.reason}); nothing in it was touched`;
+  if (attempt <= WORKTREE_BUSY_MAX_ATTEMPTS) {
+    emitLog('info', `🌳 ${detail}; retrying after a short cooldown (attempt ${attempt}/${WORKTREE_BUSY_MAX_ATTEMPTS})`, { taskId: task.id, branch: branchName, reason: admission.reason });
+    await blockTask(task, `${detail}; retrying after a short cooldown`, 'worktree-busy', {
+      cooldownUntil: new Date(Date.now() + WORKTREE_BUSY_COOLDOWN_MS).toISOString(),
+      worktreeBusyAttempts: attempt,
+    });
+    return { outcome: 'blocked', reason: detail };
+  }
+  emitLog('warn', `🌳 ${detail}; giving up after ${WORKTREE_BUSY_MAX_ATTEMPTS} attempts`, { taskId: task.id, branch: branchName, reason: admission.reason });
+  await blockTask(task, `${detail}. Resolve who owns the checkout, then re-run this task.`, 'worktree-failed');
+  return { outcome: 'blocked', reason: detail };
+}
+
+/**
+ * File a resolver task for the shared checkout that will not pull, and pause this
+ * task on a cooldown until it lands.
+ */
+async function deferForGitConflict({ task, workspacePath, resolvedAppName, pullResult }) {
+  emitLog('warn', `🔀 Git conflict in ${workspacePath} (branch: ${pullResult.branch}): ${pullResult.error}`, {
+    taskId: task.id, workspace: workspacePath, branch: pullResult.branch
+  });
+  const checkoutName = resolvedAppName || workspacePath;
+  // The description's first line is the duplicate key, so it stays stable
+  // across retries; the (varying) git error goes in the context.
+  await addTask({
+    description: `Resolve git conflict in ${checkoutName} on branch ${pullResult.branch}. `
+      + `The branch has diverged from origin and automatic rebase failed.`,
+    priority: 'HIGH',
+    app: task.metadata?.app || null,
+    metadata: { gitConflictResolution: true },
+    context: `Error: ${pullResult.error}\n`
+      + `This conflict is blocking task ${task.id}: "${task.description}". `
+      + `Resolve the conflict, commit, and push so the blocked task can proceed.`,
+    position: 'top'
+  }, 'internal').catch(err => {
+    emitLog('warn', `Failed to create conflict resolution task: ${err.message}`, { taskId: task.id });
+  });
+
+  // A timed pause, not `pending`: a pending task is re-dequeued within
+  // seconds and re-runs the same failing rebase in a hot loop until the
+  // resolver lands. The cooldown sweeper revives it.
+  await blockTask(task, `Git conflict in ${checkoutName} (branch ${pullResult.branch}); waiting for the resolver task`, 'git-conflict-wait', {
+    cooldownUntil: new Date(Date.now() + GIT_CONFLICT_COOLDOWN_MS).toISOString(),
+  });
+  return {
+    outcome: 'deferred',
+    reason: 'Git conflict blocks task — conflict resolution task created',
+    deferReason: 'git-conflict',
+    branch: pullResult.branch
+  };
+}
+
+/**
+ * Pull the shared checkout a task is about to run in.
+ * @returns {Promise<object|null>} the deferred outcome on an unresolvable conflict, else null
+ */
+async function pullSharedCheckout({ task, workspacePath, resolvedAppName, wantsWorktree }) {
+  // Isolated tasks fetch their base in createWorktree; never rebase the
+  // shared checkout as a side effect of preparing a separate workspace.
+  // The conflict-resolution task works on the very checkout that won't pull;
+  // gating it on a clean pull would defer it forever.
+  const pullResult = wantsWorktree ? { skipped: 'isolated-task' }
+    : isTruthyMeta(task.metadata?.gitConflictResolution) ? { skipped: 'git-conflict-resolver' }
+    : await git.ensureLatest(workspacePath).catch(err => {
+      emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
+      return { success: false, error: err.message };
+    });
+
+  if (pullResult.skipped) {
+    emitLog('debug', `Pre-task git pull skipped: ${pullResult.skipped}`, { taskId: task.id, workspace: workspacePath });
+  } else if (pullResult.conflict) {
+    return deferForGitConflict({ task, workspacePath, resolvedAppName, pullResult });
+  } else if (pullResult.success && !pullResult.upToDate) {
+    emitLog('info', `📥 Pulled latest for ${resolvedAppName || 'workspace'} (branch: ${pullResult.branch})`, {
+      taskId: task.id, workspace: workspacePath, branch: pullResult.branch
+    });
+  } else if (!pullResult.success) {
+    emitLog('warn', `⚠️ Pre-task git pull error: ${pullResult.error}`, { taskId: task.id, workspace: workspacePath });
+  }
+  return null;
+}
+
+/**
+ * Create a JIRA ticket and its feature branch when the app has JIRA enabled and
+ * the task opted in. Writes nothing to the task: the fields the ticket adds to
+ * `task.metadata` are returned as `metadataPatch` for the caller to record.
+ *
+ * @returns {Promise<{ jiraTicket: object|null, jiraBranchName: string|null, metadataPatch: object|null }>}
+ *   `jiraBranchName` is null when the branch could not be created, even with a ticket
+ */
+async function prepareJiraBranch({ task, workspacePath }) {
+  const none = { jiraTicket: null, jiraBranchName: null, metadataPatch: null };
+  if (!task.metadata?.createJiraTicket) return none;
+  const appData = await getAppDataForTask(task);
+  if (!appData?.jira?.enabled) return none;
+  const jiraTicket = await createJiraTicketForTask(task, appData);
+  if (!jiraTicket) return none;
+
+  const slug = (task.description || 'task')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .substring(0, 40);
+  let jiraBranchName = `feature/${jiraTicket.ticketId}-${slug}`;
+
+  if (task.metadata?.app) {
+    await git.fetchOrigin(workspacePath).catch(() => {});
+    const { baseBranch: defaultBranch } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+    if (defaultBranch) {
+      await git.checkout(workspacePath, defaultBranch).catch(() => {});
+      await execGit(['merge', '--ff-only', `origin/${defaultBranch}`], workspacePath).catch(err => { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); });
     }
-    workspacePath = claimWorkspace.workspacePath;
-    worktreeInfo = claimWorkspace.worktreeInfo;
-    emitLog('info', `🌳 Agent ${agentId} is continuing the claim worktree ${worktreeInfo.branchName}`, {
-      agentId, taskId: task.id, worktreePath: workspacePath, branchName: worktreeInfo.branchName,
+  }
+
+  await git.createBranch(workspacePath, jiraBranchName)
+    // `checkout -b` off a LOCAL branch doesn't auto-track under git's default
+    // `branch.autoSetupMerge`, but a repo configured `always` records the base
+    // branch as this one's upstream — and a config-derived push
+    // (`git push <remote> HEAD:<merge>`) then lands the agent's work on the base
+    // branch instead of opening a PR (#4172). Verify before handing it over.
+    .then(() => enforceSafeBranchUpstream(workspacePath, jiraBranchName))
+    .then(() => {
+      emitLog('success', `Created feature branch ${jiraBranchName}`, { taskId: task.id, ticketId: jiraTicket.ticketId });
+    })
+    .catch(err => {
+      emitLog('warn', `Failed to create JIRA branch ${jiraBranchName}: ${err.message}`, { taskId: task.id });
+      jiraBranchName = null;
+    });
+
+  return {
+    jiraTicket,
+    jiraBranchName,
+    metadataPatch: {
+      jiraTicketId: jiraTicket.ticketId,
+      jiraTicketUrl: jiraTicket.ticketUrl,
+      jiraBranch: jiraBranchName,
+      jiraInstanceId: appData.jira.instanceId,
+      jiraCreatePR: appData.jira.createPR !== false
+    },
+  };
+}
+
+/**
+ * A feature-agent run works in that agent's persistent worktree instead of a
+ * fresh one.
+ * @returns {Promise<{ workspacePath: string, worktreeInfo: object }|null>}
+ */
+async function adoptFeatureAgentWorktree(task) {
+  if (!task.metadata?.featureAgentRun || !task.metadata?.featureAgentId) return null;
+  const { getFeatureAgent } = await import('./featureAgents.js');
+  const fa = await getFeatureAgent(task.metadata.featureAgentId).catch(() => null);
+  if (!fa) return null;
+  const faWorktreePath = join(PATHS.cos, 'feature-agents', fa.id, 'worktree');
+  if (!existsSync(faWorktreePath)) return null;
+  if (fa.git.autoMergeBase) {
+    const { mergeBaseIntoFeatureWorktree } = await import('./worktreeManager.js');
+    await mergeBaseIntoFeatureWorktree(fa.id, fa.git.baseBranch).catch(err => {
+      emitLog('warn', `🌳 Feature agent base merge failed: ${err.message}`, { featureAgentId: fa.id });
     });
   }
-  const explicitOpenPR = isTruthyMeta(task.metadata?.openPR);
-  const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || explicitOpenPR || remediationPin !== null;
+  emitLog('info', `🌳 Feature agent ${fa.name} using persistent worktree: ${fa.git.branchName}`, {
+    featureAgentId: fa.id, worktreePath: faWorktreePath
+  });
+  return {
+    workspacePath: faWorktreePath,
+    worktreeInfo: {
+      worktreePath: faWorktreePath,
+      branchName: fa.git.branchName,
+      baseBranch: fa.git.baseBranch || 'main',
+      isPersistentWorktree: true
+    },
+  };
+}
+
+/**
+ * Cut a worktree for a shared-checkout task only when conflict detection finds
+ * another running agent in the same checkout. Creation failure keeps the task
+ * in the shared checkout.
+ * @returns {Promise<object|null>} the new worktree's info, or null to stay put
+ */
+async function provisionConflictWorktree({ agentId, task, workspacePath }) {
+  const { getAgents } = await import('./cos.js');
+  const runningAgents = (await getAgents()).filter(a => a.status === 'running');
+
+  const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {
+    emitLog('warn', `Conflict detection failed: ${err.message}`, { taskId: task.id });
+    return { hasConflict: false, recommendation: 'proceed' };
+  });
+
+  if (conflictResult.recommendation === 'proceed') {
+    emitLog('debug', `No conflicts for task ${task.id}, using shared workspace`, { taskId: task.id });
+  }
+  if (conflictResult.recommendation !== 'worktree') return null;
+
+  emitLog('info', `🌳 Conflict detected for task ${task.id}: ${conflictResult.reason} — creating worktree`, {
+    taskId: task.id,
+    conflictingAgents: conflictResult.conflictingAgents,
+    reason: conflictResult.reason
+  });
+  const worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
+    planId: task.metadata?.planId || undefined,
+    linkDependencies: resolveTaskHookType(task) !== 'dependency-updates',
+  }).catch(err => {
+    emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
+    return null;
+  });
+  if (worktreeInfo) {
+    emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName}`, {
+      agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName
+    });
+  }
+  return worktreeInfo;
+}
+
+/**
+ * Pick the checkout the agent runs in. The provisioning steps run in this fixed
+ * order and any refusal, deferral, continued claim or JIRA branch returns at
+ * once, so a later step never has to infer an earlier outcome from a flag.
+ */
+async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWorkspace, resolvedApp, resolvedAppName, isReadOnly }) {
+  const refusal = await refuseUnsafeLaunchTarget({ task, workspacePath: sourceWorkspace, isReadOnly });
+  if (refusal) return refusal;
+
+  const remediationPin = resolveTaskPinnedHead(task.metadata);
+  const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || isTruthyMeta(task.metadata?.openPR) || remediationPin !== null;
   // A task pointed at an existing branch must run in a worktree whatever isolated
   // the ORIGINAL run, because that is the only way to reach the work: the branch
   // has to be checked out somewhere, and an adoptable tree has to be attached.
@@ -619,213 +839,56 @@ async function prepareResolvedWorkspace({ agentId, task, workspacePath, resolved
   // detection returns `proceed` once the dead agent is gone) and silently
   // abandons the work the pointer was recorded to save.
   const existingBranch = resolveTaskTargetBranch(task.metadata);
-  // Where that branch lives when the task points at a fork PR's head — read
-  // here rather than inside the worktree layer, which has no forge client.
-  const forkHead = resolveTaskForkHead(task.metadata);
   const wantsWorktree = explicitWorktree || !!existingBranch;
+  const ready = ({ workspacePath, worktreeInfo, jiraTicket = null, jiraBranchName = null }) => {
+    // Announce the FINAL cwd, after any worktree reassignment, so the task log
+    // names the directory the agent actually runs in rather than the repo it was
+    // cut from (#3180).
+    emitLog('info', `📂 Agent workspace: ${workspacePath}`, { taskId: task.id, workspace: workspacePath });
+    return { outcome: 'ready', workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree };
+  };
 
-  if (!isReadOnly && !claimWorkspace) {
-    // Isolated tasks fetch their base in createWorktree; never rebase the
-    // shared checkout as a side effect of preparing a separate workspace.
-    // The conflict-resolution task works on the very checkout that won't pull;
-    // gating it on a clean pull would defer it forever.
-    const pullResult = wantsWorktree ? { skipped: 'isolated-task' }
-      : isTruthyMeta(task.metadata?.gitConflictResolution) ? { skipped: 'git-conflict-resolver' }
-      : await git.ensureLatest(workspacePath).catch(err => {
-      emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
-      return { success: false, error: err.message };
-    });
+  // A checked-out claim branch skips every later provisioner so it cannot fall
+  // through to the shared checkout. A remediation follow-up never continues one.
+  const claim = remediationPin === null ? await admitClaimWorkspace({ task, agentId, workspacePath: sourceWorkspace }) : null;
+  if (claim?.outcome) return claim;
+  if (claim) return ready(claim);
 
-    if (pullResult.skipped) {
-      emitLog('debug', `Pre-task git pull skipped: ${pullResult.skipped}`, { taskId: task.id, workspace: workspacePath });
-    } else if (pullResult.conflict) {
-      emitLog('warn', `🔀 Git conflict in ${workspacePath} (branch: ${pullResult.branch}): ${pullResult.error}`, {
-        taskId: task.id, workspace: workspacePath, branch: pullResult.branch
-      });
-
-      const appId = task.metadata?.app || null;
-      // The description's first line is the duplicate key, so it stays stable
-      // across retries; the (varying) git error goes in the context.
-      const conflictDesc = `Resolve git conflict in ${resolvedAppName || workspacePath} on branch ${pullResult.branch}. `
-        + `The branch has diverged from origin and automatic rebase failed.`;
-
-      await addTask({
-        description: conflictDesc,
-        priority: 'HIGH',
-        app: appId,
-        metadata: { gitConflictResolution: true },
-        context: `Error: ${pullResult.error}\n`
-          + `This conflict is blocking task ${task.id}: "${task.description}". `
-          + `Resolve the conflict, commit, and push so the blocked task can proceed.`,
-        position: 'top'
-      }, 'internal').catch(err => {
-        emitLog('warn', `Failed to create conflict resolution task: ${err.message}`, { taskId: task.id });
-      });
-
-      // A timed pause, not `pending`: a pending task is re-dequeued within
-      // seconds and re-runs the same failing rebase in a hot loop until the
-      // resolver lands. The cooldown sweeper revives it.
-      await blockTask(task, `Git conflict in ${resolvedAppName || workspacePath} (branch ${pullResult.branch}); waiting for the resolver task`, 'git-conflict-wait', {
-        cooldownUntil: new Date(Date.now() + GIT_CONFLICT_COOLDOWN_MS).toISOString(),
-      });
-      return {
-        outcome: 'deferred',
-        reason: 'Git conflict blocks task — conflict resolution task created',
-        deferReason: 'git-conflict',
-        branch: pullResult.branch
-      };
-    } else if (pullResult.success && !pullResult.upToDate && !pullResult.skipped) {
-      emitLog('info', `📥 Pulled latest for ${resolvedAppName || 'workspace'} (branch: ${pullResult.branch})`, {
-        taskId: task.id, workspace: workspacePath, branch: pullResult.branch
-      });
-    } else if (!pullResult.success) {
-      emitLog('warn', `⚠️ Pre-task git pull error: ${pullResult.error}`, { taskId: task.id, workspace: workspacePath });
-    }
-
-    // JIRA integration: create ticket + feature branch if app has JIRA enabled and task opted in
-    const appData = await getAppDataForTask(task);
-
-    if (appData?.jira?.enabled && task.metadata?.createJiraTicket) {
-      jiraTicket = await createJiraTicketForTask(task, appData);
-
-      if (jiraTicket) {
-        const slug = (task.description || 'task')
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '')
-          .substring(0, 40);
-        jiraBranchName = `feature/${jiraTicket.ticketId}-${slug}`;
-
-        if (task.metadata?.app) {
-          await git.fetchOrigin(workspacePath).catch(() => {});
-          const { baseBranch: defaultBranch } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
-          if (defaultBranch) {
-            await git.checkout(workspacePath, defaultBranch).catch(() => {});
-            await execGit(['merge', '--ff-only', `origin/${defaultBranch}`], workspacePath).catch(err => { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); });
-          }
-        }
-
-        await git.createBranch(workspacePath, jiraBranchName)
-          // `checkout -b` off a LOCAL branch doesn't auto-track under git's default
-          // `branch.autoSetupMerge`, but a repo configured `always` records the base
-          // branch as this one's upstream — and a config-derived push
-          // (`git push <remote> HEAD:<merge>`) then lands the agent's work on the base
-          // branch instead of opening a PR (#4172). Verify before handing it over.
-          .then(() => enforceSafeBranchUpstream(workspacePath, jiraBranchName))
-          .catch(err => {
-            emitLog('warn', `Failed to create JIRA branch ${jiraBranchName}: ${err.message}`, { taskId: task.id });
-            jiraBranchName = null;
-          });
-
-        if (jiraBranchName) {
-          emitLog('success', `Created feature branch ${jiraBranchName}`, { taskId: task.id, ticketId: jiraTicket.ticketId });
-        }
-
-        task.metadata = {
-          ...task.metadata,
-          jiraTicketId: jiraTicket.ticketId,
-          jiraTicketUrl: jiraTicket.ticketUrl,
-          jiraBranch: jiraBranchName,
-          jiraInstanceId: appData.jira.instanceId,
-          jiraCreatePR: appData.jira.createPR !== false
-        };
-      }
-    }
-
-    // Feature agent tasks: use persistent worktree instead of creating a new one
-    if (task.metadata?.featureAgentRun && task.metadata?.featureAgentId) {
-      const { getFeatureAgent } = await import('./featureAgents.js');
-      const fa = await getFeatureAgent(task.metadata.featureAgentId).catch(() => null);
-      if (fa) {
-        const faWorktreePath = join(PATHS.cos, 'feature-agents', fa.id, 'worktree');
-        if (existsSync(faWorktreePath)) {
-          workspacePath = faWorktreePath;
-          worktreeInfo = {
-            worktreePath: faWorktreePath,
-            branchName: fa.git.branchName,
-            baseBranch: fa.git.baseBranch || 'main',
-            isPersistentWorktree: true
-          };
-          const { mergeBaseIntoFeatureWorktree } = await import('./worktreeManager.js');
-          if (fa.git.autoMergeBase) {
-            await mergeBaseIntoFeatureWorktree(fa.id, fa.git.baseBranch).catch(err => {
-              emitLog('warn', `🌳 Feature agent base merge failed: ${err.message}`, { featureAgentId: fa.id });
-            });
-          }
-          emitLog('info', `🌳 Feature agent ${fa.name} using persistent worktree: ${fa.git.branchName}`, {
-            featureAgentId: fa.id, worktreePath: faWorktreePath
-          });
-        }
-      }
-    }
-
-  } // end !isReadOnly
+  let jira = { jiraTicket: null, jiraBranchName: null };
+  let featureCheckout = null;
+  if (!isReadOnly) {
+    const deferred = await pullSharedCheckout({ task, workspacePath: sourceWorkspace, resolvedAppName, wantsWorktree });
+    if (deferred) return deferred;
+    jira = await prepareJiraBranch({ task, workspacePath: sourceWorkspace });
+    if (jira.metadataPatch) task.metadata = { ...task.metadata, ...jira.metadataPatch };
+    featureCheckout = await adoptFeatureAgentWorktree(task);
+  }
+  const current = { workspacePath: sourceWorkspace, worktreeInfo: null, ...featureCheckout, jiraTicket: jira.jiraTicket, jiraBranchName: jira.jiraBranchName };
+  // The JIRA feature branch was cut in the shared checkout; the agent works there.
+  if (current.jiraBranchName) return ready(current);
 
   // A read-only public-review stage still needs a disposable checkout: it may
   // run repository commands and the action stage's provider-specific sandbox
   // needs it for tests/patch inspection. Never let `readOnly` turn an explicit
   // isolation request into the live application checkout.
-  if (wantsWorktree && !jiraBranchName && !claimWorkspace) {
+  if (wantsWorktree) {
     const worktreeOutcome = await prepareRequestedWorktree({
       agentId,
-      workspacePath,
+      workspacePath: current.workspacePath,
       task,
       existingBranch,
-      forkHead,
+      // Where that branch lives when the task points at a fork PR's head — read
+      // here rather than inside the worktree layer, which has no forge client.
+      forkHead: resolveTaskForkHead(task.metadata),
       allowSharedWorkspaceFallback: !isReadOnly && !explicitWorktree,
     });
     if (worktreeOutcome.outcome !== 'ready') return worktreeOutcome;
-    workspacePath = worktreeOutcome.workspacePath;
-    worktreeInfo = worktreeOutcome.worktreeInfo;
-  } else if (!claimWorkspace && !isReadOnly && !jiraBranchName && !isFalsyMeta(task.metadata?.useWorktree)) {
-      const { getAgents } = await import('./cos.js');
-      const allAgents = await getAgents();
-      const runningAgents = allAgents.filter(a => a.status === 'running');
+    return ready({ ...current, workspacePath: worktreeOutcome.workspacePath, worktreeInfo: worktreeOutcome.worktreeInfo });
+  }
 
-      const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {
-        emitLog('warn', `Conflict detection failed: ${err.message}`, { taskId: task.id });
-        return { hasConflict: false, recommendation: 'proceed' };
-      });
-
-      if (conflictResult.recommendation === 'worktree') {
-        emitLog('info', `🌳 Conflict detected for task ${task.id}: ${conflictResult.reason} — creating worktree`, {
-          taskId: task.id,
-          conflictingAgents: conflictResult.conflictingAgents,
-          reason: conflictResult.reason
-        });
-
-        worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
-          planId: task.metadata?.planId || undefined,
-          linkDependencies: resolveTaskHookType(task) !== 'dependency-updates',
-        }).catch(err => {
-          emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
-          return null;
-        });
-
-        if (worktreeInfo) {
-          workspacePath = worktreeInfo.worktreePath;
-          emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName}`, {
-            agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName
-          });
-        }
-      } else if (conflictResult.recommendation === 'proceed') {
-        emitLog('debug', `No conflicts for task ${task.id}, using shared workspace`, { taskId: task.id });
-      }
-    }
-
-  // Announce the FINAL cwd — emitted here, after any worktree reassignment
-  // above, so the task log names the directory the agent actually runs in
-  // rather than the repo it was cut from (#3180).
-  emitLog('info', `📂 Agent workspace: ${workspacePath}`, { taskId: task.id, workspace: workspacePath });
-
-  return {
-    outcome: 'ready',
-    workspacePath,
-    resolvedApp,
-    resolvedAppName,
-    worktreeInfo,
-    jiraTicket,
-    jiraBranchName,
-    explicitWorktree
-  };
+  if (!isReadOnly && !isFalsyMeta(task.metadata?.useWorktree)) {
+    const conflictWorktree = await provisionConflictWorktree({ agentId, task, workspacePath: current.workspacePath });
+    if (conflictWorktree) return ready({ ...current, workspacePath: conflictWorktree.worktreePath, worktreeInfo: conflictWorktree });
+  }
+  return ready(current);
 }
