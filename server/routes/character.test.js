@@ -128,3 +128,23 @@ describe('PUT /api/character', () => {
     expect(characterService.updateCharacterFields).not.toHaveBeenCalled();
   });
 });
+
+describe('dice notation bounds on damage and event routes (#13088)', () => {
+  it.each([
+    ['/api/character/damage', (notation) => ({ diceNotation: notation }), 'takeDamage'],
+    ['/api/character/event', (notation) => ({ description: 'Rolled', diceNotation: notation }), 'addEvent'],
+  ])('%s accepts in-bounds notation and refuses out-of-bounds before the service runs', async (url, body, fn) => {
+    for (const ok of ['1d8', '2d6+3', '100d1000']) {
+      vi.clearAllMocks();
+      const res = await request(makeApp()).post(url).send(body(ok));
+      expect(res.status).toBe(200);
+      expect(characterService[fn]).toHaveBeenCalledTimes(1);
+    }
+    for (const bad of ['101d6', '0d6', '1d1', '1d1001', '1000000000d6']) {
+      vi.clearAllMocks();
+      const res = await request(makeApp()).post(url).send(body(bad));
+      expect(res.status).toBe(400);
+      expect(characterService[fn]).not.toHaveBeenCalled();
+    }
+  });
+});

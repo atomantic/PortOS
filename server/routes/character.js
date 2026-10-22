@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as characterService from '../services/character.js';
+import { diceNotationSchema } from '../lib/diceNotation.js';
 
 const router = Router();
 
@@ -32,7 +33,7 @@ const addXPSchema = z.object({
 });
 
 const takeDamageSchema = z.object({
-  diceNotation: z.string().regex(/^\d+d\d+([+-]\d+)?$/, 'Invalid dice notation (e.g. "1d8", "2d6+3")'),
+  diceNotation: diceNotationSchema,
   description: z.string().max(500).optional()
 });
 
@@ -43,7 +44,7 @@ const takeRestSchema = z.object({
 const addEventSchema = z.object({
   description: z.string().min(1).max(500),
   xp: z.number().int().min(0).optional(),
-  diceNotation: z.string().regex(/^\d+d\d+([+-]\d+)?$/).optional()
+  diceNotation: diceNotationSchema.optional()
 });
 
 // `?skills=0` / `?metrics=0` opt out of each derived registry's domain fan-out, for consumers
