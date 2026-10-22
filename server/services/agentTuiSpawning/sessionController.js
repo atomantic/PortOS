@@ -1161,6 +1161,8 @@ export function createTuiSessionController({
         reason,
         sentinelPath: sentinel.path,
         mergeGateReprompted,
+        command: tuiConfig.command,
+        providerId: provider?.id,
       }), { agentId });
     }
 
