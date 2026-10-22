@@ -34,6 +34,20 @@ const resolveSchema = z.object({
   fields: z.array(z.string().min(1).max(64)).max(50).optional(),
 });
 
+// The list needs only the collapsed-row fields. Snapshots and per-field values
+// (often MBs per entry) load on demand through GET /:id.
+const toListEntry = (e) => ({
+  id: e.id,
+  recordKind: e.recordKind,
+  recordId: e.recordId,
+  detectedAt: e.detectedAt,
+  source: e.source,
+  status: e.status,
+  localUpdatedAt: e.localUpdatedAt ?? null,
+  remoteUpdatedAt: e.remoteUpdatedAt ?? null,
+  diffSummary: (e.diffSummary || []).map((d) => ({ field: d.field, changed: d.changed })),
+});
+
 router.get('/', asyncHandler(async (req, res) => {
   const { status } = validateRequest(listQuerySchema, req.query ?? {});
   // #7260: while the sync base-hash file is present-but-unreadable the store is
@@ -42,7 +56,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // "no conflicts"; the Conflicts tab renders this as a warning banner.
   const degraded = await isBaseHashPersistBlocked();
   res.json({
-    conflicts: await resolver.listConflicts({ status: status ?? null }),
+    conflicts: (await resolver.listConflicts({ status: status ?? null })).map(toListEntry),
     conflictDetection: degraded
       ? { degraded: true, reason: 'sync_base_hashes.json is present but unreadable — repair or delete it and restart' }
       : { degraded: false },

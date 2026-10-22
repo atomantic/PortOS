@@ -40,6 +40,10 @@ export const aiResolveSeriesMerge = (body, options) =>
 export const listConflicts = (status, options) =>
   request(`/conflict-journal${status ? `?status=${encodeURIComponent(status)}` : ''}`, options);
 
+// Full entry (snapshots + per-field diff values); the list endpoint is a compact projection.
+export const getConflict = (id, options) =>
+  request(`/conflict-journal/${encodeURIComponent(id)}`, options);
+
 // body: { action: 'restore-all'|'merge-fields'|'discard', fields?: string[] }
 export const resolveConflict = (id, body, options) =>
   request(`/conflict-journal/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });

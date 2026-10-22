@@ -9,7 +9,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Loader2, GitMerge, RotateCcw, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
 import InlineDiff from '../ui/InlineDiff';
-import { listConflicts, resolveConflict, deleteConflict } from '../../services/api';
+import { listConflicts, getConflict, resolveConflict, deleteConflict } from '../../services/api';
 import LoadFailedState from '../ui/LoadFailedState';
 
 const asText = (v) => {
@@ -37,6 +37,9 @@ export default function ConflictsTab() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Resolved/removed rows leave local state; re-downloading the list is unnecessary.
+  const removeEntry = useCallback((id) => setConflicts((cs) => cs?.filter((c) => c.id !== id) ?? cs), []);
+
   if (loading) {
     return <div className="flex items-center gap-2 text-gray-400 text-sm py-8"><Loader2 className="animate-spin" size={16} /> Loading conflicts…</div>;
   }
@@ -56,7 +59,7 @@ export default function ConflictsTab() {
       {conflicts?.length === 0 ? (
         <div className="text-sm text-gray-500 py-8 text-center border border-port-border rounded-lg">✓ No pending conflicts.</div>
       ) : (
-        conflicts?.map((c) => <ConflictEntry key={c.id} entry={c} onResolved={load} />)
+        conflicts?.map((c) => <ConflictEntry key={c.id} entry={c} onResolved={removeEntry} />)
       )}
     </div>
   );
@@ -66,8 +69,27 @@ function ConflictEntry({ entry, onResolved }) {
   const [expanded, setExpanded] = useState(false);
   const [selectedFields, setSelectedFields] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
+  // Full entry (diff values) loads the first time the row expands; the list is a compact projection.
+  const [detail, setDetail] = useState(null);
+  const [detailError, setDetailError] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const fields = (entry.diffSummary || []).map((d) => d.field);
+
+  const loadDetail = async () => {
+    setDetailLoading(true);
+    setDetailError(null);
+    await getConflict(entry.id, { silent: true })
+      .then(setDetail)
+      .catch((err) => setDetailError(err.message || 'Failed to load'));
+    setDetailLoading(false);
+  };
+
+  const toggleExpanded = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !detail && !detailLoading) loadDetail();
+  };
 
   const resolve = async (action, fieldList) => {
     setBusy(true);
@@ -79,7 +101,7 @@ function ConflictEntry({ entry, onResolved }) {
         : action === 'merge-fields' ? 'Merged selected fields.'
           : 'Restored your version.';
       toast.success(msg);
-      onResolved();
+      onResolved(entry.id);
     }
   };
 
@@ -88,7 +110,7 @@ function ConflictEntry({ entry, onResolved }) {
     const ok = await deleteConflict(entry.id, { silent: true }).then(() => true)
       .catch((err) => { toast.error(`Delete failed: ${err.message}`); return false; });
     setBusy(false);
-    if (ok) onResolved();
+    if (ok) onResolved(entry.id);
   };
 
   const toggleField = (f) => setSelectedFields((s) => {
@@ -100,7 +122,7 @@ function ConflictEntry({ entry, onResolved }) {
   return (
     <div className="border border-port-border rounded-lg bg-port-card">
       <div className="flex items-center justify-between gap-3 p-3">
-        <button type="button" onClick={() => setExpanded((v) => !v)} className="flex items-center gap-2 min-w-0 text-left">
+        <button type="button" onClick={toggleExpanded} className="flex items-center gap-2 min-w-0 text-left">
           {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
           <span className="text-sm text-white truncate">
             {entry.recordKind} <span className="font-mono text-[11px] text-gray-500">{entry.recordId?.slice(0, 14)}</span>
@@ -126,7 +148,14 @@ function ConflictEntry({ entry, onResolved }) {
 
       {expanded && (
         <div className="border-t border-port-border p-3 space-y-3">
-          {(entry.diffSummary || []).map((d) => (
+          {detailLoading && <div className="flex items-center gap-2 text-gray-400 text-xs"><Loader2 className="animate-spin" size={14} /> Loading diff…</div>}
+          {detailError && (
+            <div role="alert" className="text-xs text-port-error flex items-center gap-2">
+              Could not load the diff: {detailError}
+              <button type="button" onClick={loadDetail} className="underline">Retry</button>
+            </div>
+          )}
+          {(detail?.diffSummary || []).map((d) => (
             <div key={d.field} className="border border-port-border rounded p-2">
               <label className="flex items-center gap-2 text-xs text-white mb-1.5">
                 <input type="checkbox" checked={selectedFields.has(d.field)} onChange={() => toggleField(d.field)} />

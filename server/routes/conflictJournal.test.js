@@ -45,6 +45,25 @@ describe('conflict-journal routes', () => {
     expect(res.body.conflictDetection).toEqual({ degraded: false });
   });
 
+  it('GET / returns a compact projection without snapshots or per-field values; GET /:id stays full', async () => {
+    const full = {
+      id: 'e1', recordKind: 'universe', recordId: 'u1', detectedAt: '2026-01-01T00:00:00Z',
+      source: { via: 'sync' }, status: 'pending', localUpdatedAt: 'a', remoteUpdatedAt: 'b',
+      localSnapshot: { big: 'x' }, remoteSnapshot: { big: 'y' },
+      diffSummary: [{ field: 'name', changed: 'both', localValue: 'l', remoteValue: 'r', parts: [{ path: 'p', localValue: 1 }] }],
+    };
+    resolverMock.listConflicts.mockResolvedValue([full]);
+    resolverMock.getConflict.mockResolvedValue(full);
+    const list = await request(makeApp()).get('/api/conflict-journal?status=pending');
+    expect(list.body.conflicts).toEqual([{
+      id: 'e1', recordKind: 'universe', recordId: 'u1', detectedAt: '2026-01-01T00:00:00Z',
+      source: { via: 'sync' }, status: 'pending', localUpdatedAt: 'a', remoteUpdatedAt: 'b',
+      diffSummary: [{ field: 'name', changed: 'both' }],
+    }]);
+    const one = await request(makeApp()).get('/api/conflict-journal/e1');
+    expect(one.body).toEqual(full);
+  });
+
   it('GET / surfaces conflictDetection.degraded while the base-hash store is latched (#7260)', async () => {
     resolverMock.listConflicts.mockResolvedValue([]);
     libMock.isBaseHashPersistBlocked.mockResolvedValue(true);

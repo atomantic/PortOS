@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({
   listConflicts: vi.fn(),
+  getConflict: vi.fn(),
   resolveConflict: vi.fn(),
   deleteConflict: vi.fn(),
 }));
@@ -26,9 +27,13 @@ const entry = {
   status: 'pending',
 };
 
+// The list endpoint returns a compact projection; the full entry loads on expand.
+const compact = (e) => ({ ...e, diffSummary: e.diffSummary.map(({ field, changed }) => ({ field, changed })) });
+
 beforeEach(() => {
   vi.clearAllMocks();
-  api.listConflicts.mockResolvedValue({ conflicts: [entry] });
+  api.listConflicts.mockResolvedValue({ conflicts: [compact(entry)] });
+  api.getConflict.mockResolvedValue(entry);
 });
 
 describe('ConflictsTab', () => {
@@ -76,6 +81,32 @@ describe('ConflictsTab', () => {
     expect(screen.getByText(/via push/)).toBeInTheDocument();
   });
 
+  it('fetches the full diff once on first expand and shows no values before that', async () => {
+    const user = userEvent.setup();
+    render(<ConflictsTab />);
+    await waitFor(() => expect(screen.getByText(/2 field\(s\)/)).toBeInTheDocument());
+    expect(api.getConflict).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('diff')).not.toBeInTheDocument();
+
+    await user.click(screen.getByText(/u-123456789012/));
+    expect(await screen.findAllByTestId('diff')).toHaveLength(2);
+    expect(api.getConflict).toHaveBeenCalledWith('entry-1', expect.anything());
+
+    await user.click(screen.getByText(/u-123456789012/)); // collapse
+    await user.click(screen.getByText(/u-123456789012/)); // re-expand: cached
+    expect(api.getConflict).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes a resolved row locally without re-listing', async () => {
+    api.resolveConflict.mockResolvedValue({ status: 'resolved' });
+    const user = userEvent.setup();
+    render(<ConflictsTab />);
+    await waitFor(() => expect(screen.getByText(/2 field\(s\)/)).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Discard/ }));
+    expect(await screen.findByText(/No pending conflicts/)).toBeInTheDocument();
+    expect(api.listConflicts).toHaveBeenCalledTimes(1);
+  });
+
   it('restore-all resolves the whole entry', async () => {
     api.resolveConflict.mockResolvedValue({ status: 'resolved' });
     const user = userEvent.setup();
@@ -121,7 +152,8 @@ describe('ConflictsTab', () => {
       }],
       status: 'pending',
     };
-    api.listConflicts.mockResolvedValue({ conflicts: [deepEntry] });
+    api.listConflicts.mockResolvedValue({ conflicts: [compact(deepEntry)] });
+    api.getConflict.mockResolvedValue(deepEntry);
     api.resolveConflict.mockResolvedValue({ status: 'resolved' });
     const user = userEvent.setup();
     render(<ConflictsTab />);
