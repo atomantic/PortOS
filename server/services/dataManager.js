@@ -360,8 +360,8 @@ async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
 // The scan is the multi-second part of the overview (du + a recursive walk per
 // category), and the Data page, the resources report and the data-introspection
 // harbor all request it. Share one result per `strict` mode for a short window
-// after it completes and coalesce concurrent callers while it is pending; mutations here invalidate it. Rejections are
-// never cached. Busy state and disk capacity are read fresh on every call.
+// after it completes and coalesce concurrent callers while it is pending;
+// mutations here invalidate it. Rejections are never cached. Busy state and disk capacity are read fresh on every call.
 const OVERVIEW_SCAN_TTL_MS = 30_000;
 const overviewScans = new Map();
 
