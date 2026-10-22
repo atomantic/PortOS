@@ -552,9 +552,12 @@ export async function archiveCategory(categoryKey, options = {}) {
         }
       });
     }
-    return categoryKey === 'health'
-      ? { archived: capturedDays.length, removed, retained, alreadyAbsent, archivePath: relative(process.cwd(), archivePath), size: archiveStat.size }
-      : { archived: 0, archivePath: relative(process.cwd(), archivePath), archiveSize: archiveStat.size };
+    if (categoryKey === 'health') {
+      console.log(`📦 Archived data/health to ${archiveName}: ${capturedDays.length} days, ${removed} removed, ${retained} retained, ${alreadyAbsent} already absent`);
+      return { archived: capturedDays.length, removed, retained, alreadyAbsent, archivePath: relative(process.cwd(), archivePath), size: archiveStat.size };
+    }
+    console.log(`📦 Archived data/${categoryKey} to ${archiveName}`);
+    return { archived: 0, archivePath: relative(process.cwd(), archivePath), archiveSize: archiveStat.size };
   } finally {
     await rmGuarded(operationDir, { recursive: true, force: true });
   }
@@ -694,5 +697,6 @@ export async function deleteBackup(filename) {
     throw new ServerError('Path traversal not allowed', { status: 400, code: 'VALIDATION_ERROR' });
   }
   await rmGuarded(fullPath);
+  console.log(`🗑️ Deleted backup archive ${filename}`);
   return { deleted: filename };
 }
