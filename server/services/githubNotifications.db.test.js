@@ -301,7 +301,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const result = await syncAccountNotifications(account.id);
     expect(result.assist).toEqual({ sorted: 2, acted: 2 });
     expect(runUntrustedContentAnalysis).toHaveBeenCalledTimes(3);
-    expect(actions).toEqual([['PATCH', 'notifications/threads/901'], ['DELETE', 'notifications/threads/903']]);
+    // Same activity time on every thread, so compare without order.
+    expect([...actions].sort()).toEqual([['DELETE', 'notifications/threads/903'], ['PATCH', 'notifications/threads/901']]);
 
     const byId = Object.fromEntries((await listNotifications({ accountId: account.id, view: 'all' })).notifications.map((row) => [row.threadId, row]));
     expect(byId['902']).toMatchObject({ decision: 'suggest-mark-read', trust: 'outside', unread: true });
@@ -313,9 +314,10 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
 
     const activity = await listAutomationActivity();
     const mine = activity.filter((entry) => entry.accountId === account.id);
-    expect(mine.map((entry) => [entry.threadId, entry.action, entry.undoable])).toEqual([['903', 'done', true], ['901', 'read', false]]);
-    await expect(undoAutomationAction(mine[1].id)).rejects.toMatchObject({ status: 409 });
-    await undoAutomationAction(mine[0].id);
+    expect(mine.map((entry) => [entry.threadId, entry.action, entry.undoable]).sort()).toEqual([['901', 'read', false], ['903', 'done', true]]);
+    const byThread = Object.fromEntries(mine.map((entry) => [entry.threadId, entry]));
+    await expect(undoAutomationAction(byThread['901'].id)).rejects.toMatchObject({ status: 409 });
+    await undoAutomationAction(byThread['903'].id);
     expect(await getNotification(account.id, '903')).toMatchObject({ state: 'open', decision: 'surface', rule: 'learned' });
     expect((await listLearnedRules()).filter((rule) => rule.accountId === account.id)).toEqual([
       expect.objectContaining({ repoFullName: `${login}/hello`.toLowerCase(), reason: 'mention', actor: 'alice', decision: 'surface', hits: 1 }),
