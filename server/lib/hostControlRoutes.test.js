@@ -1015,6 +1015,22 @@ describe('Importer, Brain and analytics AI policy (#11036)', () => {
     }
   });
 
+  it('gates SynthID regen unless light, and a code-animation prompt only with a reference video (#13055)', () => {
+    const regen = '/api/image-gen/example.png/regenerate';
+    expect(isHostControlRoute('POST', regen)).toBe(false);
+    for (const body of [{}, null, [], { method: 'flux' }, { method: 'LIGHT' }]) {
+      expect(hostControlBodyKeys('POST', regen, body), JSON.stringify(body)).toEqual(['method']);
+    }
+    expect(hostControlBodyKeys('POST', regen, { method: 'light' })).toEqual([]);
+    expect(hostControlBodyKeys('post', '/API/image-gen/example.png/regenerate/', {})).toEqual(['method']);
+
+    const prompt = '/api/code-animation/prompt';
+    expect(hostControlBodyKeys('POST', prompt, { concept: 'Example', referenceVideo: { filename: 'example.mp4' } })).toEqual(['referenceVideo']);
+    for (const body of [{ concept: 'Example' }, { referenceVideo: null }, null, []]) {
+      expect(hostControlBodyKeys('POST', prompt, body), JSON.stringify(body)).toEqual([]);
+    }
+  });
+
   it('keeps record reads, CRUD and non-AI insights compute open', () => {
     for (const [method, path] of [
       ['GET', '/api/importer/config'],
