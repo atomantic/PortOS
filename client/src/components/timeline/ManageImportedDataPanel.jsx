@@ -14,7 +14,9 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.getTimelineSources({ silent: true }).then((r) => setSources(r?.sources || [])).catch(() => {});
+    let active = true;
+    api.getTimelineSources({ silent: true }).then((r) => { if (active) setSources(r?.sources || []); }).catch(() => {});
+    return () => { active = false; };
   }, [reloadKey]);
 
   const cancel = () => { setTarget(null); setTyped(''); };
