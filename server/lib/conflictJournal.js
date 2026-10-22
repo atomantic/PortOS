@@ -570,10 +570,13 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // column), `cards[]` is the roster itself (restored with the deck row by
   // `restoreDeck`, not offered as an individually-overlayable field), and the
   // install-capability pins never reach a snapshot (stripped from the wire).
-  deck: ['name', 'description', 'styleNotes', 'influences', 'layoutPrompt', 'samples', 'cardSize', 'universeId'],
+  deck: ['name', 'description', 'styleNotes', 'influences', 'layoutPrompt', 'cardOrientation', 'cardOrientationPrompt', 'samples', 'cardSize', 'universeId'],
   // A storyboard restores its authored plan: identity fields, the panel-maker
-  // recipe and the beats → panels → takes tree. Id and timestamps stay structural.
-  storyboard: ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'recipe', 'beats'],
+  // recipe, the plot, the temp track and the beats → panels → takes tree. `tempTrack`
+  // restores with `beats` so sanitizeStoryboard re-resolves each beat pin against
+  // the restored markers. `plotLlm` is a per-user provider pick and stays local;
+  // id and timestamps stay structural.
+  storyboard: ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'recipe', 'plot', 'tempTrack', 'beats'],
   // FableLoom restores the authored story graph, playback configuration, and
   // story-level render preferences.
   // Universe/series ids are structural links and stay on the live record.
