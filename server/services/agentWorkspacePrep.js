@@ -786,7 +786,7 @@ async function adoptFeatureAgentWorktree(task) {
  * @returns {Promise<object|null>} the new worktree's info, or null to stay put
  */
 async function provisionConflictWorktree({ agentId, task, workspacePath }) {
-  const { getAgents } = await import('./cos.js');
+  const { getAgents } = await import('./cosAgentLifecycle.js');
   const runningAgents = (await getAgents()).filter(a => a.status === 'running');
 
   const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {
