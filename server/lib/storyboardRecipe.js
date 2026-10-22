@@ -70,7 +70,7 @@ const ART_STYLE_WORDS = Object.freeze({
 });
 
 /** The default system prompt for a board's art style (shown and editable in its node). */
-export function defaultSystemPrompt(artStyle) {
+function defaultSystemPrompt(artStyle) {
   const style = ART_STYLE_WORDS[artStyle] || ART_STYLE_WORDS.pencil;
   return [
     'You write one prompt for an image model.',
@@ -81,7 +81,7 @@ export function defaultSystemPrompt(artStyle) {
 }
 
 /** Text → Prompt writer (with System prompt) → Image (with References) → Panel. */
-export function defaultPanelRecipe(board = {}) {
+function defaultPanelRecipe(board = {}) {
   return {
     nodes: [
       { id: 'node-text', type: 'text', title: 'Shot description', x: 40, y: 40, text: '', settings: { source: 'panel' } },
@@ -248,7 +248,7 @@ export const panelNodeState = (panel, nodeId) => panel?.make?.nodes?.[nodeId] ||
 
 const EMPTY_NODE_STATE = Object.freeze({
   text: '', status: 'idle', error: '', sentPrompt: '', promptAdditions: [], providerId: '', model: '',
-  runId: '', jobIds: [], failedJobIds: [], takeIds: [], excludedRefs: [], extraRefs: [], sentRefs: [], runAt: null,
+  runId: '', frameCount: 0, jobIds: [], failedJobIds: [], takeIds: [], excludedRefs: [], extraRefs: [], sentRefs: [], runAt: null,
 });
 
 /**
@@ -256,7 +256,7 @@ const EMPTY_NODE_STATE = Object.freeze({
  * an image list for references, take ids for an image node.
  * `linkedRefs` are the panel's catalog images the server resolved.
  */
-export function nodeOutputValue(recipe, node, { beat, panel, linkedRefs = [] } = {}) {
+function nodeOutputValue(recipe, node, { beat, panel, linkedRefs = [] } = {}) {
   if (!node) return null;
   const state = panelNodeState(panel, node.id);
   if (node.type === 'text') return textNodeValue(node, { beat, panel });
@@ -302,6 +302,8 @@ function sanitizeNodeState(raw, takeIds) {
     providerId: optStr(raw.providerId, 128),
     model: optStr(raw.model, 256),
     runId: optStr(raw.runId, 128),
+    // Frames an image run asked for; the node settles when that many landed or failed.
+    frameCount: Number.isInteger(raw.frameCount) ? Math.max(0, Math.min(raw.frameCount, RECIPE_LIMITS.frames)) : 0,
     jobIds: idList(raw.jobIds, RECIPE_LIMITS.frames),
     failedJobIds: idList(raw.failedJobIds, RECIPE_LIMITS.frames),
     // Frames point at the panel's takes; a removed take drops out.

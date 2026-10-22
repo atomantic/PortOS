@@ -133,4 +133,28 @@ describe('storyboard panel maker', () => {
     const reset = await api('put', `/${id}/recipe`, { recipe: null });
     expect(reset.body.recipe).toBeNull();
   });
+
+  it('counts a frame that finishes before its run is recorded, and settles when a full panel drops a frame', async () => {
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' });
+    await api('patch', `/${id}/panels/${panelId}/make/node-writer`, { text: 'A wide frame' });
+    await api('put', `/${id}/recipe`, { recipe: { nodes: [
+      { id: 'node-writer', type: 'llm' }, { id: 'node-image', type: 'image', settings: { count: 2 } },
+    ], edges: [{ from: 'node-writer', to: 'node-image', toPort: 'prompt' }] } });
+    // The first frame lands while the second is still being queued.
+    enqueue.mockImplementationOnce(async ({ params }) => {
+      await attachPanelFrame({ ...params.storyboardPanelRender, jobId: 'job-fast', filename: 'fast.png' });
+      return { jobId: 'job-fast' };
+    });
+    const run = await api('post', `/${id}/panels/${panelId}/make/node-image/run`);
+    const tag = enqueue.mock.calls[0][0].params.storyboardPanelRender;
+    expect(nodeState(run.body, 'node-image')).toMatchObject({ status: 'queued', frameCount: 2, takeIds: [expect.any(String)] });
+
+    // Fill the panel before the last frame lands.
+    for (let i = 0; i < 29; i += 1) await api('post', `/${id}/panels/${panelId}/takes`, { source: 'upload', image: `manual-${i}.png` });
+    await attachPanelFrame({ ...tag, jobId: 'job-1', filename: 'late.png' });
+    const { body: board } = await api('get', `/${id}`);
+    expect(board.beats[0].panels[0].takes).toHaveLength(30);
+    expect(nodeState(board, 'node-image')).toMatchObject({ status: 'done', failedJobIds: ['job-1'] });
+    expect(nodeState(board, 'node-image').error).toContain('panel is full');
+  });
 });

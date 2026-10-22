@@ -81,7 +81,7 @@ function announce(storyboardId, panelId, nodeId, status, error = '') {
  * images: each record's newest portrait, else its newest reference image.
  * A catalog that can't be read yields none (the run still has its own refs).
  */
-export async function resolveLinkedRefs(panel) {
+async function resolveLinkedRefs(panel) {
   const ids = [...panel.castIds, ...panel.environmentIds, ...panel.objectIds];
   if (!ids.length) return [];
   const media = await deps.linkedMedia(ids).catch((err) => {
@@ -208,36 +208,49 @@ async function runImageNode(board, panelId, node) {
     [STORYBOARD_PANEL_RENDER_TAG]: { storyboardId: board.id, panelId, nodeId: node.id, runId },
   };
   const params = await deps.imageParams(settings, { mode: node.settings.imageMode, model: node.settings.imageModelId }, common);
-  const jobIds = [];
-  try {
-    for (let i = 0; i < count; i += 1) {
-      const { jobId } = await deps.enqueue({ kind: 'image', params, owner: `storyboard:${board.id}` });
-      if (jobId) jobIds.push(jobId);
-    }
-  } catch (err) {
-    if (!jobIds.length) throw err;
-    console.log(`🚫 Storyboard ${board.id.slice(0, 11)} queued ${jobIds.length} of ${count} frames: ${err.message}`);
-  }
-  const { board: next } = await mutateStoryboard(board.id, (draft) => patchNodeState(draft, panelId, node.id, {
-    status: 'queued', error: '', runId, jobIds, failedJobIds: [], takeIds: [], sentPrompt: prompt,
+  // The run id lands before any job is queued, so a frame that finishes or
+  // fails at once is already counted against this run.
+  await mutateStoryboard(board.id, (draft) => patchNodeState(draft, panelId, node.id, {
+    status: 'queued', error: '', runId, frameCount: count, jobIds: [], failedJobIds: [], takeIds: [], sentPrompt: prompt,
     sentRefs: refs, promptAdditions: [], providerId: node.settings.imageMode || '', model: node.settings.imageModelId || '',
     runAt: new Date().toISOString(),
   }));
+  const jobIds = [];
+  let enqueueError = null;
+  for (let i = 0; i < count && !enqueueError; i += 1) {
+    const queued = await deps.enqueue({ kind: 'image', params, owner: `storyboard:${board.id}` }).catch((err) => { enqueueError = err; return null; });
+    if (queued?.jobId) jobIds.push(queued.jobId);
+  }
+  if (enqueueError) console.log(`🚫 Storyboard ${board.id.slice(0, 11)} queued ${jobIds.length} of ${count} frames: ${enqueueError.message}`);
+  const { board: next } = await mutateStoryboard(board.id, (draft) => patchNodeState(draft, panelId, node.id, (current) => {
+    if (current.runId !== runId) return null;
+    const recorded = { ...current, jobIds, frameCount: jobIds.length, ...(enqueueError ? { error: String(enqueueError.message).slice(0, RECIPE_LIMITS.error) } : {}) };
+    return { ...recorded, status: settledStatus(recorded) };
+  }));
+  if (!jobIds.length) {
+    announce(board.id, panelId, node.id, 'failed', enqueueError?.message || 'No frame was queued');
+    throw enqueueError || refuse('No frame was queued.');
+  }
   announce(board.id, panelId, node.id, 'queued');
   console.log(`🖼️ Storyboard ${board.id.slice(0, 11)} panel ${panelId.slice(0, 12)} → ${jobIds.length} image job(s)`);
   return next;
 }
 
-const settledStatus = (state) => (state.takeIds.length + state.failedJobIds.length >= state.jobIds.length
+const settledStatus = (state) => (state.takeIds.length + state.failedJobIds.length >= state.frameCount
   ? (state.takeIds.length ? 'done' : 'failed')
-  : state.status);
+  : 'queued');
 
 /** Completion: the frame becomes a panel take (selection unchanged). Null when the panel is gone. */
 export async function attachPanelFrame({ storyboardId, panelId, nodeId, runId, jobId, filename }) {
   let takeId = null;
   const { board } = await mutateStoryboard(storyboardId, (draft) => {
     const { panel } = locate(draft, panelId);
-    if (panel.takes.length >= STORYBOARD_LIMITS.takes) return;
+    // A full panel (a manual take or another run filled it meanwhile) drops
+    // the frame, counted as failed so the node still settles.
+    if (panel.takes.length >= STORYBOARD_LIMITS.takes) {
+      patchNodeState(draft, panelId, nodeId, (current) => countFailed(current, runId, jobId, `The panel is full (${STORYBOARD_LIMITS.takes} takes); a frame was dropped`));
+      return;
+    }
     takeId = newStoryboardEntityId('take');
     panel.takes.push({ id: takeId, source: 'generated', image: filename, addedAt: new Date().toISOString() });
     patchNodeState(draft, panelId, nodeId, (current) => {
@@ -250,19 +263,22 @@ export async function attachPanelFrame({ storyboardId, panelId, nodeId, runId, j
     throw err;
   });
   if (!board) return null;
-  announce(storyboardId, panelId, nodeId, 'frame');
+  announce(storyboardId, panelId, nodeId, takeId ? 'frame' : 'failed');
   return takeId ? { takeId } : null;
+}
+
+function countFailed(current, runId, jobId, reason) {
+  if (current.runId !== runId || current.failedJobIds.includes(jobId)) return null;
+  const next = { ...current, failedJobIds: [...current.failedJobIds, jobId], error: String(reason).slice(0, RECIPE_LIMITS.error) };
+  return { ...next, status: settledStatus(next) };
 }
 
 /** A failed or canceled frame is counted, and the node settles when its last frame does. */
 export async function failPanelFrame({ storyboardId, panelId, nodeId, runId, jobId }, status, error) {
   const reason = status === 'canceled' ? 'A frame was canceled' : (error || 'A frame failed');
-  await mutateStoryboard(storyboardId, (draft) => patchNodeState(draft, panelId, nodeId, (current) => {
-    if (current.runId !== runId || current.failedJobIds.includes(jobId)) return null;
-    const next = { ...current, failedJobIds: [...current.failedJobIds, jobId], error: String(reason).slice(0, RECIPE_LIMITS.error) };
-    return { ...next, status: settledStatus(next) };
-  })).catch((err) => {
-    if (err?.code !== 'NOT_FOUND') throw err;
-  });
+  await mutateStoryboard(storyboardId, (draft) => patchNodeState(draft, panelId, nodeId, (current) => countFailed(current, runId, jobId, reason)))
+    .catch((err) => {
+      if (err?.code !== 'NOT_FOUND') throw err;
+    });
   announce(storyboardId, panelId, nodeId, 'failed', reason);
 }
