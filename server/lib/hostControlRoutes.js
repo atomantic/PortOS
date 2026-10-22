@@ -87,10 +87,27 @@
  *     song-revision generation (signed-in browser) and Eidoverse augment/say
  *     (acting as the CoS world identity) are gated whole. SynthID regenerate is
  *     gated unless `method` is `light`, and the code-animation prompt only when
- *     it names a `referenceVideo`. Left open: image clean and watermark
- *     removal (in-process sharp), and the Messages, Tribe outreach,
+ *     it names a `referenceVideo`. Left open: gallery image clean and
+ *     watermark removal (in-process sharp), and the Messages, Tribe outreach,
  *     autobiography, identity-goal and insights AI routes, whose transports
  *     are tool-free (an HTTP chat completion or the sandboxed Codex text turn).
+ *     The remainder of the audit gated the routes listed under "Pre-guard
+ *     audit, remainder" below: ffmpeg/ffprobe over caller-supplied, uploaded,
+ *     gallery or peer-pulled media, the headless composition browser, local
+ *     Python/Docker/PM2 work, host data and secrets, the operator's signed-in
+ *     browser, external account writes, agent and LLM work, resets that put
+ *     held agent work back in rotation, and Eidoverse identity and controller
+ *     configuration. Per request: the standalone image clean in GPU mode (the
+ *     handler checks its query), Brain settings that arm or retarget the
+ *     scheduled digest (the handler compares the stored value), Music Video
+ *     document import and accept (the handler starts the browser overlay check
+ *     only with host control), voice config (the runtime reconcile likewise),
+ *     and the body splits in COMPILED_BODY_ROUTES. Left open with a specific
+ *     reason in REVIEWED_OPEN_MUTATIONS (server/hostControlCoverage.test.js):
+ *     fixed read-only probes (`ps`, `du`, `lsof`, `pm2 jlist`), the chiptune
+ *     and waveform renders (a fixed ffmpeg encode of audio PortOS synthesized), TTS
+ *     synthesis on an installed runtime (configured inference), and selection
+ *     among already-configured providers that arms nothing.
  *   - Importer, Brain and analytics AI (#11036): classify/analyze/retry-issues,
  *     model-personality run, goal-scorecard narrative, Brain capture (it can
  *     dispatch classification or repository intake), inbox retry, digest/review
@@ -158,7 +175,9 @@
  *     require operator authority. Head training reads git/forge history;
  *     adoption/discard changes the classifier admitting agent work.
  *   - settings: other feature toggles and the Eidoverse host bridge (they arm
- *     PortOS's own integrations or open a listener), orchestration profiles,
+ *     PortOS's own integrations or open a listener; the eidoverse and
+ *     docker-containment toggles launch or tear down host executables and are
+ *     gated by path), orchestration profiles,
  *     AI assignments and credentials (they choose among configured providers
  *     or store a key). The `PUT /api/settings` and `PUT /api/cos/config`
  *     slices that change execution policy are gated per request body — see
@@ -188,9 +207,12 @@
  *     `llm.tools.enabled` and `llm.codeAgent` are the voice agent's
  *     instructions or the switch that arms its coding-agent tool, and
  *     `stt.endpoint` receives microphone audio and returns the transcript
- *     the agent acts on. `PUT /api/voice/config` is gated only when one of those values would
- *     change (`HOST_CONTROL_VOICE_CONFIG_PATHS`); a whole-config resend and
- *     every other voice setting stay open on that dedicated endpoint.
+ *     the agent acts on. `enabled`, the STT/TTS engines, Core ML and the
+ *     host model/voice paths are what the runtime reconcile starts, installs or
+ *     reads (#13055). `PUT /api/voice/config` is gated only when one of those
+ *     values would change (`HOST_CONTROL_VOICE_CONFIG_PATHS`), and it runs the
+ *     reconcile (PM2, setup script) only for a caller with host control; a
+ *     whole-config resend and every other voice setting stay open.
  *     Generic settings replaces the entire voice root, so even an empty
  *     replacement can reset protected policy and requires operator authority.
  *
@@ -713,7 +735,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // provider that may fall back to a CLI/TUI, or enqueue an agent-backed image
   // job; chiptune publication writes into a managed app repo (#10893). Gate the
   // whole operation, API-first variants included. Deck/track CRUD, progress
-  // reads and the deterministic chiptune library render stay open.
+  // reads and the deterministic chiptune library render stay open (its fixed
+  // ffmpeg encode only reads audio PortOS synthesized, #13055).
   'POST /api/decks/:id/analyze-sample',
   'POST /api/decks/:id/generate-prompts',
   'POST /api/decks/:id/render',
@@ -972,8 +995,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // FableLoom authoring and production (#10668) can dispatch CLI/TUI agents,
   // including API-first fallback and deferred batch resume. Authorize before
   // service reads/writes, run creation or queues. Deterministic CRUD, validation,
-  // shot application, continuity/production planning, cancellation and contained
-  // fal.ai browser automation remain open under their existing contracts.
+  // shot application, continuity/production planning and cancellation remain
+  // open under their existing contracts. fal.ai scene video drives the signed-in
+  // browser and is gated with the pre-guard audit remainder (#13055).
   'POST /api/fableloom/:id/plan/generate',
   'POST /api/fableloom/:id/plan/review',
   'POST /api/fableloom/:id/plan/feedback',
@@ -1140,6 +1164,130 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/mind/start',
   'POST /api/cos/mind/wake',
   'POST /api/cos/mind/resume',
+
+  // Pre-guard audit, remainder (#13055): routes that were open when the
+  // coverage guard landed and turned out to run host work when traced.
+  //
+  // ffmpeg/ffprobe over caller-supplied, uploaded, gallery or peer-pulled
+  // media (the parser surface), like video last-frame and upscale/stitch.
+  'POST /api/music-video/:id/analyze',
+  'POST /api/music-video/:id/analyze/manual',
+  'POST /api/music-video/:id/audio-timing/preview',
+  'POST /api/music-video/:id/audio-timing/apply',
+  'POST /api/music-video/:id/dependency-repairs',
+  'POST /api/music-video/:id/production-review/proof',
+  'POST /api/music-video/:id/revisions/:revisionId/resume',
+  'POST /api/music-video/:id/scenes/:sceneId/continue-from-previous',
+  'POST /api/music-video/:id/scenes/:sceneId/performance-repair',
+  'POST /api/music-video/:id/sharing-copy',
+  'POST /api/music-video/:id/vocal-stem',
+  // Song prepare and choosing a revised song also run Demucs separation and
+  // lyric alignment in Python.
+  'POST /api/music-video/:id/song/prepare',
+  'POST /api/music-video/:id/song-revision/select',
+  'POST /api/music-video/:id/song-revision/track',
+  'POST /api/tracks/:id/audio/upload',
+  'POST /api/tracks/:id/code/render',
+  // The take's WAV comes from a container running caller SuperCollider code;
+  // the chiptune and waveform renders encode audio PortOS synthesized itself.
+  'POST /api/tracks/:id/supercollider/take',
+  'POST /api/media/collections/:id/localize',
+  'POST /api/mood-boards/:id/collage',
+  'POST /api/mood-boards/:id/items/:itemId/extract-frames',
+  'POST /api/sprites/:id/walk/postprocess',
+  'POST /api/sprites/:id/walk/runs/:runId/source-frames/extract',
+  'POST /api/sprites/:id/walk/trim',
+  'PATCH /api/video-gen/history/:id/poster',
+  'POST /api/video-gen/upload',
+  // Headless composition browser (and ffmpeg encode), like the film-look bake.
+  // Document zip import and accept stay open; their handler starts the
+  // background overlay check only for a caller with host control.
+  'POST /api/music-video/:id/production-review/text-check',
+  'POST /api/code-animation/:id/export',
+  'POST /api/code-animation/jobs/:id/poster',
+  'POST /api/html-composition/render',
+  // Local Python, Docker or PM2 work: a continuous-video episode's clip
+  // renders and stitching, a checkpoint preview render, caller SuperCollider
+  // source in a container, re-armed local video dispatch, the piper setup
+  // script (it can brew install), and the PM2 health sweep, which restarts
+  // errored processes. TTS synthesis on an installed runtime stays open as
+  // configured inference, like local-llm test and Pipeline TTS.
+  'POST /api/continuous-video',
+  'POST /api/lora-training/runs/:id/promote-checkpoint',
+  'POST /api/music/supercollider/render',
+  'POST /api/media-jobs/holds/:holdId/resume',
+  'POST /api/voice/piper/fetch',
+  'POST /api/cos/health/check',
+  // Host data and secrets: `tar` over the data directory (removing the archived
+  // day files), the Signal Safe Storage keychain secret and the database it
+  // decrypts (the GET setup check reads them too), and project files under a
+  // caller-named directory.
+  'POST /api/data/:category/archive',
+  'POST /api/signal/sync',
+  'GET /api/signal/setup-check',
+  'POST /api/detect/repo',
+  // Game publication writes asset bytes into the bound managed app's repo,
+  // like chiptune and sprite atlas publication.
+  'POST /api/games/:id/artwork/:bindingId/publish',
+  'POST /api/games/:id/music/:bindingId/publish',
+  // The operator's signed-in browser (#12488 rule): Suno, Pinterest, YouTube,
+  // Spotify, fal.ai, Outlook/Teams token capture and scraping, and the broker
+  // probes that put a privacy subject's details into broker pages.
+  'POST /api/music-video/:id/song-style/suno',
+  'POST /api/tracks/import/suno',
+  'POST /api/mood-boards/:id/pinterest/import',
+  'POST /api/youtube/sync',
+  'POST /api/youtube/playlists/sync',
+  'POST /api/digital-twin/import/spotify/browser/open',
+  'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/fal-video',
+  'POST /api/calendar/sync/:accountId',
+  'POST /api/messages/sync/:accountId',
+  'POST /api/messages/:accountId/:messageId/refresh',
+  'POST /api/messages/fetch-full/:accountId',
+  'POST /api/privacy/scan',
+  'POST /api/privacy/optout',
+  'POST /api/privacy/optout/verify',
+  // External account writes as the operator: Beeper chats, Google Calendar
+  // goal time blocks, and approving a mail draft (the send intent the gated
+  // send checks, like Beeper outbox create and X/Stacker News review).
+  'POST /api/beeper/conversations',
+  'POST /api/beeper/conversations/:id/archive',
+  'POST /api/beeper/conversations/:id/low-priority',
+  'POST /api/digital-twin/identity/goals/:id/schedule',
+  'POST /api/digital-twin/identity/goals/:id/reschedule',
+  'POST /api/messages/drafts/:id/approve',
+  // Agent and LLM work: granted agent-context MCP tools (their HTTP twins are
+  // gated), the Cast & Sets check-in that releases a waiting production run,
+  // review prepare (direction and the shot planner), thumbnail paint (an image
+  // job), custom editorial check instructions sent to a CLI/TUI-capable
+  // runner, and the Writers Room handoff, which writes a Creative Director
+  // project and treatment.
+  'POST /api/agent-context/mcp',
+  'POST /api/music-video/:id/cast-and-sets/approve',
+  'POST /api/music-video/:id/cast-and-sets/skip',
+  'POST /api/music-video/:id/production-review/prepare',
+  'POST /api/music-video/:id/publish-kit/youtube-thumbnail/paint',
+  'POST /api/pipeline/editorial/custom-checks',
+  'PATCH /api/pipeline/editorial/custom-checks/:id',
+  'POST /api/writers-room/works/:id/cd-bridge/send',
+  // Execution policy: a social persona and its provider pins (its PUT twin is
+  // gated), and resets that put held agent work back into rotation — the review
+  // cooldown, task-type learning (reset returns a type to the auto-approved
+  // tier, backfill re-records every run) and schedule failure/drain parks.
+  // A manual sync snapshot apply can replace Digital Twin personas.
+  'POST /api/agents/personalities',
+  'POST /api/cos/app-activity/:appId/clear-cooldown',
+  'POST /api/cos/learning/reset/:taskType',
+  'POST /api/cos/learning/backfill',
+  'POST /api/cos/schedule/reset',
+  'POST /api/sync/:category/apply',
+  // Eidoverse: travel spends this install's pair credential to admit the
+  // owner as a guest elsewhere; world config chooses who the CoS presence
+  // grants ownership to and what it publishes; controller config is what an
+  // armed controller says or builds unattended, as the CoS identity.
+  'POST /api/eidoverse/travel/depart',
+  'PUT /api/eidoverse/world/config',
+  'PATCH /api/eidoverse/world/controllers/:id/config',
 ]);
 
 /**
@@ -1151,6 +1299,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
  * polymorphic, so its other slices stay open.
  */
 export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
+  // The semantic actions (Brain capture, Eidoverse augment/say, tool
+  // recipes) the agent-context MCP may run for local agents (#13055).
+  'agentContext',
   'autoUpdate',
   // Deferred repair policy: verifyCommand runs a shell and autoPromote can
   // apply the repair to the live checkout. Provider pins also select its agent.
@@ -1164,6 +1315,9 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   // Image overrides pick what untrusted code runs in; extra hosts widen install egress.
   'dockerContainment',
   'harnesses',
+  // `privacy.recheck` arms the scheduled broker passes and their autonomy,
+  // the same change as the gated PUT /api/privacy/optout/schedule (#13055).
+  'privacy',
   'seriesAutopilot',
   'telegram',
   'untrustedContent',
@@ -1210,6 +1364,16 @@ export const HOST_CONTROL_VOICE_CONFIG_PATHS = Object.freeze([
   'llm.tools.enabled',
   'llm.codeAgent',
   'stt.endpoint',
+  // What the voice runtime reconcile starts, installs or reads (#13055): the
+  // PM2 whisper-server and its engine, the setup script's Core ML and piper
+  // installs, and the host model and voice paths. The handler reconciles only
+  // for a caller with host control, so every other key stays a record.
+  'enabled',
+  'stt.engine',
+  'stt.coreml',
+  'stt.modelPath',
+  'tts.engine',
+  'tts.piper.voicePath',
 ]);
 
 /**
@@ -1262,7 +1426,8 @@ const COMPILED_BODY_ROUTES = [
   // operation spelling, including the omitted legacy default; Ask promotion to
   // `task` queues a user task. Both match their gated direct routes. Other
   // sources, triage and Brain/Goal promotion stay data-only and open.
-  ['POST /api/review/queue/resolve', (body) => /^\s*cos:/i.test(body?.id) ? ['id'] : []],
+  // A `drafts:` row approves a message draft, the gated draft approve (#13055).
+  ['POST /api/review/queue/resolve', (body) => /^\s*(cos|drafts):/i.test(body?.id) ? ['id'] : []],
   ['POST /api/review/queue/promote-ask', (body) => body?.target === 'task' ? ['target'] : []],
   // LLM drill types reach a caller-chosen provider (#10989). Math, memory and
   // cognitive types stay open, including a missing or unknown type.
@@ -1280,6 +1445,42 @@ const COMPILED_BODY_ROUTES = [
   // A code-animation prompt that studies a reference video runs ffmpeg over
   // it (#13055); a prompt without one only reads records.
   ['POST /api/code-animation/prompt', (body) => body?.referenceVideo ? ['referenceVideo'] : []],
+  // Pre-guard audit, remainder (#13055). Each gates only the named value; the
+  // rest of the body is records, and disarming or disabling stays open except
+  // where disabling itself tears down host executables (Docker containment
+  // here, and the voice runtime through HOST_CONTROL_VOICE_CONFIG_PATHS).
+  // Toggling Docker containment either way runs the docker CLI and removes
+  // containers, networks and volumes, like the eidoverse toggle above.
+  ['PUT /api/settings/features/docker-containment', (body) => bodyKeys(body)],
+  // Enabling a subscription family re-enables its provider records, the gated
+  // provider-edit change.
+  ['PUT /api/usage/subscriptions/enabled', (body) => body?.enabled === true ? ['enabled'] : []],
+  // The automation brief (agent guidance, LLM pins, image tools, Cast & Sets
+  // auto-approval) steers unattended Music Video runs.
+  ['POST /api/music-video', (body) => body?.automation != null ? ['automation'] : []],
+  ['PATCH /api/music-video/:id', (body) => body?.automation != null ? ['automation'] : []],
+  // Approving the Cast & Sets sheet is the check-in's Approve & continue.
+  ['POST /api/music-video/:id/dev-artifacts/:artifactId/review', (body) => body?.status === 'approved' ? ['status'] : []],
+  // A restore re-applies archived Creative Director instructions and provider
+  // pins, or a commission whose kept schedule re-arms its runs; discard only
+  // removes the snapshot.
+  ['POST /api/conflict-journal/:id/resolve', (body) => body?.action === 'discard' ? [] : ['action']],
+  // Whisper start launches whisper-server under PM2.
+  ['POST /api/voice/whisper', (body) => body?.action === 'start' ? ['action'] : []],
+  // Approval records send intent for the gated send; content edits drop it.
+  ['PUT /api/messages/drafts/:id', (body) => body?.status === 'approved' ? ['status'] : []],
+  // Arming the privacy recheck, changing its cron, or turning on autonomous
+  // opt-out email approval or web-form submission.
+  ['PUT /api/privacy/optout/schedule', (body) => ['enabled', 'autoApproveOptOutEmails', 'autoSubmitWebForms']
+    .filter((key) => body?.[key] === true)
+    .concat(typeof body?.cronExpression === 'string' ? ['cronExpression'] : [])],
+  // A broker scan or opt-out purpose adds the subject to the armed broker
+  // passes and authorizes disclosing their details to brokers.
+  ['POST /api/privacy/subjects/:id/consents', (body) => ['broker_scan', 'broker_optout'].includes(body?.scope) ? ['scope'] : []],
+  // A delivering controller speaks or builds in the private world as the CoS
+  // identity on its own schedule, like say/augment; re-arming resumes that.
+  ['POST /api/eidoverse/world/controllers', (body) => body?.deliverEffects === true ? ['deliverEffects'] : []],
+  ['PATCH /api/eidoverse/world/controllers/:id', (body) => body?.armed === true ? ['armed'] : []],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 const bodyRouteEntry = (method, path) => (

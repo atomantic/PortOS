@@ -16,6 +16,14 @@ const voiceConfig = vi.hoisted(() => ({
   getVoiceConfig: vi.fn(),
   updateVoiceConfig: vi.fn(),
 }));
+const bootstrap = vi.hoisted(() => ({
+  reconcile: vi.fn(async () => ({})),
+  verifyBinaries: vi.fn(),
+  verifyModels: vi.fn(),
+  downloadPiperVoice: vi.fn(),
+  startWhisper: vi.fn(),
+  stopWhisper: vi.fn(),
+}));
 vi.mock('../services/auth.js', () => auth);
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(),
@@ -29,14 +37,7 @@ vi.mock('../services/instanceIdentity.js', () => ({
 }));
 vi.mock('../services/voice/config.js', () => voiceConfig);
 vi.mock('../services/voice/health.js', () => ({ checkAll: vi.fn(), invalidateHealthCache: vi.fn() }));
-vi.mock('../services/voice/bootstrap.js', () => ({
-  reconcile: vi.fn(async () => ({})),
-  verifyBinaries: vi.fn(),
-  verifyModels: vi.fn(),
-  downloadPiperVoice: vi.fn(),
-  startWhisper: vi.fn(),
-  stopWhisper: vi.fn(),
-}));
+vi.mock('../services/voice/bootstrap.js', () => bootstrap);
 vi.mock('../services/voice/tts.js', () => ({
   synthesize: vi.fn(),
   listVoices: vi.fn(),
@@ -85,7 +86,8 @@ import voiceRoutes from './voice.js';
 
 const storedVoice = {
   enabled: true,
-  tts: { engine: 'piper', rate: 1 },
+  stt: { engine: 'whisper', coreml: false, modelPath: 'example-models/example.bin' },
+  tts: { engine: 'piper', rate: 1, piper: { voicePath: 'example-voices/example.onnx' } },
   llm: {
     provider: 'ollama',
     model: 'auto',
@@ -132,6 +134,13 @@ const attackBodies = [
   { llm: { tools: { enabled: true, maxIterations: 3 } } },
   { llm: { codeAgent: { ...storedVoice.llm.codeAgent, enabled: true, provider: 'claude' } } },
   { llm: { codeAgent: { ...storedVoice.llm.codeAgent, model: 'example-model' } } },
+  // What the runtime reconcile starts, installs or reads (#13055).
+  { enabled: false },
+  { stt: { engine: 'web-speech' } },
+  { stt: { coreml: true } },
+  { stt: { modelPath: 'example-models/other.bin' } },
+  { tts: { engine: 'qwen3-tts' } },
+  { tts: { piper: { voicePath: 'example-voices/other.onnx' } } },
 ];
 
 beforeEach(() => {
@@ -141,7 +150,7 @@ beforeEach(() => {
   voiceConfig.updateVoiceConfig.mockImplementation(async patch => ({ ...storedVoice, ...patch, saved: true }));
 });
 
-describe('voice config instruction authority (#10990)', () => {
+describe('voice config instruction and runtime authority (#10990, #13055)', () => {
   it('refuses a password-free remote change to the prompt, persona, tools or coding agent', async () => {
     for (const body of attackBodies) {
       for (const path of ['/api/voice/config', '/API/Voice/Config/', '/api/voice/config//']) {
@@ -156,6 +165,7 @@ describe('voice config instruction authority (#10990)', () => {
     const peerPresented = await putConfig(appFor(), attackBodies[0], '/api/voice/config', peerHeaders);
     expect([peerPresented.status, peerPresented.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(voiceConfig.updateVoiceConfig).not.toHaveBeenCalled();
+    expect(bootstrap.reconcile).not.toHaveBeenCalled();
   });
 
   it('refuses legacy Basic when a password is set, and a scoped peer before the config is read', async () => {
@@ -171,9 +181,11 @@ describe('voice config instruction authority (#10990)', () => {
     expect(voiceConfig.updateVoiceConfig).not.toHaveBeenCalled();
   });
 
-  it('lets the same remote caller resend the stored instructions while changing the TTS rate', async () => {
+  it('lets the same remote caller resend the stored instructions and runtime keys while changing the TTS rate, without reconciling', async () => {
     const response = await putConfig(appFor(), {
-      tts: { rate: 1.25 },
+      enabled: true,
+      stt: { modelPath: 'example-models/example.bin', coreml: false, engine: 'whisper' },
+      tts: { rate: 1.25, engine: 'piper', piper: { voicePath: 'example-voices/example.onnx' } },
       llm: {
         provider: 'example-provider',
         systemPrompt: storedVoice.llm.systemPrompt,
@@ -193,9 +205,12 @@ describe('voice config instruction authority (#10990)', () => {
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(voiceConfig.updateVoiceConfig).toHaveBeenCalledTimes(1);
     expect(voiceConfig.getVoiceConfig).toHaveBeenCalledTimes(1);
+    // PM2 and the setup script are host work: the record saves, the runtime is left as it was.
+    expect(response.body.reconciliation).toEqual({ skipped: 'host-control' });
+    expect(bootstrap.reconcile).not.toHaveBeenCalled();
   });
 
-  it('lets a local password-free caller, an operator session and a delegated agent session change every field', async () => {
+  it('lets a local password-free caller, an operator session and a delegated agent session change every field and reconcile', async () => {
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
       [true, '192.0.2.10', { Cookie: 'portos_auth=example-session' }],
@@ -205,9 +220,11 @@ describe('voice config instruction authority (#10990)', () => {
       for (const body of attackBodies) {
         const response = await putConfig(appFor(address), body, '/api/voice/config', headers);
         expect(response.status, JSON.stringify(response.body)).toBe(200);
+        expect(response.body.reconciliation).toEqual({});
       }
     }
     expect(voiceConfig.getVoiceConfig).not.toHaveBeenCalled();
     expect(voiceConfig.updateVoiceConfig).toHaveBeenCalledTimes(attackBodies.length * 3);
+    expect(bootstrap.reconcile).toHaveBeenCalledTimes(attackBodies.length * 3);
   });
 });

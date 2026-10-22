@@ -150,7 +150,8 @@ describe('draft send workflow', () => {
     expect(doubles.sendGmail).not.toHaveBeenCalled();
     await approveDraft('draft-1');
     doubles.getAccount.mockImplementationOnce(async () => {
-      await updateDraft('draft-1', { body: 'Latest approved content', accountId: 'other-account', sendVia: 'playwright' });
+      // A content edit drops approval unless it re-approves (#13055); this one does.
+      await updateDraft('draft-1', { body: 'Latest approved content', status: 'approved', accountId: 'other-account', sendVia: 'playwright' });
       return { id: 'account-1', type: 'gmail' };
     });
     await sendDraft('draft-1');

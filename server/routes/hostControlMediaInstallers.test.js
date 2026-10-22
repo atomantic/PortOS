@@ -231,7 +231,9 @@ describe('media installer operator authority (#9513)', () => {
       expect(response.status, path).toBe(200);
       expect(response.headers['content-type']).toMatch(/^application\/json/);
     }
-    const render = await request(app).post('/api/music/supercollider/render')
+    // Render runs caller SuperCollider source in a container, so it needs host
+    // control (#13055); a local caller still renders without setup.
+    const render = await request(appFor('127.0.0.1')).post('/api/music/supercollider/render')
       .send({ code: 'Pbind()', durationSec: 4, seed: 1 });
     expect(render.status).toBe(202);
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'supercollider', params: {
