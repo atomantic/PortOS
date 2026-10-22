@@ -260,8 +260,8 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   const peers = await getPeers().catch(() => []);
   const peer = peers.find(p => p.instanceId === peerId);
   if (!peer || !peerAllowsOutbound(peer) || !peerHasCategory(peer, recordKind)) return [];
-  const records = await listRecordsForKind(recordKind).catch(() => {
-    console.error(`⚠️ peerSync: backfill inventory unavailable for ${recordKind}/records`);
+  const records = await listRecordsForKind(recordKind).catch((err) => {
+    logFailureWithStack(`⚠️ peerSync: backfill inventory unavailable for ${recordKind} → ${peer.name || peerId}`, err);
     return [];
   });
   if (records.length === 0) return [];
@@ -843,8 +843,8 @@ export async function syncNowForPeer(peerId) {
   if (!peer?.instanceId) return { ok: false };
   for (const kind of PEER_SUBSCRIBABLE_KINDS) {
     if (peerHasCategory(peer, kind)) {
-      await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {
-        console.error(`⚠️ peerSync: syncNow backfill failed for ${kind}`);
+      await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch((err) => {
+        logFailureWithStack(`⚠️ peerSync: syncNow backfill failed for ${kind} → ${peer.name || peer.instanceId}`, err);
       });
     }
   }
@@ -922,8 +922,8 @@ export function installPeerSyncListener() {
         // full-sync peer whose instanceId we only just learned) still back-
         // subscribes every kind here.
         if (peerHasCategory(peer, kind)) {
-          await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {
-            console.error(`⚠️ peerSync: peer:online backfill failed for ${kind}`);
+          await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch((err) => {
+            logFailureWithStack(`⚠️ peerSync: peer:online backfill failed for ${kind} → ${peer.name || peer.instanceId}`, err);
           });
         }
       }

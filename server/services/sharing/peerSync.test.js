@@ -1290,7 +1290,7 @@ describe('peerSync', () => {
       expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
     });
 
-    it('continues peer-online backfill after a kind inventory fails without logging private errors', async () => {
+    it('continues peer-online backfill after a kind inventory fails, logging the peer and cause', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
       const { instanceEvents } = await import('../instanceEvents.js');
@@ -1306,8 +1306,9 @@ describe('peerSync', () => {
       });
       await __drainForTests();
       expect(await findPeerSubscription('peer-a', 'series', 'ser-1')).not.toBeNull();
-      expect(errorLog).toHaveBeenCalledWith('⚠️ peerSync: backfill inventory unavailable for universe/records');
-      expect([...log.mock.calls, ...errorLog.mock.calls].flat().join(' ')).not.toContain('private inventory details');
+      const logged = errorLog.mock.calls.flat().join(' ');
+      expect(logged).toContain('backfill inventory unavailable for universe → A');
+      expect(logged).toContain('private inventory details');
       log.mockRestore();
       errorLog.mockRestore();
     });
