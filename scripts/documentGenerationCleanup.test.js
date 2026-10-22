@@ -1,22 +1,33 @@
-import { expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, expect, it as vitestIt } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createVitestTempFixture, fixtureReadyFailureSource } from './lib/vitestTempRootFixture.js';
+import { ownTestBodies } from '../server/lib/mockPathsDataRoot.js';
+import { createVitestTempFixture, fixtureReadyFailureSource, runFixtureToCompletion } from './lib/vitestTempRootFixture.js';
+
+// Async nested run: a synchronous spawn clock fails with ETIMEDOUT under
+// full-suite load (#13149). The outer budget adds headroom so it is never tighter.
+const RUN_CEILING_MS = 120000;
+
+// A fail-fast failure in another file cancels this body while it awaits the nested
+// run; own it so teardown waits for its `finally` to remove the host (#12924).
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+afterAll(() => owned.drain());
 
 // A sibling fails only once document authoring is inside its provider call.
 // The cancelled body must finish staging its candidate before teardown removes
 // the lazy data root; otherwise that staging write recreates the root (#12254).
-it('settles document authoring before fail-fast data-root cleanup', () => {
+it('settles document authoring before fail-fast data-root cleanup', async ({ signal }) => {
   const host = mkdtempSync(join(tmpdir(), 'mv-document-cancel-'));
   try {
     const fixture = join(host, 'fixture');
     const ready = join(fixture, 'ready');
     const events = join(fixture, 'events');
     const finished = join(fixture, 'finished');
-    const { args, options } = createVitestTempFixture(host, 'server', '');
+    const fixtureRun = createVitestTempFixture(host, 'server', '');
+    const { args, options } = fixtureRun;
     const sourcePath = fileURLToPath(new URL('../server/services/musicVideo/documentGeneration.test.js', import.meta.url));
     const header = "it('preflights selected media before a provider call and stages a reviewable 30-second document', async () => {";
     const generate = "const { document: candidate } = await generateMixedMediaDocument(id, { providerId: 'stub-provider', model: 'fixture-model' });";
@@ -58,9 +69,11 @@ it('settles document authoring before fail-fast data-root cleanup', () => {
     writeFileSync(join(fixture, 'failure.test.js'), fixtureReadyFailureSource(ready));
     args[args.indexOf('--maxWorkers') + 1] = '2';
     args.push('--bail=1', '--testNamePattern', 'preflights selected media before a provider call|controlled sibling failure');
-    const result = spawnSync(process.execPath, args, options);
-    const output = `${result.stdout}\n${result.stderr}`;
-    expect(result.error).toBeUndefined();
+    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS, { signal });
+    if (signal.aborted) return;
+    const phases = [`events=${existsSync(events) ? JSON.stringify(readFileSync(events, 'utf8')) : 'absent'}`, ...['ready', 'finished'].map(name => `${name}=${existsSync(join(fixture, name))}`)].join(' ');
+    const output = `${result.stdout}\n${result.stderr}\nlifecycle phases: ${phases}`;
+    expect(result.error, output).toBeUndefined();
     expect(result.status, output).toBe(1);
     expect(output).toContain('controlled sibling failure');
     expect(readFileSync(events, 'utf8'), output).toBe('provider-ready\nroot-at-resume:true\nauthoring-assertions-complete\nbody-settled\n');
@@ -68,4 +81,4 @@ it('settles document authoring before fail-fast data-root cleanup', () => {
   } finally {
     rmSync(host, { recursive: true, force: true });
   }
-}, 25000);
+}, RUN_CEILING_MS + 15000);

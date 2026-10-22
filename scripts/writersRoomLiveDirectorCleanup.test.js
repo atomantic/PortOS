@@ -1,12 +1,22 @@
-import { expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { afterAll, expect, it as vitestIt } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createVitestTempFixture, fixtureReadyFailureSource } from './lib/vitestTempRootFixture.js';
+import { ownTestBodies } from '../server/lib/mockPathsDataRoot.js';
+import { createVitestTempFixture, fixtureReadyFailureSource, runFixtureToCompletion } from './lib/vitestTempRootFixture.js';
 
-it('drains Live Director writes before cleaning a cancelled test fixture', () => {
+// Async nested run: a synchronous spawn clock fails with ETIMEDOUT under
+// full-suite load (#13149). The outer budget adds headroom so it is never tighter.
+const RUN_CEILING_MS = 120000;
+
+// A fail-fast failure in another file cancels this body while it awaits the nested
+// run; own it so teardown waits for its `finally` to remove the host (#12924).
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+afterAll(() => owned.drain());
+
+it('drains Live Director writes before cleaning a cancelled test fixture', async ({ signal }) => {
   const host = mkdtempSync(join(tmpdir(), 'wr-live-cancel-'));
   try {
     const fixture = join(host, 'fixture');
@@ -14,7 +24,8 @@ it('drains Live Director writes before cleaning a cancelled test fixture', () =>
     const finished = join(fixture, 'finished');
     const resultsPath = join(host, 'results.json');
     const runDiagnosticsPath = join(host, 'run.json');
-    const { args, options } = createVitestTempFixture(host, 'server', '');
+    const fixtureRun = createVitestTempFixture(host, 'server', '');
+    const { args, options } = fixtureRun;
     const sourcePath = fileURLToPath(new URL('../server/services/writersRoom/liveDirector.test.js', import.meta.url));
     const source = readFileSync(sourcePath, 'utf8')
       .replace(/(['"])(\.\.?\/[^'"]+)\1/g, (_, quote, specifier) => JSON.stringify(resolve(dirname(sourcePath), specifier)))
@@ -39,12 +50,11 @@ it('drains Live Director writes before cleaning a cancelled test fixture', () =>
     args[workerIndex + 1] = '2';
     args.push('--bail=1', '--reporter=json', `--outputFile.json=${resultsPath}`,
       `--reporter=${fileURLToPath(new URL('./vitestRunDiagnostics.js', import.meta.url))}`);
-    const result = spawnSync(process.execPath, args, {
-      ...options,
-      env: { ...options.env, PORTOS_CI_DIAGNOSTICS_PATH: runDiagnosticsPath },
-    });
-    const output = `${result.stdout}\n${result.stderr}`;
-    expect(result.error).toBeUndefined();
+    const result = await runFixtureToCompletion({ args, options: { ...options, env: { ...options.env, PORTOS_CI_DIAGNOSTICS_PATH: runDiagnosticsPath } } }, RUN_CEILING_MS, { signal });
+    if (signal.aborted) return;
+    const phases = ['ready', 'finished'].map(name => `${name}=${existsSync(join(fixture, name))}`).join(' ');
+    const output = `${result.stdout}\n${result.stderr}\nlifecycle phases: ${phases}`;
+    expect(result.error, output).toBeUndefined();
     expect(result.status, output).toBe(1);
     expect(existsSync(finished), output).toBe(true);
     expect(output).not.toMatch(/refused|unhandled|test temp leak: wr-live-test-/i);
@@ -58,4 +68,4 @@ it('drains Live Director writes before cleaning a cancelled test fixture', () =>
   } finally {
     rmSync(host, { recursive: true, force: true });
   }
-}, 25000);
+}, RUN_CEILING_MS + 15000);
