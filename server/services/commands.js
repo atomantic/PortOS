@@ -16,6 +16,16 @@ const activeCommands = new Map();
 // Stop an active entry: SIGTERM now, SIGKILL after STOP_GRACE_MS if the child
 // is still alive. Idempotent — a second request during the grace window is
 // absorbed rather than re-signalling or reporting the command as gone.
+// History is best-effort bookkeeping beside the command result: a failed history
+// write must not become an unowned rejection from a spawn listener (#12978).
+async function logHistory(...args) {
+  try {
+    await logAction(...args);
+  } catch (err) {
+    console.error(`❌ Failed to log command history: ${err.message}`);
+  }
+}
+
 function stopEntry(entry) {
   if (entry.stopping) return;
   entry.stopping = true;
@@ -42,7 +52,7 @@ export function executeCommand(command, workspacePath, onData, onComplete, { tim
     const trimmedForLog = (command || '').trim();
     onComplete?.({ success: false, error: validation.error, exitCode: 1 });
     if (trimmedForLog) {
-      logAction('command', null, trimmedForLog.substring(0, 50), { command: trimmedForLog, workspacePath }, false, validation.error);
+      void logHistory('command', null, trimmedForLog.substring(0, 50), { command: trimmedForLog, workspacePath }, false, validation.error);
     }
     return null;
   }
@@ -113,7 +123,7 @@ export function executeCommand(command, workspacePath, onData, onComplete, { tim
         : entry.stopping ? `Stopped (${signal || `exit code ${code}`})`
           : signal ? `Killed by ${signal}` : `Exit code ${code}`;
 
-    logAction('command', null, command.substring(0, 50), {
+    void logHistory('command', null, command.substring(0, 50), {
       command,
       workspacePath,
       exitCode: code,
@@ -137,7 +147,7 @@ export function executeCommand(command, workspacePath, onData, onComplete, { tim
   child.on('error', (err) => {
     if (settled) return;
     settle();
-    logAction('command', null, command.substring(0, 50), { command, workspacePath }, false, err.message);
+    void logHistory('command', null, command.substring(0, 50), { command, workspacePath }, false, err.message);
     onComplete?.({
       success: false,
       error: err.message,

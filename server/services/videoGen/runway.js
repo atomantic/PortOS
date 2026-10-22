@@ -74,7 +74,7 @@ export const cancel = (jobId) => {
   if (!entry) return false;
   entry.aborted = true;
   entry.controller.abort();
-  cancelRunwayTask(entry);
+  void cancelRunwayTask(entry);
   return true;
 };
 

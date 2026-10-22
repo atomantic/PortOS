@@ -109,7 +109,7 @@ export const cancel = (jobId) => {
   if (!entry) return false;
   entry.aborted = true;
   entry.controller.abort();
-  cancelFalRequest(entry);
+  void cancelFalRequest(entry);
   return true;
 };
 
