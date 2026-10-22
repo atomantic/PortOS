@@ -81,22 +81,50 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
   return snapshot(references);
 }
 
-/** Absent legacy evidence is unknown, never an affirmative current verdict. */
-export function musicVideoDependencyChanges(project, dependencies) {
+// A presentation/impact read checks many historical snapshots against the same
+// project. Share current references only within that synchronous read: project
+// objects can be mutated in place between reads, including before a save.
+function createDependencyReader(project) {
+  let song;
+  let scenesById;
+  const sceneReferences = new Map();
+  const windows = new Map();
+  return (ref) => {
+    if (ref.role === 'song') return song ??= songRef(project);
+    if (ref.role === 'window' || ref.role === 'composition') {
+      let byEnd = windows.get(ref.startSec);
+      if (!byEnd) windows.set(ref.startSec, byEnd = new Map());
+      let references = byEnd.get(ref.endSec);
+      if (!references) byEnd.set(ref.endSec, references = {});
+      if (!references[ref.role]) references[ref.role] = ref.role === 'composition'
+        ? compositionRef(project, ref.startSec, ref.endSec)
+        : { assetId: 'scene-set', revision: checksum((project.scenes || []).filter((scene) => intersects(scene, ref.startSec, ref.endSec)).map((scene) => scene.sceneId).sort()) };
+      return references[ref.role];
+    }
+    if (!scenesById) {
+      scenesById = new Map();
+      for (const scene of project.scenes || []) {
+        if (!scenesById.has(scene.sceneId)) scenesById.set(scene.sceneId, scene);
+      }
+    }
+    const scene = scenesById.get(ref.sceneId);
+    if (!scene) return null;
+    let references = sceneReferences.get(scene);
+    if (!references) sceneReferences.set(scene, references = new Map());
+    if (!references.has(ref.role)) references.set(ref.role, slots[ref.role] ? assetRef(scene, ref.role)
+      : ref.role === 'layer' ? layerRef(scene) : null);
+    return references.get(ref.role);
+  };
+}
+
+function dependencyChanges(dependencies, readCurrent) {
   if (!dependencies || dependencies.version !== MUSIC_VIDEO_DEPENDENCY_VERSION || !Array.isArray(dependencies.references)) {
     return [{ role: 'unknown', reason: 'Dependency evidence was not recorded; review again' }];
   }
   const changes = dependencies.references.some((ref) => ref.role === 'window') && !dependencies.references.some((ref) => ref.role === 'song')
     ? [{ role: 'song', reason: 'Song dependency evidence was not recorded; review again' }] : [];
   for (const ref of dependencies.references) {
-    let current;
-    const scene = (project.scenes || []).find((entry) => entry.sceneId === ref.sceneId);
-    if (ref.role === 'song') current = songRef(project);
-    else if (ref.role === 'window') current = { assetId: 'scene-set', revision: checksum((project.scenes || []).filter((scene) => intersects(scene, ref.startSec, ref.endSec)).map((scene) => scene.sceneId).sort()) };
-    else if (ref.role === 'composition') current = compositionRef(project, ref.startSec, ref.endSec);
-    else if (!scene) current = null;
-    else if (slots[ref.role]) current = assetRef(scene, ref.role);
-    else if (ref.role === 'layer') current = layerRef(scene);
+    const current = readCurrent(ref);
     if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
       changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
     }
@@ -104,13 +132,22 @@ export function musicVideoDependencyChanges(project, dependencies) {
   return changes;
 }
 
-export function musicVideoTakeChanges(project, scene, take) {
-  if (take?.dependencies) return musicVideoDependencyChanges(project, take.dependencies);
+/** Absent legacy evidence is unknown, never an affirmative current verdict. */
+export function musicVideoDependencyChanges(project, dependencies) {
+  return dependencyChanges(dependencies, createDependencyReader(project));
+}
+
+function takeChanges(scene, take, readCurrent) {
+  if (take?.dependencies) return dependencyChanges(take.dependencies, readCurrent);
   // Pre-provenance generated clips still recorded their actual source basename.
   if (take?.sourceImageId && take.sourceImageId !== scene.referenceImageId) {
     return [{ role: 'plate', sceneId: scene.sceneId, reason: 'Selected plate changed' }];
   }
   return [];
+}
+
+export function musicVideoTakeChanges(project, scene, take) {
+  return takeChanges(scene, take, createDependencyReader(project));
 }
 
 /** Before a write, materialize legacy provenance from the PRE-image, never new inputs. */
@@ -135,11 +172,12 @@ export function retainMusicVideoDependencies(before, after) {
 
 /** Read-only downstream preview. Generation count is an upper bound, not a price quote. */
 export function musicVideoDependencyImpact(project, performanceChanges = []) {
+  const readCurrent = createDependencyReader(project);
   const shots = [];
   for (const scene of project.scenes || []) {
     const take = selectedTake(scene, 'clip') || (!scene.videoHistoryId
       ? (scene.takes || []).findLast((entry) => entry.kind === 'video' && entry.status === 'rejected') : null);
-    const changes = take ? musicVideoTakeChanges(project, scene, take) : [];
+    const changes = take ? takeChanges(scene, take, readCurrent) : [];
     const audio = performanceChanges.filter((entry) => entry.sceneId === scene.sceneId);
     const unfinished = !scene.videoHistoryId && (project.revisions || []).some((revision) => revision.type === 'dependencies'
       && revision.sections?.some((section) => section.sceneId === scene.sceneId && section.verdict === 'rejected'));
@@ -150,7 +188,7 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
   const affected = new Set(shots.map((shot) => shot.sceneId));
   const evidence = [];
   const check = (kind, id, dependencies, scope = {}) => {
-    const changes = musicVideoDependencyChanges(project, dependencies);
+    const changes = dependencyChanges(dependencies, readCurrent);
     const transitive = (dependencies?.references || []).some((ref) => affected.has(ref.sceneId));
     if (changes.length || transitive) evidence.push({ kind, id, reasons: [...new Set([
       ...changes.map((entry) => entry.reason), ...(transitive ? ['Derived clip is stale'] : []),
@@ -177,8 +215,9 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
 /** Bounded projection for readers: retain verdicts/assets, expose their validity separately. */
 export function presentMusicVideoDependencies(project) {
   if (!project) return project;
+  const readCurrent = createDependencyReader(project);
   const state = (dependencies) => {
-    const changes = musicVideoDependencyChanges(project, dependencies);
+    const changes = dependencyChanges(dependencies, readCurrent);
     return { status: changes.length ? (changes[0].role === 'unknown' ? 'unknown' : 'stale') : 'current',
       reasons: [...new Set(changes.map((change) => change.reason))] };
   };
