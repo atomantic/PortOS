@@ -46,9 +46,7 @@ const { getDataOverview, deleteBackup, invalidateOverviewScan } = await import('
 
 afterAll(() => rmSync(testDataRoot, { recursive: true, force: true }));
 
-beforeEach(async () => {
-  // A strict scan rejects before its sibling category scans finish; let those settle so they don't spill into the next case's call log.
-  await new Promise(resolve => setTimeout(resolve, 10));
+beforeEach(() => {
   invalidateOverviewScan();
   mocks.statErrorPath = null; mocks.countErrorPath = null; mocks.virtualCount = 0;
   rmSync(testDataRoot, { recursive: true, force: true });

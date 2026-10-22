@@ -364,10 +364,8 @@ async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
 // never cached. Busy state and disk capacity are read fresh on every call.
 const OVERVIEW_SCAN_TTL_MS = 30_000;
 const overviewScans = new Map();
-let overviewScanGeneration = 0;
 
 export function invalidateOverviewScan() {
-  overviewScanGeneration++;
   overviewScans.clear();
 }
 
@@ -381,16 +379,23 @@ async function scanDataTree(strict) {
 
   // The root is the sum of its parts: scanning DATA_DIR itself would re-walk
   // every category. Top-level files are sized by allocated blocks to match du.
-  const [dirResults, fileSizes] = await Promise.all([
-    Promise.all(dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name), { strict }))),
-    Promise.all(topFiles.map(f => stat(join(DATA_DIR, f.name)).then(
+  // allSettled: a strict failure waits for its sibling scans rather than
+  // leaving them running unobserved after the rejection.
+  const settled = await Promise.allSettled([
+    ...dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name), { strict })),
+    ...topFiles.map(f => stat(join(DATA_DIR, f.name)).then(
       st => (typeof st.blocks === 'number' ? st.blocks * 512 : st.size),
       (err) => {
         if (strict) throw err;
         return 0;
       },
-    ))),
+    )),
   ]);
+  const failed = settled.find(r => r.status === 'rejected');
+  if (failed) throw failed.reason;
+  const values = settled.map(r => r.value);
+  const dirResults = values.slice(0, dirs.length);
+  const fileSizes = values.slice(dirs.length);
 
   let totalSize = fileSizes.reduce((sum, n) => sum + n, 0);
   let totalFileCount = topFiles.length;
@@ -405,17 +410,12 @@ async function scanDataTree(strict) {
 function getCachedOverviewScan(strict) {
   const cached = overviewScans.get(strict);
   if (cached && Date.now() - cached.at < OVERVIEW_SCAN_TTL_MS) return cached.promise;
-  const generation = overviewScanGeneration;
   const promise = scanDataTree(strict);
   const entry = { at: Date.now(), promise };
   overviewScans.set(strict, entry);
   promise.catch(() => {
     if (overviewScans.get(strict) === entry) overviewScans.delete(strict);
   });
-  // A mutation that landed mid-scan makes this result stale for later callers.
-  promise.then(() => {
-    if (generation !== overviewScanGeneration && overviewScans.get(strict) === entry) overviewScans.delete(strict);
-  }, () => {});
   return promise;
 }
 
