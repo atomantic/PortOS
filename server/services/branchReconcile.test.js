@@ -373,7 +373,24 @@ describe('unverified issue reservations in reconcile', () => {
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('markers untouched'));
     expect(result.cleaned).toEqual(['claim/issue-42']);
     expect(result.claimMarkersHeld).toEqual([{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' }]);
-    expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' || args[0] === 'api')).toBe(false);
+    expect(execGh.mock.calls.some(([args]) => args[0] === 'api' || (args[0] === 'issue' && args[1] !== 'view'))).toBe(false);
+  });
+
+  it.each([
+    [{ state: 'CLOSED', labels: [{ name: 'in-progress' }], assignees: [] }, false],
+    [{ state: 'OPEN', labels: [], assignees: [] }, false],
+    [{ state: 'OPEN', labels: [{ name: 'in-progress' }], assignees: [] }, true],
+    [{ state: 'OPEN', labels: [], assignees: [{ login: 'example-peer' }] }, true],
+    [{ state: 'OPEN' }, true],
+  ])('reads the issue to settle a reservation nobody holds: %j', async (view, held) => {
+    execGh.mockImplementation(async (args) => args[0] === 'issue' ? JSON.stringify(view) : '[]');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'github.com', fullName: 'example/app' });
+    wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
+    git.getBranches.mockResolvedValue([]);
+    const result = await reconcile('/repo');
+    expect(result.claimMarkersHeld.map(hold => hold.issue)).toEqual(held ? [42] : []);
+    expect(execGh.mock.calls.filter(([args]) => args[0] === 'issue').map(([args]) => args.slice(0, 2))).toEqual([['issue', 'view']]);
   });
 
   it('reports unverified reservations separately even when the forge is unavailable', async () => {

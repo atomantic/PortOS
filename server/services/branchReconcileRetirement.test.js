@@ -99,6 +99,8 @@ describe('historical completed-checkout review obligations', () => {
     [{ liveOwnerReason: 'claim-owner-active' }, {}],
     [{ completionPolicyReason: 'pr-completion-human-handoff' }, {}],
     [{ openPr: { isDraft: true } }, {}],
+    [{ openPr: { isDraft: false, headRefOid: head } }, {}],
+    [{ openPr: { isDraft: false, headRefOid: null } }, {}],
     [{ worktreeDirty: true }, {}],
     [{ worktreeStatusUnavailable: true }, {}],
     [{}, { locked: true }], [{}, { managed: false }], [{}, { head: 'b'.repeat(40) }],
@@ -110,6 +112,25 @@ describe('historical completed-checkout review obligations', () => {
     }
     expect(deps.prepare).not.toHaveBeenCalled();
     expect(deps.retire).not.toHaveBeenCalled();
+  });
+
+  it('retires a merged checkout left idle behind its open PR, and keeps one still in use', async () => {
+    const deps = setup();
+    deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
+    const behind = { isMerged: true, openPr: { isDraft: false, headRefOid: 'c'.repeat(40) } };
+    deps.checkoutIdleMs = vi.fn(async () => 2 * 60 * 60 * 1000);
+    expect(await prepareReconcileRetirements(app, scan(behind), deps)).toMatchObject({ retired: [expect.objectContaining({ head })], held: [] });
+    expect(deps.checkoutIdleMs).toHaveBeenCalledWith(tree.path);
+    expect(deps.retire).toHaveBeenCalledWith(expect.objectContaining({ release: expect.objectContaining({ head }) }),
+      { beforeMutation: expect.any(Function), settleMergedReviewObligation: true });
+    deps.retire.mockClear();
+    for (const idle of [5 * 60 * 1000, null]) {
+      deps.checkoutIdleMs = vi.fn(async () => idle);
+      expect(await prepareReconcileRetirements(app, scan(behind), deps)).toMatchObject({ candidates: [], retired: [], held: [] });
+    }
+    expect(await prepareReconcileRetirements(app, scan({ ...behind, isMerged: false }), deps)).toMatchObject({ candidates: [], retired: [] });
+    expect(deps.retire).not.toHaveBeenCalled();
+    expect(deps.prepare).not.toHaveBeenCalled();
   });
 
   it.each(['claim-owner-active', 'retirement-local-objects-missing', 'retirement-submodule-not-uninitialized', 'retirement-policy-not-legacy-completed'])('keeps a fresh preview refusal visible: %s', async reason => {
