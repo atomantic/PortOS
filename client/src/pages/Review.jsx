@@ -441,7 +441,7 @@ export default function Review() {
           role={briefingFullscreen ? 'dialog' : undefined}
           aria-modal={briefingFullscreen ? 'true' : undefined}
           aria-label={briefingFullscreen ? 'Daily Briefing' : undefined}
-          className={`bg-port-card border border-port-border rounded-xl p-4 mt-2 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : ''}`}>
+          className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : 'mt-2'}`}>
           <div className="flex items-center justify-between gap-2 mb-2">
             <h2 className="text-sm font-semibold text-white flex items-center gap-2">
               <FileText size={16} className="text-gray-400" />
