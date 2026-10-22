@@ -487,12 +487,15 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     mockGh(() => listing([
       thread('1201', { owner: 'acme', repo: 'app' }),
       thread('1202', { owner: 'acme', repo: 'app', commentUrl: 'https://api.github.com/repos/acme/app/issues/comments/9' }),
+      // Its latest comment cannot be read, so it is not assumed to be yours.
+      thread('1208', { owner: 'acme', repo: 'app', commentUrl: 'https://api.github.com/repos/acme/app/issues/comments/404' }),
       alert('1203'), alert('1204'), alert('1205'),
       thread('1206', { owner: 'acme', repo: 'app', reason: 'review_requested' }),
       thread('1207', { owner: 'acme', repo: 'app', reason: 'review_requested' }),
     ]), {
       'repos/acme/app/pulls/1201': { author: account.login, association: 'OWNER', state: 'open', merged: false },
       'repos/acme/app/pulls/1202': { author: account.login, association: 'OWNER', state: 'open', merged: false },
+      'repos/acme/app/pulls/1208': { author: account.login, association: 'OWNER', state: 'open', merged: false },
       'repos/acme/app/issues/comments/9': { author: 'visitor', association: 'NONE', mentions: 0 },
       'repos/acme/app/collaborators/visitor/permission': { user: { login: 'visitor' }, permission: 'read' },
       'repos/acme/app/pulls/1206': { author: 'mallory', association: 'NONE', state: 'open', merged: false },
@@ -511,7 +514,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect((await getNotification(account.id, '1204')).evidence.handoff).toMatchObject({ lane: 'dependency-updates', requestId: 'demand-dependency-updates', batchSize: 3 });
     // Your own PR waits for you only when someone outside commented on it.
     const needsYou = (await listNotifications({ accountId: account.id, view: 'needs-you' })).notifications.map((row) => row.threadId);
-    expect(needsYou).toEqual(['1202']);
+    expect(needsYou.sort()).toEqual(['1202', '1208']);
     const handled = (await listNotifications({ accountId: account.id, view: 'handled' })).notifications;
     // Autopilot includes Assist, which marks it done on GitHub.
     expect(handled.find((row) => row.threadId === '1201')).toMatchObject({ state: 'done', decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' });

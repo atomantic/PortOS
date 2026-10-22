@@ -144,7 +144,9 @@ async function triageThread(row, ctx) {
   const signalSet = new Set(actorLogin
     ? await signalsFor(actorLogin, trust, subjectAuthor ? subject.association : comment?.association, subjectAuthor ? 0 : comment?.mentions ?? 0)
     : []);
-  let commenterTrust = null;
+  // A latest comment that could not be read counts as outside, so your own PR
+  // never leaves Needs you on a comment nobody checked.
+  let commenterTrust = commentPath && commentPath !== subjectPath && !commenter ? 'outside' : null;
   if (commenter && subjectAuthor && commenter.toLowerCase() !== subjectAuthor.toLowerCase()) {
     commenterTrust = await trustOf(commenter);
     for (const signal of await signalsFor(commenter, commenterTrust, comment.association, comment.mentions ?? 0)) signalSet.add(signal);
