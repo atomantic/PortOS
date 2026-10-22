@@ -10,6 +10,23 @@ import * as api from '../../../services/api';
 import PublishedTab from './PublishedTab.jsx';
 
 describe('PublishedTab', () => {
+  it('shows a retryable error instead of a spinner when the account load fails', async () => {
+    api.getPlatformAccounts
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue([{ id: 'account-1', status: 'active', credentials: { username: 'example-user' } }]);
+    api.getAgentPublished.mockResolvedValue({ posts: [], comments: [] });
+
+    render(<PublishedTab agentId="agent-1" />);
+
+    expect(await screen.findByText(/Could not load platform accounts/)).toBeInTheDocument();
+    expect(screen.queryByText('Loading')).not.toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByRole('button', { name: 'Refresh' })).toBeEnabled();
+    expect(api.getPlatformAccounts).toHaveBeenLastCalledWith('agent-1', null, { silent: true });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     api.getPlatformAccounts.mockResolvedValue([{

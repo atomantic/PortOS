@@ -12,7 +12,7 @@ const page = (action, count, prefix = 'a') => Array.from({ length: count }, (_, 
   id: `${prefix}-${i}`, action, status: 'completed', timestamp: `2026-08-23T00:${String(59 - i).padStart(2, '0')}:00.000Z`,
 }));
 
-describe('ActivityTab filter paging', () => {
+describe('ActivityTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -33,5 +33,24 @@ describe('ActivityTab filter paging', () => {
     expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(
       50, ['agent-1'], '2026-08-23T00:10:00.000Z', 'post'
     );
+  });
+
+  it('shows a retryable error instead of an endless spinner when the activity load fails', async () => {
+    api.getAgentActivityTimeline
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce([]);
+
+    render(<ActivityTab agentId="agent-1" />);
+
+    expect(await screen.findByText(/Could not load activity log/)).toBeInTheDocument();
+    expect(screen.queryByText('Loading activity')).not.toBeInTheDocument();
+    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, null, { silent: true });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Activity Log' })).toBeInTheDocument();
+    expect(api.getAgentActivityTimeline).toHaveBeenCalledTimes(2);
   });
 });

@@ -7,6 +7,7 @@ import { filterSelectableModels } from '../../../utils/providers';
 import { providerModeSelectionPolicy } from '../../../utils/providerSelection';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
+import ListLoadError from '../../ui/ListLoadError';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
 import { DEFAULT_AVATAR_COLOR } from '../../../themes/portosThemes';
@@ -24,10 +25,12 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   // Providers state (for AI config section)
   const [providers, setProviders] = useState([]);
+  const [providersError, setProvidersError] = useState(false);
 
   // Accounts state
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountsError, setAccountsError] = useState(false);
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [accountForm, setAccountForm] = useState({
     platform: 'moltbook',
@@ -74,14 +77,19 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   }, [topicsKey, quirksKey]);
 
   const fetchAccounts = useCallback(async () => {
-    const data = await api.getPlatformAccounts(agentId);
-    setAccounts(data);
-    setAccountsLoading(false);
+    setAccountsLoading(true);
+    setAccountsError(false);
+    await api.getPlatformAccounts(agentId, null, { silent: true })
+      .then((data) => setAccounts(data))
+      .catch(() => setAccountsError(true))
+      .finally(() => setAccountsLoading(false));
   }, [agentId]);
 
   const fetchProviders = useCallback(async () => {
-    const data = await api.getProviders();
-    setProviders((data.providers || []).filter(p => p.enabled));
+    setProvidersError(false);
+    await api.getProviders({ silent: true })
+      .then((data) => setProviders((data.providers || []).filter(p => p.enabled)))
+      .catch(() => setProvidersError(true));
   }, []);
 
   const fetchStats = useCallback(async () => {
@@ -537,6 +545,9 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
             <p className="text-xs text-gray-500 mb-3">
               Content, engagement, and challenge solving read public Moltbook text and list text API providers only. A saved CLI or TUI stays listed, and that run skips instead of switching provider. System Default sends comments, replies, and verification challenges to an eligible Abuse Guard text API provider. Original posts use the globally active provider.
             </p>
+            {providersError && (
+              <ListLoadError what="AI providers" onRetry={fetchProviders} className="mb-3" />
+            )}
             <div className="space-y-3">
               {[
                 { key: 'content', label: 'Content Generation', desc: 'Posts, comments, replies', selectionPolicy: providerModeSelectionPolicy('direct-api') },
@@ -680,6 +691,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
             {accountsLoading ? (
               <p className="text-sm text-gray-400">Loading accounts...</p>
+            ) : accountsError ? (
+              <ListLoadError what="platform accounts" onRetry={fetchAccounts} />
             ) : accounts.length === 0 ? (
               <p className="text-sm text-gray-500 text-center py-4">No platform accounts linked to this agent</p>
             ) : (
