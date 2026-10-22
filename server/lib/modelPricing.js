@@ -303,8 +303,6 @@ export function resolveModelRates(providerId, model) {
   return { ...withCacheRates(FALLBACK_RATES), matched: 'fallback' };
 }
 
-// The concurrency gate and the cost report share isLoopbackEndpoint's answer
-// for what "local" means; localEndpoint.js is dependency-free so this stays a leaf.
 const FREE_ID = /ollama|lmstudio|lm-studio/i;
 
 // A record derived from a service instance (#7563) carries the plan the user
