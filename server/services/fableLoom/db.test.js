@@ -11,8 +11,9 @@
  */
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
-import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { checkHealth, ensureSchema, query, close, withTransaction } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
+import { toPgJson } from '../../lib/pgJson.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -80,6 +81,53 @@ describe.skipIf(!runDb)('fableLoom DB adapter round-trip', () => {
     await db.writeRaw('loom-b', L('loom-b', { updatedAt: '2026-02-01T00:00:00.000Z' }));
     const all = await db.listRaw();
     expect(all.map((r) => r.id)).toEqual(['loom-b', 'loom-a']);
+  });
+
+  it('waits for an in-flight video attachment before taking the retirement snapshot', async () => {
+    const saved = L('loom-pinned', { episodes: [{ nodes: [{ videoHistoryId: 'saved-final' }] }] });
+    await db.writeRaw(saved.id, L(saved.id));
+    const ready = Promise.withResolvers();
+    const commit = Promise.withResolvers();
+    const writer = withTransaction(async client => {
+      await client.query('UPDATE fableloom_stories SET data = $2::jsonb WHERE id = $1', [saved.id, toPgJson(saved)]);
+      ready.resolve();
+      await commit.promise;
+    });
+    writer.catch(ready.reject);
+    await ready.promise;
+    const snapshot = db.withMediaReferences(owners => owners);
+    try {
+      await expect.poll(async () => (await query("SELECT count(*)::int AS count FROM pg_locks WHERE relation = 'fableloom_stories'::regclass AND mode = 'ShareLock' AND NOT granted")).rows[0].count).toBe(1);
+    } finally {
+      commit.resolve();
+      await writer;
+    }
+    expect(await snapshot).toEqual([saved]);
+  });
+
+  it('holds later writes until retirement settles and releases the fence after failure', async () => {
+    const saved = L('loom-pinned');
+    await db.writeRaw(saved.id, saved);
+    const ready = Promise.withResolvers();
+    const settle = Promise.withResolvers();
+    const retirement = db.withMediaReferences(async () => {
+      ready.resolve();
+      await settle.promise;
+      throw new Error('Retirement failed');
+    });
+    retirement.catch(ready.reject);
+    const failure = expect(retirement).rejects.toThrow('Retirement failed');
+    await ready.promise;
+    const changed = { ...saved, videoHistoryId: 'saved-final' };
+    const writer = db.writeRaw(saved.id, changed);
+    try {
+      await expect.poll(async () => (await query("SELECT count(*)::int AS count FROM pg_locks WHERE relation = 'fableloom_stories'::regclass AND mode = 'RowExclusiveLock' AND NOT granted")).rows[0].count).toBe(1);
+      expect(await db.readRaw(saved.id)).toEqual(saved);
+    } finally {
+      settle.resolve();
+      await Promise.all([failure, writer]);
+    }
+    expect(await db.readRaw(saved.id)).toEqual(changed);
   });
 
   it('listIds returns live and tombstoned ids alike', async () => {

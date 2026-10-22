@@ -11,7 +11,7 @@
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
-import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
+import { createFileWriteQueue, createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createPgFileFacade, resolvePgBackend } from '../../lib/pgFileFacade.js';
 
 const TYPE_SCHEMA_VERSION = 1;
@@ -27,6 +27,7 @@ function assertId(id) {
 const loomsDir = () => join(PATHS.data, 'fableloom');
 
 function makeFileBackend() {
+  const queueMediaWrite = createFileWriteQueue();
   const collection = createCollectionStore({
     dir: loomsDir(),
     type: 'fableloom',
@@ -38,6 +39,7 @@ function makeFileBackend() {
     name: 'file',
     readRaw: (id) => collection.loadOneRaw(id),
     listRaw: () => collection.loadAll(),
+    withMediaReferences: work => queueMediaWrite(async () => work((await collection.loadAll()).filter(r => r?.deleted !== true))),
     listIds: () => collection.listIds(),
     // The file layout can't project — `deleted` lives inside each record, so
     // a live-only or tombstone-cutoff id list means reading them all (no
@@ -59,8 +61,8 @@ function makeFileBackend() {
       }
       return out;
     },
-    writeRaw: (id, record) => collection.saveOneNow(id, record),
-    deleteRaw: (id) => collection.deleteOneNow(id),
+    writeRaw: (id, record) => queueMediaWrite(() => collection.saveOneNow(id, record)),
+    deleteRaw: (id) => queueMediaWrite(() => collection.deleteOneNow(id)),
     verify: () => collection.verifySchemaVersion(),
   };
 }
@@ -70,6 +72,7 @@ function makePgBackend(db) {
     name: 'postgres',
     readRaw: db.readRaw,
     listRaw: db.listRaw,
+    withMediaReferences: db.withMediaReferences,
     listIds: db.listIds,
     listLiveIds: db.listLiveIds,
     listTombstoneIdsBefore: db.listTombstoneIdsBefore,
@@ -102,6 +105,8 @@ export const readRaw = async (id) => {
 };
 
 export const listRaw = async () => (await facade.getBackend()).listRaw();
+
+export const withLoomMediaReferences = async work => (await facade.getBackend()).withMediaReferences(work);
 
 /** Every loom id (live AND tombstones) — used by tombstoneGc's ALL_ID_LISTERS. */
 export const listIds = async () => (await facade.getBackend()).listIds();

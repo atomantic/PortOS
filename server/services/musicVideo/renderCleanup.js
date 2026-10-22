@@ -51,12 +51,13 @@ const renderFiles = entry => [safeUnder(PATHS.videos, entry.filename),
   ...Array.from({ length: 9 }, (_, i) => safeUnder(PATHS.videoThumbnails, `${entry.id}-f${i + 1}.jpg`)),
 ].filter(Boolean);
 
-async function finalInventory(projectId, history, pending = [], boardOwners = null) {
+async function finalInventory(projectId, history, pending = [], boardOwners = null, loomOwners = null) {
   const project = await requireProject(projectId);
-  const [{ listCollections }, timeline, director, { listBoards }, { isPublishKitBuildActive }, { listJobs }] = await Promise.all([
+  const [{ listCollections }, timeline, director, { listBoards }, { isPublishKitBuildActive }, { listJobs }, looms] = await Promise.all([
     import('../mediaCollections.js'), import('../videoTimeline/local.js'), import('../creativeDirector/local.js'),
     import('../moodBoard/db.js'),
     import('./publishKit.js'), import('../mediaJobQueue/index.js'),
+    import('../fableLoom/store.js'),
   ]);
   // Completed run receipts describe history, rather than a live media dependency.
   const projects = (await listProjects()).map(({ productionRuns, autonomousRun, ...record }) => ({
@@ -64,7 +65,8 @@ async function finalInventory(projectId, history, pending = [], boardOwners = nu
     autonomousRun: autonomousRun?.status === 'completed' ? null : autonomousRun,
   }));
   const owners = [projects, listJobs().filter(job => ['queued', 'running'].includes(job.status)),
-    ...(await Promise.all([listCollections(), timeline.listProjects(), director.listProjects(), boardOwners ?? listBoards()]))].flat();
+    ...(await Promise.all([listCollections(), timeline.listProjects(), director.listProjects(), boardOwners ?? listBoards(),
+      loomOwners ?? looms.listRaw().then(records => records.filter(record => record?.deleted !== true))]))].flat();
   const kitActive = isPublishKitBuildActive(projectId);
   const current = history.find(entry => entry.id === project.renderHistoryId);
   const hasCurrent = current && await size(safeUnder(PATHS.videos, current.filename)) > 0;
@@ -92,7 +94,8 @@ export async function cleanupSupersededFinals(projectId, { replacementId = null,
   // One writer owns the shared journal across history commits and file retirement.
   const retire = () => cleanupWrites(() => withBackupAssetPublication(async () => {
     const { withBoardMediaReferences } = await import('../moodBoard/db.js');
-    return withProjectMediaMutation(() => withBoardMediaReferences(async boardOwners => {
+    const { withLoomMediaReferences } = await import('../fableLoom/store.js');
+    return withProjectMediaMutation(() => withBoardMediaReferences(boardOwners => withLoomMediaReferences(async loomOwners => {
       const pending = new Map((await readPending()).map(entry => [entry.id, entry]));
       let retiring = [];
       let retainedFiles;
@@ -100,7 +103,7 @@ export async function cleanupSupersededFinals(projectId, { replacementId = null,
       return (async () => {
         await mutateVideoHistory(async history => {
           const entries = retirementEntries(history, [...pending.values()]);
-          const { project, finals } = await finalInventory(projectId, history, [...pending.values()], boardOwners);
+          const { project, finals } = await finalInventory(projectId, history, [...pending.values()], boardOwners, loomOwners);
           if (replacementId && project.renderHistoryId !== replacementId) return HISTORY_UNCHANGED;
           const eligible = new Set(finals.filter(entry => !entry.reason).map(entry => entry.id));
           retiring = entries.filter(entry => eligible.has(entry.id));
@@ -127,7 +130,7 @@ export async function cleanupSupersededFinals(projectId, { replacementId = null,
         })().finally(() => savePending(pending));
         return removed;
       })().finally(() => { if (retiring.length) musicVideoEvents.emit('render-cleanup', { projectId }); });
-    }));
+    })));
   }));
   return reserved ? retire() : withRenderCleanupReservation(projectId, retire);
 }
