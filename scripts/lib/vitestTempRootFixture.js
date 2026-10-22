@@ -111,6 +111,20 @@ it('controlled sibling failure', async ({ signal }) => {
 // this only bounds a hang.
 const WATCH_READY_MS = 120000;
 const FIXTURE_RUN_CEILING_MS = 120000;
+const WATCH_IDLE_LINE = 'Waiting for file changes';
+const WATCH_EDIT_RETRY_MS = 5000;
+
+function waitUntil(predicate, signal) {
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (predicate()) { clearInterval(timer); signal.removeEventListener('abort', onAbort); resolve(); }
+    };
+    const onAbort = () => { clearInterval(timer); reject(fixtureAborted(signal)); };
+    const timer = setInterval(check, READY_POLL_MS);
+    if (signal.aborted) onAbort();
+    else { signal.addEventListener('abort', onAbort, { once: true }); check(); }
+  });
+}
 
 // `sweepGroup` also signals after the leader exited: its detached group can
 // outlive it (a worker holding the output pipes), and the pgid stays valid
@@ -231,8 +245,21 @@ export async function runWatchConfigRestart(host, workspace, inspect) {
   };
   try {
     const first = await readMark(1);
-    appendFileSync(wrapper, '// force a config restart\n');
-    const restarted = await readMark(2);
+    // run-1 is written from inside the first test, possibly before the watcher has
+    // registered the config; an edit in that window is never observed (#12932).
+    await waitUntil(() => output.includes(WATCH_IDLE_LINE), abort.signal);
+    // Still re-append on a cadence: each edit is idempotent for the fixture, and a
+    // missed one is retried inside the WATCH_READY_MS bound.
+    const restartFile = join(marks, 'run-2.json');
+    const edit = () => { if (!existsSync(restartFile)) appendFileSync(wrapper, '// force a config restart\n'); };
+    edit();
+    const retry = setInterval(edit, WATCH_EDIT_RETRY_MS);
+    let restarted;
+    try {
+      restarted = await readMark(2);
+    } finally {
+      clearInterval(retry);
+    }
     return await inspect({ first, restarted, pid: child.pid });
   } catch (error) {
     error.message += `\n${output}`;
