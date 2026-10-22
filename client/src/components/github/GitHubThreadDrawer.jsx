@@ -77,6 +77,7 @@ export default function GitHubThreadDrawer({ accountId, threadId }) {
               <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Why</h3>
               <p className="text-gray-300">{RULE_LABELS[evidence.rule] || evidence.rule}</p>
               {evidence.actor && <p className="text-xs text-gray-400">Actor <span className="font-mono">@{evidence.actor}</span></p>}
+              {evidence.commenter && <p className="text-xs text-gray-400">Latest comment by <span className="font-mono">@{evidence.commenter}</span></p>}
               {evidence.subjectState && <p className="text-xs text-gray-400">Thread is {evidence.subjectState}</p>}
               {evidence.foldedInto && <p className="text-xs text-gray-400">Same failure as a newer notice</p>}
               {evidence.metadataMissing && <p className="text-xs text-port-warning">GitHub did not return the thread's details; decided from the notification alone.</p>}

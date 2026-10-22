@@ -42,12 +42,12 @@ const runDb = requireDbOrSkip('services/githubNotifications.db.test', dbReady, s
 
 const accountIds = [];
 
-const thread = (id, { updatedAt = '2026-10-01T10:00:00Z', owner = 'octocat', repo = 'hello', title = `Thread ${id}`, reason = 'author', type = 'PullRequest', url } = {}) => ({
+const thread = (id, { updatedAt = '2026-10-01T10:00:00Z', owner = 'octocat', repo = 'hello', title = `Thread ${id}`, reason = 'author', type = 'PullRequest', url, commentUrl = null } = {}) => ({
   id,
   unread: true,
   reason,
   updated_at: updatedAt,
-  subject: { title, type, url: url === undefined ? `https://api.github.com/repos/${owner}/${repo}/pulls/${id}` : url },
+  subject: { title, type, url: url === undefined ? `https://api.github.com/repos/${owner}/${repo}/pulls/${id}` : url, latest_comment_url: commentUrl },
   repository: { full_name: `${owner}/${repo}`, private: false, owner: { login: owner } },
 });
 
@@ -214,6 +214,35 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const detail = await getNotification(account.id, '601');
     expect(detail.evidence).toMatchObject({ rule: 'review-outside-author', actor: 'mallory', repoOwned: true });
     expect(detail.events.map((event) => [event.actor, event.kind])).toEqual([['operator', 'mute'], ['automation', 'triaged']]);
+  });
+
+  it('takes trust from the PR author, so a later comment by you leaves an outside PR in the untrusted lane', async () => {
+    const login = account.login;
+    mockGh(() => listing([
+      thread('651', { owner: login, reason: 'review_requested', commentUrl: `https://api.github.com/repos/${login}/hello/issues/comments/9001` }),
+    ]), {
+      [`repos/${login}/hello/pulls/651`]: { author: 'mallory', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/collaborators/mallory/permission`]: { user: { login: 'mallory' }, permission: 'read' },
+      [`repos/${login}/hello/issues/comments/9001`]: { author: login, association: 'OWNER', mentions: 0 },
+    });
+    await syncAccountNotifications(account.id);
+    const detail = await getNotification(account.id, '651');
+    expect(detail).toMatchObject({ trust: 'outside', decision: 'suggest-untrusted-review' });
+    expect(detail.evidence).toMatchObject({ actor: 'mallory', commenter: login });
+  });
+
+  it('counts sibling threads from one listing as history for the unrelated-repo check', async () => {
+    mockGh(() => listing([
+      thread('661', { owner: 'workorg', repo: 'service', reason: 'mention' }),
+      thread('662', { owner: 'workorg', repo: 'service', reason: 'mention' }),
+    ]), {
+      'repos/workorg/service/pulls/661': { author: 'colleague', association: 'MEMBER', state: 'open', merged: false },
+      'repos/workorg/service/pulls/662': { author: 'colleague', association: 'MEMBER', state: 'open', merged: false },
+      'users/colleague': '2019-01-01T00:00:00Z',
+    });
+    await syncAccountNotifications(account.id);
+    const rows = (await listNotifications({ accountId: account.id })).notifications;
+    expect(rows.map((row) => [row.threadId, row.suspect, row.decision]).sort()).toEqual([['661', false, 'surface'], ['662', false, 'surface']]);
   });
 
   it('folds repeat default-branch CI notices into the newest one', async () => {

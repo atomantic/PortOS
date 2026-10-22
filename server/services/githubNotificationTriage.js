@@ -90,33 +90,49 @@ async function triageThread(row, ctx) {
   const commentPath = repoApiPath(row.latest_comment_api_url, account.host);
   const subject = await reader.subject(subjectPath);
   const comment = commentPath && commentPath !== subjectPath ? await reader.comment(commentPath) : null;
-  const actorLogin = loginOrNull(comment?.author) || loginOrNull(subject?.author);
-  const actorAssociation = comment?.author ? comment.association : subject?.association;
+  const subjectAuthor = loginOrNull(subject?.author);
+  const commenter = loginOrNull(comment?.author);
+  // Trust attaches to the subject's author; a later commenter can only add
+  // suspicion, never lift an outside PR into the trusted lane.
+  const actorLogin = subjectAuthor || commenter;
 
-  const isOwn = actorLogin && ownLogins.some((login) => login.toLowerCase() === actorLogin.toLowerCase());
-  const actorHasWriteAccess = Boolean(actorLogin && !isOwn && repoOwned && repo)
-    && await (await reader.repoTrust(repo)).isTrusted(actorLogin);
-  const actorIsOrgMember = Boolean(actorLogin && !isOwn && account.trust === 'private' && repo)
-    && await reader.orgMember(row.repo_owner, actorLogin);
-  const trust = computeThreadTrust({ actorLogin, ownLogins, repoOwned, actorHasWriteAccess, actorIsOrgMember, accountTrust: account.trust });
+  const trustOf = async (login) => {
+    const isOwn = ownLogins.some((own) => own.toLowerCase() === login.toLowerCase());
+    const actorHasWriteAccess = Boolean(!isOwn && repoOwned && repo) && await (await reader.repoTrust(repo)).isTrusted(login);
+    const actorIsOrgMember = Boolean(!isOwn && account.trust === 'private' && repo) && await reader.orgMember(row.repo_owner, login);
+    return computeThreadTrust({ actorLogin: login, ownLogins, repoOwned, actorHasWriteAccess, actorIsOrgMember, accountTrust: account.trust });
+  };
+  // Any other thread from this repo counts as history, whatever its age: rows
+  // from one sync share a created_at, so an age comparison would see none.
+  let priorThreadsInRepo = null;
+  const priorThreads = async () => {
+    priorThreadsInRepo ??= Number((await query(
+      'SELECT COUNT(*)::int AS n FROM github_notifications WHERE account_id = $1 AND repo_full_name = $2 AND thread_id <> $3',
+      [account.id, row.repo_full_name, row.thread_id],
+    )).rows[0].n);
+    return priorThreadsInRepo;
+  };
+  const signalsFor = async (login, loginTrust, association, mentionCount) => (loginTrust === 'outside'
+    ? spamSignals({
+      trust: loginTrust,
+      actorCreatedAt: await reader.userCreatedAt(login),
+      actorAssociation: association,
+      mentionCount,
+      repoOwned,
+      priorThreadsInRepo: await priorThreads(),
+      reason: row.reason,
+      now,
+    })
+    : []);
 
-  const outsider = trust === 'outside';
-  const priorThreadsInRepo = outsider
-    ? Number((await query(
-      'SELECT COUNT(*)::int AS n FROM github_notifications WHERE account_id = $1 AND repo_full_name = $2 AND thread_id <> $3 AND created_at < $4',
-      [account.id, row.repo_full_name, row.thread_id, row.created_at],
-    )).rows[0].n)
-    : 0;
-  const signals = spamSignals({
-    trust,
-    actorCreatedAt: outsider && actorLogin ? await reader.userCreatedAt(actorLogin) : null,
-    actorAssociation,
-    mentionCount: comment?.mentions ?? 0,
-    repoOwned,
-    priorThreadsInRepo,
-    reason: row.reason,
-    now,
-  });
+  const trust = actorLogin ? await trustOf(actorLogin) : computeThreadTrust({ actorLogin: null });
+  const signalSet = new Set(actorLogin
+    ? await signalsFor(actorLogin, trust, subjectAuthor ? subject.association : comment?.association, subjectAuthor ? 0 : comment?.mentions ?? 0)
+    : []);
+  if (commenter && subjectAuthor && commenter.toLowerCase() !== subjectAuthor.toLowerCase()) {
+    for (const signal of await signalsFor(commenter, await trustOf(commenter), comment.association, comment.mentions ?? 0)) signalSet.add(signal);
+  }
+  const signals = [...signalSet];
 
   const isCi = row.reason === 'ci_activity' || row.subject_type === 'CheckSuite';
   const ciBranch = isCi ? parseCiBranch(row.subject_title) : null;
@@ -141,6 +157,7 @@ async function triageThread(row, ctx) {
       rule,
       signals,
       actor: actorLogin,
+      commenter: commenter && commenter !== actorLogin ? commenter : null,
       repoOwned,
       repoManaged,
       subjectState: subject ? (subject.merged === true ? 'merged' : subject.state || null) : null,
