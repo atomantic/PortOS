@@ -60,6 +60,8 @@ function checkout(host, name, workspace, configName, dependencies) {
   for (const file of ['lib/vitestTempRoot.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
     link(join(REPO, 'scripts', file), join(parent, 'scripts', file));
   }
+  // The data exclusion belongs to the synthetic checkout, like its cache paths.
+  copyFileSync(join(REPO, 'scripts/lib/vitestWatch.js'), join(parent, 'scripts/lib/vitestWatch.js'));
   if (workspace === 'server') {
     // Both configs load this environment relative to themselves. Copy its
     // Node-only support closure intact so setup and teardown run in this checkout.

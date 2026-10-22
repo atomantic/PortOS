@@ -92,6 +92,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const shared = [
     '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
+    'scripts/lib/vitestWatch.js',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
     'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
     'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
