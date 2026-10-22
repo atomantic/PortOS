@@ -126,7 +126,10 @@ grant one.
 
 An always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every plan,
 so no impact scope can drop it. A documentation-only PR therefore still runs the
-server job with those files selected. Two kinds of test qualify:
+server job with those files selected. The one exception is a PR that changes
+only generated data no code or test reads (`GENERATED_DATA_RULES`: the repo-root
+`.quality.json` that `npm run quality:snapshot` publishes): it skips every job,
+and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qualify:
 
 - **Cross-install contract snapshots** — `server/services/taskPromptDefaults.test.js`
   pins the prompt-upgrade contract, and nothing else in the suite notices when

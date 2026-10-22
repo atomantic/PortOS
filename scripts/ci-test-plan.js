@@ -537,6 +537,15 @@ const DOCUMENTATION_RULES = [
   /\.(?:md|mdx|png|jpe?g|gif|webp|svg|ico)$/i,
 ];
 
+// Generated data no code or test reads from this checkout: the repo-root
+// `.quality.json` is the numeric snapshot `appQualitySnapshotFile.js` lands
+// through its own immediately-merged PR. A PR touching only these skips every
+// runner, the always-run guards included — there is nothing for them to check.
+// The hidden-content diff scan in the impact job still reads it.
+const GENERATED_DATA_RULES = [
+  /^\.quality\.json$/,
+];
+
 // Text snapshots are executable test inputs, but their extension is deliberately
 // outside EXECUTABLE_RE. Keep this mapping explicit rather than treating every
 // `.txt` file as a test fixture: an unmapped text artifact must still widen CI.
@@ -766,6 +775,7 @@ const isPythonScript = (path) => PYTHON_SCRIPT_RE.test(path);
 const isExecutable = (path) => EXECUTABLE_RE.test(path) || isPythonScript(path);
 // A documentation directory can also contain runnable contracts and helpers.
 const isDocumentationOnly = (path) => !isExecutable(path) && DOCUMENTATION_RULES.some((rule) => rule.test(path));
+const isGeneratedData = (path) => GENERATED_DATA_RULES.some((rule) => rule.test(path));
 const isServerRunnerFile = (path) => RUNNER_ROOTS.server.some((root) => path.startsWith(root));
 const isClientRunnerFile = (path) => RUNNER_ROOTS.client.some((root) => path.startsWith(root));
 
@@ -1125,14 +1135,17 @@ function buildSuitePlan(changedFiles, {
     });
   }
 
-  const alwaysRun = alwaysRunTests(trackedSet);
+  const dataOnly = changed.length > 0 && changed.every(isGeneratedData);
+  const alwaysRun = dataOnly ? [] : alwaysRunTests(trackedSet);
 
-  const relevant = changed.filter((path) => !isDocumentationOnly(path));
+  const relevant = changed.filter((path) => !isDocumentationOnly(path) && !isGeneratedData(path));
   if (relevant.length === 0) {
     const { server: alwaysRunServer, client: alwaysRunClient } = splitByRunner(alwaysRun);
+    const reason = dataOnly ? 'generated data-only change'
+      : changed.length ? 'documentation-only change' : 'no changed files';
     const plan = {
       full: false,
-      reason: changed.length ? 'documentation-only change' : 'no changed files',
+      reason,
       changedFiles: changed,
       server: alwaysRunServer.length > 0 ? { mode: 'files', files: alwaysRunServer, sources: [] } : skippedRunner(),
       client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient, sources: [] } : skippedRunner(),
