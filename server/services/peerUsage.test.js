@@ -25,7 +25,7 @@ vi.mock('./usage.js', async () => {
   return { ...actual, getUsage: () => localUsage };
 });
 
-const { buildUsageDigest } = await import('./usage.js');
+const { buildUsageDigest, buildUsageReport } = await import('./usage.js');
 const {
   getUsageSnapshot,
   getUsageManifest,
@@ -33,6 +33,7 @@ const {
   getFleetUsage,
   getFleetQuotaEntries,
   getFleetClaudeCodeModels,
+  getFleetRollingCost,
   forgetInstanceUsage,
   PEER_USAGE_FILE,
 } = await import('./peerUsage.js');
@@ -469,6 +470,38 @@ describe('fleet report', () => {
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry() } });
     const outside = await getFleetUsage({ from: '2026-09-01', to: '2026-09-30', providers: [] });
     expect(outside.totals.tokensOut).toBe(0);
+  });
+});
+
+describe('fleet rolling 30-day cost', () => {
+  const dayCost = (usage, day) => buildUsageReport({ [day]: usage.dailyActivity[day] }, { providers: [] }).totals.estimatedCost;
+
+  // Every instance counts — including one marked API-billed, whose spend at API
+  // rates is exactly what this chart totals — and a day leaves the window 30
+  // days later.
+  it('sums every instance over a trailing 30-day window', async () => {
+    const peer = peerEntry();
+    await applyUsageRemote({ instances: { 'inst-peer': peer } });
+    const both = dayCost(localUsage, '2026-08-30') + dayCost(peer.usage, '2026-08-30');
+    expect(both).toBeGreaterThan(0);
+
+    const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-28T12:00:00Z') });
+    expect(series.instanceCount).toBe(2);
+    expect(series.points).toHaveLength(90);
+    const at = (date) => series.points.find((p) => p.date === date).cost;
+    expect(series.points.at(-1).date).toBe('2026-09-28');
+    expect(at('2026-08-29')).toBe(0);
+    expect(at('2026-08-30')).toBeCloseTo(both, 2);
+    expect(at('2026-09-28')).toBeCloseTo(both, 2);
+
+    const later = await getFleetRollingCost({ providers: [], now: new Date('2026-09-29T00:00:00Z') });
+    expect(later.points.at(-1).cost).toBe(0);
+  });
+
+  it('charts this machine alone before any peer has synced', async () => {
+    const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
+    expect(series.instanceCount).toBe(1);
+    expect(series.points.at(-1).cost).toBeCloseTo(dayCost(localUsage, '2026-08-30'), 2);
   });
 });
 
