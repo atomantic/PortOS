@@ -8,7 +8,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { ensureDir, PATHS, UUID_RE, tryReadFile, copyFileGuarded, writeFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
-  findFfmpeg, safeUnder, extractEvaluationFrames, runFfmpegProcess, vfrSyncArgs,
+  FFMPEG_SCAN_TIMEOUT_MS, findFfmpeg, safeUnder, extractEvaluationFrames, runFfmpegProcess, vfrSyncArgs,
 } from '../../lib/ffmpeg.js';
 import {
   TAIL_WINDOW_SECONDS, CANDIDATE_FPS, MAX_CANDIDATES, pickBestFrame,
@@ -46,6 +46,7 @@ async function decodeTailCandidates(ffmpeg, videoPath, candidateDir) {
       '-frames:v', String(MAX_CANDIDATES), '-y', outPattern,
     ],
     stderrTailBytes: 0,
+    timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
   });
   if (!scan.ok && scan.reason?.startsWith('spawn failed: ')) {
     console.log(`⚠️ Anchor candidate scan failed to spawn: ${scan.reason.slice('spawn failed: '.length)}`);

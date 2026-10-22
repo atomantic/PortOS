@@ -10,7 +10,7 @@ import { readFile, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir } from '../../lib/fileCore.js';
-import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { FFMPEG_FRAME_TIMEOUT_MS, FFMPEG_SCAN_TIMEOUT_MS, findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/paths.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
 import { trimTo } from '../../lib/textUtils.js';
@@ -41,6 +41,7 @@ async function detectCuts(ffmpeg, videoPath) {
     args: ['-hide_banner', '-nostats', '-loglevel', 'info', '-i', videoPath, '-an', '-vf', `scale=320:-2,select='gt(scene,${CUT_THRESHOLD})',showinfo`, '-f', 'null', '-'],
     returnStderr: true,
     stderrTailBytes: 400000,
+    timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
   });
   // null, not [], so a failed pass never reads as "no cuts".
   return result.ok ? parseCutTimes(result.stderr) : null;
@@ -50,6 +51,7 @@ async function extractKeyframe(ffmpeg, videoPath, atSec, outputPath) {
   const result = await runFfmpegProcess({
     bin: ffmpeg,
     args: ['-hide_banner', '-loglevel', 'error', '-ss', atSec.toFixed(2), '-i', videoPath, '-frames:v', '1', '-vf', 'scale=1280:-2', '-q:v', '3', '-y', outputPath],
+    timeoutMs: FFMPEG_FRAME_TIMEOUT_MS,
   });
   if (!result.ok) throw new Error(`Reference keyframe failed: ${result.reason}`);
 }
