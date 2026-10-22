@@ -38,7 +38,10 @@ vi.mock('../services/codeAnimation/jobStore.js', () => ({
   saveCodeAnimationHtml: vi.fn(async (id, html) => codeAnimationHtml.set(id, html)),
   saveCodeAnimationJobRecord: vi.fn(async (job) => codeAnimationRecords.set(job.id, job)),
   deleteCodeAnimationJobRecord: vi.fn(async (id) => codeAnimationRecords.delete(id)),
-  codeAnimationJobFiles: vi.fn(async (id) => (codeAnimationHtml.has(id) ? [`/animations/${id}.html`] : [])),
+  codeAnimationJobFiles: vi.fn(async (id) => [
+    ...(codeAnimationHtml.has(id) ? [`/animations/${id}.html`] : []),
+    ...(codeAnimationPosters.has(id) ? [`/animations/${id}.jpg`] : []),
+  ]),
   codeAnimationPosterPath: (id) => `${process.env.PORTOS_TEST_POSTER_DIR}/${id}.jpg`,
   codeAnimationPosterVersions: vi.fn(async (ids) => new Map(ids.filter((id) => codeAnimationPosters.has(id)).map((id) => [id, codeAnimationPosters.get(id)]))),
 }));
@@ -49,6 +52,7 @@ vi.mock('../services/codeAnimation/poster.js', () => ({
     codeAnimationPosters.set(id, 1700000000000);
     return true;
   }),
+  settleCodeAnimationPoster: vi.fn(async () => false),
 }));
 vi.mock('../services/socket.js', () => ({
   // Observe the persisted state at emit time: a notification before a save
@@ -96,7 +100,7 @@ import { getTrack } from '../services/tracks/index.js';
 import { listCodeAnimationJobPage, listCodeAnimationJobRecords, readCodeAnimationHtml, saveCodeAnimationHtml, saveCodeAnimationJobRecord } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
-import { captureCodeAnimationPoster } from '../services/codeAnimation/poster.js';
+import { captureCodeAnimationPoster, settleCodeAnimationPoster } from '../services/codeAnimation/poster.js';
 import routes from './codeAnimation.js';
 
 const makeApp = () => {
@@ -202,6 +206,19 @@ describe('DELETE /api/code-animation/jobs/:id', () => {
     expect(codeAnimationRecords.has(id)).toBe(false);
     expect(emitCodeAnimationChanged).toHaveBeenCalledWith(id, 'deleted');
     expect((await request(app).delete(`/api/code-animation/jobs/${id}`)).status).toBe(404);
+  });
+
+  it('waits for a poster still being drawn, so it goes to the Trash too', async () => {
+    codeAnimationRecords.set(id, finished);
+    codeAnimationHtml.set(id, '<!doctype html>');
+    let drawn;
+    settleCodeAnimationPoster.mockReturnValueOnce(new Promise((resolve) => { drawn = resolve; }));
+    const deleting = request(makeApp()).delete(`/api/code-animation/jobs/${id}`).then((res) => res);
+    await vi.waitFor(() => expect(settleCodeAnimationPoster).toHaveBeenCalledWith(id));
+    codeAnimationPosters.set(id, 1700000000000);
+    drawn(true);
+    expect((await deleting).status).toBe(200);
+    expect(moveToNativeTrash).toHaveBeenCalledWith([`/animations/${id}.html`, `/animations/${id}.jpg`]);
   });
 
   it('keeps the item when the Trash refuses its files', async () => {

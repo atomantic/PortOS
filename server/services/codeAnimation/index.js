@@ -392,16 +392,24 @@ export async function deleteCodeAnimationJob(id, { moveToTrash } = {}) {
   if (job.status === 'running' && activeJobs.has(id)) {
     throw new ServerError('This animation is still generating. Delete it once it finishes.', { status: 409, code: 'CODE_ANIMATION_RUNNING' });
   }
-  const files = await codeAnimationJobFiles(id);
-  if (files.length) {
-    const trash = moveToTrash || (await import('../../lib/nativeTrash.js')).moveToNativeTrash;
-    await trash(files).catch((error) => {
-      throw new ServerError(`Could not move the animation files to the Trash (${error.code || error.message}). Nothing was deleted.`, {
-        status: 500, code: 'CODE_ANIMATION_TRASH_FAILED',
+  // A poster drawn just after completion must land before the files are
+  // listed, or it would be written after the row is gone.
+  await (await import('./poster.js')).settleCodeAnimationPoster(id);
+  // Files and row leave together, as they were published (#9982), so a
+  // snapshot never holds a completed row whose HTML is gone.
+  let files = [];
+  await withBackupAssetPublication(async () => {
+    files = await codeAnimationJobFiles(id);
+    if (files.length) {
+      const trash = moveToTrash || (await import('../../lib/nativeTrash.js')).moveToNativeTrash;
+      await trash(files).catch((error) => {
+        throw new ServerError(`Could not move the animation files to the Trash (${error.code || error.message}). Nothing was deleted.`, {
+          status: 500, code: 'CODE_ANIMATION_TRASH_FAILED',
+        });
       });
-    });
-  }
-  await deleteCodeAnimationJobRecord(id);
+    }
+    await deleteCodeAnimationJobRecord(id);
+  });
   emitCodeAnimationChanged(id, 'deleted');
   console.log(`🗑️ Code animation ${id.slice(0, 8)} deleted (${files.length} file(s) to Trash)`);
   return { id, deleted: true };
