@@ -187,7 +187,7 @@ describe('useMediaJobSse run owner', () => {
     expect(last().closed).toBe(false);
 
     last().emit({ type: 'complete', result: {} });
-    expect(await run).toBe('done');
+    expect(await run).toBe('resolved');
   });
 
   it('a resumed (adopted) job is cancellable by its id', async () => {
