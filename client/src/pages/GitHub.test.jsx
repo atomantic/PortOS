@@ -20,6 +20,7 @@ const mock = vi.hoisted(() => ({
   getGitHubNotifications: vi.fn(),
   syncGitHubNotifications: vi.fn(),
   applyGitHubNotificationAction: vi.fn(),
+  resolveGitHubNotificationWithAgent: vi.fn(),
   getGitHubNotification: vi.fn(),
   getGitHubAutomations: vi.fn(),
   setGitHubNotificationCadence: vi.fn(),
@@ -393,6 +394,25 @@ describe('GitHub inbox tab', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
     expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'done');
     expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+  });
+
+  it('resolves an actionable thread with an agent in one tap, and says why when it cannot', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [
+        { ...NOTIFICATION, agent: { lane: 'pr-reviewer', refused: null } },
+        { ...NOTIFICATION, threadId: '102', title: 'Alert elsewhere', reason: 'security_alert', agent: { lane: 'dependency-updates', refused: 'no-managed-app' } },
+      ],
+      sync: {},
+    });
+    mock.resolveGitHubNotificationWithAgent.mockResolvedValue({ ...NOTIFICATION, decision: 'handed-off', agent: null });
+    renderTab('inbox');
+    expect(await screen.findByText('Add this repo as a PortOS app to resolve it with an agent')).toBeTruthy();
+    const buttons = screen.getAllByRole('button', { name: 'Resolve with agent' });
+    expect(buttons).toHaveLength(1);
+    fireEvent.click(buttons[0]);
+    expect(mock.resolveGitHubNotificationWithAgent).toHaveBeenCalledWith('github-com', '101');
+    // A handed-off thread is something else's now, so it leaves Needs you.
+    await waitFor(() => expect(screen.queryByText('Example change')).toBeNull());
   });
 
   it('undoes Done locally and a mute by re-subscribing', async () => {

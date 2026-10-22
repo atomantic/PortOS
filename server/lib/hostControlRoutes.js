@@ -982,6 +982,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/github/repos/:fullName/unarchive',
   'PUT /api/github/secrets/:name',
   'POST /api/github/secrets/:name/sync',
+  // Resolve with agent queues CoS agent work against the thread's app.
+  'POST /api/github/notifications/:accountId/:threadId/agent',
 
   // Beeper outbox creation records approved send intent; send spends the
   // operator's saved connection, and breaker reset re-arms that capability.

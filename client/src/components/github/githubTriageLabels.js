@@ -6,7 +6,7 @@ export const DECISION_VIEW = {
   surface: { tone: 'accent', label: 'Worth a look' },
   'suggest-review': { tone: 'accent', label: 'Suggest Do:Review' },
   'suggest-untrusted-review': { tone: 'warning', label: 'Suggest Untrusted:Review' },
-  'suggest-mark-read': { tone: 'muted', label: 'Suggest mark read' },
+  'suggest-mark-read': { tone: 'muted', label: 'Closed or merged' },
   'handled-by-pr-workflow': { tone: 'success', label: 'PR workflow has it' },
   duplicate: { tone: 'muted', label: 'Duplicate' },
   'suggest-done': { tone: 'muted', label: 'Suggest done' },
@@ -28,6 +28,7 @@ export const RULE_LABELS = {
   'finished-thread': 'The issue or pull request is already closed or merged',
   'ci-default-branch': 'CI failed on the default branch',
   'ci-watched-by-pr-workflow': 'CI on a branch of a PortOS managed app, which its PR workflow handles',
+  'own-pr-in-managed-repo': 'Activity on your own PR in a PortOS managed app, which its PR workflow handles',
   'ci-other': 'CI result outside the default branch of a repo PortOS does not manage',
   'review-trusted-author': 'Review requested by you or a collaborator with write access',
   'review-outside-author': 'Review requested on your repo by someone without write access',
@@ -58,6 +59,13 @@ export const ACTION_LABELS = {
 export const LANE_VIEW = {
   'pr-reviewer': { label: 'Untrusted:Review', tab: 'pull-requests' },
   'issue-watcher': { label: 'the issue watcher', tab: 'tasks' },
+  'dependency-updates': { label: 'dependency updates', tab: 'tasks' },
+};
+
+// Why Resolve with agent is unavailable for a thread.
+export const AGENT_REFUSED_LABELS = {
+  'private-account': 'Private accounts never hand off to an agent',
+  'no-managed-app': 'Add this repo as a PortOS app to resolve it with an agent',
 };
 
 // Why Autopilot left a thread with you instead of handing it off.

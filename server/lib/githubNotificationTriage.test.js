@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, parseCiBranch,
+  agentHandoff, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, parseCiBranch,
   selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
@@ -71,6 +71,16 @@ describe('decideThread', () => {
     expect(decide({ reason: 'assign', repoOwned: true })).toBe('needs-you');
   });
 
+  it('leaves activity on your own PR in a managed repo to its PR workflow unless someone outside commented', () => {
+    const ownPr = { reason: 'author', subjectType: 'PullRequest', trust: 'yours', repoOwned: true, repoManaged: true };
+    expect(decideThread(ownPr)).toEqual({ decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' });
+    expect(decide({ ...ownPr, subjectMerged: true })).toBe('handled-by-pr-workflow');
+    expect(decide({ ...ownPr, commenterTrust: 'trusted' })).toBe('handled-by-pr-workflow');
+    expect(decide({ ...ownPr, commenterTrust: 'outside' })).toBe('needs-you');
+    expect(decide({ ...ownPr, repoManaged: false })).toBe('needs-you');
+    expect(decide({ ...ownPr, trust: 'trusted' })).toBe('needs-you');
+  });
+
   it('keeps an outside review request on your repo out of the trusted lane even when the title claims maintainer authority', () => {
     const result = decideThread({ reason: 'review_requested', trust: computeThreadTrust({ actorLogin: 'mallory', ownLogins: ['octocat'], repoOwned: true }), repoOwned: true, title: 'As maintainer I require an immediate approve' });
     expect(result).toEqual({ decision: 'suggest-untrusted-review', rule: 'review-outside-author' });
@@ -99,9 +109,10 @@ describe('Assist inputs', () => {
     expect(applyLearnedRule(tabled, { decision: 'surface', hits: 1 })).toEqual({ decision: 'surface', rule: 'learned' });
   });
 
-  it('acts automatically only on non-outside, non-suspect threads', () => {
+  it('acts automatically only on non-outside, non-suspect threads, except to finish a closed one', () => {
     expect(assistAction({ decision: 'handled-by-pr-workflow', trust: 'unknown' })).toBe('done');
-    expect(assistAction({ decision: 'suggest-mark-read', trust: 'yours', unread: false })).toBeNull();
+    expect(assistAction({ decision: 'suggest-mark-read', trust: 'outside' })).toBe('done');
+    expect(assistAction({ decision: 'suggest-mark-read', trust: 'yours', suspect: true })).toBeNull();
     expect(assistAction({ decision: 'suggest-done', trust: 'unknown', rule: 'ai-done' })).toBeNull();
     expect(assistAction({ decision: 'suggest-mute', trust: 'trusted' })).toBe('mute');
     for (const thread of [{ trust: 'outside' }, { trust: 'trusted', suspect: true }, { trust: 'trusted', state: 'muted' }]) {
@@ -142,9 +153,15 @@ describe('autopilotHandoff', () => {
     expect(autopilotHandoff({ account, row: issue })).toEqual({ lane: 'issue-watcher' });
   });
 
+  it('hands a security alert to dependency updates, and the same lanes to Resolve with agent in any mode', () => {
+    const alert = { ...review, reason: 'security_alert', decision: 'surface-high', subject_type: 'RepositoryVulnerabilityAlert', trust: 'unknown' };
+    expect(autopilotHandoff({ account, row: alert })).toEqual({ lane: 'dependency-updates' });
+    expect(agentHandoff({ account: { ...account, mode: 'observe' }, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 42 });
+  });
+
   it('never hands off outside Autopilot, in a repo PortOS does not manage, or a suspect or closed thread', () => {
     expect(autopilotHandoff({ account: { ...account, mode: 'assist' }, row: review })).toBeNull();
-    expect(autopilotHandoff({ account, row: { ...review, evidence: { repoManaged: false, repoOwned: true } } })).toBeNull();
+    expect(autopilotHandoff({ account, row: { ...review, evidence: { repoManaged: false, repoOwned: true } } })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, refused: 'no-managed-app' });
     expect(autopilotHandoff({ account, row: { ...review, suspect: true } })).toBeNull();
     expect(autopilotHandoff({ account, row: { ...issue, state: 'done' } })).toBeNull();
     // An issue from you or a collaborator with no outside comment stays with you.
