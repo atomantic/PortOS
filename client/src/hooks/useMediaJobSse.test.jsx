@@ -190,6 +190,25 @@ describe('useMediaJobSse run owner', () => {
     expect(await run).toBe('resolved');
   });
 
+  it('a double cancel shares one in-flight request', async () => {
+    const pending = deferred();
+    const cancelJob = vi.fn(() => pending.promise);
+    const { result } = renderHook(() => useMediaJobSse('video', { cancelJob }));
+    settle(result.current.start(async () => ({ jobId: 'job-a' })));
+    await act(async () => {});
+
+    let first; let second;
+    await act(async () => {
+      first = result.current.cancel();
+      second = result.current.cancel();
+      pending.resolve({ ok: true });
+      await Promise.all([first, second]);
+    });
+    expect(cancelJob).toHaveBeenCalledTimes(1);
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+  });
+
   it('a resumed (adopted) job is cancellable by its id', async () => {
     const cancelJob = vi.fn(async () => ({}));
     const { result } = renderHook(() => useMediaJobSse('video', { cancelJob }));

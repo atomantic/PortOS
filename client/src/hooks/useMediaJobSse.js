@@ -196,9 +196,14 @@ export function useMediaJobSse(kind, { cancelJob } = {}) {
     const run = runRef.current;
     if (!run) return false;
     if (run.jobId) {
-      await sendCancel(run.jobId);
+      // A repeated click shares the in-flight request instead of racing the
+      // queue into a spurious ALREADY_TERMINAL refusal.
+      run.cancelPending ||= sendCancel(run.jobId).finally(() => { run.cancelPending = null; });
+      await run.cancelPending;
       // The run may have settled (terminal frame, supersede) while the request was in flight.
+      if (run.canceled) return true;
       if (runRef.current !== run || run.ended) return false;
+      run.canceled = true;
       runRef.current = null;
       retire(run, 'canceled');
       return true;
