@@ -265,6 +265,7 @@ const probeMockImpl = vi.hoisted(() => ({
 }));
 
 vi.mock('../../lib/ffmpeg.js', async () => ({
+  FFMPEG_SCAN_TIMEOUT_MS: 15 * 60 * 1000,
   findFfmpeg: vi.fn(async () => '/usr/bin/ffmpeg'),
   vfrSyncArgs: vi.fn(async () => ['-fps_mode', 'vfr']),
   safeUnder: vi.fn((base, file) => (file ? join(base, file) : null)),
