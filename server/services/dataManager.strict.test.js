@@ -42,12 +42,15 @@ vi.mock('./dataManagerBusy.js', () => ({
   updateDetachedBusy: vi.fn(async () => ({ busy: false })),
 }));
 
-const { getDataOverview, deleteBackup, invalidateOverviewScan } = await import('./dataManager.js');
+const { getDataOverview, deleteBackup } = await import('./dataManager.js');
 
+afterAll(() => vi.useRealTimers());
 afterAll(() => rmSync(testDataRoot, { recursive: true, force: true }));
 
+// Each case starts past the overview scan's 30s TTL so no result carries over.
+let clock = Date.now();
 beforeEach(() => {
-  invalidateOverviewScan();
+  vi.useFakeTimers({ toFake: ['Date'], now: (clock += 60_000) });
   mocks.statErrorPath = null; mocks.countErrorPath = null; mocks.virtualCount = 0;
   rmSync(testDataRoot, { recursive: true, force: true });
   mkdirSync(join(testDataRoot, 'cache'), { recursive: true });

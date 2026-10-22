@@ -365,7 +365,7 @@ async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
 const OVERVIEW_SCAN_TTL_MS = 30_000;
 const overviewScans = new Map();
 
-export function invalidateOverviewScan() {
+function invalidateOverviewScan() {
   overviewScans.clear();
 }
 
