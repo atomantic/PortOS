@@ -30,6 +30,7 @@ const {
   listAutomationActivity, undoAutomationAction, listLearnedRules,
 } = await import('./githubNotifications.js');
 const { buildTaskInput } = await import('./githubNotificationsHooks.js');
+const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange } = await import('./githubNotificationAudit.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -76,7 +77,12 @@ function mockGh(respond, forge = {}) {
       actions.push([args[args.indexOf('--method') + 1], path]);
       return '';
     }
+    const method = args[args.indexOf('--method') + 1];
     const endpoint = args[args.indexOf('--method') + 2];
+    if (method !== 'GET') {
+      actions.push([method, endpoint]);
+      return '';
+    }
     if (endpoint in forge) return typeof forge[endpoint] === 'string' ? forge[endpoint] : JSON.stringify(forge[endpoint]);
     throw Object.assign(new Error('HTTP 404'), { ghExitCode: 1, ghStderr: 'HTTP 404' });
   });
@@ -91,6 +97,7 @@ afterAll(async () => {
     await query('DELETE FROM github_notification_sync WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
     await query('DELETE FROM github_notification_events WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
     await query('DELETE FROM github_notification_rules WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
+    await query('DELETE FROM github_notification_audit_changes WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
     await close();
   }
   rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
@@ -346,6 +353,57 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     mockGh(() => listing([mention('953', '2026-10-02T10:00:00Z')]), forge);
     await syncAccountNotifications(account.id);
     expect(await getNotification(account.id, '953')).toMatchObject({ decision: 'suggest-done', rule: 'learned', state: 'open' });
+  });
+
+  it('audits 30 days of notifications, applies an unwatch and a mute only on tap, and undoes both', async () => {
+    const recent = new Date(Date.now() - 86_400_000).toISOString();
+    const watched = (id) => thread(id, { owner: 'acme', repo: 'noisy', reason: 'subscribed', updatedAt: recent });
+    const ci = (id) => thread(id, { owner: 'acme', repo: 'core', reason: 'ci_activity', type: 'CheckSuite', url: null, updatedAt: recent, title: 'CI workflow run failed for feature branch' });
+    let actions = mockGh(() => listing(['1001', '1002', '1003', '1004', '1005'].map(watched).concat([ci('1011'), ci('1012')])), {
+      'user/subscriptions?per_page=100': 'acme/noisy\nacme/core\n',
+    });
+    await syncAccountNotifications(account.id);
+    // Stand in for a managed app's PR workflow owning these CI threads.
+    await query("UPDATE github_notifications SET decision = 'handled-by-pr-workflow' WHERE account_id = $1 AND thread_id IN ('1011','1012')", [account.id]);
+    actions.length = 0;
+
+    const audit = await runAccountAudit(account.id);
+    expect(audit.summary).toMatchObject({ total: 7, acted: 0, repos: 2 });
+    expect(audit.suggestions.map((entry) => entry.id).sort()).toEqual(['mute-handled:acme/core', 'unwatch:acme/noisy']);
+    expect(actions).toEqual([]);
+
+    await applyAuditSuggestion(account.id, 'unwatch:acme/noisy');
+    const muted = await applyAuditSuggestion(account.id, 'mute-handled:acme/core');
+    expect(muted.threadIds).toEqual(['1011', '1012']);
+    expect(actions).toEqual([
+      ['DELETE', 'repos/acme/noisy/subscription'],
+      ['PUT', 'notifications/threads/1011/subscription'],
+      ['PUT', 'notifications/threads/1012/subscription'],
+    ]);
+    await expect(applyAuditSuggestion(account.id, 'unwatch:acme/noisy')).rejects.toMatchObject({ status: 409 });
+    await expect(applyAuditSuggestion(account.id, 'mute-handled:acme/core')).rejects.toMatchObject({ status: 409 });
+    // Audit mutes are not the operator acting, and a later handled thread in
+    // the same repo gets a fresh, unapplied mute card.
+    actions = mockGh(() => listing([ci('1013')]), { 'user/subscriptions?per_page=100': 'acme/core\n' });
+    await syncAccountNotifications(account.id);
+    await query("UPDATE github_notifications SET decision = 'handled-by-pr-workflow' WHERE account_id = $1 AND thread_id = '1013'", [account.id]);
+    const rerun = await runAccountAudit(account.id);
+    expect(rerun.summary.acted).toBe(0);
+    expect(rerun.suggestions.find((entry) => entry.id === 'mute-handled:acme/core')).toMatchObject({ threadIds: ['1013'], applied: false });
+    // A bulk audit mute teaches no learned rule.
+    expect((await listLearnedRules()).filter((rule) => rule.accountId === account.id)).toEqual([]);
+
+    const changes = (await listAuditChanges()).filter((change) => change.accountId === account.id);
+    expect(changes.map((change) => [change.kind, change.repo, change.undone])).toEqual([['mute-handled', 'acme/core', false], ['unwatch', 'acme/noisy', false]]);
+    actions.length = 0;
+    for (const change of changes) await undoAuditChange(change.id);
+    expect(actions).toEqual([
+      ['PUT', 'notifications/threads/1011/subscription'],
+      ['PUT', 'notifications/threads/1012/subscription'],
+      ['PUT', 'repos/acme/noisy/subscription'],
+    ]);
+    expect((await getNotification(account.id, '1011')).state).toBe('open');
+    expect((await listAuditChanges()).filter((change) => change.accountId === account.id).every((change) => change.undone)).toBe(true);
   });
 
   it('runs the scheduled pass without any model call, respecting the poll interval', async () => {

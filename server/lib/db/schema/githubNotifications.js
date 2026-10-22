@@ -69,4 +69,15 @@ export const githubNotificationsDdl = [
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (account_id, repo_full_name, reason, actor)
   )`,
+  // Subscription audit (#12873): each change the operator applied from an
+  // audit card, with what Undo needs to reverse it.
+  `CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
+    id BIGSERIAL PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('unwatch','mute-handled')),
+    repo_full_name TEXT NOT NULL,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    applied_at TIMESTAMPTZ DEFAULT NOW(),
+    undone_at TIMESTAMPTZ
+  )`,
 ];

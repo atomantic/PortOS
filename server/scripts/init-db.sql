@@ -1972,6 +1972,16 @@ CREATE TABLE IF NOT EXISTS github_notification_rules (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (account_id, repo_full_name, reason, actor)
 );
+-- Subscription audit (#12873): changes applied from audit cards, for Undo.
+CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
+  id BIGSERIAL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('unwatch','mute-handled')),
+  repo_full_name TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  applied_at TIMESTAMPTZ DEFAULT NOW(),
+  undone_at TIMESTAMPTZ
+);
 
 -- Beeper conversation mirror (#27). Machine-local mirror of the Beeper Desktop
 -- API — accounts, conversations, messages, participants, attachment metadata,

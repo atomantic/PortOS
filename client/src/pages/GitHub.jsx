@@ -1,14 +1,15 @@
 import { useParams } from 'react-router';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import GitHubAccountsTab from '../components/github/GitHubAccountsTab';
+import GitHubAuditTab from '../components/github/GitHubAuditTab';
 import GitHubAutomationsTab from '../components/github/GitHubAutomationsTab';
 import GitHubInboxTab from '../components/github/GitHubInboxTab';
 import GitHubReposTab from '../components/github/GitHubReposTab';
 
-// Audit joins when its phase ships (#12873).
 export const GITHUB_PAGE_TABS = Object.freeze([
   { id: 'inbox', label: 'Inbox', to: '/devtools/github/inbox' },
   { id: 'automations', label: 'Automations', to: '/devtools/github/automations' },
+  { id: 'audit', label: 'Audit', to: '/devtools/github/audit' },
   { id: 'repos', label: 'Repos', to: '/devtools/github/repos' },
   { id: 'accounts', label: 'Accounts', to: '/devtools/github/accounts' },
 ]);
@@ -25,6 +26,7 @@ export default function GitHub() {
       </div>
       {activeTab === 'inbox' && <GitHubInboxTab />}
       {activeTab === 'automations' && <GitHubAutomationsTab />}
+      {activeTab === 'audit' && <GitHubAuditTab />}
       {activeTab === 'repos' && <GitHubReposTab />}
       {activeTab === 'accounts' && <GitHubAccountsTab />}
     </div>
