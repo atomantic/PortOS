@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Music, Pause, Play, SkipBack, SkipForward, Trash2, Upload } from 'lucide-react';
 import FilePickerButton from '../ui/FilePickerButton';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import toast from '../ui/Toast';
 import { getUploadUrl, uploadFile } from '../../services/api';
 import { formatTimecode } from '../../utils/formatters';
-import { panelHoldSeconds } from '../../../../server/lib/storyboardSongBrief.js';
+import { storyboardTimeline } from '../../../../server/lib/storyboardSongBrief.js';
+import SongMarkers from './SongMarkers';
 import { aspectClass, MUSICAL_ROLE_LABELS, selectedTake, takeSrc } from './storyboardArt';
 
 const controlButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-2 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
@@ -12,33 +14,20 @@ const controlButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justif
 // Portrait frames get a narrower stage so the whole frame stays above the fold.
 const STAGE_WIDTH = { '9:16': 'max-w-[22rem]', '4:5': 'max-w-md', '1:1': 'max-w-xl' };
 
-/** Every panel in board order with its start and end on the animatic clock. */
-function buildTimeline(board) {
-  const out = [];
-  let start = 0;
-  board.beats.forEach((beat, beatIndex) => {
-    for (const panel of beat.panels) {
-      const end = start + panelHoldSeconds(panel);
-      out.push({ panel, beat, beatIndex, number: out.length + 1, start, end });
-      start = end;
-    }
-  });
-  return out;
-}
-
 /**
  * Play: the animatic. Each panel holds for its estimated seconds (or the
- * default), with the beat and the panel's line in small type; a temp track,
- * when attached, plays under it and is the clock while it sounds.
+ * default), and a beat pinned to a song marker starts there; the beat and the
+ * lyric line (or the panel's line) show in small type. A temp track, when
+ * attached, plays under it and is the clock while it sounds.
  */
 export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
-  const timeline = useMemo(() => buildTimeline(board), [board]);
-  const panelsEnd = timeline.at(-1)?.end || 0;
+  const { panels: timeline, end: panelsEnd } = useMemo(() => storyboardTimeline(board), [board]);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioMissing, setAudioMissing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const audioRef = useRef(null);
   const clockRef = useRef({ base: 0, at: 0 });
   const timeRef = useRef(0);
@@ -126,8 +115,15 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
       toast.error(err?.message || 'Could not upload the temp track');
       return null;
     });
-    if (saved?.filename) await onTempTrack({ filename: saved.filename, name: file.name });
+    // A new mix of the same song keeps its section and lyric marks.
+    if (saved?.filename) await onTempTrack({ ...track, filename: saved.filename, name: file.name });
     setUploading(false);
+  };
+
+  const marks = (track?.sections?.length || 0) + (track?.lines?.length || 0);
+  const remove = () => {
+    pause();
+    onTempTrack(null);
   };
 
   const take = selectedTake(current?.panel);
@@ -135,6 +131,11 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
   const nextTake = selectedTake(next?.panel);
   const nextSrc = takeSrc(nextTake, sketchNonce?.(nextTake?.sketchKey));
   const role = current?.beat.musicalRole ? MUSICAL_ROLE_LABELS[current.beat.musicalRole] : null;
+  // The stamped lyric line sounding now, else the panel's own line.
+  const stamped = (track?.lines || []).filter((line) => line.at !== null);
+  const lyric = stamped.length
+    ? stamped.reduce((found, line) => (line.at <= time && (!found || line.at >= found.at) ? line : found), null)?.text || ''
+    : current?.panel.dialogue || '';
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-2">
@@ -161,7 +162,7 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
               </span>
               <div className="absolute inset-x-0 bottom-0 space-y-0.5 p-2 text-center">
                 <p className="port-media-overlay-strong mx-auto w-fit max-w-full truncate rounded px-1 text-[10px]">{current.beat.title || `Beat ${current.beatIndex + 1}`}</p>
-                {current.panel.dialogue && <p className="port-media-overlay-strong mx-auto w-fit max-w-full rounded px-1 text-[11px] line-clamp-2">{current.panel.dialogue}</p>}
+                {lyric && <p className="port-media-overlay-strong mx-auto w-fit max-w-full rounded px-1 text-[11px] line-clamp-2">{lyric}</p>}
               </div>
             </>
           )}
@@ -191,7 +192,7 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
               ariaLabel={uploading ? undefined : 'Replace temp track'}>
               <Upload size={16} aria-hidden="true" /> {uploading ? 'Uploading…' : 'Replace'}
             </FilePickerButton>
-            <button type="button" onClick={() => { pause(); onTempTrack(null); }} aria-label="Remove temp track" className={controlButton}>
+            <button type="button" onClick={() => (marks ? setConfirmRemove(true) : remove())} aria-label="Remove temp track" className={controlButton}>
               <Trash2 size={16} aria-hidden="true" />
             </button>
           </>
@@ -201,7 +202,13 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack }) {
           </FilePickerButton>
         )}
         {audioMissing && <p role="alert" className="basis-full text-xs text-port-warning">The temp track can't be played on this machine. Replace it to hear it here.</p>}
+        {confirmRemove && (
+          <InlineConfirmRow autoFocus aria-label="Remove temp track" className="basis-full" confirmText="Remove"
+            question={`Remove the temp track? Its ${marks} section and lyric mark${marks === 1 ? '' : 's'} go with it, and beats pinned to them are unpinned.`}
+            onConfirm={() => { setConfirmRemove(false); remove(); }} onCancel={() => setConfirmRemove(false)} />
+        )}
       </div>
+      {track && <SongMarkers track={track} time={time} onSeek={seek} onChange={onTempTrack} />}
     </div>
   );
 }

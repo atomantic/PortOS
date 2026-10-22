@@ -77,12 +77,29 @@ describe('storyboards routes', () => {
   it('attaches a temp track from uploads and takes it off again', async () => {
     const { body: board } = await api('post', '/', { name: 'Demo' });
     const set = await api('patch', `/${board.id}`, { tempTrack: { filename: '0a1b2c3d-demo_v2.mp3', name: 'demo v2.mp3' } });
-    expect(set.body.tempTrack).toEqual({ filename: '0a1b2c3d-demo_v2.mp3', name: 'demo v2.mp3' });
+    expect(set.body.tempTrack).toEqual({ filename: '0a1b2c3d-demo_v2.mp3', name: 'demo v2.mp3', sections: [], lines: [] });
     // Only an uploaded audio file: no paths, no other file types.
     expect((await api('patch', `/${board.id}`, { tempTrack: { filename: '../secrets.mp3' } })).status).toBe(400);
     expect((await api('patch', `/${board.id}`, { tempTrack: { filename: '0a1b2c3d-cover.png' } })).status).toBe(400);
     const cleared = await api('patch', `/${board.id}`, { tempTrack: null });
     expect(cleared.body.tempTrack).toBeNull();
+  });
+
+  it('pins a beat to a song section on the temp track, and drops the pin with its marker', async () => {
+    const { body: board } = await api('post', '/', { name: 'Pins' });
+    const beatId = (await api('post', `/${board.id}/beats`, { title: 'Chorus' })).body.beatId;
+    const track = {
+      filename: '0a1b2c3d-demo.mp3', name: 'demo.mp3',
+      sections: [{ id: 'sec-b', label: 'Chorus 1', at: 45.678 }, { id: 'sec-a', label: 'Verse 1', at: 12 }],
+      lines: [{ id: 'line-1', text: 'Here I am', at: null }],
+    };
+    const set = await api('patch', `/${board.id}`, { tempTrack: track });
+    expect(set.body.tempTrack.sections.map((s) => [s.label, s.at])).toEqual([['Verse 1', 12], ['Chorus 1', 45.68]]);
+    expect(set.body.tempTrack.lines).toEqual([{ id: 'line-1', text: 'Here I am', at: null }]);
+    const pinned = await api('patch', `/${board.id}/beats/${beatId}`, { pin: 'sec-b' });
+    expect(pinned.body.beats[0].pin).toBe('sec-b');
+    const unmarked = await api('patch', `/${board.id}`, { tempTrack: { ...track, sections: [] } });
+    expect(unmarked.body.beats[0].pin).toBeNull();
   });
 
   it('treats a deleted board as gone', async () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import StoryboardDetail from './StoryboardDetail';
+import { updateStoryboardBeat } from '../services/api';
 
 const api = vi.hoisted(() => ({
   getStoryboard: vi.fn(),
@@ -316,5 +317,37 @@ describe('StoryboardDetail', () => {
     renderAt('/storyboards/sb-1?brief=open');
     fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
     expect(clipboard.copyToClipboard).toHaveBeenCalledWith(expect.stringContaining('Structure: [Intro]'), 'Song brief copied');
+  });
+
+  it('stamps lyric lines on the temp track and pins a beat to a song mark', async () => {
+    const track = { filename: '0a1b2c3d-demo.mp3', name: 'demo.mp3', sections: [], lines: [] };
+    api.getStoryboard.mockResolvedValue(board({ tempTrack: track }));
+    let latest = board({ tempTrack: track });
+    api.updateStoryboard.mockImplementation((_id, patch) => {
+      latest = { ...latest, ...patch, updatedAt: new Date(Date.parse(latest.updatedAt) + 1000).toISOString() };
+      return Promise.resolve(latest);
+    });
+    renderAt('/storyboards/sb-1?view=play');
+
+    fireEvent.change(await screen.findByLabelText('Lyrics, one line per row'), { target: { value: 'Here I am\n\nStill here' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save lines' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Stamp next line/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Mark section at/ }));
+    await waitFor(() => expect(api.updateStoryboard).toHaveBeenCalledTimes(3));
+    // Each save carries every change before it, in order.
+    const last = api.updateStoryboard.mock.calls[2][1].tempTrack;
+    expect(last.lines.map((line) => [line.text, line.at])).toEqual([['Here I am', 0], ['Still here', null]]);
+    expect(last.sections).toEqual([expect.objectContaining({ label: 'Section 1', at: 0 })]);
+    // The stamped line plays as the lyric over the panel.
+    expect(await screen.findByText('Here I am', { selector: 'p' })).toBeTruthy();
+  });
+
+  it('pins a beat to a song section from its details', async () => {
+    const track = { filename: '0a1b2c3d-demo.mp3', name: 'demo.mp3', sections: [{ id: 'sec-1', label: 'Chorus 1', at: 45.5 }], lines: [] };
+    api.getStoryboard.mockResolvedValue(board({ tempTrack: track }));
+    renderAt('/storyboards/sb-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Beat details' }));
+    fireEvent.change(screen.getByLabelText('Starts at (temp track)'), { target: { value: 'sec-1' } });
+    expect(updateStoryboardBeat).toHaveBeenCalledWith('sb-1', 'beat-1', { pin: 'sec-1' });
   });
 });

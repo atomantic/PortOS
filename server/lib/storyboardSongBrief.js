@@ -4,8 +4,10 @@
  * of each, its energy, mood and lyric theme. Built from the board alone, with
  * no model call, so it is the same text every time the beats are the same.
  *
- * `panelHoldSeconds` is also the animatic's timing: a panel with no estimated
- * seconds holds for the default, so Play and the brief agree on length.
+ * `storyboardTimeline` is the animatic's timing, shared by Play and the
+ * brief so they agree on length: a panel holds for its estimated seconds (the
+ * default when unset), and a beat pinned to a song section or lyric line on
+ * the temp track starts at that time, the beats before it fitted to reach it.
  *
  * Browser-safe: no node-only imports.
  */
@@ -20,7 +22,7 @@ const clock = (sec) => {
 
 export const STORYBOARD_DEFAULT_HOLD_SEC = 3;
 
-export const panelHoldSeconds = (panel) => (panel?.seconds > 0 ? panel.seconds : STORYBOARD_DEFAULT_HOLD_SEC);
+const panelHoldSeconds = (panel) => (panel?.seconds > 0 ? panel.seconds : STORYBOARD_DEFAULT_HOLD_SEC);
 
 
 // How hard each section should hit, as a songwriter would brief it.
@@ -30,13 +32,63 @@ const ROLE_ENERGY = Object.freeze({
 });
 
 /**
+ * Every panel's start and end on the animatic clock, and each beat's span.
+ *
+ * Pins split the board into runs: each run's panels keep their relative
+ * holds, scaled so the run fills the time up to the next pin (from 0 for the
+ * run before the first pin). The run after the last pin plays at its holds.
+ * A pin earlier than the one before it is ignored, so time never runs back.
+ */
+export function storyboardTimeline(board) {
+  const beats = board?.beats || [];
+  const track = board?.tempTrack;
+  const markerTimes = new Map();
+  for (const section of track?.sections || []) markerTimes.set(section.id, section.at);
+  for (const line of track?.lines || []) if (line.at !== null) markerTimes.set(line.id, line.at);
+
+  const anchors = [];
+  let last = -Infinity;
+  beats.forEach((beat, index) => {
+    const at = markerTimes.get(beat.pin);
+    if (at === undefined || at <= last) return;
+    anchors.push({ index, at });
+    last = at;
+  });
+  if (anchors[0]?.index !== 0) anchors.unshift({ index: 0, at: 0, implicit: true });
+
+  const panels = [];
+  const spans = [];
+  anchors.forEach((anchor, runIndex) => {
+    const stop = anchors[runIndex + 1];
+    const runBeats = beats.slice(anchor.index, stop ? stop.index : beats.length);
+    const natural = runBeats.reduce((sum, beat) => sum + beat.panels.reduce((s, panel) => s + panelHoldSeconds(panel), 0), 0);
+    const fitted = !!stop && natural > 0;
+    const scale = fitted ? (stop.at - anchor.at) / natural : 1;
+    let t = anchor.at;
+    runBeats.forEach((beat, offset) => {
+      const beatIndex = anchor.index + offset;
+      const start = t;
+      for (const panel of beat.panels) {
+        const end = t + panelHoldSeconds(panel) * scale;
+        panels.push({ panel, beat, beatIndex, number: panels.length + 1, start: t, end });
+        t = end;
+      }
+      spans.push({ beatId: beat.id, start, end: t, pinned: offset === 0 && !anchor.implicit, fitted });
+    });
+  });
+  return { panels, beats: spans, end: panels.at(-1)?.end || 0 };
+}
+
+/**
  * The song map: one section per beat (beats with no panels still count, at
  * zero length). `estimated` marks a section where some panel had no seconds
  * and held for the default.
  */
 export function storyboardSongSections(board) {
+  const spans = storyboardTimeline(board).beats;
   return (board?.beats || []).map((beat, index) => {
-    const seconds = beat.panels.reduce((sum, panel) => sum + panelHoldSeconds(panel), 0);
+    const span = spans[index];
+    const seconds = span.end - span.start;
     const lines = beat.panels.map((panel) => panel.dialogue.trim()).filter(Boolean);
     return {
       beatId: beat.id,
@@ -44,7 +96,9 @@ export function storyboardSongSections(board) {
       tag: STORYBOARD_MUSICAL_ROLE_LABELS[beat.musicalRole] || null,
       title: beat.title,
       seconds: Math.round(seconds * 100) / 100,
-      estimated: beat.panels.some((panel) => !(panel.seconds > 0)),
+      start: span.start,
+      pinned: span.pinned,
+      estimated: !span.fitted && beat.panels.some((panel) => !(panel.seconds > 0)),
       energy: ROLE_ENERGY[beat.musicalRole] || null,
       mood: beat.emotion,
       theme: beat.what || beat.title,
@@ -65,6 +119,7 @@ export function storyboardSongBriefText(board) {
   if (tags.length) out.push(`Structure: ${tags.map((tag) => `[${tag}]`).join(' ')}`);
   sections.forEach((section, index) => {
     const head = [`${index + 1}. ${section.label}`, clock(section.seconds)];
+    if (section.pinned) head.push(`starts at ${clock(section.start)}`);
     if (section.energy) head.push(`${section.energy} energy`);
     out.push('', head.join(', '));
     if (section.title && section.title !== section.theme) out.push(`   Beat: ${section.title}`);

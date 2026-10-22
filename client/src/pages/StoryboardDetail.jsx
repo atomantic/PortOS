@@ -124,6 +124,16 @@ export default function StoryboardDetail() {
   // The request helper toasts a failure; null tells the caller it failed.
   const write = useCallback((call) => call().then(apply).catch(() => null), [apply]);
 
+  // Marks on the temp track a beat can be pinned to (Play starts the beat there).
+  const pinOptions = useMemo(() => {
+    const track = board?.tempTrack;
+    if (!track) return [];
+    return [
+      ...(track.sections || []).map((section) => ({ id: section.id, label: `${section.label} · ${formatTimecode(section.at)}` })),
+      ...(track.lines || []).map((line) => ({ id: line.id, label: `“${line.text}” · ${line.at === null ? 'not stamped' : formatTimecode(line.at)}` })),
+    ];
+  }, [board?.tempTrack]);
+
   const panelNumbers = useMemo(() => {
     const numbers = new Map();
     let n = 1;
@@ -305,6 +315,7 @@ export default function StoryboardDetail() {
                   onDelete={() => write(() => deleteStoryboardBeat(id, beat.id))}
                   onAddPanel={() => addPanel(beat.id)}
                   onOpenPanel={openPanel}
+                  pinOptions={pinOptions}
                 />
               );
             })}

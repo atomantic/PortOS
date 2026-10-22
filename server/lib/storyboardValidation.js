@@ -19,6 +19,7 @@ const nullableRef = ref.nullable();
 const refs = z.array(ref).max(L.refs);
 const entityId = z.string().trim().min(1).max(120);
 const position = z.number().int().min(0).max(10_000);
+const markerAt = z.number().min(0).max(L.markerAtMax);
 
 export const storyboardCreateSchema = z.object({
   name: text(L.name).optional(),
@@ -32,6 +33,8 @@ export const storyboardCreateSchema = z.object({
   tempTrack: z.object({
     filename: z.string().refine(isStoryboardTempTrackFilename, { message: 'tempTrack.filename must name an uploaded audio file' }),
     name: text(L.tempTrackName).optional(),
+    sections: z.array(z.object({ id: entityId.optional(), label: text(L.sectionLabel), at: markerAt }).strict()).max(L.songSections).optional(),
+    lines: z.array(z.object({ id: entityId.optional(), text: text(L.lyricLine), at: markerAt.nullable() }).strict()).max(L.lyricLines).optional(),
   }).strict().nullable().optional(),
 }).strict();
 
@@ -44,6 +47,7 @@ const beatFields = {
   emotion: text(L.emotion).optional(),
   musicalRole: z.enum(STORYBOARD_MUSICAL_ROLES).nullable().optional(),
   sectionHint: text(L.sectionHint).optional(),
+  pin: entityId.nullable().optional(),
 };
 
 export const storyboardBeatCreateSchema = z.object({ ...beatFields, index: position.optional() }).strict();
