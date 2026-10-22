@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 const mock = vi.hoisted(() => ({
@@ -348,6 +348,22 @@ describe('GitHub inbox tab', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
     expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'done');
     expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+  });
+
+  it('undoes Done locally and a mute by re-subscribing', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, state: 'done' }, { ...NOTIFICATION, threadId: '102', title: 'Muted change', state: 'muted' }],
+      sync: {},
+    });
+    mock.applyGitHubNotificationAction.mockImplementation(async (_account, threadId) => ({ ...NOTIFICATION, threadId, state: 'open' }));
+    renderTab('inbox');
+    fireEvent.click(await screen.findByRole('button', { name: 'Handled' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to inbox' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unmute' }));
+    await waitFor(() => expect(mock.applyGitHubNotificationAction).toHaveBeenCalledTimes(2));
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'reopen');
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '102', 'resubscribe');
+    await act(async () => {});
   });
 
   it('shows a failed sync for the account instead of an empty inbox', async () => {

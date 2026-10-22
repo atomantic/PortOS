@@ -146,7 +146,7 @@ router.post('/notifications/sync', asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /api/github/notifications/:accountId/:threadId — done / read / mute / unsubscribe / resubscribe
+ * POST /api/github/notifications/:accountId/:threadId — read / done / reopen / mute / unsubscribe / resubscribe
  */
 router.post('/notifications/:accountId/:threadId', asyncHandler(async (req, res) => {
   const { action } = validateRequest(githubNotificationActionSchema, req.body ?? {});

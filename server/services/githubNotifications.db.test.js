@@ -142,6 +142,27 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(open.map((row) => row.threadId)).toEqual(['301']);
   });
 
+  it('brings an unsubscribed thread back on a new mention but leaves a muted one handled', async () => {
+    let updatedAt = '2026-10-01T10:00:00Z';
+    mockGh(() => listing([thread('401', { updatedAt }), thread('402', { updatedAt })]));
+    await syncAccountNotifications(account.id);
+    await applyNotificationAction(account.id, '401', 'unsubscribe');
+    await applyNotificationAction(account.id, '402', 'mute');
+
+    updatedAt = '2026-10-02T10:00:00Z';
+    await syncAccountNotifications(account.id);
+    const open = (await listNotifications({ accountId: account.id, view: 'needs-you' })).notifications;
+    expect(open.map((row) => row.threadId)).toEqual(['401']);
+  });
+
+  it('reopens a done thread locally without subscribing to it on GitHub', async () => {
+    const actions = mockGh(() => listing([thread('501')]));
+    await syncAccountNotifications(account.id);
+    await applyNotificationAction(account.id, '501', 'done');
+    expect(await applyNotificationAction(account.id, '501', 'reopen')).toMatchObject({ state: 'open' });
+    expect(actions).toEqual([['DELETE', 'notifications/threads/501']]);
+  });
+
   it('records the failure on the sync cursor and refuses actions on unknown threads', async () => {
     mockGh(() => { throw Object.assign(new Error('HTTP 502'), { ghExitCode: 1, ghStderr: 'HTTP 502' }); });
     await expect(syncAccountNotifications(account.id)).rejects.toThrow('HTTP 502');

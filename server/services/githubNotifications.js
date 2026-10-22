@@ -27,11 +27,14 @@ const MAX_PAGES = 5;
 const LIST_LIMIT = 200;
 
 export const NOTIFICATION_VIEWS = Object.freeze(['needs-you', 'handled', 'all']);
-export const NOTIFICATION_ACTIONS = Object.freeze(['read', 'done', 'mute', 'unsubscribe', 'resubscribe']);
+export const NOTIFICATION_ACTIONS = Object.freeze(['read', 'done', 'reopen', 'mute', 'unsubscribe', 'resubscribe']);
 
 // method + path suffix + fields for each operator action; the state it leaves
 // the stored row in. Thread ids are digits-only (validated at the route).
+// `reopen` is local only: re-subscribing a done thread would opt into all of
+// its future activity when the notification was a one-off mention.
 const ACTION_SPECS = {
+  reopen: { method: null, path: '', fields: [], state: 'open' },
   read: { method: 'PATCH', path: '', fields: [], state: null },
   done: { method: 'DELETE', path: '', fields: [], state: 'done' },
   mute: { method: 'PUT', path: '/subscription', fields: ['-F', 'ignored=true'], state: 'muted' },
@@ -89,8 +92,9 @@ const UPSERT_SQL = `INSERT INTO github_notifications (
     subject_api_url = EXCLUDED.subject_api_url,
     html_url = EXCLUDED.html_url,
     unread = EXCLUDED.unread,
-    -- GitHub brings a thread marked done back when it has new activity.
-    state = CASE WHEN github_notifications.state = 'done' AND EXCLUDED.gh_updated_at > github_notifications.gh_updated_at
+    -- New activity brings back a thread marked done, and an unsubscribed one
+    -- (GitHub re-subscribes on a fresh mention or review request). Muted stays.
+    state = CASE WHEN github_notifications.state IN ('done', 'unsubscribed') AND EXCLUDED.gh_updated_at > github_notifications.gh_updated_at
       THEN 'open' ELSE github_notifications.state END,
     gh_updated_at = EXCLUDED.gh_updated_at,
     updated_at = NOW()`;
@@ -225,12 +229,14 @@ export async function applyNotificationAction(accountId, threadId, action) {
   if (!existing) {
     throw new ServerError('Notification not found', { status: 404, code: 'GITHUB_NOTIFICATION_NOT_FOUND' });
   }
-  const env = await requireAccountEnv(account);
-  await execGh(
-    ['api', '--hostname', account.host, '--method', spec.method, `notifications/threads/${threadId}${spec.path}`, ...spec.fields],
-    GH_TIMEOUT_MS,
-    { env },
-  );
+  if (spec.method) {
+    const env = await requireAccountEnv(account);
+    await execGh(
+      ['api', '--hostname', account.host, '--method', spec.method, `notifications/threads/${threadId}${spec.path}`, ...spec.fields],
+      GH_TIMEOUT_MS,
+      { env },
+    );
+  }
   const result = await query(
     `UPDATE github_notifications SET
        unread = CASE WHEN $3::text IN ('read','done') THEN FALSE ELSE unread END,

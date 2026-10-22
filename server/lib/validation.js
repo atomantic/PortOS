@@ -977,7 +977,7 @@ export const githubNotificationsSyncSchema = z.object({
 }).strict();
 
 export const githubNotificationActionSchema = z.object({
-  action: z.enum(['read', 'done', 'mute', 'unsubscribe', 'resubscribe']),
+  action: z.enum(['read', 'done', 'reopen', 'mute', 'unsubscribe', 'resubscribe']),
 }).strict();
 
 export const GITHUB_NOTIFICATION_THREAD_ID_RE = /^\d{1,20}$/;

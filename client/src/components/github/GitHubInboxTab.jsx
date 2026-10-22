@@ -36,6 +36,13 @@ const REASON_LABELS = {
 
 const STATE_LABELS = { done: 'Done', muted: 'Muted', unsubscribed: 'Unsubscribed' };
 
+// Undoing Done is local; undoing Mute/Unsubscribe re-subscribes on GitHub.
+const UNDO_ACTIONS = {
+  done: { action: 'reopen', label: 'Back to inbox' },
+  muted: { action: 'resubscribe', label: 'Unmute' },
+  unsubscribed: { action: 'resubscribe', label: 'Resubscribe' },
+};
+
 const OPEN_ACTIONS = [
   { action: 'done', label: 'Done' },
   { action: 'mute', label: 'Mute' },
@@ -75,7 +82,7 @@ function NotificationCard({ notification, accountLabel, busy, onAction }) {
             <ExternalLink size={12} aria-hidden="true" /> Open
           </a>
         )}
-        {(handled ? [{ action: 'resubscribe', label: 'Back to inbox' }] : OPEN_ACTIONS).map(({ action, label }) => (
+        {(handled ? [UNDO_ACTIONS[notification.state]].filter(Boolean) : OPEN_ACTIONS).map(({ action, label }) => (
           <button
             key={action}
             type="button"
