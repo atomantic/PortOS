@@ -37,6 +37,13 @@ describe('branch reconciliation completion', () => {
       claimOwners: { agents: [], readAgents: readClaimOwnershipAgents }, forgeAccount: 'example-account'
     });
   });
+  it('records an incomplete outcome instead of throwing when the run has no managed app', async () => {
+    const appless = { ...agent, metadata: { ...agent.metadata, taskApp: null } };
+    expect(await settleBranchReconcileRun(appless)).toBeNull();
+    expect(getAppById).not.toHaveBeenCalled();
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith(null, expect.objectContaining({ status: 'incomplete', reason: 'no-managed-app-target' }));
+  });
   it('requires an exact persisted archive receipt after the review task reports success', async () => {
     const release = { branch: 'claim/issue-42', path: '/example/checkout', head: 'a'.repeat(40) };
     getTaskById.mockResolvedValue({ id: 'task-example', metadata: { reconcileRetirements: [{ release, cognition: { ownerAgentId: 'original-owner', observation: 'exact-observation' }, createdAt: '2026-10-20T00:00:00Z', prUrl: 'https://github.com/example/repo/pull/42' }] } });
@@ -108,11 +115,12 @@ describe('branch reconciliation completion', () => {
     await settleBranchReconcileRun(agent);
     expect(reconcile).not.toHaveBeenCalled();
   });
-  it('fails closed on unreadable ownership or a missing target', async () => {
+  it('fails closed on unreadable ownership and records an unresolvable app target', async () => {
     readClaimOwnershipAgents.mockRejectedValueOnce(new Error('unreadable'));
     await expect(settleBranchReconcileRun(agent)).rejects.toThrow('unreadable');
     getAppById.mockResolvedValueOnce(null);
-    await expect(settleBranchReconcileRun(agent)).rejects.toThrow('target unavailable');
+    expect(await settleBranchReconcileRun(agent)).toBeNull();
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('example', expect.objectContaining({ reason: 'no-managed-app-target' }));
     expect(reconcile).not.toHaveBeenCalled();
   });
   it('ignores other completed task types', async () => {
