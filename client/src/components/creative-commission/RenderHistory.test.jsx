@@ -42,3 +42,42 @@ describe('RenderHistory taste-aware runs', () => {
     await waitFor(() => expect(onRate).toHaveBeenCalledWith('run-example', 'up', '', ['more-experimental']));
   });
 });
+
+describe('RenderHistory render state', () => {
+  const now = new Date().toISOString();
+  const runs = [
+    { id: 'run-removed', ranAt: now, status: 'started', projectId: 'cd-gone' },
+    { id: 'run-failed', ranAt: now, status: 'failed', error: 'boom', projectId: null },
+    { id: 'run-done', ranAt: now, status: 'started', projectId: 'cd-done' },
+    { id: 'run-bad', ranAt: now, status: 'started', projectId: 'cd-bad' },
+  ];
+  const projectsById = new Map([['cd-done', { id: 'cd-done', status: 'complete' }], ['cd-bad', { id: 'cd-bad', status: 'failed' }]]);
+  const mount = (props) => render(
+    <MemoryRouter>
+      <RenderHistory runs={runs} feedback={[]} projectsById={projectsById} projectsLoading={false} onRate={vi.fn()} {...props} />
+    </MemoryRouter>,
+  );
+
+  it('shows the project state, never a bare "started", and groups removed renders', () => {
+    mount();
+    expect(screen.getByText('Complete')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
+    expect(screen.queryByText(/^started$/)).toBeNull();
+    // Only the two live project cards link out; the removed one does not.
+    expect(screen.getAllByRole('link', { name: /view output/i })).toHaveLength(2);
+    const summary = screen.getByText('1 older render is no longer available');
+    expect(summary.closest('details').open).toBe(false);
+    fireEvent.click(summary);
+    expect(screen.getAllByText('Render removed').length).toBeGreaterThan(0);
+    // The removed-render run is still rateable.
+    expect(screen.getAllByRole('button', { name: 'Like this result' })).toHaveLength(3);
+  });
+
+  it('shows Loading… and no removed grouping while projects load', () => {
+    mount({ projectsLoading: true, projectsById: new Map() });
+    expect(screen.getAllByText('Loading…').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Render removed')).toBeNull();
+    expect(screen.queryByText(/no longer available/)).toBeNull();
+  });
+});
