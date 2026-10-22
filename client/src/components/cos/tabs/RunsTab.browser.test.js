@@ -150,10 +150,10 @@ describe.skipIf(!chrome && !auditCdp)('run actions without hover', () => {
     const url = `${fixture.origin}runs-test?failure=1`;
     await cdp.send('Page.navigate', { url });
     await page.waitForURL(url, { timeout: 20000 });
-    await page.getByRole('alert').waitFor({ timeout: 20000 });
+    await page.getByRole('note').waitFor({ timeout: 20000 });
     if (auditCdp) await page.evaluate(() => { window.name = 'portos-ui-quality-audit'; });
 
-    const guidance = page.getByRole('alert');
+    const guidance = page.getByRole('note');
     expect(await guidance.innerText()).toContain(failureReason);
     expect(await guidance.innerText()).toContain(suggestedFix);
     expect(await page.getByRole('button', { name: 'Collapse run details' }).count()).toBe(0);

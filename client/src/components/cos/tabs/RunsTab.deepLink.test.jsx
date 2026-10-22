@@ -71,7 +71,8 @@ describe('RunsTab ?run= deep link', () => {
     renderTab('/cos/runs');
 
     expect(await screen.findByText(/Choose an available model for this service/)).toHaveTextContent(error.replace('\n', ' '));
-    expect(screen.getByText(/Open AI Services and reconnect/)).toBeVisible();
+    expect(screen.getByRole('note')).toHaveTextContent(/Open AI Services and reconnect/);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     for (const [id, label] of [['failed', 'Failed'], ['running', 'Running'], ['run-b', 'Succeeded']]) {
       expect(within(screen.getByTestId(`run-row-${id}`)).getByText(label)).toBeVisible();
     }

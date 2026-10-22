@@ -350,7 +350,7 @@ export default function RunsTab() {
                   const hasExitCode = run.exitCode !== undefined && run.exitCode !== null && run.exitCode !== 0;
                   return (
                     <div className="px-3 pb-3 sm:px-4 sm:pb-4 min-w-0">
-                      <Banner tone="error" size="md" title="Run failed" srLabel={false}>
+                      <Banner tone="error" size="md" title="Run failed" srLabel={false} role="note">
                         <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                           {run.error || (hasExitCode ? exitInfo.description : 'This run did not complete successfully.')}
                         </p>
