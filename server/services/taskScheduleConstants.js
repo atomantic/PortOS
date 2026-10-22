@@ -56,7 +56,7 @@ export const FAILURE_PARK_THRESHOLD = 5;
  *
  * A request written before `origin` existed carries none, which reads as USER.
  */
-export const ON_DEMAND_ORIGINS = { USER: 'user', REFILL: 'refill', QUOTA_BURN: QUOTA_BURN_REQUEST_ORIGIN };
+export const ON_DEMAND_ORIGINS = { USER: 'user', REFILL: 'refill', QUOTA_BURN: QUOTA_BURN_REQUEST_ORIGIN, GITHUB_NOTIFICATION: 'github-notification' };
 export const isRefillRequest = (request) => request?.origin === ON_DEMAND_ORIGINS.REFILL;
 /**
  * Whether a human asked for this run. Absent origin reads as USER (see above),

@@ -3,7 +3,8 @@
  * last 30 days of stored threads with what was done about them, and offer
  * one-tap changes (unwatch a repo, mute its handled threads) plus links for
  * settings the API cannot change. Nothing is applied without a tap, and every
- * applied change is logged with Undo.
+ * applied change is logged with Undo. Accounts can opt in to a monthly report
+ * of the same suggestions as a PortOS notification.
  */
 import { query } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -12,8 +13,10 @@ import { toPgJson } from '../lib/pgJson.js';
 import { execGh } from './github.js';
 import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccounts.js';
 import { applyNotificationAction } from './githubNotifications.js';
+import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 
 const GH_TIMEOUT_MS = 30_000;
+const REPORT_EVERY_MS = AUDIT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
 // The last audit per account. Rebuilt by running the audit again; it holds
@@ -171,4 +174,47 @@ export async function undoAuditChange(id) {
   }
   await query('UPDATE github_notification_audit_changes SET undone_at = NOW() WHERE id = $1', [id]);
   return { id: String(id), undone: true };
+}
+
+/**
+ * The optional monthly report (#12874): for each enabled account that opted
+ * in, run the audit at most once per audit window and send its open
+ * suggestions as a PortOS notification. It only suggests; applying still
+ * takes a tap on the Audit tab. A report with no suggestions sends nothing.
+ */
+export async function sendDueAuditReports({ now = Date.now() } = {}) {
+  const accounts = (await listAccounts()).filter((account) => account.enabled && account.auditReport === true);
+  if (!accounts.length) return [];
+  const { rows } = await query(
+    'SELECT account_id, last_sent_at FROM github_notification_audit_reports WHERE account_id = ANY($1::text[])',
+    [accounts.map((account) => account.id)],
+  );
+  const lastSent = new Map(rows.map((row) => [row.account_id, new Date(row.last_sent_at).getTime()]));
+  const results = [];
+  for (const account of accounts) {
+    if (now - (lastSent.get(account.id) ?? 0) < REPORT_EVERY_MS) continue;
+    const audit = await runAccountAudit(account.id).catch((error) => {
+      console.log(`⏭️ Monthly GitHub audit for ${account.host} skipped: ${error.message}`);
+      return null;
+    });
+    if (!audit) continue;
+    const open = audit.suggestions.filter((suggestion) => !suggestion.applied);
+    if (open.length) {
+      await addNotification({
+        type: NOTIFICATION_TYPES.GITHUB_AUDIT,
+        title: `GitHub audit: ${open.length} suggestion${open.length === 1 ? '' : 's'} for ${account.label}`,
+        description: `From the last ${audit.windowDays} days of notifications. Nothing changes until you tap Apply.`,
+        priority: PRIORITY_LEVELS.LOW,
+        link: `/devtools/github/audit?account=${encodeURIComponent(account.id)}`,
+        metadata: { accountId: account.id },
+      });
+    }
+    await query(
+      `INSERT INTO github_notification_audit_reports (account_id, last_sent_at) VALUES ($1, $2)
+       ON CONFLICT (account_id) DO UPDATE SET last_sent_at = EXCLUDED.last_sent_at`,
+      [account.id, new Date(now).toISOString()],
+    );
+    results.push({ accountId: account.id, suggestions: open.length });
+  }
+  return results;
 }

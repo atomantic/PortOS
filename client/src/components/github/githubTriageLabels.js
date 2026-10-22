@@ -11,6 +11,7 @@ export const DECISION_VIEW = {
   duplicate: { tone: 'muted', label: 'Duplicate' },
   'suggest-done': { tone: 'muted', label: 'Suggest done' },
   'suggest-mute': { tone: 'muted', label: 'Suggest mute' },
+  'handed-off': { tone: 'success', label: 'Handed off' },
 };
 
 export const TRUST_VIEW = {
@@ -50,6 +51,20 @@ export const ACTION_LABELS = {
   done: 'Marked done',
   read: 'Marked read',
   mute: 'Muted',
+  'handed-off': 'Handed off',
+};
+
+// The lanes Autopilot hands threads to, and the app tab each one reports on.
+export const LANE_VIEW = {
+  'pr-reviewer': { label: 'Untrusted:Review', tab: 'pull-requests' },
+  'issue-watcher': { label: 'the issue watcher', tab: 'tasks' },
+};
+
+// Why Autopilot left a thread with you instead of handing it off.
+export const HANDOFF_SKIP_LABELS = {
+  'private-account': 'Private accounts never hand off: the lanes use their own AI providers',
+  'no-managed-app': 'No PortOS app manages this repo',
+  'lane-unavailable': 'The lane would not take it',
 };
 
 export const LEARNED_DECISION_LABELS = {

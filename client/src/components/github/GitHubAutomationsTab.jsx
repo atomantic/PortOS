@@ -18,15 +18,20 @@ import {
 } from '../../services/api';
 import { ACTION_LABELS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
 
-const MODE_OPTIONS = ['observe', 'assist'];
+const MODE_OPTIONS = ['observe', 'assist', 'autopilot'];
 const MODE_LABELS = { observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
 
 function modeHint(account) {
-  if (account.mode !== 'assist') return 'Records a decision for each notification; changes nothing on GitHub.';
+  if (account.mode === 'observe') return 'Records a decision for each notification; changes nothing on GitHub.';
   const where = account.trust === 'private'
     ? 'Text goes only to local AI providers unless you allow others in Accounts.'
     : 'Text goes to the GitHub notifications provider in Models › LLMs › Abuse Guard.';
-  return `Screens and sorts notifications no rule decided, marks CI noise done and closed threads read. Never acts on outside or suspect threads. ${where}`;
+  const assist = `Screens and sorts notifications no rule decided, marks CI noise done and closed threads read. Never acts on outside or suspect threads. ${where}`;
+  if (account.mode !== 'autopilot') return assist;
+  const handoff = account.trust === 'private'
+    ? 'Private accounts never hand threads off.'
+    : 'Also hands outside review requests and issues in your PortOS apps to Untrusted:Review and the issue watcher, when those are on for the app. Nothing outside your apps is ever started.';
+  return `${assist} ${handoff}`;
 }
 
 const CADENCE_TEXT = {
@@ -78,7 +83,7 @@ function AccountCard({ account, running, onRun, onMode, savingMode }) {
 }
 
 function ActivityList({ actions, onUndo, undoingId }) {
-  if (!actions.length) return <p className="text-xs text-gray-500">Assist has not acted on anything yet.</p>;
+  if (!actions.length) return <p className="text-xs text-gray-500">Assist and Autopilot have not acted on anything yet.</p>;
   return (
     <ul className="divide-y divide-port-border">
       {actions.map((action) => (

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { ExternalLink } from 'lucide-react';
 import Drawer from '../Drawer';
 import Pill from '../ui/Pill';
 import { formatDateTime } from '../../utils/formatters';
 import { getGitHubNotification } from '../../services/api';
 import socket from '../../services/socket';
-import { AI_SKIP_LABELS, DECISION_VIEW, RULE_LABELS, SIGNAL_LABELS, TRUST_VIEW } from './githubTriageLabels';
+import { AI_SKIP_LABELS, DECISION_VIEW, HANDOFF_SKIP_LABELS, LANE_VIEW, RULE_LABELS, SIGNAL_LABELS, TRUST_VIEW } from './githubTriageLabels';
 
 const EVENT_LABELS = {
   triaged: 'Triaged',
@@ -16,10 +16,12 @@ const EVENT_LABELS = {
   mute: 'Muted',
   unsubscribe: 'Unsubscribed',
   resubscribe: 'Resubscribed',
+  'handed-off': 'Handed off',
 };
 
 function describeEvent(event) {
   const label = EVENT_LABELS[event.kind] || event.kind;
+  if (event.kind === 'handed-off') return `${label} to ${LANE_VIEW[event.detail?.lane]?.label || event.detail?.lane}`;
   if (event.kind !== 'triaged') return label;
   const decision = DECISION_VIEW[event.detail?.decision]?.label || 'Needs you';
   return `${label}: ${decision}${event.detail?.mode ? ` (${event.detail.mode})` : ''}`;
@@ -27,8 +29,28 @@ function describeEvent(event) {
 
 const eventActorSuffix = (event) => {
   if (event.actor !== 'automation') return ' by you';
-  return event.kind === 'triaged' ? '' : ' by Assist';
+  if (event.kind === 'triaged') return '';
+  return event.kind === 'handed-off' ? ' by Autopilot' : ' by Assist';
 };
+
+function HandoffLine({ handoff }) {
+  const lane = LANE_VIEW[handoff.lane];
+  if (handoff.skipped) {
+    return (
+      <p className="text-xs text-gray-400">
+        Autopilot left it with you: {HANDOFF_SKIP_LABELS[handoff.skipped] || handoff.skipped}{handoff.error ? ` (${handoff.error})` : ''}
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-gray-300">
+      {handoff.duplicate ? 'Already with ' : 'Handed to '}{lane?.label || handoff.lane}
+      {handoff.appId && lane && (
+        <> for <Link to={`/apps/${encodeURIComponent(handoff.appId)}/${lane.tab}`} className="text-port-accent">{handoff.appName || handoff.appId}</Link></>
+      )}
+    </p>
+  );
+}
 
 /** One thread's triage evidence and action log, opened from the Inbox at /devtools/github/inbox/:accountId/:threadId. */
 export default function GitHubThreadDrawer({ accountId, threadId }) {
@@ -85,6 +107,7 @@ export default function GitHubThreadDrawer({ accountId, threadId }) {
               {evidence.commenter && <p className="text-xs text-gray-400">Latest comment by <span className="font-mono">@{evidence.commenter}</span></p>}
               {evidence.subjectState && <p className="text-xs text-gray-400">Thread is {evidence.subjectState}</p>}
               {evidence.foldedInto && <p className="text-xs text-gray-400">Same failure as a newer notice</p>}
+              {evidence.handoff && <HandoffLine handoff={evidence.handoff} />}
               {evidence.ai?.skipped && <p className="text-xs text-gray-400">Assist did not sort it: {AI_SKIP_LABELS[evidence.ai.skipped] || 'screening or the provider failed'}</p>}
               {evidence.metadataMissing && <p className="text-xs text-port-warning">GitHub did not return the thread's details; decided from the notification alone.</p>}
               {current.signals.length > 0 && (

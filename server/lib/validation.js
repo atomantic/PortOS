@@ -961,6 +961,8 @@ export const githubAccountCreateSchema = z.object({
   // null = the trust level's default (Private: local providers only).
   allowedProviders: z.array(z.string().trim().min(1).max(128)).max(50).nullable().optional(),
   mode: z.enum(GITHUB_ACCOUNT_MODES).optional(),
+  // Monthly subscription audit delivered as a PortOS notification (#12874).
+  auditReport: z.boolean().optional(),
   enabled: z.boolean().optional(),
 }).strict();
 

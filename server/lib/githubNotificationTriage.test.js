@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyLearnedRule, assistAction, computeThreadTrust, decideThread, decisionFromVerdict, parseCiBranch, selectNotificationProvider, spamSignals,
+  applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, parseCiBranch,
+  selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
 
@@ -125,5 +126,32 @@ describe('selectNotificationProvider', () => {
     expect(selectNotificationProvider({ account: { trust: 'private', allowedProviders: null }, providers: [cloud] }))
       .toEqual({ code: 'github-notification-provider-not-allowed' });
     expect(selectNotificationProvider({ account: { trust: 'private', allowedProviders: ['cloud'] }, providers })).toEqual({ provider: cloud, model: 'large' });
+  });
+});
+
+describe('autopilotHandoff', () => {
+  const account = { mode: 'autopilot', trust: 'public' };
+  const review = {
+    state: 'open', suspect: false, trust: 'outside', decision: 'suggest-untrusted-review', subject_type: 'PullRequest',
+    subject_api_url: 'https://api.github.com/repos/acme/app/pulls/42', evidence: { repoManaged: true },
+  };
+  const issue = { ...review, decision: 'needs-you', subject_type: 'Issue', subject_api_url: 'https://api.github.com/repos/acme/app/issues/7' };
+
+  it('hands outside review requests and issue activity in a managed repo to their lanes', () => {
+    expect(autopilotHandoff({ account, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 42 });
+    expect(autopilotHandoff({ account, row: issue })).toEqual({ lane: 'issue-watcher' });
+  });
+
+  it('never hands off outside Autopilot, in a repo PortOS does not manage, or a suspect or closed thread', () => {
+    expect(autopilotHandoff({ account: { ...account, mode: 'assist' }, row: review })).toBeNull();
+    expect(autopilotHandoff({ account, row: { ...review, evidence: { repoManaged: false, repoOwned: true } } })).toBeNull();
+    expect(autopilotHandoff({ account, row: { ...review, suspect: true } })).toBeNull();
+    expect(autopilotHandoff({ account, row: { ...issue, state: 'done' } })).toBeNull();
+    // An issue from you or a collaborator with no outside comment stays with you.
+    expect(autopilotHandoff({ account, row: { ...issue, trust: 'trusted' } })).toBeNull();
+  });
+
+  it('refuses every hand-off on a Private account, whose provider allow-list the lanes cannot honor', () => {
+    expect(autopilotHandoff({ account: { ...account, trust: 'private' }, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, refused: 'private-account' });
   });
 });

@@ -117,9 +117,18 @@ async function recordSyncError(accountId, message) {
   );
 }
 
-const runAssist = (account, env) => assistAccountNotifications(account, env, {
-  act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail }),
-});
+// Autopilot hands threads to their lanes first, so a thread a lane now owns
+// is not also sorted by Assist. Loaded lazily: the hand-off reaches the CoS
+// task schedule, which itself registers this module's scheduled check.
+async function runAutomation(account, env) {
+  const autopilot = account.mode === 'autopilot'
+    ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account)
+    : { handedOff: 0 };
+  const assist = await assistAccountNotifications(account, env, {
+    act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail }),
+  });
+  return { ...assist, handedOff: autopilot.handedOff };
+}
 
 async function syncAccountNow(account) {
   const env = await requireAccountEnv(account);
@@ -129,8 +138,8 @@ async function syncAccountNow(account) {
     await query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
     // Threads past the last run's triage cap still need a decision.
     const triage = await triageAccountNotifications(account, env);
-    const assist = await runAssist(account, env);
-    if (triage.triaged || assist.sorted || assist.acted) githubNotificationEvents.emit('changed', { accountId: account.id });
+    const assist = await runAutomation(account, env);
+    if (triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
     return { accountId: account.id, changed: false, fetched: 0, triage, assist };
   }
   const threads = [...first.threads];
@@ -168,9 +177,9 @@ async function syncAccountNow(account) {
     );
   });
   const triage = await triageAccountNotifications(account, env);
-  const assist = await runAssist(account, env);
+  const assist = await runAutomation(account, env);
   githubNotificationEvents.emit('changed', { accountId: account.id });
-  console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}, triaged ${triage.triaged}, sorted ${assist.sorted}, acted on ${assist.acted}`);
+  console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}, triaged ${triage.triaged}, sorted ${assist.sorted}, acted on ${assist.acted}, handed off ${assist.handedOff}`);
   return { accountId: account.id, changed: true, fetched: records.length, truncated, triage, assist };
 }
 
@@ -326,7 +335,7 @@ export async function listAutomationActivity({ limit = 50 } = {}) {
      FROM github_notification_events e JOIN github_notifications n ON n.account_id = e.account_id AND n.thread_id = e.thread_id
      WHERE e.actor = 'automation' AND e.kind = ANY($1::text[]) AND e.account_id = ANY($2::text[])
      ORDER BY e.created_at DESC, e.id DESC LIMIT $3`,
-    [NOTIFICATION_ACTIONS, accounts.map((account) => account.id), limit],
+    [[...NOTIFICATION_ACTIONS, 'handed-off'], accounts.map((account) => account.id), limit],
   );
   return rows.map((row) => ({
     id: String(row.id),
@@ -424,6 +433,9 @@ export async function runScheduledNotificationCheck({ now = Date.now() } = {}) {
       .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
   }
   lastScheduledSummary = describeScheduledCheck(results);
+  // Only the scheduled check sends the opt-in monthly audit report.
+  const { sendDueAuditReports } = await import('./githubNotificationAudit.js');
+  await sendDueAuditReports({ now }).catch((error) => console.error(`❌ Monthly GitHub audit report failed: ${error.message}`));
   return results;
 }
 
@@ -434,7 +446,9 @@ export function describeScheduledCheck(results) {
   const triaged = checked.reduce((sum, result) => sum + (result.triage?.triaged || 0), 0);
   const acted = checked.reduce((sum, result) => sum + (result.assist?.acted || 0), 0);
   const parts = [`checked ${checked.length} of ${results.length} account(s)`, `${fetched} new or updated`, `${triaged} triaged`];
+  const handedOff = checked.reduce((sum, result) => sum + (result.assist?.handedOff || 0), 0);
   if (acted) parts.push(`${acted} handled`);
+  if (handedOff) parts.push(`${handedOff} handed off`);
   if (failed) parts.push(`${failed} failed`);
   return parts.join(', ');
 }

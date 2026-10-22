@@ -12,6 +12,7 @@ import {
   getGitHubAuditChanges,
   runGitHubAudit,
   undoGitHubAuditChange,
+  updateGitHubAccount,
 } from '../../services/api';
 
 const fetchAccounts = () => getGitHubAccounts({ silent: true });
@@ -62,7 +63,7 @@ function SuggestionCard({ suggestion, onApply, onSkip, applying }) {
 
 export default function GitHubAuditTab() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { items: accounts, state: accountsState, error: accountsError, retry } = useListResource(fetchAccounts);
+  const { items: accounts, state: accountsState, error: accountsError, retry, setItems: setAccounts } = useListResource(fetchAccounts);
   const accountId = searchParams.get('account') || accounts[0]?.id || null;
   const [audit, setAudit] = useState(null);
   const [running, setRunning] = useState(false);
@@ -70,6 +71,7 @@ export default function GitHubAuditTab() {
   const [applyingId, setApplyingId] = useState(null);
   const [changes, setChanges] = useState([]);
   const [undoingId, setUndoingId] = useState(null);
+  const [savingReport, setSavingReport] = useState(false);
 
   const loadChanges = useCallback(async () => {
     const result = await getGitHubAuditChanges({ silent: true }).catch(() => null);
@@ -106,6 +108,13 @@ export default function GitHubAuditTab() {
     await loadChanges();
   };
 
+  const setMonthlyReport = async (auditReport) => {
+    setSavingReport(true);
+    const saved = await updateGitHubAccount(accountId, { auditReport }).catch(() => null);
+    setSavingReport(false);
+    if (saved) setAccounts((prev) => prev.map((account) => (account.id === saved.id ? saved : account)));
+  };
+
   const undo = async (id) => {
     setUndoingId(id);
     const undone = await undoGitHubAuditChange(id).catch(() => null);
@@ -124,6 +133,7 @@ export default function GitHubAuditTab() {
   }
 
   const visible = audit?.suggestions.filter((suggestion) => !skipped.has(suggestion.id)) || [];
+  const selected = accounts.find((account) => account.id === accountId);
 
   return (
     <div className="min-w-0 space-y-4">
@@ -157,6 +167,17 @@ export default function GitHubAuditTab() {
         )}
         {audit && !audit.watchedListed && <p className="text-xs text-port-warning">GitHub did not list your watched repos, so there are no unwatch suggestions this time.</p>}
         {!audit && !running && <p className="text-xs text-gray-500">Nothing changes until you tap Apply on a suggestion.</p>}
+        <div className="flex items-center gap-2">
+          <input
+            id="github-audit-monthly"
+            type="checkbox"
+            checked={selected?.auditReport === true}
+            disabled={savingReport || !selected}
+            onChange={(event) => setMonthlyReport(event.target.checked)}
+            className="h-4 w-4 accent-port-accent"
+          />
+          <label htmlFor="github-audit-monthly" className="text-xs text-gray-300">Send me this audit monthly as a notification (needs the scheduled check on)</label>
+        </div>
       </section>
 
       {audit && (visible.length ? (

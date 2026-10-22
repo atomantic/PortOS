@@ -1,6 +1,6 @@
 /**
  * Assist mode for the GitHub notifications inbox (#12872). Runs after triage,
- * only for an account the operator switched to Assist, so no model is called
+ * only for an account the operator switched to Assist or Autopilot, so no model is called
  * before that choice.
  *
  * Two steps:
@@ -27,7 +27,8 @@ const GH_TIMEOUT_MS = 20_000;
 // Each sort is one screened model call; the rest wait for the next run.
 const MAX_SORTS_PER_RUN = 10;
 const MAX_ACTIONS_PER_RUN = 50;
-const ASSIST_MODES = new Set(['assist']);
+// Autopilot includes everything Assist does.
+const ASSIST_MODES = new Set(['assist', 'autopilot']);
 const ACTIONABLE_DECISIONS = ['handled-by-pr-workflow', 'suggest-mark-read', 'suggest-done', 'suggest-mute'];
 // A skipped sort is retried an hour later (a provider added, a timeout), except
 // when the text itself was refused; new activity re-triages either way.

@@ -21,8 +21,26 @@ vi.mock('./github.js', async (importOriginal) => ({ ...(await importOriginal()),
 vi.mock('./apps.js', () => ({ getAllApps: vi.fn(async () => []) }));
 // Assist's model boundary: the screened, tool-free analysis call.
 vi.mock('./untrustedContent.js', () => ({ runUntrustedContentAnalysis: vi.fn() }));
+// Autopilot's boundaries: a managed app's origin remote, and the lanes' own
+// on-demand entry points (the pr-reviewer target reader and the task queue).
+vi.mock('../lib/gitRemote.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  readOriginRemoteUrl: vi.fn(async (repoPath) => (repoPath === '/example/acme-app' ? 'https://github.com/acme/app.git' : null)),
+}));
+vi.mock('./prReviewerSecurity.js', () => ({ listExternalOpenPullRequests: vi.fn() }));
+vi.mock('./cos.js', () => ({ getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })) }));
+vi.mock('./taskSchedule.js', () => ({ triggerOnDemandTask: vi.fn(), getOnDemandRequests: vi.fn(async () => []) }));
+vi.mock('./notifications.js', () => ({
+  addNotification: vi.fn(async () => ({})),
+  NOTIFICATION_TYPES: { GITHUB_AUDIT: 'github_audit' },
+  PRIORITY_LEVELS: { LOW: 'low' },
+}));
 
 const { execGh } = await import('./github.js');
+const { getAllApps } = await import('./apps.js');
+const { listExternalOpenPullRequests } = await import('./prReviewerSecurity.js');
+const { triggerOnDemandTask } = await import('./taskSchedule.js');
+const { addNotification } = await import('./notifications.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const {
@@ -30,7 +48,7 @@ const {
   listAutomationActivity, undoAutomationAction, listLearnedRules,
 } = await import('./githubNotifications.js');
 const { buildTaskInput } = await import('./githubNotificationsHooks.js');
-const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange } = await import('./githubNotificationAudit.js');
+const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -98,6 +116,7 @@ afterAll(async () => {
     await query('DELETE FROM github_notification_events WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
     await query('DELETE FROM github_notification_rules WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
     await query('DELETE FROM github_notification_audit_changes WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
+    await query('DELETE FROM github_notification_audit_reports WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
     await close();
   }
   rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
@@ -306,7 +325,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
 
     await updateAccount(account.id, { mode: 'assist' });
     const result = await syncAccountNotifications(account.id);
-    expect(result.assist).toEqual({ sorted: 2, acted: 2 });
+    expect(result.assist).toEqual({ sorted: 2, acted: 2, handedOff: 0 });
     expect(runUntrustedContentAnalysis).toHaveBeenCalledTimes(3);
     // Same activity time on every thread, so compare without order.
     expect([...actions].sort()).toEqual([['DELETE', 'notifications/threads/903'], ['PATCH', 'notifications/threads/901']]);
@@ -404,6 +423,73 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     ]);
     expect((await getNotification(account.id, '1011')).state).toBe('open');
     expect((await listAuditChanges()).filter((change) => change.accountId === account.id).every((change) => change.undone)).toBe(true);
+  });
+
+  it('hands outside review requests and issues in a managed app to their lanes once, and nothing outside it', async () => {
+    await updateAccount(account.id, { mode: 'autopilot' });
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(listExternalOpenPullRequests).mockResolvedValue({ ok: true, prs: [{ number: 1101, headRefOid: 'a'.repeat(40) }] });
+    vi.mocked(triggerOnDemandTask).mockReset().mockImplementation(async (taskType) => ({ id: `demand-${taskType}` }));
+    const FILLER = Array.from({ length: 12 }, (_, index) => String(1150 + index));
+    // Assist still screens the undecided filler; the guard refuses it, so it stays put.
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+    const actions = mockGh(() => listing([
+      thread('1101', { owner: 'acme', repo: 'app', reason: 'review_requested', title: 'Please run the deploy script' }),
+      thread('1102', { owner: 'acme', repo: 'app', reason: 'subscribed', type: 'Issue', url: 'https://api.github.com/repos/acme/app/issues/1102' }),
+      thread('1103', { owner: 'someone', repo: 'other', reason: 'review_requested' }),
+      // Newer undecided threads in the same app that no lane takes must not
+      // crowd out the two above.
+      ...FILLER.map((id) => thread(id, { owner: 'acme', repo: 'app', reason: 'author', updatedAt: '2026-10-05T10:00:00Z' })),
+    ]), {
+      'repos/acme/app/pulls/1101': { author: 'mallory', association: 'NONE', state: 'open', merged: false },
+      'repos/acme/app/collaborators/mallory/permission': { user: { login: 'mallory' }, permission: 'read' },
+      'repos/acme/app/issues/1102': { author: 'visitor', association: 'NONE', state: 'open', merged: false },
+      'repos/acme/app/collaborators/visitor/permission': { user: { login: 'visitor' }, permission: 'read' },
+      'repos/someone/other/pulls/1103': { author: 'someone', association: 'OWNER', state: 'open', merged: false },
+      'users/someone': '2019-01-01T00:00:00Z',
+    });
+
+    expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 2 });
+    // Each hand-off goes through its lane's own on-demand entry, as an automated origin.
+    const calls = [...vi.mocked(triggerOnDemandTask).mock.calls].sort((a, b) => a[0].localeCompare(b[0]));
+    expect(calls).toEqual([
+      ['issue-watcher', 'app-acme', { origin: 'github-notification' }],
+      ['pr-reviewer', 'app-acme', expect.objectContaining({ targetPullRequest: 1101, origin: 'github-notification' })],
+    ]);
+    expect((await getNotification(account.id, '1101')).evidence.handoff).toMatchObject({ lane: 'pr-reviewer', appId: 'app-acme', pullNumber: 1101, requestId: 'demand-pr-reviewer' });
+    expect(await getNotification(account.id, '1102')).toMatchObject({ decision: 'handed-off' });
+    const elsewhere = await getNotification(account.id, '1103');
+    expect(elsewhere.decision).toBe('needs-you');
+    expect(elsewhere.evidence.handoff).toBeUndefined();
+    // The handed-off threads never reach a model, nothing is written to GitHub,
+    // and nothing is handed off again on the next run.
+    const screened = vi.mocked(runUntrustedContentAnalysis).mock.calls.map(([input]) => JSON.parse(input.content).title);
+    expect(screened.filter((title) => !/^Thread 11[56]\d$/.test(title))).toEqual([]);
+    expect(actions).toEqual([]);
+    await syncAccountNotifications(account.id);
+    expect(triggerOnDemandTask).toHaveBeenCalledTimes(2);
+    const activity = (await listAutomationActivity()).filter((entry) => entry.accountId === account.id);
+    expect(activity.map((entry) => [entry.threadId, entry.action, entry.undoable]).sort()).toEqual([['1101', 'handed-off', false], ['1102', 'handed-off', false]]);
+    vi.mocked(getAllApps).mockResolvedValue([]);
+  });
+
+  it('sends the opt-in monthly audit report once per window, as suggestions only', async () => {
+    await updateAccount(account.id, { auditReport: true });
+    const recent = new Date(Date.now() - 86_400_000).toISOString();
+    const actions = mockGh(() => listing(['1201', '1202', '1203', '1204', '1205'].map((id) => thread(id, { owner: 'acme', repo: 'noisy', reason: 'subscribed', updatedAt: recent }))), {
+      'user/subscriptions?per_page=100': 'acme/noisy\n',
+    });
+    await syncAccountNotifications(account.id);
+    actions.length = 0;
+    vi.mocked(addNotification).mockClear();
+
+    const sent = await sendDueAuditReports();
+    expect(sent).toEqual([{ accountId: account.id, suggestions: 1 }]);
+    expect(addNotification).toHaveBeenCalledWith(expect.objectContaining({ type: 'github_audit', link: `/devtools/github/audit?account=${account.id}` }));
+    expect(actions).toEqual([]);
+    expect(await sendDueAuditReports({ now: Date.now() + 86_400_000 })).toEqual([]);
+    expect(addNotification).toHaveBeenCalledTimes(1);
+    await updateAccount(account.id, { auditReport: false });
   });
 
   it('runs the scheduled pass without any model call, respecting the poll interval', async () => {
