@@ -309,7 +309,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     // The injected comment got a verdict but no action and no change of trust.
     expect(byId['904']).toMatchObject({ decision: 'suggest-done', trust: 'outside', state: 'open', suspect: false });
     expect(byId['905']).toMatchObject({ decision: 'needs-you', state: 'open' });
-    expect((await getNotification(account.id, '905')).evidence.ai).toEqual({ skipped: 'untrusted-content-invalid-response' });
+    expect((await getNotification(account.id, '905')).evidence.ai).toMatchObject({ skipped: 'untrusted-content-invalid-response', retryAfter: expect.any(String) });
 
     const activity = await listAutomationActivity();
     const mine = activity.filter((entry) => entry.accountId === account.id);
@@ -321,10 +321,14 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       expect.objectContaining({ repoFullName: `${login}/hello`.toLowerCase(), reason: 'mention', actor: 'alice', decision: 'surface', hits: 1 }),
     ]);
 
-    // The next run leaves the undone thread alone.
+    // The next run leaves the undone thread alone, and retries the skipped
+    // sort once its retry time has passed.
+    await query(`UPDATE github_notifications SET evidence = jsonb_set(evidence, '{ai,retryAfter}', '"2000-01-01T00:00:00Z"') WHERE account_id = $1 AND thread_id = '905'`, [account.id]);
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: true, value: { verdict: 'surface' } });
     actions.length = 0;
     await syncAccountNotifications(account.id);
     expect(actions).toEqual([]);
+    expect(await getNotification(account.id, '905')).toMatchObject({ decision: 'surface', rule: 'ai-surface' });
   });
 
   it('learns to quiet a repo, reason and actor after the same correction twice', async () => {

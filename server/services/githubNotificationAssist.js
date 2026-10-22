@@ -29,6 +29,10 @@ const MAX_SORTS_PER_RUN = 10;
 const MAX_ACTIONS_PER_RUN = 50;
 const ASSIST_MODES = new Set(['assist']);
 const ACTIONABLE_DECISIONS = ['handled-by-pr-workflow', 'suggest-mark-read', 'suggest-done', 'suggest-mute'];
+// A skipped sort is retried an hour later (a provider added, a timeout), except
+// when the text itself was refused; new activity re-triages either way.
+const RETRY_SKIPPED_MS = 60 * 60 * 1000;
+const FINAL_SKIPS = new Set(['untrusted-content-blocked', 'untrusted-content-too-large']);
 
 const SORT_PROMPT = `Sort one GitHub notification for its recipient's inbox. Answer "surface" when the recipient should read or act on it, "done" when it is purely informational and needs nothing from them, or "suggest-mute" when it is recurring noise from a thread they do not need to follow. When unsure, answer "surface". Return ONLY a JSON object: {"verdict":"surface|done|suggest-mute"}.`;
 const sortSchema = z.object({ verdict: z.enum(ASSIST_VERDICTS) }).strict();
@@ -75,7 +79,8 @@ async function sortThread(account, env, row, selection) {
 async function sortUndecided(account, env) {
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
-       AND decision = 'needs-you' AND evidence->>'rule' = 'default' AND NOT (evidence ? 'ai')
+       AND decision = 'needs-you' AND evidence->>'rule' = 'default'
+       AND (NOT (evidence ? 'ai') OR (evidence->'ai'->>'retryAfter')::timestamptz <= NOW())
      ORDER BY gh_updated_at DESC LIMIT ${MAX_SORTS_PER_RUN}`,
     [account.id],
   );
@@ -93,6 +98,7 @@ async function sortUndecided(account, env) {
       return { skipped: 'untrusted-content-failed' };
     });
     const decided = outcome.verdict ? decisionFromVerdict(outcome.verdict) : null;
+    if (!decided && !FINAL_SKIPS.has(outcome.skipped)) outcome.retryAfter = new Date(Date.now() + RETRY_SKIPPED_MS).toISOString();
     await withTransaction(async (client) => {
       await client.query(
         `UPDATE github_notifications SET decision = COALESCE($3, decision),
