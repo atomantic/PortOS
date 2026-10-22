@@ -8,13 +8,6 @@ export const getAgents = getRunningAgents;
 export const killAgent = killRunningAgent;
 
 // Agent Activity
-export const getAgentActivities = (limit = 50, agentIds = null, action = null) => {
-  const params = new URLSearchParams();
-  params.set('limit', limit);
-  if (agentIds) params.set('agentIds', agentIds.join(','));
-  if (action) params.set('action', action);
-  return request(`/agents/activity?${params}`);
-};
 // `action` is one action string or an array of them (sent comma-joined).
 export const getAgentActivityTimeline = (limit = 50, agentIds = null, before = null, action = null) => {
   const params = new URLSearchParams();
