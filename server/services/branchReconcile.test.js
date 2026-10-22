@@ -1245,6 +1245,42 @@ describe('reconcile', () => {
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-4348', expect.any(Object));
   });
 
+  // A reused claim branch, or a checkout left behind while the branch shipped
+  // from another checkout, has no merged PR at its exact head. Merge evidence
+  // plus a forge read with no open PR and an idle checkout proves it finished.
+  it.each([
+    ['idle with no open PR', {}, true],
+    ['an open PR', { openPr: true }, false],
+    ['recent checkout activity', { mtime: Date.now() - 60 * 1000 }, false],
+    ['an unreadable checkout', { gitDir: '' }, false],
+  ])('retires a merged manual claim with no exact-head PR only when idle: %s', async (_label, { openPr = false, mtime = Date.now() - 4 * 60 * 60 * 1000, gitDir = '/repo/.git/worktrees/claim-issue-4348' }, cleaned) => {
+    hasCompletedCheckoutEvidence.mockResolvedValue(false);
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-4348', isDefault: false, current: false, tracking: '', merged: true }
+    ]);
+    wt.listWorktrees.mockResolvedValue([
+      { head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/claim-issue-4348', branch: 'refs/heads/claim/issue-4348' }
+    ]);
+    execGh.mockResolvedValue(openPr
+      ? JSON.stringify([{ number: 7, headRefName: 'claim/issue-4348', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }])
+      : '[]');
+    execGit.mockImplementation(async (args) => pinnedRef(args) ? { stdout: RETIRE_HEAD, exitCode: 0 }
+      : args[0] === 'rev-parse' && args[1] === '--absolute-git-dir' ? { stdout: gitDir, exitCode: 0 }
+      : args[0] === 'ls-remote' ? { stdout: 'abc123\trefs/heads/main\n', exitCode: 0 }
+      : { stdout: '', exitCode: 0 });
+    worktreeMtimeMs = mtime;
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+
+    const res = await reconcile('/repo');
+    if (cleaned) {
+      expect(res.cleaned).toEqual(['claim/issue-4348']);
+      expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-4348', expect.any(Object));
+    } else {
+      expect(res.cleaned).toEqual([]);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    }
+  });
+
   // The fail-safe half of the same signal: "we could not read origin" must never
   // read as "the remote branch is gone", or an unreachable network would start
   // reaping claim worktrees that were never shipped.

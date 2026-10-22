@@ -1119,7 +1119,9 @@ async function retainedClaimMarkers(repoPath, branch, { origin } = {}) {
  *   4. fresh ownership and completion policy permit retirement under the claim
  *      binding lock; a claim checkout has an exact successful run receipt, or
  *      the forge reports its exact head merged and it has idled past
- *      SHIPPED_CLAIM_IDLE_MS (see manualClaimShippedHold).
+ *      SHIPPED_CLAIM_IDLE_MS, or (no PR at that head) the forge reports no open
+ *      PR for the branch and the checkout has been untouched that long (see
+ *      manualClaimShippedHold).
  *   5. recovery archives verify before removal and exact-head ref deletion.
  * A failed gate skips the branch with a reason. Age, an absent upstream, and
  * a cached merged flag never substitute for successful completion evidence.
@@ -1408,7 +1410,8 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
       const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
       // Registry absence cannot prove a manual CLI or external task finished.
       // Waive the claim hold only on a recorded completed owner or, for a
-      // manual session that records none, the forge's merged exact head.
+      // manual session that records none, the forge's merged exact head (or,
+      // with no PR at that head, a forge-confirmed idle checkout).
       const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
       if (!records) return stop({ ok: false, reason: 'claim-ownership-unreadable' });
       if (await hasCompletedCheckoutEvidence(records, {
@@ -1417,6 +1420,8 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
       else {
         const hold = await manualClaimShippedHold(repoPath, b, expectedHead, forgeAccount);
         if (hold) return stop(hold);
+        // Removal re-proves merge evidence, and the archive's byte check
+        // refuses a checkout that changed after this admission.
         claimCompletion = 'forge-merged';
       }
     }
@@ -1442,8 +1447,28 @@ async function manualClaimShippedHold(repoPath, b, head, forgeAccount) {
   if (!Number.isFinite(b.worktreeAgeMs) || b.worktreeAgeMs < SHIPPED_CLAIM_IDLE_MS) return unverified;
   const { readMergedClaimEvidence } = await import('./completedCheckoutEvidence.js');
   const merged = await readMergedClaimEvidence({ repoPath, branch: b.branch, head, forgeAccount }).catch(() => null);
-  if (!merged || Date.now() - Date.parse(merged.mergedAt) < SHIPPED_CLAIM_IDLE_MS) return unverified;
-  return null;
+  if (merged) return Date.now() - Date.parse(merged.mergedAt) < SHIPPED_CLAIM_IDLE_MS ? unverified : null;
+  // A reused claim branch, or a checkout left behind while the branch shipped
+  // from elsewhere, has no PR at its exact head. Its head is already on the
+  // default branch (re-proven by the caller), so the remaining question is
+  // whether a session is still live: no open PR for the branch on a forge read
+  // this cycle, and no checkout activity (directory, index, HEAD log) for the
+  // idle window. A session tearing down or waiting on CI fails one of those.
+  // Only a GitHub origin's PR read is evidence: elsewhere "no open PR" is the default, not an answer.
+  if (b.openPr !== null || b.prStateUnavailable !== false) return unverified;
+  if (!githubRepoSpec(await getOriginInfo(repoPath).catch(() => null))) return unverified;
+  const idle = await checkoutIdleMs(b.worktreePath);
+  return Number.isFinite(idle) && idle >= SHIPPED_CLAIM_IDLE_MS ? null : unverified;
+}
+
+/** Time since the checkout last changed: its directory, index or HEAD log. Null when unreadable. */
+async function checkoutIdleMs(worktreePath) {
+  const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], worktreePath).catch(() => null))?.stdout?.trim();
+  if (!gitDir) return null;
+  const stamps = await Promise.all([worktreePath, join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]
+    .map(path => stat(path).then(st => st.mtimeMs, error => (error.code === 'ENOENT' ? 0 : null))));
+  if (stamps.some(stamp => stamp === null)) return null;
+  return Math.max(0, Date.now() - Math.max(...stamps));
 }
 
 /**

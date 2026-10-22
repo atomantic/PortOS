@@ -163,7 +163,11 @@ merge without a checkout. Cleanup reports locked, dirty, active, unmanaged,
 unverified manual claim, changed-head and archive-failure holds explicitly.
 An absent live registry entry alone cannot waive a manual claim hold; a
 successful completion receipt bound to the current checkout path, head and
-filesystem incarnation is required. Older records cannot release a reused claim. Initialized submodules currently retain
+filesystem incarnation is required, or for a manual session the forge's merged
+PR at the exact head. A merged manual claim with no PR at its exact head (a
+reused branch, or a checkout left behind while the branch shipped from
+elsewhere) retires once a GitHub read finds no open PR for the branch and the
+checkout's directory, index and HEAD log have been untouched for an hour. Older records cannot release a reused claim. Initialized submodules currently retain
 the checkout because their complete content is not supported by the archive.
 A held merged receipt names a recovery task when policy and source ownership
 permit it; intentional human handoffs stay with their existing owner. The recovery
