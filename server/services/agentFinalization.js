@@ -2050,11 +2050,6 @@ async function publishAppSnapshotFileAfterAudit(appId) {
   }
 }
 
-/**
- * Where a hook's `.agent-done` payload may be read from. A live completion falls
- * back to the task's repoPath; a recovery run trusts only the persisted
- * workspace — without it there is nothing safe to read, so no payload.
- */
 // A run is a clean baseline only when it succeeded, recorded its assessment and
 // that assessment verified no material finding (worstSeverity 0) from a real
 // scan; anything else drops the baseline so the next launch runs.
@@ -2076,6 +2071,11 @@ async function recordInputGateBaseline({ task, taskType, agentId, success, audit
   });
 }
 
+/**
+ * Where a hook's `.agent-done` payload may be read from. A live completion falls
+ * back to the task's repoPath; a recovery run trusts only the persisted
+ * workspace — without it there is nothing safe to read, so no payload.
+ */
 function hookPayloadDir({ task, workspacePath, recovery }) {
   return recovery
     ? (workspacePath || null)
