@@ -28,7 +28,7 @@ vi.mock('../lib/systemCapabilities.js', () => ({ detectSystemCapabilities: async
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaUtilization: async () => ({ gpus: [{ memoryUsedMib: 1000 }] }) }));
 vi.mock('../lib/tailscale.js', () => ({ getTailscaleStatus: async () => ({ running: true, dnsName: 'host-XXXX.example.ts.net' }) }));
 vi.mock('../lib/fileUtils.js', () => ({ PATHS: { root: '/example' }, atomicWrite: async (path, value) => state.writes.push({ path, value }), tryReadFile: async () => state.enabled }));
-vi.mock('node:fs/promises', () => ({ readFile: async () => 'VLLM_API_KEY=example-api-key-with-32-characters\n' }));
+vi.mock('node:fs/promises', () => ({ readFile: async () => { if (state.readError) throw state.readError; return 'VLLM_API_KEY=example-api-key-with-32-characters\n'; } }));
 vi.mock('../lib/portosEnv.js', async (original) => ({ ...(await original()), upsertPortosEnvLine: async (key, value) => { state.enabled = `${key}=${value}`; } }));
 vi.mock('../lib/commandExists.js', () => ({ commandOutput: async (_cmd, args) => args.includes('config') ? JSON.stringify({ services: { single: { image: 'example-runtime' } } }) : args.includes('inspect') ? 'sha256:' + 'a'.repeat(64) : '1.0' }));
 vi.mock('../lib/vllmQwenProject.js', () => ({ inspectVllmQwenProject: async () => ({ dir: '/example', composeFile: '/example/compose.yaml', hasWeights: true }) }));
@@ -36,8 +36,8 @@ vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: async () => (
 vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn(async () => ({ success: true })) }));
 vi.mock('./vllmQwenManager.js', () => ({ ensureVllmProjectDir: async () => null, provisionVllmQwenProject: async () => ({ success: true }) }));
 vi.mock('./providers.js', () => ({ getAllProviders: async () => ({ providers: state.providers }), createProvider: async (record) => state.providers.push(record), updateProvider: async (id, patch) => Object.assign(state.providers.find(p => p.id === id), patch) }));
-vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: () => ({ server: { once() {}, on() {}, listen(_port, _host, done) { done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }) }));
-import { configureFleetLlmHost, disableFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
+vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: () => ({ server: { once(_evt, fail) { this.fail = fail; }, on() {}, listen(_port, _host, done) { if (state.listenError) this.fail(state.listenError); else done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }) }));
+import { configureFleetLlmHost, disableFleetLlmHost, startFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.enabled = ''; state.loginTaskRemoved = false; state.providers = []; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
 describe('dedicated host setup workflow', () => {
@@ -160,3 +160,29 @@ describe('fleet peer host discovery', () => {
   });
 });
 
+
+describe('dedicated host startup failures', () => {
+  beforeEach(() => {
+    state.enabled = 'PORTOS_FLEET_LLM_ENABLED=1';
+    state.readError = null;
+    state.listenError = null;
+  });
+
+  it('names the port conflict instead of only the setup remedy', async () => {
+    state.listenError = Object.assign(new Error('listen EADDRINUSE: address already in use 0.0.0.0:1'), { code: 'EADDRINUSE', syscall: 'listen', port: 1 });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await startFleetLlmHost();
+    expect(errors.mock.calls.flat().join('\n')).toContain('EADDRINUSE listen 1');
+    errors.mockRestore();
+  });
+
+  it('reports a rejected env read without echoing the API key', async () => {
+    state.readError = Object.assign(new Error('EACCES: permission denied\nVLLM_API_KEY=example-api-key-with-32-characters'), { code: 'EACCES' });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await startFleetLlmHost();
+    const logged = errors.mock.calls.flat().join('\n');
+    expect(logged).toContain('EACCES');
+    expect(logged).not.toContain('example-api-key');
+    errors.mockRestore();
+  });
+});

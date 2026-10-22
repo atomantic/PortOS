@@ -600,7 +600,7 @@ if (!isSmokeBoot()) {
   import('./services/humanActionReminders.js').then(({ initHumanActionReminders }) => initHumanActionReminders())
     .catch((err) => console.error(`❌ Human action reminders could not start: ${err.message}`));
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
-    .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
+    .catch((err) => console.error(`❌ Dedicated model host listener could not load: ${err.message}`));
   // Local file scan only (no provider calls); keeps the federated Claude Code
   // token history current even when the usage page is never opened.
   import('./services/claudeCodeTranscriptUsage.js').then(({ startTranscriptUsageRefresh }) => startTranscriptUsageRefresh())
