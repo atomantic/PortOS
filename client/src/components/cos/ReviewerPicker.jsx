@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { Plus, X, ChevronUp, ChevronDown } from 'lucide-react';
 import Pill from '../ui/Pill';
+import ProviderModelSelector from '../ProviderModelSelector';
 import {
   REVIEWER_OPTIONS,
   REVIEW_STOP_MODES,
@@ -60,8 +61,8 @@ const HEADER_CLASS = `hidden @4xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.
 /**
  * Ordered multi-reviewer picker, rendered as one row per reviewer with the five
  * per-reviewer controls as columns: **Provider | Model | Effort | Optional | Max
- * Iterations** (#3133). Add configured providers or standalone backends from one
- * menu, reorder with the arrows within each service/standalone boundary, remove with ✕. Maps to slashdo's
+ * Iterations** (#3133). Add configured providers or standalone backends from
+ * their pickers (one pick adds), reorder with the arrows within each service/standalone boundary, remove with ✕. Maps to slashdo's
  * `--review-with a,b,c` plus the stop-mode / `--reviewer-applies` flags.
  *
  * A second "GitHub reviewers" table collects arbitrary usernames (e.g.
@@ -145,8 +146,8 @@ const HEADER_CLASS = `hidden @4xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.
  * never clears.
  *
  * Together with `modelOptions.providerDisabled`, that describes which reviewers
- * can run on this machine. Configured providers and standalone backends share one
- * Add menu, each option labeled with its unavailability. Missing/disabled saved
+ * can run on this machine. Configured providers use the shared provider selector;
+ * standalone backends use a compact local/CLI picker labeled with unavailability. Missing/disabled saved
  * rows remain editable with actionable warnings. `showReviewers`, `showUsernames`
  * and `renderReviewer` let the tier editor compose these same rows and controls
  * without introducing fallback-group fields to task-local overrides.
@@ -741,29 +742,36 @@ export default function ReviewerPicker({
   return (
     <div className="@container flex flex-col gap-2 w-full">
       {showReviewers && (
-        <div className="flex flex-col gap-1 min-w-0">
-          <label htmlFor={`${id}-add`} className="text-xs text-gray-500">AI reviewers</label>
-          <select
-            id={`${id}-add`}
-            value=""
-            disabled={disabled || (addableProviders.length === 0 && addable.length === 0)}
-            onChange={event => add(event.target.value)}
-            className="w-full sm:w-80 max-w-full min-h-9 px-2 bg-port-bg border border-port-border rounded text-xs text-gray-300 focus:border-port-accent focus:outline-none disabled:opacity-50"
-          >
-            <option value="">{modelOptions?.loaded === false ? 'Loading reviewers…' : '+ Add AI reviewer'}</option>
-            {addableProviders.length > 0 && (
-              <optgroup label="Providers">
-                {addableProviders.map(provider => (
-                  <option key={provider.id} value={`provider:${provider.id}`}>{provider.name || provider.id}{unavailability(`provider:${provider.id}`) ? ` (${unavailability(`provider:${provider.id}`).label})` : ''}</option>
-                ))}
-              </optgroup>
-            )}
-            {addable.length > 0 && (
-              <optgroup label="Local & CLI">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-2 min-w-0">
+          <div className="w-full sm:w-64 max-w-full">
+            <ProviderModelSelector
+              dense
+              label="Add AI provider"
+              providers={addableProviders}
+              selectedProviderId=""
+              onProviderChange={providerId => add(providerId && `provider:${providerId}`)}
+              emptyProviderOption={modelOptions?.loaded === false ? 'Loading…' : '+ Provider'}
+              compose={false}
+              highlightVision={false}
+              loading={modelOptions?.loaded === false}
+              disabled={disabled}
+            />
+          </div>
+          {addable.length > 0 && (
+            <div className="w-full sm:w-48 max-w-full">
+              <label htmlFor={`${id}-legacy`} className="block mb-1 text-xs text-gray-500">Add local / CLI</label>
+              <select
+                id={`${id}-legacy`}
+                value=""
+                disabled={disabled}
+                onChange={event => add(event.target.value)}
+                className="w-full min-h-9 px-2 bg-port-bg border border-port-border rounded text-xs text-gray-300 focus:border-port-accent focus:outline-none disabled:opacity-50"
+              >
+                <option value="">+ Local / CLI</option>
                 {addable.map(option => <option key={option.value} value={option.value}>{option.label}{unavailability(option.value) ? ` (${unavailability(option.value).label})` : ''}</option>)}
-              </optgroup>
-            )}
-          </select>
+              </select>
+            </div>
+          )}
           {modelOptions?.providersLoaded === false && modelOptions?.loaded && <p role="alert" className="text-xs text-port-warning">Provider list unavailable. Reload to retry.</p>}
         </div>
       )}

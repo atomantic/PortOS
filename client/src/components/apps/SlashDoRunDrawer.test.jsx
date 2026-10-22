@@ -139,7 +139,7 @@ describe('SlashDoRunDrawer', () => {
   it('does not blame a claim-work override when the reviewers came from the install defaults', async () => {
     renderDrawer();
 
-    await waitFor(() => expect(screen.getByText('AI reviewers')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Add local / CLI')).toBeInTheDocument());
     expect(screen.queryByText(/claim-work/)).not.toBeInTheDocument();
   });
 
@@ -147,7 +147,7 @@ describe('SlashDoRunDrawer', () => {
     const onQueued = vi.fn();
     renderDrawer({ onQueued });
 
-    await waitFor(() => expect(screen.getByText('AI reviewers')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Add local / CLI')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /Remove Copilot/ }));
     await userEvent.click(screen.getByRole('button', { name: /Queue \/do:next/ }));
 
@@ -159,9 +159,9 @@ describe('SlashDoRunDrawer', () => {
   it('hides the stop-mode and reviewer-applies controls the claim flow cannot honor', async () => {
     renderDrawer();
 
-    await waitFor(() => expect(screen.getByText('AI reviewers')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Add local / CLI')).toBeInTheDocument());
     // Add a second, non-Copilot reviewer — the two flags render at 2+ / non-copilot.
-    await userEvent.selectOptions(screen.getByLabelText('AI reviewers'), 'claude');
+    await userEvent.selectOptions(screen.getByLabelText('Add local / CLI'), 'claude');
 
     expect(screen.queryByText('Stop mode:')).not.toBeInTheDocument();
     expect(screen.queryByText(/Reviewer applies fixes/)).not.toBeInTheDocument();
@@ -175,7 +175,7 @@ describe('SlashDoRunDrawer', () => {
     renderDrawer({ command: 'better', label: '/do:better' });
 
     await waitFor(() => expect(screen.getByText('Task settings')).toBeInTheDocument());
-    expect(screen.queryByText('AI reviewers')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add local / CLI')).not.toBeInTheDocument();
     expect(screen.queryByText('People & bots (GitHub/GitLab)')).not.toBeInTheDocument();
   });
 
@@ -271,10 +271,10 @@ describe('SlashDoRunDrawer', () => {
     const onQueued = vi.fn();
     renderDrawer({ onQueued });
 
-    await waitFor(() => expect(screen.getByText('AI reviewers')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Add local / CLI')).toBeInTheDocument());
     await userEvent.selectOptions(screen.getByLabelText('After opening PR'), 'merge-on-green');
 
-    expect(screen.queryByText('AI reviewers')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add local / CLI')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /Queue \/do:next/ }));
 
     await waitFor(() => expect(onQueued).toHaveBeenCalled());
@@ -300,6 +300,6 @@ describe('SlashDoRunDrawer', () => {
     renderDrawer();
 
     await waitFor(() => expect(screen.getByLabelText('After opening PR')).toHaveValue('merge-on-green'));
-    expect(screen.queryByText('AI reviewers')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add local / CLI')).not.toBeInTheDocument();
   });
 });

@@ -647,7 +647,7 @@ describe('PullRequestsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Remove codex$/i }));
     expect(screen.getByRole('button', { name: /Reviewer override \(active\)/ })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('AI reviewers'), { target: { value: 'codex' } });
+    fireEvent.change(screen.getByLabelText('Add local / CLI'), { target: { value: 'codex' } });
     expect(screen.getByRole('button', { name: /^Reviewer override$/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));

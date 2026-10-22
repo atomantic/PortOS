@@ -52,7 +52,7 @@ describe('ReviewerPicker', () => {
       return <ReviewerPicker {...config} modelOptions={{ providers }} onChange={value => { onChange(value); setConfig(value); }} />;
     }
     render(<Form />);
-    fireEvent.change(screen.getByLabelText('AI reviewers'), { target: { value: 'provider:codex-tui' } });
+    fireEvent.change(screen.getByLabelText('Add AI provider'), { target: { value: 'codex-tui' } });
     fireEvent.change(screen.getByLabelText('Reasoning effort for Codex TUI'), { target: { value: 'ultra' } });
     const effort = screen.getByLabelText('Reasoning effort for Codex TUI');
     expect(effort).toHaveValue('ultra');
@@ -219,7 +219,7 @@ describe('ReviewerPicker', () => {
       );
       expect(screen.getByRole('option', { name: /Kimi/ })).toHaveTextContent('disabled');
       expect(screen.getByRole('option', { name: /Antigravity/ })).toHaveTextContent('not installed');
-      await user.selectOptions(screen.getByLabelText('AI reviewers'), 'kimi');
+      await user.selectOptions(screen.getByLabelText('Add local / CLI'), 'kimi');
       expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['copilot', 'kimi'] }));
     });
 
@@ -262,7 +262,7 @@ describe('ReviewerPicker', () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
-    await user.selectOptions(screen.getByLabelText('AI reviewers'), 'codex');
+    await user.selectOptions(screen.getByLabelText('Add local / CLI'), 'codex');
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['copilot', 'codex'] }));
   });
 
