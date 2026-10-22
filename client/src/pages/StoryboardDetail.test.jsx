@@ -19,6 +19,8 @@ const api = vi.hoisted(() => ({
   listStoryboardRecipes: vi.fn(),
   saveStoryboardRecipe: vi.fn(),
   deleteStoryboardRecipe: vi.fn(),
+  extractStoryboardBeats: vi.fn(),
+  addStoryboardBeats: vi.fn(),
 }));
 vi.mock('../services/api', () => {
   const rest = ['deleteStoryboardBeat', 'deleteStoryboardPanel', 'moveStoryboardBeat', 'moveStoryboardPanel',
@@ -260,5 +262,31 @@ describe('StoryboardDetail', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Load' }).at(-1));
     await waitFor(() => expect(api.updateStoryboardRecipe).toHaveBeenCalledWith('sb-1', savedRecipe));
     expect(await screen.findByRole('region', { name: 'Words node' })).toBeInTheDocument();
+  });
+
+  it('draws beats from a plot summary as a preview and adds only the ticked ones', async () => {
+    api.getStoryboard.mockResolvedValue(board({ beats: [] }));
+    const beats = [
+      { title: 'Arrival', what: 'She reaches the gym', why: '', emotion: '', musicalRole: 'intro', panels: [{ action: 'Doors open', dialogue: '', framing: 'wide', camera: '', seconds: 3 }] },
+      { title: 'Exit', what: 'She leaves', why: '', emotion: '', musicalRole: null, panels: [] },
+    ];
+    api.extractStoryboardBeats.mockImplementation(async (_id, input) => ({
+      board: board({ beats: [], plot: input.plot, updatedAt: '2026-10-22T00:00:02.000Z' }),
+      beats, sentPrompt: `Instructions\n\n---\n\nPlot summary:\n${input.plot}`,
+      promptAdditions: [{ id: 'beat-instructions', label: 'Beat instructions', text: 'Instructions' }], providerId: 'example', model: 'example-model',
+    }));
+    api.addStoryboardBeats.mockImplementation(async (_id, added) => board({ beats: added.map((b, i) => ({ ...b, id: `beat-${i}`, sectionHint: '' })), updatedAt: '2026-10-22T00:00:03.000Z' }));
+    renderAt('/storyboards/sb-1?plot=open');
+
+    fireEvent.change(await screen.findByLabelText('Plot summary'), { target: { value: 'A shy teen finds her courage.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Draw beats' }));
+    await waitFor(() => expect(api.extractStoryboardBeats).toHaveBeenCalledWith('sb-1', { plot: 'A shy teen finds her courage.', providerId: '', model: '', effort: '' }));
+    expect(await screen.findByRole('button', { name: '+ Beat instructions' })).toBeInTheDocument();
+    expect(api.addStoryboardBeats).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Exit/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add 1 beat' }));
+    await waitFor(() => expect(api.addStoryboardBeats).toHaveBeenCalledWith('sb-1', [beats[0]]));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('plot=open'));
   });
 });

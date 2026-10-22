@@ -258,7 +258,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // The FIRST incompatible board/beat/panel/take shape change MUST bump this to
   // 2 (a v1 peer would round-trip the new shape through an unaware sanitizer
   // and LWW the strip back onto the newer peer).
-  storyboards: 1,
+  // v2 = board-level `plot` (the plot summary beats are drawn from) and
+  // `plotLlm` (provider/model/effort last picked for it); a v1 peer would strip
+  // both, so only the storyboards category pauses until it upgrades.
+  storyboards: 2,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

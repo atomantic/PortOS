@@ -10,7 +10,7 @@ import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
   storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
-  storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
+  storyboardBeatsAddSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
@@ -20,6 +20,7 @@ import {
 import {
   getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
+import { addBeats, extractBeats } from '../services/storyboards/plot.js';
 import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
 
 const router = Router();
@@ -122,6 +123,16 @@ router.patch('/:id/panels/:panelId/make/:nodeId', asyncHandler(async (req, res) 
 // frames are queued (storyboard:make follows each frame).
 router.post('/:id/panels/:panelId/make/:nodeId/run', asyncHandler(async (req, res) => {
   res.json(await runPanelNode(req.params.id, req.params.panelId, req.params.nodeId));
+}));
+
+// Beats from a plot summary: extract answers with a preview (the board only
+// keeps the plot and LLM pick); add appends the beats the user keeps.
+router.post('/:id/beats/extract', asyncHandler(async (req, res) => {
+  res.json(await extractBeats(req.params.id, validateRequest(storyboardPlotExtractSchema, req.body ?? {})));
+}));
+
+router.post('/:id/beats/add', asyncHandler(async (req, res) => {
+  res.json(await addBeats(req.params.id, validateRequest(storyboardBeatsAddSchema, req.body ?? {}).beats));
 }));
 
 // Make empty panels: GET names what a run would do (panels, nodes, models);

@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, LayoutGrid, LayoutPanelLeft, Loader2, Plus, Rows3 } from 'lucide-react';
+import { ArrowLeft, LayoutGrid, LayoutPanelLeft, Loader2, Plus, Rows3, ScrollText } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -26,6 +26,7 @@ import { STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS } from '../../../server/lib
 import BeatSection from '../components/storyboards/BeatSection';
 import CommitField from '../components/storyboards/CommitField';
 import MakeEmptyPanels from '../components/storyboards/MakeEmptyPanels';
+import PlotBeatsDrawer from '../components/storyboards/PlotBeatsDrawer';
 import PanelCard from '../components/storyboards/PanelCard';
 import PanelDrawer from '../components/storyboards/PanelDrawer';
 import { beatSeconds, findPanel } from '../components/storyboards/storyboardArt';
@@ -36,12 +37,20 @@ const VIEW_TABS = [
 ];
 
 const selectClass = 'min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white';
+const headerButton = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white';
 
 export default function StoryboardDetail() {
   const { id, panelId } = useParams();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get('view') === 'board' ? 'board' : 'beats';
+  const plotOpen = searchParams.get('plot') === 'open';
+  const setPlotOpen = (on) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (on) next.set('plot', 'open');
+    else next.delete('plot');
+    return next;
+  }, { replace: !on });
   const viewSuffix = view === 'board' ? '?view=board' : '';
   // undefined = loading, null = missing.
   const [board, setBoard] = useState(undefined);
@@ -226,6 +235,9 @@ export default function StoryboardDetail() {
             {missingMoodBoard ? <option value={board.moodBoardId}>Missing mood board</option> : null}
             {moodBoards.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
+          <button type="button" onClick={() => setPlotOpen(true)} className={headerButton}>
+            <ScrollText size={16} aria-hidden="true" /> Beats from plot
+          </button>
           {board.beats.some((beat) => beat.panels.length) && <MakeEmptyPanels boardId={id} />}
         </div>
       </header>
@@ -233,10 +245,13 @@ export default function StoryboardDetail() {
       <div className="flex-1 min-h-0 overflow-auto p-2 sm:p-4">
         {board.beats.length === 0 ? (
           <div className="py-10 text-center space-y-3">
-            <p className="text-sm text-gray-400">Start with the first story beat.</p>
+            <p className="text-sm text-gray-400">Start with the first story beat, or draw the beats from a plot summary.</p>
             <button type="button" onClick={addBeat} disabled={pending === 'beat'}
               className="min-h-[44px] inline-flex items-center gap-1.5 px-4 rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50">
               <Plus size={16} aria-hidden="true" /> Beat
+            </button>
+            <button type="button" onClick={() => setPlotOpen(true)} className={`${headerButton} ml-2`}>
+              <ScrollText size={16} aria-hidden="true" /> Beats from plot
             </button>
           </div>
         ) : view === 'board' ? (
@@ -287,6 +302,7 @@ export default function StoryboardDetail() {
         )}
       </div>
 
+      <PlotBeatsDrawer open={plotOpen} board={board} onClose={() => setPlotOpen(false)} onBoard={apply} />
       <PanelDrawer
         open={!!panelId}
         board={board}
