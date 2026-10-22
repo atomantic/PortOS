@@ -28,3 +28,18 @@ export const deleteGitHubAccount = (id, options = {}) =>
   request(`/github/accounts/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 export const getGitHubAccountStatus = (id, options = {}) =>
   request(`/github/accounts/${encodeURIComponent(id)}/status`, options);
+
+// Notifications inbox: rows are stored server-side; sync fetches fresh ones.
+export const getGitHubNotifications = ({ accountId, view } = {}, options = {}) => {
+  const params = new URLSearchParams();
+  if (accountId) params.set('accountId', accountId);
+  if (view) params.set('view', view);
+  const qs = params.toString();
+  return request(`/github/notifications${qs ? `?${qs}` : ''}`, options);
+};
+export const syncGitHubNotifications = (accountId = null, options = {}) =>
+  request('/github/notifications/sync', { method: 'POST', body: JSON.stringify(accountId ? { accountId } : {}), ...options });
+export const applyGitHubNotificationAction = (accountId, threadId, action, options = {}) =>
+  request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}`, {
+    method: 'POST', body: JSON.stringify({ action }), ...options,
+  });
