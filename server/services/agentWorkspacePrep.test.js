@@ -480,7 +480,7 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
       agentId: 'agent-new', task: resumeTask({ analysisType: 'dependency-updates' }),
     });
 
-    expect(adoptWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), DEAD_TREE, 'cos/t-resume/agent-dead');
+    expect(adoptWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), DEAD_TREE, 'cos/t-resume/agent-dead', { preserveLockfiles: true });
     expect(unlinkWorktreeDependencies).toHaveBeenCalledWith(expect.any(String), '/mock/worktrees/agent-new');
     expect(createWorktree).not.toHaveBeenCalled();
     expect(r.outcome).toBe('ready');

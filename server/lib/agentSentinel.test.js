@@ -13,6 +13,14 @@ describe('missingSentinelLogMessage', () => {
     expect(message).not.toContain('finalized');
   });
 
+  it('names the TUI command and provider on a startup failure, and only there', () => {
+    const base = { agentId: 'agent-1', reason: 'paste-not-rendered', sentinelPath: '/work/.agent-done-agent-1' };
+    expect(missingSentinelLogMessage({ ...base, command: 'codex', providerId: 'codex-tui' }))
+      .toBe('agent-1 startup failed (paste-not-rendered tui=codex provider=codex-tui) before a completion sentinel could be written');
+    expect(missingSentinelLogMessage({ ...base, reason: 'idle-timeout', command: 'codex', providerId: 'codex-tui' }))
+      .toBe('agent-1 finalized (idle-timeout) with no completion sentinel — expected /work/.agent-done-agent-1');
+  });
+
   it('reads a missing TUI binary as a startup failure too', () => {
     // `command-not-found` exits before the prompt was sent — the login-shell
     // path printing "command not found" — so it is the same no-prompt shape.

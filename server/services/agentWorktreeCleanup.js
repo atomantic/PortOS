@@ -18,6 +18,7 @@ import { join } from 'path';
 import { emitLog } from './cosEvents.js';
 import { addTask, forceSpawnTask, getAgents, updateTask } from './cos.js';
 import * as git from './git.js';
+import { resolveTaskHookType } from './taskTypeHooks.js';
 import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
 import { claimContinuationPointer } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from './agentState.js';
@@ -295,6 +296,9 @@ function cleanupOptions({ prCreation = PR_CREATION.NEVER, prCompletion = null, r
     reviewerModels, reviewerEfforts, skipMerge, description, agentOutput, originalTask };
 }
 
+// A lockfile-only diff is a legitimate deliverable for dependency-updates only.
+export const lockfileDeliverable = (task) => (resolveTaskHookType(task) === 'dependency-updates' ? { preserveLockfiles: true } : {});
+
 async function discardAgentWorktree({ agentId, sourceWorkspace, worktreeBranch }) {
   emitLog('info', `🌳 Discarding worktree for reasoning agent ${agentId} (no merge, no PR)`, { agentId, branchName: worktreeBranch });
   // `discardDirt`: the discard prompt explicitly invites scratch edits ("only
@@ -378,7 +382,7 @@ async function openWorktreePullRequest(context) {
   return completeOpenedPullRequest(context, prResult);
 }
 
-async function handlePrCreationFailure({ agentId, sourceWorkspace, worktreeBranch, warnings }, prResult, targetBranch) {
+async function handlePrCreationFailure({ agentId, sourceWorkspace, worktreeBranch, warnings, originalTask }, prResult, targetBranch) {
   const reason = prResult?.error || 'unknown error (createPR returned null or threw)';
 
   // "No commits between X and Y" means the agent made no code changes.
@@ -390,7 +394,7 @@ async function handlePrCreationFailure({ agentId, sourceWorkspace, worktreeBranc
       emitLog('warn', `🌳 Remote branch delete failed for ${worktreeBranch}: ${err.message}`, { agentId });
       warnings.push(`Remote branch delete failed for ${worktreeBranch}: ${err.message}`);
     });
-    const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+    const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false, ...lockfileDeliverable(originalTask) }).catch(err => {
       emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
       return { warnings: [`Worktree cleanup failed for ${agentId}: ${err.message}`] };
     });
@@ -447,7 +451,7 @@ async function completeOpenedPullRequest(context, prResult) {
   // at …", the task was blocked, and the pull request it existed to land was
   // orphaned. Nothing below this point reads the worktree — the Copilot
   // pre-request above is the last user of that checkout.
-  const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+  const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false, ...lockfileDeliverable(originalTask) }).catch(err => {
     emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
     return { cleanupIncomplete: true, warnings: [`Worktree cleanup failed: ${err.message}`] };
   });
@@ -591,6 +595,7 @@ async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranc
   // from the preserved work through resolveResumeBranch below.
   const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, {
     merge: shouldMerge,
+    ...lockfileDeliverable(originalTask),
   }).catch(err => {
     emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
     return { cleanupIncomplete: true, warnings: [`Worktree cleanup failed: ${err.message}`] };
@@ -714,7 +719,7 @@ async function deleteMergedRemoteCopy(agentId, sourceWorkspace, branchName) {
  *   adoption candidate. Omit to consider only the branch-attach shape.
  * @returns {Promise<{branchName: string, worktreePath: string|null}|null>}
  */
-export async function resolveResumePointer(sourceWorkspace, branchName, worktreePath = null) {
+export async function resolveResumePointer(sourceWorkspace, branchName, worktreePath = null, { preserveLockfiles = false } = {}) {
   if (!sourceWorkspace || !branchName) return null;
 
   const survivingTree = !!(worktreePath && existsSync(worktreePath));
@@ -755,7 +760,7 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
     // resuming" can't disagree: lockfile churn an agent never meant to commit is
     // not work, and a tree holding only that should start clean.
     const porcelain = await git.getStatusPorcelain(worktreePath).catch(() => '');
-    if (!classifyWorktreeDirt(porcelain).hasRealChanges) return null;
+    if (!classifyWorktreeDirt(porcelain, { preserveLockfiles }).hasRealChanges) return null;
     emitLog('info', `🌳 Worktree ${worktreePath} survived on ${branchName} — a retry can adopt it and keep its uncommitted work`, { branchName, worktreePath });
     return { branchName, worktreePath };
   }
@@ -845,7 +850,7 @@ export async function resolveTaskResumePatch({ task, agentId, agentMetadata }) {
   // convention is the fallback for a record written before it was stamped (same
   // idiom cleanupAgentWorktree uses for the PR push).
   const worktreePath = agentMetadata.workspacePath || join(PATHS.worktrees, agentId);
-  const pointer = await resolveResumePointer(agentMetadata.sourceWorkspace, agentMetadata.worktreeBranch, worktreePath)
+  const pointer = await resolveResumePointer(agentMetadata.sourceWorkspace, agentMetadata.worktreeBranch, worktreePath, lockfileDeliverable(task))
     .catch(err => {
       emitLog('warn', `Failed to resolve resume pointer for ${agentId}: ${err.message}`, { agentId });
       return null;

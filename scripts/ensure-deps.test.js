@@ -98,7 +98,9 @@ describe('startup dependency reconciliation', () => {
     copyFileSync(join(REPO_ROOT, 'scripts', 'ensure-deps.js'), join(root, 'scripts', 'ensure-deps.js'));
     copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'directInvocation.js'), join(root, 'scripts', 'lib', 'directInvocation.js'));
     copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'workspaceDependencies.js'), join(root, 'scripts', 'lib', 'workspaceDependencies.js'));
-    writeFileSync(join(root, 'scripts', 'trusted-rebuilds.js'), 'export const rebuildTrusted = () => true;\n');
+    writeFileSync(join(root, 'scripts', 'trusted-rebuilds.js'), `
+      export const rebuildTrusted = () => true;
+    `);
     writeFileSync(join(root, 'server', 'lib', 'bufferedSpawn.js'), `
       import { fileURLToPath } from 'url';
       export const prepareCliSpawn = (command, args) => ({

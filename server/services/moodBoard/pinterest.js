@@ -145,7 +145,8 @@ export async function syncPinterestBoard(boardId) {
     const batch = candidates.slice(i, i + DOWNLOAD_CONCURRENCY);
     const results = await Promise.all(batch.map(async (pin) => {
       const localUrl = await downloadPinImage(pin);
-      return localUrl ? { imageUrl: localUrl, caption: pin.title || pin.description || null, source: pin.pinUrl } : null;
+      // A pin's title and description are someone else's words, so none is kept.
+      return localUrl ? { imageUrl: localUrl, source: pin.pinUrl } : null;
     }));
     for (const r of results) if (r) imported.push(r);
   }

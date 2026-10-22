@@ -439,6 +439,11 @@ const TASK_INTERVAL_DEFAULTS = {
   // buildTaskInput hook never spawns a coordinator agent — hence no prompt.
   // taskMetadata holds the run caps (lib/cosValidation.js clamps them).
   'error-log-triage': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: Object.fromEntries(Object.entries(ERROR_LOG_TRIAGE_LIMITS).map(([key, limit]) => [key, limit.default])) },
+  // github-notifications (#12871) syncs and triages the GitHub accounts on
+  // Dev Tools › GitHub. Off by default like every shipped task (other installs
+  // must not start polling GitHub on upgrade); the Automations tab sets the
+  // weekday cadence in one tap. No provider call and no coordinator agent.
+  'github-notifications': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null },
   // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). On-demand
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the
   // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
@@ -657,6 +662,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'media-render-research': 'Research local Apple Silicon image/video models, runtimes and settings; file ready-to-work issues for improvements (no code)',
   'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
   'error-log-triage': 'Triage new stderr lines from PortOS processes — fingerprint and dedupe against issues, then queue one investigation agent per new fault',
+  'github-notifications': 'Check each GitHub account\'s notifications and record a rule-based triage decision per thread — no model, no GitHub writes in Observe mode',
   'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code",
   'development-watchdog': 'Inspect maintainer repository ownership and queue eligible work without an inference call',
   'music-video-autopilot': 'Turn the next unused Brain idea into a fully autonomous music video — lyrics, Suno song, mood board and video. No agent',
@@ -691,6 +697,10 @@ export const TASK_TYPE_PROMPT_INFO = Object.freeze({
   'error-log-triage': Object.freeze({
     mode: 'runtime-generated',
     description: 'PortOS reads its own stderr logs, fingerprints and redacts each new fault, and dedupes it against the issue tracker with no model call. Each new fault seen at least the configured number of times queues one investigation agent on the provider and model below, up to the per-run cap; that prompt is generated from the redacted excerpt.'
+  }),
+  'github-notifications': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'No prompt: PortOS fetches notification metadata for each account on Dev Tools › GitHub and applies fixed trust, spam and routing rules. Observe mode only records the decisions.'
   }),
   'layered-intelligence': Object.freeze({
     mode: 'runtime-generated',

@@ -1444,6 +1444,8 @@ export function perpetualRefillPlan(agent, schedule) {
     // a task queued before the field existed is.
     const origin = agent?.metadata?.taskOnDemandOrigin || ON_DEMAND_ORIGINS.USER;
     if (!DRAINABLE_ON_DEMAND_ORIGINS.has(origin)) return { lane: 'skip' };
+    // Reconciliation is per-repository: an app-less legacy run would re-issue itself forever.
+    if (agentScheduledType(agent) === 'branch-reconcile' && !agent?.metadata?.taskApp) return { lane: 'skip' };
     return { lane: 'onDemand', taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null };
   }
   return { lane: 'queue' };

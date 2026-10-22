@@ -1913,6 +1913,76 @@ CREATE TABLE IF NOT EXISTS x_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_x_drafts_account_state ON x_drafts (account_id, state, created_at DESC);
 
+-- GitHub notifications inbox (#12870): machine-local, never federated.
+CREATE TABLE IF NOT EXISTS github_notifications (
+  account_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  repo_full_name TEXT NOT NULL,
+  repo_owner TEXT NOT NULL DEFAULT '',
+  repo_private BOOLEAN NOT NULL DEFAULT FALSE,
+  reason TEXT NOT NULL DEFAULT '',
+  subject_type TEXT NOT NULL DEFAULT '',
+  subject_title TEXT NOT NULL DEFAULT '',
+  subject_api_url TEXT,
+  html_url TEXT NOT NULL DEFAULT '',
+  unread BOOLEAN NOT NULL DEFAULT TRUE,
+  gh_updated_at TIMESTAMPTZ NOT NULL,
+  state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','done','muted','unsubscribed')),
+  state_changed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (account_id, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_github_notifications_account_updated ON github_notifications (account_id, gh_updated_at DESC);
+
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS latest_comment_api_url TEXT;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS decision TEXT;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS trust TEXT;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS suspect BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS triaged_for TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS github_notification_sync (
+  account_id TEXT PRIMARY KEY,
+  last_modified TEXT,
+  poll_interval_seconds INTEGER,
+  last_sync_at TIMESTAMPTZ,
+  last_error TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS github_notification_events (
+  id BIGSERIAL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  actor TEXT NOT NULL CHECK (actor IN ('operator','automation')),
+  kind TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_github_notification_events_thread ON github_notification_events (account_id, thread_id, created_at DESC);
+-- Learned rules (#12872): the operator's own corrections ('' actor = any).
+CREATE TABLE IF NOT EXISTS github_notification_rules (
+  id BIGSERIAL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  repo_full_name TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  decision TEXT NOT NULL CHECK (decision IN ('surface','suggest-done','suggest-mute')),
+  hits INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (account_id, repo_full_name, reason, actor)
+);
+-- Subscription audit (#12873): changes applied from audit cards, for Undo.
+CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
+  id BIGSERIAL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('unwatch','mute-handled')),
+  repo_full_name TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  applied_at TIMESTAMPTZ DEFAULT NOW(),
+  undone_at TIMESTAMPTZ
+);
+
 -- Beeper conversation mirror (#27). Machine-local mirror of the Beeper Desktop
 -- API — accounts, conversations, messages, participants, attachment metadata,
 -- and per-chat sync cursors. NEVER FEDERATED: no sync_sequence column, no

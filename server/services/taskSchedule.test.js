@@ -302,7 +302,7 @@ describe('taskSchedule', () => {
       // repo-sync sweeps every managed checkout; user-action-review reads the
       // install-wide operator-action ledger; error-log-triage reads PortOS's own
       // PM2 logs — none is a per-app run.
-      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review', 'model-comparison-refresh', 'error-log-triage'])
+      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review', 'model-comparison-refresh', 'error-log-triage', 'github-notifications'])
     })
 
     it('every install-wide type is a registered task type', () => {
@@ -314,7 +314,7 @@ describe('taskSchedule', () => {
 
   describe('managed-app target task types', () => {
     it('keeps app-required scope explicit and separate from install-wide scope', () => {
-      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['private-security-assessment', 'pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile'])
+      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['private-security-assessment', 'pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile', 'branch-reconcile'])
       expect(requiresManagedAppTarget('pr-reviewer')).toBe(true)
       expect(requiresManagedAppTarget('security')).toBe(false)
       expect(requiresManagedAppTarget('repo-sync')).toBe(false)

@@ -65,13 +65,14 @@ export async function stopApp(id) {
   appendFileSync(${JSON.stringify(join(stubs.dir, 'events.log'))}, 'stop ' + row.name + '\\n');
   return { success: true };
 }\n`);
-  const hooks = join(stubs.dir, 'hooks.mjs');
-  writeFileSync(hooks, `export async function resolve(specifier, context, next) {
-  const result = await next(specifier, context);
-  return result.url.endsWith('/server/services/pm2.js') ? { url: ${JSON.stringify(pathToFileURL(stubModule).href)}, format: 'module', shortCircuit: true } : result;
-}\n`);
+  // In-thread registerHooks: Node 26 deprecates module.register() with a
+  // stderr warning that breaks the exact-stderr assertions below.
   const register = join(stubs.dir, 'register.mjs');
-  writeFileSync(register, `import { register } from 'node:module';\nregister(${JSON.stringify(pathToFileURL(hooks).href)});\n`);
+  writeFileSync(register, `import { registerHooks } from 'node:module';
+registerHooks({ resolve(specifier, context, next) {
+  const result = next(specifier, context);
+  return result.url.endsWith('/server/services/pm2.js') ? { url: ${JSON.stringify(pathToFileURL(stubModule).href)}, format: 'module', shortCircuit: true } : result;
+} });\n`);
   return pathToFileURL(register).href;
 }
 

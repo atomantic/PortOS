@@ -32,6 +32,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // reach here.
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cos.js';
+import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderUnavailable } from './providerStatus.js';
 import { resolveProviderBench } from '../lib/providerCooldown.js';
@@ -539,6 +540,13 @@ async function verifyLandedChangeRequest(refs, forge, workspacePath) {
  * every existing caller, persisted payload and test sees exactly what it saw
  * before this indirection existed.
  */
+async function hasUncommittedLockfileDeliverable(task, workspacePath) {
+  if (resolveTaskHookType(task) !== 'dependency-updates') return false;
+  const { readWorktreeStatus, classifyWorktreeDirt } = await import('./worktreeManager.js');
+  const status = await readWorktreeStatus(workspacePath).catch(() => null);
+  return status !== null && classifyWorktreeDirt(status, { preserveLockfiles: true }).hasRealChanges;
+}
+
 function prVerdictFromObservation(observation) {
   const policy = PR_OBSERVATION_POLICY[observation.outcome];
   const verdict = { ok: policy.completionOk };
@@ -646,6 +654,11 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
     // Deliberately gated on an EXPLICIT 0: an unreadable count is not evidence
     // of an empty branch, so it leaves the miss standing.
     const ahead = await countCommitsAhead(workspacePath).catch(() => null);
+    // A dependency-updates run can leave its deliverable (a lockfile-only change)
+    // uncommitted; cleanup preserves it, so the empty branch is not "already current".
+    if (ahead === 0 && await hasUncommittedLockfileDeliverable(task, workspacePath)) {
+      return prObservation(PR_OBSERVATION.MISSING_PR, { branch, commitsAhead: 0, inconclusive: false });
+    }
     if (ahead === 0) return prObservation(PR_OBSERVATION.EMPTY_BRANCH, { branch });
     // The stand-down a parallel claim produces: the branch holds this run's
     // (now redundant) commits, the forge holds no change request for it, and
@@ -1907,7 +1920,7 @@ export async function finalizeAgent({
     if (taskUpdate.metadata) delete taskUpdate.metadata.privateSecurityScope;
   }
   const taskResult = await updateTask(task.id, taskUpdate, taskType);
-  if (taskResult?.error) {
+  if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
   }

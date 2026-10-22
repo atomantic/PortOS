@@ -1,8 +1,12 @@
 import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema } from '../lib/validation.js';
+import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
+  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
+  githubNotificationCadenceSchema, githubAuditApplySchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
+import * as githubNotifications from '../services/githubNotifications.js';
+import * as githubAudit from '../services/githubNotificationAudit.js';
 
 const router = express.Router();
 
@@ -122,6 +126,131 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
  */
 router.get('/accounts/:id/status', asyncHandler(async (req, res) => {
   res.json(await githubAccounts.getAccountStatus(req.params.id));
+}));
+
+/**
+ * GET /api/github/notifications — stored inbox rows for one or every account
+ */
+router.get('/notifications', asyncHandler(async (req, res) => {
+  const { accountId, view } = validateRequest(githubNotificationsQuerySchema, req.query);
+  res.json(await githubNotifications.listNotifications({ accountId, view }));
+}));
+
+/**
+ * POST /api/github/notifications/sync — fetch unread notifications from GitHub
+ */
+router.post('/notifications/sync', asyncHandler(async (req, res) => {
+  const { accountId } = validateRequest(githubNotificationsSyncSchema, req.body ?? {});
+  const results = accountId
+    ? [{ ...(await githubNotifications.syncAccountNotifications(accountId)), ok: true }]
+    : await githubNotifications.syncAllNotifications();
+  res.json({ results });
+}));
+
+const threadIdParam = (req) => {
+  if (!GITHUB_NOTIFICATION_THREAD_ID_RE.test(req.params.threadId)) {
+    throw new ServerError('Invalid notification thread id', { status: 400 });
+  }
+  return req.params.threadId;
+};
+
+/**
+ * GET /api/github/notifications/:accountId/:threadId — one thread with its triage evidence and action log
+ */
+router.get('/notifications/:accountId/:threadId', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.getNotification(req.params.accountId, threadIdParam(req)));
+}));
+
+/**
+ * POST /api/github/notifications/:accountId/:threadId — read / done / reopen / mute / unsubscribe / resubscribe
+ */
+router.post('/notifications/:accountId/:threadId', asyncHandler(async (req, res) => {
+  const { action } = validateRequest(githubNotificationActionSchema, req.body ?? {});
+  res.json(await githubNotifications.applyNotificationAction(req.params.accountId, threadIdParam(req), action));
+}));
+
+/**
+ * GET /api/github/automations — the notification check's cadence and each account's last run
+ */
+router.get('/automations', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.getAutomationsOverview());
+}));
+
+/**
+ * PUT /api/github/automations/schedule — weekday 15-minute checks, or Run now only
+ */
+router.put('/automations/schedule', asyncHandler(async (req, res) => {
+  const { cadence } = validateRequest(githubNotificationCadenceSchema, req.body ?? {});
+  res.json(await githubNotifications.setNotificationCadence(cadence));
+}));
+
+const numericIdParam = (req) => {
+  if (!/^\d{1,18}$/.test(req.params.id)) throw new ServerError('Invalid id', { status: 400 });
+  return req.params.id;
+};
+
+/**
+ * GET /api/github/automations/activity — recent Assist actions, newest first
+ */
+router.get('/automations/activity', asyncHandler(async (req, res) => {
+  res.json({ actions: await githubNotifications.listAutomationActivity() });
+}));
+
+/**
+ * POST /api/github/automations/activity/:id/undo — reverse one Assist action (reopen a done thread, unmute)
+ */
+router.post('/automations/activity/:id/undo', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.undoAutomationAction(numericIdParam(req)));
+}));
+
+/**
+ * GET /api/github/automations/rules — rules learned from the operator's corrections
+ */
+router.get('/automations/rules', asyncHandler(async (req, res) => {
+  res.json({ rules: await githubNotifications.listLearnedRules() });
+}));
+
+/**
+ * DELETE /api/github/automations/rules/:id — forget one learned rule
+ */
+router.delete('/automations/rules/:id', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.deleteLearnedRule(numericIdParam(req)));
+}));
+
+/**
+ * GET /api/github/audit-changes — changes applied from audit cards, newest first
+ */
+router.get('/audit-changes', asyncHandler(async (req, res) => {
+  res.json({ changes: await githubAudit.listAuditChanges() });
+}));
+
+/**
+ * POST /api/github/audit-changes/:id/undo — re-watch the repo or re-subscribe the muted threads
+ */
+router.post('/audit-changes/:id/undo', asyncHandler(async (req, res) => {
+  res.json(await githubAudit.undoAuditChange(numericIdParam(req)));
+}));
+
+/**
+ * GET /api/github/audit/:accountId — the account's latest audit, or null
+ */
+router.get('/audit/:accountId', asyncHandler(async (req, res) => {
+  res.json({ audit: await githubAudit.getLastAudit(req.params.accountId) });
+}));
+
+/**
+ * POST /api/github/audit/:accountId — audit the last 30 days of notifications against what was done about them
+ */
+router.post('/audit/:accountId', asyncHandler(async (req, res) => {
+  res.json({ audit: await githubAudit.runAccountAudit(req.params.accountId) });
+}));
+
+/**
+ * POST /api/github/audit/:accountId/apply — apply one audit suggestion (unwatch, mute handled threads)
+ */
+router.post('/audit/:accountId/apply', asyncHandler(async (req, res) => {
+  const { suggestionId } = validateRequest(githubAuditApplySchema, req.body ?? {});
+  res.json(await githubAudit.applyAuditSuggestion(req.params.accountId, suggestionId));
 }));
 
 export default router;

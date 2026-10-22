@@ -41,7 +41,10 @@ export function moodBoardAnalysisFromResult(item, result) {
 /**
  * Resolves the primary prompt text for a mood board item.
  * Prefers the analyzed prompt from prompt-from-media, then explicit item.prompt,
- * then a gallery item's caption prompt. Returns empty string if no prompt exists.
+ * then a gallery item's caption prompt. A pin imported from X, Pinterest or
+ * another page (or a frame cut from one) never offers its caption: that text is
+ * someone else's, so only an analysis inferred from its pixels is a prompt.
+ * Same imported-pin rule as the server's `moodBoardItemCaption`. Returns empty string if no prompt exists.
  */
 export function moodBoardItemPrompt(item) {
   if (item?.analysis?.prompt && typeof item.analysis.prompt === 'string' && item.analysis.prompt.trim()) {
@@ -50,7 +53,9 @@ export function moodBoardItemPrompt(item) {
   if (item?.prompt && typeof item.prompt === 'string' && item.prompt.trim()) {
     return item.prompt.trim();
   }
-  if ((item?.mediaKey?.startsWith('image:') || item?.mediaKey?.startsWith('video:')) && item?.caption && typeof item.caption === 'string' && item.caption.trim()) {
+  const local = typeof item?.mediaKey === 'string' && /^(?:image|video):/.test(item.mediaKey);
+  const external = typeof item?.source === 'string' && /^(?:https?:|frame:)/i.test(item.source);
+  if (local && !external && typeof item.caption === 'string' && item.caption.trim()) {
     return item.caption.trim();
   }
   return '';

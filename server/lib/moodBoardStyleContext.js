@@ -22,11 +22,28 @@ const CONTEXT_ITEMS_MAX = 60;
 const CONTEXT_FIELD_MAX = 600;
 const CONTEXT_TOTAL_CHARS_MAX = 24000;
 
+const EXTERNAL_SOURCE = /^(?:https?:|frame:)/i;
+
+/**
+ * The caption a model may read for a board item, or `''`. A pin imported from
+ * X, Pinterest or another page (its `source` is that page) — and a frame cut
+ * from one — can hold someone else's text: misleading at best, a prompt
+ * injection at worst. That text stays on the board for display, but only the
+ * prompt the item's analysis inferred from its pixels reaches a model. Captions
+ * the user or PortOS wrote (gallery pins, uploads, notes) still count.
+ */
+export function moodBoardItemCaption(item) {
+  if (typeof item?.caption !== 'string' || !item.caption.trim()) return '';
+  if (typeof item.source === 'string' && EXTERNAL_SOURCE.test(item.source)) return '';
+  return item.caption.trim();
+}
+
 /**
  * Reduce a board to the style-relevant text fragments the LLM sees. An item
- * contributes only what it actually carries: a text note, a caption, and/or a
- * persisted analysis (prompt + negative + rationale). Media items without any
- * of those contribute nothing — synthesis reads text, not pixels (analyzing
+ * contributes only what it actually carries: a text note, a caption that did
+ * not come from an imported page (`moodBoardItemCaption`), and/or a persisted
+ * analysis (prompt + negative + rationale). Media items without any of those
+ * contribute nothing — synthesis reads text, not pixels (analyzing
  * an item is Phase 3's explicit per-item vision step).
  */
 export function collectBoardStyleContext(board) {
@@ -38,9 +55,8 @@ export function collectBoardStyleContext(board) {
     if (it.type === 'text' && typeof it.text === 'string' && it.text.trim()) {
       entry.note = trimTo(it.text, CONTEXT_FIELD_MAX);
     }
-    if (typeof it.caption === 'string' && it.caption.trim()) {
-      entry.caption = trimTo(it.caption, CONTEXT_FIELD_MAX);
-    }
+    const caption = moodBoardItemCaption(it);
+    if (caption) entry.caption = trimTo(caption, CONTEXT_FIELD_MAX);
     if (typeof it.prompt === 'string' && it.prompt.trim()) {
       entry.prompt = trimTo(it.prompt, CONTEXT_FIELD_MAX);
     }
@@ -114,8 +130,7 @@ export function moodBoardImageCandidates(board, resolveItem) {
   for (const item of items) {
     const asset = typeof resolveItem === 'function' ? resolveItem(item) : null;
     if (!asset) continue;
-    const caption = typeof item?.caption === 'string' ? item.caption.trim() : '';
-    push(asset.kind, asset.filename, caption || asset.filename);
+    push(asset.kind, asset.filename, moodBoardItemCaption(item) || asset.filename);
   }
   return candidates;
 }

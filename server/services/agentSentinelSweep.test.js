@@ -94,9 +94,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('sweeping a repo\'s linked worktrees', (
     }
 
     const dirs = await checkoutDirsOf([repo]);
-    // Git on Windows lists long, forward-slash paths while the temp dir may be an
-    // 8.3 short name; the native realpath canonicalizes both the same way.
-    expect(dirs.map((d) => realpathSync.native(d))).toContain(realpathSync.native(tree));
+    // Git prints the long, forward-slash form; Windows temp dirs arrive as 8.3 short names.
+    expect(dirs.map(d => realpathSync.native(d))).toContain(realpathSync.native(tree));
     expect(await sweepStaleDoneSentinels(dirs, new Set(['agent-live']))).toBe(1);
     expect(await readdir(tree)).toContain('.agent-done-agent-live');
     expect(await readdir(tree)).not.toContain('.agent-done-agent-dead');

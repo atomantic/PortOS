@@ -13,6 +13,7 @@ export { PRIVATE_UNTRUSTED_CONTENT_SOURCES, UNTRUSTED_CONTENT_SOURCES } from '..
 export const UNTRUSTED_CONTENT_SOURCE_LABELS = Object.freeze({
   'github-issue': 'GitHub issues',
   'github-pr': 'GitHub pull requests',
+  'github-notification': 'GitHub notifications',
   'stacker-news': 'Stacker News',
   moltbook: 'Moltbook',
   messages: 'Messages',

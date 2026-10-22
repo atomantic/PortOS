@@ -132,7 +132,10 @@ describe('dependency override parity across manifests (#2848)', () => {
       // server/ only, so the parity assertion above never sees it — this floor is
       // the sole guard against a downgrade back onto the vulnerable 0.34.x line
       // that @huggingface/transformers still requests.
-      'sharp': '0.35.0'
+      'sharp': '0.35.0',
+      // GHSA-8r9p-f939-6h3c and GHSA-q3jh-wrc6-jgq8 (credential headers leak across
+      // cross-origin redirects); 1.16.0 was itself the fix for the previous advisory.
+      'follow-redirects': '1.16.1'
     };
 
     const EXACT_VERSION = /^\d+\.\d+\.\d+$/;

@@ -173,7 +173,7 @@ An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring
 Defined in `package.json` (root + server + client + autofixer) — kept current to dodge known upstream advisories:
 
 - `ws@8.21.3` (root + server + client)
-- `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.2` (root + server)
+- `lodash@4.18.1`, `follow-redirects@1.16.1`, `js-yaml@4.3.2` (root + server)
 - `nanoid@3.3.18`, `socket.io-parser@4.2.7` (server + client)
 - `path-to-regexp@8.4.2`, `body-parser@2.3.0`, `qs@6.16.0` (server + autofixer — the express-reachable subset; `autofixer/` mirrors only these three because a pin for a package absent from the tree reads as protection that does not exist)
 - `engine.io@6.6.9` (server only)
@@ -201,9 +201,13 @@ These exist purely to force-bump transitive deps; revisit if `npm audit` flags n
 
 Packages that legitimately need an install script are named explicitly in the allowlist in `scripts/trusted-rebuilds.js`, the single source consumed by `npm run setup`, `scripts/ensure-deps.js`, `setup.ps1`, `update.sh` / `update.ps1`, and CI. `scripts/trusted-rebuilds.test.js` fails if a workspace `.npmrc` loses the setting, or if a dependency appears with an install hook that nobody has explicitly decided about. Because CI caches `server/node_modules` between jobs, `scripts/trusted-rebuild-stamp.js` writes a mark into the tree in the same step that rebuilds it and checks that mark after a cache restore — a tree cached before the rebuild is otherwise indistinguishable from a good one, since the allowlisted packages all ship prebuilt bindings and import fine either way.
 
-### Retired install-time dependency patches
+### Install-time dependency patches
 
-PortOS used to patch two PM2 transitive dependencies during the trusted-rebuild step: get-uri's FTP adapter (#9462, with a `basic-ftp` override, #9444) and a recursion-depth guard for braces (#9906, GHSA-vfj7-8cjw-p6xm). PM2 7.1.0 dropped its `proxy-agent` dependency (and with it the get-uri → basic-ftp chain and `ip-address`), and it now vendors chokidar 3.6.0 under `modules/chokidar` with `braces` swapped for a bounded brace expander (nesting depth 10, 256 expansions). Neither patched package is installed any more, and the watch path keeps a recursion bound upstream. The patches, the `get-uri` and `ip-address` overrides, and the `patches` field of the trusted-rebuild stamp were removed with that bump. `server/dependency-overrides.test.js` fails if braces reappears in the root or server lockfile, because it would then run without the old guard.
+None at present. PortOS carried two from 2026-09/10 to 2026-10-21, both against packages that only PM2 pulled in through `proxy-agent`: an FTP LIST-date fallback for `get-uri` (#9444, #9462, with `basic-ftp` and `ip-address` overrides) and a recursion bound for `braces` (#9906, below). PM2 7.1.0 dropped `proxy-agent` and vendored `chokidar`, so none of those packages resolve in any lockfile and the patches, their overrides, their tests and the `patches` field of the trusted-rebuild stamp were removed with that bump. A tree stamped before the removal reads as stale and is rebuilt. If a patch is ever needed again, the hook point is `rebuildTrusted` in `scripts/trusted-rebuilds.js`, which every managed install path already calls after `npm install` because `ignore-scripts=true` rules out a postinstall hook.
+
+### PM2 brace recursion advisory (#9906)
+
+The upstream [braces advisory GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) never got a patched braces release. PM2 7.1.0 (2026-10-21) vendors chokidar with a bounded brace expansion and drops the `braces` dependency, so no lockfile resolves `braces` any more; the local depth patch PortOS carried from 2026-10-03 (`scripts/lib/bracesDepthPatch.js`) went with it. If a future dependency reintroduces `braces` 3.x, check first whether the dependency can be moved off it before restoring the patch from history.
 
 ## Inline Audit Policy
 

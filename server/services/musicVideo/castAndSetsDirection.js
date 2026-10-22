@@ -38,6 +38,7 @@ import { musicVideoCreativeContext, musicVideoSongStyleContext, withoutPeople } 
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 import { musicVideoBriefTools as briefTools } from '../../lib/musicVideoMediumPlan.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { moodBoardItemCaption } from '../../lib/moodBoardStyleContext.js';
 import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';
 
 // Mood board images are outside inspiration (Pinterest pins, uploads): they
@@ -136,7 +137,7 @@ export function moodBoardImageList(board, resolveItem) {
     out.push({
       kind: asset.kind,
       filename: asset.filename,
-      caption: trimTo(item.caption, MOOD_ITEM_TEXT),
+      caption: trimTo(moodBoardItemCaption(item), MOOD_ITEM_TEXT),
       analysis: trimTo(item.analysis?.prompt, MOOD_ITEM_TEXT),
     });
     if (out.length >= MOOD_ITEMS_MAX) break;

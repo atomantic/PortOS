@@ -1,4 +1,5 @@
 import { catalogIdentityEvents } from './catalogIdentity/events.js';
+import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { registerModelObservationSocket } from './modelObservation.js';
 import { registerBrowserStatusSocket } from './browserStatus.js';
 import { registerFleetHostSocket } from './fleetHostNotify.js';
@@ -318,6 +319,8 @@ const SIMPLE_BRIDGES = [
   { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },
   { emitter: catalogEvents, event: 'progress', channel: 'catalog:extract:progress' },
   { emitter: catalogIdentityEvents, event: 'changed', channel: 'catalog:identity-changed' },
+  // A GitHub notification inbox sync, triage or action changed stored rows.
+  { emitter: githubNotificationEvents, event: 'changed', channel: 'github:notifications:changed' },
   { emitter: aiStatusEvents, event: 'status', channel: 'ai:status' },
   // The call-host tab already gets `voice:call:state` from its own socket
   // handler (server/sockets/voice.js); this fans it out to every OTHER tab.

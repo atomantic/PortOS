@@ -32,9 +32,16 @@ const RAW_FLUSH_INTERVAL_MS = 1000;
  *
  * @param {object} opts
  * @param {string} opts.agentId  Agent id (used in logs and metadata updates).
+ * @param {(fileLabel: string) => boolean} [opts.isDrained]  True once the
+ *   final drain for that file's pipeline finished. An ENOENT after that point
+ *   is a straggler flush landing in a run directory the completion path has
+ *   already archived or removed — the transcript was fully written by the
+ *   drain, so it is neither flagged nor sent to stderr. ENOENT on a pipeline
+ *   that has not drained is still a fault: the directory vanished under a
+ *   live run.
  * @returns {object} Reporter with `report(fileLabel, err)` method.
  */
-export function createTranscriptWriteReporter({ agentId }) {
+export function createTranscriptWriteReporter({ agentId, isDrained = () => false }) {
   const reportedFailures = new Set();
 
   return {
@@ -45,6 +52,11 @@ export function createTranscriptWriteReporter({ agentId }) {
         return;
       }
       reportedFailures.add(failureKey);
+
+      if (err.code === 'ENOENT' && isDrained(fileLabel)) {
+        console.log(`⏭️ agent ${agentId} ${fileLabel} late write skipped after the final drain (ENOENT) — run directory already archived`);
+        return;
+      }
 
       // Log the first failure with error code and message
       console.error(`❌ agent ${agentId} ${fileLabel} write failed (${err.code || 'error'}): ${err.message}`);
@@ -94,8 +106,20 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
   let rawFlushing = null;
   let rawBytesWritten = 0;
   let rawSpoolTruncationWarned = false;
+  // A drain owns its pipeline until it returns: the debounce timer must not
+  // launch a second concurrent flush, or the drain can see an empty queue and
+  // resolve while that other flush's append is still in flight — the completion
+  // path would then archive the run directory under the pending write.
+  let linesDraining = false;
+  let rawDraining = false;
+  // Set once a drain has written everything queued; see the reporter's isDrained.
+  let linesDrained = false;
+  let rawDrained = false;
 
-  const reporter = createTranscriptWriteReporter({ agentId });
+  const reporter = createTranscriptWriteReporter({
+    agentId,
+    isDrained: (fileLabel) => (fileLabel === 'raw.txt' ? rawDrained : linesDrained),
+  });
 
   const flushPendingLines = () => withBackupAssetPublication(async () => {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
@@ -109,7 +133,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
   });
 
   const scheduleFlush = () => {
-    if (flushTimer || flushing) return;
+    if (flushTimer || flushing || linesDraining) return;
     flushTimer = setTimeout(() => {
       flushTimer = null;
       flushing = flushPendingLines().catch(err => reporter.report('state', err)).finally(() => {
@@ -192,7 +216,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
   });
 
   const scheduleRawFlush = () => {
-    if (rawFlushTimer || rawFlushing) return;
+    if (rawFlushTimer || rawFlushing || rawDraining) return;
     rawFlushTimer = setTimeout(() => {
       rawFlushTimer = null;
       rawFlushing = flushPendingRawChunks().catch(err => reporter.report('raw.txt', err)).finally(() => {
@@ -233,18 +257,51 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
     scheduleRawFlush();
   };
 
-  // Drain the parsed-line pipeline: await any in-flight flush, then flush
-  // whatever is still pending. Called at finalize (and mirrored order matters —
-  // see drainRaw) so completion events don't beat the last batch to disk.
+  // Drain a pipeline to empty: stop its timer, wait out the in-flight flush,
+  // then flush until nothing is queued. The drain is the only writer while it
+  // runs (scheduleFlush/scheduleRawFlush stand down on the draining flag), and
+  // the flag drops in `finally` so a rejected drain (e.g. BACKUP_SNAPSHOT_BUSY)
+  // does not wedge later flushes.
+  const drainPipeline = async ({ setDraining, getTimer, clearTimer, getInFlight, flush, hasPending }) => {
+    setDraining(true);
+    try {
+      for (;;) {
+        if (getTimer()) clearTimer();
+        const inFlight = getInFlight();
+        if (!inFlight) break;
+        await inFlight.catch(() => {});
+      }
+      do { await flush(); } while (hasPending());
+    } finally {
+      setDraining(false);
+    }
+  };
+
+  // Drain the parsed-line pipeline. Called at finalize (order matters — see
+  // drainRaw) so completion events don't beat the last batch to disk.
   const drainLines = async () => {
-    if (flushing) await flushing.catch(() => {});
-    await flushPendingLines();
+    await drainPipeline({
+      setDraining: (v) => { linesDraining = v; },
+      getTimer: () => flushTimer,
+      clearTimer: () => { clearTimeout(flushTimer); flushTimer = null; },
+      getInFlight: () => flushing,
+      flush: flushPendingLines,
+      hasPending: () => pendingLines.length > 0,
+    });
+    linesDrained = true;
   };
 
   // Drain the raw-chunk pipeline. Same shape as drainLines.
   const drainRaw = async () => {
-    if (rawFlushing) await rawFlushing.catch(() => {});
-    await flushPendingRawChunks();
+    await drainPipeline({
+      setDraining: (v) => { rawDraining = v; },
+      getTimer: () => rawFlushTimer,
+      clearTimer: () => { clearTimeout(rawFlushTimer); rawFlushTimer = null; },
+      getInFlight: () => rawFlushing,
+      flush: flushPendingRawChunks,
+      hasPending: () => pendingRawChunks.length > 0,
+    });
+    rawDrained = true;
   };
 
   return {
