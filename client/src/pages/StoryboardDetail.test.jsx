@@ -161,4 +161,43 @@ describe('StoryboardDetail', () => {
     await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('node=node-writer'));
     expect(await screen.findByRole('region', { name: 'Prompt writer node' })).toBeInTheDocument();
   });
+
+  it('refuses a canvas wire that would close a cycle, keeping the input wired', async () => {
+    const recipe = {
+      nodes: [
+        { id: 'node-a', type: 'text', title: 'Words', settings: { source: 'custom' }, text: 'Rain', x: 0, y: 0 },
+        { id: 'node-b', type: 'llm', title: 'First', settings: {}, x: 260, y: 0 },
+        { id: 'node-c', type: 'llm', title: 'Second', settings: {}, x: 520, y: 0 },
+      ],
+      edges: [{ from: 'node-a', to: 'node-b', toPort: 'prompt' }, { from: 'node-b', to: 'node-c', toPort: 'prompt' }],
+    };
+    api.getStoryboard.mockResolvedValue(board({ recipe }));
+    api.updateStoryboardRecipe.mockImplementation(async (_id, next) => board({ recipe: next, updatedAt: '2026-10-22T00:00:03.000Z' }));
+    renderAt('/storyboards/sb-1/panel/panel-1?panelTab=make&makeView=canvas');
+    await screen.findByRole('button', { name: 'Second (llm)' });
+
+    const dropWire = (fromId, toId, port) => {
+      const out = document.querySelector(`[data-node-id="${fromId}"] [data-port-out]`);
+      const input = document.querySelector(`[data-node-id="${toId}"] [data-port-in="${port}"] circle`);
+      fireEvent.pointerDown(out, { button: 0, pointerId: 1, pointerType: 'mouse', clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(window, { clientX: 40, clientY: 40 });
+      const original = document.elementFromPoint;
+      document.elementFromPoint = () => input;
+      try {
+        fireEvent.pointerUp(window, { clientX: 50, clientY: 50 });
+      } finally {
+        document.elementFromPoint = original;
+      }
+    };
+
+    dropWire('node-c', 'node-b', 'prompt');
+    expect(api.updateStoryboardRecipe).not.toHaveBeenCalled();
+
+    dropWire('node-a', 'node-c', 'prompt');
+    await waitFor(() => expect(api.updateStoryboardRecipe).toHaveBeenCalledTimes(1));
+    expect(api.updateStoryboardRecipe.mock.calls[0][1].edges).toEqual([
+      { from: 'node-a', to: 'node-b', toPort: 'prompt' },
+      { from: 'node-a', to: 'node-c', toPort: 'prompt' },
+    ]);
+  });
 });

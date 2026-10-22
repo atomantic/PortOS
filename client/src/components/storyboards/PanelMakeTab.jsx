@@ -130,11 +130,13 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
     ...recipe,
     edges: [...recipe.edges.filter((e) => !(e.to === node.id && e.toPort === port)), ...(fromId ? [{ from: fromId, to: node.id, toPort: port }] : [])],
   });
-  // A canvas wire: the dropped-on input must take the output's kind.
+  // A canvas wire: the dropped-on input must take the output's kind, and a
+  // wire that would close a cycle is refused so the input keeps its old wire.
   const connect = (fromId, toId, port) => {
     const from = recipe.nodes.find((n) => n.id === fromId);
     const to = recipe.nodes.find((n) => n.id === toId);
     if (!from || !to || RECIPE_NODE_PORTS[to.type].inputs[port] !== RECIPE_NODE_PORTS[from.type].output) return;
+    if (reaches(recipe.edges.filter((e) => !(e.to === toId && e.toPort === port)), toId, fromId)) return;
     wire(to)(port, fromId);
   };
   const duplicate = (node) => {
