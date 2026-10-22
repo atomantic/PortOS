@@ -5,14 +5,15 @@
  * Phase 5 scan/case backbone. Two submission lanes + a verification loop + a
  * human-task digest + a user-configured recheck schedule (privacyRecheckScheduler.js):
  *
- *   - Web-form lane  → browserService (real Chrome over CDP, SSRF-pinned nav).
- *     Detects CAPTCHA / anti-bot walls and records `blocked` — NEVER defeats
- *     them. Auto-submit is OFF by default; the default surfaces the prepared
- *     request + playbook as a `human_task_queued` digest item.
+ *   - Web-form lane  → queues a human task (no unattended submission).
+ *     PortOS never submits a web form for the operator: it surfaces the prepared
+ *     request + playbook as a `human_task_queued` digest item. `blocked` comes
+ *     from scan verdicts (anti-bot walls), which are NEVER defeated.
  *   - Email lane     → renders a CCPA/CPRA/GDPR/generic rights-request template,
  *     recipient LOCKED to the broker record's declared address, into the
- *     messages drafts queue. Auto-send only behind the explicit settings toggle
- *     `privacy.recheck.autoApproveOptOutEmails` (default false).
+ *     messages drafts queue. The settings toggle
+ *     `privacy.recheck.autoApproveOptOutEmails` (default false) only pre-approves
+ *     the draft; sending stays a human step in Comms.
  *   - Verification   → scans the synced Gmail inbox for broker confirmation
  *     mail, anti-phishing scores it (link domain must match the broker's own
  *     domains) before advancing `submitted → verification_pending`, and a
@@ -273,59 +274,36 @@ export function scoreVerificationEmail(message, broker) {
 // ─── Lane executors (side-effecting; injectable) ────────────────────────────
 
 /**
- * WEB-FORM lane. Default-safe: prepares the request and queues it as a human
- * task with the playbook + prepared disclosure, UNLESS auto-submit is enabled.
- * When enabled, it SSRF-pin-navigates the opt-out URL, detects an anti-bot wall
- * (→ `blocked`, never defeated) and otherwise records `submitted` with screenshot
- * evidence. A form that demands more than planned mid-flow → `human_task_queued`
- * (never discloses extra PII). Deps injectable so the run loop is testable.
+ * WEB-FORM lane. PortOS never submits a broker web form on the operator's
+ * behalf (that is external publication, a human step): the case is queued as a
+ * `human_task_queued` digest item carrying the playbook and the prepared
+ * disclosure, and the user runs the form themselves. Never touches a CAPTCHA.
  */
-export async function webFormLane(broker, kase, { disclosedFields, payload, listingUrls, autoSubmit = false, probe = null, now = new Date() }) {
+export async function webFormLane(broker, kase, { disclosedFields, now = new Date() }) {
   const optoutUrl = broker?.optout?.url;
-  const evidence = {
-    lane: 'web_form', optout_url: optoutUrl || null,
-    playbook: broker?.optout?.playbook || [], disclosed: disclosedFields,
-  };
-  // Default (auto-submit off): surface as a human task — the user runs the
-  // playbook with the prepared identifiers. Honest, and never touches a CAPTCHA.
-  if (!autoSubmit || !optoutUrl) {
-    await transitionCase(kase.id, 'human_task_queued', {
-      channel: 'web_form', disclosedFields, evidence: { ...evidence, requires: 'manual_submit' },
-      reason: !optoutUrl ? 'no_optout_url' : 'auto_submit_disabled', now,
-    });
-    return { caseId: kase.id, lane: 'web_form', outcome: 'human_task_queued' };
-  }
-  // Auto-submit path: probe the page (injectable — real impl drives CDP).
-  const result = probe ? await probe(optoutUrl, { broker, disclosedFields, payload, listingUrls }).catch((e) => ({ outcome: 'error', error: e?.message })) : { outcome: 'unavailable' };
-  if (result.outcome === 'blocked') {
-    // `blocked` is only reachable from a settled SCAN verdict (found / indirect /
-    // not_found). A `reappeared` case can't transition straight to blocked, so it
-    // goes to the digest as a human task with the wall reason instead — same
-    // net effect (a person must act), and it never trips the state machine.
-    const canBlock = ['found', 'indirect_exposure', 'not_found'].includes(kase.state);
-    const to = canBlock ? 'blocked' : 'human_task_queued';
-    await transitionCase(kase.id, to, { channel: 'web_form', reason: 'antibot_wall', evidence: { ...evidence, ...result.evidence }, now });
-    return { caseId: kase.id, lane: 'web_form', outcome: to };
-  }
-  if (result.outcome === 'submitted') {
-    await transitionCase(kase.id, 'optout_in_progress', { channel: 'web_form', disclosedFields, evidence, now });
-    const submitted = await transitionCase(kase.id, 'submitted', { channel: 'web_form', evidence: { ...evidence, screenshot: result.screenshot || null, confirmation: result.confirmation || null }, now });
-    return { caseId: kase.id, lane: 'web_form', outcome: 'submitted', case: submitted };
-  }
-  // Unexpected extra challenge / unavailable → human digest, no extra disclosure.
-  await transitionCase(kase.id, 'human_task_queued', { channel: 'web_form', disclosedFields, evidence: { ...evidence, requires: 'manual_submit', probe: result.outcome }, reason: result.outcome === 'error' ? 'probe_error' : 'needs_human', now });
+  await transitionCase(kase.id, 'human_task_queued', {
+    channel: 'web_form', disclosedFields,
+    evidence: {
+      lane: 'web_form', optout_url: optoutUrl || null,
+      playbook: broker?.optout?.playbook || [], disclosed: disclosedFields,
+      requires: 'manual_submit',
+    },
+    reason: optoutUrl ? 'manual_submit_required' : 'no_optout_url', now,
+  });
   return { caseId: kase.id, lane: 'web_form', outcome: 'human_task_queued' };
 }
 
 /**
  * EMAIL lane. Renders the rights-request template, LOCKS the recipient to the
  * broker's declared address, and creates a `draft` in the messages queue.
- * Auto-approve+send only when `autoApprove` (settings toggle) is on. Transitions
- * the case `optout_in_progress → submitted`. Deps injectable.
+ * `autoApprove` (settings toggle) only marks the draft approved; it is NEVER
+ * sent from here: the user sends it from Comms. Transitions the case
+ * `optout_in_progress → submitted` (the request is prepared, not yet sent).
+ * Deps injectable.
  */
 export async function emailLane(broker, kase, {
   disclosedFields, payload, listingUrls = [], autoApprove = false, now = new Date(),
-  accountsProvider = listAccounts, draftCreator = createDraft, draftApprover = approveDraft, sender = null,
+  accountsProvider = listAccounts, draftCreator = createDraft, draftApprover = approveDraft,
 }) {
   const to = broker?.optout?.email;
   if (typeof to !== 'string' || !to.includes('@')) {
@@ -350,21 +328,13 @@ export async function emailLane(broker, kase, {
 
   await transitionCase(kase.id, 'optout_in_progress', { channel: 'email', disclosedFields, evidence: { lane: 'email', to, template: templateName, draftId: draft.id, disclosed: disclosedFields }, now });
 
-  let sent = false;
-  if (autoApprove) {
-    // Standing-authorization auto-send (settings opt-in). Approve then dispatch.
-    await draftApprover(draft.id);
-    if (sender) {
-      const res = await sender(draft.id).catch((e) => ({ success: false, error: e?.message }));
-      sent = Boolean(res?.success);
-    }
-  }
+  if (autoApprove) await draftApprover(draft.id);
   const submitted = await transitionCase(kase.id, 'submitted', {
     channel: 'email',
-    evidence: { lane: 'email', to, template: templateName, draftId: draft.id, autoApproved: autoApprove, sent, disclosed: disclosedFields },
+    evidence: { lane: 'email', to, template: templateName, draftId: draft.id, autoApproved: autoApprove, disclosed: disclosedFields },
     now,
   });
-  return { caseId: kase.id, lane: 'email', outcome: 'submitted', draftId: draft.id, autoApproved: autoApprove, sent, case: submitted };
+  return { caseId: kase.id, lane: 'email', outcome: 'submitted', draftId: draft.id, autoApproved: autoApprove, case: submitted };
 }
 
 // ─── Planner (pure) ─────────────────────────────────────────────────────────
@@ -491,11 +461,11 @@ export async function runVerificationPass({
  * `found` cluster-parents-first via the chosen lane, (2) email `indirect_exposure`,
  * (3) poll verifications, (4) leave `blocked`/`human_task_queued` for the digest.
  *
- * Reads submission autonomy from settings (`privacy.recheck.autoApproveOptOutEmails`,
- * `privacy.recheck.autoSubmitWebForms`, both default OFF). Deps injectable.
+ * Reads `privacy.recheck.autoApproveOptOutEmails` (default OFF) from settings; it
+ * pre-approves drafts for the human to send. Nothing is sent or submitted here.
  */
 export async function runOptOutPass({
-  now = new Date(), settingsProvider = getSettings, deps = {}, runVerification = true, subjectId,
+  now = new Date(), settingsProvider = getSettings, runVerification = true, subjectId,
 } = {}) {
   // CONSENT GATE — BEFORE any vault read, broker fetch, or draft creation. NO
   // CONSENT, NO ACTION: a subject without an active `broker_optout` grant is
@@ -505,7 +475,6 @@ export async function runOptOutPass({
   const settings = await settingsProvider();
   const recheck = settings?.privacy?.recheck || {};
   const autoApprove = recheck.autoApproveOptOutEmails === true;
-  const autoSubmit = recheck.autoSubmitWebForms === true;
 
   const scanValues = await listScanEligibleValues({ subjectId: resolvedSubjectId });
   const payload = buildDisclosurePayload(scanValues);
@@ -540,8 +509,8 @@ export async function runOptOutPass({
       continue;
     }
     const result = lane === 'email'
-      ? await emailLane(broker, kase, { disclosedFields, payload, listingUrls, autoApprove, now, ...(deps.email || {}) })
-      : await webFormLane(broker, kase, { disclosedFields, payload, listingUrls, autoSubmit, now, ...(deps.webForm || {}) });
+      ? await emailLane(broker, kase, { disclosedFields, payload, listingUrls, autoApprove, now })
+      : await webFormLane(broker, kase, { disclosedFields, now });
     if (result.outcome === 'account_required') {
       skipped += 1;
       nextActions.add(result.nextAction);
@@ -551,11 +520,11 @@ export async function runOptOutPass({
   }
 
   const verification = runVerification
-    ? await runVerificationPass({ now, subjectId: resolvedSubjectId, ...(deps.verification || {}) })
+    ? await runVerificationPass({ now, subjectId: resolvedSubjectId })
     : null;
 
-  console.log(`📋 Opt-out pass: ${submitted.length} actioned, ${skipped} skipped (autoApprove=${autoApprove}, autoSubmit=${autoSubmit})`);
-  return { submitted, skipped, nextActions: [...nextActions], verification, subjectId: resolvedSubjectId, autonomy: { autoApprove, autoSubmit } };
+  console.log(`📋 Opt-out pass: ${submitted.length} actioned, ${skipped} skipped (autoApprove=${autoApprove})`);
+  return { submitted, skipped, nextActions: [...nextActions], verification, subjectId: resolvedSubjectId, autonomy: { autoApprove } };
 }
 
 // ─── Human-task digest ──────────────────────────────────────────────────────

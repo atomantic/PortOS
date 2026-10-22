@@ -210,12 +210,15 @@ describe('emailLane', () => {
     const states = transitionCase.mock.calls.map((c) => c[1]);
     expect(states).toEqual(['optout_in_progress', 'submitted']);
   });
-  it('auto-approves + sends when the toggle is on', async () => {
-    const sender = vi.fn(async () => ({ success: true }));
-    const res = await emailLane(broker, { id: 'c1' }, { disclosedFields: ['full_name', 'email'], payload, autoApprove: true, sender });
+  it('auto-approve approves the draft but never sends it', async () => {
+    approveDraft.mockClear();
+    const res = await emailLane(broker, { id: 'c1' }, { disclosedFields: ['full_name', 'email'], payload, autoApprove: true });
     expect(approveDraft).toHaveBeenCalledWith('draft-1');
-    expect(sender).toHaveBeenCalledWith('draft-1');
-    expect(res.sent).toBe(true);
+    expect(res).toMatchObject({ outcome: 'submitted', autoApproved: true });
+    expect(res).not.toHaveProperty('sent');
+    const evidence = transitionCase.mock.calls.at(-1)[2].evidence;
+    expect(evidence).toMatchObject({ autoApproved: true });
+    expect(evidence).not.toHaveProperty('sent');
   });
   it.each([
     ['an Outlook account drafts over the browser transport', [{ id: 'outlook-1', type: 'outlook', canSend: true }], 'outlook-1', 'playwright'],
@@ -238,27 +241,18 @@ describe('emailLane', () => {
 
 describe('webFormLane', () => {
   const broker = { id: 'spokeo', name: 'Spokeo', optout: { method: 'web_form', url: 'https://www.spokeo.com/optout', playbook: ['step 1'] }, disclosureFields: ['full_name', 'email', 'listing_url'] };
-  it('default (auto-submit off) → human_task_queued with the playbook', async () => {
-    const res = await webFormLane(broker, { id: 'c1' }, { disclosedFields: ['full_name'], payload: {}, listingUrls: [], autoSubmit: false });
+  it('always queues a human task with the playbook and never submits', async () => {
+    const res = await webFormLane(broker, { id: 'c1' }, { disclosedFields: ['full_name'] });
     expect(res.outcome).toBe('human_task_queued');
-    expect(transitionCase).toHaveBeenCalledWith('c1', 'human_task_queued', expect.objectContaining({ channel: 'web_form' }));
+    expect(transitionCase).toHaveBeenCalledWith('c1', 'human_task_queued', expect.objectContaining({
+      channel: 'web_form', reason: 'manual_submit_required',
+      evidence: expect.objectContaining({ playbook: ['step 1'], requires: 'manual_submit' }),
+    }));
+    expect(transitionCase.mock.calls.map((c) => c[1])).not.toContain('submitted');
   });
-  it('auto-submit + anti-bot wall → blocked (never defeated)', async () => {
-    const probe = vi.fn(async () => ({ outcome: 'blocked', evidence: { wall: 'captcha' } }));
-    const res = await webFormLane(broker, { id: 'c1', state: 'found' }, { disclosedFields: ['full_name'], payload: {}, listingUrls: [], autoSubmit: true, probe });
-    expect(res.outcome).toBe('blocked');
-  });
-  it('a reappeared case that hits a wall → human_task_queued (state machine safe)', async () => {
-    const probe = vi.fn(async () => ({ outcome: 'blocked' }));
-    const res = await webFormLane(broker, { id: 'c1', state: 'reappeared' }, { disclosedFields: ['full_name'], payload: {}, listingUrls: [], autoSubmit: true, probe });
-    expect(res.outcome).toBe('human_task_queued');
-  });
-  it('auto-submit success → submitted', async () => {
-    const probe = vi.fn(async () => ({ outcome: 'submitted', screenshot: 's.png' }));
-    const res = await webFormLane(broker, { id: 'c1' }, { disclosedFields: ['full_name'], payload: {}, listingUrls: [], autoSubmit: true, probe });
-    expect(res.outcome).toBe('submitted');
-    const states = transitionCase.mock.calls.map((c) => c[1]);
-    expect(states).toEqual(['optout_in_progress', 'submitted']);
+  it('records no_optout_url when the broker has no form URL', async () => {
+    await webFormLane({ id: 'x', optout: {} }, { id: 'c1' }, { disclosedFields: ['full_name'] });
+    expect(transitionCase).toHaveBeenCalledWith('c1', 'human_task_queued', expect.objectContaining({ reason: 'no_optout_url' }));
   });
 });
 
@@ -278,14 +272,14 @@ describe('runOptOutPass', () => {
     expect(res.submitted[0].lane).toBe('email');
     expect(res.submitted[0].outcome).toBe('submitted');
   });
-  it('reads autonomy toggles from settings', async () => {
+  it('reads the auto-approve toggle from settings', async () => {
     const vault = await import('./privacyVault.js');
     vault.listScanEligibleValues.mockResolvedValue(SCAN_VALUES);
-    settings.getSettings.mockResolvedValue({ privacy: { recheck: { autoApproveOptOutEmails: true, autoSubmitWebForms: true } } });
+    settings.getSettings.mockResolvedValue({ privacy: { recheck: { autoApproveOptOutEmails: true } } });
     listBrokers.mockResolvedValue([]);
     listBrokerCases.mockResolvedValue([]);
     const res = await runOptOutPass({ runVerification: false });
-    expect(res.autonomy).toEqual({ autoApprove: true, autoSubmit: true });
+    expect(res.autonomy).toEqual({ autoApprove: true });
   });
 });
 
