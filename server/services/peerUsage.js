@@ -587,7 +587,7 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
   const spanLength = pointCount + ROLLING_COST_WINDOW_DAYS - 1;
   const span = Array.from({ length: spanLength }, (_, i) => utcDay(todayMs - (spanLength - 1 - i) * DAY_MS));
 
-  const key = JSON.stringify([span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p)])]);
+  const key = JSON.stringify([rangeId, span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p)])]);
   if (rollingMemo?.key === key) return rollingMemo.value;
 
   const labels = new Map();
