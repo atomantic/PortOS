@@ -703,9 +703,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const release = { ...c.release, locked: false, lockReason: null };
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'pr-completion-review-required' }] });
     const retire = (more = {}) => retireInventoriedCheckout({ appId: 'app-1', release }, { ...c.opts, ...more });
-    injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+    // A reused branch: the obligation names an earlier PR, not this head.
+    injected.policies[0].metadata.branchCompletionPolicy = {
+      branch: release.branch, completion: 'review-then-merge', prUrl: 'https://github.com/example/repo/pull/41', tip: null,
+    };
+    injected.policies[0].metadata.branchCompletionPolicy.completion = 'leave-open';
     expect(await retire({ settleMergedReviewObligation: true })).toMatchObject({ ok: false, reason: 'pr-completion-human-handoff' });
-    injected.policies[0].metadata.prCompletionPolicy = 'review-then-merge';
+    injected.policies[0].metadata.branchCompletionPolicy.completion = 'review-then-merge';
     expect(await retire()).toMatchObject({ ok: false, reason: 'pr-completion-review-required' });
     expect(await registered(release.path)).toBe(true);
     const result = await retire({ settleMergedReviewObligation: true });
