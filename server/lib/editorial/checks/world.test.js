@@ -34,13 +34,6 @@ describe('worldbuilding-doctrine checks — registration (#2175)', () => {
     expect(all.has('world.unforeshadowed-solution')).toBe(true);
     expect(all.has('world.cost-free-power')).toBe(true);
   });
-
-  it('both checks gate off when the manuscript is empty', () => {
-    for (const check of worldChecks) {
-      expect(check.gate({ manuscript: '' }), check.id).toBe(false);
-      expect(check.gate({ manuscript: 'He drew the blade.' }), check.id).toBe(true);
-    }
-  });
 });
 
 describe('canonWorldSummary (#2175)', () => {

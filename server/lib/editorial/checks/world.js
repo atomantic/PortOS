@@ -2,6 +2,7 @@
 // review-side companion to the Sanderson's-Laws doctrine injected into the
 // universe-expansion generation prompt. Each entry is a declarative check; see
 // ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   WORLD_COST_FREE_POWER_STAGE,
   WORLD_UNFORESHADOWED_SOLUTION_STAGE,
@@ -55,7 +56,7 @@ export const worldChecks = [
     needsManuscript: true,
     configSchema: maxFindingsSchema,
     configFields: maxFindingsFields,
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
       // context: the world canon names the artifacts/powers/places a solution may
@@ -114,7 +115,7 @@ export const worldChecks = [
     needsManuscript: true,
     configSchema: maxFindingsSchema,
     configFields: maxFindingsFields,
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
       // context: the world canon + continuity world-rule facts state the costs and

@@ -1,5 +1,6 @@
 // Editorial checks — characterArc group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   ARC_REGRESSION_STAGE,
   ARC_TRANSITIONS_STAGE,
@@ -67,7 +68,7 @@ export const characterArcChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // All three blocks are fixed per-call overhead (re-sent on each chunk) and
       // pure context: the canon traits give the established temperament/voice/
@@ -155,7 +156,7 @@ export const characterArcChecks = [
         help: 'Cap findings so a large cast can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // All three blocks are fixed per-call overhead (re-sent on each chunk) and
       // pure context: the secondary-cast roster names which recurring non-POV
@@ -232,7 +233,7 @@ export const characterArcChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
       // context: the scene map lets the model attribute transitions to scenes,
@@ -294,7 +295,7 @@ export const characterArcChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
       // context: the authored arcs name each character's planned start → end state
@@ -395,7 +396,7 @@ export const characterArcChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // All three blocks are fixed per-call overhead (re-sent on each chunk) and
       // pure context: the authored payoffs name what the reader was PROMISED the
@@ -630,7 +631,7 @@ export const characterArcChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Per-scene, localized findings (one interiority gap = one scene), so this
     // stays a plain per-chunk run with no cross-chunk digest — mirrors
     // prose.info-dumping.

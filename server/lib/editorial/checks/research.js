@@ -1,5 +1,6 @@
 // Editorial checks — research group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   FACT_ACCURACY_STAGE,
   THEME_COHERENCE_STAGE,
@@ -57,7 +58,7 @@ export const researchChecks = [
     gate: (ctx) =>
       ctx.series?.factCritical === true
       && (ctx.series?.factReference || '').trim().length > 0
-      && (ctx.manuscript || '').trim().length > 0,
+      && hasManuscript(ctx),
     run: (ctx) => {
       // The author's documented real-world facts are the authoritative reference
       // the prose is judged against — fixed per-call overhead re-sent on each
@@ -103,7 +104,7 @@ export const researchChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
       // context: the declared themes let the model build a per-theme setup/

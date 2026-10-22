@@ -1,5 +1,6 @@
 // Editorial checks — dialogue group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   DIALOGUE_PLEASANTRIES_STAGE,
   EDITORIAL_PROMPT_OVERHEAD_TOKENS,
@@ -45,7 +46,7 @@ export const dialogueChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Localized to scene openings — plain per-chunk run, no digest.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
       stage: DIALOGUE_PLEASANTRIES_STAGE,
@@ -79,7 +80,7 @@ export const dialogueChecks = [
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Speech-tag verbs to leave alone (comma-separated or one per line) — a genre voice may keep some.' },
       { key: 'extraWords', label: 'Extra bookisms to flag', type: 'text', help: 'Series-specific ornate tags to add (comma-separated or one per line).' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -139,7 +140,7 @@ export const dialogueChecks = [
       { key: 'beatChars', label: 'Action-beat threshold (characters)', type: 'number', min: 0, max: 80, step: 1, help: 'How many non-quoted characters a dialogue paragraph needs to count as carrying a grounding action beat (which re-anchors the speaker).' },
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a dialogue-heavy draft can not flood the review.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -206,7 +207,7 @@ export const dialogueChecks = [
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Tag verbs to leave out of the inventory (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra ornate tags to count', type: 'text', help: 'Series-specific ornate tags to include in the inventory (comma-separated or one per line).' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -269,7 +270,7 @@ export const dialogueChecks = [
     configFields: [
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Localized prose-level findings (one on-the-nose line = one spot), so this
     // stays a plain per-chunk run with no cross-chunk digest — mirrors prose.info-dumping.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
@@ -303,7 +304,7 @@ export const dialogueChecks = [
     configFields: [
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Localized prose-level findings (one reported beat = one spot), so this stays
     // a plain per-chunk run with no cross-chunk digest — mirrors dialogue.on-the-nose.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
@@ -333,7 +334,7 @@ export const dialogueChecks = [
     configFields: [
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a large cast can not flood the review.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // The authored voice profiles are fixed per-call overhead (re-sent on each
       // chunk) and pure context: they let the model reconcile a character's drafted
