@@ -43,7 +43,8 @@ export default function MediaHistory() {
   const [selected, setSelected] = useState([]); // video ids
   const [stitching, setStitching] = useState(false);
   // Stitch job ids still running server-side; the toast waits for the job's own
-  // terminal event rather than the enqueue response (#13000).
+  // terminal event rather than the enqueue response (#13000). The button frees
+  // at enqueue: a repeat POST of the same ids returns the live job server-side.
   const stitchJobsRef = useRef(new Set());
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, updateAnnotation: saveAnnotation, getCardProps } = useMediaAnnotations();
@@ -78,7 +79,6 @@ export default function MediaHistory() {
   useEffect(() => {
     const settle = (event, onSettled) => {
       if (!stitchJobsRef.current.delete(event?.generationId)) return;
-      if (stitchJobsRef.current.size === 0) setStitching(false);
       onSettled();
     };
     const onCompleted = (event) => settle(event, () => { toast.success('Stitched videos'); refresh(); });
@@ -97,6 +97,7 @@ export default function MediaHistory() {
     try {
       const { job } = await stitchVideos(selected, { silent: true });
       stitchJobsRef.current.add(job.jobId);
+      setStitching(false);
       toast('Stitch queued — it lands in history when it finishes');
       setStitchMode(false);
       setSelected([]);
