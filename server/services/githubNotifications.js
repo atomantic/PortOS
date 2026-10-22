@@ -51,7 +51,13 @@ const ACTION_SPECS = {
   resubscribe: { method: 'PUT', path: '/subscription', fields: ['-F', 'ignored=false'], state: 'open' },
 };
 
-const syncFlight = createSingleFlight();
+// One flight per account, exclusive across its keys: a sync that may run
+// Assist/Autopilot never joins (or overlaps) a fetch-only one, and vice versa.
+const syncFlights = new Map();
+const syncFlightFor = (accountId) => {
+  if (!syncFlights.has(accountId)) syncFlights.set(accountId, createSingleFlight({ exclusive: true }));
+  return syncFlights.get(accountId);
+};
 
 const isNotModified = (error) => /\bHTTP 304\b/.test(String(error?.ghStderr || error?.message || ''));
 
@@ -117,10 +123,14 @@ async function recordSyncError(accountId, message) {
   );
 }
 
+// A sync requested without host control (#12952) fetches and triages only.
+const SKIPPED_AUTOMATION = Object.freeze({ sorted: 0, acted: 0, handedOff: 0, agentRuns: 0, skipped: 'no-host-control' });
+
 // Autopilot hands threads to their lanes first, so a thread a lane now owns
 // is not also sorted by Assist. Loaded lazily: the hand-off reaches the CoS
 // task schedule, which itself registers this module's scheduled check.
-async function runAutomation(account, env) {
+async function runAutomation(account, env, automate) {
+  if (!automate) return SKIPPED_AUTOMATION;
   const autopilot = account.mode === 'autopilot'
     ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account)
     : { handedOff: 0, agentRuns: 0 };
@@ -130,7 +140,7 @@ async function runAutomation(account, env) {
   return { ...assist, handedOff: autopilot.handedOff, agentRuns: autopilot.agentRuns };
 }
 
-async function syncAccountNow(account) {
+async function syncAccountNow(account, automate) {
   const env = await requireAccountEnv(account);
   const cursor = (await query('SELECT last_modified FROM github_notification_sync WHERE account_id = $1', [account.id])).rows[0];
   const first = await fetchPage(account, env, 1, cursor?.last_modified || null);
@@ -138,7 +148,7 @@ async function syncAccountNow(account) {
     await query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
     // Threads past the last run's triage cap still need a decision.
     const triage = await triageAccountNotifications(account, env);
-    const assist = await runAutomation(account, env);
+    const assist = await runAutomation(account, env, automate);
     if (triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
     return { accountId: account.id, changed: false, fetched: 0, triage, assist };
   }
@@ -177,27 +187,30 @@ async function syncAccountNow(account) {
     );
   });
   const triage = await triageAccountNotifications(account, env);
-  const assist = await runAutomation(account, env);
+  const assist = await runAutomation(account, env, automate);
   githubNotificationEvents.emit('changed', { accountId: account.id });
   console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}, triaged ${triage.triaged}, sorted ${assist.sorted}, acted on ${assist.acted}, handed off ${assist.handedOff}`);
   return { accountId: account.id, changed: true, fetched: records.length, truncated, triage, assist };
 }
 
-/** Fetch one account's unread notifications, coalescing concurrent requests. */
-export async function syncAccountNotifications(accountId) {
+/**
+ * Fetch one account's unread notifications, coalescing concurrent requests.
+ * `automate: false` (a caller without host control) skips Assist/Autopilot.
+ */
+export async function syncAccountNotifications(accountId, { automate = true } = {}) {
   const account = await getAccount(accountId);
-  return syncFlight.run(account.id, () => syncAccountNow(account).catch(async (error) => {
+  return syncFlightFor(account.id).run(automate, () => syncAccountNow(account, automate).catch(async (error) => {
     await recordSyncError(account.id, error.message).catch(() => {});
     throw error;
   }));
 }
 
 /** Sync every enabled account; one account's failure never hides another's result. */
-export async function syncAllNotifications() {
+export async function syncAllNotifications(options = {}) {
   const accounts = (await listAccounts()).filter((account) => account.enabled);
   const results = [];
   for (const account of accounts) {
-    results.push(await syncAccountNotifications(account.id)
+    results.push(await syncAccountNotifications(account.id, options)
       .then((result) => ({ ...result, ok: true }))
       .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
   }
