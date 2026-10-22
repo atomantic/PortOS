@@ -91,7 +91,7 @@ const CLI_DETAIL_MAX_CHARS = 200;
  * callers can tell "no detail available" apart from a detail that redacted to
  * an empty string.
  */
-function redactCliDetail(stderr) {
+export function redactCliDetail(stderr) {
   const lines = String(stderr || '').split('\n').map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return null;
   const detail = redactPii(scrubSecretTokens(lines[lines.length - 1]));
