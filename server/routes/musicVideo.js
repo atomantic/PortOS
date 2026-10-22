@@ -277,7 +277,8 @@ router.get('/', asyncHandler(async (req, res) => {
     const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst } : {}) });
     const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
     const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
-    const next = page.offset + page.items.length;
+    // A deletion between header selection and hydration still consumes its slot.
+    const next = Math.min(page.offset + page.limit, page.total);
     return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
   res.json(await Promise.all((await listProjects()).map((project) => presentProjectForRead(project))));

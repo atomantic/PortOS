@@ -266,6 +266,13 @@ describe('musicVideo routes', () => {
     expect(readOffPage).not.toHaveBeenCalled();
   });
 
+  it('advances past a page whose project was deleted between selection and hydration', async () => {
+    svc.listProjectPage.mockResolvedValueOnce({ items: [], total: 2, limit: 1, offset: 0 });
+    const response = await request(app).get('/api/music-video?summary=1&limit=1');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ items: [], total: 2, offset: 0, nextCursor: '1' });
+  });
+
   it('GET /:id 404s when missing', async () => {
     svc.getProject.mockResolvedValue(null);
     const r = await request(app).get('/api/music-video/mv-x');
