@@ -1080,6 +1080,44 @@ describe('probeTestDatabase', () => {
     expect(result.reason).not.toContain(String(port));
     expect(result.endpoint).toBe(`127.0.0.1:${port}/portos_test`);
   });
+
+  // A single pg connection queues overlapping queries (and pg@9 drops that), so the probe must await them in turn.
+  const fakeClient = ({ installed = [], trusted = [], superuser = true }) => {
+    let inFlight = false;
+    const respond = (sql) => {
+      if (sql.includes('pg_extension')) return { rows: installed.map((extname) => ({ extname })) };
+      if (sql.includes('pg_available_extension_versions')) return { rows: trusted.map((name) => ({ name })) };
+      if (sql.includes('pg_roles')) return { rows: [{ rolsuper: superuser }] };
+      return { rows: [] };
+    };
+    return {
+      connect: async () => {},
+      end: async () => {},
+      query(sql) {
+        if (inFlight) throw new Error('overlapping query on one client');
+        inFlight = true;
+        return Promise.resolve().then(() => {
+          inFlight = false;
+          return respond(sql);
+        });
+      },
+    };
+  };
+  const probeWith = (opts) => probeTestDatabase(
+    { PGHOST: '127.0.0.1', PGPORT: '5432', PGUSER: 'portos', PGPASSWORD: 'portos' },
+    { repoRoot: REPO_ROOT, createClient: () => fakeClient(opts) },
+  );
+
+  it('awaits its extension and role probes in turn on the single client', async () => {
+    const result = await probeWith({ installed: ['vector', 'pgcrypto'] });
+    expect(result).toEqual({ ok: true, endpoint: `127.0.0.1:5432/${TEST_DATABASE}`, provision: false });
+  });
+
+  it('still names a missing extension a non-superuser cannot create', async () => {
+    const result = await probeWith({ installed: ['pgcrypto'], superuser: false });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/^Postgres extension\(s\) vector missing/);
+  });
 });
 
 describe('buildPregateReport', () => {
