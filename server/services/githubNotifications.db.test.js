@@ -594,7 +594,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const advisoryTask = tasks.find((task) => !task.metadata.githubSecurityFix.repo);
     expect(advisoryTask.metadata.githubSecurityFix.advisories).toEqual(['GHSA-8r9p-f939-6h3c', 'GHSA-q3jh-wrc6-jgq8']);
     expect(await getNotification(account.id, '1404')).toMatchObject({ decision: 'handed-off', htmlUrl: 'https://github.com/advisories/GHSA-q3jh-wrc6-jgq8' });
-    expect((await getNotification(account.id, '1402')).evidence.handoff).toMatchObject({ lane: 'security-fix', taskId: 'task-1', batchSize: 2 });
+    // The two batches share a timestamp, so either may be queued first.
+    expect((await getNotification(account.id, '1402')).evidence.handoff).toMatchObject({ lane: 'security-fix', taskId: `task-${tasks.indexOf(repoTask) + 1}`, batchSize: 2 });
     // A repo you neither own nor manage is not yours to fix.
     expect(await getNotification(account.id, '1403')).toMatchObject({ decision: 'surface-high' });
     await syncAccountNotifications(account.id);
