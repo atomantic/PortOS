@@ -525,8 +525,11 @@ const addInto = (target, source, scale = 1) => {
  * days, this machine's history after 400), so a month bucket's cost is spread
  * evenly over that month's days that no longer have a day bucket. The month's
  * total is exact; its shape within the month is not.
+ *
+ * Claude Code use outside PortOS also comes from the instance's transcript
+ * history (see `withTranscriptClaude`).
  */
-function instanceDailyCosts({ daily = {}, monthly = {} }, span, providers, labels) {
+function instanceDailyCosts({ daily = {}, monthly = {}, transcript = {} }, span, providers, labels) {
   const missingDays = new Map();
   for (const day of span) {
     const month = day.slice(0, 7);
@@ -545,15 +548,33 @@ function instanceDailyCosts({ daily = {}, monthly = {} }, span, providers, label
     monthShare.set(month, share);
   }
   return span.map((day) => {
-    if (daily[day]) return costByGroup(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers }), labels);
-    return monthShare.get(day.slice(0, 7)) || {};
+    const costs = daily[day]
+      ? costByGroup(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers }), labels)
+      : { ...(monthShare.get(day.slice(0, 7)) || {}) };
+    return withTranscriptClaude(costs, transcript?.[day] && summarizeTranscriptDays({ [day]: transcript[day] }).totals.estimatedCost, labels);
   });
+}
+
+/**
+ * The Claude Code CLI's own transcripts count every session on the machine —
+ * the terminal, the desktop app's Code tab, AND the runs PortOS spawned. The
+ * ledger holds PortOS runs plus the terminal sessions the interactive scan
+ * billed (usageInteractiveScan.js, which reaches back only ~35 days from its
+ * first run), so each is a partial view of the same spend: the day's Claude
+ * cost is the larger of the two, never their sum.
+ */
+function withTranscriptClaude(costs, transcriptCost, labels) {
+  if ((transcriptCost || 0) > (costs.claude || 0)) {
+    if (!labels.has('claude')) labels.set('claude', familyLabel('claude'));
+    costs.claude = transcriptCost;
+  }
+  return costs;
 }
 
 function earliestDay(sources) {
   let earliest = null;
-  for (const { daily, monthly } of sources) {
-    for (const day of Object.keys(daily || {})) if (!earliest || day < earliest) earliest = day;
+  for (const { daily, monthly, transcript } of sources) {
+    for (const day of [...Object.keys(daily || {}), ...Object.keys(transcript || {})]) if (!earliest || day < earliest) earliest = day;
     for (const month of Object.keys(monthly || {})) if (!earliest || `${month}-01` < earliest) earliest = `${month}-01`;
   }
   return earliest;
@@ -571,11 +592,25 @@ let rollingMemo = null;
 export async function getFleetRollingCost({ providers = [], range = '3m', now = new Date() } = {}) {
   const { self, peers } = await entriesWithSelf();
   const local = getUsage();
+  // An unreadable transcript store charts PortOS runs only rather than failing.
+  const localTranscript = await readLocalTranscriptUsage().catch(() => null);
   // This machine always reads its live maps; with no minted identity yet it
   // still has its own history to chart.
   const sources = [
-    { id: self?.instanceId ?? 'local', stamp: local?.lastUpdated, daily: local?.dailyActivity, monthly: local?.monthlyActivity },
-    ...peers.map((e) => ({ id: e.instanceId, stamp: e.capturedAt, daily: e.usage.dailyActivity, monthly: e.usage.monthlyActivity })),
+    {
+      id: self?.instanceId ?? 'local',
+      stamp: [local?.lastUpdated, localTranscript?.updatedAt],
+      daily: local?.dailyActivity,
+      monthly: local?.monthlyActivity,
+      transcript: localTranscript?.days,
+    },
+    ...peers.map((e) => ({
+      id: e.instanceId,
+      stamp: e.capturedAt,
+      daily: e.usage.dailyActivity,
+      monthly: e.usage.monthlyActivity,
+      transcript: e.claudeCode?.days,
+    })),
   ];
 
   const todayMs = dayMs(utcDay(now.getTime()));

@@ -1,12 +1,14 @@
-import { stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { atomicWrite, PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import {
   UNKNOWN_MODEL,
   decodeGrokSessionDir,
   parseAgyTranscript,
+  parseClaudeTranscript,
+  parseCodexRollout,
   parseGrokTurns,
   parseJsonLines,
   totalTranscriptTokens
@@ -23,11 +25,13 @@ import {
 import { applyHistoricalUsageCorrections, forgetSiblingReconciledUsageRuns } from './usage.js';
 
 /**
- * Attribute Grok and Antigravity sessions that PortOS never launched.
+ * Attribute Claude Code, Codex, Grok and Antigravity sessions that PortOS never
+ * launched.
  *
  * `usageReconciler.js` only reads a CLI's session store inside a PortOS run's
  * own workspace and time window, so everything the user does in a terminal —
- * the interactive `grok` / `agy` sessions that actually burn the weekly quota —
+ * the interactive `claude` / `codex` / `grok` / `agy` sessions (and the desktop
+ * apps that write the same session stores) that actually burn the weekly quota —
  * never reached the cost report, and both plans read as far cheaper than their
  * subscription. This scan walks every session on the machine and bills what the
  * run path did NOT.
@@ -49,7 +53,7 @@ import { applyHistoricalUsageCorrections, forgetSiblingReconciledUsageRuns } fro
 
 export const INTERACTIVE_SCAN_FILE = join(PATHS.data, 'usage-interactive-scan.json');
 
-const FAMILIES = ['grok', 'agy'];
+const FAMILIES = ['claude', 'codex', 'grok', 'agy'];
 const DAY_MS = 86_400_000;
 // A CLI flushes an event slightly after it stamps it; leaving the newest few
 // minutes for the next scan keeps a still-being-written turn from being cut.
@@ -118,7 +122,21 @@ const windowsFor = (byCwd, sessionCwd) => {
   return out;
 };
 
-/** Session files written since `from`: `{ cwd, path, mtimeMs, birthMs }`. */
+// The CLI's own override applies only to the real home; a fixture home wins.
+const cliHome = (home, envVar, dirName) => (home === homedir() && process.env[envVar]) || join(home, dirName);
+
+/** Every `.jsonl` under `root`, at any depth (Claude sidechains, Codex date dirs). */
+async function listJsonl(root) {
+  const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map((entry) => join(entry.parentPath ?? entry.path, entry.name));
+}
+
+/**
+ * Session files written since `from`: `{ cwd, path, mtimeMs, birthMs }`. A null
+ * `cwd` on a Claude or Codex file is read from its own content in `parseSession`.
+ */
 async function listSessions(family, home, from) {
   const sessions = [];
   const add = async (cwd, path) => {
@@ -126,7 +144,15 @@ async function listSessions(family, home, from) {
     if (!info || info.mtimeMs < from) return;
     sessions.push({ cwd, path, mtimeMs: info.mtimeMs, birthMs: info.birthtimeMs || info.mtimeMs });
   };
-  if (family === 'grok') {
+  if (family === 'claude') {
+    const root = join(cliHome(home, 'CLAUDE_CONFIG_DIR', '.claude'), 'projects');
+    for (const path of await listJsonl(root)) await add(null, path);
+  } else if (family === 'codex') {
+    const root = join(cliHome(home, 'CODEX_HOME', '.codex'), 'sessions');
+    for (const path of await listJsonl(root)) {
+      if (basename(path).startsWith('rollout-')) await add(null, path);
+    }
+  } else if (family === 'grok') {
     const root = join(home, '.grok', 'sessions');
     for (const dirName of await listSubdirs(root)) {
       const cwd = decodeGrokSessionDir(dirName);
@@ -149,29 +175,50 @@ const addBuckets = (target, buckets) => {
   for (const field of BUCKET_FIELDS) target[field] = (target[field] || 0) + (buckets[field] || 0);
 };
 
+/** The working directory a Claude transcript or Codex rollout records about itself. */
+function cwdFromEntries(family, entries) {
+  for (const entry of entries) {
+    if (family === 'codex' && entry.type === 'session_meta' && typeof entry.payload?.cwd === 'string') return entry.payload.cwd;
+    if (family === 'claude' && typeof entry.cwd === 'string' && entry.cwd) return entry.cwd;
+  }
+  return null;
+}
+
+/**
+ * One slice's billed buckets per model. `seen` is the scan-wide set of Claude
+ * message keys already counted: a resumed or forked session replays earlier
+ * messages into a NEW file under their original ids and timestamps.
+ */
+function parseSlice(family, entries, slice, seen) {
+  if (family === 'claude') {
+    const parsed = parseClaudeTranscript(entries, { from: slice.from, to: slice.to, exclude: seen });
+    for (const key of parsed.countedKeys) seen.add(key);
+    return parsed.byModel;
+  }
+  // A rollout's totals are cumulative; a windowed read is the slice's delta.
+  if (family === 'codex') return parseCodexRollout(entries, { from: slice.from, to: slice.to }).byModel;
+  if (family === 'grok') return parseGrokTurns(entries, { from: slice.from, to: slice.to }).byModel;
+  return { [UNKNOWN_MODEL]: agyEstimatedBuckets(parseAgyTranscript(entries, { from: slice.from, to: slice.to })) };
+}
+
 /** One session file's billed buckets per `{ day, model }` inside `[from, to]`, minus run windows. */
-async function parseSession(family, session, from, to, byCwd) {
+async function parseSession(family, session, from, to, byCwd, seen) {
   const text = await tryReadFile(session.path);
   if (!text) return [];
   // Parsed once and windowed per day slice: re-splitting a multi-MB file per
   // slice would cost ~35 parses of it on a first scan.
   const entries = parseJsonLines(text);
+  const cwd = session.cwd ?? cwdFromEntries(family, entries);
   // A file cannot hold anything before it existed or after it was last written.
   // A birth time AFTER the last write means the file was copied or restored, so
   // it says nothing about when its content began — read from the window start.
   const lo = session.birthMs <= session.mtimeMs ? Math.max(from, session.birthMs - DAY_MS) : from;
   const hi = Math.min(to, session.mtimeMs + WINDOW_SLACK_MS);
   const results = [];
-  for (const [a, b] of subtractWindows(lo, hi, windowsFor(byCwd, session.cwd))) {
+  for (const [a, b] of subtractWindows(lo, hi, windowsFor(byCwd, cwd))) {
     for (const slice of splitByUtcDay(a, b)) {
-      if (family === 'grok') {
-        const parsed = parseGrokTurns(entries, { from: slice.from, to: slice.to });
-        for (const [model, buckets] of Object.entries(parsed.byModel)) {
-          if (totalTranscriptTokens(buckets) > 0) results.push({ day: slice.day, model, buckets });
-        }
-      } else {
-        const buckets = agyEstimatedBuckets(parseAgyTranscript(entries, { from: slice.from, to: slice.to }));
-        if (totalTranscriptTokens(buckets) > 0) results.push({ day: slice.day, model: UNKNOWN_MODEL, buckets });
+      for (const [model, buckets] of Object.entries(parseSlice(family, entries, slice, seen))) {
+        if (totalTranscriptTokens(buckets) > 0) results.push({ day: slice.day, model, buckets });
       }
     }
   }
@@ -179,7 +226,8 @@ async function parseSession(family, session, from, to, byCwd) {
 }
 
 /**
- * Bill every un-launched Grok / Antigravity session since the last scan.
+ * Bill every un-launched Claude Code / Codex / Grok / Antigravity session since
+ * the last scan.
  *
  * Resolves with `{ families: { [family]: { days, tokens } } }`. A family with no
  * configured provider is skipped WITHOUT advancing its watermark, so enabling
@@ -204,8 +252,9 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       if (to < from) continue;
 
       const perDay = new Map();
+      const seen = new Set();
       for (const session of await listSessions(family, home, from)) {
-        for (const { day, model, buckets } of await parseSession(family, session, from, to, byCwd)) {
+        for (const { day, model, buckets } of await parseSession(family, session, from, to, byCwd, seen)) {
           if (!perDay.has(day)) perDay.set(day, { byModel: {} });
           const dayTotals = perDay.get(day);
           addBuckets(dayTotals, buckets);
@@ -219,7 +268,8 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       const corrections = [];
       let tokens = 0;
       for (const [day, totals] of perDay) {
-        const measured = { ...totals, source: family === 'grok' ? 'measured' : 'estimate', model: null };
+        // Antigravity writes no token counts; every other family's are the CLI's own.
+        const measured = { ...totals, source: family === 'agy' ? 'estimate' : 'measured', model: null };
         const provider = resolveFamilyProvider(providerList, family, measured);
         if (!provider) continue;
         tokens += totalTranscriptTokens(totals);

@@ -541,6 +541,32 @@ describe('fleet rolling 30-day cost', () => {
     expect(series.points.at(-1).values).toEqual([series.points.at(-1).cost]);
   });
 
+  // Transcripts hold every Claude Code session on the machine, PortOS's own
+  // runs included, and the ledger holds a subset of them: each day takes the
+  // larger, never the sum.
+  it('counts Claude Code from transcripts where they exceed the ledger, never on top', async () => {
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    const { summarizeTranscriptDays } = await import('./claudeCodeModelReport.js');
+    localUsage = usageFixture();
+    const bucket = localUsage.dailyActivity['2026-08-30'];
+    bucket.byProvider = { 'claude-code': bucket.byProvider.anthropic };
+    const ledger = dayCost(localUsage, '2026-08-30');
+    const counts = (output) => ({ messages: 4, input: 2_000_000, output, cacheRead: 0, cacheWrite: 0 });
+    const transcript = { '2026-08-30': { 'claude-opus-5': counts(3_000_000) }, '2026-08-29': { 'claude-opus-5': counts(1_000_000) } };
+    await atomicWrite(TRANSCRIPT_USAGE_FILE, { days: transcript, updatedAt: '2026-08-31T00:00:00.000Z' });
+    const dayTranscript = (day) => summarizeTranscriptDays({ [day]: transcript[day] }).totals.estimatedCost;
+    expect(dayTranscript('2026-08-30')).toBeGreaterThan(ledger);
+
+    const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
+    expect(series.series).toEqual([{ key: 'claude', label: 'Claude Code' }]);
+    expect(series.points.at(-1).cost).toBeCloseTo(dayTranscript('2026-08-30') + dayTranscript('2026-08-29'), 1);
+
+    // A day where the ledger already holds more keeps the ledger's figure.
+    await atomicWrite(TRANSCRIPT_USAGE_FILE, { days: { '2026-08-30': { 'claude-opus-5': { messages: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } } }, updatedAt: '2026-08-31T01:00:00.000Z' });
+    const lower = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
+    expect(lower.points.at(-1).cost).toBeCloseTo(ledger, 2);
+  });
+
   it('charts this machine alone before any peer has synced', async () => {
     const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
     expect(series.instanceCount).toBe(1);

@@ -17,6 +17,8 @@ const { refreshInteractiveUsage, INTERACTIVE_SCAN_FILE } = await import('./usage
 
 const GROK = { id: 'grok-cli', type: 'cli', command: 'grok', enabled: true, defaultModel: 'example-grok-model' };
 const AGY = { id: 'antigravity-cli', type: 'cli', command: 'agy', enabled: true, defaultModel: 'example-agy-model' };
+const CODEX = { id: 'codex-cli', type: 'cli', command: 'codex', enabled: true, defaultModel: 'example-codex-model' };
+const CLAUDE = { id: 'claude-code', type: 'cli', command: 'claude', enabled: true, defaultModel: 'example-claude-model' };
 // Real time: a file's birth time can't be faked, and the scan prunes on it.
 const NOW = Date.now();
 const HOUR = 3_600_000;
@@ -124,5 +126,51 @@ describe('refreshInteractiveUsage', () => {
     await refreshInteractiveUsage({ home, runsDir, providers: [AGY], now: NOW });
     const record = applied.find((c) => c.providerId === 'antigravity-cli').siblings[0];
     expect(record).toMatchObject({ source: 'estimate', tokensIn: 100, tokensOut: 50 });
+  });
+
+  // A rollout's token totals are cumulative, so the run-owned tail must not
+  // leak into the terminal slice and the terminal head must not be lost.
+  it('bills a terminal Codex rollout up to a PortOS run window, not past it', async () => {
+    const runDir = join(runsDir, 'run-1');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, 'metadata.json'), JSON.stringify({
+      workspacePath: CWD, startTime: new Date(P3 - 60_000).toISOString(), endTime: new Date(P3 + 60_000).toISOString()
+    }));
+    const dir = join(home, '.codex', 'sessions', '2026', '10', '22');
+    await mkdir(dir, { recursive: true });
+    const snapshot = (ms, input, cached, output) => JSON.stringify({
+      timestamp: new Date(ms).toISOString(),
+      type: 'event_msg',
+      payload: { type: 'token_count', info: { total_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output } } }
+    });
+    await writeFile(join(dir, 'rollout-1.jsonl'), [
+      JSON.stringify({ timestamp: new Date(P2 - 60_000).toISOString(), type: 'session_meta', payload: { id: 'r1', cwd: CWD, model: 'example-codex-model' } }),
+      snapshot(P2, 1000, 400, 100),
+      snapshot(P3, 3000, 1000, 500)
+    ].join('\n'));
+
+    const summary = await refreshInteractiveUsage({ home, runsDir, providers: [CODEX], now: NOW });
+    expect(summary.families.codex.tokens).toBe(600 + 400 + 100);
+    const records = applied.filter((c) => c.providerId === 'codex-cli').map((c) => c.siblings[0]);
+    expect(records.every((r) => r.source === 'measured')).toBe(true);
+    expect(records.reduce((sum, r) => sum + r.tokensOut, 0)).toBe(100);
+  });
+
+  // A resumed Claude Code session replays earlier messages into a new file
+  // under their original ids; they are billed once.
+  it('bills terminal Claude Code sessions once across resumed transcripts', async () => {
+    const dir = join(home, '.claude', 'projects', '-example-workspace');
+    await mkdir(join(dir, 'subagents'), { recursive: true });
+    const line = (id, ms, output) => JSON.stringify({
+      type: 'assistant', timestamp: new Date(ms).toISOString(), cwd: CWD, requestId: `req-${id}`,
+      message: { id, model: 'example-claude-model', usage: { input_tokens: 10, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    });
+    await writeFile(join(dir, 'a.jsonl'), line('m1', P2, 100));
+    await writeFile(join(dir, 'subagents', 'b.jsonl'), [line('m1', P2, 100), line('m2', P2 + 60_000, 50)].join('\n'));
+
+    await refreshInteractiveUsage({ home, runsDir, providers: [CLAUDE], now: NOW });
+    const records = applied.filter((c) => c.providerId === 'claude-code').map((c) => c.siblings[0]);
+    expect(records.reduce((sum, r) => sum + r.tokensOut, 0)).toBe(150);
+    expect(records.reduce((sum, r) => sum + r.tokensIn, 0)).toBe(20);
   });
 });
