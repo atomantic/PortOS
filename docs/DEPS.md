@@ -203,7 +203,7 @@ Packages that legitimately need an install script are named explicitly in the al
 
 ### Retired install-time dependency patches
 
-PortOS used to patch two PM2 transitive dependencies during the trusted-rebuild step: get-uri's FTP adapter (#9462, with a `basic-ftp` override, #9444) and a recursion-depth guard for braces (#9906, GHSA-vfj7-8cjw-p6xm). PM2 7.1.0 dropped its `proxy-agent` dependency (and with it the get-uri → basic-ftp chain and `ip-address`) and its chokidar 3 watcher dependency, so neither package is installed any more. The patches, the `get-uri` and `ip-address` overrides, and the `patches` field of the trusted-rebuild stamp were removed with that bump. `server/dependency-overrides.test.js` fails if braces reappears in the root or server lockfile, because it would then run without the old guard.
+PortOS used to patch two PM2 transitive dependencies during the trusted-rebuild step: get-uri's FTP adapter (#9462, with a `basic-ftp` override, #9444) and a recursion-depth guard for braces (#9906, GHSA-vfj7-8cjw-p6xm). PM2 7.1.0 dropped its `proxy-agent` dependency (and with it the get-uri → basic-ftp chain and `ip-address`), and it now vendors chokidar 3.6.0 under `modules/chokidar` with `braces` swapped for a bounded brace expander (nesting depth 10, 256 expansions). Neither patched package is installed any more, and the watch path keeps a recursion bound upstream. The patches, the `get-uri` and `ip-address` overrides, and the `patches` field of the trusted-rebuild stamp were removed with that bump. `server/dependency-overrides.test.js` fails if braces reappears in the root or server lockfile, because it would then run without the old guard.
 
 ## Inline Audit Policy
 
