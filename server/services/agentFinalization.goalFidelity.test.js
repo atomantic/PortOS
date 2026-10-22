@@ -43,7 +43,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
 }));
 
 const updateTaskMock = vi.fn(async () => ({}));
-vi.mock('./cos.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
+vi.mock('./cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
 vi.mock('./providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('./providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),

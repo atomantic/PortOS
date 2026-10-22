@@ -42,21 +42,25 @@ vi.mock('../lib/uuid.js', () => ({
   v4: vi.fn(() => 'mock-uuid')
 }));
 
-vi.mock('./cos.js', () => ({
-  cosEvents: { on: vi.fn(), emit: vi.fn() },
+vi.mock('./cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
   appendAgentOutput: vi.fn().mockResolvedValue(undefined),
-  getConfig: vi.fn().mockResolvedValue({}),
-  updateTask: vi.fn().mockResolvedValue(undefined),
-  addTask: vi.fn().mockResolvedValue(undefined),
-  emitLog: vi.fn(),
-  getTaskById: vi.fn().mockResolvedValue(null),
-  forceSpawnTask: vi.fn().mockResolvedValue({ success: true }),
   getAgent: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null),
   getAgents: vi.fn().mockResolvedValue([])
+}));
+vi.mock('./cosState.js', () => ({
+  getConfig: vi.fn().mockResolvedValue({})
+}));
+vi.mock('./cosTaskStore.js', () => ({
+  updateTask: vi.fn().mockResolvedValue(undefined),
+  addTask: vi.fn().mockResolvedValue(undefined),
+  getTaskById: vi.fn().mockResolvedValue(null)
+}));
+vi.mock('./cos.js', () => ({
+  forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
 vi.mock('./appActivity.js', () => ({
@@ -248,7 +252,9 @@ import { existsSync as existsSyncMock } from 'fs';
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
 import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
-import { getAgent, getAgentRecord, getAgents, getTaskById, addTask, forceSpawnTask, updateTask, updateAgent } from './cos.js';
+import { getAgent, getAgentRecord, getAgents, updateAgent } from './cosAgentLifecycle.js';
+import { getTaskById, addTask, updateTask } from './cosTaskStore.js';
+import { forceSpawnTask } from './cos.js';
 import { listWorktrees, removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';

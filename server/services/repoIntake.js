@@ -23,7 +23,7 @@
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { posix } from 'path';
-import * as cos from './cos.js';
+import { addTask } from './cosTaskStore.js';
 import { getAppById, PORTOS_APP_ID } from './apps.js';
 import { prepareScanReportDirectory, reportPathForId } from './malwareScanReports.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
@@ -70,7 +70,7 @@ export async function queueMalwareScan(link) {
 
 Use that path as SCAN_DIR. Adhere to every Operational Invariant in the workflow body — this is a hostile-until-proven-safe audit. End the report with exactly one verdict heading: \`## Verdict: CLEAN\`, \`## Verdict: CAUTION\`, or \`## Verdict: DANGEROUS\`. When complete, summarize the verdict and top findings in your final response.`;
 
-  const result = await cos.addTask(
+  const result = await addTask(
     {
       description: `Malware scan: ${repoLabel(link)}`,
       // Multi-line ⇒ the agent PROMPT: `cosTaskStore.addTask` routes it to
@@ -198,7 +198,7 @@ export async function queueRepoStudy(link, { targetAppId, studyContext, provider
       ? {}
       : { issueLabelContract: GENERIC_REPO_STUDY_LABEL_CONTRACT });
 
-  const result = await cos.addTask(
+  const result = await addTask(
     {
       description: `Repo study: ${repoLabel(link)} — what can ${app.name} learn from it?`,
       // Workspace routing must follow the same managed app whose tracker and

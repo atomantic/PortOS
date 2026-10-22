@@ -34,7 +34,7 @@ import { sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
 import { readLocalBranchPresence, readCheckoutPathPresence, inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 import { join, resolve } from 'path';
 import { emitLog } from './cosEvents.js';
-import { addTask } from './cos.js';
+import { addTask } from './cosTaskStore.js';
 import * as git from './git.js';
 import { listWorktrees } from './worktreeManager.js';
 import { listRemoteHeads, driveToMerge } from './branchReconcile.js';

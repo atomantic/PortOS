@@ -3,12 +3,20 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import insightRoutes from './cosInsightRoutes.js';
 
-vi.mock('../services/cos.js', () => ({
-  getAllTasks: vi.fn(),
-  getAgents: vi.fn(async () => []),
+vi.mock('../services/cosTaskStore.js', () => ({
+  getAllTasks: vi.fn()
+}));
+vi.mock('../services/cosAgentLifecycle.js', () => ({
+  getAgents: vi.fn(async () => [])
+}));
+vi.mock('../services/cosHealthMonitor.js', () => ({
   runHealthCheck: vi.fn(),
-  getHealthStatus: vi.fn(),
-  getPendingAgentFeedbackCount: vi.fn(),
+  getHealthStatus: vi.fn()
+}));
+vi.mock('../services/cosAgentFeedback.js', () => ({
+  getPendingAgentFeedbackCount: vi.fn()
+}));
+vi.mock('../services/cosReports.js', () => ({
   getTodayActivity: vi.fn(),
   getRecentTasks: vi.fn()
 }));
@@ -39,7 +47,11 @@ vi.mock('../services/notifications.js', () => ({
   getNotifications: vi.fn().mockResolvedValue([])
 }));
 
-import * as cos from '../services/cos.js';
+import { getAgents } from '../services/cosAgentLifecycle.js';
+import { getAllTasks } from '../services/cosTaskStore.js';
+import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
+import { getPendingAgentFeedbackCount } from '../services/cosAgentFeedback.js';
+import { getRecentTasks, getTodayActivity } from '../services/cosReports.js';
 import * as taskLearning from '../services/taskLearning.js';
 import { getActivityCalendar } from '../services/cosActivityCalendar.js';
 import * as goalProgress from '../services/goalProgress.js';
@@ -54,7 +66,7 @@ describe('CoS Insight Routes', () => {
     app.use(express.json());
     app.use('/api/cos', insightRoutes);
     vi.clearAllMocks();
-    cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
+    getPendingAgentFeedbackCount.mockResolvedValue(0);
     // clearAllMocks keeps implementations, so a per-test override would leak
     // into later tests — restore the default empty notification list here.
     notifications.getNotifications.mockResolvedValue([]);
@@ -96,25 +108,25 @@ describe('CoS Insight Routes', () => {
 
   describe('GET /api/cos/actionable-insights', () => {
     it('refreshes event-driven insights from persisted health without running process repair', async () => {
-      cos.getAllTasks.mockResolvedValue({ user: null, cos: null });
+      getAllTasks.mockResolvedValue({ user: null, cos: null });
       taskLearning.getLearningInsights.mockResolvedValue(null);
-      cos.getHealthStatus.mockResolvedValue({ issues: [] });
+      getHealthStatus.mockResolvedValue({ issues: [] });
       const response = await request(app).get('/api/cos/actionable-insights?cachedHealth=1');
       expect(response.status).toBe(200);
-      expect(cos.getHealthStatus).toHaveBeenCalledTimes(1);
-      expect(cos.runHealthCheck).not.toHaveBeenCalled();
+      expect(getHealthStatus).toHaveBeenCalledTimes(1);
+      expect(runHealthCheck).not.toHaveBeenCalled();
       expect(response.body.insights).toEqual([]);
       expect(response.body.unavailableSources).toEqual([]);
     });
 
     it('should return actionable insights sorted by priority', async () => {
-      cos.getAllTasks.mockResolvedValue({
+      getAllTasks.mockResolvedValue({
         user: { grouped: { pending: [{ id: 't1', description: 'Task' }], blocked: [] } },
         cos: { awaitingApproval: [{ id: 'a1', description: 'Approve me' }], grouped: { pending: [], blocked: [] } }
       });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
-      cos.runHealthCheck.mockResolvedValue({ issues: [] });
-      cos.getPendingAgentFeedbackCount.mockResolvedValue(2);
+      runHealthCheck.mockResolvedValue({ issues: [] });
+      getPendingAgentFeedbackCount.mockResolvedValue(2);
 
       const response = await request(app).get('/api/cos/actionable-insights');
 
@@ -134,13 +146,13 @@ describe('CoS Insight Routes', () => {
     });
 
     it('surfaces leftover idle branches as a Run Now insight card', async () => {
-      cos.getAllTasks.mockResolvedValue({
+      getAllTasks.mockResolvedValue({
         user: { grouped: { pending: [], blocked: [] } },
         cos: { awaitingApproval: [], grouped: { pending: [], blocked: [] } }
       });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
-      cos.runHealthCheck.mockResolvedValue({ issues: [] });
-      cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
+      runHealthCheck.mockResolvedValue({ issues: [] });
+      getPendingAgentFeedbackCount.mockResolvedValue(0);
       detectIdleLeftoverBranches.mockResolvedValueOnce([{
         appId: 'app-acme', appName: 'Acme', leftoverCount: 3, states: { NEEDS_PR: 3 },
         branches: ['claim/one'], lastUserReconcileAt: null, agentsIdle: true,
@@ -168,13 +180,13 @@ describe('CoS Insight Routes', () => {
     // no way to know which app to run branch-reconcile for — the card now names
     // every app and carries the per-app rows the banner runs from.
     it('names each app holding leftover branches in the multi-app card', async () => {
-      cos.getAllTasks.mockResolvedValue({
+      getAllTasks.mockResolvedValue({
         user: { grouped: { pending: [], blocked: [] } },
         cos: { awaitingApproval: [], grouped: { pending: [], blocked: [] } }
       });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
-      cos.runHealthCheck.mockResolvedValue({ issues: [] });
-      cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
+      runHealthCheck.mockResolvedValue({ issues: [] });
+      getPendingAgentFeedbackCount.mockResolvedValue(0);
       detectIdleLeftoverBranches.mockResolvedValueOnce([
         { appId: 'app-acme', appName: 'Acme', leftoverCount: 4, states: { NEEDS_PR: 4 }, branches: [], lastUserReconcileAt: null, agentsIdle: true },
         { appId: 'app-beta', appName: 'Beta', leftoverCount: 1, states: { WIP: 1 }, branches: [], lastUserReconcileAt: '2026-08-28T10:00:00.000Z', agentsIdle: true },
@@ -192,10 +204,10 @@ describe('CoS Insight Routes', () => {
     // writes, so a PM2 process that failed to auto-restart banner'd at the same
     // muted `medium` priority as a memory warning.
     it('raises the health insight to critical for an error-type issue', async () => {
-      cos.getAllTasks.mockResolvedValue({ user: null, cos: null });
+      getAllTasks.mockResolvedValue({ user: null, cos: null });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
-      cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
-      cos.runHealthCheck.mockResolvedValue({
+      getPendingAgentFeedbackCount.mockResolvedValue(0);
+      runHealthCheck.mockResolvedValue({
         issues: [
           { type: 'warning', category: 'memory', message: 'High memory usage in: example-app (900MB)' },
           { type: 'error', category: 'processes', message: 'example-app failed to auto-restart' }
@@ -216,10 +228,10 @@ describe('CoS Insight Routes', () => {
     });
 
     it('keeps a warning-only health check at medium priority', async () => {
-      cos.getAllTasks.mockResolvedValue({ user: null, cos: null });
+      getAllTasks.mockResolvedValue({ user: null, cos: null });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
-      cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
-      cos.runHealthCheck.mockResolvedValue({
+      getPendingAgentFeedbackCount.mockResolvedValue(0);
+      runHealthCheck.mockResolvedValue({
         issues: [{ type: 'warning', category: 'memory', message: 'High memory usage in: example-app (900MB)' }]
       });
 
@@ -239,14 +251,14 @@ describe('CoS Insight Routes', () => {
     // `slice(0, 5)` entirely. Only reachable now that a health issue can
     // actually be `critical`.
     it('sorts a critical insight first and keeps it within the top-5 slice', async () => {
-      cos.getAllTasks.mockResolvedValue({
+      getAllTasks.mockResolvedValue({
         user: { grouped: { pending: [], blocked: [{ id: 'b1', description: 'Blocked task' }] } },
         cos: { awaitingApproval: [{ id: 'a1', description: 'Approve me' }], grouped: { pending: [], blocked: [] } }
       });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [{ type: 'flaky' }] });
-      cos.getPendingAgentFeedbackCount.mockResolvedValue(2);
+      getPendingAgentFeedbackCount.mockResolvedValue(2);
       notifications.getNotifications.mockResolvedValue([{ type: 'briefing_ready' }]);
-      cos.runHealthCheck.mockResolvedValue({
+      runHealthCheck.mockResolvedValue({
         issues: [{ type: 'error', category: 'processes', message: 'example-app failed to auto-restart' }]
       });
 
@@ -260,9 +272,9 @@ describe('CoS Insight Routes', () => {
     });
 
     it('keeps health observation failure visible when parallel calls fail', async () => {
-      cos.getAllTasks.mockRejectedValue(new Error('fail'));
+      getAllTasks.mockRejectedValue(new Error('fail'));
       taskLearning.getLearningInsights.mockRejectedValue(new Error('fail'));
-      cos.runHealthCheck.mockRejectedValue(new Error('fail'));
+      runHealthCheck.mockRejectedValue(new Error('fail'));
 
       const response = await request(app).get('/api/cos/actionable-insights');
 
@@ -274,10 +286,10 @@ describe('CoS Insight Routes', () => {
     });
 
     it.each(['', '?cachedHealth=1'])('retains other insights while health is unavailable on %s', async query => {
-      cos.getAllTasks.mockResolvedValue({ user: null, cos: { awaitingApproval: [{ id: 'a1', description: 'Example approval' }] } });
+      getAllTasks.mockResolvedValue({ user: null, cos: { awaitingApproval: [{ id: 'a1', description: 'Example approval' }] } });
       taskLearning.getLearningInsights.mockResolvedValue(null);
-      cos.runHealthCheck.mockRejectedValue(new Error('private failure details'));
-      cos.getHealthStatus.mockRejectedValue(new Error('private failure details'));
+      runHealthCheck.mockRejectedValue(new Error('private failure details'));
+      getHealthStatus.mockRejectedValue(new Error('private failure details'));
 
       const response = await request(app).get(`/api/cos/actionable-insights${query}`);
 
@@ -285,33 +297,33 @@ describe('CoS Insight Routes', () => {
       expect(response.body.insights.map(i => i.type)).toEqual(['approval', 'health-unavailable']);
       expect(response.body.unavailableSources).toEqual([{ source: 'health', code: 'HEALTH_UNAVAILABLE' }]);
       expect(JSON.stringify(response.body)).not.toContain('private failure details');
-      if (query) expect(cos.runHealthCheck).not.toHaveBeenCalled();
+      if (query) expect(runHealthCheck).not.toHaveBeenCalled();
     });
   });
 
   describe('GET /api/cos/recent-tasks', () => {
     it('should return recent tasks with default limit', async () => {
-      cos.getRecentTasks.mockResolvedValue([{ id: 't1' }]);
+      getRecentTasks.mockResolvedValue([{ id: 't1' }]);
 
       const response = await request(app).get('/api/cos/recent-tasks');
 
       expect(response.status).toBe(200);
-      expect(cos.getRecentTasks).toHaveBeenCalledWith(10);
+      expect(getRecentTasks).toHaveBeenCalledWith(10);
     });
 
     it('should respect custom limit', async () => {
-      cos.getRecentTasks.mockResolvedValue([]);
+      getRecentTasks.mockResolvedValue([]);
 
       const response = await request(app).get('/api/cos/recent-tasks?limit=5');
 
       expect(response.status).toBe(200);
-      expect(cos.getRecentTasks).toHaveBeenCalledWith(5);
+      expect(getRecentTasks).toHaveBeenCalledWith(5);
     });
   });
 
   describe('GET /api/cos/quick-summary', () => {
     it('should return combined dashboard summary', async () => {
-      cos.getTodayActivity.mockResolvedValue({
+      getTodayActivity.mockResolvedValue({
         stats: { completed: 3, succeeded: 2, failed: 1, running: 0, successRate: 67 },
         time: { combined: '2h 30m' },
         isRunning: true,
@@ -319,7 +331,7 @@ describe('CoS Insight Routes', () => {
         lastEvaluation: Date.now(),
         accomplishments: ['Fixed bug']
       });
-      cos.getAllTasks.mockResolvedValue({
+      getAllTasks.mockResolvedValue({
         user: { grouped: { pending: [] } },
         cos: { awaitingApproval: [], grouped: { pending: [] } }
       });
@@ -339,18 +351,18 @@ describe('CoS Insight Routes', () => {
     it('does not count a task its agent is already running as queued', async () => {
       // The dashboard widget renders this payload's queue total beside its own
       // "N agents running" line, so the one task being worked read as BOTH.
-      cos.getTodayActivity.mockResolvedValue({
+      getTodayActivity.mockResolvedValue({
         stats: { completed: 0, succeeded: 0, failed: 0, running: 1, successRate: 0 },
         time: { combined: '0s' },
         isRunning: true,
         isPaused: false,
         lastEvaluation: Date.now()
       });
-      cos.getAllTasks.mockResolvedValue({
+      getAllTasks.mockResolvedValue({
         user: { grouped: { pending: [{ id: 'user/42', status: 'pending' }] } },
         cos: { awaitingApproval: [], grouped: { pending: [] } }
       });
-      cos.getAgents.mockResolvedValue([{ id: 'agent-1', taskId: 'user/42', status: 'running', startedAt: new Date().toISOString() }]);
+      getAgents.mockResolvedValue([{ id: 'agent-1', taskId: 'user/42', status: 'running', startedAt: new Date().toISOString() }]);
 
       const response = await request(app).get('/api/cos/quick-summary');
 

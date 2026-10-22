@@ -89,7 +89,7 @@ vi.mock('./mediaJobQueue/index.js', () => ({
     },
   })),
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   getAllTasks: vi.fn(async () => ({
     user: { grouped: { pending: [{ id: 'task-1' }], in_progress: [] } },
     cos: {
@@ -97,7 +97,11 @@ vi.mock('./cos.js', () => ({
       awaitingApproval: [{ id: 'approval-1', approvalRequired: true }],
     },
   })),
+}));
+vi.mock('./cos.js', () => ({
   getStatus: vi.fn(async () => ({ running: true, paused: false, activeAgents: 0, pausedAgents: 0 })),
+}));
+vi.mock('./cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(async () => []),
 }));
 vi.mock('./settings.js', () => ({
@@ -120,7 +124,9 @@ const mediaModelStorage = await import('./mediaModelStorage.js');
 const modelStoreStorage = await import('./modelStoreStorage.js');
 const ollamaManager = await import('./ollamaManager.js');
 const lmStudioManager = await import('./lmStudioManager.js');
-const cos = await import('./cos.js');
+const { getAgents } = await import('./cosAgentLifecycle.js');
+const { getAllTasks } = await import('./cosTaskStore.js');
+const { getStatus } = await import('./cos.js');
 const settings = await import('./settings.js');
 const modelManifest = await import('./modelManifest.js');
 const {
@@ -303,11 +309,11 @@ describe('system resource reporting', () => {
     // (lib/cosSpawnWindow.js), so counting the two lists independently reported
     // the same task as queued AND running — "Agent pending 1 / Agent running 1"
     // for a queue of one. It must move sides, not appear on both and not vanish.
-    cos.getAllTasks.mockResolvedValueOnce({
+    getAllTasks.mockResolvedValueOnce({
       user: { grouped: { pending: [{ id: 'user/42', status: 'pending' }], in_progress: [] } },
       cos: { grouped: { pending: [], in_progress: [] }, awaitingApproval: [] },
     });
-    cos.getAgents.mockResolvedValueOnce([{ id: 'agent-1', taskId: 'user/42', status: 'running', startedAt: new Date().toISOString() }]);
+    getAgents.mockResolvedValueOnce([{ id: 'agent-1', taskId: 'user/42', status: 'running', startedAt: new Date().toISOString() }]);
 
     const report = await buildSystemResourceReport();
 
@@ -324,10 +330,10 @@ describe('system resource reporting', () => {
       user: { grouped: { pending: [{ id: 'user/42', status: 'pending' }], in_progress: [] } },
       cos: { grouped: { pending: [{ id: 'approval-1', approvalRequired: true }], in_progress: [] }, awaitingApproval: [{ id: 'approval-1' }] },
     };
-    cos.getAllTasks.mockResolvedValueOnce(tasks).mockResolvedValueOnce(tasks).mockResolvedValueOnce(tasks);
-    cos.getStatus.mockResolvedValueOnce({ running: true, paused: false, activeAgents: 1, pausedAgents: 2 });
+    getAllTasks.mockResolvedValueOnce(tasks).mockResolvedValueOnce(tasks).mockResolvedValueOnce(tasks);
+    getStatus.mockResolvedValueOnce({ running: true, paused: false, activeAgents: 1, pausedAgents: 2 });
     const failure = Object.assign(new Error('private census path'), { code: 'EIO' });
-    cos.getAgents.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure)
+    getAgents.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure)
       .mockResolvedValueOnce([{ id: 'agent-1', taskId: 'user/42', status: 'running', startedAt: new Date().toISOString() }]);
 
     const failed = await buildSystemResourceReport();
@@ -356,11 +362,11 @@ describe('system resource reporting', () => {
   });
 
   it('treats a successful empty census as measured persisted-task counts', async () => {
-    cos.getAllTasks.mockResolvedValueOnce({
+    getAllTasks.mockResolvedValueOnce({
       user: { grouped: { pending: [], in_progress: [{ id: 'user/42' }] } },
       cos: { grouped: { pending: [], in_progress: [] }, awaitingApproval: [] },
     });
-    cos.getAgents.mockResolvedValueOnce([]);
+    getAgents.mockResolvedValueOnce([]);
     const report = await buildSystemResourceReport();
     expect(report.sourceErrors).not.toContain('agent-census');
     expect(report.queues.agents).toMatchObject({ pendingUser: 0, pendingSystem: 0, inProgress: 1 });
@@ -368,8 +374,8 @@ describe('system resource reporting', () => {
   });
 
   it('preserves failed agent queue and status probes as unknown', async () => {
-    cos.getAllTasks.mockRejectedValueOnce(new Error('task store unavailable'));
-    cos.getStatus.mockRejectedValueOnce(new Error('daemon status unavailable'));
+    getAllTasks.mockRejectedValueOnce(new Error('task store unavailable'));
+    getStatus.mockRejectedValueOnce(new Error('daemon status unavailable'));
 
     const report = await buildSystemResourceReport();
 
@@ -405,7 +411,7 @@ describe('system resource reporting', () => {
   });
 
   it('keeps daemon status unknown when only the COS status probe fails', async () => {
-    cos.getStatus.mockRejectedValueOnce(new Error('daemon status unavailable'));
+    getStatus.mockRejectedValueOnce(new Error('daemon status unavailable'));
 
     const report = await buildSystemResourceReport();
 

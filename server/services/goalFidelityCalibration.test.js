@@ -25,7 +25,7 @@ const updateTask = vi.fn();
 const getAgents = vi.fn();
 const updateAgent = vi.fn();
 
-vi.mock('./cos.js', () => ({ updateTask }));
+vi.mock('./cosTaskStore.js', () => ({ updateTask }));
 vi.mock('./cosAgentLifecycle.js', () => ({ getAgents, updateAgent }));
 vi.mock('./settings.js', () => ({ getSettings }));
 vi.mock('./investigationTaskProducer.js', () => ({ fileInvestigationTask }));

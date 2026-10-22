@@ -699,7 +699,7 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
   }
   if (!app) return { queued: false, reason: 'app-not-found' };
 
-  const { addTask } = await import('./cos.js');
+  const { addTask } = await import('./cosTaskStore.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
 
   const referenceDataBlock = formatReferenceForPrompt(ref, snapshot);

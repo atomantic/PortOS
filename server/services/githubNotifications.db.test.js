@@ -28,7 +28,7 @@ vi.mock('../lib/gitRemote.js', async (importOriginal) => ({
   readOriginRemoteUrl: vi.fn(async (repoPath) => (repoPath === '/example/acme-app' ? 'https://github.com/acme/app.git' : null)),
 }));
 vi.mock('./prReviewerSecurity.js', () => ({ listExternalOpenPullRequests: vi.fn() }));
-vi.mock('./cos.js', () => ({ getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })) }));
+vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })) }));
 vi.mock('./taskSchedule.js', () => ({ triggerOnDemandTask: vi.fn(), getOnDemandRequests: vi.fn(async () => []) }));
 vi.mock('./notifications.js', () => ({
   addNotification: vi.fn(async () => ({})),

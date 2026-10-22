@@ -18,7 +18,7 @@ import {
 } from './toolStateMachine.js';
 
 // Mock the cosEvents to prevent actual event emission
-vi.mock('./cos.js', () => ({
+vi.mock('./cosEvents.js', () => ({
   cosEvents: {
     emit: vi.fn()
   }

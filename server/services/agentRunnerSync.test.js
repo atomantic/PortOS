@@ -8,6 +8,7 @@ const recoveredPty = {
   kill: vi.fn(),
 };
 
+vi.mock('./cos.js', () => ({}));
 vi.mock('./cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn(),
   terminateAgentViaRunner: vi.fn(async () => ({ success: true, terminated: true })),
@@ -24,7 +25,7 @@ vi.mock('./shell.js', () => ({
   unregisterExternalSession: vi.fn(),
 }));
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   getAllTasks: vi.fn().mockResolvedValue({
     user: { grouped: { active: [{ id: 'task-1', description: 'Example task' }] } },
     cos: { grouped: {} },

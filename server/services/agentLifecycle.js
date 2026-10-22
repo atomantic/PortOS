@@ -31,8 +31,8 @@ import { join } from 'path';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { updateAgent, completeAgent } from './cosAgentLifecycle.js';
-import { getTaskById, updateTask, getAgentRecord } from './cos.js';
+import { updateAgent, completeAgent, getAgent, getAgentRecord } from './cosAgentLifecycle.js';
+import { getTaskById, updateTask } from './cosTaskStore.js';
 import { spawnAgentViaRunner, getRunnerHealth, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
@@ -436,10 +436,7 @@ export async function extractPipelineOutputSummary(task, workspacePath, outputBu
  * one name.
  */
 async function completeUntrackedAgentFromCosState(agentId, exitCode, success, duration, { interruptedStartup = null } = {}) {
-  // Dynamic import: `cos.js` imports back into this cluster, so a static import
-  // of the transcript-hydrating `getAgent` here would close an import cycle.
-  const { getAgent: getAgentState } = await import('./cos.js');
-  const cosAgent = await getAgentState(agentId).catch(() => null);
+  const cosAgent = await getAgent(agentId).catch(() => null);
   if (!cosAgent) {
     console.log(`⚠️ Received completion for unknown agent: ${agentId} (not in cos state)`);
     return;

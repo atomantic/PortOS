@@ -54,7 +54,7 @@ import {
 } from './agentFinalization.js';
 
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn(async () => ({})),
   addTask: vi.fn(async () => ({ id: 'investigation-test' })),
 }));
@@ -77,7 +77,7 @@ vi.mock('./taskSchedule.js', () => ({
   recordTaskTypeSuccess: vi.fn(async () => null),
   recordRecommendedAudits: vi.fn(async () => null),
 }));
-import { updateTask, addTask } from './cos.js';
+import { updateTask, addTask } from './cosTaskStore.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';

@@ -49,7 +49,7 @@
  */
 
 import { emitLog } from './cosEvents.js';
-import { addTask } from './cos.js';
+import { addTask } from './cosTaskStore.js';
 import { buildCiMergeGateSteps, buildForkBranchInstructions } from './promptSections/reviewLifecycle.js';
 import { normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';

@@ -7,7 +7,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { request } from '../lib/testHelper.js';
 
 vi.mock('../services/modelManifest.js', () => ({ recordModelUninstall: vi.fn(async () => true) }));
-vi.mock('../services/cos.js', () => ({ addTask: vi.fn() }));
+vi.mock('../services/cosTaskStore.js', () => ({ addTask: vi.fn() }));
 vi.mock('../services/mediaModelInstall.js', () => ({ addModelFromHuggingface: vi.fn() }));
 
 const { default: routes } = await import('./imageVideoModels.js');

@@ -33,10 +33,16 @@ vi.mock('./apps.js', () => ({
 vi.mock('./appProcessStatus.js', () => ({
   getAppStatuses: vi.fn(async () => sources.apps),
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(async () => sources.agents),
+}));
+vi.mock('./cosTaskStore.js', () => ({
   getCosTasks: vi.fn(async () => sources.taskState),
+}));
+vi.mock('./cos.js', () => ({
   getStatus: vi.fn(async () => sources.cosStatus),
+}));
+vi.mock('./cosReports.js', () => ({
   getTodayActivity: vi.fn(async () => sources.todayActivity),
 }));
 vi.mock('./review.js', () => ({ getPendingCounts: vi.fn(async () => sources.review) }));

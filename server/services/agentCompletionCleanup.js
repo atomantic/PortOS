@@ -32,7 +32,8 @@ import { join, relative, resolve, sep } from 'path';
 import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
-import { updateTask, addTask, reviveBlockedTask, checkStagePrecondition } from './cos.js';
+import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
+import { checkStagePrecondition } from './cosTaskGenerator.js';
 import { PIPELINE_STAGE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
 import { PATHS, rmGuarded, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
@@ -315,7 +316,7 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
   // Fetch agent state once for JIRA, plan-question, and the resume pointer. Its
   // worktree fields are stamped once at registerAgent and never mutated, so passing
   // it to the release spares a re-read that would re-split the whole output.txt.
-  const { getAgent: getAgentState } = await import('./cos.js');
+  const { getAgent: getAgentState } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgentState(agentId).catch(() => null);
 
   try {
@@ -580,7 +581,7 @@ async function completeWorktreeCleanup({ agentId, task, effectiveSuccess, prOwne
 
 async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings }) {
   if (cleanupWarnings?.length > 0) {
-    const { getAgent: getAgentForResult } = await import('./cos.js');
+    const { getAgent: getAgentForResult } = await import('./cosAgentLifecycle.js');
     const currentAgent = await getAgentForResult(agentId).catch(() => null);
     await updateAgent(agentId, { result: { ...currentAgent?.result, warnings: cleanupWarnings } });
 
@@ -620,7 +621,7 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
 export async function runSpawnerCompletionCleanup({ agentId, task, success: effectiveSuccess, prOwnership, prClaimVerified = false, branchProvenEmpty = false, outputBuffer }) {
   let agentState = null;
   try {
-    const { getAgent } = await import('./cos.js');
+    const { getAgent } = await import('./cosAgentLifecycle.js');
     agentState = await getAgent(agentId).catch(() => null);
     await runCompletionCleanupSteps({
       agentId, task, agentState, effectiveSuccess, prOwnership,

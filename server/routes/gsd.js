@@ -14,7 +14,7 @@ import { atomicWrite } from '../lib/fileUtils.js'
 import { documentUpdateSchema, validateRequest } from '../lib/validation.js'
 import * as gsdService from '../services/gsdService.js'
 import { resolveGsdPath } from '../services/gsdPaths.js'
-import { addTask } from '../services/cos.js'
+import { addTask } from '../services/cosTaskStore.js'
 import { getActiveApps } from '../services/apps.js'
 import * as git from '../services/git.js'
 

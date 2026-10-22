@@ -22,7 +22,9 @@ import { emitLog } from './cosEvents.js';
 // that declares it; a barrel would be a third answer to "where does completeAgent
 // live", which is the thing this sequencing keeps removing.
 import { completeAgent, updateAgent, getAgents, getAgentRecord, AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
-import { updateTask, addTask, getTaskById, reviveBlockedTask, evaluateTasks, forceSpawnTask } from './cos.js';
+import { updateTask, addTask, getTaskById, reviveBlockedTask } from './cosTaskStore.js';
+import { evaluateTasks } from './cosTaskGenerator.js';
+import { forceSpawnTask } from './cos.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
@@ -1169,12 +1171,6 @@ export function cleanupOrphanedAgents() {
 }
 
 async function runCleanupOrphanedAgents() {
-  // Was `await import('./cos.js')` destructuring all four of these (#3450). The
-  // deferral bought nothing — this module already imports `./cos.js` statically
-  // at the top, so the module was loaded either way — while routing two agent
-  // functions through the `cos.js` re-export block, i.e. reaching a transition
-  // through a barrel. `completeAgent`/`getAgents` now come from the module that
-  // declares them and `evaluateTasks` joined the existing static `cos.js` import.
   const agents = await getAgents();
   let cleanedCount = 0;
   const orphanedTaskIds = [];

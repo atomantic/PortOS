@@ -88,7 +88,7 @@ export function initTaskLearning() {
  * Call this once to populate historical data
  */
 export async function backfillFromHistory() {
-  const { getAgents } = await import('../cos.js');
+  const { getAgents } = await import('../cosAgentLifecycle.js');
   const agents = await getAgents();
 
   let backfilled = 0;

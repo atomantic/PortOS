@@ -44,13 +44,17 @@ const AGENT_MANAGEMENT_SRC = normalizeEol(readFileSync(join(__dirname, 'agentMan
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(true),
   addTask: vi.fn().mockResolvedValue({ id: 'sys-mocked' }),
   getTaskById: vi.fn(),
   getAllTasks: vi.fn(),
-  reviveBlockedTask: vi.fn().mockResolvedValue(true),
-  evaluateTasks: vi.fn().mockResolvedValue(undefined),
+  reviveBlockedTask: vi.fn().mockResolvedValue(true)
+}));
+vi.mock('./cosTaskGenerator.js', () => ({
+  evaluateTasks: vi.fn().mockResolvedValue(undefined)
+}));
+vi.mock('./cos.js', () => ({
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
@@ -163,7 +167,8 @@ import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AG
 import { updateRun, getProject } from './creativeDirector/local.js';
 import { advanceAfterPlanStepSettled } from './creativeDirector/planAdvance.js';
 import { advanceAfterSceneSettled } from './creativeDirector/completionHook.js';
-import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask, forceSpawnTask } from './cos.js';
+import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask } from './cosTaskStore.js';
+import { forceSpawnTask } from './cos.js';
 import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';

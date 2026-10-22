@@ -474,7 +474,7 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     const body = trackedCompletionPreamble();
     expect(body).toMatch(/const persistedAgent = await getAgentRecord\(agentId\)/);
     // Imported unaliased, so `getAgent` can't be smuggled back in under this name.
-    expect(AGENT_LIFECYCLE_SRC).toMatch(/import \{[^}]*\bgetAgentRecord\b[^}]*\} from '\.\/cos\.js'/);
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/import \{[^}]*\bgetAgentRecord\b[^}]*\} from '\.\/cosAgentLifecycle\.js'/);
     expect(AGENT_LIFECYCLE_SRC).not.toMatch(/getAgent as getAgentRecord/);
     // Exactly one read for the whole tracked path.
     const reads = AGENT_LIFECYCLE_SRC.match(/await getAgentRecord\(agentId\)/g) || [];

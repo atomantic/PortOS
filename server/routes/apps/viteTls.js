@@ -12,7 +12,8 @@ import { join } from 'path';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
-import * as cos from '../../services/cos.js';
+import { addTask } from '../../services/cosTaskStore.js';
+import { isRunning } from '../../services/cos.js';
 import { z } from 'zod';
 import { validateRequest } from '../../lib/validation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
@@ -118,14 +119,14 @@ router.post('/:id/fix-vite-hosts', loadApp, asyncHandler(async (req, res) => {
   const config = await findViteConfig(app.repoPath, { extraDirs });
 
   if (mode === 'ai') {
-    if (!cos.isRunning()) {
+    if (!isRunning()) {
       throw new ServerError(
         'CoS is not running — start it to use AI remediation, or use the automatic fix.',
         { status: 409, code: 'COS_NOT_RUNNING' }
       );
     }
     const where = config ? config.path : `${app.repoPath} (no vite.config found — create one)`;
-    const task = await cos.addTask({
+    const task = await addTask({
       description: `Allow the Tailscale host in ${app.name}'s Vite config so its Dev UI loads`,
       priority: 'MEDIUM',
       app: app.id,

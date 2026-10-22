@@ -14,7 +14,11 @@ vi.mock('../lib/checkoutRetirementAdmission.js', () => ({
     return work();
   },
 }));
-vi.mock('../services/cos.js', () => ({}));
+vi.mock('../services/cosAgentArchive.js', () => ({}));
+vi.mock('../services/cosAgentFeedback.js', () => ({}));
+vi.mock('../services/cosAgentIndex.js', () => ({}));
+vi.mock('../services/cosAgentLifecycle.js', () => ({}));
+vi.mock('../services/cosHealthMonitor.js', () => ({}));
 vi.mock('../services/agentOrchestrator.js', () => ({}));
 vi.mock('../services/apps.js', () => ({ getAppById: async () => ({ repoPath: '/synthetic/repo' }) }));
 vi.mock('../services/cosState.js', () => ({
