@@ -336,6 +336,8 @@ export async function startMakeEmpty(storyboardId) {
   if (!steps.some((node) => node.type === 'image')) throw refuse('The recipe has no Image node, so there is nothing to make.');
   const panelIds = emptyPanelIds(board, steps);
   if (!panelIds.length) throw refuse('Every panel already has art.');
+  // Re-checked after the read: two quick taps (or two tabs) both passed the first check.
+  if (batches.has(storyboardId)) throw refuse('This board is already making its empty panels.', 'STORYBOARD_BATCH_RUNNING', 409);
   const batch = { status: 'running', total: panelIds.length, done: 0, failed: 0, startedAt: new Date().toISOString() };
   batches.set(storyboardId, batch);
   deps.emitBatch(batchView(storyboardId, batch));

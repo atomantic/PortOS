@@ -177,8 +177,10 @@ describe('storyboard panel maker', () => {
 
     let answer;
     runPrompt.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
-    const start = await api('post', `/${id}/make-empty`);
-    expect(start.status).toBe(202);
+    // Two taps at once: only one batch starts.
+    const both = await Promise.all([api('post', `/${id}/make-empty`), api('post', `/${id}/make-empty`)]);
+    expect(both.map((res) => res.status).sort()).toEqual([202, 409]);
+    const start = both.find((res) => res.status === 202);
     expect(start.body.batch).toMatchObject({ status: 'running', total: 2, done: 0 });
     await vi.waitFor(() => expect(answer).toBeTypeOf('function'));
     expect((await api('post', `/${id}/make-empty`)).status).toBe(409);
