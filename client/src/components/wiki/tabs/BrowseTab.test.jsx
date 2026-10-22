@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import BrowseTab from './BrowseTab';
@@ -184,5 +184,44 @@ describe('BrowseTab iCloud force save', () => {
     await clickSave();
 
     expect(screen.queryByRole('button', { name: 'Save anyway' })).toBeNull();
+  });
+});
+
+describe('BrowseTab save lifetimes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getNote.mockResolvedValue(sampleNote);
+  });
+
+  const openEditor = async () => {
+    renderTab();
+    fireEvent.click(screen.getByText('Example Source'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    return screen.findByRole('textbox', { name: 'Note content' });
+  };
+
+  it('keeps text typed during a deferred save visible and unsaved, and the next save sends it', async () => {
+    let resolveSave;
+    api.updateNote.mockReturnValueOnce(new Promise(resolve => { resolveSave = resolve; }));
+    const editor = await openEditor();
+    fireEvent.change(editor, { target: { value: 'Submitted body' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    fireEvent.change(editor, { target: { value: 'Later unsaved body' } });
+    await act(async () => { resolveSave({ ...sampleNote, content: 'Submitted body' }); });
+    expect(screen.getByRole('textbox', { name: 'Note content' })).toHaveValue('Later unsaved body');
+    api.updateNote.mockResolvedValueOnce({ ...sampleNote, content: 'Later unsaved body' });
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    await waitFor(() => expect(api.updateNote).toHaveBeenLastCalledWith(
+      'v1', 'wiki/sources/example.md', 'Later unsaved body', { force: false },
+    ));
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Note content' })).toBeNull());
+  });
+
+  it('closes the editor when the buffer is unchanged during the save', async () => {
+    api.updateNote.mockResolvedValueOnce({ ...sampleNote, content: 'Submitted body' });
+    const editor = await openEditor();
+    fireEvent.change(editor, { target: { value: 'Submitted body' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Note content' })).toBeNull());
   });
 });
