@@ -37,6 +37,11 @@ describe('branch reconciliation completion', () => {
       claimOwners: { agents: [], readAgents: readClaimOwnershipAgents }, forgeAccount: 'example-account'
     });
   });
+  it('keeps superseded branches when the task turns reapSuperseded off', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-example', metadata: { reapSuperseded: false } });
+    await settleBranchReconcileRun(agent);
+    expect(reconcile).toHaveBeenCalledWith('/example/repo', expect.objectContaining({ cleanup: true, reapSuperseded: false }));
+  });
   it('records an incomplete outcome instead of throwing when the run has no managed app', async () => {
     const appless = { ...agent, metadata: { ...agent.metadata, taskApp: null } };
     expect(await settleBranchReconcileRun(appless)).toBeNull();
