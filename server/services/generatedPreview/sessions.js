@@ -2,9 +2,10 @@
  * Isolated generated-preview sessions (#11157).
  *
  * Music-video documents, code-rendered videos, and code animations execute in
- * the OS-jailed composition browser. The user's browser receives JPEG frames
- * and, when a page records, bounded WebM slices. It never receives executable
- * generated HTML or private media bytes.
+ * the OS-jailed composition browser. The user's browser receives JPEG frames;
+ * a recording the user asked for is saved to Media History as an MP4 and the
+ * browser receives its library URL. It never receives executable generated
+ * HTML or private media bytes.
  */
 import { randomUUID } from 'node:crypto';
 import { rm, writeFile } from 'node:fs/promises';
@@ -14,11 +15,10 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { PREVIEW_PAGE_CSP } from '../../lib/generatedPreviewSandbox.js';
 import { createCooperativePlayback, playbackSchema } from './cooperativePlayback.js';
 import { stageCodeAnimationPage, writeComposition as writeNamedComposition } from './codeAnimationPage.js';
+import { saveRecordingToMediaHistory } from './recordingSave.js';
 
 const MAX_SESSIONS = 3;
 const IDLE_MS = 120_000;
-const RECORDING_CAP = 8 * 1024 * 1024;
-const SLICE_BYTES = 256 * 1024;
 const AUDIO_CAP = 12 * 1024 * 1024;
 const MUSIC_URL = /^\/data\/music\/([^/]+)$/;
 
@@ -60,6 +60,7 @@ const commandSchema = z.object({
   look: z.record(z.string(), z.unknown()).nullable().optional(),
   card: z.record(z.string(), z.unknown()).nullable().optional(),
   message: z.object({ type: z.string().min(1).max(80) }).strict().optional(),
+  title: z.string().max(200).optional(),
 }).strict();
 
 const closeSchema = z.object({
@@ -281,44 +282,35 @@ async function runSeek(session, generation, t, playing = false) {
   await session.seekTail;
 }
 
-async function pullRecording(session) {
-  if (session.pulling || session.closed) return;
-  session.pulling = true;
+// A recording is accepted only while a record command is outstanding, so a
+// page cannot fill the library by posting blobs on its own.
+async function saveRecording(session) {
+  const pending = session.recordPending;
+  if (!pending || session.saving) return;
+  session.saving = true;
+  session.recordPending = null;
+  const { requestId, id: sessionId, socket } = session;
+  socket.emit('generated-preview:recording', { requestId, sessionId, status: 'saving' });
   try {
-    const info = await session.page.evaluate(`(async () => {
-      const blob = window.__portosLastBlob;
-      if (!(blob instanceof Blob)) return null;
-      if (blob.size > ${RECORDING_CAP}) return { error: 'too-large' };
-      window.__portosRecordingBytes = new Uint8Array(await blob.arrayBuffer());
-      return { bytes: blob.size, mime: blob.type || 'video/webm' };
-    })()`);
-    if (!info) return;
-    if (info.error) {
-      fail(session.socket, { requestId: session.requestId, sessionId: session.id, message: 'The recording is too large to return.' });
-      return;
-    }
-    const count = Math.ceil(info.bytes / SLICE_BYTES) || 1;
-    for (let index = 0; index < count; index += 1) {
-      const start = index * SLICE_BYTES;
-      const end = Math.min(info.bytes, start + SLICE_BYTES);
-      const chunk = await session.page.evaluate(`(() => {
-        const bytes = window.__portosRecordingBytes;
-        let text = '';
-        for (let i = ${start}; i < ${end}; i += 1) text += String.fromCharCode(bytes[i]);
-        return btoa(text);
-      })()`);
-      if (session.closed) return;
-      session.socket.emit('generated-preview:recording', {
-        requestId: session.requestId, sessionId: session.id, generation: session.appliedGeneration,
-        index, count, mime: info.mime, chunk,
-      });
-    }
-    await session.page.evaluate('window.__portosRecordingBytes = null; window.__portosLastBlob = null;');
+    const entry = await saveRecordingToMediaHistory(session.page, { title: pending.title });
+    if (!entry) throw new Error('the page posted no recording');
+    socket.emit('generated-preview:recording', {
+      requestId, sessionId, status: 'saved',
+      video: { id: entry.id, filename: entry.filename, url: `/data/videos/${entry.filename}`, durationSec: entry.durationSec ?? null },
+    });
+    console.log(`🎞️ Preview recording saved to Media History: ${entry.filename}`);
   } catch (error) {
-    console.error(`❌ Generated preview recording failed: ${error.message}`);
-    fail(session.socket, { requestId: session.requestId, sessionId: session.id, message: 'The recording could not be returned.' });
+    // Reported on the recording channel, not as a preview error: the preview
+    // itself is still running.
+    const refused = error?.code === 'RECORDING_TOO_LARGE' || error?.code === 'RECORDING_EMPTY';
+    if (refused) console.log(`🚫 Preview recording refused: ${error.message}`);
+    else console.error(`❌ Generated preview recording failed: ${error.message}`);
+    socket.emit('generated-preview:recording', {
+      requestId, sessionId, status: 'failed',
+      message: refused ? error.message : 'The recording could not be saved to Media History.',
+    });
   } finally {
-    session.pulling = false;
+    session.saving = false;
   }
 }
 
@@ -338,7 +330,7 @@ function attachEvents(session) {
       session.socket.emit('generated-preview:event', {
         requestId: session.requestId, sessionId: session.id, ...params,
       });
-      if (params.hasBlob) pullRecording(session).catch(() => {});
+      if (params.hasBlob) saveRecording(session).catch(() => {});
       return;
     }
     if (message.method === 'Portos.pageError') {
@@ -620,6 +612,7 @@ async function commandGeneratedPreview(socket, data) {
       else if (parsed.data.action === 'record' && parsed.data.message) {
         // A real-time recording runs on the page's own clock.
         if (session.kind === 'code-animation') await session.page.evaluate(RELEASE_CODE_ANIMATION_CLOCK);
+        session.recordPending = { title: parsed.data.title || '' };
         await session.page.evaluate(`window.postMessage({ type: ${JSON.stringify(parsed.data.message.type)} }, '*')`);
       }
     };
