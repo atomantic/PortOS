@@ -30,6 +30,9 @@ vi.mock('../services/apiPipeline.js', pendingModule('../services/apiPipeline.js'
 vi.mock('../services/apiPrompts', pendingModule('../services/apiPrompts'));
 vi.mock('../services/apiProviders', pendingModule('../services/apiProviders'));
 vi.mock('../services/apiUniverseBuilder.js', pendingModule('../services/apiUniverseBuilder.js'));
+// Render-only 3D viewer: the pages here stay pending, and importing it pulls in
+// @react-three/fiber, which requires three's deprecated CommonJS build.
+vi.mock('../components/media/GlbViewer', () => ({ default: () => null }));
 vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), connected: false },
 }));
