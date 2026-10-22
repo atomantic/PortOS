@@ -10,6 +10,18 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 const shortBranch = branch => branch?.replace(/^refs\/heads\//, '');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+const repoCommonByRepo = new Map();
+async function resolveRepoCommon(repository) {
+  let cached = repoCommonByRepo.get(repository);
+  if (!cached) {
+    cached = execGit(['rev-parse', '--git-common-dir'], repository)
+      .then(r => r.stdout.trim())
+      .catch(() => null);
+    repoCommonByRepo.set(repository, cached);
+  }
+  return cached;
+}
+
 async function filesystemIdentity(path, type) {
   const stat = await lstat(path, { bigint: true });
   if (!(type === 'file' ? stat.isFile() : stat.isDirectory()) || typeof stat.dev !== 'bigint'
@@ -19,24 +31,26 @@ async function filesystemIdentity(path, type) {
   return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
 }
 
-export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head }) {
+export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head, worktrees = null, repoCommon = null }) {
   const { listWorktrees } = await import('./worktreeManager.js');
   const repository = await realpath(repoPath);
   const checkout = await realpath(path);
   if (checkout === repository || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head || '')) return null;
-  const holders = (await listWorktrees(repository)).filter(tree => shortBranch(tree.branch) === branch);
+  const trees = worktrees || await listWorktrees(repository);
+  const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
   if (holders.length !== 1 || await realpath(holders[0].path) !== checkout || holders[0].head !== head) return null;
   const pointer = await filesystemIdentity(join(checkout, '.git'), 'file');
   const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], checkout)).stdout.trim());
   const administration = await filesystemIdentity(gitdir, 'directory');
-  const [currentHead, currentBranch, common] = await Promise.all([
+  const [currentHead, currentBranch, common, resolvedRepoCommon] = await Promise.all([
     execGit(['rev-parse', '--verify', 'HEAD^{commit}'], checkout),
     execGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], checkout),
     execGit(['rev-parse', '--git-common-dir'], checkout),
+    repoCommon ?? resolveRepoCommon(repository),
   ]);
-  const repoCommon = await execGit(['rev-parse', '--git-common-dir'], repository);
+  if (!resolvedRepoCommon) return null;
   if (currentHead.stdout.trim() !== head || currentBranch.stdout.trim() !== branch
-    || await realpath(resolve(checkout, common.stdout.trim())) !== await realpath(resolve(repository, repoCommon.stdout.trim()))) return null;
+    || await realpath(resolve(checkout, common.stdout.trim())) !== await realpath(resolve(repository, resolvedRepoCommon))) return null;
   if (!same(pointer, await filesystemIdentity(join(checkout, '.git'), 'file'))
     || !same(administration, await filesystemIdentity(gitdir, 'directory'))) return null;
   return { repoPath: repository, branch, path: checkout, head, incarnation: { pointer, gitdir: { path: gitdir, ...administration } } };
@@ -77,7 +91,7 @@ export async function captureCompletedCheckouts(agent, { success } = {}) {
       const recordedPath = typeof meta.workspacePath === 'string' ? await realpath(meta.workspacePath).catch(() => null) : null;
       if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) continue;
     }
-    const target = { repoPath, branch, path: holders[0].path, head: holders[0].head };
+    const target = { repoPath, branch, path: holders[0].path, head: holders[0].head, worktrees: trees };
     const first = await readCompletedCheckoutIdentity(target).catch(() => null);
     if (!first || !same(first, await readCompletedCheckoutIdentity(target).catch(() => null))) continue;
     receipts.push({ version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), ...first });
