@@ -882,9 +882,9 @@ describe('completion sentinel survives a finalize that recorded no outcome', () 
     expect(await readFile(join(workspace, '.agent-done-a1'), 'utf8')).toContain('proposal');
   });
 
-  it('removes it once the record reached an outcome', async () => {
+  it.each(['completed', 'failed'])('removes it once the record reached a %s outcome', async (status) => {
     await writeFile(join(workspace, '.agent-done-a1'), '{"summary":"x","payload":{"title":"proposal"}}');
-    await cleanupWithStatus('completed');
+    await cleanupWithStatus(status);
     await expect(readFile(join(workspace, '.agent-done-a1'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
