@@ -523,6 +523,35 @@ describe('CI test impact planner', () => {
     });
   });
 
+  // Quality snapshot PRs land through the publisher's immediate merge; their
+  // diff is one numeric data file nothing reads from the checkout.
+  it('skips every job, always-run guards included, for a quality-snapshot-only change', () => {
+    const plan = buildCiTestPlan(['.quality.json'], { trackedFiles: [...TRACKED, '.quality.json'] });
+
+    expect(plan).toMatchObject({
+      full: false,
+      reason: 'generated data-only change',
+      server: { mode: 'skip' },
+      client: { mode: 'skip' },
+      browserFiles: [],
+      db: false,
+      lint: { mode: 'skip' },
+      build: false,
+      smoke: false,
+      windows: false,
+    });
+  });
+
+  it('keeps the always-run guards when the quality snapshot rides with other changes', () => {
+    const docs = buildCiTestPlan(['.quality.json', 'docs/GITHUB_ACTIONS.md'], { trackedFiles: [...TRACKED, '.quality.json'] });
+    expect(docs).toMatchObject({ reason: 'documentation-only change', server: { mode: 'files' } });
+    expect(docs.server.files).toContain('server/services/taskPromptDefaults.test.js');
+
+    const code = buildCiTestPlan(['.quality.json', 'server/services/auth.js'], { trackedFiles: [...TRACKED, '.quality.json'] });
+    expect(code.reason).not.toMatch(/unmapped executable surface/);
+    expect(code.server.mode).not.toBe('skip');
+  });
+
   // The prompt-integrity snapshot guards a cross-install upgrade contract that
   // no other test covers, so no impact scope may drop it — including the scopes
   // that otherwise skip the server runner entirely.
