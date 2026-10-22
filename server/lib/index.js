@@ -23,6 +23,7 @@ export * from './codeAnimationPackage.js';
 export * from './codeAnimationAcceptance.js';
 export * from './codeAnimationContainment.js';
 export * from './autofixVerifyContainment.js';
+export * from './diceNotation.js';
 export * from './dockerContainment.js';
 export * from './dockerContainmentValidation.js';
 export * from './dockerEgressProxy.js';
