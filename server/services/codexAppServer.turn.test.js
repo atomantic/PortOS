@@ -41,7 +41,12 @@ const makeChild = () => {
   child.stderr = new EventEmitter();
   child.stdin = Object.assign(new EventEmitter(), {
     destroyed: false,
-    write: (line, cb) => { child.written.push(JSON.parse(line)); cb?.(); return true; },
+    write: (line, cb) => {
+      child.written.push(JSON.parse(line));
+      child.emit('request-written');
+      cb?.();
+      return true;
+    },
   });
   child.kill = vi.fn(() => { child.emit('exit', null, 'SIGTERM'); });
   child.emitFrame = (frame) => child.stdout.emit('data', `${JSON.stringify(frame)}\n`);
@@ -61,8 +66,27 @@ const makeChild = () => {
 
 /** Wait for PortOS to write `method`, then run `answer` against that frame. */
 const awaitRequest = async (child, method, answer) => {
-  let frame = null;
-  await vi.waitFor(() => { frame = child.take(method); expect(frame).toBeTruthy(); });
+  // Scratch-directory creation is real async I/O, not a one-second protocol
+  // deadline. Await the fake wire itself within the enclosing test's budget.
+  const frame = await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      child.off('request-written', check);
+      child.off('exit', exited);
+    };
+    const check = () => {
+      const request = child.take(method);
+      if (!request) return;
+      cleanup();
+      resolve(request);
+    };
+    const exited = () => {
+      cleanup();
+      reject(new Error(`App-server exited before writing ${method}`));
+    };
+    child.on('request-written', check);
+    child.once('exit', exited);
+    check();
+  });
   if (typeof answer === 'function') answer(frame);
   else child.reply(frame, answer);
   return frame;
