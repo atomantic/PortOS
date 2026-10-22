@@ -83,6 +83,24 @@ const listing = (threads, headers = {}) => [
   JSON.stringify(threads),
 ].join('\r\n');
 
+// GitHub's answer to a listing request for an inbox holding `threads`: the
+// unread listing has only unread threads, done threads stay in the `all=true`
+// listing (as read), and a conditional request lists only threads updated
+// since its If-Modified-Since, or is a 304 when there are none.
+const IF_MODIFIED_SINCE = 'If-Modified-Since: ';
+function githubListing(args, threads) {
+  const path = args.find((arg) => /^notifications\?/.test(arg));
+  const since = args.find((arg) => String(arg).startsWith(IF_MODIFIED_SINCE));
+  let listed = path.includes('all=true') ? threads : threads.filter((t) => t.unread);
+  if (since) {
+    const cutoff = Date.parse(since.slice(IF_MODIFIED_SINCE.length));
+    listed = listed.filter((t) => Date.parse(t.updated_at) > cutoff);
+    if (!listed.length) throw Object.assign(new Error('gh: HTTP 304'), { ghExitCode: 1, ghStderr: 'gh: HTTP 304' });
+  }
+  const newest = Math.max(...threads.map((t) => Date.parse(t.updated_at)));
+  return listing(listed, { 'Last-Modified': new Date(newest).toUTCString() });
+}
+
 // Routes gh calls: token lookup, the listing (via `respond`), thread actions,
 // and triage's read-only metadata lookups (via `forge`, keyed by API path).
 function mockGh(respond, forge = {}) {
@@ -131,14 +149,13 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     accountIds.push(account.id);
   });
 
-  it('reads the whole inbox, sends If-Modified-Since next time, and marks a thread gone from GitHub done', async () => {
+  it('reads the whole inbox, keeps threads a since-cursor listing leaves out, and marks a thread gone from GitHub done', async () => {
     const login = account.login;
     const seen = [];
+    let inbox = [thread('101', { owner: login }), thread('102', { owner: 'someone-else' })];
     mockGh((args) => {
       seen.push(args);
-      return seen.length === 1
-        ? listing([thread('101', { owner: login }), thread('102', { owner: 'someone-else' })])
-        : listing([{ ...thread('102', { owner: 'someone-else' }), unread: false }]);
+      return githubListing(args, inbox);
     });
 
     expect(await syncAccountNotifications(account.id)).toMatchObject({ changed: true, fetched: 2 });
@@ -148,28 +165,56 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       expect.objectContaining({ threadId: '102', yourRepo: false }),
     ]));
     expect(first.sync[account.id]).toMatchObject({ lastError: null, pollIntervalSeconds: 60 });
+    // A whole first read already holds every unread thread.
+    expect(seen.map((args) => args.find((arg) => /^notifications\?/.test(arg)))).toEqual(['notifications?all=true&per_page=50&page=1']);
 
+    // Both read on GitHub; a new thread arrives. The since-cursor listing
+    // names only the new one, which says nothing about the rest.
+    inbox = [...inbox.map((t) => ({ ...t, unread: false })), thread('103', { updatedAt: '2026-10-01T11:00:00Z' })];
     await syncAccountNotifications(account.id);
-    expect(seen[0]).toContain('notifications?all=true&per_page=50&page=1');
-    expect(seen[1]).toContain('If-Modified-Since: Thu, 01 Oct 2026 10:00:00 GMT');
-    // A cursor saved by the older unread-only listing is not sent.
-    await query("UPDATE github_notification_sync SET last_modified = 'Thu, 01 Oct 2026 09:00:00 GMT' WHERE account_id = $1", [account.id]);
+    expect(seen[1]).toContain(`${IF_MODIFIED_SINCE}Thu, 01 Oct 2026 10:00:00 GMT`);
+    expect(seen[2]).toContain('notifications?per_page=50&page=1');
+    let rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
+    expect(rows.map((row) => [row.threadId, row.state, row.unread]).sort()).toEqual([
+      ['101', 'open', false], ['102', 'open', false], ['103', 'open', true],
+    ]);
+
+    // A cursor saved by an older sync is not sent, so the whole listing is
+    // read: a thread gone from it is done.
+    inbox = inbox.filter((t) => t.id !== '102');
+    await query("UPDATE github_notification_sync SET last_modified = 'all:Thu, 01 Oct 2026 11:00:00 GMT' WHERE account_id = $1", [account.id]);
+    const before = seen.length;
     await syncAccountNotifications(account.id);
-    expect(seen[2].some((arg) => String(arg).startsWith('If-Modified-Since'))).toBe(false);
-    const rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
-    // Read on GitHub but still in its inbox: open here too. Gone from the inbox: done.
-    expect(rows.find((row) => row.threadId === '102')).toMatchObject({ unread: false, state: 'open' });
-    expect(rows.find((row) => row.threadId === '101')).toMatchObject({ unread: false, state: 'done' });
-    expect((await listNotifications({ accountId: account.id })).counts).toEqual({ 'needs-you': 1, suspect: 0, handled: 1, all: 2, 'with-agents': 0 });
+    expect(seen[before].some((arg) => String(arg).startsWith(IF_MODIFIED_SINCE))).toBe(false);
+    rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
+    expect(rows.find((row) => row.threadId === '102')).toMatchObject({ unread: false, state: 'done' });
+    expect(rows.find((row) => row.threadId === '101')).toMatchObject({ unread: false, state: 'open' });
+  });
+
+  it('brings in every unread thread past the inbox page cap and reopens one marked done here while still unread', async () => {
+    const inbox = [thread('151', { reason: 'mention' })];
+    const unreadOnly = [...inbox, thread('152', { reason: 'mention', updatedAt: '2026-09-01T10:00:00Z' })];
+    // The `all=true` listing never ends within the page cap.
+    mockGh((args) => (args.some((arg) => String(arg).includes('all=true'))
+      ? listing(inbox, { Link: '<https://api.github.com/notifications?all=true&page=2>; rel="next"' })
+      : listing(unreadOnly)));
+    expect(await syncAccountNotifications(account.id)).toMatchObject({ truncated: true });
+    const ids = async () => (await listNotifications({ accountId: account.id })).notifications.map((row) => row.threadId).sort();
+    expect(await ids()).toEqual(['151', '152']);
+
+    // What the earlier sync left behind: an unread thread marked done here
+    // without GitHub being told.
+    await query(
+      "UPDATE github_notifications SET state = 'done', unread = FALSE, state_changed_at = NOW() - INTERVAL '1 hour' WHERE account_id = $1 AND thread_id = '152'",
+      [account.id],
+    );
+    expect(await ids()).toEqual(['151']);
+    await syncAccountNotifications(account.id);
+    expect(await ids()).toEqual(['151', '152']);
   });
 
   it('treats a 304 as unchanged and keeps rows', async () => {
-    let calls = 0;
-    mockGh(() => {
-      calls += 1;
-      if (calls === 1) return listing([thread('201')]);
-      throw Object.assign(new Error('gh: HTTP 304'), { ghExitCode: 1, ghStderr: 'gh: HTTP 304' });
-    });
+    mockGh((args) => githubListing(args, [thread('201')]));
     await syncAccountNotifications(account.id);
     expect(await syncAccountNotifications(account.id)).toMatchObject({ changed: false });
     expect((await listNotifications({ accountId: account.id })).notifications).toHaveLength(1);

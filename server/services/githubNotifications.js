@@ -60,9 +60,9 @@ const syncFlightFor = (accountId) => {
 };
 
 // The stored Last-Modified cursor names the listing it came from. A cursor
-// saved by the older unread-only listing is not reused: a 304 against it would
-// skip the first read of the whole inbox until something new arrived.
-const LISTING_CURSOR_PREFIX = 'all:';
+// saved by an older sync format is not reused: a 304 against it would skip
+// the first full read until something new arrived.
+const LISTING_CURSOR_PREFIX = 'inbox:';
 const listingCursor = (stored) => (typeof stored === 'string' && stored.startsWith(LISTING_CURSOR_PREFIX)
   ? stored.slice(LISTING_CURSOR_PREFIX.length) || null
   : null);
@@ -82,9 +82,9 @@ async function requireAccountEnv(account) {
   return env;
 }
 
-async function fetchPage(account, env, page, ifModifiedSince) {
+async function fetchPage(account, env, { all, page, ifModifiedSince }) {
   const args = ['api', '--hostname', account.host, '--include', '--method', 'GET',
-    `notifications?all=true&per_page=${PER_PAGE}&page=${page}`];
+    `notifications?${all ? 'all=true&' : ''}per_page=${PER_PAGE}&page=${page}`];
   if (ifModifiedSince) args.push('-H', `If-Modified-Since: ${ifModifiedSince}`);
   const output = await execGh(args, GH_TIMEOUT_MS, { env }).catch((error) => {
     if (ifModifiedSince && isNotModified(error)) return null;
@@ -99,6 +99,28 @@ async function fetchPage(account, env, page, ifModifiedSince) {
     });
   }
   return { notModified: false, threads, headers: parsed.headers };
+}
+
+/**
+ * Every page of one listing, up to MAX_PAGES. GitHub answers a conditional
+ * request that is not a 304 with only the threads updated since the cursor,
+ * so `complete` (the whole listing, safe to reconcile against) needs an
+ * unconditional, untruncated read.
+ */
+async function fetchListing(account, env, { all, ifModifiedSince = null }) {
+  let page = await fetchPage(account, env, { all, page: 1, ifModifiedSince });
+  if (page.notModified) return { notModified: true };
+  const { headers } = page;
+  const threads = [...page.threads];
+  let pageNumber = 1;
+  while (linkHeaderHasNext(page.headers.link) && pageNumber < MAX_PAGES) {
+    pageNumber += 1;
+    page = await fetchPage(account, env, { all, page: pageNumber, ifModifiedSince });
+    if (page.notModified) break;
+    threads.push(...page.threads);
+  }
+  const truncated = page.notModified || linkHeaderHasNext(page.headers.link);
+  return { notModified: false, threads, headers, truncated, complete: !ifModifiedSince && !truncated };
 }
 
 const UPSERT_SQL = `INSERT INTO github_notifications (
@@ -118,7 +140,12 @@ const UPSERT_SQL = `INSERT INTO github_notifications (
     unread = EXCLUDED.unread,
     -- New activity brings back a thread marked done, and an unsubscribed one
     -- (GitHub re-subscribes on a fresh mention or review request). Muted stays.
+    -- An unread thread is in GitHub's inbox (marking one done reads it), so it
+    -- is not done here, unless that state was set after this listing was read.
     state = CASE WHEN github_notifications.state IN ('done', 'unsubscribed') AND EXCLUDED.gh_updated_at > github_notifications.gh_updated_at
+      THEN 'open'
+      WHEN github_notifications.state = 'done' AND EXCLUDED.unread
+        AND (github_notifications.state_changed_at IS NULL OR github_notifications.state_changed_at < $14)
       THEN 'open' ELSE github_notifications.state END,
     gh_updated_at = EXCLUDED.gh_updated_at,
     updated_at = NOW()`;
@@ -148,11 +175,36 @@ async function runAutomation(account, env, automate) {
   return { ...assist, handedOff: autopilot.handedOff, agentRuns: autopilot.agentRuns };
 }
 
+const listedIds = (listing) => listing.threads.map((thread) => String(thread?.id));
+
+// Only a complete listing says anything about the threads it does not name.
+async function reconcileListings(client, accountId, { inbox, unread }) {
+  if (unread.complete) {
+    await client.query(
+      `UPDATE github_notifications SET unread = FALSE, updated_at = NOW()
+       WHERE account_id = $1 AND unread AND NOT (thread_id = ANY($2::text[]))`,
+      [accountId, listedIds(unread)],
+    );
+  }
+  // GitHub's `all=true` listing still includes threads marked done (as
+  // read), so only a thread missing from the whole listing is known gone.
+  if (inbox.complete) {
+    await client.query(
+      `UPDATE github_notifications SET unread = FALSE,
+         state = CASE WHEN state = 'open' THEN 'done' ELSE state END,
+         state_changed_at = CASE WHEN state = 'open' THEN NOW() ELSE state_changed_at END, updated_at = NOW()
+       WHERE account_id = $1 AND (unread OR state = 'open') AND NOT (thread_id = ANY($2::text[]))`,
+      [accountId, listedIds(inbox)],
+    );
+  }
+}
+
 async function syncAccountNow(account, automate) {
   const env = await requireAccountEnv(account);
   const cursor = (await query('SELECT last_modified FROM github_notification_sync WHERE account_id = $1', [account.id])).rows[0];
-  const first = await fetchPage(account, env, 1, listingCursor(cursor?.last_modified));
-  if (first.notModified) {
+  const listedAt = new Date();
+  const inbox = await fetchListing(account, env, { all: true, ifModifiedSince: listingCursor(cursor?.last_modified) });
+  if (inbox.notModified) {
     await query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
     // Threads past the last run's triage cap still need a decision.
     const triage = await triageAccountNotifications(account, env);
@@ -160,42 +212,34 @@ async function syncAccountNow(account, automate) {
     if (triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
     return { accountId: account.id, changed: false, fetched: 0, triage, assist };
   }
-  const threads = [...first.threads];
-  let page = first;
-  let pageNumber = 1;
-  while (linkHeaderHasNext(page.headers.link) && pageNumber < MAX_PAGES) {
-    pageNumber += 1;
-    page = await fetchPage(account, env, pageNumber, null);
-    threads.push(...page.threads);
+  // The `all=true` listing can run past MAX_PAGES and is a delta after the
+  // first read; the unread listing is small and read whole, so every unread
+  // thread reaches the inbox and `unread` mirrors GitHub.
+  const unread = inbox.complete
+    ? { threads: inbox.threads.filter((thread) => thread?.unread === true), truncated: false, complete: true }
+    : await fetchListing(account, env, { all: false });
+  const byId = new Map();
+  for (const thread of [...inbox.threads, ...unread.threads]) {
+    const record = toNotificationRecord(thread, account.host);
+    if (record) byId.set(record.threadId, record);
   }
-  const truncated = linkHeaderHasNext(page.headers.link);
-  const records = threads.map((thread) => toNotificationRecord(thread, account.host)).filter(Boolean);
+  const records = [...byId.values()];
+  const truncated = inbox.truncated || unread.truncated;
 
   await withTransaction(async (client) => {
     for (const r of records) {
       await client.query(UPSERT_SQL, [
         account.id, r.threadId, r.repoFullName, r.repoOwner, r.repoPrivate, r.reason, r.subjectType,
-        r.subjectTitle, r.subjectApiUrl, r.htmlUrl, r.unread, r.ghUpdatedAt, r.latestCommentApiUrl,
+        r.subjectTitle, r.subjectApiUrl, r.htmlUrl, r.unread, r.ghUpdatedAt, r.latestCommentApiUrl, listedAt,
       ]);
     }
-    // The listing is the whole GitHub inbox, read and unread (`all=true`); a
-    // thread that dropped out was marked done on GitHub. A truncated listing
-    // proves nothing about the rest.
-    if (!truncated) {
-      await client.query(
-        `UPDATE github_notifications SET unread = FALSE,
-           state = CASE WHEN state = 'open' THEN 'done' ELSE state END,
-           state_changed_at = CASE WHEN state = 'open' THEN NOW() ELSE state_changed_at END, updated_at = NOW()
-         WHERE account_id = $1 AND (unread OR state = 'open') AND NOT (thread_id = ANY($2::text[]))`,
-        [account.id, records.map((r) => r.threadId)],
-      );
-    }
+    await reconcileListings(client, account.id, { inbox, unread });
     await client.query(
       `INSERT INTO github_notification_sync (account_id, last_modified, poll_interval_seconds, last_sync_at, last_error, updated_at)
        VALUES ($1, $2, $3, NOW(), '', NOW())
        ON CONFLICT (account_id) DO UPDATE SET last_modified = EXCLUDED.last_modified,
          poll_interval_seconds = EXCLUDED.poll_interval_seconds, last_sync_at = NOW(), last_error = '', updated_at = NOW()`,
-      [account.id, first.headers['last-modified'] ? `${LISTING_CURSOR_PREFIX}${first.headers['last-modified']}` : null, pollIntervalSeconds(first.headers['x-poll-interval'])],
+      [account.id, inbox.headers['last-modified'] ? `${LISTING_CURSOR_PREFIX}${inbox.headers['last-modified']}` : null, pollIntervalSeconds(inbox.headers['x-poll-interval'])],
     );
   });
   const triage = await triageAccountNotifications(account, env);
