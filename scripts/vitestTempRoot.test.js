@@ -128,7 +128,7 @@ describe('real workspace runner temp lifecycle', () => {
     } finally {
       rmSync(host, { recursive: true, force: true });
     }
-  }, 90000);
+  }, 150000); // must exceed the fixture's readiness bound (WATCH_READY_MS)
 });
 
 // #10840: a capture browser whose test process died without cleanup.
