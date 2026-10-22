@@ -909,7 +909,8 @@ router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req,
 // Decide before responding: once the response ends the socket can close and
 // lose the address that makes a caller local. authGate loads lazily because
 // this router is reached by many suites that mock settings. Both deferred
-// imports are memoized: overlapping first loads of one specifier can resolve
+// imports (`authGateModule`, declared with `planOptions`, and
+// `overlayTextModule`) are memoized: overlapping first loads of one specifier can resolve
 // past a test's module mock.
 let overlayTextModule;
 const checkOverlayTextAfterImport = async (req, projectId) => {

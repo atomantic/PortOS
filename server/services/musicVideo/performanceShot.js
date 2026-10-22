@@ -265,7 +265,8 @@ export async function withDraftPerformanceFallbacks(project, masterPath, options
 export async function assertCurrentPerformanceTakes(project, masterPath, options) {
   const reviewed = await reviewPerformanceTakes(project, masterPath, options);
   const rehashed = reviewed.filter((r) => r.reason === 'audio-rehashed').length;
-  if (rehashed > 0) console.log(`🎵 Music Video: ${rehashed} lip-sync take${rehashed === 1 ? '' : 's'} still match${rehashed === 1 ? 'es' : ''} the re-mastered song in ${rehashed === 1 ? 'its' : 'their'} sung window`);
+  // An unchecked window (decode: false) proves nothing, so it logs nothing.
+  if (rehashed > 0 && options?.decode !== false) console.log(`🎵 Music Video: ${rehashed} lip-sync take${rehashed === 1 ? '' : 's'} still match${rehashed === 1 ? 'es' : ''} the re-mastered song in ${rehashed === 1 ? 'its' : 'their'} sung window`);
   const locks = clipLocks(project);
   const stale = reviewed.filter((r) => r.stale && locks?.[r.sceneId] !== 'locked')
     .map(({ sceneId, reason }) => ({ sceneId, reason, cutaway: reason === 'not-lip-synced' }));
