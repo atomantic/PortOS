@@ -119,3 +119,39 @@ export const clipSpeedRate = (scene) => (CLIP_TIMING_FPS + whole(scene?.speedFps
 export const clipOffsetSec = (scene) => whole(scene?.offsetFrames, CLIP_OFFSET_FRAMES_RANGE) / CLIP_TIMING_FPS;
 // A footage shot's clip set to play backwards. A lip-sync performance never reverses: its mouth follows the song.
 export const clipReversed = (scene) => scene?.reverse === true && scene?.shotMode !== 'performance';
+
+export const COVERAGE_TOLERANCE_SEC = 0.25;
+
+/** Performance edits and reversed clips read their source once. */
+export const clipCanLoop = (scene, edit = null) => !edit && !clipReversed(scene);
+// An absent loop preserves playback for projects saved before shot planning.
+export const clipLoops = (scene, edit = null) => clipCanLoop(scene, edit) && scene?.loop !== false;
+
+/**
+ * Source trim on the render's output clock, shared with card coverage. Only
+ * retimed clips round to milliseconds; untouched performance edits retain
+ * their original precision. sourceSec includes footage after the edit out-point.
+ */
+export function clipPlaybackWindow(scene, edit, duration) {
+  const round3 = (n) => Math.round(n * 1000) / 1000;
+  const sourceInSec = edit ? Math.min(edit.inSec, duration) : 0;
+  const sourceOutSec = edit ? Math.min(edit.outSec, duration) : duration;
+  const rate = clipSpeedRate(scene);
+  const offsetSourceInSec = sourceInSec + clipOffsetSec(scene);
+  const retimed = rate !== 1 || offsetSourceInSec !== sourceInSec;
+  const leadSec = retimed ? round3(Math.max(0, -offsetSourceInSec)) : 0;
+  const clampedSourceInSec = Math.min(duration, Math.max(0, offsetSourceInSec));
+  return {
+    rate,
+    leadSec,
+    inSec: retimed ? round3(clampedSourceInSec / rate) : sourceInSec,
+    outSec: retimed ? round3(leadSec + Math.max(clampedSourceInSec, sourceOutSec) / rate) : sourceOutSec,
+    sourceSec: retimed ? round3(leadSec + (duration - clampedSourceInSec) / rate) : duration - sourceInSec,
+  };
+}
+
+/** Unknown measurements cannot establish a shortfall; an authored hold covers any gap. */
+export function clipNeedsMoreFootage({ loop, holdLastFrame, spanSec, clipSec }, toleranceSec = COVERAGE_TOLERANCE_SEC) {
+  return loop === false && !holdLastFrame && Number.isFinite(spanSec) && Number.isFinite(clipSec)
+    && spanSec - clipSec > toleranceSec;
+}

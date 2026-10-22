@@ -44,7 +44,7 @@ import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
@@ -113,12 +113,6 @@ const emitRenderSettled = (projectId, job) => musicVideoEvents.emit('render', {
 
 export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
-// #8964 loop semantics. A scene saved before shot planning existed has no
-// `loop` key and keeps the legacy behavior — its clip repeats to fill the
-// authored span — so existing projects render exactly as they did. A scene
-// created since carries an explicit boolean, and only `loop: true` repeats.
-const sceneLoops = (scene) => scene?.loop !== false;
-
 const round3 = (n) => Math.round(n * 1000) / 1000;
 // #8977: a performance take is placed by the immutable shot instruction it was
 // generated with — its footage starts `edit.inSec` into the clip (the audio
@@ -131,10 +125,6 @@ const cutEffectOf = (scene, planned) => {
   return effect?.enabled ? { cutEffect: effect } : {};
 };
 
-// A non-looping shot may run this much past its source clip; the gap holds the
-// final frame (tpad) rather than repeating footage. Longer shortfalls block the
-// render until the director resolves them.
-const COVERAGE_TOLERANCE_SEC = 0.25;
 const COVERAGE_RESOLUTIONS = Object.freeze(['hold', 'trim', 'continue', 'replace', 'loop']);
 
 /**
@@ -145,10 +135,10 @@ const COVERAGE_RESOLUTIONS = Object.freeze(['hold', 'trim', 'continue', 'replace
 function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC } = {}) {
   const out = [];
   for (const clip of Array.isArray(clips) ? clips : []) {
-    if (clip.layer || clip.loop !== false || clip.holdLastFrame) continue;
+    if (clip.layer) continue;
     const spanSec = clip.outSec - clip.inSec;
     const clipSec = clip.sourceSec ?? clip.duration;
-    if (spanSec - clipSec > toleranceSec) {
+    if (clipNeedsMoreFootage({ loop: clip.loop, holdLastFrame: clip.holdLastFrame, spanSec, clipSec }, toleranceSec)) {
       const round = (n) => Math.round(n * 100) / 100;
       out.push({ sceneId: clip.sceneId, spanSec: round(spanSec), clipSec: round(clipSec), shortBySec: round(spanSec - clipSec) });
     }
@@ -273,36 +263,12 @@ async function footageGeometry(entry) {
   return { videoPath, width: measured.width, height: measured.height, fps: measured.fps || 24, duration };
 }
 
-// Where a footage clip plays on the output timebase. A performance edit trims
-// the source; a hand-set speed and offset (clipSpeedRate / clipOffsetSec)
-// retime it: sectionChain plays it at `rate` and holds its first frame for
-// `leadSec` before the trim, so the in/out points here are output seconds.
-// Source coordinates stay immutable: only retimed clips round to milliseconds,
-// an untouched performance edit keeps its original precision. `sourceSec` is
-// the playable source length from the in-point on.
-function playbackWindow(scene, edit, duration) {
-  const sourceInSec = edit ? Math.min(edit.inSec, duration) : 0;
-  const sourceOutSec = edit ? Math.min(edit.outSec, duration) : duration;
-  const rate = clipSpeedRate(scene);
-  const offsetSourceInSec = sourceInSec + clipOffsetSec(scene);
-  const retimed = rate !== 1 || offsetSourceInSec !== sourceInSec;
-  const leadSec = retimed ? round3(Math.max(0, -offsetSourceInSec)) : 0;
-  const clampedSourceInSec = Math.min(duration, Math.max(0, offsetSourceInSec));
-  return {
-    rate,
-    leadSec,
-    inSec: retimed ? round3(clampedSourceInSec / rate) : sourceInSec,
-    outSec: retimed ? round3(leadSec + Math.max(clampedSourceInSec, sourceOutSec) / rate) : sourceOutSec,
-    sourceSec: retimed ? round3(leadSec + (duration - clampedSourceInSec) / rate) : duration - sourceInSec,
-  };
-}
-
 // A footage shot's render clip, or `missing-clip` when its selected take cannot be read.
 async function footageClip(scene, entry, planned) {
   const geometry = await footageGeometry(entry);
   if (!geometry) return { problem: 'missing-clip' };
   const edit = performanceEdit(scene);
-  const { rate, leadSec, inSec, outSec, sourceSec } = playbackWindow(scene, edit, geometry.duration);
+  const { rate, leadSec, inSec, outSec, sourceSec } = clipPlaybackWindow(scene, edit, geometry.duration);
   return { clip: {
     sceneId: scene.sceneId,
     videoPath: geometry.videoPath,
@@ -314,7 +280,7 @@ async function footageClip(scene, entry, planned) {
     // `duration` to the rendered span) so coverage can be judged against it.
     sourceSec,
     // A reversed clip is read once, backwards, and holds its last frame rather than looping.
-    loop: edit || clipReversed(scene) ? false : sceneLoops(scene),
+    loop: clipLoops(scene, edit),
     ...(clipReversed(scene) ? { reverse: true } : {}),
     // The director chose to hold the last frame over a shot longer than its clip.
     ...(scene.holdLastFrame === true ? { holdLastFrame: true } : {}),

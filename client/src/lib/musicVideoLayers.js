@@ -26,6 +26,11 @@ export {
   clipSpeedRate,
   clipOffsetSec,
   clipReversed,
+  COVERAGE_TOLERANCE_SEC,
+  clipCanLoop,
+  clipLoops,
+  clipPlaybackWindow,
+  clipNeedsMoreFootage,
 } from '../../../server/lib/musicVideoLayers.js';
 
 /** The composed render's cover-fitted still move at a song time, clamped to its last frame. */

@@ -67,6 +67,7 @@ vi.mock('./compositionRender.js', () => ({
   sweepCompositionScratch: vi.fn(async () => {}),
 }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})), mutateProjectRecord: vi.fn() }));
+vi.mock('./renderCleanup.js', () => ({ cleanupSupersededFinals: vi.fn(async () => ({})) }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-self') }));
 // A composed render goes shot by shot (shotSegments.js): the segment work is
 // held open until a test settles it, or rejects on the render's abort signal.
