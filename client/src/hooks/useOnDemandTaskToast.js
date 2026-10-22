@@ -148,9 +148,9 @@ export function useOnDemandTaskToast() {
           });
           return;
         }
-        // error-log-triage's and github-notifications' deterministic pass IS
-        // the run; the reason is its result line.
-        if (['error-log-triage', 'github-notifications'].includes(data?.taskType) && data?.reason) {
+        // error-log-triage's deterministic pass IS the run; the reason is its
+        // result line.
+        if (data?.taskType === 'error-log-triage' && data?.reason) {
           toast(`${task}: ${data.reason}.`, { duration: 7000, icon: '🩺' });
           return;
         }

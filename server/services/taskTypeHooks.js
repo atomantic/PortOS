@@ -86,11 +86,6 @@ const HOOK_MODULES = {
   'error-log-triage': {
     load: () => import('./errorLogTriageHooks.js')
   },
-  // buildTaskInput only: syncs and triages the GitHub notification inboxes
-  // and always skips — the pass is the run.
-  'github-notifications': {
-    load: () => import('./githubNotificationsHooks.js')
-  },
 };
 const PAYLOAD_OPTIONAL_OUTPUT_HOOKS = new Set();
 

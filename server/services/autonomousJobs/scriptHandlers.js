@@ -27,6 +27,16 @@ async function eidoverseProjection(options = {}) {
   return projectEidoverseWorld({ ...options, compact: true })
 }
 
+// Loaded lazily: the inbox pulls in Postgres and the gh client, which this
+// registry must not load at import time. Deterministic, no provider call.
+async function githubNotificationsCheck() {
+  const { describeScheduledCheck, runScheduledNotificationCheck } = await import('../githubNotifications.js')
+  const results = await runScheduledNotificationCheck()
+  const summary = describeScheduledCheck(results)
+  console.log(`📬 GitHub notifications check: ${summary}`)
+  return { summary, accounts: results.length }
+}
+
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
  * Returns a summary object when the script exits.
@@ -217,7 +227,8 @@ const SCRIPT_HANDLERS = {
   // record-level divergence the cursor-based sync cycle cannot see. Default
   // job ships disabled — deterministic, no LLM calls.
   'brain-parity-sweep': runBrainParitySweep,
-  'eidoverse-projection': eidoverseProjection
+  'eidoverse-projection': eidoverseProjection,
+  'github-notifications': githubNotificationsCheck
   // 'layered-intelligence' retired here (#2322): LI is now a per-app scheduled
   // task, not a global autonomous-job sweep. It runs as a normal reasoning agent
   // with programmatic-I/O hooks — see taskTypeHooks.js +
