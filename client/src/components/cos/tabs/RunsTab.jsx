@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Trash2, RotateCcw, MessageSquarePlus, ScrollText, Square } from 'lucide-react';
+import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
 import * as api from '../../../services/api';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -115,24 +115,6 @@ export default function RunsTab() {
     deepLinkOpened.current = true;
     expandRun(deepLinkRunId);
   }, [deepLinkRunId, loading, runs, expandRun]);
-
-  const handleContinue = (run) => {
-    const details = expandedDetails[run.id] || {};
-    navigate('/devtools/runner', {
-      state: {
-        continueFrom: {
-          prompt: details.prompt || run.prompt,
-          output: details.output || '',
-          runId: run.id,
-          providerId: run.providerId,
-          providerName: run.providerName,
-          model: run.model,
-          workspacePath: run.workspacePath,
-          workspaceName: run.workspaceName
-        }
-      }
-    });
-  };
 
   const handleResume = async (run, e) => {
     e.stopPropagation();
@@ -274,8 +256,8 @@ export default function RunsTab() {
                   onKeyDown={onActivateKeyDown(() => toggleExpand(run.id))}
                   data-testid={`run-row-${run.id}`}
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+                    <div className="flex items-center gap-3 flex-1 basis-64 min-w-0">
                       <button
                         type="button"
                         className="text-gray-400 hover:text-white shrink-0"
@@ -309,23 +291,13 @@ export default function RunsTab() {
                         <div className="text-xs text-gray-500 font-mono truncate mt-1">
                           {run.prompt?.substring(0, 100)}{run.prompt?.length > 100 ? '...' : ''}
                         </div>
-                        {/* Show error preview for failed runs in collapsed view */}
-                        {run.success === false && expandedId !== run.id && (
-                          <div className="text-xs text-port-error/80 font-mono truncate mt-1">
-                            ⚠ {run.error
-                              ? (() => {
-                                  const firstLine = run.error.split('\n')[0] || '';
-                                  return `${firstLine.substring(0, 80)}${firstLine.length > 80 ? '...' : ''}`;
-                                })()
-                              : run.errorCategory && run.errorCategory !== 'unknown'
-                                ? `${run.errorCategory}: ${run.suggestedFix || 'See details'}`
-                                : `${getExitCodeInfo(run.exitCode).label}: ${getExitCodeInfo(run.exitCode).description}`}
-                          </div>
-                        )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 pl-8 sm:pl-0">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
+                    <div className="flex flex-wrap items-center gap-3 min-w-0">
+                      <span className="inline-flex items-center gap-1.5 text-sm text-gray-400 shrink-0">
+                        <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
+                        {run.success ? 'Succeeded' : run.success === false ? 'Failed' : 'Running'}
+                      </span>
                       <span className="text-sm text-gray-500 shrink-0">{formatTime(run.startTime)}</span>
                       {run.success === false && (
                         <button
@@ -371,6 +343,26 @@ export default function RunsTab() {
                     </div>
                   </div>
                 </div>
+
+                {/* Failure guidance stays visible; only execution diagnostics collapse. */}
+                {(run.error || run.success === false) && (() => {
+                  const exitInfo = getExitCodeInfo(run.exitCode);
+                  const hasExitCode = run.exitCode !== undefined && run.exitCode !== null && run.exitCode !== 0;
+                  return (
+                    <div className="px-3 pb-3 sm:px-4 sm:pb-4 min-w-0">
+                      <Banner tone="error" size="md" title="Run failed" srLabel={false} role="note">
+                        <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                          {run.error || (hasExitCode ? exitInfo.description : 'This run did not complete successfully.')}
+                        </p>
+                        {run.suggestedFix && (
+                          <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                            <span className="font-medium">Suggested fix: </span>{run.suggestedFix}
+                          </p>
+                        )}
+                      </Banner>
+                    </div>
+                  );
+                })()}
 
                 {/* Expanded Details */}
                 {expandedId === run.id && (
@@ -422,6 +414,12 @@ export default function RunsTab() {
                             </div>
                           </div>
                         )}
+                        {run.errorCategory && run.errorCategory !== 'unknown' && (
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Failure category</div>
+                            <div className="text-gray-300 [overflow-wrap:anywhere]">{run.errorCategory}</div>
+                          </div>
+                        )}
                         {run.outputSize && (
                           <div>
                             <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Output Size</div>
@@ -429,6 +427,15 @@ export default function RunsTab() {
                           </div>
                         )}
                       </div>
+
+                      {run.errorDetails && run.errorDetails !== run.error && (
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Additional error details</div>
+                          <pre className="text-xs text-port-error/80 font-mono whitespace-pre-wrap break-all">
+                            {run.errorDetails}
+                          </pre>
+                        </div>
+                      )}
 
                       {/* Prompt */}
                       <div>
@@ -451,79 +458,6 @@ export default function RunsTab() {
                                 : 'Loading output...'}
                             </pre>
                           </div>
-                        </div>
-                      )}
-
-                      {/* Error - show for failed runs with error message OR exit code */}
-                      {(run.error || (run.success === false && run.exitCode !== 0)) && (() => {
-                        const exitInfo = getExitCodeInfo(run.exitCode);
-                        return (
-                          <div>
-                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
-                              Error
-                              {run.exitCode !== undefined && run.exitCode !== null && run.exitCode !== 0 && (
-                                <span className="text-port-error/70">(exit code: {run.exitCode})</span>
-                              )}
-                              {run.errorCategory && run.errorCategory !== 'unknown' ? (
-                                <span className="px-1.5 py-0.5 bg-port-error/20 text-port-error/80 rounded text-xs">
-                                  {run.errorCategory}
-                                </span>
-                              ) : run.exitCode !== 0 && exitInfo.label !== 'Unknown' && (
-                                <span className="px-1.5 py-0.5 bg-port-error/20 text-port-error/80 rounded text-xs">
-                                  {exitInfo.label}
-                                </span>
-                              )}
-                            </div>
-                            <Banner tone="error" size="md">
-                              <pre className="text-sm font-mono whitespace-pre-wrap break-all">
-                                {run.error || exitInfo.description}
-                              </pre>
-                            </Banner>
-                            {/* Show additional error details if available and different from error */}
-                            {run.errorDetails && run.errorDetails !== run.error && (
-                              <div role="status" className="mt-2 bg-port-error/5 border border-port-error/20 rounded-lg p-3">
-                                <div className="text-xs text-gray-500 mb-1">Additional Details</div>
-                                <pre className="text-xs text-port-error/80 font-mono whitespace-pre-wrap break-all">
-                                  {run.errorDetails}
-                                </pre>
-                              </div>
-                            )}
-                            {/* Show suggested fix if available, or fallback to exit code info */}
-                            {(run.suggestedFix || (!run.error && exitInfo.description)) && (
-                              <Banner tone="warning" size="md" className="mt-2">
-                                <div className="text-xs font-medium mb-1">Suggested Fix</div>
-                                <div className="text-sm text-gray-300">
-                                  {run.suggestedFix || 'Check the output above for specific error details. If the output is empty, the process may have been terminated before producing output.'}
-                                </div>
-                              </Banner>
-                            )}
-                            {/* Jump straight to the system logs for the full error context,
-                                for operators who don't know where the logs live. */}
-                            <div className="mt-3">
-                              <button
-                                onClick={() => setLogModalRun(run)}
-                                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-card border border-port-border hover:border-port-accent text-gray-300 hover:text-white rounded-lg transition-colors"
-                                data-testid={`view-logs-expanded-${run.id}`}
-                              >
-                                <ScrollText size={14} />
-                                View System Logs
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* Continue Button */}
-                      {run.success && expandedDetails[run.id]?.output && (
-                        <div className="flex justify-end pt-2">
-                          <button
-                            onClick={() => handleContinue(run)}
-                            className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
-                            data-testid="continue-conversation-btn"
-                          >
-                            <MessageSquarePlus size={16} />
-                            Continue Conversation
-                          </button>
                         </div>
                       )}
                     </div>
