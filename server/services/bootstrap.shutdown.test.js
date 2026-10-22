@@ -114,9 +114,6 @@ describe('shutdown handler — request drain ordering (#8323)', () => {
   });
 });
 
-// Issue #11756: the IdeaLoom export debounce is in memory, so shutdown must
-// flush it — after the servers close (nothing can schedule another export),
-// bounded by a grace, overlapping the DB close, and awaited before exit.
 describe('shutdown handler — scheduled handlers finish before the DB pool closes', () => {
   const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
 
@@ -133,6 +130,9 @@ describe('shutdown handler — scheduled handlers finish before the DB pool clos
   });
 });
 
+// Issue #11756: the IdeaLoom export debounce is in memory, so shutdown must
+// flush it — after the servers close (nothing can schedule another export),
+// bounded by a grace, overlapping the DB close, and awaited before exit.
 describe('shutdown handler — IdeaLoom auto-sync flush (#11756)', () => {
   const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
 
