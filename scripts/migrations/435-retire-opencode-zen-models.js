@@ -59,7 +59,7 @@ async function migrateJobs(rootDir) {
   if (!Array.isArray(doc?.jobs)) return [];
   const touched = [];
   for (const job of doc.jobs) {
-    const next = replacement(job?.model);
+    const next = TARGET_PROVIDER_IDS.includes(job?.providerId) ? replacement(job.model) : null;
     if (next) { job.model = next; touched.push(job.id); }
   }
   if (touched.length) await writeJsonAtomic(path, doc);

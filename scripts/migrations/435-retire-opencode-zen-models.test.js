@@ -41,6 +41,7 @@ describe('migration 435 — retire OpenCode Zen model ids the CLI no longer list
       version: 1,
       jobs: [
         { id: 'job-a', providerId: 'opencode-zen-tui', model: 'opencode/muse-spark-1.2-contributor-free' },
+        { id: 'job-c', providerId: 'opencode-zen', model: 'opencode/mimo-v2.5-free' },
         { id: 'job-b', providerId: 'opencode-zen-tui', model: 'opencode/big-pickle' },
       ],
     });
@@ -57,7 +58,7 @@ describe('migration 435 — retire OpenCode Zen model ids the CLI no longer list
     expect(providers['opencode-zen-cli'].heavyModel).toBe('opencode/big-pickle');
     expect(providers['opencode-zen-tui'].models).toEqual(['opencode/mimo-v2.6-flash-free', 'opencode/custom']);
     expect(providers['opencode-zen'].models).toEqual(['opencode/mimo-v2.5-free']);
-    expect(readJson(jobsPath).jobs.map((j) => j.model)).toEqual(['opencode/glm-5.3-flash-free', 'opencode/big-pickle']);
+    expect(readJson(jobsPath).jobs.map((j) => j.model)).toEqual(['opencode/glm-5.3-flash-free', 'opencode/mimo-v2.5-free', 'opencode/big-pickle']);
 
     await expect(migration.up({ rootDir })).resolves.toEqual({ ok: true, providers: [], jobs: [] });
   });
