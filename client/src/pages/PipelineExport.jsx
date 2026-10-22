@@ -25,7 +25,6 @@ import {
   getGalleryImages,
   listVideoHistory,
 } from '../services/api';
-import { CLIP_CATALOG_QUERY } from '../lib/videoTimelineModel';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import AttributionList from '../components/media/AttributionList';
@@ -98,7 +97,8 @@ export default function PipelineExport() {
   const fetchSeriesAssets = useCallback(async () => {
     const [collections, videos] = await Promise.all([
       listMediaCollections({ silent: true }),
-      listVideoHistory({ silent: true, query: CLIP_CATALOG_QUERY }),
+      // Full (non-compact) read: compact rows drop the stamped `provenance` the rollup needs.
+      listVideoHistory({ silent: true }),
     ]);
     const list = Array.isArray(collections) ? collections : [];
     const collection = list.find((c) => c.seriesId === seriesId || c.id === `sc-${seriesId}`);
