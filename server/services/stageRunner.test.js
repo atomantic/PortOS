@@ -948,6 +948,13 @@ describe('withLocalConcurrencyGate', () => {
     expect(LOCAL_LLM_MAX_CONCURRENCY).toBe(1); // default — serialized
   });
 
+  it('serializes a loopback-alias endpoint (127.0.0.2) like 127.0.0.1', async () => {
+    const provider = { type: 'api', endpoint: 'http://127.0.0.2:11434' };
+    const { state, fn } = makeTracker();
+    await Promise.all(Array.from({ length: 4 }, () => withLocalConcurrencyGate(provider, fn)));
+    expect(state.peak).toBeLessThanOrEqual(LOCAL_LLM_MAX_CONCURRENCY);
+  });
+
   it('does NOT gate a remote api endpoint (runs concurrently)', async () => {
     const provider = { type: 'api', endpoint: 'https://api.openai.com' };
     const { state, fn } = makeTracker();
