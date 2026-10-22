@@ -1138,3 +1138,53 @@ describe('durable memory mastery', () => {
     }
   });
 });
+
+describe('concurrent memory writes', () => {
+  const customItem = (id) => ({
+    id,
+    title: id,
+    type: 'poem',
+    builtin: false,
+    content: {
+      lines: [{ text: 'line' }],
+      chunks: [
+        { id: 'chunk-1', label: 'Chunk 1', lineRange: [0, 0] },
+        { id: 'chunk-2', label: 'Chunk 2', lineRange: [0, 0] },
+      ],
+    },
+    mastery: { overallPct: 0, chunks: {}, elements: {}, retention: { status: 'learning' } },
+    schedule: defaultSchedule('2026-07-01T00:00:00.000Z'),
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-01T00:00:00.000Z',
+  });
+
+  it('keeps every overlapping submit, across chunks and items, when reads yield before writes land', async () => {
+    // A stateful store whose reads resolve a macrotask later from the snapshot
+    // taken at call time: overlapping read-modify-write cycles then all see the
+    // same pre-image, so any unserialized write loses the others' updates.
+    let stored = { items: [customItem('item-a'), customItem('item-b')] };
+    readJSONFile.mockImplementation(async (path) => {
+      if (!String(path).includes('post-memory-items')) return { entries: [] };
+      const snapshot = structuredClone(stored);
+      await new Promise(resolve => setImmediate(resolve));
+      return snapshot;
+    });
+    atomicWrite.mockImplementation(async (path, data) => {
+      if (String(path).includes('post-memory-items')) stored = structuredClone(data);
+    });
+    try {
+      await Promise.all([
+        submitPractice('item-a', { mode: 'fill-blank', chunkId: 'chunk-1', results: [{ correct: true }] }),
+        submitPractice('item-a', { mode: 'fill-blank', chunkId: 'chunk-2', results: [{ correct: true }] }),
+        submitPractice('item-b', { mode: 'fill-blank', chunkId: 'chunk-1', results: [{ correct: false }] }),
+      ]);
+      const byId = Object.fromEntries(stored.items.map(i => [i.id, i]));
+      expect(byId['item-a'].mastery.chunks['chunk-1'].attempts).toBe(1);
+      expect(byId['item-a'].mastery.chunks['chunk-2'].attempts).toBe(1);
+      expect(byId['item-b'].mastery.chunks['chunk-1'].attempts).toBe(1);
+    } finally {
+      readJSONFile.mockResolvedValue({ items: [] });
+      atomicWrite.mockResolvedValue(undefined);
+    }
+  });
+});

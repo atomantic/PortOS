@@ -8,6 +8,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { shuffle } from '../lib/arrayUtils.js';
 import { isMemoryItemEnabled } from '../lib/postTopics.js';
 import { userLocalToday } from './userTimezone.js';
@@ -23,6 +24,11 @@ import { listStoredTrainingEntries, saveStoredTrainingRun } from './postRunStore
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MEMORY_ITEMS_FILE = join(MEATSPACE_DIR, 'post-memory-items.json');
+
+// One queue for the whole store: every mutator's load → edit → save cycle runs
+// under it so overlapping writes (e.g. the per-chunk submits of a spaced session)
+// cannot each rewrite the other's result. Reads stay unqueued.
+const queueMemoryWrite = createFileWriteQueue();
 
 // =============================================================================
 // SPACED-REPETITION SCHEDULER (SM-2 inspired)
@@ -399,7 +405,11 @@ export async function getMemoryItem(id) {
   return items.find(i => i.id === id) || null;
 }
 
-export async function createMemoryItem(data) {
+export function createMemoryItem(data) {
+  return queueMemoryWrite(() => createMemoryItemLocked(data));
+}
+
+async function createMemoryItemLocked(data) {
   const items = await loadMemoryItems();
   const now = new Date().toISOString();
 
@@ -440,7 +450,11 @@ export async function createMemoryItem(data) {
   return item;
 }
 
-export async function updateMemoryItem(id, updates) {
+export function updateMemoryItem(id, updates) {
+  return queueMemoryWrite(() => updateMemoryItemLocked(id, updates));
+}
+
+async function updateMemoryItemLocked(id, updates) {
   const items = await loadMemoryItems();
   const idx = items.findIndex(i => i.id === id);
   if (idx === -1) return null;
@@ -481,7 +495,11 @@ export async function updateMemoryItem(id, updates) {
  * training now, then schedule one randomized future audit. Passing that audit
  * makes the attestation verified; failing it resumes ordinary learning.
  */
-export async function attestMemoryItemMastery(id, now = new Date(), random = Math.random) {
+export function attestMemoryItemMastery(id, now = new Date(), random = Math.random) {
+  return queueMemoryWrite(() => attestMemoryItemMasteryLocked(id, now, random));
+}
+
+async function attestMemoryItemMasteryLocked(id, now, random) {
   const items = await loadMemoryItems();
   const item = items.find(i => i.id === id);
   if (!item) return null;
@@ -513,7 +531,11 @@ export async function attestMemoryItemMastery(id, now = new Date(), random = Mat
   return { mastery: item.mastery, schedule: item.schedule };
 }
 
-export async function deleteMemoryItem(id) {
+export function deleteMemoryItem(id) {
+  return queueMemoryWrite(() => deleteMemoryItemLocked(id));
+}
+
+async function deleteMemoryItemLocked(id) {
   const items = await loadMemoryItems();
   const idx = items.findIndex(i => i.id === id);
   if (idx === -1) return null;
@@ -592,10 +614,6 @@ async function saveMemoryPracticeRun({ memoryItemId, mode, chunkId, results, tot
 }
 
 export async function submitPractice(id, practiceData) {
-  const items = await loadMemoryItems();
-  const item = items.find(i => i.id === id);
-  if (!item) return null;
-
   const { mode, chunkId, results = [], totalMs } = practiceData;
   const nowDate = new Date();
   const now = nowDate.toISOString();
@@ -613,6 +631,8 @@ export async function submitPractice(id, practiceData) {
   // This also makes old clients that sent a synthetic `{ correct: true }` learn
   // result harmless: the service ignores the payload entirely in this branch.
   if (!RETRIEVAL_PRACTICE_MODES.has(mode)) {
+    const item = await getMemoryItem(id);
+    if (!item) return null;
     const practiceId = await saveMemoryPracticeRun({
       memoryItemId: id,
       mode,
@@ -626,6 +646,32 @@ export async function submitPractice(id, practiceData) {
     console.log(`🧠 Memory exposure logged: "${item.title}" mode=${mode}`);
     return { mastery: item.mastery, schedule: item.schedule, practiceId };
   }
+
+  // Only the item load/edit/save runs under the store queue; the training-log
+  // append does not depend on the item pre-image, so it stays outside the lock.
+  const applied = await queueMemoryWrite(() => applyRetrievalPracticeLocked(id, { chunkId, results, nowDate, now }));
+  if (!applied) return null;
+  const { item, correctCount } = applied;
+
+  const practiceId = await saveMemoryPracticeRun({
+    memoryItemId: id,
+    mode,
+    chunkId,
+    results,
+    totalMs,
+    date: todayLocal,
+    timestamp: now,
+  });
+
+  console.log(`🧠 Practice logged: "${item.title}" mode=${mode} ${correctCount}/${results.length} → next review in ${item.schedule.intervalDays}d`);
+  return { mastery: item.mastery, schedule: item.schedule, practiceId };
+}
+
+// Mutation half of submitPractice. Callers must hold queueMemoryWrite.
+async function applyRetrievalPracticeLocked(id, { chunkId, results, nowDate, now }) {
+  const items = await loadMemoryItems();
+  const item = items.find(i => i.id === id);
+  if (!item) return null;
 
   const correctCount = results.filter(r => r.correct).length;
   const ratio = results.length ? correctCount / results.length : 0;
@@ -686,20 +732,7 @@ export async function submitPractice(id, practiceData) {
 
   item.updatedAt = now;
   await saveMemoryItems(items);
-
-  // Log the practice session
-  const practiceId = await saveMemoryPracticeRun({
-    memoryItemId: id,
-    mode,
-    chunkId,
-    results,
-    totalMs,
-    date: todayLocal,
-    timestamp: now,
-  });
-
-  console.log(`🧠 Practice logged: "${item.title}" mode=${mode} ${correctCount}/${results.length} → next review in ${item.schedule.intervalDays}d`);
-  return { mastery: item.mastery, schedule: item.schedule, practiceId };
+  return { item, correctCount };
 }
 
 /**
@@ -715,8 +748,12 @@ export async function submitPractice(id, practiceData) {
  * doesn't match a known item. The composed-session path uses
  * `applySessionToMemoryItems`, which gates tasks to scored retrieval types.
  */
-export async function advanceScheduleFromSession(memoryItemId, ratio, now = new Date()) {
-  if (!memoryItemId) return null;
+export function advanceScheduleFromSession(memoryItemId, ratio, now = new Date()) {
+  if (!memoryItemId) return Promise.resolve(null);
+  return queueMemoryWrite(() => advanceScheduleFromSessionLocked(memoryItemId, ratio, now));
+}
+
+async function advanceScheduleFromSessionLocked(memoryItemId, ratio, now) {
   const items = await loadMemoryItems();
   const item = items.find(i => i.id === memoryItemId);
   if (!item) return null;
@@ -869,8 +906,12 @@ function applyMasteryMergeToItem(item, questions, now) {
  * Returns the updated mastery, or `null` when `memoryItemId`/`questions` are
  * absent or the id doesn't match a known item.
  */
-export async function mergeMasteryFromSession(memoryItemId, questions, now = new Date()) {
-  if (!memoryItemId || !Array.isArray(questions) || !questions.length) return null;
+export function mergeMasteryFromSession(memoryItemId, questions, now = new Date()) {
+  if (!memoryItemId || !Array.isArray(questions) || !questions.length) return Promise.resolve(null);
+  return queueMemoryWrite(() => mergeMasteryFromSessionLocked(memoryItemId, questions, now));
+}
+
+async function mergeMasteryFromSessionLocked(memoryItemId, questions, now) {
   const items = await loadMemoryItems();
   const item = items.find(i => i.id === memoryItemId);
   if (!item) return null;
@@ -896,13 +937,16 @@ export async function mergeMasteryFromSession(memoryItemId, questions, now = new
  * @param {Array<{memoryItemId?, questions?}>} tasks - the session's scored tasks
  * @returns {Promise<{updated:number}>} how many memory items were touched
  */
-export async function applySessionToMemoryItems(tasks, now = new Date()) {
+export function applySessionToMemoryItems(tasks, now = new Date()) {
   const memoryTasks = (Array.isArray(tasks) ? tasks : []).filter(t => (
     t?.memoryItemId
     && (!t.type || ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'].includes(t.type))
   ));
-  if (!memoryTasks.length) return { updated: 0 };
+  if (!memoryTasks.length) return Promise.resolve({ updated: 0 });
+  return queueMemoryWrite(() => applySessionToMemoryItemsLocked(memoryTasks, now));
+}
 
+async function applySessionToMemoryItemsLocked(memoryTasks, now) {
   const items = await loadMemoryItems();
   let updated = 0;
   for (const task of memoryTasks) {
