@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import { Bot, Cpu, Gauge, Network, Package, Plus } from 'lucide-react';
+import { Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -31,7 +31,7 @@ import FleetProviderSetup from '../components/providers/FleetProviderSetup';
 import FleetHostSetup from '../components/providers/FleetHostSetup';
 import LocalPersistentMindSetupCard from '../components/settings/LocalPersistentMindSetupCard.jsx';
 import RetiredModelPinsPanel from '../components/providers/RetiredModelPinsPanel';
-import ProviderPageTabs, { providerPageTabForPath } from '../components/providers/ProviderPageTabs';
+import { providerPageTabForPath } from '../components/providers/ProviderPageTabs';
 import ProviderHarnessesTab from '../components/providers/ProviderHarnessesTab';
 import ProviderServicesTab from '../components/providers/ProviderServicesTab';
 import ProviderCompatibilityMatrix from '../components/providers/ProviderCompatibilityMatrix';
@@ -41,6 +41,14 @@ import DefaultProviderHelper from '../components/providers/DefaultProviderHelper
 const STATUS_EVENTS = ['provider-status:changed'];
 const READINESS_EVENTS = ['provider-readiness:changed'];
 const ACCOUNT_EVENTS = ['codex-account:changed'];
+
+// Title and icon follow the routed view; labels and icons match the Models
+// section strip and navPresentation for the same paths.
+const VIEW_HEADERS = {
+  presets: { icon: Bot, title: 'Providers' },
+  harnesses: { icon: TerminalSquare, title: 'Harnesses' },
+  services: { icon: Plug, title: 'AI Services' },
+};
 
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
@@ -239,6 +247,7 @@ export default function AIProviders() {
   const editingProviderId = presetId ?? providerId;
   const barePath = location.pathname.replace(/\/+$/, '');
   const activeTab = providerPageTabForPath(barePath);
+  const { icon: HeaderIcon, title: headerTitle } = VIEW_HEADERS[activeTab];
   const creatingProvider = barePath.endsWith('/ai/presets/new');
   const creatingService = barePath.endsWith('/ai/services/new');
   const fleetSetupOpen = barePath.endsWith('/ai/fleet');
@@ -802,7 +811,7 @@ export default function AIProviders() {
   if (loading) {
     return (
       <ModelsSectionLayout activeTab="providers">
-        <PageHeader icon={Bot} title="AI Providers" />
+        <PageHeader icon={HeaderIcon} title={headerTitle} />
         <ModelsTabsHeader activeTab="providers" />
         <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4">
           <PageSkeleton header="none" label="Loading providers" layout="grid" cards={4} />
@@ -861,15 +870,12 @@ export default function AIProviders() {
 
   return (
     <ModelsSectionLayout activeTab="providers">
-      <PageHeader icon={Bot} title="AI Providers" actions={headerActions} />
+      <PageHeader icon={HeaderIcon} title={headerTitle} actions={headerActions} />
 
       <ModelsTabsHeader activeTab="providers" />
       {activeTab !== 'harnesses' && Object.values(observationUnavailable).some(Boolean) && (
         <Banner variant="warning">Provider readiness status unavailable. Showing the last known state.</Banner>
       )}
-      <div className="px-4 pt-3">
-        <ProviderPageTabs activeTab={activeTab} />
-      </div>
 
       <div className={`min-h-0 min-w-0 flex-1 overflow-auto p-4 ${activeTab === 'presets' ? 'space-y-6' : ''}`}>
       {activeTab === 'harnesses' && (
