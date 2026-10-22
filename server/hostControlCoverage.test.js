@@ -1084,7 +1084,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/sharing/subscriptions/:id', REMOVES_RECORD],
   // /api/spotify
   ['POST /api/spotify/auth/clear', REMOVES_RECORD],
-  ['POST /api/spotify/auth/credentials', RECORDS],
+  ['POST /api/spotify/auth/credentials', CONNECTOR_CREDENTIAL],
   ['POST /api/spotify/playlists/sync', EXTERNAL_SYNC],
   ['POST /api/spotify/sync', EXTERNAL_SYNC],
   // /api/sprites

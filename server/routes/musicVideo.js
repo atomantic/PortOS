@@ -18,7 +18,6 @@ import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js'
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { requestHasHostControl } from '../services/authGate.js';
 import {
   validateRequest,
   musicVideoAudioTimingPreviewSchema,
@@ -898,10 +897,12 @@ router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req,
 // The check renders the document in the headless composition browser, so it
 // runs only for a caller with host control (#13055); anyone else gets the
 // import alone, and the gated production-review text check runs it later.
+// authGate loads lazily: this router is reached by many suites that mock settings.
 const checkOverlayTextAfterImport = (req, projectId) => {
-  if (!requestHasHostControl(req)) return;
-  import('../services/musicVideo/overlayTextService.js')
-    .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId))
+  import('../services/authGate.js')
+    .then(({ requestHasHostControl }) => requestHasHostControl(req)
+      && import('../services/musicVideo/overlayTextService.js')
+        .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId)))
     .catch((err) => console.error(`❌ Overlay text check did not start: ${err.message}`));
 };
 
