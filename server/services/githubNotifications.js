@@ -274,9 +274,10 @@ async function learnFromOperator(client, row, action) {
 
 /**
  * Apply one thread action on GitHub, then mirror it locally. The operator's
- * actions teach learned rules; an automation's carry the decision behind it.
+ * actions teach learned rules (unless `learn: false`, for a bulk audit change);
+ * an automation's carry the decision behind it.
  */
-export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {} } = {}) {
+export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator' } = {}) {
   const spec = ACTION_SPECS[action];
   const account = await getAccount(accountId);
   const existing = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
@@ -292,7 +293,7 @@ export async function applyNotificationAction(accountId, threadId, action, { act
     );
   }
   const row = await withTransaction(async (client) => {
-    if (actor === 'operator') await learnFromOperator(client, existing, action);
+    if (learn) await learnFromOperator(client, existing, action);
     const result = await client.query(
       `UPDATE github_notifications SET
          unread = CASE WHEN $3::text IN ('read','done') THEN FALSE ELSE unread END,

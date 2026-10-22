@@ -28,6 +28,11 @@ const mock = vi.hoisted(() => ({
   getGitHubLearnedRules: vi.fn(),
   deleteGitHubLearnedRule: vi.fn(),
   getProviders: vi.fn(),
+  getGitHubAudit: vi.fn(),
+  runGitHubAudit: vi.fn(),
+  applyGitHubAuditSuggestion: vi.fn(),
+  getGitHubAuditChanges: vi.fn(),
+  undoGitHubAuditChange: vi.fn(),
 }));
 
 vi.mock('../services/api', () => mock);
@@ -507,5 +512,49 @@ describe('GitHub automations tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run now/ }));
     await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
     await waitFor(() => expect(mock.getGitHubAutomations).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('GitHub audit tab', () => {
+  const ACCOUNT = { id: 'github-com', label: 'github.com', host: 'github.com', trust: 'public', mode: 'observe', enabled: true };
+  const AUDIT = {
+    accountId: 'github-com', accountLabel: 'github.com', ranAt: '2026-10-22T00:00:00Z', windowDays: 30, watchedListed: true,
+    summary: { total: 20, acted: 0, handled: 12, repos: 2 },
+    suggestions: [
+      { id: 'unwatch:acme/noisy', kind: 'unwatch', repo: 'acme/noisy', stats: { total: 8, acted: 0, handled: 0 }, apply: true, applied: false },
+      { id: 'actions-failed-only', kind: 'actions-failed-only', repo: null, stats: { total: 12, acted: 0, handled: 12 }, link: 'https://github.com/settings/notifications', applied: false },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock.getGitHubAccounts.mockResolvedValue([ACCOUNT]);
+    mock.getGitHubAudit.mockResolvedValue({ audit: null });
+    mock.getGitHubAuditChanges.mockResolvedValue({ changes: [] });
+  });
+
+  it('runs an audit on tap, applies one change, links the rest, and undoes from the log', async () => {
+    mock.runGitHubAudit.mockResolvedValue({ audit: AUDIT });
+    mock.applyGitHubAuditSuggestion.mockResolvedValue({ id: '5', kind: 'unwatch', repo: 'acme/noisy' });
+    renderTab('audit');
+    expect(await screen.findByText('Nothing changes until you tap Apply on a suggestion.')).toBeTruthy();
+    expect(mock.runGitHubAudit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Run audit/ }));
+    expect(await screen.findByText('Unwatch acme/noisy')).toBeTruthy();
+    expect(screen.getByText(/20 notifications in 2 repos/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Open on GitHub/ }).getAttribute('href')).toBe('https://github.com/settings/notifications');
+
+    mock.getGitHubAuditChanges.mockResolvedValue({ changes: [
+      { id: '5', accountId: 'github-com', accountLabel: 'github.com', kind: 'unwatch', repo: 'acme/noisy', threadCount: null, appliedAt: '2026-10-22T00:00:00Z', undone: false },
+    ] });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByText('Applied')).toBeTruthy();
+    expect(mock.applyGitHubAuditSuggestion).toHaveBeenCalledWith('github-com', 'unwatch:acme/noisy');
+
+    mock.undoGitHubAuditChange.mockResolvedValue({ id: '5', undone: true });
+    fireEvent.click(await screen.findByRole('button', { name: /Undo/ }));
+    expect(await screen.findByText('Undone')).toBeTruthy();
+    expect(mock.undoGitHubAuditChange).toHaveBeenCalledWith('5');
   });
 });

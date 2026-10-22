@@ -2,10 +2,11 @@ import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
   githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
-  githubNotificationCadenceSchema } from '../lib/validation.js';
+  githubNotificationCadenceSchema, githubAuditApplySchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
 import * as githubNotifications from '../services/githubNotifications.js';
+import * as githubAudit from '../services/githubNotificationAudit.js';
 
 const router = express.Router();
 
@@ -214,6 +215,42 @@ router.get('/automations/rules', asyncHandler(async (req, res) => {
  */
 router.delete('/automations/rules/:id', asyncHandler(async (req, res) => {
   res.json(await githubNotifications.deleteLearnedRule(numericIdParam(req)));
+}));
+
+/**
+ * GET /api/github/audit-changes — changes applied from audit cards, newest first
+ */
+router.get('/audit-changes', asyncHandler(async (req, res) => {
+  res.json({ changes: await githubAudit.listAuditChanges() });
+}));
+
+/**
+ * POST /api/github/audit-changes/:id/undo — re-watch the repo or re-subscribe the muted threads
+ */
+router.post('/audit-changes/:id/undo', asyncHandler(async (req, res) => {
+  res.json(await githubAudit.undoAuditChange(numericIdParam(req)));
+}));
+
+/**
+ * GET /api/github/audit/:accountId — the account's latest audit, or null
+ */
+router.get('/audit/:accountId', asyncHandler(async (req, res) => {
+  res.json({ audit: await githubAudit.getLastAudit(req.params.accountId) });
+}));
+
+/**
+ * POST /api/github/audit/:accountId — audit the last 30 days of notifications against what was done about them
+ */
+router.post('/audit/:accountId', asyncHandler(async (req, res) => {
+  res.json({ audit: await githubAudit.runAccountAudit(req.params.accountId) });
+}));
+
+/**
+ * POST /api/github/audit/:accountId/apply — apply one audit suggestion (unwatch, mute handled threads)
+ */
+router.post('/audit/:accountId/apply', asyncHandler(async (req, res) => {
+  const { suggestionId } = validateRequest(githubAuditApplySchema, req.body ?? {});
+  res.json(await githubAudit.applyAuditSuggestion(req.params.accountId, suggestionId));
 }));
 
 export default router;
