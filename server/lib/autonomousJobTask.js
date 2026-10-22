@@ -65,7 +65,7 @@ export function generatedJobTaskFields(generated) {
  * at spawn and finalization legitimately find no row. Manual/quota runs queue
  * through `addTask` and get a store-minted id, so a missing one IS a deletion.
  */
-export function isEphemeralJobTask(task) {
+function isEphemeralJobTask(task) {
   const jobId = task?.metadata?.jobId;
   return task?.metadata?.autonomousJob === true && !!jobId && typeof task.id === 'string' && task.id.startsWith(`${jobId}-`);
 }
