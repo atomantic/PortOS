@@ -78,7 +78,7 @@ export function uncreatableExtensions({ installed, trusted, superuser }) {
  * host and port so it can travel in the receipt; the endpoint is printed
  * separately for the operator.
  */
-export async function probeTestDatabase(stageEnv, { repoRoot }) {
+export async function probeTestDatabase(stageEnv, { repoRoot, createClient }) {
   const endpoint = `${stageEnv.PGHOST}:${stageEnv.PGPORT}/${TEST_DATABASE}`;
   let pg;
   try {
@@ -86,7 +86,8 @@ export async function probeTestDatabase(stageEnv, { repoRoot }) {
   } catch (error) {
     return { ok: false, endpoint, reason: `pg package unavailable (${error.code ?? error.message})` };
   }
-  const client = new pg.Client({
+  // One connection cannot run queries concurrently (pg queues them and warns, pg@9 removes that), so the probes are awaited in sequence.
+  const client = (createClient ?? ((config) => new pg.Client(config)))({
     host: stageEnv.PGHOST,
     port: Number(stageEnv.PGPORT),
     user: stageEnv.PGUSER,
@@ -99,11 +100,9 @@ export async function probeTestDatabase(stageEnv, { repoRoot }) {
     await client.query('SELECT 1');
     // CREATE EXTENSION IF NOT EXISTS is a no-op for installed extensions, so only
     // a missing one needs privilege; a non-superuser role cannot supply it (#13134).
-    const [present, available, role] = await Promise.all([
-      client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_EXTENSIONS]),
-      client.query('SELECT DISTINCT name FROM pg_available_extension_versions WHERE trusted AND name = ANY($1)', [REQUIRED_EXTENSIONS]),
-      client.query('SELECT rolsuper FROM pg_roles WHERE rolname = current_user'),
-    ]);
+    const present = await client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_EXTENSIONS]);
+    const available = await client.query('SELECT DISTINCT name FROM pg_available_extension_versions WHERE trusted AND name = ANY($1)', [REQUIRED_EXTENSIONS]);
+    const role = await client.query('SELECT rolsuper FROM pg_roles WHERE rolname = current_user');
     const blocked = uncreatableExtensions({
       installed: present.rows.map((row) => row.extname),
       trusted: available.rows.map((row) => row.name),
