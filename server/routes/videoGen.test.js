@@ -878,12 +878,15 @@ describe('videoGen routes', () => {
       imageGen: { grok: { enabled: true, grokPath: '/example/grok', aspectRatio: '16:9' } },
       videoGen: { fal: { apiKey: 'example-fal-key' }, reactor: { apiKey: 'example-reactor-key' } },
     };
-    it.each(['aleph2', 'act_two'])('stages %s inputs durably and preserves the workflow in queued params', async (modelId) => {
+    it.each([
+      ['aleph2', 'runway'], ['act_two', 'runway'],
+      ['aleph2', undefined], ['act_two', undefined],
+    ])('stages %s inputs with backend %s and preserves the workflow in queued params', async (modelId, backend) => {
       const { getSettings } = await import('../services/settings.js');
-      getSettings.mockResolvedValueOnce({ videoGen: { runway: { apiKey: 'example-key' } } });
+      getSettings.mockResolvedValueOnce({ videoGen: { mode: 'runway', runway: { apiKey: 'example-key' } } });
       setPendingUpload({ fieldname: 'runwayVideo', path: '/tmp/performance.mp4', originalname: 'performance.mp4' });
       const mode = modelId === 'aleph2' ? 'video-edit' : 'character-performance';
-      const response = await request(app).post('/api/video-gen/').send({ backend: 'runway', mode, runwayModelId: modelId, prompt: '',
+      const response = await request(app).post('/api/video-gen/').send({ backend, mode, runwayModelId: modelId, prompt: '',
         ...(modelId === 'act_two' ? { sourceImageFile: 'character.png', runwayBodyControl: 'false', runwayExpressionIntensity: '4' } : { runwayTargetAspect: '9:16' }),
       });
       expect(response.status).toBe(200);
@@ -892,6 +895,15 @@ describe('videoGen routes', () => {
       expect(params.uploadedTempPaths).toContain(params.runwayVideoPath);
       expect(validateRunwayVideoInput).toHaveBeenCalledWith(params.runwayVideoPath, expect.objectContaining({ id: modelId }));
       expect(JSON.stringify(params)).not.toContain('example-key');
+    });
+
+    it.each(['local', undefined])('refuses an empty-prompt special workflow on non-Runway backend %s', async (backend) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { mode: 'grok' }, imageGen: { grok: { enabled: true } } });
+      const response = await request(app).post('/api/video-gen/').send({ backend, mode: 'character-performance', runwayModelId: 'act_two', prompt: '' });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/matching Runway video workflow/);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('rolls back the durable video if validation fails and refuses a video workflow on another backend', async () => {
@@ -1187,6 +1199,18 @@ describe('videoGen routes', () => {
       videoGen: { fal: { apiKey: 'example-fal-key' } },
     };
     const style = { id: 'style-preset', label: 'Style preset', text: 'film grain' };
+
+    it.each([['aleph2', 'video-edit'], ['act_two', 'character-performance']])('previews empty-prompt %s using the default Runway backend without staging', async (runwayModelId, mode) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { mode: 'runway', runway: { apiKey: 'example-key' } } });
+      const response = await request(app).post('/api/video-gen/prompt-preview').send({
+        mode, runwayModelId, prompt: '', previewUploads: ['runwayVideo', ...(runwayModelId === 'act_two' ? ['sourceImage'] : [])],
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ backend: 'runway', sentPrompt: '' });
+      expect(copyFile).not.toHaveBeenCalled();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
 
     it('shows the grok agent prompt, its instructions chip and the form\'s chips without queueing', async () => {
       const { getSettings } = await import('../services/settings.js');

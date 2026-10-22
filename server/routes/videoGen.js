@@ -552,7 +552,7 @@ const generateBodySchema = z.object({
   // docs/decisions/2026-08-20-federated-visual-prompts.md
   mediaProviderPeerId: z.string().guid().optional(),
   mediaProviderEngine: z.string().trim().min(1).max(80).optional(),
-}).refine((body) => body.prompt.length > 0 || (body.backend === 'runway' && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode)), {
+}).refine((body) => body.prompt.length > 0 || RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode), {
   message: 'A prompt is required for this workflow.', path: ['prompt'],
 });
 

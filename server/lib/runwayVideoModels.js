@@ -1,6 +1,8 @@
 /** Runway text/image-to-video capabilities shared by forms, submissions and quotes.
  * Published OpenAPI snapshot: 2026-10-22. Video-editing and performance endpoints
  * need different input workflows and are reported separately by the catalog API.
+ * Veo is intentionally included under the all-model scope adopted on 2026-10-22,
+ * reversing the earlier project exclusion in #12344; see docs/RUNWAY_MODELS.md.
  */
 import { RUNWAY_CATALOG_SNAPSHOT } from './runwayCatalogSnapshot.js';
 

@@ -11,6 +11,7 @@ The bundled capability snapshot was verified on 2026-10-22. It offers 19 image
 models and 24 image-to-video models; 23 of the video models also accept text alone.
 Video edit adds Aleph 2 and Character performance adds Act-Two, for 26 distinct
 video models across these workflows.
+
 Selectors filter by the active operation. Gen-4 Image Turbo requires a reference;
 Gen-4 Turbo video requires a start frame. The builder validates each model's prompt,
 reference and seed constraints and emits supported parameters only. Models accepting
@@ -24,6 +25,16 @@ WAN keyframe requests use auto ratios, text requests use explicit canvases, and
 models such as MiniMax accept a separate resolution field. Optional advanced API
 controls keep provider defaults. Unknown prices are displayed as unknown, not zero;
 consult [Runway pricing](https://docs.dev.runwayml.com/guides/pricing/) before rendering.
+
+## Veo inclusion decision (2026-10-22)
+
+The earlier Runway integration ([#12344](https://github.com/atomantic/PortOS/pull/12344))
+deliberately excluded Veo as a project choice. This expansion reverses that choice
+in response to the newer request to offer all models on Runway's API within the
+supported workflows. `veo3.1` and `veo3.1_fast` are therefore intentionally included;
+Gen-4.5 remains the default. The earlier catalog and PR record no safety or
+contractual basis for the exclusion. Inclusion does not assert account entitlement,
+waive provider terms, or enable generation without the normal submission flow.
 
 ## Cache and refresh
 

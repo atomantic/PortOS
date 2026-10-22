@@ -259,8 +259,10 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
     && !body.keyframes?.length
     && !body.loraFilenames?.length
     && !(body.chunks != null && Number(body.chunks) > 1);
+  // Special Runway workflows may use an install/target pin too. The resolved
+  // backend is checked against the workflow before staging any inputs below.
   return body.backend
-    || (grokDeliverable
+    || (grokDeliverable || RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode)
       ? resolveVideoMode(null, settings, { target: body.musicVideo ? RENDER_TARGET.MUSIC_VIDEO : null })
       : VIDEO_GEN_MODE.LOCAL);
 }
