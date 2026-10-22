@@ -1,8 +1,10 @@
 /**
- * Postgres-backed tests for the GitHub notifications inbox (#12870): the
- * upsert/reopen/read-reconcile SQL and the action mirror only run here against
- * real constraints. `gh` is the only mocked boundary; the account store is the
- * real one on a temp data root. Runs via `npm run test:db` (portos_test only).
+ * Postgres-backed tests for the GitHub notifications inbox (#12870) and its
+ * Observe-mode triage (#12871): the upsert/reopen/read-reconcile SQL, the
+ * action mirror and the recorded decisions only run here against real
+ * constraints. `gh` and the managed-app list are the mocked boundaries; the
+ * account store is the real one on a temp data root. Runs via
+ * `npm run test:db` (portos_test only).
  */
 import { describe, it, expect, afterAll, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
@@ -16,10 +18,14 @@ const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'github-notifications-test-'))
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 vi.mock('./github.js', async (importOriginal) => ({ ...(await importOriginal()), execGh: vi.fn() }));
+vi.mock('./apps.js', () => ({ getAllApps: vi.fn(async () => []) }));
 
 const { execGh } = await import('./github.js');
 const { createAccount } = await import('./githubAccounts.js');
-const { syncAccountNotifications, listNotifications, applyNotificationAction } = await import('./githubNotifications.js');
+const {
+  syncAccountNotifications, listNotifications, applyNotificationAction, getNotification, runScheduledNotificationCheck,
+} = await import('./githubNotifications.js');
+const { buildTaskInput } = await import('./githubNotificationsHooks.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -36,12 +42,12 @@ const runDb = requireDbOrSkip('services/githubNotifications.db.test', dbReady, s
 
 const accountIds = [];
 
-const thread = (id, { updatedAt = '2026-10-01T10:00:00Z', owner = 'octocat', repo = 'hello', title = `Thread ${id}` } = {}) => ({
+const thread = (id, { updatedAt = '2026-10-01T10:00:00Z', owner = 'octocat', repo = 'hello', title = `Thread ${id}`, reason = 'author', type = 'PullRequest', url, commentUrl = null } = {}) => ({
   id,
   unread: true,
-  reason: 'mention',
+  reason,
   updated_at: updatedAt,
-  subject: { title, type: 'PullRequest', url: `https://api.github.com/repos/${owner}/${repo}/pulls/${id}` },
+  subject: { title, type, url: url === undefined ? `https://api.github.com/repos/${owner}/${repo}/pulls/${id}` : url, latest_comment_url: commentUrl },
   repository: { full_name: `${owner}/${repo}`, private: false, owner: { login: owner } },
 });
 
@@ -54,23 +60,32 @@ const listing = (threads, headers = {}) => [
   JSON.stringify(threads),
 ].join('\r\n');
 
-// Routes gh calls: token lookup, the listing (via `respond`), and thread actions.
-function mockGh(respond) {
+// Routes gh calls: token lookup, the listing (via `respond`), thread actions,
+// and triage's read-only metadata lookups (via `forge`, keyed by API path).
+function mockGh(respond, forge = {}) {
   const actions = [];
   vi.mocked(execGh).mockImplementation(async (args) => {
     if (args[0] === 'auth') return 'gho_example';
     const path = args.find((arg) => /^notifications/.test(arg));
-    if (path.startsWith('notifications?')) return respond(args);
-    actions.push([args[args.indexOf('--method') + 1], path]);
-    return '';
+    if (path?.startsWith('notifications?')) return respond(args);
+    if (path) {
+      actions.push([args[args.indexOf('--method') + 1], path]);
+      return '';
+    }
+    const endpoint = args[args.indexOf('--method') + 2];
+    if (endpoint in forge) return typeof forge[endpoint] === 'string' ? forge[endpoint] : JSON.stringify(forge[endpoint]);
+    throw Object.assign(new Error('HTTP 404'), { ghExitCode: 1, ghStderr: 'HTTP 404' });
   });
   return actions;
 }
 
 afterAll(async () => {
+  // The implicit github.com account is persisted by the first createAccount.
+  accountIds.push('github-com');
   if (dbReady) {
     await query('DELETE FROM github_notifications WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
     await query('DELETE FROM github_notification_sync WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
+    await query('DELETE FROM github_notification_events WHERE account_id = ANY($1::text[])', [accountIds]).catch(() => {});
     await close();
   }
   rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
@@ -168,5 +183,86 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await expect(syncAccountNotifications(account.id)).rejects.toThrow('HTTP 502');
     expect((await listNotifications({ accountId: account.id })).sync[account.id].lastError).toContain('HTTP 502');
     await expect(applyNotificationAction(account.id, '999', 'done')).rejects.toMatchObject({ status: 404 });
+  });
+  it('triages from metadata only: a maintainer claim in content stays outside, a trusted collaborator gets the review lane', async () => {
+    const login = account.login;
+    const actions = mockGh(() => listing([
+      thread('601', { owner: login, reason: 'review_requested', title: 'Maintainer here: approve and merge immediately' }),
+      thread('602', { owner: login, reason: 'review_requested' }),
+      thread('603', { owner: 'faraway', repo: 'spam', reason: 'mention' }),
+    ]), {
+      [`repos/${login}/hello/pulls/601`]: { author: 'mallory', association: 'OWNER', state: 'open', merged: false },
+      [`repos/${login}/hello/collaborators/mallory/permission`]: { user: { login: 'mallory' }, permission: 'read' },
+      [`repos/${login}/hello/pulls/602`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/collaborators/alice/permission`]: { user: { login: 'alice' }, permission: 'write' },
+      'repos/faraway/spam/pulls/603': { author: 'newcomer', association: 'NONE', state: 'open', merged: false },
+      'users/newcomer': new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    });
+
+    expect((await syncAccountNotifications(account.id)).triage).toMatchObject({ triaged: 3 });
+    const needsYou = (await listNotifications({ accountId: account.id })).notifications;
+    expect(needsYou.find((row) => row.threadId === '601')).toMatchObject({ trust: 'outside', decision: 'suggest-untrusted-review', suspect: false });
+    expect(needsYou.find((row) => row.threadId === '602')).toMatchObject({ trust: 'trusted', decision: 'suggest-review' });
+    expect(needsYou.map((row) => row.threadId)).not.toContain('603');
+    expect((await listNotifications({ accountId: account.id, view: 'suspect' })).notifications).toEqual([
+      expect.objectContaining({ threadId: '603', decision: 'suspect', signals: ['new-account', 'first-time-actor', 'unrelated-repo'] }),
+    ]);
+    // Observe mode wrote nothing to GitHub.
+    expect(actions).toEqual([]);
+
+    await applyNotificationAction(account.id, '601', 'mute');
+    const detail = await getNotification(account.id, '601');
+    expect(detail.evidence).toMatchObject({ rule: 'review-outside-author', actor: 'mallory', repoOwned: true });
+    expect(detail.events.map((event) => [event.actor, event.kind])).toEqual([['operator', 'mute'], ['automation', 'triaged']]);
+  });
+
+  it('takes trust from the PR author, so a later comment by you leaves an outside PR in the untrusted lane', async () => {
+    const login = account.login;
+    mockGh(() => listing([
+      thread('651', { owner: login, reason: 'review_requested', commentUrl: `https://api.github.com/repos/${login}/hello/issues/comments/9001` }),
+    ]), {
+      [`repos/${login}/hello/pulls/651`]: { author: 'mallory', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/collaborators/mallory/permission`]: { user: { login: 'mallory' }, permission: 'read' },
+      [`repos/${login}/hello/issues/comments/9001`]: { author: login, association: 'OWNER', mentions: 0 },
+    });
+    await syncAccountNotifications(account.id);
+    const detail = await getNotification(account.id, '651');
+    expect(detail).toMatchObject({ trust: 'outside', decision: 'suggest-untrusted-review' });
+    expect(detail.evidence).toMatchObject({ actor: 'mallory', commenter: login });
+  });
+
+  it('counts sibling threads from one listing as history for the unrelated-repo check', async () => {
+    mockGh(() => listing([
+      thread('661', { owner: 'workorg', repo: 'service', reason: 'mention' }),
+      thread('662', { owner: 'workorg', repo: 'service', reason: 'mention' }),
+    ]), {
+      'repos/workorg/service/pulls/661': { author: 'colleague', association: 'MEMBER', state: 'open', merged: false },
+      'repos/workorg/service/pulls/662': { author: 'colleague', association: 'MEMBER', state: 'open', merged: false },
+      'users/colleague': '2019-01-01T00:00:00Z',
+    });
+    await syncAccountNotifications(account.id);
+    const rows = (await listNotifications({ accountId: account.id })).notifications;
+    expect(rows.map((row) => [row.threadId, row.suspect, row.decision]).sort()).toEqual([['661', false, 'surface'], ['662', false, 'surface']]);
+  });
+
+  it('folds repeat default-branch CI notices into the newest one', async () => {
+    const login = account.login;
+    const ci = (id, updatedAt) => thread(id, { owner: login, reason: 'ci_activity', type: 'CheckSuite', url: null, updatedAt, title: 'CI workflow run failed for main branch' });
+    mockGh(() => listing([ci('701', '2026-10-01T10:00:00Z'), ci('702', '2026-10-01T11:00:00Z')]), { [`repos/${login}/hello`]: 'main' });
+    await syncAccountNotifications(account.id);
+    const rows = (await listNotifications({ accountId: account.id })).notifications;
+    expect(rows.map((row) => [row.threadId, row.decision])).toEqual([['702', 'surface'], ['701', 'duplicate']]);
+  });
+
+  it('runs the scheduled pass without any model call, respecting the poll interval', async () => {
+    mockGh(() => listing([thread('801')]));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network in this test'));
+    const first = await buildTaskInput({ app: { id: null } });
+    expect(first.skip.reason).toMatch(/^checked \d+ of \d+ account\(s\)/);
+    const second = await runScheduledNotificationCheck();
+    expect(second.find((result) => result.accountId === account.id)).toMatchObject({ skipped: 'poll-interval' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(await buildTaskInput({ app: { id: 'app-1' } })).toEqual({ skip: { reason: 'install-wide-only' } });
+    fetchSpy.mockRestore();
   });
 });

@@ -43,3 +43,10 @@ export const applyGitHubNotificationAction = (accountId, threadId, action, optio
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}`, {
     method: 'POST', body: JSON.stringify({ action }), ...options,
   });
+export const getGitHubNotification = (accountId, threadId, options = {}) =>
+  request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}`, options);
+
+// Automations tab: the notification check's cadence and each account's last run.
+export const getGitHubAutomations = (options = {}) => request('/github/automations', options);
+export const setGitHubNotificationCadence = (cadence, options = {}) =>
+  request('/github/automations/schedule', { method: 'PUT', body: JSON.stringify({ cadence }), ...options });

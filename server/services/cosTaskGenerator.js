@@ -2037,6 +2037,10 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     const { readLastTriageSummary } = await import('./errorLogTriage.js');
     reason = await readLastTriageSummary().catch(() => null);
   }
+  if (outcome === 'idle' && request.taskType === 'github-notifications') {
+    const { readLastScheduledSummary } = await import('./githubNotifications.js');
+    reason = readLastScheduledSummary();
+  }
 
   // 'transient' says "the forge probe failed, try again shortly" — only true when
   // the forge is momentarily flaky. A gh that is missing, unauthenticated, or

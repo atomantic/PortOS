@@ -188,6 +188,11 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // Install-wide only; its buildTaskInput hook (errorLogTriageHooks.js) does
   // the whole pass deterministically and never spawns a coordinator agent.
   'error-log-triage',
+  // Syncs each configured GitHub account's notifications and records a
+  // rule-based triage decision per thread (#12871). Install-wide only; its
+  // buildTaskInput hook (githubNotificationsHooks.js) does the whole pass
+  // without a model and never spawns a coordinator agent.
+  'github-notifications',
   // layered-intelligence is a PROGRAMMATIC-I/O task: it spawns a NORMAL reasoning
   // agent (visible in the CoS queue + Active Agents, TUI-attachable) with two
   // deterministic hooks around it — buildTaskInput gathers the app's goals +

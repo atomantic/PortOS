@@ -302,7 +302,7 @@ describe('taskSchedule', () => {
       // repo-sync sweeps every managed checkout; user-action-review reads the
       // install-wide operator-action ledger; error-log-triage reads PortOS's own
       // PM2 logs — none is a per-app run.
-      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review', 'model-comparison-refresh', 'error-log-triage'])
+      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review', 'model-comparison-refresh', 'error-log-triage', 'github-notifications'])
     })
 
     it('every install-wide type is a registered task type', () => {

@@ -432,6 +432,7 @@ export * from './gitOutputParsers.js';
 export * from './gitRemote.js';
 export * from './gitStaleLock.js';
 export * from './githubNotificationParse.js';
+export * from './githubNotificationTriage.js';
 export * from './repoUrl.js';
 export * from './glabArgs.js';
 export * from './goalFeatureMap.js';
