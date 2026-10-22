@@ -135,7 +135,9 @@ describe('inbox summary reads through the production HTTP/service boundary', () 
     const repeated = [
       'search=first&search=second',
       `accountId=${ACCOUNT_IDS[0]}&accountId=${ACCOUNT_IDS[1]}`,
-      'summary=true&summary=false'
+      'summary=true&summary=false',
+      'limit=1&limit=2',
+      'offset=1&offset=2'
     ];
     for (const query of repeated) {
       const response = await request(app).get('/inbox?' + query);
