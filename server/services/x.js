@@ -166,6 +166,7 @@ const normalizeRemotePost = (post) => {
     kind: post?.kind === 'reply' ? 'reply' : 'post',
     body: boundedText(post?.body, 40_000),
     sourceUrl: X_STATUS_URL.test(sourceUrl) ? sourceUrl : '',
+    authorHandle: safeUsername(post?.authorHandle),
     remoteCreatedAt: safeDate(post?.remoteCreatedAt),
     impressions: safeMetric(post?.impressions),
     engagements: safeMetric(post?.engagements),
@@ -176,7 +177,18 @@ const normalizeRemotePost = (post) => {
   };
 };
 
-const mergePosts = (...lists) => [...new Map(lists.flat().map(normalizeRemotePost).filter((post) => /^\d+$/.test(post.remoteId)).map((post) => [post.remoteId, post])).values()].slice(0, 100);
+// A profile timeline also lists reposts of other authors. An unreadable handle is unknown, not a mismatch.
+const isForeignPost = (post, username) => Boolean(post.authorHandle) && post.authorHandle !== username;
+
+// Splits normalized posts into the account's own and the foreign ids, before the 100 cap so reposts can't crowd real posts out.
+const mergePosts = (username, ...lists) => {
+  const byId = new Map(lists.flat().map(normalizeRemotePost).filter((post) => /^\d+$/.test(post.remoteId)).map((post) => [post.remoteId, post]));
+  const all = [...byId.values()];
+  return {
+    posts: all.filter((post) => !isForeignPost(post, username)).slice(0, 100),
+    foreignIds: all.filter((post) => isForeignPost(post, username)).map((post) => post.remoteId),
+  };
+};
 
 async function syncAccountUnlocked(accountId) {
   const account = await getAccountRow(accountId);
@@ -198,23 +210,25 @@ async function syncAccountUnlocked(accountId) {
     peopleSearch: { exactMatch: people.exactMatch === true },
     latestSearch: { postCount: diagnostics.latestSearchPostCount },
   };
-  const posts = mergePosts(profileResult.posts || [], latestPosts);
+  const { posts, foreignIds } = mergePosts(safeUsername(account.username), profileResult.posts || [], latestPosts);
   const readError = buildXReadError(diagnostics);
   if (readError) console.warn(`⚠️ X read for @${account.username} came back empty — reporting affected visibility checks as unknown`);
 
   await withTransaction(async (client) => {
+    // Rows an older sync stored for someone else's repost; only ids seen in this read are purged.
+    if (foreignIds.length) await client.query('DELETE FROM x_posts WHERE account_id=$1 AND remote_id = ANY($2)', [accountId, foreignIds]);
     for (const post of posts) {
       await client.query(
         `INSERT INTO x_posts
-         (id,account_id,remote_id,kind,body,source_url,remote_created_at,impressions,engagements,replies,reposts,likes,bookmarks,content_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         (id,account_id,remote_id,kind,body,source_url,remote_created_at,impressions,engagements,replies,reposts,likes,bookmarks,content_hash,author_handle)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (account_id,remote_id) DO UPDATE SET kind=EXCLUDED.kind,body=EXCLUDED.body,
            source_url=EXCLUDED.source_url,remote_created_at=EXCLUDED.remote_created_at,
            impressions=EXCLUDED.impressions,engagements=EXCLUDED.engagements,replies=EXCLUDED.replies,
            reposts=EXCLUDED.reposts,likes=EXCLUDED.likes,bookmarks=EXCLUDED.bookmarks,
-           content_hash=EXCLUDED.content_hash,received_at=NOW(),updated_at=NOW()`,
+           content_hash=EXCLUDED.content_hash,author_handle=EXCLUDED.author_handle,received_at=NOW(),updated_at=NOW()`,
         [randomUUID(), accountId, post.remoteId, post.kind, post.body, post.sourceUrl, post.remoteCreatedAt,
-          post.impressions, post.engagements, post.replies, post.reposts, post.likes, post.bookmarks, stableHash(post.body)],
+          post.impressions, post.engagements, post.replies, post.reposts, post.likes, post.bookmarks, stableHash(post.body), post.authorHandle || null],
       );
     }
     await client.query(
