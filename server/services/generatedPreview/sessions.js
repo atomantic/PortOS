@@ -179,9 +179,47 @@ async function applyJson(page, globalName, value) {
   await page.evaluate(`globalThis.${globalName} && globalThis.${globalName}.apply(${literal})`);
 }
 
+// A Code Animation page runs its own requestAnimationFrame clock. A seek takes
+// that clock over: callbacks are held (not dropped) so releasing them, before a
+// real-time record, resumes the page's loop. One native frame passes after the
+// hold so a callback already queued cannot paint over the requested time. A
+// page without renderFrame(t) (Record-only, or a module not yet run) keeps its
+// own loop, since nothing else could draw the held frames.
+const holdCodeAnimationClock = (time) => `(async () => {
+  const w = window;
+  if (typeof w.renderFrame !== 'function') return false;
+  if (!w.__portosClock) {
+    const raf = w.requestAnimationFrame.bind(w);
+    const clock = { raf, held: [], on: false };
+    w.__portosClock = clock;
+    w.requestAnimationFrame = (callback) => {
+      if (!clock.on) return raf(callback);
+      clock.held.push(callback);
+      return 0;
+    };
+  }
+  const clock = w.__portosClock;
+  if (!clock.on) {
+    clock.on = true;
+    await Promise.race([new Promise((resolve) => clock.raf(() => resolve())), new Promise((resolve) => setTimeout(resolve, 100))]);
+  }
+  await w.renderFrame(${time});
+  return true;
+})()`;
+
+const RELEASE_CODE_ANIMATION_CLOCK = `(() => {
+  const clock = window.__portosClock;
+  if (!clock || !clock.on) return;
+  clock.on = false;
+  for (const callback of clock.held.splice(0)) clock.raf(callback);
+})()`;
+
 async function seekPage(session, t, playing = false) {
   const time = Number(t);
-  if (session.kind === 'code-animation') return;
+  if (session.kind === 'code-animation') {
+    if (Number.isFinite(time)) await session.page.evaluate(holdCodeAnimationClock(Math.max(0, time)));
+    return;
+  }
   if (session.lyrics) {
     await session.page.evaluate(`window.postMessage({ type: 'portos-mv:seek', t: ${time} }, '*')`);
     await session.page.evaluate('new Promise((resolve) => setTimeout(resolve, 40))');
@@ -226,7 +264,9 @@ async function runSeek(session, generation, t, playing = false) {
       }
       try {
         await seekPage(session, current.t, current.playing);
-        emitFrame(session, current.generation, await capture(session.page));
+        // A playing Code Animation's new canvas arrives through its screencast;
+        // a screenshot per frame would halve the rate.
+        if (!(session.kind === 'code-animation' && current.playing)) emitFrame(session, current.generation, await capture(session.page));
         session.appliedGeneration = current.generation;
       } catch (error) {
         console.error(`❌ Generated preview seek failed: ${error.message}`);
@@ -578,6 +618,8 @@ async function commandGeneratedPreview(socket, data) {
       if (parsed.data.action === 'film-look') await applyJson(session.page, '__portosFilmLook', parsed.data.look ?? null);
       else if (parsed.data.action === 'title-card') await applyJson(session.page, '__portosTitleCard', parsed.data.card ?? null);
       else if (parsed.data.action === 'record' && parsed.data.message) {
+        // A real-time recording runs on the page's own clock.
+        if (session.kind === 'code-animation') await session.page.evaluate(RELEASE_CODE_ANIMATION_CLOCK);
         await session.page.evaluate(`window.postMessage({ type: ${JSON.stringify(parsed.data.message.type)} }, '*')`);
       }
     };

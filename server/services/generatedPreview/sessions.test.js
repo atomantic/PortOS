@@ -7,6 +7,11 @@ vi.mock('../musicVideo/documentRender.js', () => ({ openIsolatedDocumentPreview:
   return { page: fixture.page, scratchRoot: null, width: 390, height: 219, fps: 30, durationSec: 10,
     ...(fixture.playback ? { playback: fixture.playback } : {}) };
 } }));
+vi.mock('./codeAnimationPage.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  stageCodeAnimationPage: async () => ({ scratchRoot: null, directory: 'example-animation' }),
+}));
+vi.mock('../htmlComposition/browser.js', () => ({ openComposition: async () => fixture.page }));
 import { AUTHORED_PREVIEW_PLAYBACK_TARGET } from '../../lib/generatedPreviewPlaybackSchema.js';
 import { closeSession, registerGeneratedPreviewHandlers } from './sessions.js';
 
@@ -567,4 +572,62 @@ describe('cooperative playback through preview sockets', () => {
     expect(states().filter(state => state.action === 'clock')).toHaveLength(2);
   });
 
+});
+
+// Catches a scrub that the film's own requestAnimationFrame loop paints over,
+// and a record that can't run because the taken-over clock was never released.
+describe('code animation playhead', () => {
+  it('holds the page clock at the scrubbed time, then hands it back for a real-time record', async () => {
+    const drawn = [];
+    let clock = 100;
+    const win = {
+      requestAnimationFrame: (callback) => setTimeout(() => callback(performance.now()), 1),
+      renderFrame: (t) => drawn.push(t),
+      postMessage: vi.fn(),
+    };
+    const tick = () => { win.renderFrame(clock); clock += 1; win.requestAnimationFrame(tick); };
+    fixture.page = {
+      evaluate: (source) => new Function('window', 'return ' + source)(win),
+      send: async () => ({ data: 'frame' }),
+      close: async () => {},
+    };
+    registerGeneratedPreviewHandlers(socket);
+    const requestId = '00000000-0000-4000-8000-000000000002';
+    socket.handlers.get('generated-preview:open')({ requestId, kind: 'code-animation', html: '<canvas></canvas>' });
+    await vi.waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:opened', expect.any(Object)));
+    const sessionId = socket.emit.mock.calls.find(([event]) => event === 'generated-preview:opened')[1].sessionId;
+    tick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    socket.handlers.get('generated-preview:seek')({ requestId, sessionId, generation: 1, t: 2.5 });
+    await vi.waitFor(() => expect(drawn.at(-1)).toBe(2.5));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(drawn.at(-1)).toBe(2.5);
+
+    socket.handlers.get('generated-preview:command')({ requestId, sessionId, generation: 1, action: 'record', message: { type: 'example:record' } });
+    await vi.waitFor(() => expect(win.postMessage).toHaveBeenCalledWith({ type: 'example:record' }, '*'));
+    await vi.waitFor(() => expect(drawn.at(-1)).toBeGreaterThanOrEqual(100));
+  });
+
+  it('leaves a page without renderFrame on its own loop', async () => {
+    let frames = 0;
+    const win = { requestAnimationFrame: (callback) => setTimeout(() => callback(performance.now()), 1), postMessage: vi.fn() };
+    const tick = () => { frames += 1; win.requestAnimationFrame(tick); };
+    fixture.page = {
+      evaluate: (source) => new Function('window', 'return ' + source)(win),
+      send: async () => ({ data: 'frame' }),
+      close: async () => {},
+    };
+    registerGeneratedPreviewHandlers(socket);
+    const requestId = '00000000-0000-4000-8000-000000000003';
+    socket.handlers.get('generated-preview:open')({ requestId, kind: 'code-animation', html: '<canvas></canvas>' });
+    await vi.waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:opened', expect.any(Object)));
+    const sessionId = socket.emit.mock.calls.find(([event]) => event === 'generated-preview:opened')[1].sessionId;
+    tick();
+
+    socket.handlers.get('generated-preview:seek')({ requestId, sessionId, generation: 1, t: 2.5 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const after = frames;
+    await vi.waitFor(() => expect(frames).toBeGreaterThan(after + 3));
+  });
 });
