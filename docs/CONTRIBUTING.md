@@ -264,6 +264,22 @@ dump, so `test:db` takes a session-level Postgres advisory lock for the run
 (`server/test/dbRunExclusivity.js`). A second run from another worktree prints
 `Another DB test run holds portos_test` and waits for the first to finish.
 
+### Repairing a test database whose extensions were dropped
+
+The application role cannot create extensions. `backup.db.test.js` used to
+rebuild `portos_test` with `DROP SCHEMA public CASCADE`, which dropped `vector`
+and `pgcrypto`; it now removes only application objects and leaves them
+installed, and refuses to start (before changing anything) if they are missing.
+A test database an older checkout already stripped needs a one-time repair by a
+superuser, after which `npm run setup:db:test` works with the ordinary role:
+
+```bash
+psql -d portos_test -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;'
+npm run setup:db:test
+```
+
+Do not grant the application role superuser to avoid this step.
+
 Supported full local validation uses the CI worker budget. An unbounded
 `npm test` can oversubscribe a loaded machine: real media, prompt-catalog,
 and nested-worker cases then hit their existing budgets. A green focused
