@@ -38,7 +38,9 @@ export const GRAPH_ZOOM_MIN = 0.25;
 export const GRAPH_ZOOM_MAX = 2;
 const ZOOM_STEP = 1.25;
 
-const clampZoom = (z) => Math.min(GRAPH_ZOOM_MAX, Math.max(GRAPH_ZOOM_MIN, Math.round(z * 100) / 100));
+// Unrounded: a slow trackpad pinch arrives as many sub-percent wheel steps,
+// and rounding each one against the last rounded zoom would drop them all.
+const clampZoom = (z) => Math.min(GRAPH_ZOOM_MAX, Math.max(GRAPH_ZOOM_MIN, z));
 
 /**
  * How far the pointer has travelled since pointerdown in screen px, or `null`

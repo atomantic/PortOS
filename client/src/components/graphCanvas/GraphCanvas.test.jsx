@@ -67,6 +67,16 @@ describe('GraphCanvas', () => {
     expect(scroll.defaultPrevented).toBe(false);
   });
 
+  it('follows a slow pinch made of sub-percent wheel steps', () => {
+    renderCanvas();
+    const surface = screen.getByTestId('surface');
+    for (let i = 0; i < 8; i += 1) {
+      const step = Object.assign(new Event('wheel', { bubbles: true, cancelable: true }), { deltaY: -0.5, clientX: 0, clientY: 0, ctrlKey: true });
+      act(() => { surface.dispatchEvent(step); });
+    }
+    expect(Number(surface.dataset.zoom)).toBeCloseTo(Math.exp(8 * 0.5 / 200), 6);
+  });
+
   it('never drags a card when dragging is off, so a stacked layout keeps its positions', () => {
     const onMove = vi.fn();
     renderCanvas({ onMove, canDragNodes: false });
