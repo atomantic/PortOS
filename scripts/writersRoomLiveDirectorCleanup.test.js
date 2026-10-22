@@ -50,7 +50,8 @@ it('drains Live Director writes before cleaning a cancelled test fixture', async
     args[workerIndex + 1] = '2';
     args.push('--bail=1', '--reporter=json', `--outputFile.json=${resultsPath}`,
       `--reporter=${fileURLToPath(new URL('./vitestRunDiagnostics.js', import.meta.url))}`);
-    const result = await runFixtureToCompletion({ args, options: { ...options, env: { ...options.env, PORTOS_CI_DIAGNOSTICS_PATH: runDiagnosticsPath } } }, RUN_CEILING_MS, { signal });
+    fixtureRun.options = { ...options, env: { ...options.env, PORTOS_CI_DIAGNOSTICS_PATH: runDiagnosticsPath } };
+    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS, { signal });
     if (signal.aborted) return;
     const phases = ['ready', 'finished'].map(name => `${name}=${existsSync(join(fixture, name))}`).join(' ');
     const output = `${result.stdout}\n${result.stderr}\nlifecycle phases: ${phases}`;
