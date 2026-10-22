@@ -24,7 +24,7 @@ export const RUNWAY_IMAGE_MODEL_IDS = Object.freeze(RUNWAY_IMAGE_MODELS.map((row
 export const getRunwayImageModel = (id) => RUNWAY_IMAGE_MODELS.find((row) => row.id === id) || null;
 
 /** Preserve caller framing using the closest supported canvas at the chosen tier. */
-export function runwayImageRatio(model, { width, height, resolution = '720p', ratio } = {}) {
+function runwayImageRatio(model, { width, height, resolution = '720p', ratio } = {}) {
   const ratios = model.ratios[resolution];
   if (!ratios) throw refuse(`Runway image resolution must be 720p or 1080p`);
   if (ratio) {
