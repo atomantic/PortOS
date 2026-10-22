@@ -219,6 +219,9 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.devtools.datadog', path: '/devtools/datadog', label: 'DataDog', section: 'Dev Tools', feature: 'datadog', previousPaths: ['/datadog'], aliases: ['datadog', 'devtools-datadog'] },
   { id: 'nav.devtools.flows', path: '/devtools/flows', label: 'Flows', section: 'Dev Tools', aliases: ['flows', 'integration-flows', 'workflows'], keywords: ['architecture', 'diagram', 'data flow', 'integrations', 'how it works'] },
   { id: 'nav.devtools.github', path: '/devtools/github', label: 'GitHub', section: 'Dev Tools', aliases: ['github', 'devtools-github'] },
+  // ⌘K / voice only — no sidebar row: tabs of the GitHub page.
+  { id: 'nav.devtools.github-accounts', path: '/devtools/github/accounts', label: 'GitHub Accounts', section: 'Dev Tools', aliases: ['github-accounts', 'github-enterprise'], keywords: ['github', 'enterprise', 'ghes', 'gh auth', 'login', 'trust', 'notifications'] },
+  { id: 'nav.devtools.github-repos', path: '/devtools/github/repos', label: 'GitHub Repos', section: 'Dev Tools', aliases: ['github-repos', 'github-secrets'], keywords: ['github', 'repositories', 'secrets', 'archive', 'npm'] },
   { id: 'nav.devtools.history', path: '/devtools/history', label: 'History', section: 'Dev Tools', aliases: ['devtools-history'] },
   { id: 'nav.devtools.image-clean', path: '/devtools/image-clean', label: 'Image Cleaner', section: 'Dev Tools', aliases: ['image-clean', 'image-cleaner'], keywords: ['metadata', 'c2pa', 'content-credentials', 'sharp', 'denoise'] },
   { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', feature: 'jira', previousPaths: ['/jira'], aliases: ['jira', 'devtools-jira'] },

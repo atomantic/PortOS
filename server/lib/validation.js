@@ -943,6 +943,29 @@ export const githubSecretSchema = z.object({
   value: z.string().min(1)
 });
 
+// GitHub notifications manager accounts (#12869). A bare hostname (optional
+// :port) whose first character also rules out a value `gh` would parse as a flag.
+export const GITHUB_ACCOUNT_HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/;
+// github.com logins are [A-Za-z0-9-]; Enterprise Managed Users add `_shortcode`.
+export const GITHUB_ACCOUNT_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
+export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
+export const GITHUB_ACCOUNT_MODES = Object.freeze(['observe', 'assist', 'autopilot']);
+
+export const githubAccountCreateSchema = z.object({
+  label: z.string().trim().max(80).optional(),
+  host: z.string().trim().toLowerCase()
+    .transform((value) => value.replace(/^https?:\/\//, '').replace(/\/+$/, ''))
+    .pipe(z.string().min(1).max(253).regex(GITHUB_ACCOUNT_HOST_RE, 'Use a bare hostname such as github.example.com')),
+  login: z.string().trim().regex(GITHUB_ACCOUNT_LOGIN_RE, 'Not a valid GitHub login').nullable().optional(),
+  trust: z.enum(GITHUB_ACCOUNT_TRUST_LEVELS).optional(),
+  // null = the trust level's default (Private: local providers only).
+  allowedProviders: z.array(z.string().trim().min(1).max(128)).max(50).nullable().optional(),
+  mode: z.enum(GITHUB_ACCOUNT_MODES).optional(),
+  enabled: z.boolean().optional(),
+}).strict();
+
+export const githubAccountUpdateSchema = githubAccountCreateSchema.partial().strict();
+
 // =============================================================================
 // INSIGHTS SCHEMAS
 // =============================================================================

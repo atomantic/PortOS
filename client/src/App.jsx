@@ -300,6 +300,7 @@ export default function App() {
           <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/flows" element={<FlowsDoc />} />
           <Route path="devtools/github" element={<GitHub />} />
+          <Route path="devtools/github/:tab" element={<GitHub />} />
           <Route path="devtools/history" element={<HistoryPage />} />
           <Route path="devtools/image-clean" element={<ImageClean />} />
           <Route path="devtools/quota-burn" element={<QuotaBurn />} />
