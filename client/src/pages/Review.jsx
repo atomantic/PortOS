@@ -43,7 +43,7 @@ import useUrlParams from '../hooks/useUrlParams';
 import useAsyncAction from '../hooks/useAsyncAction';
 import useEscapeKey from '../hooks/useEscapeKey';
 import useFocusTrap from '../hooks/useFocusTrap';
-import { timeAgo, formatDateTime, formatCount, localDateKey } from '../utils/formatters';
+import { timeAgo, formatDateTime, formatCount, formatDateShort, localDateKey } from '../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
 import { useActionQueue } from '../hooks/useActionQueue';
 import * as api from '../services/api';
@@ -85,6 +85,9 @@ const TYPE_CONFIG = {
   todo: { label: 'Todos', icon: ClipboardList, color: 'text-port-success' },
   briefing: { label: 'Briefing', icon: FileText, color: 'text-gray-400' }
 };
+
+// A briefing generated within a day is news; older ones are history context.
+const BRIEFING_FRESH_MS = 24 * 60 * 60 * 1000;
 
 const TYPE_PRIORITY = { alert: 0, cos: 1, todo: 2, briefing: 3 };
 
@@ -395,6 +398,11 @@ export default function Review() {
   const showLegacyReviewSurface = queue && !queueError && queueItems.length === 0 && queueSourceErrors.length === 0 && !queue.partial;
 
   const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
+  const showBriefing = showLegacyReviewSurface && briefing && briefing.source !== 'none';
+  const briefingIsFresh = Boolean(showBriefing) && Date.now() - new Date(briefing.generatedAt).getTime() < BRIEFING_FRESH_MS;
+  const historySummary = showBriefing
+    ? `Daily briefing · ${formatDateShort(briefing.generatedAt)} · history counts`
+    : 'Stored review history counts';
   const genericCompletableCount = pendingItems.filter(isGenericCompletableItem).length;
 
   const actionableItems = useMemo(() => pendingItems
@@ -414,6 +422,51 @@ export default function Review() {
   // triage summary below comes from the unfiltered counts endpoint.
   const pendingCount = pendingItems.length;
   const remainingActionCount = Math.max(0, actionableItems.length - topActionItems.length);
+
+  // One named disclosure for history: stored counts plus the daily briefing. A
+  // briefing older than a day is context, not news, so it starts closed. Rendered
+  // below stored items on the all-clear surface so pending work leads.
+  const historyDisclosure = (
+    <details open={briefingIsFresh}>
+      <summary className="text-xs text-port-text-muted">{historySummary}</summary>
+      <section className="flex flex-wrap gap-2 mt-2">
+        <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
+        <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
+        <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
+        <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
+      </section>
+      {showBriefing && (
+        <section
+          ref={briefingRef}
+          role={briefingFullscreen ? 'dialog' : undefined}
+          aria-modal={briefingFullscreen ? 'true' : undefined}
+          aria-label={briefingFullscreen ? 'Daily Briefing' : undefined}
+          className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : 'mt-2'}`}>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+              <FileText size={16} className="text-gray-400" />
+              Daily Briefing
+            </h2>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-gray-400">
+                {briefing.source} &middot; {formatDateTime(briefing.generatedAt)}
+              </span>
+              <button
+                onClick={() => setBriefingFullscreen(prev => !prev)}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
+                title={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              >
+                {briefingFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+            </div>
+          </div>
+          <div className={`text-gray-400 text-sm overflow-y-auto ${briefingFullscreen ? '' : 'max-h-[32rem]'}`}>
+            <MarkdownOutput content={briefing.content} />
+          </div>
+        </section>
+      )}
+    </details>
+  );
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -435,19 +488,18 @@ export default function Review() {
         <div role="tabpanel" id={`actions-view-${actionView}`} aria-labelledby={`tab-${actionView}`} className="space-y-3">
         {/* Triage summary */}
         <section className="flex flex-wrap gap-2">
-          {queue && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
+          {queue && showLegacyReviewSurface && (
+            <span className="text-sm text-port-text">
+              <span className="font-medium text-port-success">Nothing needs you today</span>
+              {' · '}0 required
+              {pendingCount > 0 && <> · {formatCount(pendingCount)} stored item{pendingCount !== 1 ? 's' : ''} still pending</>}
+            </span>
+          )}
+          {queue && !showLegacyReviewSurface && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
           {queueLoading && !queue && <span role="status">Loading actions…</span>}
           {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button onClick={fetchQueue}>Retry</button></span>}
         </section>
-        <details>
-          <summary className="text-xs text-port-text-muted">Stored review history counts</summary>
-          <section className="flex flex-wrap gap-2">
-            <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
-            <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
-            <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
-            <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
-          </section>
-        </details>
+        {!showLegacyReviewSurface && historyDisclosure}
 
         {/* Canonical Actions queue — live-pulled from Brain commitments, manual
             todos, Ask, CoS, Messages, Health, and Backups. Shown whenever there
@@ -542,17 +594,17 @@ export default function Review() {
                       <button
                         onClick={handleCompleteAll}
                         className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
-                        title="Mark all general pending items as completed"
+                        title={`Mark ${genericCompletableCount} general pending item${genericCompletableCount !== 1 ? 's' : ''} as completed`}
                       >
-                        Complete All
+                        Complete all {formatCount(genericCompletableCount)}
                       </button>
                     )}
                     <button
                       onClick={handleMarkAllRead}
                       className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
-                      title="Dismiss all pending items"
+                      title={`Dismiss ${pendingCount} pending item${pendingCount !== 1 ? 's' : ''}`}
                     >
-                      Dismiss All
+                      Dismiss all {formatCount(pendingCount)} pending
                     </button>
                   </>
                 )}
@@ -606,38 +658,6 @@ export default function Review() {
           </p>
         )}
 
-        {/* Daily Briefing remains available as compatibility/history context. */}
-        {showLegacyReviewSurface && briefing && briefing.source !== 'none' && (
-          <section
-            ref={briefingRef}
-            role={briefingFullscreen ? 'dialog' : undefined}
-            aria-modal={briefingFullscreen ? 'true' : undefined}
-            aria-label={briefingFullscreen ? 'Daily Briefing' : undefined}
-            className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : ''}`}>
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-                <FileText size={16} className="text-gray-400" />
-                Daily Briefing
-              </h2>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-gray-400">
-                  {briefing.source} &middot; {formatDateTime(briefing.generatedAt)}
-                </span>
-                <button
-                  onClick={() => setBriefingFullscreen(prev => !prev)}
-                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
-                  title={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                >
-                  {briefingFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                </button>
-              </div>
-            </div>
-            <div className={`text-gray-400 text-sm overflow-y-auto ${briefingFullscreen ? '' : 'max-h-[32rem]'}`}>
-              <MarkdownOutput content={briefing.content} />
-            </div>
-          </section>
-        )}
-
         {/* Detailed sections — tiled two-up on wide screens so the per-type
             queues use the full width instead of stacking in one column. */}
         {showLegacyReviewSurface && <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
@@ -684,6 +704,7 @@ export default function Review() {
             <p className="text-sm mt-1">This hub will fill up as agents surface alerts, actions, and briefing context.</p>
           </div>
         )}
+        {showLegacyReviewSurface && historyDisclosure}
         </div>
       </div>
       <ActionDetail
