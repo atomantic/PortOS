@@ -55,16 +55,25 @@ describe('Runway image workflow', () => {
   it('sends both bound character anchors with distinct stable tags and records basenames rather than paths', async () => {
     const paths = ['hero.png', 'rival.png'].map((name) => join(PATHS.images, name));
     await Promise.all(paths.map((path) => writeFile(path, output)));
-    const visualConditioning = { assets: [{ filename: 'hero.png', bindingId: 'char-a', role: 'character-neutral' }, { filename: 'rival.png', bindingId: 'char-b', role: 'character-neutral' }] };
+    const visualConditioning = { assets: [{ filename: 'hero.png', bindingId: 'char-a', role: 'character-neutral', label: 'Hero' }, { filename: 'rival.png', bindingId: 'char-b', role: 'character-neutral', label: 'Rival' }] };
     const job = await runway.generateImage({ prompt: 'Two rivals', model: 'gen4_image_turbo', referenceImagePaths: paths, visualConditioning });
     expect(await terminal(job.jobId)).toMatchObject({ type: 'completed' });
     const refs = calls[0].body.referenceImages;
+    expect(calls[0].body.promptText).toContain(`@${refs[0].tag}: character-neutral for Hero.`);
+    expect(calls[0].body.promptText).toContain(`@${refs[1].tag}: character-neutral for Rival.`);
     expect(refs).toHaveLength(2);
     expect(refs[0].tag).not.toBe(refs[1].tag);
     for (const ref of refs) { expect(ref.uri).toMatch(/^data:image\/jpeg;base64,/); expect(calls[0].body.promptText).toContain(`@${ref.tag}`); }
     const sidecar = JSON.parse(await readFile(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
     expect(sidecar.referenceTags.map((r) => r.filename)).toEqual(['hero.png', 'rival.png']);
     expect(JSON.stringify(sidecar)).not.toContain(root);
+  });
+  it('refuses an oversized encoded reference before any paid submission', async () => {
+    const path = join(PATHS.images, 'large.png');
+    await writeFile(path, Buffer.concat([output, Buffer.alloc(4_000_000)]));
+    const job = await runway.generateImage({ prompt: 'A garden', referenceImagePaths: [path] });
+    expect(await terminal(job.jobId)).toMatchObject({ type: 'failed', error: expect.stringContaining('after base64 encoding') });
+    expect(calls).toEqual([]);
   });
   it('fails a moderated task once with its verbatim reason and permits the next asset', async () => {
     nextTask = { status: 'FAILED', failureCode: 'SAFETY.INPUT', failure: 'Input rejected by Runway moderation.' };

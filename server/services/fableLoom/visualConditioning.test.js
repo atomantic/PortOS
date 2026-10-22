@@ -81,6 +81,7 @@ describe('FableLoom visual conditioning compiler', () => {
       authoredPrompt: 'Two rivals', ...deps(loom),
     });
     expect(result.visualConditioning.status).toBe('locked');
+    expect(result.visualConditioning.assets.filter((asset) => asset.role === 'character-neutral').map((asset) => asset.label)).toEqual(['Aria', 'Bex']);
     expect(result.referenceImagePaths).toEqual(['/approved/opening.png', '/approved/aria-neutral.png', '/approved/bex-neutral.png']);
   });
 

@@ -22,7 +22,7 @@ import { getSettings } from '../settings.js';
 import {
   awaitRunwayTask, cancelRunwayTask, createRunwayTaskEntry, resolveRunwayApiKey, submitRunwayTask,
 } from '../runwayApi.js';
-import { IMAGE_GEN_MODE } from './modes.js';
+import { IMAGE_GEN_MODE, describeFidelity } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
@@ -74,12 +74,17 @@ export async function checkConnection({ model = RUNWAY_IMAGE_DEFAULT_MODEL } = {
   return { connected: Boolean(apiKey), mode: MODE, model, ...(apiKey ? {} : { reason: noKeyReason }) };
 }
 
-export function runwayImageSentPrompt({ prompt = '', negativePrompt, inputImages, visualConditioning, promptAdditions = [] }) {
+export function runwayImageSentPrompt({ prompt = '', negativePrompt, inputImages, initImageStrength, visualConditioning, promptAdditions = [] }) {
   const references = runwayReferenceTags(inputImages.paths.map((path) => {
     const asset = visualConditioning?.assets?.find((item) => item.filename === basename(path));
     return { filename: basename(path), ...(asset || {}), path };
   }));
-  const roles = references.map((ref) => `@${ref.tag}: ${ref.role || (ref.path === inputImages.initPath ? 'source image to edit' : 'visual reference')}${ref.bindingId ? ` (${ref.bindingId})` : ''}.`).join('\n');
+  const roles = references.map((ref) => {
+    const role = ref.path === inputImages.initPath
+      ? `source image to edit — ${describeFidelity(initImageStrength)}`
+      : ref.role || 'visual reference';
+    return `@${ref.tag}: ${role}${ref.label ? ` for ${ref.label}` : ''}.`;
+  }).join('\n');
   const added = [promptAddition('reference-tags', 'Tagged Runway reference images', roles), promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt ? `Avoid: ${negativePrompt}` : '')];
   const fullPrompt = [prompt, ...added.map((item) => item?.text).filter(Boolean)].join('\n\n');
   return { fullPrompt, references, record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }), added }) };
@@ -88,8 +93,10 @@ export function runwayImageSentPrompt({ prompt = '', negativePrompt, inputImages
 async function encodeInputImage(path) {
   const bytes = await readFile(path);
   const mime = detectImageFormat(bytes)?.mime;
-  if (!mime || bytes.length > 5 * 1024 * 1024) throw new ServerError('Runway references must be images no larger than 5 MB', { status: 400, code: 'RUNWAY_IMAGE_INPUT_INVALID' });
-  return `data:${mime};base64,${bytes.toString('base64')}`;
+  const uri = mime ? `data:${mime};base64,${bytes.toString('base64')}` : null;
+  // Runway's 5 MB ceiling applies to the encoded URI, including base64 overhead.
+  if (!uri || Buffer.byteLength(uri) > 5_000_000) throw new ServerError('Runway reference data URIs must be images no larger than 5 MB after base64 encoding', { status: 400, code: 'RUNWAY_IMAGE_INPUT_INVALID' });
+  return uri;
 }
 
 export const generateImage = (params) => preparations.run(params, generateImagePrepared);
@@ -97,7 +104,7 @@ export const generateImage = (params) => preparations.run(params, generateImageP
 async function generateImagePrepared({
   promptAdditions = [],
   model, resolution = '720p', ratio, prompt = '', negativePrompt, width, height, seed,
-  initImagePath, referenceImagePaths = [],
+  initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
   jobId: providedJobId = null,
   cleanC2PA = false,
@@ -129,7 +136,7 @@ async function generateImagePrepared({
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
   if (inputImages.paths.length !== (initImagePath ? 1 : 0) + referenceImagePaths.length) throw new ServerError('Runway reference inputs are unavailable or exceed the three-image limit', { status: 400, code: 'RUNWAY_IMAGE_INPUT_INVALID' });
-  const { fullPrompt, references, record: sentRecord } = runwayImageSentPrompt({ prompt, negativePrompt, inputImages, visualConditioning, promptAdditions });
+  const { fullPrompt, references, record: sentRecord } = runwayImageSentPrompt({ prompt, negativePrompt, inputImages, initImageStrength, visualConditioning, promptAdditions });
   const request = buildRunwayImageRequest({ modelId: family.id, prompt: fullPrompt, resolution, ratio, width, height, seed, referenceImages: references.map((ref) => ({ uri: '(validated input)', tag: ref.tag })) });
 
   const meta = {

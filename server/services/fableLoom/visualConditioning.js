@@ -401,7 +401,14 @@ export async function compileFableLoomVisualRequest({
     universeId: universe.id,
     capability,
     bindings: manifestBindings(bindings),
-    assets: allocation.accepted.map(({ path: _path, ...asset }) => asset),
+    assets: allocation.accepted.map(({ path: _path, ...asset }) => {
+      if (capability.backend !== 'runway') return asset;
+      const entry = asset.role.startsWith('character')
+        ? bindings.boundCharacters.find(({ character }) => character.id === asset.bindingId)?.character
+        : asset.role === 'environment' ? bindings.boundPlace
+          : bindings.boundObjects.find((object) => object.id === asset.bindingId);
+      return { ...asset, ...(entry?.name ? { label: entry.name } : {}) };
+    }),
     adapters,
     omitted,
     warnings,
