@@ -15,7 +15,6 @@ import {
   reviewerLabel,
   sanitizeReviewerModelInput
 } from './constants';
-import ProviderModelSelector from '../ProviderModelSelector';
 import { isToolFreeReviewer, prioritizeToolFreeReviewers } from '../../../../server/lib/reviewerConfig.js';
 import { effortLevelsForProvider, effectiveModelFor, isTuiProvider } from '../../utils/providers';
 import { isApplyCapableReviewer, isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
@@ -61,8 +60,8 @@ const HEADER_CLASS = `hidden @4xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.
 /**
  * Ordered multi-reviewer picker, rendered as one row per reviewer with the five
  * per-reviewer controls as columns: **Provider | Model | Effort | Optional | Max
- * Iterations** (#3133). Add configured providers or standalone legacy backends,
- * reorder with the arrows within each service/standalone boundary, remove with ✕. Maps to slashdo's
+ * Iterations** (#3133). Add configured providers or standalone backends from one
+ * menu, reorder with the arrows within each service/standalone boundary, remove with ✕. Maps to slashdo's
  * `--review-with a,b,c` plus the stop-mode / `--reviewer-applies` flags.
  *
  * A second "GitHub reviewers" table collects arbitrary usernames (e.g.
@@ -146,8 +145,8 @@ const HEADER_CLASS = `hidden @4xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.
  * never clears.
  *
  * Together with `modelOptions.providerDisabled`, that describes which reviewers
- * can run on this machine. Configured providers use the shared provider selector;
- * standalone backends live in a compact legacy selector. Missing/disabled saved
+ * can run on this machine. Configured providers and standalone backends share one
+ * Add menu, each option labeled with its unavailability. Missing/disabled saved
  * rows remain editable with actionable warnings. `showReviewers`, `showUsernames`
  * and `renderReviewer` let the tier editor compose these same rows and controls
  * without introducing fallback-group fields to task-local overrides.
@@ -170,14 +169,9 @@ export default function ReviewerPicker({
   showRunFlags = true,
   showReviewers = true,
   showUsernames = true,
-  // Page-level help (Code Reviewers) explains tiers once. Compact callers such
-  // as a task form still get the short intro beside the controls.
-  showIntro = true,
   renderReviewer = (_token, row) => row,
 }) {
   const id = useId();
-  const [addProviderId, setAddProviderId] = useState('');
-  const [legacyReviewer, setLegacyReviewer] = useState('');
   const [effortNotice, setEffortNotice] = useState('');
   const providerRecords = modelOptions?.providers || [];
   // A review runs its provider headless (CLI or API), never through an
@@ -209,6 +203,7 @@ export default function ReviewerPicker({
   const selected = Array.isArray(reviewers) ? [...new Set(reviewers.map(normalizeReviewerValue))] : [];
   const orderedSelected = prioritizeToolFreeReviewers(selected);
   const addable = REVIEWER_OPTIONS.filter(o => !selected.includes(o.value));
+  const addableProviders = reviewerProviderOptions.filter(provider => provider.enabled !== false && !selected.includes(`provider:${provider.id}`));
   // Only codex is offered the editing pass: slashdo forces every other local
   // reviewer back to review-only and reverts what it wrote, so showing the toggle
   // for agy/grok/cursor would ask the user to grant write access for nothing.
@@ -687,7 +682,7 @@ export default function ReviewerPicker({
   };
 
   const addUsername = () => {
-    const entries = usernameInput.split(/[,\n]+/).map(value => value.trim()).filter(Boolean);
+    const entries = usernameInput.split(/[\s,]+/).map(value => value.trim()).filter(Boolean);
     const invalid = entries.filter(value => !cleanReviewUsername(value));
     if (!entries.length || invalid.length) {
       setUsernameError(invalid.length
@@ -746,35 +741,34 @@ export default function ReviewerPicker({
   return (
     <div className="@container flex flex-col gap-2 w-full">
       {showReviewers && (
-        <div className="flex flex-wrap items-end gap-2 min-w-0">
-          <div className="w-full sm:w-80 max-w-full">
-            <ProviderModelSelector
-              dense
-              providers={reviewerProviderOptions}
-              selectedProviderId={addProviderId}
-              onProviderChange={setAddProviderId}
-              emptyProviderOption="Choose a reviewer provider"
-              compose={false}
-              highlightVision={false}
-              loading={modelOptions?.loaded === false}
-              disabled={disabled}
-            />
-          </div>
-          <button type="button" disabled={disabled || !addProviderId || selected.includes(`provider:${addProviderId}`)}
-            className="min-h-9 text-sm text-port-accent disabled:opacity-50"
-            onClick={() => { add(`provider:${addProviderId}`); setAddProviderId(''); }}>Add provider reviewer</button>
-          {showIntro && <p className="text-xs text-gray-500">Add a configured provider, then choose its model and effort on its row. Its account and transport stay attached to that identity.</p>}
-          {modelOptions?.providersLoaded === false && modelOptions?.loaded && <p role="alert" className="text-xs text-port-warning">Provider list unavailable. Reload this page to retry; saved reviewers and pins are preserved.</p>}
+        <div className="flex flex-col gap-1 min-w-0">
+          <label htmlFor={`${id}-add`} className="text-xs text-gray-500">AI reviewers</label>
+          <select
+            id={`${id}-add`}
+            value=""
+            disabled={disabled || (addableProviders.length === 0 && addable.length === 0)}
+            onChange={event => add(event.target.value)}
+            className="w-full sm:w-80 max-w-full min-h-9 px-2 bg-port-bg border border-port-border rounded text-xs text-gray-300 focus:border-port-accent focus:outline-none disabled:opacity-50"
+          >
+            <option value="">{modelOptions?.loaded === false ? 'Loading reviewers…' : '+ Add AI reviewer'}</option>
+            {addableProviders.length > 0 && (
+              <optgroup label="Providers">
+                {addableProviders.map(provider => (
+                  <option key={provider.id} value={`provider:${provider.id}`}>{provider.name || provider.id}{unavailability(`provider:${provider.id}`) ? ` (${unavailability(`provider:${provider.id}`).label})` : ''}</option>
+                ))}
+              </optgroup>
+            )}
+            {addable.length > 0 && (
+              <optgroup label="Local & CLI">
+                {addable.map(option => <option key={option.value} value={option.value}>{option.label}{unavailability(option.value) ? ` (${unavailability(option.value).label})` : ''}</option>)}
+              </optgroup>
+            )}
+          </select>
+          {modelOptions?.providersLoaded === false && modelOptions?.loaded && <p role="alert" className="text-xs text-port-warning">Provider list unavailable. Reload to retry.</p>}
         </div>
       )}
       {effortNotice && <p role="status" className="text-xs text-port-warning">{effortNotice}</p>}
       {showReviewers && <div className="flex flex-col gap-1">
-        {showIntro && (
-          <>
-            <span className="text-xs text-gray-500">Reviewers (in order):</span>
-            <p className="text-xs text-gray-400">Configured providers and local models first, then standalone CLI / Copilot.</p>
-          </>
-        )}
         {selected.length > 0 && (
           <>
             <div className={HEADER_CLASS} aria-hidden="true">
@@ -815,7 +809,7 @@ export default function ReviewerPicker({
                     </button>
                   </div>
                   <span className="flex items-center gap-1 min-w-0 col-span-2 @4xl:col-span-1">
-                    <span className="text-xs text-gray-300 break-words">{labelFor(value)}<span className="block text-[10px] text-gray-500">{isProviderReviewer(value) ? value : 'Standalone / legacy'}</span></span>
+                    <span className="text-xs text-gray-300 break-words">{labelFor(value)}</span>
                     {renderUnavailableBadge(value)}
                   </span>
                   <span className={CELL_LABEL_CLASS}>Model</span>
@@ -848,45 +842,16 @@ export default function ReviewerPicker({
           </>
         )}
         {selected.length === 0 && (
-          <span className="text-xs text-gray-400 italic">none — no AI reviewers in this list</span>
+          <span className="text-xs text-gray-400 italic">None</span>
         )}
       </div>}
-
-      {showIntro && showUsernames && (selected.length > 0 || selectedUsernames.length > 0) && (
-        <details className="text-[11px] text-gray-400">
-          <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-300">Tip: reviewer controls</summary>
-          <p className="mt-1">
-            <span className="font-mono text-port-accent">Model</span> pins the model that reviewer runs (the shown default is used when no override is saved), and <span className="font-mono text-port-accent-2">Effort</span> pins how hard it reasons — higher is slower and pricier, and each reviewer only offers the tiers its own CLI accepts. The <span className="font-mono text-port-warning">~opt</span> badge marks a reviewer <em>non-blocking</em> — it still runs and its findings are still fixed, but an inconclusive verdict (timeout / no result) won't block the merge. A hard failure still does. <span className="font-mono text-port-accent-2">Max</span> caps that reviewer's review → fix → re-review rounds (blank = its built-in cap, <span className="font-mono">0</span> = loop until clean) — a small cap keeps a slow local model affordable.
-          </p>
-        </details>
-      )}
-
-      {showReviewers && addable.length > 0 && (
-        <details className="text-xs text-gray-500">
-          <summary className="cursor-pointer min-h-9">Standalone / legacy backend</summary>
-          {showIntro && <p className="mb-2">Direct CLI, local runtime and Copilot identities keep their existing behavior. Prefer a configured provider to select an account and transport.</p>}
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="min-w-0 flex-1 max-w-xs">
-              <label htmlFor={`${id}-legacy`} className="block mb-1">Legacy backend</label>
-              <select id={`${id}-legacy`} value={legacyReviewer} disabled={disabled}
-                className="w-full min-w-0 min-h-9 bg-port-bg border border-port-border rounded text-gray-300"
-                onChange={event => setLegacyReviewer(event.target.value)}>
-                <option value="">Choose a backend</option>
-                {addable.map(option => <option key={option.value} value={option.value}>{option.label}{unavailability(option.value) ? ` (${unavailability(option.value).label})` : ''}</option>)}
-              </select>
-            </div>
-            <button type="button" disabled={disabled || !legacyReviewer} className="min-h-9 text-port-accent disabled:opacity-50"
-              onClick={() => { add(legacyReviewer); setLegacyReviewer(''); }}>Add legacy reviewer</button>
-          </div>
-        </details>
-      )}
 
       {/* GitHub reviewer usernames — arbitrary PR reviewers (bots/humans) that
           gate the merge. Appended to `--review-with` as `@user` tokens. Same row
           grid as the keyed reviewers so the columns line up, minus reorder (their
           order is fixed after the keyed list) and minus a Model cell. */}
       {showUsernames && <div className="flex flex-col gap-1.5 pt-1 border-t border-port-border/50">
-        <span className="text-xs text-gray-500">GitHub/GitLab reviewers (gate merge):</span>
+        <span className="text-xs text-gray-500">People &amp; bots (GitHub/GitLab)</span>
         {selectedUsernames.length > 0 ? (
           <div className="flex flex-col gap-1.5 @4xl:gap-0.5">
             {selectedUsernames.map((value) => (
@@ -897,10 +862,8 @@ export default function ReviewerPicker({
               >
                 <span className="text-port-accent font-mono text-xs col-span-2 @4xl:col-span-1">@</span>
                 <span className="text-xs text-gray-300 col-span-2 @4xl:col-span-1 truncate">{value}</span>
-                <span className={CELL_LABEL_CLASS}>Model</span>
-                <div className="min-w-0">{renderModelCell(`@${value}`)}</div>
-                <span className={CELL_LABEL_CLASS}>Effort</span>
-                <div className="min-w-0">{renderEffortCell(`@${value}`)}</div>
+                <span className="hidden @4xl:block" />
+                <span className="hidden @4xl:block" />
                 <span className={CELL_LABEL_CLASS}>Optional</span>
                 <div>
                   {renderOptToggle(`@${value}`, `@${value}`, isOptional(`@${value}`)
@@ -923,34 +886,34 @@ export default function ReviewerPicker({
               </div>
             ))}
           </div>
-        ) : (
-          <span className="text-xs text-gray-400 italic">none</span>
-        )}
+        ) : null}
         <div className="flex items-center gap-1.5">
           <span className="text-xs text-gray-400 font-mono">@</span>
-          <textarea
+          <input
             id={`${id}-username`}
-            rows={2}
+            type="text"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             value={usernameInput}
             disabled={disabled || atMaxUsernames}
-            placeholder="alice, bob.team"
+            placeholder="username"
             aria-label="Add a GitHub/GitLab reviewer username"
             onChange={(e) => { setUsernameInput(e.target.value); if (usernameError) setUsernameError(''); }}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addUsername(); } }}
-            className="flex-1 min-w-0 max-w-[200px] px-2 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 min-h-[28px] focus:border-port-accent focus:outline-none disabled:opacity-50"
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addUsername(); } }}
+            className="flex-1 min-w-0 max-w-[200px] px-2 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 min-h-9 focus:border-port-accent focus:outline-none disabled:opacity-50"
           />
           <button
             type="button"
             disabled={disabled || !usernameInput.trim() || atMaxUsernames}
             onClick={addUsername}
             aria-label="Add reviewer username"
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-transparent border border-port-border rounded text-xs text-gray-400 hover:text-white hover:border-port-accent disabled:opacity-50"
+            className="inline-flex items-center gap-1 px-2 min-h-9 bg-transparent border border-port-border rounded text-xs text-gray-400 hover:text-white hover:border-port-accent disabled:opacity-50"
           >
             <Plus size={11} />
             Add
           </button>
         </div>
-        <p className="text-xs text-gray-400">Separate names with commas or newlines (Shift+Enter). Enter adds the list; an invalid name or a full roster leaves the whole draft for correction.</p>
         {usernameError && <span role="alert" className="text-xs text-port-error">{usernameError}</span>}
       </div>}
 

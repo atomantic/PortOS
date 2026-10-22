@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 
 /**
- * Where a claim's reviewer list came from, in one sentence.
+ * Where a claim's reviewer list came from, as one compact link.
  *
  * Shared by the two manual claim surfaces because they were already drifting on
  * the answer: a claim resolves the claim-work task metadata FIRST and only falls
@@ -19,20 +19,19 @@ import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
  * them — naming it here would send the user to a screen with no such control.
  */
 export default function ClaimReviewerSource({ source }) {
-  const codeReviewersPage = getNavPageForPath('/models/code-reviewers')?.breadcrumb || 'its management page';
-  if (source === 'task-override') {
-    return (
-      <>
-        {' — from the '}<strong className="text-port-warning">claim-work</strong>{' reviewer override in '}
-        <Link to="/cos/schedule" className="text-port-accent hover:underline">Chief of Staff → Schedule</Link>
-        {`, not ${codeReviewersPage}. Clear it there to follow the install default again.`}
-      </>
-    );
-  }
+  const override = source === 'task-override';
   return (
     <>
-      {' — from '}
-      <Link to="/models/code-reviewers" className="text-port-accent hover:underline">{codeReviewersPage}</Link>.
+      {' · '}
+      <Link
+        to={override ? '/cos/schedule' : '/models/code-reviewers'}
+        title={override
+          ? `Set by the claim-work reviewer override in Chief of Staff → Schedule, not ${getNavPageForPath('/models/code-reviewers')?.breadcrumb || 'Code Reviewers'}.`
+          : undefined}
+        className={`hover:underline ${override ? 'text-port-warning' : 'text-port-accent'}`}
+      >
+        {override ? 'claim-work override' : 'defaults'}
+      </Link>
     </>
   );
 }

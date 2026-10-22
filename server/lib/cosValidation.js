@@ -1261,7 +1261,10 @@ export function sanitizeTaskMetadata(raw) {
       const normalized = REVIEWER_ALIASES[r] || r;
       if (isReviewer(normalized) && !seen.has(normalized)) { seen.add(normalized); list.push(normalized); }
     }
-    if (list.length) { clean.reviewers = list; hasKeys = true; }
+    // Explicitly empty survives only beside forge reviewers: that is the
+    // username-only roster (`usernameOnlyRoster`), not "inherit the defaults".
+    const usernameOnly = !list.length && Array.isArray(raw.usernames) && normalizeReviewUsernames(raw.usernames).length > 0;
+    if (list.length || usernameOnly) { clean.reviewers = list; hasKeys = true; }
   }
   // `usernames` is the arbitrary GitHub reviewer-username list — normalize to
   // shell-safe, deduped, capped tokens (strips `@`, drops bogus entries). Unlike

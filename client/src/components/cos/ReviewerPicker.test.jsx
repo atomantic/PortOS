@@ -52,8 +52,7 @@ describe('ReviewerPicker', () => {
       return <ReviewerPicker {...config} modelOptions={{ providers }} onChange={value => { onChange(value); setConfig(value); }} />;
     }
     render(<Form />);
-    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'codex-tui' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add provider reviewer' }));
+    fireEvent.change(screen.getByLabelText('AI reviewers'), { target: { value: 'provider:codex-tui' } });
     fireEvent.change(screen.getByLabelText('Reasoning effort for Codex TUI'), { target: { value: 'ultra' } });
     const effort = screen.getByLabelText('Reasoning effort for Codex TUI');
     expect(effort).toHaveValue('ultra');
@@ -70,7 +69,6 @@ describe('ReviewerPicker', () => {
     expect(screen.getByText('2.')).toBeInTheDocument();
     expect(screen.getByText('3.')).toBeInTheDocument();
     // The not-yet-selected reviewer (claude) shows in the Add row.
-    fireEvent.click(screen.getByText('Standalone / legacy backend'));
     expect(screen.getByRole('option', { name: 'Claude' })).toBeInTheDocument();
   });
 
@@ -92,10 +90,8 @@ describe('ReviewerPicker', () => {
       expect(screen.queryByText('not installed')).not.toBeInTheDocument();
     });
 
-    it('flags an unselected reviewer once the Add row reveals it', async () => {
-      const user = userEvent.setup();
+    it('flags an unselected reviewer in the Add menu', () => {
       render(<ReviewerPicker reviewers={['copilot']} installed={{ antigravity: false }} onChange={() => {}} />);
-      await user.click(screen.getByText('Standalone / legacy backend'));
       expect(screen.getByRole('option', { name: /Antigravity/ })).toHaveTextContent('not installed');
     });
   });
@@ -205,7 +201,6 @@ describe('ReviewerPicker', () => {
           onChange={() => {}}
         />
       );
-      fireEvent.click(screen.getByText('Standalone / legacy backend'));
       expect(screen.getByRole('option', { name: /Antigravity/ })).toHaveTextContent('not installed');
       expect(screen.getByRole('option', { name: /Kimi/ })).toHaveTextContent('disabled');
       expect(screen.getByRole('option', { name: /Codex/ })).toHaveTextContent('Codex');
@@ -222,11 +217,9 @@ describe('ReviewerPicker', () => {
           onChange={onChange}
         />
       );
-      await user.click(screen.getByText('Standalone / legacy backend'));
       expect(screen.getByRole('option', { name: /Kimi/ })).toHaveTextContent('disabled');
       expect(screen.getByRole('option', { name: /Antigravity/ })).toHaveTextContent('not installed');
-      await user.selectOptions(screen.getByLabelText('Legacy backend'), 'kimi');
-      await user.click(screen.getByRole('button', { name: 'Add legacy reviewer' }));
+      await user.selectOptions(screen.getByLabelText('AI reviewers'), 'kimi');
       expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['copilot', 'kimi'] }));
     });
 
@@ -239,7 +232,6 @@ describe('ReviewerPicker', () => {
 
     it('offers the whole roster when neither signal was fetched', () => {
       render(<ReviewerPicker reviewers={['copilot']} onChange={() => {}} />);
-      fireEvent.click(screen.getByText('Standalone / legacy backend'));
       expect(screen.queryByRole('option', { name: /unavailable/ })).not.toBeInTheDocument();
       expect(screen.getByRole('option', { name: /Kimi/ })).toBeInTheDocument();
     });
@@ -247,16 +239,7 @@ describe('ReviewerPicker', () => {
 
   it('shows the empty-state hint when no reviewers are selected', () => {
     render(<ReviewerPicker reviewers={[]} onChange={() => {}} />);
-    expect(screen.getByText(/none — no AI reviewers in this list/)).toBeInTheDocument();
-  });
-
-  it('keeps the short provider intro unless the page explains tiers itself', () => {
-    const { unmount } = render(<ReviewerPicker reviewers={[]} onChange={() => {}} />);
-    expect(screen.getByText(/Add a configured provider/)).toBeInTheDocument();
-    unmount();
-    render(<ReviewerPicker reviewers={['codex']} onChange={() => {}} showIntro={false} />);
-    expect(screen.queryByText(/Add a configured provider/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Tool-free first/)).not.toBeInTheDocument();
+    expect(screen.getByText('None')).toBeInTheDocument();
   });
 
   it('de-dupes a malformed list with duplicates (order-preserving)', () => {
@@ -279,9 +262,7 @@ describe('ReviewerPicker', () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
-    await user.click(screen.getByText('Standalone / legacy backend'));
-    await user.selectOptions(screen.getByLabelText('Legacy backend'), 'codex');
-    await user.click(screen.getByRole('button', { name: 'Add legacy reviewer' }));
+    await user.selectOptions(screen.getByLabelText('AI reviewers'), 'codex');
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['copilot', 'codex'] }));
   });
 
@@ -351,10 +332,10 @@ describe('ReviewerPicker', () => {
     render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
     // Same pin: a partially-typed `bad` is a *valid* username, so an Enter that
     // beat the last keystrokes would emit and make this assertion lie.
-    await typeSettled(user, screen.getByLabelText('Add a GitHub/GitLab reviewer username'), 'bad token!');
+    await typeSettled(user, screen.getByLabelText('Add a GitHub/GitLab reviewer username'), 'bad-token!');
     await user.keyboard('{Enter}');
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert')).toHaveTextContent('Invalid reviewer names: bad token!');
+    expect(screen.getByRole('alert')).toHaveTextContent('Invalid reviewer names: bad-token!');
   });
 
   it('renders existing username pills and removes one', async () => {
@@ -366,18 +347,18 @@ describe('ReviewerPicker', () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['other-bot'] }));
   });
 
-  it('adds comma/newline forge usernames as one validated, deduplicated batch', () => {
+  it('adds comma/space separated forge usernames as one validated, deduplicated batch', () => {
     const onChange = vi.fn();
     render(<ReviewerPicker usernames={['Alice']} onChange={onChange} />);
     const input = screen.getByLabelText('Add a GitHub/GitLab reviewer username');
-    fireEvent.change(input, { target: { value: '@alice, bob.team\ncarol_dev' } });
+    fireEvent.change(input, { target: { value: '@alice, bob.team carol_dev' } });
     fireEvent.click(screen.getByLabelText('Add reviewer username'));
     expect(onChange.mock.lastCall[0].usernames).toEqual(['Alice', 'bob.team', 'carol_dev']);
     onChange.mockClear();
-    fireEvent.change(input, { target: { value: 'valid-user, not valid!' } });
+    fireEvent.change(input, { target: { value: 'valid-user, not-valid!' } });
     fireEvent.click(screen.getByLabelText('Add reviewer username'));
-    expect(screen.getByRole('alert')).toHaveTextContent('Invalid reviewer names: not valid!');
-    expect(input).toHaveValue('valid-user, not valid!');
+    expect(screen.getByRole('alert')).toHaveTextContent('Invalid reviewer names: not-valid!');
+    expect(input).toHaveValue('valid-user, not-valid!');
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.change(input, { target: { value: Array.from({ length: 20 }, (_, index) => `reviewer-${index}`).join(',') } });
     fireEvent.click(screen.getByLabelText('Add reviewer username'));
@@ -841,18 +822,6 @@ describe('ReviewerPicker', () => {
         });
       });
     });
-
-  describe('help disclosure', () => {
-    it('keeps the reviewer tip collapsed until opened', async () => {
-      const user = userEvent.setup();
-      render(<ReviewerPicker reviewers={['codex']} onChange={() => {}} />);
-      const summary = screen.getByText('Tip: reviewer controls');
-      const details = summary.closest('details');
-      expect(details).not.toHaveAttribute('open');
-      await user.click(summary);
-      expect(details).toHaveAttribute('open');
-    });
-  });
 
   describe('defaults-aware emit (#6208)', () => {
     const DEFAULTS = {

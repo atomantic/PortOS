@@ -261,7 +261,7 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     normalize: normalizeReviewers,
     isTruthyMeta,
   });
-  const reviewers = claimSafeReviewers(reviewOptions.reviewers);
+  const reviewers = claimSafeReviewers(reviewOptions.reviewers, reviewOptions.usernames);
   const optionalReviewers = (reviewOptions.optionalReviewers || [])
     .filter(reviewer => reviewer !== 'copilot');
   const appLabel = String(app.name || app.id).replace(/\s+/g, ' ').trim();

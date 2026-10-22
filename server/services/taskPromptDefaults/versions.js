@@ -114,10 +114,11 @@ export const PROMPT_VERSIONS = {
 // Guard each merge attempt and stop on uncertain readback (#12273).
 // Epic decomposition reads only the owner's own comments, never the public
 // thread, resolving the account itself so a pinned epic still finds them.
-PROMPT_VERSIONS['claim-issue'] = 45;
-PROMPT_VERSIONS['claim-issue-gitlab'] = 39;
+// A forge reviewer (`@login`) may be a person: wait up to 4 hours per round and iterate with them.
+PROMPT_VERSIONS['claim-issue'] = 46;
+PROMPT_VERSIONS['claim-issue-gitlab'] = 40;
 // Accepted review findings require resolution regardless of severity.
-PROMPT_VERSIONS['claim-issue-jira'] = 26; // v25: API calls target {portosApiUrl}, expanded at spawn to the loopback origin (#12405).
+PROMPT_VERSIONS['claim-issue-jira'] = 27; // v25: API calls target {portosApiUrl}, expanded at spawn to the loopback origin (#12405).
 
 // Audit anchor for reference-watch's read/write coupling.
 // The reference-watch schedule default (`taskMetadata.readOnly` in DEFAULT_TASK_INTERVALS)

@@ -62,6 +62,15 @@ export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value)
 export const REVIEW_UNAVAILABLE_REPORTING_NOTE = 'Report the pending review in your run summary — do NOT post a PR/MR comment saying the review was unavailable or inconclusive.';
 
 /**
+ * How a claim run waits on a forge reviewer (`@login`). That reviewer is often a
+ * person, so a few minutes of polling is not a wait: the run would give up long
+ * before they look. Each poll is bounded below an agent shell's command limit,
+ * and the four-hour round budget keeps an absent reviewer from holding the agent
+ * slot forever. Shared by every claim prompt's PR/MR-side review step.
+ */
+export const FORGE_REVIEWER_WAIT_NOTE = 'An `@<login>` is often a person, not a bot: after requesting the review, wait for it with blocking polls of at most 9 minutes each (check once a minute inside, counting only a review that login submitted on the current head commit), and keep repeating them for up to 4 hours per round. Do not end the run, skip the reviewer, or treat it as clean while that wait runs. Each review is a round: fix every comment, push, reply to and resolve its threads, then re-request their review. Only their approval of the current head satisfies them; changes requested or comments start the next round. No review after 4 hours is unsatisfied, not clean.';
+
+/**
  * What an agent does when EVERY configured reviewer returned a config fault:
  * distinguish it from clean in the run summary, so the operator sees "no
  * reviewer reviewed this branch" rather than a silent success.
@@ -888,10 +897,13 @@ const CLAIM_REVIEWER_FALLBACK = ['codex'];
  * actually invoke: `copilot` is a forge-side PR reviewer with no CLI, so a claim
  * agent told to "review with copilot" has nothing to run and stalls (#2507).
  * An empty result falls back to `codex` rather than to `DEFAULT_REVIEWERS`
- * (which is `copilot`, the very thing being removed).
+ * (which is `copilot`, the very thing being removed) — unless `usernames` names
+ * forge reviewers, which the run requests and waits on itself.
  */
-export function claimSafeReviewers(reviewers) {
+export function claimSafeReviewers(reviewers, usernames = []) {
   const kept = (Array.isArray(reviewers) ? reviewers : []).filter((reviewer) => reviewer !== 'copilot');
+  // A forge reviewer the run requests and waits on is a reviewer it can invoke.
+  if (!kept.length && normalizeReviewUsernames(usernames).length) return [];
   return kept.length ? kept : [...CLAIM_REVIEWER_FALLBACK];
 }
 
@@ -932,7 +944,7 @@ export function resolveClaimReviewerConfig(metadata, codeReviewDefaults, default
     };
   }
   const config = resolveReviewerConfig(metadata, codeReviewDefaults, defaultReviewers);
-  const reviewers = claimSafeReviewers(config.reviewers);
+  const reviewers = claimSafeReviewers(config.reviewers, config.usernames);
   return {
     ...config,
     reviewers,
@@ -1354,6 +1366,18 @@ export function normalizeReviewers(meta, fallback = DEFAULT_REVIEWERS) {
 }
 
 /**
+ * True when the winning layer explicitly lists NO keyed (AI/CLI) reviewers and
+ * forge reviewers (`@login`) remain: the user chose "review by these people or
+ * bots only", which must not fall back to the install default chain.
+ */
+function usernameOnlyRoster(metadata, codeReviewDefaults) {
+  if (!resolveReviewUsernames(metadata?.usernames, codeReviewDefaults?.usernames).length) return false;
+  if (!Array.isArray(metadata?.reviewers) && typeof metadata?.reviewer === 'string' && metadata.reviewer) return false;
+  const explicitEmpty = (layer) => Array.isArray(layer?.reviewers) && layer.reviewers.length === 0;
+  return Array.isArray(metadata?.reviewers) ? explicitEmpty(metadata) : explicitEmpty(codeReviewDefaults);
+}
+
+/**
  * Resolve an explicit task reviewer list as its preferred tier, followed by
  * the system Code Review Defaults tiers. This lets scheduled task overrides
  * retain their choice while inheriting a configured default when that tier is
@@ -1366,6 +1390,7 @@ export function resolveReviewerGroup(metadata, codeReviewDefaults, defaultReview
     ? raw.reviewers
     : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
   const taskGroup = normalizeReviewerList(source);
+  if (usernameOnlyRoster(raw, codeReviewDefaults)) return [];
   if (!taskGroup.length) {
     return prioritizeToolFreeReviewers(normalize(metadata, defaultReviewers));
   }
@@ -1411,7 +1436,7 @@ export function resolveKeyedReviewers(reviewers, hasUsernames) {
 /**
  * Build the comma-separated reviewer token list used to fill the `{reviewers}`
  * placeholder in claim/plan prompts: keyed reviewers (falling back to the
- * configured default when empty) followed by `@user` tokens for the reviewer usernames.
+ * configured default when empty, unless usernames make it a username-only roster) followed by `@user` tokens for the reviewer usernames.
  * Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix, and
  * reviewers carrying a `reviewerMaxRounds` cap get `~max=<n>` after it. A
  * reviewer with a `reviewerModels` pin gets slashdo's `[<model>]` selector
@@ -1420,8 +1445,8 @@ export function resolveKeyedReviewers(reviewers, hasUsernames) {
  * The flag-string variant is `buildReviewWithArgs`.
  */
 export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}) {
-  const keyed = Array.isArray(reviewers) && reviewers.length ? reviewers : [...DEFAULT_REVIEWERS];
   const users = normalizeReviewUsernames(usernames);
+  const keyed = Array.isArray(reviewers) && reviewers.length ? reviewers : (users.length ? [] : [...DEFAULT_REVIEWERS]);
   const optSet = optionalReviewerSet(optionalReviewers);
   const maxLookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
   const modelLookup = reviewerModelLookup(reviewerModels);
