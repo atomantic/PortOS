@@ -79,6 +79,7 @@ vi.mock('../services/moodBoard/index.js', async (importOriginal) => ({
   ...await importOriginal(),
   getBoard: vi.fn(async (id) => ({ id, name: 'Example Board', items: [] })),
   updateBoard: vi.fn(async (id, patch) => ({ id, ...patch })),
+  renderBoardItem: vi.fn(async () => ({ item: { id: 'example-item' }, jobId: 'example-job' })),
 }));
 vi.mock('../services/moodBoardStyleSynthesis.js', () => ({
   synthesizeBoardStyle: vi.fn(async () => ({ styleNotes: 'Example' })),
@@ -109,6 +110,7 @@ import cosTaskRoutes from './cosTaskRoutes.js';
 import { generateRound, evaluateRound, deriveRoundParts } from '../services/roundsAI.js';
 import { generateAgentPersonality } from '../services/agentPersonalityGenerator.js';
 import { triageSystemResources } from '../services/systemResources.js';
+import { renderBoardItem } from '../services/moodBoard/index.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
 import { startGenerateJob } from '../services/moodBoard/generateMore.js';
@@ -130,6 +132,8 @@ const operations = [
   [`/api/mood-boards/${id}/compose-prompt`, { ...picker }, composeBoardPrompt, 200],
   [`/api/mood-boards/${id}/analyze`, { ...picker }, startAnalyzeJob, 202],
   [`/api/mood-boards/${id}/generate`, { ...picker, requestId: id }, startGenerateJob, 202],
+  // A note render queues an image job, local Python included (#13055).
+  [`/api/mood-boards/${id}/items/example-item/render`, { mode: 'local' }, renderBoardItem, 202],
   ['/api/cos/tasks/enhance', { description: 'Example task' }, enhanceTaskPrompt, 200],
 ];
 // Distinct services touched by the table, so the "never ran" check covers each once.

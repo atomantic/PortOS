@@ -82,6 +82,15 @@
  *     mood-board generate. Board, beat, panel and take CRUD, the recipe and
  *     node PATCH, beats/add, the recipe library and the plan/make reads only
  *     store or read records and stay open.
+ *   - Pre-guard audit (#13055): the film-look bake (headless browser),
+ *     video last-frame (ffmpeg), mood-board note render (image job), Suno
+ *     song-revision generation (signed-in browser) and Eidoverse augment/say
+ *     (acting as the CoS world identity) are gated whole. SynthID regenerate is
+ *     gated unless `method` is `light`, and the code-animation prompt only when
+ *     it names a `referenceVideo`. Left open: image clean and watermark
+ *     removal (in-process sharp), and the Messages, Tribe outreach,
+ *     autobiography, identity-goal and insights AI routes, whose transports
+ *     are tool-free (an HTTP chat completion or the sandboxed Codex text turn).
  *   - Importer, Brain and analytics AI (#11036): classify/analyze/retry-issues,
  *     model-personality run, goal-scorecard narrative, Brain capture (it can
  *     dispatch classification or repository intake), inbox retry, digest/review
@@ -661,13 +670,20 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/production-runs/:runId/resume',
   'POST /api/music-video/:id/auto-reviews',
   'POST /api/music-video/:id/auto-reviews/:runId/resume',
+  // Song revision drives the signed-in PortOS Browser to submit the song to
+  // Suno, spending the operator's account credits (#13055).
+  'POST /api/music-video/:id/song-revision/generate',
 
   // Media agents retain host tools; scratch cwd and output validation are not
   // execution containment (#9667). Gate before uploads, stores or queue writes,
   // including inference-first requests that can fall back to CLI/TUI.
   'POST /api/image-gen/generate',
   'POST /api/image-gen/avatar',
+  // Film-look bake launches a headless composition browser on the host (#13055).
+  'POST /api/image-gen/:filename/film-look',
   'POST /api/video-gen',
+  // Last-frame extraction runs ffmpeg over a gallery clip (#13055).
+  'POST /api/video-gen/last-frame/:id',
   // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
   'POST /api/video-gen/upscale/:id',
   'POST /api/video-gen/stitch',
@@ -898,6 +914,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/mood-boards/:id/compose-prompt',
   'POST /api/mood-boards/:id/analyze',
   'POST /api/mood-boards/:id/generate',
+  // A text note's render queues an image job on the caller-chosen backend,
+  // including local Python (#13055), like generate above.
+  'POST /api/mood-boards/:id/items/:itemId/render',
   // Storyboards (#12952): the plot and saved node prompts reach a
   // caller-chosen, non-tool-free provider; node runs and make-empty also
   // queue image renders.
@@ -1011,6 +1030,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Explicit local gameplay can speak in this machine's private world. Scoped
   // peer reachability does not grant it; operator/agent sessions retain access.
   'POST /api/eidoverse/world/controllers/:id/riddle',
+  // Augment and say act in the private world as the owner-granted CoS
+  // identity (#13055), the same authority as a riddle round.
+  'POST /api/eidoverse/world/augment',
+  'POST /api/eidoverse/world/say',
 
   // GitHub actions (#9013): mutating routes run `gh` with the user's GitHub
   // account and change external state. Syncing repos is read-only.
@@ -1251,6 +1274,12 @@ const COMPILED_BODY_ROUTES = [
   // scheduled reference-watch runs git in; name, notes and the reviewed SHA
   // are records.
   ['PATCH /api/apps/:appId/reference-repos/:refId', (body) => ['repoUrl', 'branch'].filter((key) => body?.[key] !== undefined)],
+  // SynthID regen (#13055): the default flux method queues a local Python
+  // img2img job; the light method is an in-process sharp pass and stays open.
+  ['POST /api/image-gen/:filename/regenerate', (body) => body?.method === 'light' ? [] : ['method']],
+  // A code-animation prompt that studies a reference video runs ffmpeg over
+  // it (#13055); a prompt without one only reads records.
+  ['POST /api/code-animation/prompt', (body) => body?.referenceVideo ? ['referenceVideo'] : []],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 const bodyRouteEntry = (method, path) => (
