@@ -21,6 +21,9 @@ vi.mock('../services/providers.js', () => ({
 const settingsRoutes = (await import('./brainSettings.js')).default;
 
 const app = express();
+// A local password-free caller holds host control, which retargeting the
+// scheduled digest needs (#13055); hostControlPreGuardOps.test.js covers refusal.
+app.use((req, _res, next) => { req.portosAuthContext = { enabled: false }; next(); });
 app.use(express.json());
 app.use('/api/brain', settingsRoutes);
 app.use(errorMiddleware);

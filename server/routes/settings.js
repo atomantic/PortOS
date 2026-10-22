@@ -393,9 +393,11 @@ router.put('/features/groups/:groupId', asyncHandler(async (req, res) => {
 
 // PUT /api/settings/ai-assignments/:id
 router.put('/ai-assignments/:id', asyncHandler(async (req, res) => {
-  // These facades replace execution policy or steer scheduled social posts.
+  // These facades replace execution policy, steer scheduled social posts, or
+  // retarget the scheduled Brain digest (the PUT /api/brain/settings check).
   // Check the decoded identifier so encoded route params cannot bypass the gate.
-  if (req.params.id === 'settings.autofixer' || req.params.id.startsWith('socialAgent.')) assertHostControl(req);
+  if (req.params.id === 'settings.autofixer' || req.params.id === 'brain.default'
+    || req.params.id.startsWith('socialAgent.')) assertHostControl(req);
   const payload = validateRequest(aiAssignmentUpdateSchema, req.body || {});
   res.json(await updateAiAssignment(req.params.id, payload));
 }));

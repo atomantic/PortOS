@@ -101,6 +101,9 @@ const DEFAULT_CFG = {
 
 const buildApp = ({ io = { emit: () => {} } } = {}) => {
   const app = express();
+  // A local caller on a password-free install holds host control, so PUT
+  // /config reconciles (#13055); hostControlVoiceConfig.test.js covers the rest.
+  app.use((req, _res, next) => { req.portosAuthContext = { enabled: false }; next(); });
   app.use(express.json());
   // /speak fails fast when io is missing (a 500 misconfiguration error
   // rather than a 200 { ok:false, reason:'no-io' } that monitoring would

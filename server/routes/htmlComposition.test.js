@@ -184,10 +184,12 @@ describe('motion skills install authority (#9439)', () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
-  it('keeps toolkit status and contained rendering available to a remote password-free caller', async () => {
+  it('keeps toolkit status available to a remote password-free caller and gates rendering', async () => {
     const gatedApp = buildApp();
     expect((await request(gatedApp).get('/api/html-composition/toolkit')).status).toBe(200);
-    expect((await request(gatedApp).post('/api/html-composition/render').send({ directory: 'compositions/example' })).status).toBe(202);
+    // Render runs the headless composition browser and ffmpeg (#13055).
+    const render = await request(gatedApp).post('/api/html-composition/render').send({ directory: 'compositions/example' });
+    expect([render.status, render.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(execFile).not.toHaveBeenCalled();
   });
 });

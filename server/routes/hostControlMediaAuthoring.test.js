@@ -407,7 +407,6 @@ describe('media authoring operator authority (#9512, #9869)', () => {
     for (const [path, body, status] of [
       ['/api/code-animation/prompt', { concept: 'Example scene' }, 200],
       [`/api/code-animation/projects/${id}/stage-runs/${id}/cancel`, {}, 200],
-      [`/api/code-animation/${id}/export`, {}, 202],
       [`/api/tracks/${id}/waveform/render`, {}, 200],
       [`/api/music-video/${id}/autonomous/stop`, {}, 200],
       [`/api/music-video/${id}/autonomous/cancel`, {}, 200],

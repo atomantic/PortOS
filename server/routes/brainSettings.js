@@ -11,6 +11,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { settingsUpdateInputSchema } from '../lib/brainValidation.js';
 import { modelPinIsOffered } from '../lib/localProviderRuntime.js';
+import { assertHostControl } from '../services/authGate.js';
 
 const router = Router();
 
@@ -29,14 +30,24 @@ router.get('/settings', asyncHandler(async (req, res) => {
  */
 router.put('/settings', asyncHandler(async (req, res) => {
   const data = validateRequest(settingsUpdateInputSchema, req.body);
+  const currentSettings = await brainService.loadMeta();
+
+  // The scheduled digest and weekly review run Brain records, which open
+  // routes write, through this provider on a runner that is not tool-free.
+  // Turning them on or retargeting them needs host control, like the gated
+  // daily-log digest settings (#13055); an unchanged resend stays open.
+  const changes = (key) => data[key] !== undefined && data[key] !== currentSettings[key];
+  if ((data.scheduledReviewsEnabled === true && changes('scheduledReviewsEnabled'))
+    || changes('defaultProvider') || changes('defaultModel')) {
+    assertHostControl(req);
+  }
 
   // Validate provider and model if provided
   if (data.defaultProvider || data.defaultModel) {
     const providerId = data.defaultProvider;
     const modelId = data.defaultModel;
 
-    // Get current settings to use existing provider if only model is being updated
-    const currentSettings = await brainService.loadMeta();
+    // Use the existing provider if only the model is being updated
     const effectiveProviderId = providerId || currentSettings.defaultProvider;
 
     // Validate provider exists

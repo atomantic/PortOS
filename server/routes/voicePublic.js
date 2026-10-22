@@ -21,6 +21,9 @@ import { voiceSynthesizeBodySchema } from '../lib/apiContractSchemas.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { synthesize, listVoices, VALID_ENGINES } from '../services/voice/tts.js';
 import { getVoiceConfig } from '../services/voice/config.js';
+import { getSettings } from '../services/settings.js';
+import { assertHostControl } from '../services/authGate.js';
+import { resolveApiAccess } from '../lib/apiRegistry.js';
 
 const router = Router();
 
@@ -37,7 +40,16 @@ export const synthesizeBodySchema = voiceSynthesizeBodySchema;
 // Mirrors /api/voice/test but is the external-facing surface. `synthesize()`
 // validates the voice id against the curated catalog (throws 400 UNKNOWN_VOICE),
 // so a bad voice can't silently produce the wrong audio.
-router.post('/synthesize', asyncHandler(async (req, res) => {
+// Exposure is the operator's opt-in (#13055). authGate applies it only when a
+// password is set, so a password-free install checks it here: unexposed,
+// synthesis spawns a TTS runtime only for a caller with host control.
+const requireExposedOrHostControl = asyncHandler(async (req, _res, next) => {
+  const voice = resolveApiAccess(await getSettings()).find((entry) => entry.id === 'voice');
+  if (voice?.exposed !== true) assertHostControl(req);
+  next();
+});
+
+router.post('/synthesize', requireExposedOrHostControl, asyncHandler(async (req, res) => {
   const parsed = synthesizeBodySchema.safeParse(req.body || {});
   if (!parsed.success) {
     throw new ServerError(

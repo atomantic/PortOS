@@ -139,7 +139,8 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
     expect(isHostControlRoute('post', '/API/Apps/example-app/START/')).toBe(true);
     expect(hostControlRouteFor('post', '/API/HTML-COMPOSITION/TOOLKIT/SKILLS/INSTALL/')).toBe('POST /api/html-composition/toolkit/skills/install');
     expect(isHostControlRoute('GET', '/api/html-composition/toolkit')).toBe(false);
-    expect(isHostControlRoute('POST', '/api/html-composition/render')).toBe(false);
+    // Render runs the headless composition browser and ffmpeg (#13055).
+    expect(isHostControlRoute('POST', '/api/html-composition/render')).toBe(true);
     expect(isHostControlRoute('POST', '/api/git/status')).toBe(true);
     for (const suffix of ['//', '////']) {
       expect(hostControlRouteFor('post', '/API/Runs' + suffix)).toBe('POST /api/runs');
@@ -174,7 +175,17 @@ describe('outbound mail host-control policy (#11273)', () => {
     expect(mounted.has(route)).toBe(true);
     expect(hostControlRouteFor('POST', '/api/messages/drafts/33333333-3333-3333-3333-333333333333/send')).toBe(route);
     expect(isHostControlRoute('POST', '/api/messages/drafts')).toBe(false);
-    expect(isHostControlRoute('POST', '/api/messages/drafts/33333333-3333-3333-3333-333333333333/approve')).toBe(false);
+    // Approval is the send intent the gated send checks (#13055); a PUT that
+    // approves is gated per body, and other draft edits stay open.
+    expect(isHostControlRoute('POST', '/api/messages/drafts/33333333-3333-3333-3333-333333333333/approve')).toBe(true);
+    const draft = '/api/messages/drafts/33333333-3333-3333-3333-333333333333';
+    expect(isHostControlRoute('PUT', draft)).toBe(false);
+    expect(hostControlBodyKeys('PUT', draft, { status: 'approved' })).toEqual(['status']);
+    for (const body of [{ body: 'Example' }, { status: 'draft' }, { status: 'pending_review' }, null]) {
+      expect(hostControlBodyKeys('PUT', draft, body), JSON.stringify(body)).toEqual([]);
+    }
+    expect(hostControlBodyKeys('POST', '/api/review/queue/resolve', { id: 'drafts:example' })).toEqual(['id']);
+    expect(hostControlBodyKeys('POST', '/api/review/queue/resolve', { id: 'memory:example' })).toEqual([]);
   });
 
   it('gates external archive/delete actions while keeping message reads open (#11434)', () => {
@@ -310,8 +321,6 @@ describe('prompt-feeding store and Digital Twin mutation inventory (#9040, #1067
     "POST /api/digital-twin/identity/goals/:id/generate-phases",
     "POST /api/digital-twin/identity/goals/:id/milestones",
     "POST /api/digital-twin/identity/goals/:id/progress",
-    "POST /api/digital-twin/identity/goals/:id/reschedule",
-    "POST /api/digital-twin/identity/goals/:id/schedule",
     "POST /api/digital-twin/identity/goals/:id/todos",
     "POST /api/digital-twin/identity/goals/organize",
     "POST /api/digital-twin/identity/goals/organize/apply",
@@ -319,7 +328,6 @@ describe('prompt-feeding store and Digital Twin mutation inventory (#9040, #1067
     "POST /api/digital-twin/identity/image/save",
     "POST /api/digital-twin/identity/longevity/derive",
     "POST /api/digital-twin/import/save",
-    "POST /api/digital-twin/import/spotify/browser/open",
     "POST /api/digital-twin/snapshots",
     "POST /api/digital-twin/snapshots/compare",
     "POST /api/digital-twin/social-accounts",
@@ -394,7 +402,6 @@ describe('media generation and source publication policy (#9667)', () => {
       ['POST', '/api/image-gen/cancel'],
       ['POST', '/api/video-gen/cancel'],
       ['POST', '/api/sprites/:id/atlas/compile'],
-      ['POST', '/api/html-composition/render'],
     ]) expect(isHostControlRoute(method, path), path).toBe(false);
   });
 });
@@ -415,7 +422,6 @@ describe('auxiliary media mutation inventory (#9672)', () => {
     'POST /api/lora-datasets/:id/strip-shared-fragments',
     'POST /api/media-jobs/:id/cancel',
     'POST /api/media-jobs/cancel-queued',
-    'POST /api/media-jobs/holds/:holdId/resume',
   ];
 
   it('gates every agent-dispatching mutation and keeps reviewed record operations open', () => {
@@ -515,7 +521,6 @@ describe('Pipeline authoring remainder policy (#10907)', () => {
     'DELETE /api/pipeline/series/:id/seasons/:seasonId',
     'DELETE /api/pipeline/editorial/custom-checks/:id',
     'PATCH /api/pipeline/editorial/checks/:id',
-    'PATCH /api/pipeline/editorial/custom-checks/:id',
     'PATCH /api/pipeline/editorial/readiness-gate',
     'PATCH /api/pipeline/issues/:id',
     'PATCH /api/pipeline/issues/:id/stages/audio/lines/:lineIdx',
@@ -525,7 +530,6 @@ describe('Pipeline authoring remainder policy (#10907)', () => {
     'PATCH /api/pipeline/series/:id/manuscript/review/comments/:commentId',
     'PATCH /api/pipeline/series/:id/seasons/:seasonId',
     'PATCH /api/pipeline/tts/narrate/segment',
-    'POST /api/pipeline/editorial/custom-checks',
     'POST /api/pipeline/issues/:id/auto-run-text/cancel',
     // Recovery only resets persisted state; generating again uses the gated route.
     'POST /api/pipeline/issues/:id/stages/:stageId/recover',
@@ -666,7 +670,6 @@ describe('FableLoom mutation inventory (#10668)', () => {
     'POST /api/fableloom/:id/episodes/:episodeId/nodes',
     'PATCH /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId',
     'DELETE /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId',
-    'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/fal-video',
     'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions',
     'PATCH /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId',
     'DELETE /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId',
@@ -941,8 +944,10 @@ describe('Calendar MCP execution policy (#11051)', () => {
       expect(hostControlRouteFor('POST', path)).toBe(`POST ${path}`);
       expect(hostControlRouteFor('post', path.toUpperCase() + '/')).toBe(`POST ${path}`);
     }
+    // Generic sync captures an Outlook bearer token through the signed-in
+    // browser (#13055); the direct API sync and push ingestion do not.
+    expect(hostControlRouteFor('POST', '/api/calendar/sync/:accountId')).toBe('POST /api/calendar/sync/:accountId');
     for (const route of [
-      'POST /api/calendar/sync/:accountId',
       'POST /api/calendar/sync/:accountId/push',
       'POST /api/calendar/sync/:accountId/api',
       'POST /api/calendar/sync/:accountId/discover-api',

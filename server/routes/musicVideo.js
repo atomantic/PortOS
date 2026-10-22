@@ -18,6 +18,7 @@ import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js'
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { requestHasHostControl } from '../services/authGate.js';
 import {
   validateRequest,
   musicVideoAudioTimingPreviewSchema,
@@ -894,7 +895,11 @@ router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req,
 // install; the record keeps a pointer to the current immutable version.
 // A new document gets its overlay text checked in the background, so the
 // findings are waiting at the storyboard approval (local browser work, no provider).
-const checkOverlayTextAfterImport = (projectId) => {
+// The check renders the document in the headless composition browser, so it
+// runs only for a caller with host control (#13055); anyone else gets the
+// import alone, and the gated production-review text check runs it later.
+const checkOverlayTextAfterImport = (req, projectId) => {
+  if (!requestHasHostControl(req)) return;
   import('../services/musicVideo/overlayTextService.js')
     .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId))
     .catch((err) => console.error(`❌ Overlay text check did not start: ${err.message}`));
@@ -916,7 +921,7 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
   if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
   try {
     res.status(201).json(await importDocumentZip(req.params.id, req.file.path, req.file.originalname));
-    checkOverlayTextAfterImport(req.params.id);
+    checkOverlayTextAfterImport(req, req.params.id);
   } finally {
     await unlink(req.file.path).catch(() => {});
   }
@@ -925,7 +930,7 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
 router.post('/:id/composition/document/directory', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentDirectoryImportSchema, req.body || {});
   res.status(201).json(await importDocumentDirectory(req.params.id, directory));
-  checkOverlayTextAfterImport(req.params.id);
+  checkOverlayTextAfterImport(req, req.params.id);
 }));
 
 router.post('/:id/composition/document/template', asyncHandler(async (req, res) => {
@@ -961,7 +966,7 @@ router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHan
 router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
   res.json(await acceptMixedMediaDocument(req.params.id, directory));
-  checkOverlayTextAfterImport(req.params.id);
+  checkOverlayTextAfterImport(req, req.params.id);
 }));
 
 router.delete('/:id/composition/document/candidate', asyncHandler(async (req, res) => {

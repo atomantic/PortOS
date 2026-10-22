@@ -13,13 +13,26 @@ vi.mock('../services/voice/config.js', () => ({
 vi.mock('../services/voice/proactiveSpeech.js', () => ({
   MAX_PROACTIVE_TEXT_LEN: 2000,
 }));
+const access = vi.hoisted(() => ({ exposed: true }));
+vi.mock('../services/settings.js', () => ({
+  getSettings: vi.fn(async () => ({ apiAccess: { voice: { exposed: access.exposed } } })),
+  settingsEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
+}));
 
 const tts = await import('../services/voice/tts.js');
 const config = await import('../services/voice/config.js');
 const { default: voicePublicRoutes } = await import('./voicePublic.js');
 
-const buildApp = () => {
+const buildApp = (authContext) => {
   const app = express();
+  // A remote LAN caller: host control then rests on the auth context alone.
+  if (authContext) {
+    app.use((req, _res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: '192.0.2.10' });
+      req.portosAuthContext = authContext;
+      next();
+    });
+  }
   app.use(express.json());
   app.use('/api/voice/public', voicePublicRoutes);
   return app;
@@ -28,6 +41,7 @@ const buildApp = () => {
 describe('Public Voice API (/api/voice/public)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    access.exposed = true;
     config.getVoiceConfig.mockResolvedValue({
       tts: { engine: 'piper', kokoro: { voice: 'af_heart' }, piper: { voice: 'en_GB-jenny_dioco-medium' } },
     });
@@ -77,6 +91,29 @@ describe('Public Voice API (/api/voice/public)', () => {
       const res = await request(buildApp()).post('/api/voice/public/synthesize').send({ text: 'hi', engine: 'piper', voice: 'bogus' });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('UNKNOWN_VOICE');
+    });
+  });
+
+  describe('exposure (#13055)', () => {
+    // authGate applies the exposure toggle only with a password set, so the
+    // router enforces it on a password-free install: unexposed synthesis
+    // spawns a TTS runtime only for a caller with host control.
+    it('refuses unexposed synthesis without host control and keeps it for an operator', async () => {
+      access.exposed = false;
+      tts.synthesize.mockResolvedValue({ wav: Buffer.from('x'), latencyMs: 1, engine: 'piper' });
+      const refused = await request(buildApp({ enabled: false })).post('/api/voice/public/synthesize').send({ text: 'hi' });
+      expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(tts.synthesize).not.toHaveBeenCalled();
+
+      const operator = { enabled: true, authenticated: true, method: 'session' };
+      expect((await request(buildApp(operator)).post('/api/voice/public/synthesize').send({ text: 'hi' })).status).toBe(200);
+      expect(tts.synthesize).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the voice list readable while unexposed', async () => {
+      access.exposed = false;
+      tts.listVoices.mockResolvedValue([]);
+      expect((await request(buildApp({ enabled: false })).get('/api/voice/public/voices')).status).toBe(200);
     });
   });
 
