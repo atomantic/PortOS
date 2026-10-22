@@ -54,6 +54,18 @@ describe('GalleryVideoPicker', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('asks the server for a bounded compact page and searches server-side', async () => {
+    render(<GalleryVideoPicker open onClose={vi.fn()} onSelect={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('a neon chase')).toBeInTheDocument());
+    expect(listVideoHistory).toHaveBeenLastCalledWith({
+      silent: true, query: { limit: 60, compact: true, hidden: false, q: '' },
+    });
+    fireEvent.change(screen.getByLabelText('Search videos'), { target: { value: ' forest ' } });
+    await waitFor(() => expect(listVideoHistory).toHaveBeenLastCalledWith({
+      silent: true, query: { limit: 60, compact: true, hidden: false, q: 'forest' },
+    }));
+  });
+
   it('shows a load error with Retry instead of the empty copy when the history read fails', async () => {
     listVideoHistory.mockRejectedValueOnce(new Error('History unavailable'));
     render(<GalleryVideoPicker open onClose={vi.fn()} onSelect={vi.fn()} />);

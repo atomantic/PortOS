@@ -269,7 +269,16 @@ export const getVideoGenRuntimeStatus = (runtime, { signal } = {}) =>
 // resume progress display after a page reload. Silent so a 5xx during status
 // poll doesn't double-toast on every navigation.
 export const getActiveVideoJob = () => request('/video-gen/active', { silent: true });
-export const listVideoHistory = (options = {}) => request('/video-gen/history', options);
+// No `query` returns every full record (stat-ing each file). `query` opts into
+// { limit (<=200), offset, q, hidden, compact } — a bounded newest-first page
+// and/or the stat-free compact projection (`{ compact: true }` = every clip as
+// card-sized rows: id, filename, numFrames, fps, thumbnail); the result is still a plain array.
+export const listVideoHistory = ({ query, ...options } = {}) => {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query || {})) if (value !== undefined && value !== '') params.set(key, value);
+  const qs = params.toString();
+  return request(`/video-gen/history${qs ? `?${qs}` : ''}`, options);
+};
 // ONE history entry by id (#4165) — for a surface that holds only a video-history
 // id and needs the file it actually points at. A history id is not the filename
 // stem (a timeline render mints `timeline-*.mp4` beside a randomUUID() id), and

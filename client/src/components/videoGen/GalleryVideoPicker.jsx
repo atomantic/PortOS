@@ -1,6 +1,7 @@
 // Visual picker over video history — the video counterpart of GalleryImagePicker.
-// Opens as a modal, fetches GET /api/video-gen/history on open, lets the user
-// search (same haystack as MediaHistory) and click a thumbnail. With
+// Opens as a modal, fetches one bounded compact page of GET /api/video-gen/history, lets the user
+// search (server-side, so prompt text beyond the card preview still matches)
+// and click a thumbnail. With
 // `allowUpload`, a header Upload button saves the file via POST /api/uploads
 // and selects it as `{ kind: 'upload', filename }` so the reverse-prompt
 // endpoint can sample frames from PATHS.uploads. With `uploadToGallery`
@@ -10,7 +11,7 @@
 // REFERENCED by a synced record (e.g. a mood-board item), because
 // /api/uploads' scratch dir does not federate.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, X, RefreshCw, Upload } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FilePickerButton from '../ui/FilePickerButton';
@@ -18,16 +19,15 @@ import MediaCard from '../media/MediaCard';
 import { normalizeVideo } from '../media/normalize';
 import { listVideoHistory, uploadGalleryVideo } from '../../services/apiImageVideo';
 import { uploadFile } from '../../services/apiMedia';
-import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../../lib/mediaSearch';
 import useListResource from '../../hooks/useListResource';
+import useCancelableDebounce from '../../hooks/useCancelableDebounce';
 import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 
 const VIDEO_ACCEPT = 'video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v';
 
-const fetchVideoItems = () => listVideoHistory({ silent: true }).then((videos) => (
-  (Array.isArray(videos) ? videos : []).map(normalizeVideo).filter((it) => !it.hidden)
-));
+const PICKER_PAGE_LIMIT = 60;
+const SEARCH_DEBOUNCE_MS = 250;
 
 export default function GalleryVideoPicker({
   open,
@@ -37,9 +37,15 @@ export default function GalleryVideoPicker({
   uploadToGallery = false,
   accept = VIDEO_ACCEPT,
 }) {
-  const { items, state, error, retry } = useListResource(fetchVideoItems, { enabled: open });
   const [uploading, setUploading] = useState(false);
   const [query, setQuery] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [scheduleSearch, cancelSearch] = useCancelableDebounce();
+  const fetchVideoItems = useCallback(() => listVideoHistory({
+    silent: true,
+    query: { limit: PICKER_PAGE_LIMIT, compact: true, hidden: false, q: searchTerm.trim() },
+  }).then((videos) => (Array.isArray(videos) ? videos : []).map(normalizeVideo).filter((it) => !it.hidden)), [searchTerm]);
+  const { items, state, error, retry } = useListResource(fetchVideoItems, { enabled: open });
   // Invalidate on every open/close transition and on unmount. A host can
   // change its selected record while an upload is reading or posting; a late
   // completion must leave the saved gallery asset unselected.
@@ -54,15 +60,14 @@ export default function GalleryVideoPicker({
   }, [open]);
 
   useEffect(() => {
-    if (!open) setQuery('');
-  }, [open]);
+    if (!open) { cancelSearch(); setQuery(''); setSearchTerm(''); }
+  }, [open, cancelSearch]);
 
-  const haystacks = useMemo(() => items.map(buildMediaHaystack), [items]);
-  const tokens = useMemo(() => tokenizeQuery(query), [query]);
-  const filtered = useMemo(() => {
-    if (!tokens.length) return items;
-    return items.filter((_, idx) => matchHaystack(haystacks[idx], tokens));
-  }, [items, haystacks, tokens]);
+  const updateQuery = (value) => {
+    setQuery(value);
+    scheduleSearch(() => setSearchTerm(value), SEARCH_DEBOUNCE_MS);
+  };
+  const clearQuery = () => { cancelSearch(); setQuery(''); setSearchTerm(''); };
 
   const handleUpload = async (event) => {
     const file = event.target.files?.[0];
@@ -140,7 +145,7 @@ export default function GalleryVideoPicker({
             id="video-picker-search"
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => updateQuery(e.target.value)}
             placeholder="Search prompt, model, seed…"
             className="w-full pl-7 pr-7 py-1.5 text-xs bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
             autoFocus
@@ -148,7 +153,7 @@ export default function GalleryVideoPicker({
           {query && (
             <button
               type="button"
-              onClick={() => setQuery('')}
+              onClick={clearQuery}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
               aria-label="Clear search"
             >
@@ -165,13 +170,13 @@ export default function GalleryVideoPicker({
           </div>
         ) : state === 'error' ? (
           <ListLoadError what="your video gallery" error={error} onRetry={retry} />
-        ) : filtered.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="text-xs text-gray-500 py-10 text-center">
-            {items.length === 0 ? 'No videos in your gallery yet.' : 'No videos match your search.'}
+            {!searchTerm.trim() ? 'No videos in your gallery yet.' : 'No videos match your search.'}
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {filtered.map((item) => (
+            {items.map((item) => (
               <MediaCard
                 key={item.key}
                 item={item}

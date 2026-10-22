@@ -89,7 +89,7 @@ import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
   getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen, previewVideoPrompt,
-  listVideoHistory, deleteVideoHistoryItem, setVideoHidden,
+  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, setVideoHidden,
   patchSettingsSlice,
   getActiveVideoJob,
   getSettings,
@@ -132,6 +132,9 @@ const MODES = [
 
 // Stable fetcher for useListResource — the hook re-runs on identity change.
 const loadLoraLibrary = () => listLorasFull({ silent: true });
+
+// The gallery shows the newest records; older ones are reached by id (Remix) or Media History.
+const HISTORY_PAGE_LIMIT = 200;
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -411,7 +414,7 @@ export default function VideoGen() {
   // gallery simply staying empty), so the shared toast would double it.
   const refreshHistory = useCallback(() => {
     historyInFlightRef.current += 1;
-    return listVideoHistory({ silent: true })
+    return listVideoHistory({ silent: true, query: { limit: HISTORY_PAGE_LIMIT } })
       .then((items) => {
         setHistory(Array.isArray(items) ? items : []);
         setHistoryLoad('loaded');
@@ -573,10 +576,15 @@ export default function VideoGen() {
     if (record) {
       applyRemix(record);
       setRemixHandoffProblem(null);
-    } else {
-      setRemixHandoffProblem('missing');
+      consumeRemixHandoff();
+      return;
     }
-    consumeRemixHandoff();
+    // The page loads only the newest HISTORY_PAGE_LIMIT records, so an older
+    // clip is hydrated by id before it is called missing.
+    getVideoHistoryItem(remixHandoffId, { silent: true })
+      .then((older) => { applyRemix(older); setRemixHandoffProblem(null); })
+      .catch(() => setRemixHandoffProblem('missing'))
+      .finally(consumeRemixHandoff);
   }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
   // Back to 'loading' first, so a retry that fails again still moves the state
   // ('loading' → 'error') and re-runs the effect above.

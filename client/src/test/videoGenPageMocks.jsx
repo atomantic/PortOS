@@ -191,6 +191,7 @@ vi.mock('../services/api', () => ({
   previewVideoPrompt: (...args) => state.previewVideoPrompt(...args),
   cancelVideoGen: vi.fn(async () => ({})),
   listVideoHistory: (...args) => state.listVideoHistory(...args),
+  getVideoHistoryItem: vi.fn(async () => { throw new Error('Video history entry not found'); }),
   deleteVideoHistoryItem: vi.fn(async () => ({})),
   setVideoHidden: vi.fn(async () => ({})),
   extractLastFrame: vi.fn(async () => ({})),
