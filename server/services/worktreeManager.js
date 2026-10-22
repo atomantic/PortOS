@@ -552,6 +552,7 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  *   statically, notably one run's own `.agent-done-<agentId>` sentinel. Matched
  *   as roots: a directory entry also covers everything under it. They are still
  *   removed only when the rest of the tree is safe to remove.
+ * @param {{ ignoredPaths?: string[], preserveLockfiles?: boolean }} [opts] - `preserveLockfiles` classifies lockfiles as real changes
  * @returns {{ clean: boolean, lockfileOnly: boolean, lockfilePaths: string[], untrackedLockfilePaths: string[], realChangePaths: string[], hasRealChanges: boolean }}
  *   - clean: no changes at all
  *   - lockfileOnly: every change is an auto-generated lockfile (safe to discard)
@@ -563,7 +564,7 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  *     superseded while it sat uncommitted.
  *   - hasRealChanges: at least one non-lockfile change (worktree must be preserved)
  */
-export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
+export function classifyWorktreeDirt(porcelain, { ignoredPaths = [], preserveLockfiles = false } = {}) {
   const ignored = [...AGENT_SCRATCH_PATHS, ...ignoredPaths];
   // Git's porcelain v1 output C-quotes paths with spaces and several other
   // characters. Decode those paths before comparing them with scratch roots or
@@ -619,7 +620,9 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
   if (lines.length === 0) {
     return { clean: true, lockfileOnly: false, lockfilePaths: [], untrackedLockfilePaths: [], realChangePaths: [], hasRealChanges: false };
   }
-  const isLockfile = (line) => AUTO_GENERATED_LOCKFILES.some(f => toPath(line).endsWith(f));
+  // `dependency-updates` can legitimately deliver a lockfile-only diff (`npm audit
+  // fix`, a transitive bump), so there a lockfile is work, never churn.
+  const isLockfile = (line) => !preserveLockfiles && AUTO_GENERATED_LOCKFILES.some(f => toPath(line).endsWith(f));
   // `R old -> new` (rename) names two paths; the post-rename path is the one
   // that exists on disk and the one a diff against the default branch reports.
   const lockfileLines = lines.filter(isLockfile);
@@ -1390,7 +1393,7 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
   const porcelain = await execGit(['status', '--porcelain'], targetPath)
     .then(r => r.stdout.trim())
     .catch(() => '');
-  const dirt = classifyWorktreeDirt(porcelain);
+  const dirt = classifyWorktreeDirt(porcelain, { preserveLockfiles: options.preserveLockfiles === true });
   if (dirt.lockfileOnly) {
     console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in adopted worktree ${agentId}`);
     await discardLockfileChanges(targetPath, dirt).catch(err => {
@@ -1503,6 +1506,8 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
  * @param {string} branchName - The worktree branch to clean up
  * @param {object} options
  * @param {boolean} [options.merge] - attempt to merge the branch back first
+ * @param {boolean} [options.preserveLockfiles] - keep a lockfile-only change (a
+ *   `dependency-updates` deliverable) instead of discarding it as install churn
  * @param {boolean} [options.discardDirt] - remove even when the tree is dirty.
  *   The dirty-abort exists to protect work that might still be wanted; the
  *   throwaway-worktree posture has already declared this tree's contents
@@ -1672,7 +1677,8 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     // name, plus the legacy shared one a pre-upgrade run may have left — and no
     // other agent's.
     const dirt = classifyWorktreeDirt(dirtyFiles, {
-      ignoredPaths: [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)]
+      ignoredPaths: [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)],
+      preserveLockfiles: options.preserveLockfiles === true
     });
     if (!dirt.clean && options.discardDirt) {
       // Throwaway posture: the caller has already established that nothing in this
