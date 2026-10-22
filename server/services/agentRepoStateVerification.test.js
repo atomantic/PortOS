@@ -636,8 +636,23 @@ describe('verifyAgentRepoState — every hold records the reason it returns', ()
     expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', { branch: 'claim/issue-11', status: 'blocked', reason: 'claim-ownership-unreadable', owners: [] });
 
     readClaimOwnershipAgents.mockResolvedValue([]);
+    localBranch(true);
     expect((await run({ agentState: state })).branches).toEqual([{ branch: 'claim/issue-11', verified: false, skipReason: 'claim-checkout-identity-unverified', issues: [], recoveryTaskId: null }]);
     expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', { branch: 'claim/issue-11', status: 'blocked', reason: 'claim-checkout-identity-unverified' });
+  });
+
+  it('settles a receipt-less swarm branch from delivery evidence once its checkout and ref are gone', async () => {
+    const state = agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo', claimPicksOwnBranch: true, claimBranches: ['claim/issue-11'] });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' });
+    expect((await run({ agentState: state })).branches).toEqual([expect.objectContaining({ branch: 'claim/issue-11', skipReason: 'already-absent-preservation-unverified' })]);
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ branch: 'claim/issue-11', path: null, status: 'already-absent' }));
+    // A holder or an unreadable ref keeps the identity hold.
+    listWorktrees.mockResolvedValue([{ ...RELEASE, branch: 'refs/heads/claim/issue-11' }]);
+    expect((await run({ agentState: state })).branches[0].skipReason).toBe('claim-checkout-identity-unverified');
+    listWorktrees.mockResolvedValue([]);
+    readLocalBranchPresence.mockResolvedValue(null);
+    expect((await run({ agentState: state })).branches[0].skipReason).toBe('claim-checkout-identity-unverified');
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 });
 

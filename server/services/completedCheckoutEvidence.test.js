@@ -37,6 +37,15 @@ describe('completed claim checkout evidence', () => {
     expect(await captureCompletedCheckouts({ ...agent, metadata: { ...agent.metadata, workspacePath: repoPath } }, { success: true })).toEqual([]);
   });
 
+  it('captures a claim run that works from the source checkout without a separate sourceWorkspace', async () => {
+    agent.metadata = { claimPicksOwnBranch: true, isWorktree: false, workspacePath: repoPath, claimBranches: [branch] };
+    const receipts = await captureCompletedCheckouts(agent, { success: true });
+    expect(receipts).toEqual([expect.objectContaining({ branch, head, path: expect.stringMatching(/claim$/) })]);
+    expect(await hasCompletedCheckoutEvidence([completed(receipts)], target())).toBe(true);
+    // An ordinary worktree run's workspace is its own checkout, never the repository.
+    expect(await captureCompletedCheckouts({ ...agent, metadata: { isWorktree: true, workspacePath: repoPath, worktreeBranch: branch } }, { success: true })).toEqual([]);
+  });
+
   it('rejects a new checkout reusing the completed branch, path and exact head', async () => {
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toHaveLength(1);
