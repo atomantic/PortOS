@@ -20,6 +20,7 @@ import {
 import {
   getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
+import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
 import { addBeats, extractBeats } from '../services/storyboards/plot.js';
 import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
 
@@ -31,6 +32,11 @@ router.get('/', asyncHandler(async (_req, res) => {
 
 router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(await createStoryboard(validateRequest(storyboardCreateSchema, req.body ?? {})));
+}));
+
+// Make storyboard from this video: a board from the project's shots, linked to it.
+router.post('/from-music-video/:projectId', asyncHandler(async (req, res) => {
+  res.status(201).json(await makeStoryboardFromMusicVideo(req.params.projectId));
 }));
 
 // The saved recipe library sits before /:id; a board id always starts "sb-".
