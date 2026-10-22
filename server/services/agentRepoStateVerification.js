@@ -311,11 +311,14 @@ const skipped = (skipReason, { issues = [], observed = null } = {}) => ({ verifi
  * matching skip in one step, so a gate cannot return a skip while leaving the
  * ledger silent about the branch it held. `skipReason` overrides the returned
  * reason only where the caller-facing skip code differs from the ledger reason.
+ *
+ * @param {string} agentId
+ * @param {{branch: string, path?: string}} location - stamped on every ledger entry
  */
-function branchLedger({ agentId, branchName, worktreePath }) {
+function branchLedger(agentId, location) {
   const record = async (status, reason, extra = {}) => {
     const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
-    await recordCleanupOutcome(agentId, { status, reason, branch: branchName, path: worktreePath, ...extra });
+    await recordCleanupOutcome(agentId, { status, reason, ...location, ...extra });
   };
   const blockWith = async (reason, { skipReason = reason, record: extra, issues, observed } = {}) => {
     await record('blocked', reason, extra);
@@ -336,10 +339,10 @@ async function verifyRunBranches(input) {
   const sourceWorkspace = meta.sourceWorkspace || meta.workspacePath;
   const trees = sourceWorkspace ? await listWorktrees(sourceWorkspace).catch(() => null) : null;
   if (!trees) return skipped(REPO_STATE_SKIPS.GATE_UNREADABLE);
-  const holdBranch = async (branch, reason, extra = {}) => {
-    const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
-    await recordCleanupOutcome(input.agentId, { branch, status: 'blocked', reason, ...extra });
-    return { branch, verified: false, skipReason: reason, issues: [], recoveryTaskId: null };
+  const holdBranch = async (branch, reason, extra) => {
+    // Per-branch swarm results carry no observation; a held branch was never probed.
+    const { observed: _unprobed, ...held } = await branchLedger(input.agentId, { branch }).blockWith(reason, { record: extra });
+    return { branch, ...held };
   };
   const results = [];
   for (const branch of branches) {
@@ -404,7 +407,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   if (app === UNREADABLE) return skipped(REPO_STATE_SKIPS.GATE_UNREADABLE);
 
   const worktreePath = isTruthyMeta(metadata.claimPicksOwnBranch) ? metadata.workspacePath : metadata.workspacePath || join(PATHS.worktrees, agentId);
-  const { record, blockWith } = branchLedger({ agentId, branchName, worktreePath });
+  const { record, blockWith } = branchLedger(agentId, { branch: branchName, path: worktreePath });
   const enabled = repoStateVerificationEnabled(app);
   const owned = enabled ? await branchHasPendingOwner(branchName, app).catch(() => null) : false;
   if (owned === null) return blockWith('ownership-unreadable', { skipReason: REPO_STATE_SKIPS.GATE_UNREADABLE });
