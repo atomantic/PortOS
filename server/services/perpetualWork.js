@@ -156,6 +156,9 @@ async function resolveGitlabNamespace(repoPath) {
   return segments.join('/');
 }
 
+// gh pr list defaults to 30; match the issue listing cap
+const IN_FLIGHT_PR_LIMIT = 500;
+
 /**
  * Collect the set of issue numbers currently in flight, evidenced by an open
  * `claim/issue-<num>` / `cos/.../issue-<num>/...` / `next/issue-<num>` (slashdo
@@ -166,8 +169,6 @@ async function resolveGitlabNamespace(repoPath) {
  * how open changes are listed: GitHub PR head refs (`gh pr list`) vs GitLab
  * MR source branches (`glab mr list`).
  */
-const IN_FLIGHT_PR_LIMIT = 500; // gh pr list defaults to 30; match the issue listing cap
-
 async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   const nums = new Set();
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.

@@ -968,6 +968,16 @@ describe('perpetualWork', () => {
       expect(out).toMatchObject({ actionable: false, reason: 'glab-unavailable', transient: true });
     });
 
+    it('stays transient instead of under-counting in-flight work when glab mr list fails', async () => {
+      routeSpawn({
+        'glab issue': { stdout: JSON.stringify([{ iid: 10, title: 'has an MR', assignees: [], labels: [] }]) },
+        'git branch': { stdout: 'main\n' },
+        'glab mr': { stdout: '', code: 1, stderr: 'timeout' }
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ actionable: false, reason: 'glab-unavailable', transient: true });
+    });
+
     it('reports a transient failure when glab exits non-zero', async () => {
       routeSpawn({ 'glab issue': { stdout: '', code: 1 } });
       const out = await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
