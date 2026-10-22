@@ -9,7 +9,7 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => (
 const app = { id: 'example', repoPath: '/example/repo' };
 const head = 'a'.repeat(40);
 const branch = { branch: 'claim/issue-42', tip: head, worktreePath: '/example/checkout', isMerged: false,
-  completionPolicyReason: 'pr-completion-review-required' };
+  rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' };
 const tree = { branch: branch.branch, path: branch.worktreePath, head, managed: true, locked: false, lockReason: null };
 const scan = (b = {}, t = {}) => ({ wip: [{ ...branch, ...b }], worktreeInventory: [{ ...tree, ...t }] });
 const setup = () => ({

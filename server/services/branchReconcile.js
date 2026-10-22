@@ -148,104 +148,105 @@ export function isMalformedClaimBranch(branch) {
 const PR_LIST_LIMIT = 200;
 
 /**
- * Pure classifier: map one branch's git/PR facts to a reconcile state.
- * First match wins.
+ * Ordered classifier rules; the FIRST whose `when` matches decides. Each rule's
+ * `id` is copied onto the classified entry as `rule`, so callers read WHICH
+ * gate fired instead of re-deriving it from the input fields. Order is
+ * load-bearing — moving a rule changes what gets deleted, retired or delegated:
+ *   draft              WIP            explicit human-review handoff, even after its agent exits
+ *   completion-policy  WIP            policy hold. Sits BEFORE merged so a merged pointer is not
+ *                                     deleted by cleanupMerged without the review proof that
+ *                                     prepareReconcileRetirements requires (it scans these rows).
+ *   abandoned-wip      ABANDONED_WIP  dirty tree of an INACTIVE run, no live owner → agent finishes it.
+ *                                     Before merged: a dead agent that never committed leaves its
+ *                                     pointer on an old default-branch commit, which reads as MERGED
+ *                                     and was only ever skipped by cleanupMerged (dirty), invisibly.
+ *                                     The live-owner gate stays in front of this exception.
+ *   merged             MERGED         fully in the default branch → deterministic cleanup. Before
+ *                                     live-owner: cleanupMerged applies the same protection and
+ *                                     reports it as held back.
+ *   live-owner         WIP            an active CoS agent or lock owns it; handing it to the
+ *                                     coordinator would race the live session's git operations
+ *   dirty              WIP            uncommitted changes are never handed to the coordinator
+ *                                     (rebase/resolve/merge could discard them), whatever the PR state
+ *   open-pr            CONFLICTED | IN_REVIEW
+ *   pr-state-unavailable WIP          the forge was unreadable (#3358): "no PR" was not learned, so
+ *                                     do not dispatch an agent to open one that may exist
+ *   needs-pr           NEEDS_PR       tracks a remote, or never pushed but holds commits and a
+ *                                     remote exists to push to. `ahead` is what separates a
+ *                                     never-pushed branch with work from a bare pointer (#3358);
+ *                                     `hasOrigin` gates only the ahead arm because nothing else
+ *                                     proves that work is shippable.
+ *   bare-pointer       WIP            nothing to ship; unreadable `ahead` (null) also lands here,
+ *                                     since a git failure must never manufacture work
+ */
+const CLASSIFY_RULES = [
+  { id: 'draft', state: 'WIP', when: ({ openPr }) => Boolean(openPr?.isDraft) },
+  { id: 'completion-policy', state: 'WIP', when: ({ completionPolicyReason }) => Boolean(completionPolicyReason) },
+  { id: 'abandoned-wip', state: 'ABANDONED_WIP', when: ({ worktreeDirty, liveOwnerReason, abandonedAgentWorktree, abandonedClaimWorktree }) => Boolean(worktreeDirty && !liveOwnerReason && (abandonedAgentWorktree || abandonedClaimWorktree)) },
+  { id: 'merged', state: 'MERGED', when: ({ isMerged }) => Boolean(isMerged) },
+  { id: 'live-owner', state: 'WIP', when: ({ liveOwnerReason }) => Boolean(liveOwnerReason) },
+  { id: 'dirty', state: 'WIP', when: ({ worktreeDirty }) => Boolean(worktreeDirty) },
+  { id: 'open-pr', state: ({ openPr }) => (openPr.mergeable === 'CONFLICTING' ? 'CONFLICTED' : 'IN_REVIEW'), when: ({ openPr }) => Boolean(openPr) },
+  { id: 'pr-state-unavailable', state: 'WIP', when: ({ prStateUnavailable }) => Boolean(prStateUnavailable) },
+  { id: 'needs-pr', state: 'NEEDS_PR', when: ({ hasUpstream, hasOrigin, ahead }) => Boolean(hasUpstream || (hasOrigin && typeof ahead === 'number' && ahead > 0)) },
+  { id: 'bare-pointer', state: 'WIP', when: () => true },
+];
+
+/**
+ * Pure classifier: map one branch's git/PR facts to a reconcile state and the
+ * named rule that matched (see CLASSIFY_RULES for the order). States:
  *   ABANDONED_WIP — dirty worktree of an INACTIVE PortOS run → agent finishes it
  *   MERGED     — work is fully in the default branch → deterministic cleanup
  *   CONFLICTED — open PR with merge conflicts        → agent resolves
  *   IN_REVIEW  — open PR, otherwise                  → agent drives to merge
  *   NEEDS_PR   — unmerged work, no PR, clean          → agent verifies + opens PR
  *                (pushed-with-no-PR, or never pushed but holding commits)
- *   WIP        — bare pointer, dirty, or LIVE-owned   → skip + report (never touch)
+ *   WIP        — not dispatched to the coordinator: draft, completion-policy hold, live owner,
+ *                dirty tree, unreadable forge, or bare pointer. It is NOT "never touch":
+ *                completion-policy rows are still scanned for review-gated retirement.
  *
- * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
+ * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, completionPolicyReason?:string|null, openPr:({mergeable?:string, isDraft?:boolean}|null), prStateUnavailable?:boolean }} input
  *   `ahead` is the branch's own commit count over the default branch (null =
  *   unreadable), and `hasOrigin` says the repo has a remote to push that work to.
- *   Together they are what make a never-pushed branch actionable — see the
- *   NEEDS_PR gate below. `hasOrigin` defaults to FALSE (fail-closed): a caller
- *   that cannot vouch for a remote must not have one invented for it.
+ *   `hasOrigin` defaults to FALSE (fail-closed): a caller that cannot vouch for a
+ *   remote must not have one invented for it.
  *   `prStateUnavailable` means the forge could not be READ this cycle — distinct
  *   from `openPr: null` ("the forge answered: no open PR").
  *   `liveOwnerReason` is `resolveLiveOwnerReason`'s verdict for the branch — non-null
  *   means an active CoS agent or deliberate lock owns it right now, whether or not
  *   its worktree still exists. A clean `claim-*` directory is only a claim marker;
  *   an inactive dirty claim is actionable only when `abandonedClaimWorktree` is true.
- * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
+ *   `completionPolicyReason` is a non-null policy hold (e.g. pr-completion-review-required).
+ *   An `openPr.isDraft` is an explicit human-review handoff.
+ * @returns {{state:'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP', rule:string}}
  */
-export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, isMerged, worktreeDirty, abandonedAgentWorktree, abandonedClaimWorktree, liveOwnerReason = null, completionPolicyReason = null, openPr, prStateUnavailable = false }) {
-  // A draft is an explicit human-review handoff, even after its agent exits.
-  // Protect it before dirty/merged classification can delegate or retire it.
-  if (openPr?.isDraft || completionPolicyReason) return 'WIP';
-  // A dead agent's worktree that still holds uncommitted work is the ONE dirty
-  // case that must be driven rather than skipped — and it must be caught BEFORE
-  // the `isMerged` test, because an agent that exited without committing leaves
-  // its branch pointer parked on an old default-branch commit, which reads as
-  // MERGED. That combination (merged pointer + dirty tree) is exactly what made
-  // these branches invisible: MERGED sent them to `cleanupMerged`, which
-  // correctly refused to delete a dirty worktree, so they were only ever
-  // reported as `skipped` and never appeared in-flight. The work sat there
-  // indefinitely while every run logged "nothing in-flight".
-  // Dirty work is normally protected, but a dirty claim tree is the one
-  // exception branch-reconcile can safely hand to its coordinator: claim
-  // worktrees have no durable agent id, and the caller supplied an authoritative
-  // active-agent set before marking this tree abandoned. Keep the live-owner gate
-  // in front of the exception so a contradictory caller can never dispatch onto
-  // a tree it also says is owned right now.
-  if (worktreeDirty && !liveOwnerReason && (abandonedAgentWorktree || abandonedClaimWorktree)) return 'ABANDONED_WIP';
-  if (isMerged) return 'MERGED';
-  // A branch with a LIVE owner belongs to an active CoS agent or an explicitly
-  // locked worktree. It may keep moving (commits, a PR opened, a rebase) for as
-  // long as that session runs, so handing it to the coordinator races the live
-  // session's git operations and can re-advance the drain's progress signature.
-  // Checked AFTER `isMerged` on purpose — a merged branch with a live owner still
-  // belongs in the MERGED bucket, where `cleanupMerged` applies the same protection
-  // and reports it as held back. A clean `claim-*` tree is not a live-owner signal;
-  // a dirty one is caught by the ordinary WIP guard below.
-  if (liveOwnerReason) return 'WIP';
-  // A worktree with real uncommitted changes is NEVER handed to the coordinator
-  // agent — even for a branch with an open PR. The agent's per-state actions
-  // (rebase/resolve/merge) run git operations that could stash/reset/checkout
-  // and silently discard the user's in-progress work. Skip it as WIP regardless
-  // of PR state; the `cleanupMerged` path applies the same guard for MERGED.
-  if (worktreeDirty) return 'WIP';
-  if (openPr) return openPr.mergeable === 'CONFLICTING' ? 'CONFLICTED' : 'IN_REVIEW';
-  // The forge was unreadable this cycle, so "no open PR" is not something we
-  // learned — it is something we failed to ask (#3358). Report the branch as WIP
-  // (skip + never touch) rather than dispatching an agent to open a PR that may
-  // already exist. MERGED above is unaffected: that verdict is pure git truth.
-  if (prStateUnavailable) return 'WIP';
-  // Unmerged commits that nothing else owns are in-flight work whether or not
-  // they were ever PUSHED. Gating this on `hasUpstream` alone is what made a
-  // whole shelf of `claim/*` branches invisible: a /claim session that dies
-  // before its `git push -u` leaves commits ahead of the default branch with no
-  // upstream, so every run classified them WIP and parked on "no branches in
-  // flight" while the work sat there. NEEDS_PR already tells the agent to push
-  // (`/do:pr`, or `git push -u origin <branch>` by hand), so the un-pushed case
-  // needs no separate state — only to stop being skipped.
-  //
-  // `ahead` is the discriminator the upstream check was standing in for: a branch
-  // with NO commits of its own is a bare pointer with nothing to ship, and stays
-  // WIP. Unknown (`null`, an unreadable rev-list) also stays WIP — a git failure
-  // must never manufacture work.
-  //
-  // `hasOrigin` gates only the ahead-based arm, because that arm is the one with
-  // nothing else proving the work is shippable. On a managed repo with NO remote,
-  // every branch has `hasUpstream: false` and `getOpenPrsByHead` answers with an
-  // empty Map, so without this gate a clean local branch would be dispatched to a
-  // coordinator that can only fail at `git push -u origin <branch>` — spending an
-  // agent run to discover there is nowhere to push. `hasUpstream` needs no such
-  // gate: a branch that tracks a remote branch is itself proof the remote exists.
-  if (hasUpstream || (hasOrigin && typeof ahead === 'number' && ahead > 0)) return 'NEEDS_PR';
-  return 'WIP';
+export function classifyBranchRule(input) {
+  const rule = CLASSIFY_RULES.find((candidate) => candidate.when({ hasOrigin: false, ahead: null, ...input }));
+  return { state: typeof rule.state === 'function' ? rule.state(input) : rule.state, rule: rule.id };
+}
+
+/** Same as classifyBranchRule, state only. */
+export function classifyBranch(input) {
+  return classifyBranchRule(input).state;
+}
+
+/**
+ * The idle-park cause for a WIP row. Priority is draft, live owner, completion
+ * policy, then unfinished-work. A live owner outranks a completion policy HERE
+ * even though the completion-policy rule outranks the live-owner rule in the
+ * classified state; that difference is intentional and persisted as skipCauses.
+ */
+export function wipParkCause(entry) {
+  return entry.openPr?.isDraft ? 'draft-review-required' : entry.liveOwnerReason || entry.completionPolicyReason || 'unfinished-work';
 }
 
 /**
  * Classify a list of gathered branch inputs. Pure.
  * @param {object[]} inputs - each from `gatherBranchState`
- * @returns {object[]} inputs with a `state` field added
+ * @returns {object[]} inputs with `state` and the matched `rule` id added
  */
 export function classifyBranches(inputs) {
-  return inputs.map((input) => ({ ...input, state: classifyBranch(input) }));
+  return inputs.map((input) => ({ ...input, ...classifyBranchRule(input) }));
 }
 
 /**
@@ -1052,7 +1053,7 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
   }
   for (const entry of detachedWorktrees) add(entry, entry.reason || 'detached-worktree-held');
   for (const entry of superseded) add(entry, entry.holdReason || 'superseded-branch-held');
-  for (const entry of wip) add(entry, entry.openPr?.isDraft ? 'draft-review-required' : entry.liveOwnerReason || entry.completionPolicyReason || 'unfinished-work');
+  for (const entry of wip) add(entry, wipParkCause(entry));
   for (const entry of heldLive) if (!holds.has(entry.branch || entry.path)) add(entry, entry.liveOwnerReason || 'live-owner');
   for (const entry of gated) add(entry, entry.openPr?.isDraft ? 'draft-review-required' : 'action-disabled');
   // Marker cleanup is distinct from successful local branch retirement.
