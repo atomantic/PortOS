@@ -21,6 +21,7 @@
 
 import { isNonBlankStr, trimTo } from './textUtils.js';
 import { localImageFilename } from './localImageFilename.js';
+import { UPLOAD_AUDIO_EXTENSIONS } from './mimeTypes.js';
 import { sanitizeSoftDeleteFields } from './syncWire.js';
 import {
   isValidStoryboardId, isValidStoryboardRecipeId, newStoryboardEntityId, STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS,
@@ -37,6 +38,11 @@ const ART_STYLE_SET = new Set(STORYBOARD_ART_STYLES);
 const ROLE_SET = new Set(STORYBOARD_MUSICAL_ROLES);
 const FRAMING_SET = new Set(STORYBOARD_PANEL_FRAMINGS);
 const SOURCE_SET = new Set(STORYBOARD_TAKE_SOURCES);
+
+// A temp track is an audio file in the uploads bucket, named as POST
+// /api/uploads names it (`<uuid8>-<sanitized-name>`).
+const TEMP_TRACK_FILENAME = new RegExp(`^[A-Za-z0-9][A-Za-z0-9._-]{0,250}\\.(${UPLOAD_AUDIO_EXTENSIONS.join('|')})$`, 'i');
+export const isStoryboardTempTrackFilename = (value) => typeof value === 'string' && TEMP_TRACK_FILENAME.test(value);
 
 const pick = (value, set, fallback = null) => (set.has(value) ? value : fallback);
 const isoOr = (value, fallback) => (isNonBlankStr(value) && Number.isFinite(Date.parse(value)) ? value : fallback);
@@ -163,11 +169,18 @@ export function sanitizeStoryboard(raw) {
     // The plot summary beats are drawn from, and the LLM last picked for it.
     plot: trimTo(raw.plot, BEAT_EXTRACT_LIMITS.plot),
     plotLlm: sanitizeLlmPick(raw.plotLlm),
+    tempTrack: sanitizeTempTrack(raw.tempTrack),
     beats,
     createdAt,
     updatedAt: isoOr(raw.updatedAt, createdAt),
     ...sanitizeSoftDeleteFields(raw),
   };
+}
+
+/** The demo or draft song the animatic plays with, or null. */
+function sanitizeTempTrack(raw) {
+  if (!isStoryboardTempTrackFilename(raw?.filename)) return null;
+  return { filename: raw.filename, name: trimTo(raw.name, STORYBOARD_LIMITS.tempTrackName) || raw.filename };
 }
 
 function sanitizeLlmPick(raw) {

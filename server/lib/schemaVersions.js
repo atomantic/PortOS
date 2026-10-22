@@ -261,7 +261,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v2 = board-level `plot` (the plot summary beats are drawn from) and
   // `plotLlm` (provider/model/effort last picked for it); a v1 peer would strip
   // both, so only the storyboards category pauses until it upgrades.
-  storyboards: 2,
+  // v3 = board-level `tempTrack` (the demo song the animatic plays with); a v2
+  // peer would strip it the same way.
+  storyboards: 3,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

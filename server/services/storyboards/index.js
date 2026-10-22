@@ -24,7 +24,7 @@ export * from './sync.js';
 const notFound = (what = 'Storyboard') => new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });
 const tooMany = (message) => new ServerError(message, { status: 409, code: 'STORYBOARD_LIMIT' });
 
-const BOARD_FIELDS = ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'plot'];
+const BOARD_FIELDS = ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'plot', 'tempTrack'];
 const BEAT_FIELDS = ['title', 'what', 'why', 'emotion', 'musicalRole', 'sectionHint'];
 const PANEL_FIELDS = ['action', 'dialogue', 'framing', 'camera', 'seconds', 'castIds', 'environmentIds', 'objectIds', 'notes'];
 

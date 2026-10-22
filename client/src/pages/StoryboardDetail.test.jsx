@@ -21,6 +21,8 @@ const api = vi.hoisted(() => ({
   deleteStoryboardRecipe: vi.fn(),
   extractStoryboardBeats: vi.fn(),
   addStoryboardBeats: vi.fn(),
+  uploadFile: vi.fn(),
+  getUploadUrl: (filename) => `/api/uploads/${filename}`,
 }));
 vi.mock('../services/api', () => {
   const rest = ['deleteStoryboardBeat', 'deleteStoryboardPanel', 'moveStoryboardBeat', 'moveStoryboardPanel',
@@ -34,6 +36,8 @@ vi.mock('../components/imageGen/GalleryImagePicker', () => ({ default: () => nul
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
 vi.mock('../components/musicVideo/MusicVideoLlmPicker', () => ({ default: () => null }));
 vi.mock('../components/imageGen/RecordRenderPinRow', () => ({ default: () => null }));
+const clipboard = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
+vi.mock('../lib/clipboard', () => clipboard);
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const panel = (id, extra = {}) => ({
@@ -64,7 +68,7 @@ const renderAt = (path) => render(
 );
 
 beforeEach(() => {
-  for (const fn of Object.values(api)) fn.mockReset();
+  for (const fn of Object.values(api)) fn.mockReset?.();
   api.listMoodBoardNames.mockResolvedValue([]);
   api.getStoryboardMakeEmpty.mockResolvedValue({ batch: null, panelCount: 0, steps: [] });
 });
@@ -288,5 +292,29 @@ describe('StoryboardDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add 1 beat' }));
     await waitFor(() => expect(api.addStoryboardBeats).toHaveBeenCalledWith('sb-1', [beats[0]]));
     await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('plot=open'));
+  });
+
+  it('plays the animatic with a temp track attached from an upload', async () => {
+    api.getStoryboard.mockResolvedValue(board({ tempTrack: null }));
+    api.uploadFile.mockResolvedValue({ filename: '0a1b2c3d-demo.mp3' });
+    api.updateStoryboard.mockImplementation((_id, patch) => Promise.resolve(board({ ...patch, updatedAt: '2026-10-22T00:00:05.000Z' })));
+    renderAt('/storyboards/sb-1?view=play');
+
+    expect(await screen.findByRole('button', { name: 'Play' })).toBeTruthy();
+    expect(screen.getByText('Opening')).toBeTruthy();
+    expect(screen.getByText('0:00.00 / 0:03.00')).toBeTruthy();
+
+    const file = new File(['x'], 'demo.mp3', { type: 'audio/mpeg' });
+    fireEvent.change(document.getElementById('storyboard-temp-track'), { target: { files: [file] } });
+    await waitFor(() => expect(api.updateStoryboard).toHaveBeenCalledWith('sb-1', { tempTrack: { filename: '0a1b2c3d-demo.mp3', name: 'demo.mp3' } }));
+    expect(await screen.findByText('demo.mp3')).toBeTruthy();
+    expect(document.querySelector('audio').getAttribute('src')).toBe('/api/uploads/0a1b2c3d-demo.mp3');
+  });
+
+  it('copies the song brief built from the beats', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    renderAt('/storyboards/sb-1?brief=open');
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
+    expect(clipboard.copyToClipboard).toHaveBeenCalledWith(expect.stringContaining('Structure: [Intro]'), 'Song brief copied');
   });
 });

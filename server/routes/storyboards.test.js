@@ -74,6 +74,17 @@ describe('storyboards routes', () => {
     expect(mixed.status).toBe(400);
   });
 
+  it('attaches a temp track from uploads and takes it off again', async () => {
+    const { body: board } = await api('post', '/', { name: 'Demo' });
+    const set = await api('patch', `/${board.id}`, { tempTrack: { filename: '0a1b2c3d-demo_v2.mp3', name: 'demo v2.mp3' } });
+    expect(set.body.tempTrack).toEqual({ filename: '0a1b2c3d-demo_v2.mp3', name: 'demo v2.mp3' });
+    // Only an uploaded audio file: no paths, no other file types.
+    expect((await api('patch', `/${board.id}`, { tempTrack: { filename: '../secrets.mp3' } })).status).toBe(400);
+    expect((await api('patch', `/${board.id}`, { tempTrack: { filename: '0a1b2c3d-cover.png' } })).status).toBe(400);
+    const cleared = await api('patch', `/${board.id}`, { tempTrack: null });
+    expect(cleared.body.tempTrack).toBeNull();
+  });
+
   it('treats a deleted board as gone', async () => {
     const { body: board } = await api('post', '/', { name: 'Gone' });
     expect((await api('delete', `/${board.id}`)).body).toEqual({ ok: true });

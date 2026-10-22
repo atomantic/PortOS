@@ -1,17 +1,17 @@
 /**
  * Storyboard editor — `/storyboards/:id`, with the open panel deep-linked at
- * `/storyboards/:id/panel/:panelId` and the view in `?view=board`.
+ * `/storyboards/:id/panel/:panelId` and the view in `?view=board|play`.
  *
  * Beats view: one row per beat (title, musical role, estimated length) with a
  * strip of panels. Board view: every panel as one sheet, the classic
- * storyboard page. Each write returns the whole board, and the page keeps the
+ * storyboard page. Play view: the animatic, with the temp track under it. Each write returns the whole board, and the page keeps the
  * newest one it has seen (`updatedAt`), so two quick edits can't land out of
  * order.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, LayoutGrid, LayoutPanelLeft, Loader2, Plus, Rows3, ScrollText } from 'lucide-react';
+import { ArrowLeft, LayoutGrid, LayoutPanelLeft, ListMusic, Loader2, Play, Plus, Rows3, ScrollText } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -27,6 +27,8 @@ import BeatSection from '../components/storyboards/BeatSection';
 import CommitField from '../components/storyboards/CommitField';
 import MakeEmptyPanels from '../components/storyboards/MakeEmptyPanels';
 import PlotBeatsDrawer from '../components/storyboards/PlotBeatsDrawer';
+import SongBriefDrawer from '../components/storyboards/SongBriefDrawer';
+import StoryboardPlayer from '../components/storyboards/StoryboardPlayer';
 import PanelCard from '../components/storyboards/PanelCard';
 import PanelDrawer from '../components/storyboards/PanelDrawer';
 import { beatSeconds, findPanel } from '../components/storyboards/storyboardArt';
@@ -34,7 +36,9 @@ import { beatSeconds, findPanel } from '../components/storyboards/storyboardArt'
 const VIEW_TABS = [
   { id: 'beats', label: 'Beats', icon: Rows3 },
   { id: 'board', label: 'Board', icon: LayoutGrid },
+  { id: 'play', label: 'Play', icon: Play },
 ];
+const VIEW_IDS = new Set(VIEW_TABS.map((tab) => tab.id));
 
 const selectClass = 'min-h-[44px] bg-port-bg border border-port-border rounded px-2 text-sm text-white';
 const headerButton = 'min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white';
@@ -43,15 +47,19 @@ export default function StoryboardDetail() {
   const { id, panelId } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const view = searchParams.get('view') === 'board' ? 'board' : 'beats';
-  const plotOpen = searchParams.get('plot') === 'open';
-  const setPlotOpen = (on) => setSearchParams((prev) => {
+  const view = VIEW_IDS.has(searchParams.get('view')) ? searchParams.get('view') : 'beats';
+  // Drawers over the board (`?plot=open`, `?brief=open`), deep-linkable.
+  const setDrawerParam = (key, on) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
-    if (on) next.set('plot', 'open');
-    else next.delete('plot');
+    if (on) next.set(key, 'open');
+    else next.delete(key);
     return next;
   }, { replace: !on });
-  const viewSuffix = view === 'board' ? '?view=board' : '';
+  const plotOpen = searchParams.get('plot') === 'open';
+  const setPlotOpen = (on) => setDrawerParam('plot', on);
+  const briefOpen = searchParams.get('brief') === 'open';
+  const viewQuery = (next) => (next === 'beats' ? '' : `?view=${next}`);
+  const viewSuffix = viewQuery(view);
   // undefined = loading, null = missing.
   const [board, setBoard] = useState(undefined);
   const [pending, setPending] = useState(null);
@@ -125,7 +133,7 @@ export default function StoryboardDetail() {
 
   const openPanel = (pid) => navigate(`/storyboards/${id}/panel/${pid}${viewSuffix}`);
   const closePanel = () => navigate(`/storyboards/${id}${viewSuffix}`);
-  const setView = (next) => navigate(`/storyboards/${id}${panelId ? `/panel/${panelId}` : ''}${next === 'board' ? '?view=board' : ''}`, { replace: true });
+  const setView = (next) => navigate(`/storyboards/${id}${panelId ? `/panel/${panelId}` : ''}${viewQuery(next)}`, { replace: true });
 
   const addBeat = async () => {
     setPending('beat');
@@ -238,6 +246,9 @@ export default function StoryboardDetail() {
           <button type="button" onClick={() => setPlotOpen(true)} className={headerButton}>
             <ScrollText size={16} aria-hidden="true" /> Beats from plot
           </button>
+          <button type="button" onClick={() => setDrawerParam('brief', true)} className={headerButton}>
+            <ListMusic size={16} aria-hidden="true" /> Song brief
+          </button>
           {board.beats.some((beat) => beat.panels.length) && <MakeEmptyPanels boardId={id} />}
         </div>
       </header>
@@ -254,6 +265,9 @@ export default function StoryboardDetail() {
               <ScrollText size={16} aria-hidden="true" /> Beats from plot
             </button>
           </div>
+        ) : view === 'play' ? (
+          <StoryboardPlayer board={board} sketchNonce={sketchNonce}
+            onTempTrack={(tempTrack) => write(() => updateStoryboard(id, { tempTrack }))} />
         ) : view === 'board' ? (
           <ol className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2" aria-label="All panels">
             {board.beats.flatMap((beat, beatIndex) => beat.panels.map((panel, index) => (
@@ -302,6 +316,7 @@ export default function StoryboardDetail() {
         )}
       </div>
 
+      <SongBriefDrawer open={briefOpen} board={board} onClose={() => setDrawerParam('brief', false)} />
       <PlotBeatsDrawer open={plotOpen} board={board} onClose={() => setPlotOpen(false)} onBoard={apply} />
       <PanelDrawer
         open={!!panelId}
