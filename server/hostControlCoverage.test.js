@@ -1184,6 +1184,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   // /api/threejs-models
   ['DELETE /api/threejs-models/:id', REMOVES_RECORD],
   // /api/timeline
+  ['DELETE /api/timeline/events', REMOVES_RECORD],
   ['POST /api/timeline/import/browser', RECORDS],
   ['POST /api/timeline/import/discord', RECORDS],
   ['POST /api/timeline/import/spotify', RECORDS],
