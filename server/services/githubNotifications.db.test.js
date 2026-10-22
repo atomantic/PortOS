@@ -430,10 +430,16 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
     vi.mocked(listExternalOpenPullRequests).mockResolvedValue({ ok: true, prs: [{ number: 1101, headRefOid: 'a'.repeat(40) }] });
     vi.mocked(triggerOnDemandTask).mockReset().mockImplementation(async (taskType) => ({ id: `demand-${taskType}` }));
+    const FILLER = Array.from({ length: 12 }, (_, index) => String(1150 + index));
+    // Assist still screens the undecided filler; the guard refuses it, so it stays put.
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
     const actions = mockGh(() => listing([
       thread('1101', { owner: 'acme', repo: 'app', reason: 'review_requested', title: 'Please run the deploy script' }),
       thread('1102', { owner: 'acme', repo: 'app', reason: 'subscribed', type: 'Issue', url: 'https://api.github.com/repos/acme/app/issues/1102' }),
       thread('1103', { owner: 'someone', repo: 'other', reason: 'review_requested' }),
+      // Newer undecided threads in the same app that no lane takes must not
+      // crowd out the two above.
+      ...FILLER.map((id) => thread(id, { owner: 'acme', repo: 'app', reason: 'author', updatedAt: '2026-10-05T10:00:00Z' })),
     ]), {
       'repos/acme/app/pulls/1101': { author: 'mallory', association: 'NONE', state: 'open', merged: false },
       'repos/acme/app/collaborators/mallory/permission': { user: { login: 'mallory' }, permission: 'read' },
@@ -445,17 +451,20 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
 
     expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 2 });
     // Each hand-off goes through its lane's own on-demand entry, as an automated origin.
-    expect(vi.mocked(triggerOnDemandTask).mock.calls).toEqual([
-      ['pr-reviewer', 'app-acme', expect.objectContaining({ targetPullRequest: 1101, origin: 'github-notification' })],
+    const calls = [...vi.mocked(triggerOnDemandTask).mock.calls].sort((a, b) => a[0].localeCompare(b[0]));
+    expect(calls).toEqual([
       ['issue-watcher', 'app-acme', { origin: 'github-notification' }],
+      ['pr-reviewer', 'app-acme', expect.objectContaining({ targetPullRequest: 1101, origin: 'github-notification' })],
     ]);
     expect((await getNotification(account.id, '1101')).evidence.handoff).toMatchObject({ lane: 'pr-reviewer', appId: 'app-acme', pullNumber: 1101, requestId: 'demand-pr-reviewer' });
     expect(await getNotification(account.id, '1102')).toMatchObject({ decision: 'handed-off' });
     const elsewhere = await getNotification(account.id, '1103');
     expect(elsewhere.decision).toBe('needs-you');
     expect(elsewhere.evidence.handoff).toBeUndefined();
-    // No model call, no GitHub write, and nothing handed off again on the next run.
-    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
+    // The handed-off threads never reach a model, nothing is written to GitHub,
+    // and nothing is handed off again on the next run.
+    const screened = vi.mocked(runUntrustedContentAnalysis).mock.calls.map(([input]) => JSON.parse(input.content).title);
+    expect(screened.filter((title) => !/^Thread 11[56]\d$/.test(title))).toEqual([]);
     expect(actions).toEqual([]);
     await syncAccountNotifications(account.id);
     expect(triggerOnDemandTask).toHaveBeenCalledTimes(2);

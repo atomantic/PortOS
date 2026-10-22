@@ -20,7 +20,11 @@ import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 
 const MAX_HANDOFFS_PER_RUN = 10;
 const ISSUE_WATCHER_TASK_TYPE = 'issue-watcher';
-const CANDIDATE_DECISIONS = ['suggest-untrusted-review', 'needs-you', 'surface'];
+// The SQL mirror of `autopilotHandoff`'s lane rules, so a run's limit is spent
+// only on threads that can be handed off and an older eligible thread is never
+// starved by newer ones the rule would reject.
+const CANDIDATE_SQL = `((decision = 'suggest-untrusted-review' AND subject_type = 'PullRequest')
+  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface') AND (trust = 'outside' OR evidence->>'commenter' IS NOT NULL)))`;
 
 /** Queue the app's issue-watcher run unless one is already queued or running. */
 async function queueIssueWatcher(app) {
@@ -39,8 +43,7 @@ async function queueIssueWatcher(app) {
 async function queueLane(plan, app) {
   if (plan.lane === 'issue-watcher') return queueIssueWatcher(app);
   return queueTargetedPrReview(app, plan.pullNumber, { origin: ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION })
-    .then((queued) => (queued.duplicate ? { duplicate: true, taskId: queued.reviewAction?.taskId || null } : { requestId: queued.request.id }))
-    .catch((error) => ({ error: error.message }));
+    .then((queued) => (queued.duplicate ? { duplicate: true, taskId: queued.reviewAction?.taskId || null } : { requestId: queued.request.id }));
 }
 
 async function recordHandoff(account, row, handoff) {
@@ -69,9 +72,9 @@ export async function autopilotAccountNotifications(account) {
   if (account.mode !== 'autopilot') return { handedOff: 0 };
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
-       AND decision = ANY($2::text[]) AND (evidence->>'repoManaged')::boolean IS TRUE AND NOT (evidence ? 'handoff')
+       AND ${CANDIDATE_SQL} AND (evidence->>'repoManaged')::boolean IS TRUE AND NOT (evidence ? 'handoff')
      ORDER BY gh_updated_at DESC LIMIT ${MAX_HANDOFFS_PER_RUN}`,
-    [account.id, CANDIDATE_DECISIONS],
+    [account.id],
   );
   const plans = rows.map((row) => ({ row, plan: autopilotHandoff({ account, row }) })).filter((entry) => entry.plan);
   if (!plans.length) return { handedOff: 0 };
@@ -83,7 +86,9 @@ export async function autopilotAccountNotifications(account) {
     if (plan.refused) outcome = { skipped: plan.refused };
     else if (!app) outcome = { skipped: 'no-managed-app' };
     else {
-      const queued = await queueLane(plan, app);
+      // A lane that throws (a schedule write failing) is a recorded skip, so
+      // it never stops Assist or the rest of the sync for this account.
+      const queued = await queueLane(plan, app).catch((error) => ({ error: error.message }));
       outcome = queued.error ? { skipped: 'lane-unavailable', error: String(queued.error).slice(0, 300) } : queued;
     }
     const handoff = {
