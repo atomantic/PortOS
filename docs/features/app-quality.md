@@ -143,7 +143,11 @@ breaking changes, idempotency keys, pagination bounds), `observability`
 installs from migration-test fixture shapes, runs the migration runner and a
 backup restore against them, and boots the result, so a failure only an
 executed path shows (#6182, #12044, #12046, #12049) is caught without touching
-live data.
+live data. On a host with Postgres it also round-trips the database: backup,
+then `restorePostgres` into a second throwaway `portos_rehearsal_<id>_test`
+database made and dropped by `scripts/rehearsal-scratch-db.js` (#12906); with
+no reachable Postgres it falls back to the file path and reports Postgres as
+uncovered.
 
 Two gap lenses cover defects every page-walking and code-shape audit reads as
 intentional or never reaches:
