@@ -1552,6 +1552,13 @@ export const musicVideoProductionProofSchema = z.object({
 // A scene on the director board. `startSec`/`endSec` place it on the timeline;
 // `prompt` drives the shot's video; `framePrompt`/`referenceImageId` are the
 // reference-frame inputs the i2v generation (Phase 1b) will consume.
+// The linked storyboard panel a shot was fitted from (Fit to song), and a
+// fingerprint of the panel as it was then, so a later panel edit shows on the shot.
+const scenePanelFields = {
+  panelId: z.string().regex(/^panel-[A-Za-z0-9-]{1,80}$/, 'Invalid panel id').nullable().optional(),
+  panelRev: z.string().regex(/^[0-9a-z]{1,16}$/, 'Invalid panel revision').nullable().optional(),
+};
+
 export const musicVideoSceneCreateSchema = z.object({
   label: z.string().max(120).optional(),
   sectionLabel: z.string().max(120).nullable().optional(),
@@ -1575,6 +1582,7 @@ export const musicVideoSceneCreateSchema = z.object({
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
+  ...scenePanelFields,
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -1625,6 +1633,7 @@ export const musicVideoSceneUpdateSchema = z.object({
   // may send `null` to dismiss it; a full object is accepted so a client that
   // round-trips the scene doesn't 400.
   lastFailure: musicVideoSceneLastFailureSchema.nullable().optional(),
+  ...scenePanelFields,
 }).strict();
 
 // Reorder the board: the full set of scene ids in their new order.

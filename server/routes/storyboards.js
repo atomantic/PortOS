@@ -10,7 +10,7 @@ import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
   storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
-  storyboardBeatsAddSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
+  storyboardBeatsAddSchema, storyboardFitSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
@@ -20,6 +20,7 @@ import {
 import {
   getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
+import { fitMusicVideoToStoryboard } from '../services/storyboards/fitMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
 import { addBeats, extractBeats } from '../services/storyboards/plot.js';
 import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
@@ -37,6 +38,11 @@ router.post('/', asyncHandler(async (req, res) => {
 // Make storyboard from this video: a board from the project's shots, linked to it.
 router.post('/from-music-video/:projectId', asyncHandler(async (req, res) => {
   res.status(201).json(await makeStoryboardFromMusicVideo(req.params.projectId));
+}));
+
+// Fit to song: write the video's shots from its linked board, as previewed.
+router.post('/fit-music-video/:projectId', asyncHandler(async (req, res) => {
+  res.json(await fitMusicVideoToStoryboard(req.params.projectId, validateRequest(storyboardFitSchema, req.body || {})));
 }));
 
 // The saved recipe library sits before /:id; a board id always starts "sb-".

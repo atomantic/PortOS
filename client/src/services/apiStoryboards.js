@@ -78,3 +78,8 @@ export const addStoryboardBeats = (id, beats, options) =>
 // A new board built from a music video's shots, linked to it → { board, project }.
 export const makeStoryboardFromMusicVideo = (projectId, options) =>
   request(`/storyboards/from-music-video/${enc(projectId)}`, { method: 'POST', ...options });
+
+// Fit to song: the video's shots written from its linked board, as previewed (lib/storyboardFit.js)
+// → { project, shots, replaced }. 409 when the board changed since the preview or a shot is locked.
+export const fitMusicVideoToStoryboard = (projectId, input, options) =>
+  request(`/storyboards/fit-music-video/${enc(projectId)}`, { ...json('POST', input), ...options });

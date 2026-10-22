@@ -4,6 +4,7 @@ import { ExternalLink, LayoutPanelLeft, Loader2, Unlink } from 'lucide-react';
 import { getStoryboard, listStoryboards, makeStoryboardFromMusicVideo } from '../../services/api';
 import { formatCount, formatTimecode } from '../../utils/formatters';
 import { selectedTake, takeSrc } from '../storyboards/storyboardArt';
+import StoryboardFitPanel from './StoryboardFitPanel';
 
 const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const plural = (n, word) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;
@@ -11,10 +12,10 @@ const STRIP_PANELS = 8;
 
 /**
  * The Plan step's link to a Create › Storyboards board: pick one, or make one
- * from this video's shots, then see it at a glance and open it. Linking
- * changes no shot.
+ * from this video's shots, then see it at a glance, open it, and fit it to
+ * the song. Linking changes no shot; only Fit to song writes them.
  */
-export default function StoryboardLinkPanel({ project, onLink }) {
+export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFitted }) {
   const linkedId = project.storyboardId || null;
   // undefined = loading, null = missing on this machine.
   const [board, setBoard] = useState(undefined);
@@ -22,16 +23,17 @@ export default function StoryboardLinkPanel({ project, onLink }) {
   const [boards, setBoards] = useState(null);
   const [listError, setListError] = useState(false);
   const [making, setMaking] = useState(false);
+  const [reads, setReads] = useState(0);
 
   useEffect(() => {
     if (!linkedId) return undefined;
     let active = true;
-    setBoard(undefined);
+    if (!reads) setBoard(undefined);
     getStoryboard(linkedId, { silent: true })
       .then((next) => { if (active) setBoard(next); })
       .catch(() => { if (active) setBoard(null); });
     return () => { active = false; };
-  }, [linkedId]);
+  }, [linkedId, reads]);
 
   // The board list is read when the picker is first touched, not on every Plan visit.
   const loadBoards = () => {
@@ -91,6 +93,7 @@ export default function StoryboardLinkPanel({ project, onLink }) {
             {panels.length > STRIP_PANELS && <li className="flex h-12 shrink-0 items-center px-1 text-[11px] text-gray-500">+{formatCount(panels.length - STRIP_PANELS)}</li>}
           </ol>
         )}
+        <StoryboardFitPanel project={project} board={board} disabled={fitDisabled} onFitted={onFitted} onBoardStale={() => setReads((n) => n + 1)} />
       </div>
     );
   }
