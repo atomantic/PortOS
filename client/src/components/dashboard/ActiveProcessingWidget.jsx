@@ -97,7 +97,7 @@ function ActiveProcessingWidget() {
     { enabled: visible, compare: sameGpuSample },
   );
   const data = snapshot;
-  const cancel = (id) => api.cancelMediaJob(id, { silent: true }).catch(() => undefined);
+  const cancel = (id) => api.cancelMediaJob(id).catch(() => undefined);
   const jobs = data?.jobs || [];
   const gpu = telemetry?.gpu;
   const imageTo3d = data?.extras?.imageTo3d || [];

@@ -148,7 +148,22 @@ describe('ActiveProcessingWidget', () => {
     const user = userEvent.setup();
     renderWidget();
     await user.click(await screen.findByRole('button', { name: 'Cancel Example image' }));
-    expect(mockCancelMediaJob).toHaveBeenCalledWith('image-1', { silent: true });
+    expect(mockCancelMediaJob).toHaveBeenCalledWith('image-1');
+  });
+
+  it('keeps Cancel usable for a retry when the cancel request fails', async () => {
+    mockGetSystemActivity.mockResolvedValue({
+      jobs: [{ id: 'image-1', kind: 'image', status: 'running', progress: 0.5, startedAt: new Date().toISOString(), params: { prompt: 'Example image' } }],
+      extras: {},
+      agents: {},
+      activity: { idle: false, activeCount: 1, queuedCount: 0, blockers: [] },
+    });
+    mockCancelMediaJob.mockRejectedValueOnce(new Error('GPU busy'));
+    const user = userEvent.setup();
+    renderWidget();
+    await user.click(await screen.findByRole('button', { name: 'Cancel Example image' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel Example image' }));
+    expect(mockCancelMediaJob).toHaveBeenCalledTimes(2);
   });
 
   it('does not sample the GPU while the inspector is off screen', async () => {
