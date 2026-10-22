@@ -34,7 +34,9 @@ vi.mock('../components/sprites/AssetCollection.jsx', () => ({ default: () => nul
 vi.mock('../components/sprites/SpriteCatalog.jsx', () => ({ default: () => null }));
 vi.mock('../components/sprites/SpriteDetailHeader.jsx', () => ({ default: ({ record }) => <h2>{record.name}</h2> }));
 vi.mock('../components/sprites/ImportPanel.jsx', () => ({ default: () => null }));
-vi.mock('../components/sprites/NewSpritePanel.jsx', () => ({ default: () => null }));
+vi.mock('../components/sprites/NewSpritePanel.jsx', () => ({
+  default: ({ showTrigger = true }) => (showTrigger ? <button type="button">New Sprite</button> : null),
+}));
 vi.mock('../components/sprites/SpriteSearch.jsx', () => ({ default: () => null }));
 
 import Sprites from './Sprites.jsx';
@@ -128,5 +130,23 @@ describe('persisted sprite events in the rendered page', () => {
     });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByText('No sprites yet')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New Sprite' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create your first sprite' })).toBeInTheDocument();
+  });
+
+  it('keeps the header New Sprite action while loading, after a failed read, and with records', async () => {
+    listSpriteRecords.mockRejectedValueOnce(new Error('503'));
+    const { unmount } = render(<MemoryRouter initialEntries={['/sprites']}><Routes><Route path="/sprites" element={<Page />} /></Routes></MemoryRouter>);
+    expect(screen.getByRole('button', { name: 'New Sprite' })).toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New Sprite' })).toBeInTheDocument();
+    unmount();
+
+    listSpriteRecords.mockResolvedValueOnce([{ id: 'example-sprite', kind: 'character', name: 'Example' }]);
+    render(<MemoryRouter initialEntries={['/sprites']}><Routes><Route path="/sprites" element={<Page />} /></Routes></MemoryRouter>);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'New Sprite' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create your first sprite' })).not.toBeInTheDocument();
   });
 });

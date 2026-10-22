@@ -6,7 +6,8 @@
  * can refresh the library and navigate into it.
  *
  * Open/closed is controlled by the page so the library's empty state can offer
- * "create your first sprite" as its call to action.
+ * "create your first sprite" as its call to action; `showTrigger={false}` hides
+ * the header button then so the empty state holds the only create control.
  */
 
 import { useState } from 'react';
@@ -16,7 +17,7 @@ import { createSpriteRecord } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { NEW_SPRITE_KINDS } from '../../lib/spriteRecordGroups.js';
 
-export default function NewSpritePanel({ onCreated, open, onOpenChange }) {
+export default function NewSpritePanel({ onCreated, open, onOpenChange, showTrigger = true }) {
   const [name, setName] = useState('');
   const [id, setId] = useState('');
   const [kind, setKind] = useState('character');
@@ -36,12 +37,14 @@ export default function NewSpritePanel({ onCreated, open, onOpenChange }) {
 
   return (
     <>
-      <button
-        onClick={() => onOpenChange(true)}
-        className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
-      >
-        <Plus className="w-4 h-4" /> New Sprite
-      </button>
+      {showTrigger && (
+        <button
+          onClick={() => onOpenChange(true)}
+          className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
+        >
+          <Plus className="w-4 h-4" /> New Sprite
+        </button>
+      )}
       <Modal open={open} onClose={() => onOpenChange(false)} size="sm" ariaLabel="New sprite" closeOnBackdrop={false}>
         <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
           <div className="flex items-center justify-between">

@@ -469,6 +469,7 @@ export default function Sprites() {
             </button>
             <NewSpritePanel
               open={newSpriteOpen}
+              showTrigger={!(recordsState === 'ready' && records.length === 0)}
               onOpenChange={setNewSpriteOpen}
               onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }}
             />

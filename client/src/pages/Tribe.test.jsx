@@ -116,6 +116,32 @@ describe('Tribe deep-linkable tabs', () => {
   });
 });
 
+describe('Tribe create actions', () => {
+  beforeEach(() => {
+    api.getTribePeople.mockClear();
+    window.localStorage.clear();
+  });
+
+  it('starts a new relationship from the header Add only while the roster is empty', async () => {
+    api.getTribePeople.mockResolvedValue({ people: [] });
+    renderAt('/tribe?tab=circle');
+    expect(await screen.findByText('No relationships yet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add Relationship' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'New Relationship' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New relationship' })).toBeNull();
+  });
+
+  it('offers the form plus action when editing an existing relationship', async () => {
+    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    renderAt('/tribe?person=p2');
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('tab=circle'));
+    expect(screen.getByRole('heading', { name: 'Relationship' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New relationship' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+  });
+});
+
 describe('Tribe care filter', () => {
   beforeEach(() => {
     api.getTribePeople.mockClear();

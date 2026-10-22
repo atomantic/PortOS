@@ -130,6 +130,20 @@ describe('X page', () => {
     expect(screen.getByTestId('location')).toHaveTextContent(`/x/${account.id}/accounts?xAccount=edit`);
   });
 
+  it('offers one Add account control when no accounts exist and the header switcher once they do', async () => {
+    api.getXAccounts.mockResolvedValueOnce({ accounts: [] });
+    const first = renderPage('/x');
+    await screen.findByRole('heading', { name: 'X accounts' });
+    expect(screen.getAllByRole('button', { name: 'Add account' })).toHaveLength(1);
+    expect(screen.queryByLabelText('X account in scope')).not.toBeInTheDocument();
+    first.unmount();
+
+    renderPage('/x');
+    await screen.findByRole('heading', { name: 'X accounts' });
+    expect(screen.getAllByRole('button', { name: 'Add account' })).toHaveLength(2);
+    expect(screen.getByLabelText('X account in scope')).toBeInTheDocument();
+  });
+
   it('renders a not-found fallback for stale account URLs', async () => {
     renderPage('/x/00000000-0000-4000-8000-000000000099/health');
     expect(await screen.findByText(/This X account was not found/)).toBeInTheDocument();
