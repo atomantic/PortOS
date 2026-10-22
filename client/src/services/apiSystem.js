@@ -239,6 +239,10 @@ export const getUsage = (params = {}, options = {}) => request(`/usage${usageQue
 // from the CLI transcripts. Same { period } | { from, to } params as getUsage.
 export const getClaudeCodeModelUsage = (params = {}, options = {}) =>
   request(`/usage/claude-code/models${usageQuery(params)}`, options);
+// Trailing-30-day estimated API cost across every instance, stacked by plan.
+// `range` is the chart span: 1m|3m|6m|1y|all.
+export const getUsageRollingCost = (params = {}, options = {}) =>
+  request(`/usage/rolling-cost${usageQuery(params)}`, options);
 export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill', options);
 // Monthly plan prices per provider family, used to compare subscription spend
 // against the report's estimated API cost. `costs` is a partial patch: an

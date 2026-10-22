@@ -111,6 +111,7 @@ describe('formatWeight', () => {
 describe('formatUsd', () => {
   it('renders cents by default and treats a missing amount as zero', () => {
     expect(formatUsd(12.3)).toBe('$12.30');
+    expect(formatUsd(9428.45, { compact: true })).toBe('$9.4K');
     expect(formatUsd(null)).toBe('$0.00');
   });
 

@@ -494,8 +494,51 @@ describe('fleet rolling 30-day cost', () => {
     expect(at('2026-08-30')).toBeCloseTo(both, 2);
     expect(at('2026-09-28')).toBeCloseTo(both, 2);
 
+    // Split by plan; a provider no subscription family claims stands alone.
+    expect(series.series).toEqual([{ key: 'provider:anthropic', label: 'Anthropic' }]);
+    expect(series.points.at(-1).values[0]).toBeCloseTo(both, 2);
+
     const later = await getFleetRollingCost({ providers: [], now: new Date('2026-09-29T00:00:00Z') });
     expect(later.points.at(-1).cost).toBe(0);
+  });
+
+  // Past a peer's 120-day day retention only month buckets remain; their cost
+  // is spread over the month so a long range still totals correctly.
+  it('spreads a rolled-up month over its days on a long range', async () => {
+    const rolledUp = peerEntry({
+      usage: buildUsageDigest(usageFixture({ day: '2026-03-10', tokensOut: 7000 }), {
+        retentionDays: 30, now: new Date('2026-09-01T00:00:00Z'),
+      }),
+    });
+    await applyUsageRemote({ instances: { 'inst-peer': rolledUp } });
+    const monthCost = buildUsageReport({}, { monthlyActivity: rolledUp.usage.monthlyActivity, providers: [] }).totals.estimatedCost;
+    expect(monthCost).toBeGreaterThan(0);
+
+    const series = await getFleetRollingCost({ providers: [], range: 'all', now: new Date('2026-09-01T00:00:00Z') });
+    const at = (date) => series.points.find((p) => p.date === date).cost;
+    expect(series.range).toBe('all');
+    expect(series.points[0].date).toBe('2026-03-01');
+    // 31 March days share the month; the window ending Mar 30 holds 30 of them.
+    expect(at('2026-03-30')).toBeCloseTo((monthCost * 30) / 31, 1);
+    expect(at('2026-08-30')).toBeCloseTo(dayCost(localUsage, '2026-08-30'), 2);
+
+    const year = await getFleetRollingCost({ providers: [], range: '1y', now: new Date('2026-09-01T00:00:00Z') });
+    expect(year.points).toHaveLength(365);
+  });
+
+  // Two provider records on the same plan (here one only a peer has configured)
+  // stack as one Claude Code area.
+  it('stacks providers of one plan together', async () => {
+    const asProvider = (usage, id) => {
+      const out = structuredClone(usage);
+      for (const day of Object.values(out.dailyActivity)) day.byProvider = { [id]: day.byProvider.anthropic };
+      return out;
+    };
+    localUsage = asProvider(usageFixture(), 'claude-code');
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ usage: buildUsageDigest(asProvider(usageFixture({ tokensOut: 4000 }), 'claude-opus-cli')) }) } });
+    const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
+    expect(series.series).toEqual([{ key: 'claude', label: 'Claude Code' }]);
+    expect(series.points.at(-1).values).toEqual([series.points.at(-1).cost]);
   });
 
   it('charts this machine alone before any peer has synced', async () => {

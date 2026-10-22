@@ -34,6 +34,7 @@ import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } f
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { isFreeProvider } from '../lib/modelPricing.js';
+import { familyForProviderId, familyLabel } from '../lib/providerFamilies.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { buildUsageDigest, buildUsageReport, getUsage, USAGE_FILE } from './usage.js';
 import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
@@ -482,66 +483,145 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
   return { instances: rows, totals: sumFleetTotals(included) };
 }
 
-// Peer digests keep day precision for 120 days (DIGEST_DAILY_RETENTION_DAYS in
-// usage.js), so 90 points of a 30-day window (119 days of input) is the longest
-// series every instance can supply at full resolution.
 export const ROLLING_COST_WINDOW_DAYS = 30;
-export const ROLLING_COST_POINTS = 90;
+// Points shown per range. `all` starts at the earliest day any instance has.
+export const ROLLING_COST_RANGES = { '1m': 30, '3m': 90, '6m': 182, '1y': 365, all: null };
 
-const utcDay = (date) => date.toISOString().slice(0, 10);
+const DAY_MS = 86_400_000;
+const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+const dayMs = (day) => Date.parse(`${day}T00:00:00Z`);
 
-/** Each UTC day from `days - 1` days before `now` through `now`, oldest first. */
-function trailingDays(now, days) {
-  const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  return Array.from({ length: days }, (_, i) => utcDay(new Date(end - (days - 1 - i) * 86_400_000)));
-}
+// Stacked groups beyond this many fold into "Other" so the legend stays short.
+const MAX_COST_GROUPS = 5;
+const OTHER_GROUP = 'other';
 
 /**
- * Estimated API cost per day, each day priced on its own through the same
- * `buildUsageReport` as the cost report so the series and the headline agree.
+ * A report's cost split by plan: a provider row belongs to its subscription
+ * family when it has one (a peer's provider may not be configured here, so the
+ * id is tried too), else it stands alone under its own name.
  */
-function dailyCosts(dailyActivity, dayList, providers) {
-  return dayList.map((day) => {
-    const bucket = dailyActivity?.[day];
-    return bucket ? buildUsageReport({ [day]: bucket }, { from: day, to: day, providers }).totals.estimatedCost : 0;
+function costByGroup(report, labels) {
+  const out = {};
+  for (const row of report.providers) {
+    if (!(row.estimatedCost > 0)) continue;
+    const family = row.family || familyForProviderId(row.id);
+    const key = family || `provider:${row.id}`;
+    if (!labels.has(key)) labels.set(key, family ? familyLabel(family) : row.name || row.id);
+    out[key] = (out[key] || 0) + row.estimatedCost;
+  }
+  return out;
+}
+
+const addInto = (target, source, scale = 1) => {
+  for (const [key, cost] of Object.entries(source)) target[key] = (target[key] || 0) + cost * scale;
+};
+
+/**
+ * Estimated API cost per day for one instance over `span`, split by plan, each
+ * day priced on its own through the same `buildUsageReport` as the cost report
+ * so the series and the headline agree.
+ *
+ * Old days survive only as month buckets (a peer's digest rolls up after 120
+ * days, this machine's history after 400), so a month bucket's cost is spread
+ * evenly over that month's days that no longer have a day bucket. The month's
+ * total is exact; its shape within the month is not.
+ */
+function instanceDailyCosts({ daily = {}, monthly = {} }, span, providers, labels) {
+  const missingDays = new Map();
+  for (const day of span) {
+    const month = day.slice(0, 7);
+    if (!daily[day] && monthly[month]) missingDays.set(month, (missingDays.get(month) || 0) + 1);
+  }
+  const monthShare = new Map();
+  for (const [month, count] of missingDays) {
+    const report = buildUsageReport({}, { monthlyActivity: { [month]: monthly[month] }, providers });
+    // Days of the month outside the span still carry their share, so divide by
+    // every rolled-up day of the month, not only the `count` in view.
+    const [y, m] = month.split('-').map(Number);
+    const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const rolledDays = daysInMonth - Object.keys(daily).filter((d) => d.startsWith(`${month}-`)).length;
+    const share = {};
+    addInto(share, costByGroup(report, labels), 1 / Math.max(rolledDays, count));
+    monthShare.set(month, share);
+  }
+  return span.map((day) => {
+    if (daily[day]) return costByGroup(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers }), labels);
+    return monthShare.get(day.slice(0, 7)) || {};
   });
+}
+
+function earliestDay(sources) {
+  let earliest = null;
+  for (const { daily, monthly } of sources) {
+    for (const day of Object.keys(daily || {})) if (!earliest || day < earliest) earliest = day;
+    for (const month of Object.keys(monthly || {})) if (!earliest || `${month}-01` < earliest) earliest = `${month}-01`;
+  }
+  return earliest;
 }
 
 let rollingMemo = null;
 
 /**
  * Rolling 30-day estimated API cost summed across EVERY known instance, one
- * point per UTC day for the last 90 days. API-billed instances count here: this
- * is total spend at API rates, not the subscription-covered subset the Across
- * Instances total reports. Peers are as fresh as their last sync.
+ * point per UTC day over `range` (see ROLLING_COST_RANGES). API-billed
+ * instances count here: this is total spend at API rates, not the
+ * subscription-covered subset the Across Instances total reports. Peers are as
+ * fresh as their last sync.
  */
-export async function getFleetRollingCost({ providers = [], now = new Date() } = {}) {
+export async function getFleetRollingCost({ providers = [], range = '3m', now = new Date() } = {}) {
   const { self, peers } = await entriesWithSelf();
   const local = getUsage();
   // This machine always reads its live maps; with no minted identity yet it
   // still has its own history to chart.
   const sources = [
-    { id: self?.instanceId ?? 'local', stamp: local?.lastUpdated, daily: local?.dailyActivity },
-    ...peers.map((e) => ({ id: e.instanceId, stamp: e.capturedAt, daily: e.usage.dailyActivity })),
+    { id: self?.instanceId ?? 'local', stamp: local?.lastUpdated, daily: local?.dailyActivity, monthly: local?.monthlyActivity },
+    ...peers.map((e) => ({ id: e.instanceId, stamp: e.capturedAt, daily: e.usage.dailyActivity, monthly: e.usage.monthlyActivity })),
   ];
 
-  const span = trailingDays(now, ROLLING_COST_POINTS + ROLLING_COST_WINDOW_DAYS - 1);
-  const key = JSON.stringify([span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p)])]);
+  const todayMs = dayMs(utcDay(now.getTime()));
+  const rangeId = Object.hasOwn(ROLLING_COST_RANGES, range) ? range : '3m';
+  const fixed = ROLLING_COST_RANGES[rangeId];
+  const first = earliestDay(sources);
+  const allPoints = first ? Math.floor((todayMs - dayMs(first)) / DAY_MS) + 1 : 2;
+  const pointCount = Math.max(2, fixed ?? allPoints);
+  const spanLength = pointCount + ROLLING_COST_WINDOW_DAYS - 1;
+  const span = Array.from({ length: spanLength }, (_, i) => utcDay(todayMs - (spanLength - 1 - i) * DAY_MS));
+
+  const key = JSON.stringify([span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p)])]);
   if (rollingMemo?.key === key) return rollingMemo.value;
 
-  const perDay = new Array(span.length).fill(0);
+  const labels = new Map();
+  const perDay = span.map(() => ({}));
   for (const source of sources) {
-    dailyCosts(source.daily, span, providers).forEach((cost, i) => { perDay[i] += cost; });
+    instanceDailyCosts(source, span, providers, labels).forEach((costs, i) => addInto(perDay[i], costs));
   }
-  let running = perDay.slice(0, ROLLING_COST_WINDOW_DAYS - 1).reduce((a, b) => a + b, 0);
+
+  const totals = {};
+  for (const costs of perDay) addInto(totals, costs);
+  const ranked = Object.keys(totals).sort((x, y) => totals[y] - totals[x]);
+  const kept = ranked.length > MAX_COST_GROUPS ? ranked.slice(0, MAX_COST_GROUPS - 1) : ranked;
+  const groupOf = new Map(ranked.map((key) => [key, kept.includes(key) ? key : OTHER_GROUP]));
+  const series = kept.map((key) => ({ key, label: labels.get(key) }));
+  if (kept.length < ranked.length) series.push({ key: OTHER_GROUP, label: 'Other' });
+  const slot = new Map(series.map((g, i) => [g.key, i]));
+
+  // Per-day cost in series order, then a trailing-window sum per slot.
+  const daily = perDay.map((costs) => {
+    const row = new Array(series.length).fill(0);
+    for (const [key, cost] of Object.entries(costs)) row[slot.get(groupOf.get(key))] += cost;
+    return row;
+  });
+  const running = new Array(series.length).fill(0);
   const points = [];
-  for (let i = ROLLING_COST_WINDOW_DAYS - 1; i < span.length; i++) {
-    running += perDay[i];
+  for (let i = 0; i < span.length; i++) {
+    daily[i].forEach((cost, j) => { running[j] += cost; });
+    if (i >= ROLLING_COST_WINDOW_DAYS) daily[i - ROLLING_COST_WINDOW_DAYS].forEach((cost, j) => { running[j] -= cost; });
+    if (i < ROLLING_COST_WINDOW_DAYS - 1) continue;
     // Clamp: the add/subtract walk can leave float dust just below zero.
-    points.push({ date: span[i], cost: Math.max(0, roundCents(running)) });
-    running -= perDay[i - ROLLING_COST_WINDOW_DAYS + 1];
+    const values = running.map((v) => Math.max(0, roundCents(v)));
+    points.push({ date: span[i], cost: roundCents(values.reduce((sum, v) => sum + v, 0)), values });
   }
-  const value = { windowDays: ROLLING_COST_WINDOW_DAYS, instanceCount: sources.length, points };
+  const value = { range: rangeId, windowDays: ROLLING_COST_WINDOW_DAYS, instanceCount: sources.length, series, points };
   rollingMemo = { key, value };
   return value;
 }

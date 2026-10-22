@@ -5,7 +5,7 @@ import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsa
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema } from '../lib/validation.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
@@ -40,9 +40,7 @@ router.get('/', asyncHandler(async (req, res) => {
   //   same window by the same report builder. Empty on a single-machine install
   //   (or before a peer's first usage sync) — the UI hides that section rather
   //   than showing a one-row "fleet".
-  // - rollingCost: the trailing-30-day API estimate across every instance,
-  //   independent of the window (memoized, so a range change re-sends it free).
-  const [subscriptionSavings, fleet, rollingCost] = await Promise.all([
+  const [subscriptionSavings, fleet] = await Promise.all([
     getSubscriptionSavings({
       report: summary.report,
       providers,
@@ -54,9 +52,17 @@ router.get('/', asyncHandler(async (req, res) => {
     }),
     getApiBilledInstanceIds().then((apiBilledInstanceIds) =>
       getFleetUsage({ from, to, providers, apiBilledInstanceIds })),
-    getFleetRollingCost({ providers }),
   ]);
-  res.json({ ...summary, subscriptionSavings, fleet, rollingCost });
+  res.json({ ...summary, subscriptionSavings, fleet });
+}));
+
+// GET /api/usage/rolling-cost - Trailing-30-day estimated API cost summed across
+// every instance, one point per day over ?range=1m|3m|6m|1y|all (default 3m).
+router.get('/rolling-cost', asyncHandler(async (req, res) => {
+  const { range } = validateRequest(usageRollingCostQuerySchema, req.query);
+  const result = await getAllProviders();
+  const providers = Array.isArray(result) ? result : (result?.providers || []);
+  res.json(await getFleetRollingCost({ providers, range }));
 }));
 
 // GET /api/usage/subscriptions - The Subscriptions page's own model: one row
