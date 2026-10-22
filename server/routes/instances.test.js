@@ -511,11 +511,72 @@ describe('local peer admission configuration', () => {
     expect(res.status).toBe(403);
     expect(instances.updatePeer).not.toHaveBeenCalled();
   });
-  it('rejects apparent loopback access without an operator session', async () => {
+  it('rejects a request the auth gate never classified, even over loopback', async () => {
     const res = await request(buildApp()).put('/api/instances/peers/peer-a')
       .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
     expect(res.status).toBe(403);
     expect(instances.updatePeer).not.toHaveBeenCalled();
+  });
+
+  const buildAppWithAuth = (auth) => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.portosAuthContext = auth; next(); });
+    app.use('/api/instances', instancesRoutes);
+    app.use(errorMiddleware);
+    return app;
+  };
+  const passwordFree = { enabled: false, authenticated: false, method: null };
+
+  it('admits a local caller on a password-free install to peer CRUD', async () => {
+    instances.updatePeer.mockResolvedValue({ id: 'peer-a' });
+    const res = await request(buildAppWithAuth(passwordFree)).put('/api/instances/peers/peer-a')
+      .send({ name: 'Peer A' });
+    expect(res.status).toBe(200);
+    expect(instances.updatePeer).toHaveBeenCalledWith('peer-a', { name: 'Peer A' });
+  });
+
+  it('still refuses a remote password-free caller and a peer credential on peer CRUD', async () => {
+    const remote = await request(remoteRequestHandler(buildAppWithAuth(passwordFree))).put('/api/instances/peers/peer-a')
+      .send({ name: 'Peer A' });
+    expect(remote.status).toBe(403);
+    const peer = await request(buildAppWithAuth({ enabled: false, authenticated: true, method: 'peer', peerId: 'peer-a' }))
+      .put('/api/instances/peers/peer-a').send({ name: 'Peer A' });
+    expect(peer.status).toBe(403);
+    expect(instances.updatePeer).not.toHaveBeenCalled();
+  });
+
+  describe('reciprocal sync callback', () => {
+    const instanceId = '191aaece-a492-41ee-a66d-d4661eadc132';
+    const body = { instanceId, syncCategories: { universe: true } };
+    const peerAuth = (enabled) => ({ enabled, authenticated: true, method: 'peer', peerId: 'peer-a' });
+
+    it('accepts a paired peer credential acting for its own instance id', async () => {
+      instances.applyReciprocalSync.mockResolvedValue({ changed: true });
+      for (const enabled of [true, false]) {
+        const res = await request(remoteRequestHandler(buildAppWithAuth(peerAuth(enabled))))
+          .post('/api/instances/peers/sync-categories').set('X-PortOS-Instance-Id', instanceId).send(body);
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ applied: true });
+      }
+    });
+
+    it('refuses a peer credential reciprocating for a different instance id', async () => {
+      const res = await request(remoteRequestHandler(buildAppWithAuth(peerAuth(true))))
+        .post('/api/instances/peers/sync-categories')
+        .set('X-PortOS-Instance-Id', '291aaece-a492-41ee-a66d-d4661eadc132').send(body);
+      expect(res.status).toBe(403);
+      expect(instances.applyReciprocalSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses Basic and anonymous remote callers', async () => {
+      for (const auth of [{ enabled: true, authenticated: true, method: 'basic' }, passwordFree]) {
+        const res = await request(remoteRequestHandler(buildAppWithAuth(auth)))
+          .post('/api/instances/peers/sync-categories').set('X-PortOS-Instance-Id', instanceId).send(body);
+        expect(res.status).toBe(403);
+      }
+      expect(instances.applyReciprocalSync).not.toHaveBeenCalled();
+    });
   });
   it('refuses anonymous reciprocal admission of discovery peers', async () => {
     const res = await request(remoteRequestHandler(buildApp())).post('/api/instances/peers/sync-categories')
