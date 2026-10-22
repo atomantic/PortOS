@@ -89,6 +89,7 @@ import { findPullRequestForBranch, execGh, getPullRequestState } from './github.
 import { findMergeRequestForBranch } from './gitlab.js';
 import { getAppById } from './apps.js';
 import { addNotification, exists as notificationExists } from './notifications.js';
+import { emitLog } from './cosEvents.js';
 import { readPendingMergePrs } from './prWatcher.js';
 import { execGit } from '../lib/execGit.js';
 import { existsSync } from 'fs';
@@ -301,8 +302,14 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(await run()).toMatchObject({ verified: false, skipReason: 'active-agent-owner', recoveryTaskId: null });
     expect(addTask).not.toHaveBeenCalled();
     expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({ reason: 'active-agent-owner' }));
+    // The gate declining to retire is its designed outcome: reported at info, never warn.
+    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('Repo-state retirement retained'), expect.any(Object));
+    expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('Repo-state retirement retained'), expect.anything());
     prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), digest: 'b'.repeat(64) } });
     expect(await run()).toMatchObject({ verified: false, recoveryTaskId: 'task-recovery-1' });
+    // The recovery task is the investigation, so the divergence itself is logged at info.
+    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('Repo state diverged'), expect.any(Object));
+    expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('Repo state diverged'), expect.anything());
     expect(prepareInventoriedCheckoutRetirement).toHaveBeenCalledTimes(2);
   });
 

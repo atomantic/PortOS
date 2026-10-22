@@ -1483,7 +1483,7 @@ async function pullModel(modelId, onProgress) {
     // the transient network class, and only while attempts remain.
     if (attempt >= PULL_MAX_ATTEMPTS || !isTransientPullError(lastError)) break
     const delayMs = PULL_RETRY_BASE_DELAY_MS * attempt
-    console.warn(`🔁 Ollama pull ${modelId} hit transient error "${lastError}" (attempt ${attempt}/${PULL_MAX_ATTEMPTS}); retrying in ${delayMs}ms`)
+    console.log(`🔁 Ollama pull ${modelId} hit transient error "${lastError}" (attempt ${attempt}/${PULL_MAX_ATTEMPTS}); retrying in ${delayMs}ms`)
     if (typeof onProgress === 'function') onProgress({ status: 'retrying after network error', percent: null, retrying: true })
     await sleep(delayMs)
   }

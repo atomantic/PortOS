@@ -337,7 +337,7 @@ export const ensureToolCapableModel = async (cfg) => {
       console.log(`🎙️  voice: fast tool-capable model ready — ${fastNew}`);
       return { installed: fastNew };
     }
-    console.warn(`🎙️  voice: ${target} unavailable (${String(outcome?.reason || 'unknown').slice(0, 160)}) — trying next`);
+    console.log(`🎙️  voice: ${target} unavailable (${String(outcome?.reason || 'unknown').slice(0, 160)}) — trying next`);
   }
   console.warn(`🎙️  voice: exhausted ${backend.label} install chain ${chain.join(', ')} — set voice.llm.model explicitly in Settings`);
   return { failed: chain };

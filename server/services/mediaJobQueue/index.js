@@ -572,7 +572,7 @@ const pendingTransitions = new Map();
 // rather than stranding a finished job half-terminated.
 const COMPLETION_ADMISSION_MS = 60 * 60 * 1000;
 const admitCompletion = (state, commit) => (state === 'completed'
-  ? withBackupAssetPublication(commit, { timeoutMs: COMPLETION_ADMISSION_MS, onWait: () => console.warn('⏸️ media-job completion waiting for the backup to finish') })
+  ? withBackupAssetPublication(commit, { timeoutMs: COMPLETION_ADMISSION_MS, onWait: () => console.log('⏸️ media-job completion waiting for the backup to finish') })
   : commit());
 function stageTerminalTransition(job, apply, acknowledge) {
   job.terminating = true;
@@ -705,7 +705,7 @@ function recordQuotaCooldown(job, errorText) {
   // shorter remaining wait, and taking it would release the queue early.
   if (deferral.resumeAt <= existing) return;
   quotaCooldowns.set(mode, deferral.resumeAt);
-  console.warn(`⏳ media-job: ${mode} quota exhausted — holding queued ${mode} renders for ${formatDeferral(deferral.resetsInMs)}`);
+  console.log(`⏳ media-job: ${mode} quota exhausted — holding queued ${mode} renders for ${formatDeferral(deferral.resetsInMs)}`);
 }
 
 // Derived from the ABSOLUTE reset so the message is constant for the whole
@@ -1998,7 +1998,8 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
  */
 export function assertMediaQueueRoom(count = 1) {
   if (queue.length + count <= MAX_PENDING_MEDIA_JOBS) return;
-  console.warn(`⚠️ media queue full — refused ${count} job(s) with ${queue.length} waiting (limit ${MAX_PENDING_MEDIA_JOBS})`);
+  // The caller gets the 4xx; this is the queue's backpressure answering, not a fault.
+  console.log(`🚫 media queue full — refused ${count} job(s) with ${queue.length} waiting (limit ${MAX_PENDING_MEDIA_JOBS})`);
   throw mediaQueueFullError({ pending: queue.length, requested: count });
 }
 

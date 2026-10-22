@@ -348,7 +348,7 @@ export function start() {
 
 async function runStart() {
   if (isDaemonRunning()) {
-    emitLog('warn', 'CoS already running');
+    emitLog('info', '⏭️ CoS already running');
     return { success: false, error: 'Already running' };
   }
 

@@ -1106,7 +1106,7 @@ async function retainedClaimMarkers(repoPath, branch, { origin } = {}) {
   const target = origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : origin;
   if (target && !githubRepoSpec(target)) return null;
   const hold = { branch, issue: Number(issue), reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' };
-  console.warn(`🔒 branch-reconcile: issue #${issue} markers untouched; reservation owner/state unverified`);
+  console.log(`🔒 branch-reconcile: issue #${issue} markers untouched; reservation owner/state unverified`);
   return hold;
 }
 

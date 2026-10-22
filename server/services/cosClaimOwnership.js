@@ -45,6 +45,8 @@ async function ownershipTransaction(operation, done, work) {
   const finishPhase = () => { timings[phase] = elapsed(phaseStartedAt); };
   const enter = name => { finishPhase(); phase = name; phaseStartedAt = performance.now(); };
   const report = status => {
+    // A queue-timeout or pending report means the lock was held past its budget, which only happens
+    // during the event-loop stalls #12852 reopens on — an anomaly, so it stays on stderr; settled is routine.
     const log = status === 'failed' ? console.error : status === 'settled' ? console.log : console.warn;
     log(`🔒 Claim ownership operation=${operation} status=${status} phase=${phase} phaseMs=${elapsed(phaseStartedAt)} totalMs=${elapsed(queuedAt)} ownershipQueueMs=${timings.ownershipQueue} stateQueueMs=${timings.stateQueue} ownerReadMs=${timings.ownerRead} ownershipCheckMs=${timings.ownershipCheck} persistenceMs=${timings.persistence}`);
   };

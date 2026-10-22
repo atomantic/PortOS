@@ -805,6 +805,8 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     };
 
     it('keeps the PR published but does not dispatch the follow-up into the occupied branch', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       openPr();
       removeWorktree.mockResolvedValue({
         merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false,
@@ -818,6 +820,9 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
       expect(forceSpawnTask).not.toHaveBeenCalled();
       expect(warnings.some(w => /cleanup incomplete/.test(w))).toBe(true);
       expect(warnings.some(w => w.includes('PR follow-up for https://github.com/test/repo/pull/45 deferred'))).toBe(true);
+      // The deferral is the handling; the failed removal behind it reported itself, so stderr stays quiet here.
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('Deferring follow-up for https://github.com/test/repo/pull/45'));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Deferring follow-up'));
     });
 
     it('treats a thrown removal as an unreleased branch too', async () => {

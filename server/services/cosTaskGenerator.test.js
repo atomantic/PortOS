@@ -1422,6 +1422,8 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     const wake = vi.fn();
     const existingTaskTypes = new Set(['repo-sync']);
     const blockedTaskTypes = new Map([['repo-sync', 'blocked-repo-sync']]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const queued = await queueDueInstallWideImprovementTasks({
       dueTasks: [
@@ -1442,6 +1444,9 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     });
 
     expect(queued).toBe(0);
+    // A blocked task occupying the slot is the dedupe working, re-announced each cycle: stdout, not stderr.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Skipping install-wide repo-sync: blocked task blocked-repo-sync'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Skipping install-wide'));
     expect(generateTask).toHaveBeenCalledTimes(1);
     expect(generateTask).toHaveBeenCalledWith('user-action-review', { config: {} });
     expect(persistTask).not.toHaveBeenCalled();

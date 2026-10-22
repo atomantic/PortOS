@@ -40,7 +40,7 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorC
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
-import { updateTask, addTask, reviveBlockedTask, getAgent } from './cos.js';
+import { updateTask, addTask, reviveBlockedTask, getAgent, checkStagePrecondition } from './cos.js';
 import { emitLog } from './cosEvents.js';
 import { cleanupAgentWorktree, releaseRetryHold, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
@@ -124,6 +124,27 @@ describe('handlePipelineProgression', () => {
     expect(nextTask.metadata.pipeline.currentStage).toBe(1);
     expect(nextTask.metadata.pipeline.status).toBe('running');
     expect(nextTask.metadata.pipeline.previousStageAgentId).toBe('agent-1');
+  });
+
+  // Both are the pipeline working as designed, so they log at info: stderr is for faults.
+  it('reports a failed stage precondition at info after marking the pipeline failed', async () => {
+    checkStagePrecondition.mockReturnValueOnce({ passed: false, reason: 'REVIEW.md already exists' });
+    const stages = [{ name: 'stage-0' }, { name: 'stage-1', precondition: { fileNotExists: 'REVIEW.md' } }];
+    const task = { id: 't', taskType: 'user', metadata: { repoPath: '/example/repo', pipeline: runningPipeline({ stages }) } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    expect(updateTask.mock.calls[0][1].metadata.pipeline.status).toBe('failed');
+    expect(addTask).not.toHaveBeenCalled();
+    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('precondition failed: REVIEW.md already exists'), expect.any(Object));
+    expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('precondition failed'), expect.anything());
+  });
+
+  it('reports a duplicate stage advance at info and does not enqueue it again', async () => {
+    addTask.mockResolvedValueOnce({ id: 'queued-stage', duplicate: true, status: 'pending' });
+    const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    expect(reviveBlockedTask).not.toHaveBeenCalled();
+    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('already queued as queued-stage (pending) — skipping duplicate advance'), expect.any(Object));
+    expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('skipping duplicate advance'), expect.anything());
   });
 
   it('propagates the next stage provider/model/effort pins into the enqueued task', async () => {

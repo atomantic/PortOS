@@ -96,7 +96,7 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
   // after that lock and the presentation-only spawn grace window end.
   const state = await loadState();
   if (hasActiveTaskOwner(task.id, state.agents)) {
-    console.warn(`⚠️ Task ${task.id} already has an active owner — skipping duplicate dispatch`);
+    console.log(`⏭️ Task ${task.id} already has an active owner — skipping duplicate dispatch`);
     return null;
   }
 

@@ -102,6 +102,8 @@ describe('observeAgentChurn', () => {
 
   it('parks a looping coordinator and keeps the signal local for Layered Intelligence', async () => {
     const park = vi.fn(async () => ({}));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const out = await observeAgentChurn(
       { result: { duration: 80_000 } },
       { metadata: { analysisType: 'branch-reconcile', app: 'app-1' } },
@@ -119,10 +121,16 @@ describe('observeAgentChurn', () => {
       reason: 'churn-detected',
       actionableCount: 20
     });
+    // A coordinator the loop had to park is a workflow fault: stderr.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('CoS churn: self-improve:branch-reconcile short-lived-burst'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('CoS churn: parked branch-reconcile'));
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('keeps a non-coordinator churn signal local without parking or filing', async () => {
     const park = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const out = await observeAgentChurn(
       { result: { duration: 40_000 } },
       { metadata: { analysisType: 'claim-issue', app: 'app-1' } },
@@ -137,5 +145,8 @@ describe('observeAgentChurn', () => {
     expect(out.reason).toBe('local-metric');
     expect(out.parked).toBe(false);
     expect(park).not.toHaveBeenCalled();
+    // Nothing acts on this signal, so it is an observation, not a fault: stdout.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('CoS churn: self-improve:claim-issue short-lived-burst'));
+    expect(warn).not.toHaveBeenCalled();
   });
 });

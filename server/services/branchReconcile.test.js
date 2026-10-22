@@ -362,10 +362,15 @@ const mockOwnedClaim = () => execGh.mockImplementation(async (args) => {
 describe('unverified issue reservations in reconcile', () => {
   it('retires the local checkout while leaving possible same-account peer markers untouched before its first commit', async () => {
     mockOwnedClaim();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'github.example.com', fullName: 'example/app' });
     wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
     git.getBranches.mockResolvedValue([]);
     const result = await reconcile('/repo', { forgeAccount: 'app-account' });
+    // Leaving unverified peer markers alone is the designed policy on every local retirement: stdout.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('issue #42 markers untouched'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('markers untouched'));
     expect(result.cleaned).toEqual(['claim/issue-42']);
     expect(result.claimMarkersHeld).toEqual([{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' }]);
     expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' || args[0] === 'api')).toBe(false);

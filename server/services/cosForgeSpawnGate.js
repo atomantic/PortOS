@@ -169,7 +169,8 @@ export async function forgeSpawnHoldReason(task, { now = Date.now() } = {}) {
   // line naming the host rather than one per task.
   if (!state.warned) {
     const detail = health.detail ? ` — ${String(health.detail).split('\n')[0].slice(0, 120)}` : '';
-    emitLog('warn', `⏸️ Holding forge-dependent tasks: ${host} is unreachable${detail}`, { taskId: task.id });
+    // The hold is the handling; the one-hour escalation above is what warns.
+    emitLog('info', `⏸️ Holding forge-dependent tasks: ${host} is unreachable${detail}`, { taskId: task.id });
   }
   heldHosts.set(host, { ...state, warned: true });
   scheduleForgeRecheck();
