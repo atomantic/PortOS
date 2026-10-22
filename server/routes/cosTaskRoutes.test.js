@@ -77,7 +77,7 @@ vi.mock('../services/instances.js', () => ({ getAssignableInstances: vi.fn() }))
 vi.mock('../services/managedAppRepositories.js', () => ({ resolveManagedAppIssueTarget: vi.fn() }));
 vi.mock('../services/goalFidelityCalibration.js', () => ({ reportGoalFidelityFalsePositive: vi.fn() }));
 
-import { addTask, approveTask, deleteTask, findTaskWithSource, getAllTasks, getTaskById, getTaskView, getUserTasks, updateTask } from '../services/cosTaskStore.js';
+import { addTask, approveTask, deleteTask, findTaskWithSource, getAllTasks, getCosTasks, getTaskById, getTaskView, getUserTasks, updateTask } from '../services/cosTaskStore.js';
 import { forceSpawnTask } from '../services/cos.js';
 import { getAgents } from '../services/cosAgentLifecycle.js';
 import { getAssignableInstances } from '../services/instances.js';
@@ -168,7 +168,7 @@ describe('GET /api/cos/tasks/:id', () => {
 
   it('is a 404 for an unknown id and never shadows the literal list routes', async () => {
     findTaskWithSource.mockResolvedValue(null);
-    getUserTasks.mockResolvedValue({ tasks: [] });
+    getTaskView.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
 
     const missing = await request(buildApp()).get('/api/cos/tasks/no-such-task');
     expect(missing.status).toBe(404);
@@ -661,6 +661,20 @@ describe('GET /api/cos/tasks — bounded view routing (#9677)', () => {
     expect(getAllTasks).not.toHaveBeenCalled();
     expect(res.body.user).toMatchObject({ completedCount: 40, completedNextCursor: 'user/09' });
     expect(res.body.user.grouped.in_progress.map(t => t.id)).toEqual(['user/1']);
+  });
+
+  it.each([['user', 'user'], ['internal', 'cos']])('/tasks/%s serves bounded completed history (#12997)', async (route, key) => {
+    const views = {
+      user: { ...open(), completedCount: 40, completedNextCursor: 'user-cursor' },
+      cos: { ...empty, type: 'internal', completedCount: 3, completedNextCursor: 'cos-cursor' },
+    };
+    getTaskView.mockResolvedValue(views);
+    const res = await request(buildApp()).get(`/api/cos/tasks/${route}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(views[key]);
+    expect(getTaskView).toHaveBeenCalledWith({ kind: 'bare' });
+    expect(getUserTasks).not.toHaveBeenCalled();
+    expect(getCosTasks).not.toHaveBeenCalled();
   });
 
   it('queue view summarizes the derived lists and forwards the selected id', async () => {

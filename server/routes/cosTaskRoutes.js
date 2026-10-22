@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { existsSync } from 'fs';
 import { isRepo, notGitRepoMessage } from '../services/git.js';
-import { addTask, approveTask, challengeTask, deleteTask, findTaskWithSource, getAllTasks, getCosTasks, getTaskById, getTaskView, getUserTasks, reorderTasks, resolveTaskChallenge, resolveTaskChallengeWithRecheck, updateTask } from '../services/cosTaskStore.js';
+import { addTask, approveTask, challengeTask, deleteTask, findTaskWithSource, getAllTasks, getTaskById, getTaskView, reorderTasks, resolveTaskChallenge, resolveTaskChallengeWithRecheck, updateTask } from '../services/cosTaskStore.js';
 import { evaluateTasks } from '../services/cosTaskGenerator.js';
 import { forceSpawnTask } from '../services/cos.js';
 import { getAgents } from '../services/cosAgentLifecycle.js';
@@ -236,16 +236,15 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/cos/tasks/user - Get user tasks
+// Source-specific bounded views: open tasks plus the first completed page.
+// Further history is available through /tasks?view=completed; raw data through /tasks?view=full.
 router.get('/tasks/user', asyncHandler(async (req, res) => {
-  const tasks = await getUserTasks();
-  res.json(tasks);
+  res.json((await getTaskView({ kind: 'bare' })).user);
 }));
 
 // GET /api/cos/tasks/internal - Get CoS internal tasks
 router.get('/tasks/internal', asyncHandler(async (req, res) => {
-  const tasks = await getCosTasks();
-  res.json(tasks);
+  res.json((await getTaskView({ kind: 'bare' })).cos);
 }));
 
 // GET /api/cos/tasks/:id - One task with the queue it lives in. The Chief of
