@@ -32,6 +32,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // reach here.
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cos.js';
+import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderUnavailable } from './providerStatus.js';
 import { resolveProviderBench } from '../lib/providerCooldown.js';
@@ -1907,7 +1908,7 @@ export async function finalizeAgent({
     if (taskUpdate.metadata) delete taskUpdate.metadata.privateSecurityScope;
   }
   const taskResult = await updateTask(task.id, taskUpdate, taskType);
-  if (taskResult?.error) {
+  if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
   }
