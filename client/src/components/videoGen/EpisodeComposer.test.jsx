@@ -99,4 +99,52 @@ describe('EpisodeComposer', () => {
     rerender(<EpisodeComposer initialScenes={[{ sceneId: 's1', location: '', lines: [{ type: 'action', text: 'Imported scene' }] }]} />);
     expect(await screen.findByDisplayValue('Imported scene')).toBeTruthy();
   });
+
+  describe('preview lint lifetimes', () => {
+    // Deferred lint settles on demand so the test controls out-of-order arrival.
+    function deferLint() {
+      const pending = [];
+      lintContinuousVideoEpisode.mockImplementation(() => new Promise((resolve) => { pending.push(resolve); }));
+      return pending;
+    }
+    const flush = () => act(async () => { await Promise.resolve(); });
+
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('drops a pending lint response once the script is cleared', async () => {
+      const pending = deferLint();
+      render(<EpisodeComposer />);
+      const [textInput] = screen.getAllByPlaceholderText('what happens');
+      fireEvent.change(textInput, { target: { value: 'Mara paces the cell.' } });
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(lintContinuousVideoEpisode).toHaveBeenCalledTimes(1);
+
+      // Clear the only line while that lint is still in flight.
+      fireEvent.change(textInput, { target: { value: '' } });
+      await act(async () => { pending[0](PASSING_PREVIEW); });
+      await flush();
+
+      expect(screen.queryByText('fresh cut')).toBeNull();
+      expect(screen.getByRole('button', { name: /Queue episode/i })).toBeDisabled();
+    });
+
+    it('lets the newest edit win when an earlier lint resolves last', async () => {
+      const pending = deferLint();
+      render(<EpisodeComposer />);
+      const [textInput] = screen.getAllByPlaceholderText('what happens');
+      fireEvent.change(textInput, { target: { value: 'Mara paces the cell.' } });
+      act(() => { vi.advanceTimersByTime(1000); });
+      fireEvent.change(textInput, { target: { value: 'Mara stops.' } });
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(lintContinuousVideoEpisode).toHaveBeenCalledTimes(2);
+
+      await act(async () => { pending[1](FAILING_PREVIEW); });
+      await act(async () => { pending[0](PASSING_PREVIEW); });
+      await flush();
+
+      expect(screen.getByText(/no bible descriptor found for cast\/mara/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Queue episode/i })).toBeDisabled();
+    });
+  });
 });
