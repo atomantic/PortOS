@@ -360,7 +360,7 @@ async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
 // The scan is the multi-second part of the overview (du + a recursive walk per
 // category), and the Data page, the resources report and the data-introspection
 // harbor all request it. Share one result per `strict` mode for a short window
-// and coalesce concurrent callers; mutations here invalidate it. Rejections are
+// after it completes and coalesce concurrent callers while it is pending; mutations here invalidate it. Rejections are
 // never cached. Busy state and disk capacity are read fresh on every call.
 const OVERVIEW_SCAN_TTL_MS = 30_000;
 const overviewScans = new Map();
@@ -411,13 +411,17 @@ async function scanDataTree(strict) {
 
 function getCachedOverviewScan(strict) {
   const cached = overviewScans.get(strict);
-  if (cached && Date.now() - cached.at < OVERVIEW_SCAN_TTL_MS) return cached.promise;
+  // A pending scan is always shared; the TTL starts when it fulfills.
+  if (cached && (cached.at === null || Date.now() - cached.at < OVERVIEW_SCAN_TTL_MS)) return cached.promise;
   const promise = scanDataTree(strict);
-  const entry = { at: Date.now(), promise };
+  const entry = { at: null, promise };
   overviewScans.set(strict, entry);
-  promise.catch(() => {
-    if (overviewScans.get(strict) === entry) overviewScans.delete(strict);
-  });
+  promise.then(
+    () => { entry.at = Date.now(); },
+    () => {
+      if (overviewScans.get(strict) === entry) overviewScans.delete(strict);
+    },
+  );
   return promise;
 }
 
