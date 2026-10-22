@@ -203,7 +203,7 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // restoreStoryboard overlays the authored fields, un-tombstones, and bumps
     // updatedAt so the restore wins the next LWW. Null = already hard-pruned.
     const restored = await restoreStoryboard(recordId, patch).catch(translateGone);
-    if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
   } else if (kind === 'fableLoom') {
     // Restore the authored story graph and playback settings through the normal
     // loom mutation path so the edit is sanitized, timestamped, and re-pushed.
