@@ -36,7 +36,7 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 2;
+export const TRIAGE_RULES_VERSION = 3;
 
 // Decisions that leave nothing for you: something else has the thread, or it
 // is already closed or merged. They sit under Handled instead of Needs you,
@@ -196,7 +196,8 @@ const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 /**
  * Which lane an agent may resolve a thread in, or null when no lane fits. A
  * plan with `refused` names why it cannot go: only a PortOS managed app's
- * repo has lanes (they run per app), and a Private account's threads never
+ * repo has lanes (they run per app), except a security alert in a repo of
+ * yours or a global advisory (`security-fix`), and a Private account's threads never
  * go, because the lanes use their own providers, which its provider
  * allow-list cannot bind. Suspect and closed threads never qualify. The pull
  * number comes from the subject's API url, never from a title or body. Used
@@ -212,12 +213,16 @@ export function agentHandoff({ account, row }) {
   } else if (row.subject_type === 'Issue' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
     plan = { lane: 'issue-watcher' };
   } else if (row.reason === 'security_alert' && row.decision === 'surface-high') {
-    // The lane reads the repo's own Dependabot alerts and PRs, not the thread.
-    plan = { lane: 'dependency-updates' };
+    // A managed app's own dependency lane reads the repo's Dependabot alerts and
+    // PRs, not the thread. A repo of yours with no app, or an advisory that
+    // names no repo, gets a one-off security fix run that works in a scratch clone.
+    plan = evidence.repoManaged !== true && (evidence.repoOwned === true || !row.repo_full_name)
+      ? { lane: 'security-fix', repo: row.repo_full_name || null }
+      : { lane: 'dependency-updates' };
   }
   if (!plan) return null;
   if (account?.trust === 'private') return { ...plan, refused: 'private-account' };
-  if (evidence.repoManaged !== true) return { ...plan, refused: 'no-managed-app' };
+  if (plan.lane !== 'security-fix' && evidence.repoManaged !== true) return { ...plan, refused: 'no-managed-app' };
   return plan;
 }
 

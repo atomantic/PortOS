@@ -30,7 +30,7 @@ function modeHint(account) {
   if (account.mode !== 'autopilot') return assist;
   const handoff = account.trust === 'private'
     ? 'Private accounts never hand threads off.'
-    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. Nothing outside your apps is ever started.';
+    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. A security alert in another repo of yours starts one CoS task per repo that fixes it in a pull request and merges it.';
   return `${assist} ${handoff}`;
 }
 

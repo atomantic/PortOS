@@ -21,20 +21,25 @@ import { createGithubActorTrust } from './forgeActorTrust.js';
 import { listAccounts } from './githubAccounts.js';
 
 const GH_TIMEOUT_MS = 20_000;
-// Each thread costs a few API calls; the rest wait for the next run.
-const MAX_THREADS_PER_RUN = 25;
+// Each thread costs a few API calls; the rest wait for the next run. The first
+// sync reads the whole inbox, read threads included.
+const MAX_THREADS_PER_RUN = 60;
 // Open threads a rules-version bump re-decides without new activity: version 2
-// changed your own PRs and finished threads (now marked done, not just read).
-// A thread already handed off keeps its hand-off, and one an Assist model
-// sorted is not read again.
-const REDECIDE_SQL = `(state = 'open' AND NOT (evidence ? 'handoff') AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%'
-  AND ((reason = 'author' AND subject_type = 'PullRequest') OR decision = 'suggest-mark-read'))`;
+// changed your own PRs and finished threads (now marked done, not just read);
+// version 3 leaves a bot's comment on your own PR to the PR workflow. A thread
+// already handed off keeps its hand-off. One an Assist model sorted is not
+// read again, except your own PR: the rule table decides those, so a verdict
+// from before the rule existed must not keep one in front of you.
+const REDECIDE_SQL = `(state = 'open' AND NOT (evidence ? 'handoff')
+  AND ((reason = 'author' AND subject_type = 'PullRequest' AND trust = 'yours')
+    OR (decision = 'suggest-mark-read' AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')))`;
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
 const SUBJECT_JQ = '{author: .user.login, association: .author_association, state: .state, merged: (.merged // false)}';
 const COMMENT_JQ = '{author: .user.login, association: .author_association, mentions: ([(.body // "") | scan("@[A-Za-z0-9][A-Za-z0-9-]*")] | length)}';
 
+const isBotLogin = (login) => /\[bot\]$/i.test(login);
 const loginOrNull = (value) => (typeof value === 'string' && LOGIN_RE.test(value) ? value : null);
 
 /** PortOS managed apps keyed by their repo, as lower-cased `host/owner/repo`. */
@@ -148,7 +153,10 @@ async function triageThread(row, ctx) {
   // never leaves Needs you on a comment nobody checked.
   let commenterTrust = commentPath && commentPath !== subjectPath && !commenter ? 'outside' : null;
   if (commenter && subjectAuthor && commenter.toLowerCase() !== subjectAuthor.toLowerCase()) {
-    commenterTrust = await trustOf(commenter);
+    // A bot (a CI or review app) commenting on your own PR in your repo was
+    // installed there by you, so it is the PR workflow's business, not an
+    // outside reply waiting on you. The repo's collaborator list never names it.
+    commenterTrust = isBotLogin(commenter) && repoOwned && trust === 'yours' ? 'unknown' : await trustOf(commenter);
     for (const signal of await signalsFor(commenter, commenterTrust, comment.association, comment.mentions ?? 0)) signalSet.add(signal);
   }
   const signals = [...signalSet];

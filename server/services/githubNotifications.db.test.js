@@ -28,7 +28,7 @@ vi.mock('../lib/gitRemote.js', async (importOriginal) => ({
   readOriginRemoteUrl: vi.fn(async (repoPath) => (repoPath === '/example/acme-app' ? 'https://github.com/acme/app.git' : null)),
 }));
 vi.mock('./prReviewerSecurity.js', () => ({ listExternalOpenPullRequests: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })) }));
+vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })), addTask: vi.fn() }));
 vi.mock('./taskSchedule.js', () => ({ triggerOnDemandTask: vi.fn(), getOnDemandRequests: vi.fn(async () => []) }));
 vi.mock('./notifications.js', () => ({
   addNotification: vi.fn(async () => ({})),
@@ -41,6 +41,7 @@ const { getAllApps } = await import('./apps.js');
 const { listExternalOpenPullRequests } = await import('./prReviewerSecurity.js');
 const { triggerOnDemandTask } = await import('./taskSchedule.js');
 const { addNotification } = await import('./notifications.js');
+const { addTask } = await import('./cosTaskStore.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const {
@@ -130,14 +131,14 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     accountIds.push(account.id);
   });
 
-  it('stores threads with a host-bound link, sends If-Modified-Since next time, and reconciles reads', async () => {
+  it('reads the whole inbox, sends If-Modified-Since next time, and marks a thread gone from GitHub done', async () => {
     const login = account.login;
     const seen = [];
     mockGh((args) => {
       seen.push(args);
       return seen.length === 1
         ? listing([thread('101', { owner: login }), thread('102', { owner: 'someone-else' })])
-        : listing([thread('102', { owner: 'someone-else' })]);
+        : listing([{ ...thread('102', { owner: 'someone-else' }), unread: false }]);
     });
 
     expect(await syncAccountNotifications(account.id)).toMatchObject({ changed: true, fetched: 2 });
@@ -149,10 +150,12 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(first.sync[account.id]).toMatchObject({ lastError: null, pollIntervalSeconds: 60 });
 
     await syncAccountNotifications(account.id);
+    expect(seen[0]).toContain('notifications?all=true&per_page=50&page=1');
     expect(seen[1]).toContain('If-Modified-Since: Thu, 01 Oct 2026 10:00:00 GMT');
-    const rows = (await listNotifications({ accountId: account.id })).notifications;
-    expect(rows.find((row) => row.threadId === '101').unread).toBe(false);
-    expect(rows.find((row) => row.threadId === '102').unread).toBe(true);
+    const rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
+    // Read on GitHub but still in its inbox: open here too. Gone from the inbox: done.
+    expect(rows.find((row) => row.threadId === '102')).toMatchObject({ unread: false, state: 'open' });
+    expect(rows.find((row) => row.threadId === '101')).toMatchObject({ unread: false, state: 'done' });
   });
 
   it('treats a 304 as unchanged and keeps rows', async () => {
@@ -488,6 +491,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       thread('1202', { owner: 'acme', repo: 'app', commentUrl: 'https://api.github.com/repos/acme/app/issues/comments/9' }),
       // Its latest comment cannot be read, so it is not assumed to be yours.
       thread('1208', { owner: 'acme', repo: 'app', commentUrl: 'https://api.github.com/repos/acme/app/issues/comments/404' }),
+      // A review app's comment is the PR workflow's, not an outside reply.
+      thread('1209', { owner: 'acme', repo: 'app', commentUrl: 'https://api.github.com/repos/acme/app/issues/comments/10' }),
       alert('1203'), alert('1204'), alert('1205'),
       thread('1206', { owner: 'acme', repo: 'app', reason: 'review_requested' }),
       thread('1207', { owner: 'acme', repo: 'app', reason: 'review_requested' }),
@@ -495,6 +500,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       'repos/acme/app/pulls/1201': { author: account.login, association: 'OWNER', state: 'open', merged: false },
       'repos/acme/app/pulls/1202': { author: account.login, association: 'OWNER', state: 'open', merged: false },
       'repos/acme/app/pulls/1208': { author: account.login, association: 'OWNER', state: 'open', merged: false },
+      'repos/acme/app/pulls/1209': { author: account.login, association: 'OWNER', state: 'open', merged: false },
+      'repos/acme/app/issues/comments/10': { author: 'cursor[bot]', association: 'NONE', mentions: 0 },
       'repos/acme/app/issues/comments/9': { author: 'visitor', association: 'NONE', mentions: 0 },
       'repos/acme/app/collaborators/visitor/permission': { user: { login: 'visitor' }, permission: 'read' },
       'repos/acme/app/pulls/1206': { author: 'mallory', association: 'NONE', state: 'open', merged: false },
@@ -517,10 +524,12 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const handled = (await listNotifications({ accountId: account.id, view: 'handled' })).notifications;
     // Autopilot includes Assist, which marks it done on GitHub.
     expect(handled.find((row) => row.threadId === '1201')).toMatchObject({ state: 'done', decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' });
+    expect(handled.find((row) => row.threadId === '1209')).toMatchObject({ state: 'done', decision: 'handled-by-pr-workflow' });
 
-    // A thread decided under older rules is decided again without new activity.
+    // Your own PR decided under older rules is decided again without new
+    // activity, even when an Assist model sorted it then.
     await query(
-      `UPDATE github_notifications SET state = 'open', decision = 'needs-you', evidence = evidence - 'rulesVersion' || '{"rule":"default"}'::jsonb
+      `UPDATE github_notifications SET state = 'open', decision = 'surface', evidence = evidence - 'rulesVersion' || '{"rule":"ai-surface"}'::jsonb
        WHERE account_id = $1 AND thread_id = '1201'`,
       [account.id],
     );
@@ -553,6 +562,39 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await expect(resolveWithAgent(account.id, '1302')).rejects.toMatchObject({ status: 409 });
     expect(triggerOnDemandTask).toHaveBeenCalledTimes(1);
     vi.mocked(getAllApps).mockResolvedValue([]);
+  });
+
+  it('gives a security alert outside your apps one security fix task per repo, and one for global advisories', async () => {
+    await updateAccount(account.id, { mode: 'autopilot' });
+    let taskCount = 0;
+    vi.mocked(addTask).mockReset().mockImplementation(async (task) => ({ id: `task-${++taskCount}`, description: task.description }));
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+    const alert = (id, owner, repo) => thread(id, { owner, repo, reason: 'security_alert', type: 'RepositoryVulnerabilityAlert', url: null });
+    const advisory = (id, ghsa) => ({
+      ...thread(id, { reason: 'security_alert', type: 'SecurityAdvisory', url: `https://api.github.com/advisories/${ghsa}` }),
+      repository: null,
+    });
+    mockGh(() => listing([
+      alert('1401', account.login, 'tool'), alert('1402', account.login, 'tool'),
+      alert('1403', 'someone', 'other'),
+      advisory('1404', 'GHSA-q3jh-wrc6-jgq8'), advisory('1405', 'GHSA-8r9p-f939-6h3c'),
+    ]));
+
+    expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 4, agentRuns: 2 });
+    const tasks = vi.mocked(addTask).mock.calls.map(([task]) => task);
+    expect(tasks).toHaveLength(2);
+    const repoTask = tasks.find((task) => task.metadata.githubSecurityFix.repo);
+    expect(repoTask).toMatchObject({ useWorktree: false, openPR: false, noCodeOutput: true, metadata: { githubSecurityFix: { repo: `${account.login}/tool` } } });
+    expect(repoTask.description.split('\n')[0]).toBe(`Fix the open security alerts in github.com/${account.login}/tool`);
+    expect(repoTask.description).toContain(`gh repo clone ${account.login}/tool`);
+    const advisoryTask = tasks.find((task) => !task.metadata.githubSecurityFix.repo);
+    expect(advisoryTask.metadata.githubSecurityFix.advisories).toEqual(['GHSA-8r9p-f939-6h3c', 'GHSA-q3jh-wrc6-jgq8']);
+    expect(await getNotification(account.id, '1404')).toMatchObject({ decision: 'handed-off', htmlUrl: 'https://github.com/advisories/GHSA-q3jh-wrc6-jgq8' });
+    expect((await getNotification(account.id, '1402')).evidence.handoff).toMatchObject({ lane: 'security-fix', taskId: 'task-1', batchSize: 2 });
+    // A repo you neither own nor manage is not yours to fix.
+    expect(await getNotification(account.id, '1403')).toMatchObject({ decision: 'surface-high' });
+    await syncAccountNotifications(account.id);
+    expect(addTask).toHaveBeenCalledTimes(2);
   });
 
   it('sends the opt-in monthly audit report once per window, as suggestions only', async () => {
