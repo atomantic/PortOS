@@ -443,6 +443,55 @@ export async function listTouchpoints(personId, limit = 50) {
   return result.rows.map(rowToTouchpoint);
 }
 
+const escapeLike = (value) => String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`);
+
+/**
+ * Erase the touchpoints a synced source wrote, plus their `record_audit`
+ * snapshots (which would otherwise keep the subject/title for the 30-day Tribe
+ * sweep), in one transaction (#12984). Selectors:
+ *   - `accountId`: message touchpoints (`msg:<id>:%`) and every calendar
+ *     touchpoint of that account, including hand-logged ones — the account and
+ *     its event details are going away together.
+ *   - `dedupePrefix`: any other source's dedupe-key family (e.g. `imsg:<chat>:`).
+ * Returns counts only. An empty selector deletes nothing.
+ */
+export async function deleteAutoTouchpoints({ accountId, dedupePrefix } = {}) {
+  const clauses = [];
+  const params = [];
+  if (accountId != null && String(accountId).length > 0) {
+    params.push(`msg:${escapeLike(accountId)}:%`, String(accountId));
+    clauses.push(`(source = 'message' AND dedupe_key LIKE $${params.length - 1})`);
+    clauses.push(`(source = 'calendar' AND calendar_account_id = $${params.length})`);
+  }
+  if (dedupePrefix != null && String(dedupePrefix).length > 0) {
+    params.push(`${escapeLike(dedupePrefix)}%`);
+    clauses.push(`dedupe_key LIKE $${params.length}`);
+  }
+  if (clauses.length === 0) return { touchpoints: 0, auditRows: 0 };
+  await ensureReady();
+  const result = await withTransaction(async (client) => {
+    const removed = await client.query(
+      `DELETE FROM tribe_touchpoints WHERE ${clauses.join(' OR ')} RETURNING id`,
+      params,
+    );
+    const ids = removed.rows.map((row) => String(row.id));
+    let auditRows = 0;
+    if (ids.length > 0) {
+      const snapshots = await client.query(
+        `DELETE FROM record_audit
+         WHERE table_name = 'tribe_touchpoints' AND record_id = ANY($1::text[])`,
+        [ids],
+      );
+      auditRows = snapshots.rowCount;
+    }
+    return { touchpoints: ids.length, auditRows };
+  });
+  if (result.touchpoints > 0) {
+    console.log(`🧹 Erased ${result.touchpoints} touchpoint(s) and ${result.auditRows} audit snapshot(s)`);
+  }
+  return result;
+}
+
 export async function createTouchpoint(personId, data = {}) {
   await ensureReady();
   const person = await getPerson(personId);

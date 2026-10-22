@@ -3,6 +3,8 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import messagesRoutes from './messages.js';
 
+vi.mock('../services/humanActivity.js', () => ({ deleteEvents: vi.fn().mockResolvedValue({ deleted: 0 }) }));
+vi.mock('../services/tribe.js', () => ({ deleteAutoTouchpoints: vi.fn().mockResolvedValue({ touchpoints: 0, auditRows: 0 }) }));
 vi.mock('../services/messageEvaluator.js', () => ({ evaluateMessages: vi.fn(), generateReplyBody: vi.fn() }));
 import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
@@ -70,6 +72,8 @@ vi.mock('../services/messageTokenExtractor.js', () => ({
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
+import * as humanActivity from '../services/humanActivity.js';
+import * as tribe from '../services/tribe.js';
 import * as messageSender from '../services/messageSender.js';
 import * as messagePlaywrightSync from '../services/messagePlaywrightSync.js';
 import * as messageTokenExtractor from '../services/messageTokenExtractor.js';
@@ -262,6 +266,8 @@ describe('Messages Routes', () => {
       expect(messageAccounts.deleteAccount).toHaveBeenCalledWith(VALID_UUID);
       expect(messageSync.deleteCache).toHaveBeenCalledWith(VALID_UUID);
       expect(messageDrafts.deleteDraftsByAccountId).toHaveBeenCalledWith(VALID_UUID);
+      expect(humanActivity.deleteEvents).toHaveBeenCalledWith({ accountId: VALID_UUID });
+      expect(tribe.deleteAutoTouchpoints).toHaveBeenCalledWith({ accountId: VALID_UUID });
     });
 
     it('should return 400 for invalid UUID', async () => {

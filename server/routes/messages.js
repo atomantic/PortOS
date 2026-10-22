@@ -131,6 +131,11 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   await messageAccounts.updateAccount(req.params.id, { enabled: false });
   await messageSync.deleteCache(req.params.id);
   await messageDrafts.deleteDraftsByAccountId(req.params.id);
+  // Derived copies (subjects, previews, participants) live in the Timeline and Tribe (#12984).
+  // Lazy: these reach settings/DB modules that most route suites (and boot) never need.
+  const [humanActivity, { deleteAutoTouchpoints }] = await Promise.all([import('../services/humanActivity.js'), import('../services/tribe.js')]);
+  await humanActivity.deleteEvents({ accountId: req.params.id });
+  await deleteAutoTouchpoints({ accountId: req.params.id });
   await messageAccounts.deleteAccount(req.params.id);
   req.app.get('io')?.emit('messages:changed', {});
   res.status(204).send();
