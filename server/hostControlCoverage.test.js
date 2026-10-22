@@ -373,7 +373,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/decks/:id/samples/:sampleId', REMOVES_RECORD],
   // /api/detect
   ['POST /api/detect/ai', HANDLER_GATED],
-  ['POST /api/detect/pm2', READ_OVER_POST],
+  ['POST /api/detect/pm2', READ_ONLY_PROBE],
   ['POST /api/detect/port', READ_ONLY_PROBE],
   // /api/devtools/video-download
   ['POST /api/devtools/video-download/:jobId/cancel', REDUCES_EXECUTION],
@@ -1272,8 +1272,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/voice/public/synthesize', EXPOSED_API],
   // /api/workspace-contexts
   ['DELETE /api/workspace-contexts/:appId', REMOVES_RECORD],
-  ['POST /api/workspace-contexts/:appId/restore', READ_OVER_POST],
-  ['POST /api/workspace-contexts/:appId/save', RECORDS],
+  ['POST /api/workspace-contexts/:appId/restore', READ_ONLY_EXTERNAL],
+  ['POST /api/workspace-contexts/:appId/save', READ_ONLY_EXTERNAL],
   // /api/writers-room
   ['POST /api/writers-room/exercises', RECORDS],
   ['POST /api/writers-room/exercises/:id/discard', RECORDS],

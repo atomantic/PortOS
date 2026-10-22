@@ -104,8 +104,8 @@
  *     only with host control), voice config (the runtime reconcile likewise),
  *     and the body splits in COMPILED_BODY_ROUTES. Left open with a specific
  *     reason in REVIEWED_OPEN_MUTATIONS (server/hostControlCoverage.test.js):
- *     fixed read-only probes (`ps`, `du`, `lsof`), the chiptune and waveform
- *     renders (a fixed ffmpeg encode of audio PortOS synthesized), TTS
+ *     fixed read-only probes (`ps`, `du`, `lsof`, `pm2 jlist`), the chiptune
+ *     and waveform renders (a fixed ffmpeg encode of audio PortOS synthesized), TTS
  *     synthesis on an installed runtime (configured inference), and selection
  *     among already-configured providers that arms nothing.
  *   - Importer, Brain and analytics AI (#11036): classify/analyze/retry-issues,
@@ -1445,11 +1445,12 @@ const COMPILED_BODY_ROUTES = [
   // A code-animation prompt that studies a reference video runs ffmpeg over
   // it (#13055); a prompt without one only reads records.
   ['POST /api/code-animation/prompt', (body) => body?.referenceVideo ? ['referenceVideo'] : []],
-  // Pre-guard audit, remainder (#13055). Each opens or retargets unattended
-  // work only for the named value; the rest of the body is records, and
-  // disarming or disabling stays open.
-  // Toggling Docker containment runs the docker CLI and removes containers,
-  // networks and volumes, like the eidoverse toggle above.
+  // Pre-guard audit, remainder (#13055). Each gates only the named value; the
+  // rest of the body is records, and disarming or disabling stays open except
+  // where disabling itself tears down host executables (Docker containment
+  // here, and the voice runtime through HOST_CONTROL_VOICE_CONFIG_PATHS).
+  // Toggling Docker containment either way runs the docker CLI and removes
+  // containers, networks and volumes, like the eidoverse toggle above.
   ['PUT /api/settings/features/docker-containment', (body) => bodyKeys(body)],
   // Enabling a subscription family re-enables its provider records, the gated
   // provider-edit change.
