@@ -38,7 +38,9 @@ export function createAgentSpawnContext(task) {
       completeExecution(context.toolExecution.id, { success: false });
     }
     if (context.claimAcquired) {
-      await updateTask(context.task.id, { metadata: buildRelease() }, context.task.taskType || 'user').catch(() => {});
+      await updateTask(context.task.id, { metadata: buildRelease() }, context.task.taskType || 'user').catch((err) => {
+        emitLog('warn', `Failed to release claim for task ${context.task.id}: ${err.message}`, { taskId: context.task.id });
+      });
     }
     await releaseAppReviewMarker(context.task.metadata?.app).catch(err => {
       emitLog('warn', `Failed to release app review marker for ${context.task.metadata?.app}: ${err.message}`, { taskId: context.task.id });
@@ -64,7 +66,9 @@ export function createAgentSpawnContext(task) {
           blockedCategory: category,
           blockedAt: new Date().toISOString(),
         },
-      }, context.task.taskType || 'user').catch(() => {});
+      }, context.task.taskType || 'user').catch((err) => {
+        emitLog('warn', `Failed to persist blocked state for task ${context.task.id}: ${err.message}`, { taskId: context.task.id });
+      });
     }
     await context.cleanupOnError(reason);
     if (emit === 'agent:error'
