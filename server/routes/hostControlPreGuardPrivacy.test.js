@@ -13,7 +13,7 @@ afterAll(cleanupTempDataRoots);
 
 // Privacy broker scans, opt-out and verification passes, arming the broker
 // recheck (route body or the `privacy` settings slice), broker consent grants,
-// YouTube scrapes in the managed browser and Google Calendar goal blocks need
+// YouTube scrapes and the setup check in the managed browser, and Google Calendar goal blocks need
 // operator authority (#13055). Real routers behind the real gates; the first
 // service boundary is doubled so no browser, mail, DB or Google call runs.
 const auth = vi.hoisted(() => ({ enabled: false }));
@@ -25,6 +25,7 @@ const effects = vi.hoisted(() => ({
   restartRecheck: vi.fn(async () => {}),
   recordConsent: vi.fn(async (grant) => ({ id: 'example-grant', ...grant })),
   youtubeSync: vi.fn(async () => ({ ok: true })),
+  youtubeSetupCheck: vi.fn(async () => ({ ok: true })),
   playlistSync: vi.fn(async () => ({ ok: true })),
   scheduleGoal: vi.fn(async () => ({ scheduled: 0 })),
   rescheduleGoal: vi.fn(async () => ({ scheduled: 0 })),
@@ -56,7 +57,7 @@ vi.mock('../services/privacyVault.js', () => ({}));
 vi.mock('../services/privacyOrgs.js', () => ({}));
 vi.mock('../services/privacyBrokers.js', () => ({}));
 vi.mock('../services/privacyChanges.js', () => ({}));
-vi.mock('../services/youtubeSync.js', () => ({ runSync: effects.youtubeSync }));
+vi.mock('../services/youtubeSync.js', () => ({ runSync: effects.youtubeSync, checkSetup: effects.youtubeSetupCheck }));
 vi.mock('../services/youtubePlaylists.js', () => ({ syncYoutubePlaylists: effects.playlistSync }));
 vi.mock('../services/goalCalendarScheduler.js', () => ({
   scheduleTimeBlocks: effects.scheduleGoal, rescheduleTimeBlocks: effects.rescheduleGoal,
@@ -79,6 +80,8 @@ const operations = [
   ['post', '/api/privacy/optout/verify', {}, effects.verify, 200],
   ['post', '/api/youtube/sync', {}, effects.youtubeSync, 200],
   ['post', '/api/youtube/playlists/sync', {}, effects.playlistSync, 200],
+  // Opens or reuses a YouTube tab in the signed-in browser and reads it (#13097).
+  ['get', '/api/youtube/setup-check', undefined, effects.youtubeSetupCheck, 200],
   ['post', '/api/digital-twin/identity/goals/example-goal/schedule', {}, effects.scheduleGoal, 200],
   ['post', '/api/digital-twin/identity/goals/example-goal/reschedule', {}, effects.rescheduleGoal, 200],
   ['put', schedule, { enabled: true }, effects.restartRecheck, 200],

@@ -20,7 +20,10 @@
  *
  * `scanRouteGraph()` also returns every declaration's content key
  * (`routeDeclarationKey`) so `apiRouteGraph.test.js` can prove the walk reaches
- * every declaration under `server/routes/` by comparing two in-memory scans.
+ * every declaration under `server/routes/` by comparing two in-memory scans,
+ * and each operation's `declarations` (module, router id, local path) so the
+ * host-control guard can find the handler a mounted route runs. The catalog
+ * omits `declarations`.
  */
 
 import { readFileSync, statSync } from 'node:fs';
@@ -190,8 +193,10 @@ export function scanRouteGraph({ repoRoot = DEFAULT_REPO_ROOT, indexSource } = {
       path,
       mountPath,
       sources: [],
+      declarations: [],
     };
     existing.sources.push(declaration.source);
+    existing.declarations.push(declaration);
     operations.set(key, existing);
   };
 
@@ -257,7 +262,11 @@ export function scanRouteGraph({ repoRoot = DEFAULT_REPO_ROOT, indexSource } = {
   }
 
   const routes = [...operations.values()]
-    .map((operation) => ({ ...operation, sources: [...new Set(operation.sources)].sort() }))
+    .map((operation) => ({
+      ...operation,
+      sources: [...new Set(operation.sources)].sort(),
+      declarations: [...new Map(operation.declarations.map((d) => [routeDeclarationKey(d), d])).values()],
+    }))
     .sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
 
   // Collisions are counted PER MODULE, from the parsed declarations rather than
@@ -291,7 +300,7 @@ export function buildApiRouteCatalog(options = {}) {
   return {
     derivedFrom: DERIVED_FROM,
     mounts,
-    routes,
+    routes: routes.map(({ declarations: _declarations, ...route }) => route),
     stats: {
       mounts: mounts.length,
       operations: routes.length,

@@ -17,10 +17,24 @@
  * not tool-free belongs in HOST_CONTROL_ROUTES. Otherwise add it here with the
  * reason constant that matches, or a new one. Every entry names what the
  * route actually does; there is no catch-all "not yet reviewed" reason (#13055).
+ *
+ * GETs are covered by a static trace (#13097, test/processReachScan.js): a
+ * mounted GET whose handler can reach child_process, node-pty, a browser
+ * driver, ws, keytar, a DevTools endpoint, a computed import or an injected
+ * router dependency must be gated, or listed in REVIEWED_PROCESS_GETS with a
+ * reason. A fixed probe shared by many GETs is reviewed once, in
+ * REVIEWED_PROCESS_SITES, and ends the trace there. The trace follows a
+ * reached binding whole, so a GET that only reads a table of executors is
+ * still listed; its reason says so.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { scanRouteGraph } from './lib/apiRouteGraph.js';
 import { hostControlBodyRouteFor, hostControlRouteFor } from './lib/hostControlRoutes.js';
+import { createProcessReachTracer } from './test/processReachScan.js';
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -1372,5 +1386,348 @@ describe('host-control coverage of mounted mutating routes (#12952)', () => {
   it('counts body-gated routes as covered', () => {
     expect(routes.some(({ method, path }) => method === 'PUT' && path === '/api/settings')).toBe(true);
     expect(classify([{ method: 'PUT', path: '/api/settings' }], []).unclassified).toEqual([]);
+  });
+});
+
+// --- GET routes that reach host-process work (#13097) ---
+
+// Site reasons: one reviewed binding, which ends the trace for every GET.
+const HOST_QUERY = 'Runs one fixed read-only host query (sysctl, nvidia-smi, vm_stat, ps or a process listing, lsof/netstat, du/find, `which`, `defaults read`, an is-running AppleScript, `tailscale status`, `ffmpeg -filters` or `-list_devices`); the caller chooses no command, argument or path, and host state does not change.';
+const VERSION_PROBE = 'Runs an installed tool or interpreter only to check it (`--version`, `brew list`, `--probe`, or a fixed `python -c` import or version script); the executable is PortOS-managed or comes from code or gated settings, and the check installs, starts and changes nothing.';
+const ICLOUD_HEAL = 'Asks iCloud (`brctl download`) to download the evicted file PortOS is already reading; the caller names no path and nothing else runs.';
+const GIT_PROBE = 'Runs a fixed read-only git or gh query (`rev-parse`, `remote get-url`, `status`, `gh api user` or `rate_limit`) and changes no repository or remote state.';
+const KILLS_OWN_CHILD = 'Signals a child process PortOS itself started (its timeout or cancel path); starts nothing.';
+const PM2_LIST = 'Reads `pm2 jlist` through a short-lived cache; starts, stops or changes no process.';
+const STATIC_JSON = 'Loads the checked-in prompt-integrity JSON snapshot with `require`; the path is a constant, not a computed module.';
+const CDP_VERSION = "Reads the managed browser's DevTools `/json/version` endpoint; opens, lists or steers no page.";
+
+// 'path#binding', repo-relative, as the trace labels module-scope bindings.
+const REVIEWED_PROCESS_SITES = [
+  ['server/lib/buildIdentity.js#probe', GIT_PROBE],
+  ['server/lib/bufferedSpawn.js#killProcessTree', KILLS_OWN_CHILD],
+  ['server/lib/commandExists.js#commandExists', VERSION_PROBE],
+  ['server/lib/cudaCapability.js#detectCudaComputeCapability', HOST_QUERY],
+  ['server/lib/cudaCapability.js#detectCudaGpus', HOST_QUERY],
+  ['server/lib/cudaCapability.js#detectCudaUtilization', HOST_QUERY],
+  ['server/lib/cudaCapability.js#queryNvidiaSmi', HOST_QUERY],
+  ['server/lib/detachedSpawn.js#processMatches', HOST_QUERY],
+  ['server/lib/detachedSpawn.js#queryWin32Command', HOST_QUERY],
+  ['server/lib/detachedSpawn.js#snapshotProcesses', HOST_QUERY],
+  ['server/lib/ffmpeg.js#supportsSetparamsFilter', HOST_QUERY],
+  ['server/lib/fileCore.js#dirSize', HOST_QUERY],
+  ['server/lib/fullDiskAccess.js#defaultReadProcess', HOST_QUERY],
+  ['server/lib/gitRemote.js#readRemoteUrl', GIT_PROBE],
+  ['server/lib/icloudFile.js#materializeAndWait', ICLOUD_HEAL],
+  ['server/lib/icloudFile.js#requestMaterialization', ICLOUD_HEAL],
+  ['server/lib/memoryStats.js#macMemory', HOST_QUERY],
+  ['server/lib/platform.js#getListeningPorts', HOST_QUERY],
+  ['server/lib/platform.js#probeArm64Hardware', HOST_QUERY],
+  ['server/lib/processEnv.js#whichFirst', HOST_QUERY],
+  ['server/lib/processEnv.js#whichFirstSync', HOST_QUERY],
+  ['server/lib/pythonSetup.js#isMuscriptorRuntimeReady', VERSION_PROBE],
+  ['server/lib/pythonSetup.js#probeFlux2Venv', VERSION_PROBE],
+  ['server/lib/pythonSetup.js#probePythonArch', VERSION_PROBE],
+  ['server/lib/pythonSetup.js#probePythonHealth', VERSION_PROBE],
+  ['server/lib/tailscale.js#readTailscaleStatus', HOST_QUERY],
+  ['server/services/agentManagement.js#getAgentProcessStats', HOST_QUERY],
+  ['server/services/agents.js#getProcessInfo', HOST_QUERY],
+  ['server/services/agents.js#readUnixSnapshot', HOST_QUERY],
+  ['server/services/agents.js#readWindowsSnapshot', HOST_QUERY],
+  ['server/services/browserService.js#getCdpVersion', CDP_VERSION],
+  ['server/services/dataManager.js#getDirSizeAndCount', HOST_QUERY],
+  ['server/services/git.js#isRepo', GIT_PROBE],
+  ['server/services/github.js#getGitHubAuthStatus', GIT_PROBE],
+  ['server/services/github.js#probeGh', GIT_PROBE],
+  ['server/services/imageGen/mossRuntime.js#probeMossBinary', VERSION_PROBE],
+  ['server/services/itermAuth.js#isItermRunning', HOST_QUERY],
+  ['server/services/itermAuth.js#readApiServerEnabled', HOST_QUERY],
+  ['server/services/jev.js#isBasePythonSupported', VERSION_PROBE],
+  ['server/services/llamaServerManager.js#readLlamaServerVersion', VERSION_PROBE],
+  ['server/services/mediaService.js#listDevices', HOST_QUERY],
+  ['server/services/modelAbuseGuard.js#isBasePythonSupported', VERSION_PROBE],
+  ['server/services/pipeline/musicGen.js#isEngineHealthy', VERSION_PROBE],
+  ['server/services/pm2.js#fetchJlist', PM2_LIST],
+  ['server/services/rigging/runtime.js#probeBlenderModule', VERSION_PROBE],
+  ['server/services/taskPromptDefaults/integrityHash.js#readPromptIntegritySnapshot', STATIC_JSON],
+  ['server/services/videoGen/runtimes.js#isByovRuntimeCurrent', VERSION_PROBE],
+  ['server/services/videoGen/runtimes.js#isByovRuntimeReady', VERSION_PROBE],
+  ['server/services/videoGen/runtimes.js#probeRuntimeFingerprint', VERSION_PROBE],
+  ['server/services/videoGen/runtimes.js#resolveByovRuntimeLoraCapable', VERSION_PROBE],
+  ['server/services/ytdlpUpdate.js#readYtDlpVersion', VERSION_PROBE],
+];
+
+// GET reasons.
+const FORGE_READ = "Reads repository and forge state: read-only git (status, branch, log, ls-files, ls-remote) in a registered app checkout or PortOS's own, and gh/glab queries authenticated with the stored forge token; changes no repository or remote state beyond PortOS's own records.";
+const PM2_READ = 'Reads PM2 process state or logs (`pm2 jlist`, `pm2 logs --nostream`) of a PortOS-managed process; starts, stops or reconfigures nothing.';
+const RUNTIME_STATUS = "Reports an installed local runtime's state with fixed status, version and import probes and PM2 reads (Ollama, llama-server, MTPLX, SlotStream, JEV, LAYA, the abuse guard, Docker, SuperCollider, a TTS or image backend, the database); installs, starts and reconfigures nothing.";
+const PROVIDER_STATUS = 'Reads installed provider CLIs and runtimes: `--version` and `models` probes of the configured commands, cached runtime readiness, and the Codex app-server account or model list; takes no caller prompt, command or provider choice, and the install and run functions in the runtime table run only from gated routes.';
+const PROVIDER_USAGE = 'Reads quota and usage from the enabled provider CLIs on their fixed usage commands (`claude /usage`, a TUI usage screen, the Codex app-server account read), cached; takes no caller prompt or provider choice.';
+const TOOLKIT_INJECTED = 'Toolkit factory route (lib/aiToolkit/routes and their PortOS wrappers): the handler reads provider, run, prompt or benchmark records through the injected service and starts no run.';
+const TOOL_CATALOG = 'Lists a catalog whose entries carry executors (agent, voice and creative tools, MCP tool adapters, mind recipes); the handler returns metadata, and the executors run only through the gated tool dispatch.';
+const JOB_TABLE = "Reads media-job queue state or a job record; the traced encoders and generators sit in the queue's runtime table and run only from the queue worker after a gated enqueue.";
+const ACTIVE_WORK_READ = 'Reports in-flight work by reading the in-memory state of the runner, backup and media-job modules, loaded lazily, plus GPU telemetry; starts none of it.';
+const STORED_MEDIA = 'Runs ffmpeg or ffprobe over media PortOS already stored (a generation history item, the song master, a music-library track, a sprite run) to probe it, decode it or write a derived cache file; the caller supplies no path or argument.';
+const MOLTBOOK_READ = 'Reads from the Moltbook API with the stored agent key; a response that demands verification is answered with the account\'s configured model and screened by the local abuse classifier, as on every Moltbook call.';
+const PEER_PAYLOAD = 'Peer endpoint in PEER_API_SURFACE that builds its payload from stored records; the executors the trace reaches come from whole-module namespace imports of the stores it reads.';
+const PEER_ADMIN_READ = 'Describes peer-administration state from stored grants and catalog reviews; the installer and execution adapters the trace reaches run only from the handler-gated execution and catalog-review writes.';
+
+// 'METHOD /path' as scanRouteGraph spells it, like REVIEWED_OPEN_MUTATIONS.
+const REVIEWED_PROCESS_GETS = [
+  ['GET /api/agent-context/manifest', TOOL_CATALOG],
+  ['GET /api/agents/tools/feed', MOLTBOOK_READ],
+  ['GET /api/agents/tools/post/:postId', MOLTBOOK_READ],
+  ['GET /api/agents/tools/published', MOLTBOOK_READ],
+  ['GET /api/agents/tools/rate-limits', MOLTBOOK_READ],
+  ['GET /api/agents/tools/relevant-posts', MOLTBOOK_READ],
+  ['GET /api/agents/tools/submolts', MOLTBOOK_READ],
+  ['GET /api/apps/:id', FORGE_READ],
+  ['GET /api/apps/:id/issues', FORGE_READ],
+  ['GET /api/apps/:id/lane-health', FORGE_READ],
+  ['GET /api/apps/:id/logs', PM2_READ],
+  ['GET /api/apps/:id/pull-requests', FORGE_READ],
+  ['GET /api/apps/:id/quality-schedule', FORGE_READ],
+  ['GET /api/apps/:id/repository-sources', "Inspects a managed app's checkouts with read-only git and gh queries, and refreshes origin with `git fetch` when the last fetch is stale; a fetch updates only remote-tracking refs, and the caller chooses no repository, remote or command."],
+  ['GET /api/beeper/oauth/callback', 'OAuth redirect target: stores the credential Beeper returns and arms its ingestion socket to the fixed Beeper endpoint, as completing the connection the operator started requires.'],
+  ['GET /api/browser', "Reads the managed browser's status, including its tab list over CDP; a caller without host control gets pages and downloads stripped (#12488)."],
+  ['GET /api/browser/logs', PM2_READ],
+  ['GET /api/capabilities', PROVIDER_STATUS],
+  ['GET /api/code-animation/execution', 'Reports which containment mechanism the code-animation worker would use, from a fixed Docker or sandbox availability probe; runs no worker.'],
+  ['GET /api/code-animation/generate/:id', JOB_TABLE],
+  ['GET /api/code-review/reviewer-identities', FORGE_READ],
+  ['GET /api/cos/actionable-insights', 'Runs the PM2 health sweep (it restarts errored processes) only for a caller with host control, like its gated twin POST /api/cos/health/check; anyone else reads the recorded snapshot. Leftover-branch detection runs read-only git and gh queries.'],
+  ['GET /api/cos/mind/recipes', TOOL_CATALOG],
+  ['GET /api/cos/mind/recipes/:recipeId', TOOL_CATALOG],
+  ['GET /api/cos/mind/tools', TOOL_CATALOG],
+  ['GET /api/cos/mind/visibility', 'Reads persistent-mind workspace preflights: read-only git status of each workspace and `--version` checks of the CLIs it would use; starts nothing.'],
+  ['GET /api/cos/schedule', FORGE_READ],
+  ['GET /api/cos/schedule/due', FORGE_READ],
+  ['GET /api/cos/schedule/due/:appId', FORGE_READ],
+  ['GET /api/cos/schedule/task/:taskType', FORGE_READ],
+  ['GET /api/cos/tools', TOOL_CATALOG],
+  ['GET /api/cos/upcoming', FORGE_READ],
+  ['GET /api/cos/workflow', FORGE_READ],
+  ['GET /api/creative-director/:id/execution', PROVIDER_STATUS],
+  ['GET /api/creative-director/tools', TOOL_CATALOG],
+  ['GET /api/database/status', 'Runs the fixed `scripts/db.sh status` report and Postgres size queries; changes no database or container.'],
+  ['GET /api/devtools/video-download/yt-dlp', RUNTIME_STATUS],
+  ['GET /api/digital-twin/gaps', 'Computes twin confidence locally: the handler calls calculateConfidence without a provider, so the provider branch the trace reaches never runs here.'],
+  ['GET /api/docker-containment/status', RUNTIME_STATUS],
+  ['GET /api/eidoverse/world/controllers', 'Lists Eidoverse controller definitions loaded with `import()` from the definitions directory PortOS ships; the caller names no module and no controller runs.'],
+  ['GET /api/federation/media/v1/status', 'Reports which local media generators this install offers peers, from readiness probes and the media-job queue\'s in-memory state; the encoders in the queue\'s runtime table run only from its worker.'],
+  ['GET /api/git/:appId', FORGE_READ],
+  ['GET /api/git/submodules/status', FORGE_READ],
+  ['GET /api/github/accounts/:id/status', FORGE_READ],
+  ['GET /api/harnesses', PROVIDER_STATUS],
+  ['GET /api/html-composition/beats', STORED_MEDIA],
+  ['GET /api/image-gen/status', RUNTIME_STATUS],
+  ['GET /api/image-to-3d/targets', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
+  ['GET /api/image-to-3d/targets/:targetId/install', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
+  ['GET /api/image-to-3d/trellis2/install', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
+  ['GET /api/iterm/status', 'Reports iTerm2 bridge availability from fixed probes (`defaults read`, an is-running AppleScript) and the bridge\'s current state; opens no API connection.'],
+  ['GET /api/local-llm/assessments', RUNTIME_STATUS],
+  ['GET /api/local-llm/capability-tests', RUNTIME_STATUS],
+  ['GET /api/local-llm/jev/heads', 'Lists trained JEV heads and whether training runs; the trainer module is loaded whole, but only its in-memory running flag is read.'],
+  ['GET /api/local-llm/jev/status', RUNTIME_STATUS],
+  ['GET /api/local-llm/laya-mlx/status', RUNTIME_STATUS],
+  ['GET /api/local-llm/llama-server/status', RUNTIME_STATUS],
+  ['GET /api/local-llm/llama-server/update-status', RUNTIME_STATUS],
+  ['GET /api/local-llm/mtplx/models/search', 'Searches the MTPLX model catalog with the installed CLI (`mtplx forge discover --json`), the caller\'s query passed as one argument with no shell; downloads nothing.'],
+  ['GET /api/local-llm/mtplx/status', RUNTIME_STATUS],
+  ['GET /api/local-llm/persistent-mind-setup', RUNTIME_STATUS],
+  ['GET /api/local-llm/security-guard/status', RUNTIME_STATUS],
+  ['GET /api/local-llm/slotstream/status', RUNTIME_STATUS],
+  ['GET /api/local-llm/status', RUNTIME_STATUS],
+  ['GET /api/logs/:processName', PM2_READ],
+  ['GET /api/logs/app/:appId', PM2_READ],
+  ['GET /api/managed-visitor-admin', 'Lists managed-app visitor credentials through the injected broker (services/managedVisitors.js); it issues and runs nothing.'],
+  ['GET /api/managed-visitors/v1/capabilities', 'Reads a managed-app visitor\'s capabilities through the injected broker (services/managedVisitors.js), whose credentials work only for a local same-origin app; it runs nothing.'],
+  ['GET /api/media-jobs', JOB_TABLE],
+  ['GET /api/media-jobs/:id', JOB_TABLE],
+  ['GET /api/media-jobs/holds', JOB_TABLE],
+  ['GET /api/media-jobs/queue', JOB_TABLE],
+  ['GET /api/models/performance/task-benchmark', TOOLKIT_INJECTED],
+  ['GET /api/music-video', JOB_TABLE],
+  ['GET /api/music-video/:id', JOB_TABLE],
+  ['GET /api/music-video/:id/film-looks', STORED_MEDIA],
+  ['GET /api/music-video/:id/media-pool/library', 'Searches stored media for the pool; the trace reaches the local image backend whole through a namespace import, while the handler reads only its gallery records.'],
+  ['GET /api/music-video/:id/media-pool/search', 'Searches stored media for the pool; the trace reaches the local image backend whole through a namespace import, while the handler reads only its gallery records.'],
+  ['GET /api/music-video/:id/publish/drafts', 'Checks whether each publish draft the operator opened through the gated prepare route is still a tab in the managed browser (a CDP target lookup); opens, fills or submits nothing.'],
+  ['GET /api/music-video/:id/render-cleanup', STORED_MEDIA],
+  ['GET /api/music-video/:id/shot-renders', STORED_MEDIA],
+  ['GET /api/music-video/:id/shot-renders/:name', STORED_MEDIA],
+  ['GET /api/music/supercollider/status', RUNTIME_STATUS],
+  ['GET /api/palette/manifest', TOOL_CATALOG],
+  ['GET /api/peer-administration/catalog-review', PEER_ADMIN_READ],
+  ['GET /api/peer-administration/catalog-reviews', PEER_ADMIN_READ],
+  ['GET /api/peer-administration/peers/:peerId', PEER_ADMIN_READ],
+  ['GET /api/peer-sync/cos-tasks', PEER_PAYLOAD],
+  ['GET /api/peer-sync/eidoverse-foundations', PEER_PAYLOAD],
+  ['GET /api/peer-sync/library-manifest', PEER_PAYLOAD],
+  ['GET /api/pipeline/tts/voices', 'Lists TTS voices from the configured engines\' catalogs; the synthesize functions in the engine table run only from the speak and synthesis routes.'],
+  ['GET /api/prompts', TOOLKIT_INJECTED],
+  ['GET /api/prompts/:stage', TOOLKIT_INJECTED],
+  ['GET /api/prompts/variables', TOOLKIT_INJECTED],
+  ['GET /api/prompts/variables/:key', TOOLKIT_INJECTED],
+  ['GET /api/providers', PROVIDER_STATUS],
+  ['GET /api/providers/:id', PROVIDER_STATUS],
+  ['GET /api/providers/:id/status', TOOLKIT_INJECTED],
+  ['GET /api/providers/active', PROVIDER_STATUS],
+  ['GET /api/providers/catalog', PROVIDER_STATUS],
+  ['GET /api/providers/codex/account', PROVIDER_STATUS],
+  ['GET /api/providers/codex/models', PROVIDER_STATUS],
+  ['GET /api/providers/comparison', TOOLKIT_INJECTED],
+  ['GET /api/providers/composites/:id', PROVIDER_STATUS],
+  ['GET /api/providers/fleet-host', PROVIDER_STATUS],
+  ['GET /api/providers/harnesses', PROVIDER_STATUS],
+  ['GET /api/providers/management/preview', TOOLKIT_INJECTED],
+  ['GET /api/providers/model-pins', FORGE_READ],
+  ['GET /api/providers/opencode/installation', PROVIDER_STATUS],
+  ['GET /api/providers/readiness', PROVIDER_STATUS],
+  ['GET /api/providers/runtimes', PROVIDER_STATUS],
+  ['GET /api/providers/samples', PROVIDER_STATUS],
+  ['GET /api/providers/status', TOOLKIT_INJECTED],
+  ['GET /api/quota-burn', PROVIDER_USAGE],
+  ['GET /api/remote-desktop/status', 'Reports whether a VNC server answers on the fixed loopback port; mints no session.'],
+  ['GET /api/review/queue', 'Builds the review queue from stored records and read-only git and forge queries; the provider calls in the trace come from a local `identity` that shadows the identity-service namespace import, so the whole service is followed.'],
+  ['GET /api/runs', TOOLKIT_INJECTED],
+  ['GET /api/runs/:id', TOOLKIT_INJECTED],
+  ['GET /api/runs/:id/output', TOOLKIT_INJECTED],
+  ['GET /api/runs/:id/prompt', TOOLKIT_INJECTED],
+  ['GET /api/settings/ai-assignments', FORGE_READ],
+  ['GET /api/settings/media-share-candidates', 'Reports which local media generators this install offers peers, from readiness probes and the media-job queue\'s in-memory state; the encoders in the queue\'s runtime table run only from its worker.'],
+  ['GET /api/sprites/:id/walk/runs/:runId/source-frames', STORED_MEDIA],
+  ['GET /api/system/activity', ACTIVE_WORK_READ],
+  ['GET /api/system/health/details', JOB_TABLE],
+  ['GET /api/system/processing', ACTIVE_WORK_READ],
+  ['GET /api/update/auto', ACTIVE_WORK_READ],
+  ['GET /api/update/status', FORGE_READ],
+  ['GET /api/usage', PROVIDER_USAGE],
+  ['GET /api/usage/claude-code', PROVIDER_USAGE],
+  ['GET /api/usage/providers', PROVIDER_USAGE],
+  ['GET /api/video-gen/active', JOB_TABLE],
+  ['GET /api/video-gen/history/:id', STORED_MEDIA],
+  ['GET /api/video-gen/history/:id/sharing-download', STORED_MEDIA],
+  ['GET /api/video-gen/upscale/:id/plan', STORED_MEDIA],
+  ['GET /api/voice/facetime/status', RUNTIME_STATUS],
+  ['GET /api/voice/public/voices', 'Lists TTS voices from the configured engines\' catalogs; the synthesize functions in the engine table run only from the speak and synthesis routes.'],
+  ['GET /api/voice/qwen3/status', RUNTIME_STATUS],
+  ['GET /api/voice/status', RUNTIME_STATUS],
+  ['GET /api/voice/voices', 'Lists TTS voices from the configured engines\' catalogs; the synthesize functions in the engine table run only from the speak and synthesis routes.'],
+  ['GET /api/workspace-contexts/:appId', FORGE_READ],
+];
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** Classification problems of the GET `routes` (scanRouteGraph rows) traced with `routeSinks` against `entries`. */
+const classifyProcessGets = (routes, entries, routeSinks) => {
+  const reaching = new Set(routes
+    .filter((route) => route.method === 'GET' && route.declarations.some((declaration) => routeSinks(declaration).length))
+    .map(routeKey));
+  const seen = new Set();
+  const duplicated = [];
+  for (const [key] of entries) {
+    if (seen.has(key)) duplicated.push(key);
+    seen.add(key);
+  }
+  const alsoGated = [...seen].filter((key) => isGated(...key.split(' ')));
+  return {
+    unclassified: [...reaching].filter((key) => !seen.has(key) && !isGated(...key.split(' '))),
+    stale: [...seen].filter((key) => !reaching.has(key) && !alsoGated.includes(key)),
+    alsoGated,
+    duplicated,
+  };
+};
+
+const GET_RULES = 'Gate the GET in HOST_CONTROL_ROUTES (server/lib/hostControlRoutes.js), or list it in REVIEWED_PROCESS_GETS '
+  + '(server/hostControlCoverage.test.js) with what it actually runs. A fixed read-only probe many GETs share belongs in REVIEWED_PROCESS_SITES instead.';
+
+describe('host-control coverage of GET routes that reach host processes (#13097)', () => {
+  const { routes } = scanRouteGraph();
+  const tracer = createProcessReachTracer({ repoRoot: REPO_ROOT, reviewedSites: REVIEWED_PROCESS_SITES.map(([site]) => site) });
+
+  it('classifies every GET whose handler reaches host-process work, with no stale, gated or doubled entries', () => {
+    const problems = classifyProcessGets(routes, REVIEWED_PROCESS_GETS, tracer.routeSinks);
+    const evidence = problems.unclassified.map((key) => {
+      const route = routes.find((candidate) => routeKey(candidate) === key);
+      const declaration = route.declarations.find((candidate) => tracer.routeSinks(candidate).length);
+      return `${key}\n    ${tracer.explainRoute(declaration).chain.join('\n    > ')}`;
+    });
+    expect(evidence, `GET routes that reach host-process work. ${GET_RULES}`).toEqual([]);
+    expect(problems.stale, 'Reviewed GET entries whose route is gone or no longer reaches host-process work; delete them.').toEqual([]);
+    expect(problems.alsoGated, 'Reviewed GET entries that are also gated; delete them from REVIEWED_PROCESS_GETS.').toEqual([]);
+    expect(problems.duplicated, 'Reviewed GET entries listed twice.').toEqual([]);
+  }, 120_000);
+
+  it('keeps every reviewed site a live binding that still reaches host-process work', () => {
+    const dead = REVIEWED_PROCESS_SITES
+      .filter(([site]) => !tracer.traceSite(site)?.sinks.length)
+      .map(([site]) => site);
+    expect(dead, 'Reviewed sites that no longer exist or no longer reach a sink; delete them.').toEqual([]);
+    const sites = REVIEWED_PROCESS_SITES.map(([site]) => site);
+    expect(sites.filter((site, index) => sites.indexOf(site) !== index), 'Reviewed sites listed twice.').toEqual([]);
+  }, 120_000);
+
+  it('gives every reviewed GET and site a reason', () => {
+    expect([...REVIEWED_PROCESS_GETS, ...REVIEWED_PROCESS_SITES]
+      .filter(([, reason]) => typeof reason !== 'string' || !reason.trim())).toEqual([]);
+  });
+
+  it('fails on a new process-spawning GET, through a lazy import, a barrel, a namespace and an injected dependency', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-process-gets-'));
+    const write = (relative, text) => {
+      mkdirSync(dirname(join(root, relative)), { recursive: true });
+      writeFileSync(join(root, relative), text);
+    };
+    try {
+      write('server/index.js', [
+        "import exampleRoutes from './routes/example.js';",
+        "import { createFactoryRoutes } from './routes/factory.js';",
+        "app.use('/api/example', exampleRoutes);",
+        "app.use('/api/factory', createFactoryRoutes(service));",
+      ].join('\n'));
+      write('server/routes/example.js', [
+        "import { Router } from 'express';",
+        "import { probe } from '../services/index.js';",
+        "import * as tabs from '../services/tabs.js';",
+        "import { readNotes } from '../services/notes.js';",
+        "import { fixedProbe } from '../services/fixed.js';",
+        'const router = Router();',
+        "router.get('/lazy', async (req, res) => { const { encode } = await import('../services/encode.js'); res.json(await encode()); });",
+        "router.get('/barrel', async (req, res) => res.json(await probe()));",
+        "router.get('/namespace', async (req, res) => res.json(await tabs.open()));",
+        "router.get('/notes', async (req, res) => res.json(await readNotes()));",
+        "router.get('/reviewed', async (req, res) => res.json(await fixedProbe()));",
+        'export default router;',
+      ].join('\n'));
+      write('server/routes/factory.js', [
+        "import { Router } from 'express';",
+        'export function createFactoryRoutes(service) {',
+        '  const router = Router();',
+        "  router.get('/', async (req, res) => res.json(await service.list()));",
+        '  return router;',
+        '}',
+      ].join('\n'));
+      write('server/services/encode.js', "import { spawn } from 'node:child_process';\nexport const encode = () => spawn('ffmpeg', ['-version']);\n");
+      write('server/services/index.js', "export * from './notes.js';\nexport * from './probe.js';\n");
+      write('server/services/probe.js', "import { execFile } from 'child_process';\nexport function probe() { return execFile('git', ['status']); }\n");
+      write('server/services/tabs.js', "export const open = () => fetch('http://127.0.0.1:9222/json/new?about:blank', { method: 'PUT' });\n");
+      write('server/services/notes.js', "import { readFile } from 'node:fs/promises';\nexport const readNotes = () => readFile('notes.json', 'utf8');\n");
+      write('server/services/fixed.js', "import { execFileSync } from 'node:child_process';\nexport const fixedProbe = () => execFileSync('sysctl', ['-n', 'hw.ncpu']);\n");
+
+      const fixture = scanRouteGraph({ repoRoot: root }).routes;
+      const traced = createProcessReachTracer({ repoRoot: root, reviewedSites: ['server/services/fixed.js#fixedProbe'] });
+      expect(classifyProcessGets(fixture, [], traced.routeSinks).unclassified.sort()).toEqual([
+        'GET /api/example/barrel',
+        'GET /api/example/lazy',
+        'GET /api/example/namespace',
+        'GET /api/factory',
+      ]);
+      expect(fixture.find((route) => route.path === '/api/example/namespace').declarations.flatMap(traced.routeSinks)).toEqual(['browser']);
+      expect(fixture.find((route) => route.path === '/api/factory').declarations.flatMap(traced.routeSinks)).toEqual(['injected-dependency']);
+      expect(traced.traceSite('server/services/fixed.js#fixedProbe').sinks).toEqual(['child_process']);
+      expect(classifyProcessGets(fixture, [['GET /api/example/notes', 'Reads notes.']], traced.routeSinks).stale).toEqual(['GET /api/example/notes']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

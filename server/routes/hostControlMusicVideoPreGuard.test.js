@@ -33,6 +33,7 @@ const effects = vi.hoisted(() => {
     importDocumentZip: resolves({ project }),
     checkOverlayTextInBackground: vi.fn(),
     startDependencyRepair: resolves({ project }),
+    getDependencyImpact: resolves({ shots: [], evidence: [] }),
     reviewArtifact: resolves({ project }),
     prepareProductionReview: resolves({ project }),
     renderProductionProof: resolves({ jobId: 'example-job' }),
@@ -118,6 +119,7 @@ vi.mock('../services/musicVideo/overlayTextService.js', async (importOriginal) =
 vi.mock('../services/musicVideo/revisionService.js', async (importOriginal) => ({
   ...await importOriginal(),
   startDependencyRepair: effects.startDependencyRepair,
+  getDependencyImpact: effects.getDependencyImpact,
   resumeRevision: effects.resumeRevision,
 }));
 vi.mock('../services/musicVideo/devArtifactService.js', async (importOriginal) => ({
@@ -195,6 +197,8 @@ const operations = [
   ['post', `${PROJECT}/cast-and-sets/approve`, {}, effects.approveCastAndSets, 200],
   ['post', `${PROJECT}/cast-and-sets/skip`, {}, effects.skipCastAndSets, 200],
   ['post', `${PROJECT}/dependency-repairs`, { basis: 'example-basis' }, effects.startDependencyRepair, 201],
+  // The preview decodes the song master with ffmpeg (#13097).
+  ['get', `${PROJECT}/dependency-impact`, undefined, effects.getDependencyImpact, 200],
   ['post', `${PROJECT}/production-review/prepare`, { providerId: 'example-provider', model: 'example-model' }, effects.prepareProductionReview, 200],
   ['post', `${PROJECT}/production-review/proof`, { startSec: 0, endSec: 12 }, effects.renderProductionProof, 202],
   ['post', `${PROJECT}/production-review/text-check`, {}, effects.startOverlayTextCheck, 202],
@@ -225,9 +229,9 @@ const appFor = (address = '192.0.2.10') => {
 };
 const call = (app, [method, path, body], headers = {}) => {
   const pending = request(app)[method](path);
-  if (body.raw) pending.set('Content-Type', `multipart/form-data; boundary=${BOUNDARY}`);
+  if (body?.raw) pending.set('Content-Type', `multipart/form-data; boundary=${BOUNDARY}`);
   for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body.raw ?? body);
+  return pending.send(body?.raw ?? body);
 };
 const expectNoEffects = () => {
   for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();

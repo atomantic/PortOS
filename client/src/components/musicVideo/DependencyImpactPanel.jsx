@@ -4,6 +4,10 @@ import { openRevisionOf } from '../../lib/musicVideoAttention.js';
 import { formatCount } from '../../utils/formatters.js';
 
 const REVISION_HINT_ID = 'mv-repair-blocked-hint';
+// The preview decodes the song with ffmpeg, so the server gates it like other
+// host work (#13097); a remote password-free viewer still gets the page.
+const UNAVAILABLE = 'unavailable';
+const UNAVAILABLE_NOTE = 'Asset dependency check needs an operator session, or a local connection when no password is set.';
 
 /** Preview first; only the director's Repair action starts any work. */
 export default function DependencyImpactPanel({ project, busy, onRepair }) {
@@ -17,15 +21,18 @@ export default function DependencyImpactPanel({ project, busy, onRepair }) {
     let active = true;
     setResult(null);
     setError(null);
-    getMusicVideoDependencyImpact(project.id, { silent: true }).then((impact) => {
+    getMusicVideoDependencyImpact(project.id, { silent: true, hostControlOptional: true }).then((impact) => {
       if (active) setResult(impact);
     }).catch((err) => {
-      if (active) setError(err.message || 'Could not check asset dependencies');
+      if (!active) return;
+      if (err.code === 'HOST_CONTROL_FORBIDDEN') setResult(UNAVAILABLE);
+      else setError(err.message || 'Could not check asset dependencies');
     });
     return () => { active = false; };
   }, [project.id, basisKey, retry]);
   const revisionActive = !!openRevisionOf(project);
   if (error) return <div role="alert" className="text-xs text-port-error">{error} <button type="button" onClick={() => setRetry((value) => value + 1)}>Retry dependency check</button></div>;
+  if (result === UNAVAILABLE) return <p className="text-xs text-port-text-muted">{UNAVAILABLE_NOTE}</p>;
   if (!result || (!result.shots.length && !result.evidence.length)) return null;
   return (
     <section aria-label="Stale asset impact" className="rounded border border-port-warning/40 bg-port-warning/5 p-3 space-y-2 text-xs">

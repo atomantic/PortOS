@@ -15,6 +15,8 @@ import {
   syncYoutubePlaylists,
 } from '../../../services/api';
 
+const NEEDS_OPERATOR_NOTE = 'Setup check needs an operator session, or a local connection when no password is set.';
+
 // Brain → YouTube (#2153). Opt-in, machine-local ingestion of YouTube watch
 // history into the activity timeline. OFF by default — the YouTube watch-history
 // API is gone, so this scrapes the signed-in history page in the managed browser.
@@ -55,10 +57,15 @@ export function YoutubeTab() {
 
   const handleCheckSetup = async () => {
     setChecking(true);
-    const result = await getYoutubeSetupCheck({ silent: true }).catch(() => null);
+    // The check drives the signed-in browser, so the server gates it (#13097);
+    // a refused caller sees the note inline rather than a toast.
+    const result = await getYoutubeSetupCheck({ silent: true, hostControlOptional: true }).catch((err) => (
+      err?.code === 'HOST_CONTROL_FORBIDDEN' ? { ok: false, needsOperator: true, error: NEEDS_OPERATOR_NOTE } : null
+    ));
     setChecking(false);
     setSetup(result);
     if (result?.ok) toast.success('Signed into YouTube in the managed browser');
+    else if (result?.needsOperator) return;
     else if (result) toast.error(result.error || 'YouTube not ready');
     else toast.error('Setup check failed');
   };

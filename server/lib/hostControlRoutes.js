@@ -242,6 +242,25 @@
  * (server/hostControlCoverage.test.js), which fails CI on a new, stale or
  * double-listed route. Classify a new route when you add it, using the
  * family notes above.
+ *
+ * GET routes are covered by a static trace instead (#13097): the same guard
+ * follows each mounted GET handler through the module-scope bindings it names,
+ * lazy `import()`s, barrels and namespace imports included, to child_process,
+ * node-pty, playwright/puppeteer, ws, keytar, a DevTools endpoint, a computed
+ * import or an injected router dependency (server/test/processReachScan.js).
+ * A GET whose trace reaches one is gated here or listed in
+ * REVIEWED_PROCESS_GETS with a reason; a fixed probe that many GETs share
+ * (sysctl, nvidia-smi, `--version`, `brctl download`) is reviewed once in
+ * REVIEWED_PROCESS_SITES and ends the trace. The trace over-approximates —
+ * a reached binding counts whole — so a reason may say that the traced
+ * executor sits in a table the handler only reads. Gated GETs: the dependency
+ * impact preview (an ffmpeg decode of the song master) and the YouTube setup
+ * check (it opens and reads a tab in the signed-in browser); the client shows
+ * a refused preview as unavailable. Open with a reason: version, status and
+ * import probes, PM2 and git/forge reads, ffprobe of stored media, and the
+ * actionable-insights PM2 sweep, which runs only for a caller with host
+ * control (POST /api/cos/health/check is its gated twin). A callback stored at
+ * runtime or an EventEmitter listener is not followed, so read for those.
  */
 
 import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from './objects.js';
@@ -1288,6 +1307,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/eidoverse/travel/depart',
   'PUT /api/eidoverse/world/config',
   'PATCH /api/eidoverse/world/controllers/:id/config',
+
+  // GET routes the process-reach trace found starting host work (#13097): the
+  // dependency-impact preview decodes the current song master with ffmpeg to
+  // compare sung windows, and the YouTube setup check opens or reuses a tab in
+  // the signed-in managed browser and reads it (#12488 rule).
+  'GET /api/music-video/:id/dependency-impact',
+  'GET /api/youtube/setup-check',
 ]);
 
 /**
