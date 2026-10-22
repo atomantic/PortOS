@@ -161,6 +161,31 @@ export async function validateCleanupReviewTarget({ target, workspacePath, requi
   return null;
 }
 
+const lowerLogin = (value) => String(value ?? '').replace(/^@+/, '').toLowerCase();
+
+/** Non-optional `@login` reviewers of a roster, lower-cased and `@`-free. */
+function requiredForgeLogins(roster) {
+  const optional = new Set((roster.optionalReviewers || []).map(lowerLogin));
+  return (roster.usernames || []).map(lowerLogin).filter((login) => login && !optional.has(login));
+}
+
+// A review counts only when one of `logins` submitted it against exactly the
+// bound head; drafts (PENDING) and withdrawn (DISMISSED) reviews never resume
+// work. true/false is an answer, null means the forge could not be read.
+async function forgeReviewSubmittedOnHead(target, logins, forgeAccount) {
+  const pr = parsePullRequestUrl(target.prUrl);
+  const repoSpec = pr && githubRepoSpec({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` });
+  if (!repoSpec) return null;
+  const options = await resolveForgeExecOptions(target.repoPath, { forgeAccount });
+  const raw = await execGh(['pr', 'view', String(pr.number), '--repo', repoSpec, '--json', 'reviews'], undefined,
+    { cwd: options.cwd, env: options.env }).catch(() => null);
+  const view = safeJSONParse(raw, null);
+  if (!isPlainObject(view) || !Array.isArray(view.reviews)) return null;
+  return view.reviews.some((review) => logins.includes(lowerLogin(review?.author?.login))
+    && !['PENDING', 'DISMISSED'].includes(String(review?.state || '').toUpperCase())
+    && String(review?.commit?.oid || '').toLowerCase() === target.headSha);
+}
+
 /** Resolve a genuinely missing required review without adopting a completed
  * owner into merge admission. Ambiguous history and optional/no-review policies
  * retain the branch; pending CI by itself never creates cognitive work.
@@ -232,7 +257,16 @@ export async function inspectCompletedOwnerReview({ agentId = null, repoPath, br
   if (policy === PR_COMPLETIONS.MERGE_ON_GREEN) return { ...held('review-not-required'), agentId: agent.id, originalTask: task,
     roster: await followUpRoster(task, policy), reviewTarget: target };
   const roster = await followUpRoster(task, PR_COMPLETIONS.REVIEW_THEN_MERGE);
-  if (!roster.reviewers?.some(reviewer => !roster.optionalReviewers?.includes(reviewer))) return held('review-required-roster-unproven');
+  if (!roster.reviewers?.some(reviewer => !roster.optionalReviewers?.includes(reviewer))) {
+    // A username-only roster has no local verdict to prove: the review is a forge
+    // event. Resume only when a required login has reviewed this exact head.
+    const logins = requiredForgeLogins(roster);
+    if (!logins.length) return held('review-required-roster-unproven');
+    const reviewed = await forgeReviewSubmittedOnHead(target, logins, app.forgeAccount);
+    if (reviewed === null) return held('review-forge-unreadable');
+    if (!reviewed) return held('awaiting-forge-review');
+    return { disposition: 'review-required', reason: 'forge-review-submitted', agentId: agent.id, originalTask: task, roster, reviewTarget: target };
+  }
   const review = await readReviewEvidence(worktreePath);
   if (review.status === 'unreadable') return held('review-evidence-unreadable');
   if (reviewEvidenceAccepted(review, headSha, PR_COMPLETIONS.REVIEW_THEN_MERGE, roster)) return { ...held('review-recorded-handoff-missing'), agentId: agent.id, originalTask: task, roster, reviewTarget: target };

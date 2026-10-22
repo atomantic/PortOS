@@ -55,6 +55,21 @@ describe('completed owner required review inspection', () => {
     f.tasks.task.metadata.prCompletion = 'merge-on-green'; f.hold = null;
     expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-not-required', reviewTarget: { headSha: head } });
   });
+  it('waits for a username-only reviewer and resumes only on a review of the bound head', async () => {
+    f.roster = { reviewers: [], optionalReviewers: [], usernames: ['Alice'], reviewerMaxRounds: {} };
+    const review = (over) => ({ author: { login: 'alice' }, state: 'COMMENTED', commit: { oid: head }, ...over });
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-forge-unreadable' });
+    for (const reviews of [[], [review({ commit: { oid: 'b'.repeat(40) } })], [review({ author: { login: 'mallory' } })],
+      [review({ state: 'PENDING' })], [review({ state: 'DISMISSED' })]]) {
+      f.pr = { ...f.pr, reviews };
+      expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'awaiting-forge-review' });
+    }
+    f.pr = { ...f.pr, reviews: [review()] };
+    expect(await inspect()).toMatchObject({ disposition: 'review-required', reason: 'forge-review-submitted', agentId: 'owner',
+      roster: { usernames: ['Alice'] }, reviewTarget: { headSha: head } });
+    f.roster.optionalReviewers = ['@alice'];
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-required-roster-unproven' });
+  });
   it('preserves ambiguous owners, live holders, task holds and draft PRs', async () => {
     f.agents.push({ ...f.agents[0], id: 'second' });
     expect((await inspect()).reason).toBe('review-owner-ambiguous'); f.agents.pop();
