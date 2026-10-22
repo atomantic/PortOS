@@ -413,7 +413,6 @@ export async function saveLearningData(data) {
   cosEvents.emit('learning:changed');
 }
 
-
 /**
  * Summarize the enriched `failureSignatures` map (issues #2329/#2333) into a
  * ranked, display-ready list. Reads each category's `recent[]` samples to add
@@ -543,7 +542,6 @@ export function buildRecurrenceInsight({ category, count, taskType, agentId = nu
     message
   };
 }
-
 
 /**
  * Load dismissed recommendations map: { [id]: { dismissedAt, snapshot } }
