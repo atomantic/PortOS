@@ -186,7 +186,6 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it.each([
     ['feature-completeness', ['Stubs reachable from the interface', 'Decide, do not defer', 'Static evidence is enough']],
     ['workflow-recovery', ['Work from server state, not from views', 'Disabled controls say why', 'id of what holds it']],
-    ['upgrade-rehearsal', ['Build a synthetic older install', 'Restore a backup', 'One issue per root cause']],
   ])('%s v1 states what makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
     expect(PROMPT_VERSIONS[key]).toBe(1);
@@ -203,7 +202,27 @@ describe('taskPromptDefaults integrity snapshot', () => {
     for (const marker of ['never the live `data/`', 'never the real Postgres', '`MEMORY_BACKEND=file`', '`NODE_ENV=test`', 'port']) {
       expect(opening).toContain(marker);
     }
-    expect(opening).toMatch(/out of\nbounds even when it only reads/);
+    expect(opening).toMatch(/out of\s+bounds even when it only reads/);
+  });
+
+  // v2 (#12906): the rehearsal must reach the primary store's dump and restore
+  // through helper-made scratch databases, and still degrade to an honest
+  // "uncovered" report when none can be made.
+  it('upgrade-rehearsal v2 round-trips Postgres through scratch databases only', () => {
+    const current = DEFAULT_TASK_PROMPTS['upgrade-rehearsal'];
+    expect(PROMPT_VERSIONS['upgrade-rehearsal']).toBe(2);
+    expect(current).toContain('{modeInstructions}');
+    for (const marker of [
+      'Build a synthetic older install',
+      'Restore a backup',
+      'One issue per root cause',
+      'scripts/rehearsal-scratch-db.js',
+      'restorePostgres',
+      'portos_rehearsal_',
+      'File-only fallback',
+    ]) expect(current, marker).toContain(marker);
+    expect(current).toMatch(/under about\s+60 characters/);
+    expect(current).toMatch(/as uncovered,\s+quoting the helper/);
   });
 
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {

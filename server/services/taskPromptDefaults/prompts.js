@@ -2328,12 +2328,19 @@ offered.`,
 
 Execute {appName}'s upgrade path and its backup restore against scratch
 installs, and file what breaks. Every command in this run targets a scratch
-directory you create: never the live \`data/\`, never the real Postgres, with
-\`MEMORY_BACKEND=file\` and \`NODE_ENV=test\` in the environment and a free
-loopback port chosen inside the project's documented port band (\`docs/PORTS.md\`)
-and checked free first, never the running server's. A command whose working
-directory, data root, database name, or port is the live install's is out of
-bounds even when it only reads.
+directory or scratch database you create: never the live \`data/\`, never the real Postgres
+(the install's \`PGDATABASE\`, \`portos\`, \`portos_test\`), with
+\`NODE_ENV=test\` in the environment and a free loopback port chosen inside the
+project's documented port band (\`docs/PORTS.md\`) and checked free first, never
+the running server's. The only Postgres databases you may touch are the
+\`portos_rehearsal_<id>_test\` ones that \`node scripts/rehearsal-scratch-db.js
+create\` makes for you; \`MEMORY_BACKEND=file\` is set only on the file-only
+fallback below. Keep each scratch root and its private HOME short (under about
+60 characters): a HOME nested inside another temp directory pushes the pm2
+interactor socket path past the 104-byte macOS limit and the restored boot
+exits with EINVAL, which reads as a restore defect but is not one. A command
+whose working directory, data root, database name, or port is the live
+install's is out of bounds even when it only reads.
 
 Repository: {repoPath}
 
@@ -2363,11 +2370,40 @@ executed-path failures that no static read of one file surfaces.
    scratch root with \`restoreSnapshot\` — dry run first, then execute — and
    verify the manifest: every recorded file present with its recorded hash,
    nothing extra, nothing the current code refuses to read.
-3. **Boot the restored root** the same way and confirm its health endpoint.
+3. **Round-trip Postgres.** Postgres is the primary store and its dump and
+   restore are where restore defects have been found, so exercise them.
+   Run \`node scripts/rehearsal-scratch-db.js create\` (one JSON line on stdout):
+   when \`ok\` is false — no reachable Postgres, or a role that cannot create the
+   base schema's extensions — use the file-only fallback below. Otherwise create
+   two databases, a source and a target, and drop both with
+   \`node scripts/rehearsal-scratch-db.js drop <name>\` however the run ends,
+   success or failure (the helper refuses any other name; list a database you
+   could not drop in the report).
+   - **Back up.** With \`PGDATABASE=<source>\`, \`NODE_ENV=test\` and the source
+     scratch root as the data root, run \`ensureSchema\` (\`server/lib/db.js\`),
+     insert a few synthetic rows, and take the snapshot with \`runBackup\`; the
+     dump (\`dumpPostgres\`) must report \`ok\`, not \`skipped\`.
+   - **Restore.** In a separate process with \`PGDATABASE=<target>\` and the
+     second scratch root as the data root, call \`restorePostgres\` on that
+     snapshot — dry run first, then execute. A restore replays into whatever
+     \`PGDATABASE\` its process holds, so print it and confirm the
+     \`portos_rehearsal_\` prefix before each call.
+   - **Compare.** Row counts per table and the \`schema_migrations\` ledger must
+     match between source and target; any other status than \`ok\`, or a
+     mismatch, is a finding.
+4. **Boot the restored root** the same way and confirm its health endpoint;
+   when step 3 ran, boot it with \`MEMORY_BACKEND=postgres\` and
+   \`PGDATABASE=<target>\`, otherwise with \`MEMORY_BACKEND=file\`.
+
+**File-only fallback.** When no scratch database can be created, run every step
+except 3 with \`MEMORY_BACKEND=file\` and \`NODE_ENV=test\`, and report the
+Postgres dump, \`restorePostgres\`, and the database-backed boot as uncovered,
+quoting the helper's \`error\` text — never as passing.
 
 A repository with a different runner substitutes its documented equivalents;
 one with no migration runner and no backup path reports not-applicable and
-stops. Record every command with its data root so the run can be repeated.
+stops. Record every command with its data root and database name so the run
+can be repeated.
 
 ## Hunt for
 
@@ -2381,8 +2417,11 @@ stops. Record every command with its data root so the run can be repeated.
 - **A restore that does not round-trip** — a file the manifest records but
   the restore skips, a hash mismatch, a restored record the booted server
   rejects.
-- **A boot step the rehearsal could not reach** — one that runs only against
-  the real database stays unexercised; report it as uncovered, never as
+- **A Postgres restore that does not round-trip** — a dump \`restorePostgres\`
+  refuses, a table whose row count or the migration ledger differs between
+  source and target, a restored database the booted server rejects.
+- **A step the rehearsal could not reach** — one that needs a database it
+  could not create stays unexercised; report it as uncovered, never as
   passing.
 
 ## Not yours
