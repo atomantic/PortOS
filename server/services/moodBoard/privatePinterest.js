@@ -74,15 +74,11 @@ const PINTEREST_BOARD_SNAPSHOT_EXPRESSION = `(() => new Promise(async (resolve) 
         || imageCandidates.find((url) => url.includes('/474x/'))
         || imageCandidates[0]
         || '';
-      const rawCaption = (img?.alt
-        || card.querySelector('h1,h2,h3,[data-test-id*="title"]')?.textContent
-        || '').replace(/^This may contain:\\s*/i, '').trim();
       const prior = pins.get(source) || {};
       pins.set(source, {
         source,
         imageUrl: imageUrl || prior.imageUrl || '',
         imageUrlOriginal: original || prior.imageUrlOriginal || '',
-        caption: rawCaption || prior.caption || null,
       });
     }
   };
@@ -220,9 +216,8 @@ export async function importPrivatePinterestBoard(boardId, { url }) {
     const batch = candidates.slice(i, i + DOWNLOAD_CONCURRENCY);
     const results = await Promise.all(batch.map(async (pin) => {
       const imageUrl = await downloadPinImage({ ...pin, pinUrl: pin.source }).catch(() => null);
-      return imageUrl
-        ? { imageUrl, caption: pin.caption || null, source: pin.source }
-        : null;
+      // A pin's title and alt text are someone else's words, so none is kept.
+      return imageUrl ? { imageUrl, source: pin.source } : null;
     }));
     for (const result of results) if (result) imported.push(result);
   }

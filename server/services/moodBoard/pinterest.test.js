@@ -144,7 +144,9 @@ describe('syncPinterestBoard', () => {
 
     const [, imported] = store.appendPinterestItems.mock.calls[0];
     expect(imported).toHaveLength(1);
-    expect(imported[0]).toMatchObject({ source: 'https://www.pinterest.com/pin/2/', caption: 'two' });
+    expect(imported[0]).toMatchObject({ source: 'https://www.pinterest.com/pin/2/' });
+    // The pin's title is someone else's text, so the import keeps none.
+    expect(imported[0]).not.toHaveProperty('caption');
     expect(imported[0].imageUrl).toMatch(/^\/data\/images\/pinterest-[0-9a-f]{16}\.jpg$/);
     expect(result).toMatchObject({ added: 1, feedCount: 2 });
     expect(emitRecordUpdated).toHaveBeenCalledWith('moodBoard', 'mb-1');

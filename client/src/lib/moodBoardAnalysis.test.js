@@ -104,6 +104,12 @@ describe('moodBoardItemPrompt and helpers', () => {
     expect(moodBoardItemPrompt(galleryImage)).toBe('gallery prompt stored in caption');
   });
 
+  it('does not treat an imported X video caption as a prompt, so the pin still gets analyzed', () => {
+    const xVideo = { id: '5', type: 'video', mediaKey: 'video:x-example.mp4', source: 'https://x.com/example/status/1', caption: 'post text' };
+    expect(moodBoardItemPrompt(xVideo)).toBe('');
+    expect(boardAnalyzePlan([xVideo]).pending).toEqual([xVideo]);
+  });
+
   it('does not treat external or Pinterest default captions as prompts', () => {
     const pin = {
       id: '4',

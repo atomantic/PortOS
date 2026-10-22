@@ -26,6 +26,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { boardItemLocalImage, squareGridDims, frameSampleTimes } from './logic.js';
 import * as store from './db.js';
+import { moodBoardItemCaption } from './styleContext.js';
 
 export const MAX_FRAMES_PER_VIDEO = 24;
 export const DEFAULT_CELL_SIZE = 512;
@@ -128,11 +129,13 @@ export async function extractItemFrames(boardId, itemId, { count, times }) {
     const frames = await sampleVideoFrames(file, picked ? picked.length : count, tmp, 'f', picked);
     const names = picked ? await storePickedFramesInGallery(frames, file) : await storeFramesInGallery(frames, file, count);
     const label = (i) => (picked ? `frame at ${clock(frames[i].time)}` : `frame ${i + 1}/${count}`);
+    // An imported video's caption is someone else's text; frames never copy it.
+    const ownCaption = moodBoardItemCaption(item);
     const imported = names.map((name, i) => ({
       type: 'image',
       imageUrl: `/data/images/${name}`,
       source: picked ? `frame:${file}@${Math.round(frames[i].time * 1000)}ms` : `frame:${file}#${i + 1}of${count}`,
-      caption: item.caption ? `${item.caption} (${label(i)})` : `${label(i)[0].toUpperCase()}${label(i).slice(1)} of ${file}`,
+      caption: ownCaption ? `${ownCaption} (${label(i)})` : `${label(i)[0].toUpperCase()}${label(i).slice(1)} of ${file}`,
     }));
     // The append first names the frame files, so it commits under the backup lease (#9982).
     const { board: next, added } = await withBackupAssetPublication(() => store.appendImportedItems(boardId, imported));
@@ -186,12 +189,13 @@ export async function composeBoardCollage(boardId, { framesPerVideo, addFramesTo
         if (!frames.length) { skipped += 1; continue; }
         sources.push(...frames.map((f) => f.path));
         if (addFramesToBoard) {
+          const ownCaption = moodBoardItemCaption(item);
           const names = await storeFramesInGallery(frames, file, framesPerVideo);
           names.forEach((name, i) => imported.push({
             type: 'image',
             imageUrl: `/data/images/${name}`,
             source: `frame:${file}#${i + 1}of${framesPerVideo}`,
-            caption: item.caption ? `${item.caption} (frame ${i + 1}/${framesPerVideo})` : `Frame ${i + 1}/${framesPerVideo} of ${file}`,
+            caption: ownCaption ? `${ownCaption} (frame ${i + 1}/${framesPerVideo})` : `Frame ${i + 1}/${framesPerVideo} of ${file}`,
           }));
         }
       } // text pins carry no image — not a collage cell, not counted as skipped

@@ -16,14 +16,17 @@ import { isNonBlankStr as hasText } from '../../lib/textUtils.js';
 import { promptFromMedia } from '../mediaPromptFromMedia.js';
 import { composeBoardPrompt } from '../moodBoardCompositeStyle.js';
 import { boardItemLocalImage } from './logic.js';
+import { moodBoardItemCaption } from './styleContext.js';
 import { getBoard, updateBoard, updateBoardItem, backfillGalleryPrompts } from './index.js';
 
 const jobs = new Map();
 
+// A gallery pin's caption is its generation prompt; an imported pin's caption
+// is not a prompt at all, so that pin still gets analyzed.
 function itemHasPrompt(item) {
   if (hasText(item?.analysis?.prompt) || hasText(item?.prompt)) return true;
   const galleryKey = typeof item?.mediaKey === 'string' && /^(image|video):/.test(item.mediaKey);
-  return galleryKey && hasText(item?.caption);
+  return galleryKey && Boolean(moodBoardItemCaption(item));
 }
 
 // `{ kind, filename }` for an item prompt-from-media can read, else null.
