@@ -18,7 +18,8 @@ import socket from '../services/socket';
 import {
   addStoryboardBeat, addStoryboardPanel, addStoryboardPanelTake, createBlankSketch, deleteStoryboardBeat,
   deleteStoryboardPanel, getStoryboard, listMoodBoardNames, moveStoryboardBeat, moveStoryboardPanel,
-  removeStoryboardPanelTake, selectStoryboardPanelTake, updateStoryboard, updateStoryboardBeat, updateStoryboardPanel,
+  removeStoryboardPanelTake, runStoryboardPanelNode, selectStoryboardPanelTake, updateStoryboard, updateStoryboardBeat,
+  updateStoryboardPanel, updateStoryboardPanelNode, updateStoryboardRecipe,
 } from '../services/api';
 import { formatTimecode } from '../utils/formatters';
 import { STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS } from '../../../server/lib/storyboardVocabulary.js';
@@ -72,6 +73,26 @@ export default function StoryboardDetail() {
     socket.on('media:sketch:updated', onSketchUpdated);
     return () => socket.off('media:sketch:updated', onSketchUpdated);
   }, []);
+  // A panel maker run or frame landed (here, in another tab, or after the
+  // user navigated away and back): swap in the board's current record.
+  useEffect(() => {
+    let active = true;
+    const refresh = (evt) => {
+      if (evt?.storyboardId && evt.storyboardId !== id) return;
+      getStoryboard(id, { silent: true })
+        .then((next) => { if (active && next) setBoard((prev) => (prev && prev.updatedAt > next.updatedAt ? prev : next)); })
+        .catch(() => {});
+    };
+    const onReconnect = () => refresh();
+    socket.on('storyboard:make', refresh);
+    socket.on('connect', onReconnect);
+    return () => {
+      active = false;
+      socket.off('storyboard:make', refresh);
+      socket.off('connect', onReconnect);
+    };
+  }, [id]);
+
   const sketchNonce = useCallback((key) => (key ? sketchNonces[key] || mountNonceRef.current : 0), [sketchNonces]);
 
   // Keep the newest board: a slower earlier write must not undo a later one.
@@ -117,6 +138,14 @@ export default function StoryboardDetail() {
     onSelectTake: (takeId) => write(() => selectStoryboardPanelTake(id, panelId, takeId)),
     onRemoveTake: (takeId) => write(() => removeStoryboardPanelTake(id, panelId, takeId)),
     onMove: (target) => write(() => moveStoryboardPanel(id, panelId, target)),
+    onRecipe: (recipe) => write(() => updateStoryboardRecipe(id, recipe)),
+    onNodePatch: (nodeId, patch) => write(() => updateStoryboardPanelNode(id, panelId, nodeId, patch)),
+    // Resolves true when the node ran (Run all stops at the first failure,
+    // whose reason the node card shows).
+    onRunNode: async (nodeId) => {
+      const res = await write(() => runStoryboardPanelNode(id, panelId, nodeId));
+      return !!res && findPanel(res, panelId)?.panel.make?.nodes?.[nodeId]?.status !== 'failed';
+    },
     onDelete: async () => {
       const res = await write(() => deleteStoryboardPanel(id, panelId));
       if (res) closePanel();

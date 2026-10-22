@@ -165,6 +165,7 @@ import { initMusicStudioHook } from './musicStudioHook.js';
 import { initImageGenQuotaHook } from './imageGenQuota.js';
 import { initSpriteReferenceImageHook } from './spriteReferenceImageHook.js';
 import { initMoodBoardItemRenderHook } from './moodBoardItemRenderHook.js';
+import { initStoryboardPanelImageHook } from './storyboardPanelImageHook.js';
 import { initDeckRenderHook } from './deckRenderHook.js';
 import { initCreativeDirectorSceneImageHook } from './creativeDirectorSceneImageHook.js';
 import { initCreativeDirectorRenderFailureHook } from './creativeDirector/renderFailureHook.js';
@@ -749,6 +750,8 @@ const initMediaJobDependentHooks = () => {
   // Mood board note render hook — turns a rendered text note into its image
   // item (#10531). It only listens.
   initMoodBoardItemRenderHook();
+  // Storyboard panel frames — each finished frame becomes a panel take.
+  initStoryboardPanelImageHook();
   // Deck card hook — files a completed card render onto its deck card row.
   initDeckRenderHook();
   // Creative Director scene-frame hook — durably files a queued first-pass

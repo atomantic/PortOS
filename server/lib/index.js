@@ -144,6 +144,7 @@ export * from './scenePrompt.js';
 export * from './proseExportSettings.js';
 export * from './shotGrammar.js';
 export * from './storyboardScenes.js';
+export * from './storyboardRecipe.js';
 export * from './storyboardRecord.js';
 export * from './storyboardVocabulary.js';
 export * from './seasonStructure.js';
