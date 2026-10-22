@@ -48,24 +48,29 @@ async function encodeTrimGif(frames, fps, destAbs) {
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found — install ffmpeg to render trim GIFs', { status: 503, code: 'FFMPEG_MISSING' });
   const scratch = await mkdtemp(join(tmpdir(), 'portos-sprite-trim-'));
-  for (let i = 0; i < frames.length; i++) {
-    await writeFileGuarded(
-      join(scratch, `frame-${String(i).padStart(3, '0')}.png`),
-      await encodePng(frames[i]),
-    );
+  let result;
+  // The scratch frames must not outlive a throw in the write loop or ffmpeg.
+  try {
+    for (let i = 0; i < frames.length; i++) {
+      await writeFileGuarded(
+        join(scratch, `frame-${String(i).padStart(3, '0')}.png`),
+        await encodePng(frames[i]),
+      );
+    }
+    result = await runFfmpegProcess({
+      bin: ffmpeg,
+      args: [
+        '-y', '-framerate', String(fps),
+        '-i', join(scratch, 'frame-%03d.png'),
+        '-filter_complex', '[0:v]split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128',
+        '-loop', '0',
+        destAbs,
+      ],
+      timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
+    });
+  } finally {
+    await rmGuarded(scratch, { recursive: true, force: true }).catch(() => {});
   }
-  const result = await runFfmpegProcess({
-    bin: ffmpeg,
-    args: [
-      '-y', '-framerate', String(fps),
-      '-i', join(scratch, 'frame-%03d.png'),
-      '-filter_complex', '[0:v]split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128',
-      '-loop', '0',
-      destAbs,
-    ],
-    timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
-  });
-  await rmGuarded(scratch, { recursive: true, force: true }).catch(() => {});
   if (!result.ok) throw new ServerError(`GIF encode failed: ${result.reason}`, { status: 500, code: 'GIF_ENCODE_FAILED' });
 }
 

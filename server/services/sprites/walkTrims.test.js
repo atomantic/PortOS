@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import sharp from 'sharp';
@@ -15,6 +15,7 @@ import { writeFile, mkdir, readFile, readdir } from 'fs/promises';
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-trim-test-'));
 
 let beforeAssetWrite = async () => {};
+let beforeScratchFrameWrite = async () => {};
 let bypassAdmission = false;
 vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => {
   const actual = await importOriginal();
@@ -29,6 +30,9 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   return { ...actual, atomicWrite: async (path, ...args) => {
     await beforeAssetWrite(path);
     return actual.atomicWrite(path, ...args);
+  }, writeFileGuarded: async (path, ...args) => {
+    await beforeScratchFrameWrite(path);
+    return actual.writeFileGuarded(path, ...args);
   } };
 });
 
@@ -173,7 +177,7 @@ async function characterWithImportedRun(id, { manifest = 'valid', anchorPaths = 
 }
 
 beforeEach(() => {
-  beforeAssetWrite = async () => {}; bypassAdmission = false;
+  beforeAssetWrite = async () => {}; beforeScratchFrameWrite = async () => {}; bypassAdmission = false;
   runFfmpegProcess.mockClear();
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
@@ -374,5 +378,32 @@ describe('trim backup publication', () => {
       expect(copiedTrimPaths).not.toContain(manifest.stripPath.split('/').at(-1));
       expect(copiedTrimPaths).not.toContain(manifest.gifPath.split('/').at(-1));
     } finally { release(); }
+  });
+});
+
+describe('saveLoopTrim scratch cleanup', () => {
+  // encodeTrimGif's scratch dir is a tmpdir mkdtemp; capture it from the frame writes.
+  it('removes the scratch frame dir when a frame write throws mid-loop', async () => {
+    const id = await characterWithRun(newId());
+    const dirs = new Set();
+    beforeScratchFrameWrite = async path => {
+      if (!/frame-\d+\.png$/.test(path)) return;
+      dirs.add(dirname(path));
+      if (path.endsWith('frame-001.png')) throw new Error('ENOSPC: simulated disk full');
+    };
+    await expect(saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1, 2] }))
+      .rejects.toThrow('ENOSPC');
+    expect(dirs.size).toBe(1);
+    for (const dir of dirs) expect(existsSync(dir)).toBe(false);
+  });
+  it('removes the scratch frame dir and keeps GIF_ENCODE_FAILED when ffmpeg reports failure', async () => {
+    const id = await characterWithRun(newId());
+    const dirs = new Set();
+    beforeScratchFrameWrite = async path => { if (/frame-\d+\.png$/.test(path)) dirs.add(dirname(path)); };
+    runFfmpegProcess.mockResolvedValueOnce({ ok: false, reason: 'boom' });
+    await expect(saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] }))
+      .rejects.toMatchObject({ code: 'GIF_ENCODE_FAILED' });
+    expect(dirs.size).toBe(1);
+    for (const dir of dirs) expect(existsSync(dir)).toBe(false);
   });
 });
