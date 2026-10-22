@@ -80,6 +80,9 @@ export function HistoryPage() {
   if (loading) {
     return (
       <PageSkeleton
+        header="bar"
+        fullHeight
+        padded
         label="Loading history"
         titleWidthClass="w-48"
         showAction={false}

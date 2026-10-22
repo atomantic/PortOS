@@ -133,7 +133,7 @@ export default function IntegrationInstancesPage({
     }
   };
 
-  if (loading) return <PageSkeleton label={`Loading ${title}`} padded titleWidthClass={skeletonWidth} cards={2} />;
+  if (loading) return <PageSkeleton header="bar" fullHeight padded label={`Loading ${title}`} titleWidthClass={skeletonWidth} cards={2} />;
 
   return (
     <div className="flex h-full flex-col">

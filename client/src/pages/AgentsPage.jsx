@@ -47,6 +47,9 @@ export function AgentsPage() {
   if (loading) {
     return (
       <PageSkeleton
+        header="bar"
+        fullHeight
+        padded
         label="Scanning for AI agents"
         headerRowClass="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
         titleWidthClass="w-56"

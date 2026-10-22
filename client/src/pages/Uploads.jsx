@@ -123,7 +123,7 @@ export default function Uploads() {
   };
 
   if (loading) {
-    return <PageSkeleton label="Loading uploads" titleWidthClass="w-44" showSubtitle cards={4} sidebar={false} />;
+    return <PageSkeleton header="bar" fullHeight padded label="Loading uploads" titleWidthClass="w-44" showSubtitle cards={4} sidebar={false} />;
   }
 
   return (
