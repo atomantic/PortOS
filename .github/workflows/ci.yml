@@ -401,8 +401,9 @@ jobs:
       # package versions, Node/platform, gating env — is byte-identical to one
       # a trusted green run verified. Pull requests only read. The scheduled,
       # dispatched and called full runs save, so the cache holds nothing a PR
-      # branch wrote. Each job and shard keeps its own lineage under the key
-      # prefix; a restore takes the newest.
+      # branch wrote. Prefer the same shard's lineage, then any shard of this
+      # job: scoped 1of1 plans have no full-run seed of their own. Per-test
+      # content keys still decide reuse; unmatched files run normally.
       - name: Restore the test memo
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -410,6 +411,7 @@ jobs:
           key: test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
           restore-keys: |
             test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-
+            test-memo-${{ runner.os }}-${{ runner.arch }}-server-
 
       - name: Run server tests
         id: server-tests
@@ -534,6 +536,7 @@ jobs:
           key: test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
           restore-keys: |
             test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-
+            test-memo-${{ runner.os }}-${{ runner.arch }}-client-
 
       - name: Run client tests
         id: client-tests
@@ -1119,6 +1122,7 @@ jobs:
           key: test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
           restore-keys: |
             test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-
+            test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-
 
       - name: Run server tests on Windows
         id: windows-tests
