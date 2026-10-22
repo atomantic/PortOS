@@ -1975,6 +1975,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   }
 
   const scope = subdirFilter;
+  console.log(`💾 Restore starting: snapshot ${snapshotId}${scope ? ` (filter ${scope})` : ''}`);
   let restoredLegacy = { stores: [], migrations: null };
   let restoredLegacyLedger = legacyLedger;
   // Conversion parks live stores, so it runs only after a successful transfer,
@@ -1996,6 +1997,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
       return changed;
     },
   }));
+  console.log(`💾 Restore complete: snapshot ${snapshotId}, ${changedFiles.length} files changed`);
   return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(restoredLegacy, restoredLegacyLedger) };
 }
 

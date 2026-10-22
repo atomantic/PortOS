@@ -3826,6 +3826,30 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     });
   });
 
+  describe('restore log lines (#12979)', () => {
+    it('logs start and completion for an executed restore, with the snapshot id and changed-file count', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await runRestore('/dest', '2026-01-02T03:04:05.678Z', { dryRun: false });
+        expect(log).toHaveBeenCalledWith('💾 Restore starting: snapshot 2026-01-02T03:04:05.678Z');
+        expect(log).toHaveBeenCalledWith('💾 Restore complete: snapshot 2026-01-02T03:04:05.678Z, 0 files changed');
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it('stays silent for a preview', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await runRestore('/dest', '2026-01-02T03:04:05.678Z');
+        expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Restore starting'));
+        expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Restore complete'));
+      } finally {
+        log.mockRestore();
+      }
+    });
+  });
+
   describe('subdirFilter rsync flags', () => {
     it('reads a legacy flat snapshot when that source is explicitly selected', async () => {
       await runRestore('/dest', 'legacy-snapshot', { source: '@legacy', dryRun: true });
