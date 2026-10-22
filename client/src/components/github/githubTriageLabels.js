@@ -74,13 +74,13 @@ export const AGENT_RULE_KINDS = [
 
 // Why Resolve with agent is unavailable for a thread.
 export const AGENT_REFUSED_LABELS = {
-  'private-account': 'Private accounts never hand off to an agent',
+  'private-account': 'Allow agents on this Private account in Accounts to resolve it with an agent',
   'no-managed-app': 'Add this repo as a PortOS app to resolve it with an agent',
 };
 
 // Why Autopilot left a thread with you instead of handing it off.
 export const HANDOFF_SKIP_LABELS = {
-  'private-account': 'Private accounts never hand off: the lanes use their own AI providers',
+  'private-account': 'Agents are not allowed on this Private account (Accounts)',
   'no-managed-app': 'No PortOS app manages this repo',
   'lane-unavailable': 'The lane would not take it',
 };

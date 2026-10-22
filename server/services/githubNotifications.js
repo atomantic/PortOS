@@ -592,6 +592,7 @@ export async function getAutomationsOverview() {
         needsYou: counts?.needs_you || 0,
         suspect: counts?.suspect || 0,
         pending: counts?.pending || 0,
+        allowAgents: account.allowAgents === true,
         agentRules: Array.isArray(account.agentRules) ? account.agentRules : [],
         repos: reposById.get(account.id) || [],
       };

@@ -205,7 +205,16 @@ describe('autopilotHandoff', () => {
     expect(agentRuleScope([], 'review-request', { optIn: true })).toEqual({ all: false, except: [], only: [] });
   });
 
-  it('refuses every hand-off on a Private account, whose provider allow-list the lanes cannot honor', () => {
-    expect(autopilotHandoff({ account: { ...account, trust: 'private' }, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, refused: 'private-account' });
+  it('refuses every hand-off on a Private account until the operator allows agents on it', () => {
+    const enterprise = { ...account, trust: 'private' };
+    expect(autopilotHandoff({ account: enterprise, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, refused: 'private-account' });
+    expect(autopilotHandoff({ account: { ...enterprise, allowAgents: false }, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, refused: 'private-account' });
+    expect(autopilotHandoff({ account: { ...enterprise, allowAgents: true }, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 42 });
+  });
+
+  it('applies agent rules and their pin on a Private account that allows agents', () => {
+    const rules = [{ id: 'r', kind: 'review-request', repo: 'acme/app', agent: true, provider: 'p1' }];
+    const enterprise = { ...account, trust: 'private', allowAgents: true, agentRules: rules };
+    expect(agentHandoff({ account: enterprise, row: { ...review, repo_full_name: 'acme/app' } })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, pin: { provider: 'p1' }, rule: { id: 'r', agent: true } });
   });
 });

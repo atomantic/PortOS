@@ -29,8 +29,8 @@ function modeHint(account) {
     : 'Text goes to the GitHub notifications provider in Models › LLMs › Abuse Guard.';
   const assist = `Screens and sorts notifications no rule decided, marks CI noise and closed threads done. Never acts on outside or suspect threads. ${where}`;
   if (account.mode !== 'autopilot') return assist;
-  const handoff = account.trust === 'private'
-    ? 'Private accounts never hand threads off.'
+  const handoff = account.trust === 'private' && !account.allowAgents
+    ? 'Private accounts hand threads off only after you allow agents on them in Accounts.'
     : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. A security alert in another repo of yours starts one CoS task per repo that fixes it in a pull request and merges it. Agent rules below turn kinds on or off per repo and pick the provider.';
   return `${assist} ${handoff}`;
 }
@@ -79,7 +79,7 @@ function AccountCard({ account, running, onRun, onMode, savingMode, onSaveRules,
       >
         <Play size={12} aria-hidden="true" /> {running ? 'Checking…' : 'Run now'}
       </button>
-      {account.trust !== 'private' && <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} />}
+      {(account.trust !== 'private' || account.allowAgents) && <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} />}
     </li>
   );
 }

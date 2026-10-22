@@ -34,7 +34,7 @@ const STATUS_VIEW = {
 };
 
 const defaultTrustForHost = (host) => (host.trim().toLowerCase() === GITHUB_DOT_COM ? 'public' : 'private');
-const emptyForm = () => ({ host: GITHUB_DOT_COM, login: '', label: '', trust: 'public', trustTouched: false, allowedProviders: [] });
+const emptyForm = () => ({ host: GITHUB_DOT_COM, login: '', label: '', trust: 'public', trustTouched: false, allowedProviders: [], allowAgents: false });
 const formFromAccount = (account) => ({
   host: account.host,
   login: account.login || '',
@@ -42,6 +42,7 @@ const formFromAccount = (account) => ({
   trust: account.trust,
   trustTouched: true,
   allowedProviders: account.allowedProviders || [],
+  allowAgents: account.allowAgents === true,
 });
 // No provider ticked = the Private default, local providers only (null).
 const payloadFromForm = (form) => ({
@@ -50,6 +51,7 @@ const payloadFromForm = (form) => ({
   label: form.label.trim(),
   trust: form.trust,
   allowedProviders: form.trust === 'private' && form.allowedProviders.length ? form.allowedProviders : null,
+  allowAgents: form.trust === 'private' && form.allowAgents,
 });
 
 const fetchApiProviders = () => getProviders({ silent: true })
@@ -114,6 +116,15 @@ function AccountForm({ form, setForm, onSubmit, onCancel, saving, submitLabel })
         </FormField>
       </div>
       {form.trust === 'private' && <AllowedProviders form={form} setForm={setForm} />}
+      {form.trust === 'private' && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <input id="github-allow-agents" type="checkbox" checked={form.allowAgents} onChange={(event) => setForm((prev) => ({ ...prev, allowAgents: event.target.checked }))} />
+            <label htmlFor="github-allow-agents" className="text-sm text-gray-300">Allow agents to work on this account's threads</label>
+          </div>
+          <p className="text-xs text-gray-500">Lets Autopilot and Resolve with agent hand threads to CoS agents. They run on the providers set in PortOS, not the list above, so this code and discussion may reach those providers.</p>
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={saving || !form.host.trim()} className="px-4 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-50">
           {saving ? 'Saving…' : submitLabel}

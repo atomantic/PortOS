@@ -246,8 +246,9 @@ const rulePin = (rule) => {
 
 /**
  * Which lane an agent may resolve a thread in, or null when no lane fits. A
- * plan with `refused` names why it cannot go: a Private account's threads never
- * go (the lanes use their own providers, which its allow-list cannot bind), and
+ * plan with `refused` names why it cannot go: a Private account's threads go
+ * only once the operator sets `allowAgents` on it (the lanes use their own
+ * providers, which its allow-list cannot bind, so the operator accepts that), and
  * the per-app lanes need the repo to be a PortOS managed app. Suspect and closed
  * threads never qualify. The pull number comes from the subject's API url and
  * the link from the stored html url, never from a title or body.
@@ -289,7 +290,7 @@ export function agentHandoff({ account, row }) {
   const pin = rulePin(rule);
   if (pin) plan.pin = pin;
   if (rule) plan.rule = { id: rule.id || null, agent: rule.agent };
-  if (account?.trust === 'private') return { ...plan, refused: 'private-account' };
+  if (account?.trust === 'private' && account.allowAgents !== true) return { ...plan, refused: 'private-account' };
   const needsApp = plan.lane !== 'security-fix' && plan.lane !== 'do-review';
   if (needsApp && evidence.repoManaged !== true) return { ...plan, refused: 'no-managed-app' };
   return plan;

@@ -67,6 +67,16 @@ describe('GitHub accounts API', () => {
     expect(duplicate.status).toBe(409);
   });
 
+  it('keeps agents off an Enterprise account until the operator allows them, and persists the choice', async () => {
+    const created = await request(app).post('/api/github/accounts').send({ host: 'github.example.com' });
+    expect(created.body.allowAgents).toBe(false);
+    const allowed = await request(app).put(`/api/github/accounts/${created.body.id}`).send({ allowAgents: true });
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.allowAgents).toBe(true);
+    const bad = await request(app).put(`/api/github/accounts/${created.body.id}`).send({ allowAgents: 'yes' });
+    expect(bad.status).toBe(400);
+  });
+
   it('rejects hosts and logins that are not plain identifiers', async () => {
     for (const body of [
       { host: '--hostname=evil' },

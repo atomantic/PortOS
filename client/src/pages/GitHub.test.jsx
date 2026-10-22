@@ -330,6 +330,17 @@ describe('GitHub accounts tab', () => {
     await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', expect.objectContaining({ trust: 'private', allowedProviders: ['cloud-api'] })));
   });
 
+  it('lets a Private Enterprise account opt in to agents', async () => {
+    mock.updateGitHubAccount.mockImplementation(async (id, body) => ({ ...IMPLICIT, ...body, id }));
+    renderAccounts();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.queryByLabelText(/Allow agents/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Trust'), { target: { value: 'private' } });
+    fireEvent.click(await screen.findByLabelText(/Allow agents/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', expect.objectContaining({ trust: 'private', allowAgents: true })));
+  });
+
   it('lists each account with its trust level and live sign-in state', async () => {
     renderAccounts();
     expect(await screen.findByText('Signed in')).toBeTruthy();
@@ -354,7 +365,7 @@ describe('GitHub accounts tab', () => {
     expect(screen.getByLabelText('Trust').value).toBe('private');
     fireEvent.click(screen.getAllByRole('button', { name: 'Add account' }).at(-1));
 
-    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'private', allowedProviders: null });
+    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'private', allowedProviders: null, allowAgents: false });
     const signIn = await screen.findByRole('link', { name: 'Sign in on ghe.example.com' });
     expect(decodeURIComponent(signIn.getAttribute('href'))).toBe('/shell?cmd=gh auth login --hostname ghe.example.com --web --clipboard');
   });
@@ -564,6 +575,18 @@ describe('GitHub automations tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run now/ }));
     await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
     await waitFor(() => expect(mock.getGitHubAutomations).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows agent rules on a Private account only once it allows agents', async () => {
+    const enterprise = { ...OVERVIEW.accounts[0], id: 'ghe', label: 'ghe.example.com', host: 'ghe.example.com', trust: 'private', mode: 'autopilot', agentRules: [], repos: [] };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...enterprise, allowAgents: false }] });
+    const { unmount } = renderTab('automations');
+    expect(await screen.findByText(/only after you allow agents/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Add rule/ })).toBeNull();
+    unmount();
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...enterprise, allowAgents: true }] });
+    renderTab('automations');
+    expect(await screen.findByRole('button', { name: /Add rule/ })).toBeTruthy();
   });
 
   it('adds an agent rule for review requests in one repo and refuses a duplicate', async () => {

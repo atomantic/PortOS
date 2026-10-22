@@ -988,6 +988,9 @@ export const githubAccountCreateSchema = z.object({
   mode: z.enum(GITHUB_ACCOUNT_MODES).optional(),
   // Monthly subscription audit delivered as a PortOS notification (#12874).
   auditReport: z.boolean().optional(),
+  // Private (Enterprise) accounts refuse every agent hand-off unless the operator
+  // opts in: the lanes run on PortOS's own providers, which the allow-list cannot bind.
+  allowAgents: z.boolean().optional(),
   agentRules: githubAgentRulesSchema.optional(),
   enabled: z.boolean().optional(),
 }).strict();
