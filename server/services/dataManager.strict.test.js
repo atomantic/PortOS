@@ -152,3 +152,36 @@ it('reports an unreadable data root as an unknown count rather than an empty tre
   expect(overview.categories).toEqual([]);
   expect(overview.totalFileCount).toBeNull();
 });
+
+describe('overview scan cache lifecycle', () => {
+  it('shares a still-pending scan past the TTL, then expires the completed result', async () => {
+    const release = [];
+    let held = true;
+    mocks.execFile.mockImplementation((command, args, _options, callback) => {
+      const target = command === 'find' ? args[0] : args[args.length - 1];
+      const respond = () => callback(null, { stdout: `1\t${target}\n`, stderr: '' });
+      if (held) release.push(respond); else respond();
+    });
+    const first = getDataOverview();
+    await vi.waitFor(() => expect(release.length).toBeGreaterThan(0));
+    const started = mocks.execFile.mock.calls.length;
+
+    vi.setSystemTime(Date.now() + 45_000);
+    const second = getDataOverview();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mocks.execFile.mock.calls.length).toBe(started);
+
+    held = false;
+    while (release.length) release.shift()();
+    await Promise.all([first, second]);
+    const completed = mocks.execFile.mock.calls.length;
+
+    vi.setSystemTime(Date.now() + 10_000);
+    await getDataOverview();
+    expect(mocks.execFile.mock.calls.length).toBe(completed);
+
+    vi.setSystemTime(Date.now() + 31_000);
+    await getDataOverview();
+    expect(mocks.execFile.mock.calls.length).toBeGreaterThan(completed);
+  });
+});
