@@ -1521,16 +1521,21 @@ function hfImportError(status, statusText) {
 
 async function downloadHfImportFile({ repo, remotePath, destination, headers, progress }) {
   const url = buildHfResolveUrl(repo, 'main', remotePath)
-  const response = await fetchWithTimeout(url, { headers }, 0)
-  if (!response.ok || !response.body) throw new Error(hfImportError(response.status, response.statusText))
-  await ensureDir(dirname(destination))
-  const tracker = new Transform({
-    transform(chunk, _encoding, callback) {
-      progress(chunk.length)
-      callback(null, chunk)
-    }
-  })
-  await pipeline(Readable.fromWeb(response.body), tracker, createWriteStream(destination))
+  try {
+    const response = await fetchWithTimeout(url, { headers }, 0)
+    if (!response.ok || !response.body) throw new Error(hfImportError(response.status, response.statusText))
+    await ensureDir(dirname(destination))
+    const tracker = new Transform({
+      transform(chunk, _encoding, callback) {
+        progress(chunk.length)
+        callback(null, chunk)
+      }
+    })
+    await pipeline(Readable.fromWeb(response.body), tracker, createWriteStream(destination))
+  } catch (err) {
+    if (!(err instanceof TypeError) || !/^(fetch failed|terminated)$/.test(err.message)) throw err
+    throw new Error('Hugging Face checkpoint download was interrupted. Check the connection and retry the installation.', { cause: err })
+  }
 }
 
 /**
