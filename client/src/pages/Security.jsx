@@ -367,6 +367,7 @@ export default function Security() {
         actions={<>
           <button
             onClick={() => setShowSettings(s => !s)}
+            aria-expanded={showSettings}
             className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg transition-colors ${
               showSettings
                 ? 'bg-port-accent text-white'
@@ -374,7 +375,7 @@ export default function Security() {
             }`}
           >
             <Settings size={16} />
-            <span className="max-sm:sr-only">Settings</span>
+            <span className="max-sm:sr-only">Devices</span>
           </button>
         </>}
       />
@@ -632,17 +633,6 @@ export default function Security() {
                 </span>
               </div>
             </div>
-          </div>
-
-          {/* Instructions */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <h3 className="font-semibold text-white mb-3">Instructions</h3>
-            <ul className="space-y-2 text-sm text-gray-400">
-              <li>1. Click &quot;Start Media&quot; to stream from server</li>
-              <li>2. Video and audio stream from the PortOS server</li>
-              <li>3. Use controls to toggle camera/mic</li>
-              <li>4. Select different devices in Settings</li>
-            </ul>
           </div>
         </div>
       </div>
