@@ -29,6 +29,7 @@ import { execGit } from '../lib/execGit.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
@@ -1154,10 +1155,39 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // GitHub reviewer usernames are forge-agnostic requested reviewers, so they are
   // NOT stripped on a non-GitHub forge — a username reviewer alone can drive the
   // loop even when copilot was dropped.
-  const effectiveUsernames = selfReview ? [] : normalizeReviewUsernames(usernames);
+  let effectiveUsernames = selfReview ? [] : normalizeReviewUsernames(usernames);
   // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
   // follow-up's `--review-with` marks the same reviewers optional.
-  const effectiveOptionalReviewers = selfReview ? [] : (normalizeOptionalReviewers(optionalReviewers) || []);
+  let effectiveOptionalReviewers = selfReview ? [] : (normalizeOptionalReviewers(optionalReviewers) || []);
+  // Target-forge identity preflight (#13115). A handle the forge verifiably does
+  // not have would fail every PR-side request. A REQUIRED one fails closed (the
+  // run must not merge without the review the operator demanded); an OPTIONAL one
+  // is left out of this run's emitted roster and recorded, never reported clean.
+  // Lookups that merely fail (auth/transport) are inconclusive and change nothing.
+  // The saved roster is never rewritten.
+  let reviewerIdentityFaults = [];
+  if (effectiveUsernames.length || effectiveOptionalReviewers.length) {
+    const { preflightReviewerIdentities } = await import('./reviewerIdentity.js');
+    const preflight = await preflightReviewerIdentities({
+      usernames: effectiveUsernames,
+      optionalReviewers: effectiveOptionalReviewers,
+      forge: isNonGithubForge ? 'gitlab' : 'github',
+      host: parsedPr?.host,
+    });
+    if (preflight.requiredMissing.length) {
+      const detail = preflight.requiredMissing.map((e) => `@${e.token}: ${e.reason}`).join('; ');
+      throw new ServerError(`Required reviewer not found on the target forge — ${detail}. Fix it in Settings → Code Reviewers.`, {
+        status: 409, code: 'REVIEWER_IDENTITY_NOT_FOUND', context: { reviewers: preflight.requiredMissing.map((e) => e.token) },
+      });
+    }
+    if (preflight.optionalMissing.length) {
+      const dropped = new Set(preflight.optionalMissing.map((e) => e.token.toLowerCase()));
+      reviewerIdentityFaults = preflight.optionalMissing.map(({ token, reason }) => ({ token, reason }));
+      effectiveUsernames = effectiveUsernames.filter((u) => !dropped.has(u.toLowerCase()));
+      effectiveOptionalReviewers = effectiveOptionalReviewers.filter((r) => !dropped.has(r.replace(/^@/, '').toLowerCase()));
+      console.log(`🚫 Optional reviewer(s) not found on the target forge, skipped for this run: ${reviewerIdentityFaults.map((f) => `@${f.token}`).join(', ')}`);
+    }
+  }
   // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim
   // so the follow-up's `--review-with` carries the same budgets. Entries for
   // reviewers that were stripped are inert (the emitter only marks tokens it
@@ -1294,6 +1324,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       // and gates the merge on (appended to `--review-with` as `@user`).
       reviewLoopReviewerUsernames: effectiveUsernames,
       reviewLoopOptionalReviewers: effectiveOptionalReviewers,
+      ...(reviewerIdentityFaults.length ? { reviewLoopReviewerIdentityFaults: reviewerIdentityFaults } : {}),
       // Per-reviewer `~max=<n>` caps, keyed by emitted token. Empty object = no
       // caps (leaves slashdo's per-loop built-in default in place); an absent key
       // is NOT `0`, which slashdo reads as "loop until clean".

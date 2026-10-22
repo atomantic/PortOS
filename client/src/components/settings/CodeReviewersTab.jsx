@@ -75,6 +75,7 @@ export default function CodeReviewersTab({ view } = {}) {
   const [providerReviewUnsupported, setProviderReviewUnsupported] = useState({});
   const [reviewerHealth, setReviewerHealth] = useState({});
   const [reviewerConfigFaults, setReviewerConfigFaults] = useState({});
+  const [reviewerIdentities, setReviewerIdentities] = useState([]);
   const [reviewerFallbackGroups, setReviewerFallbackGroups] = useState([]);
   const modelOptions = useReviewerModelOptions();
   const loadVersion = useRef(0);
@@ -138,6 +139,21 @@ export default function CodeReviewersTab({ view } = {}) {
     return () => { loadVersion.current += 1; };
   }, [loadDefaults]);
 
+  // Existence of the saved @login/@team reviewers on the forge. Lookups run
+  // server-side and are cached, so this is a one-shot read after load and after
+  // a save (the roster only changes through those), never a poll. A failed read
+  // leaves the list empty: no warning is better than a fabricated one.
+  const loadIdentities = useCallback(() => {
+    // Same-reference bail-out when nothing changed (the common empty case).
+    const apply = (next) => setReviewerIdentities((prev) => (prev.length === 0 && next.length === 0 ? prev : next));
+    api.getReviewerIdentities({ silent: true })
+      .then((result) => apply(Array.isArray(result?.identities) ? result.identities : []))
+      .catch(() => apply([]));
+  }, []);
+  useEffect(() => {
+    if (!loading && !loadError) loadIdentities();
+  }, [loading, loadError, loadIdentities]);
+
   useEffect(() => {
     if (pathView && pathView !== 'chain' && pathView !== 'follow-up') {
       navigate({ pathname: CHAIN_PATH, search: location.search }, { replace: true });
@@ -198,6 +214,7 @@ export default function CodeReviewersTab({ view } = {}) {
     if (ok) {
       setReviewerFallbackGroups(groups);
       toast.success('Code Review Defaults saved');
+      loadIdentities();
     }
   };
 
@@ -265,6 +282,13 @@ export default function CodeReviewersTab({ view } = {}) {
           {Object.entries(reviewerConfigFaults).map(([reviewer, fault]) => (
             <Banner key={`config-${reviewer}`} tone="warning" size="sm" align="left">
               {reviewer}: the last review attempt failed ({fault.code}). {CONFIG_FAULT_REMEDIES[fault.code] || 'Enable or configure the reviewer in Settings → Code Reviewers.'} The next successful review clears this warning.
+            </Banner>
+          ))}
+          {reviewerIdentities.filter((entry) => entry.status === 'missing').map((entry) => (
+            <Banner key={`identity-${entry.token}`} tone="warning" size="sm" align="left">
+              @{entry.token}: {entry.reason}. {entry.required
+                ? 'It is a required reviewer, so review-loop runs that use it are refused until you correct or remove this entry.'
+                : 'It is optional, so runs skip it and continue without its review.'} Your saved list is unchanged.
             </Banner>
           ))}
           {activeView === 'chain' ? (
