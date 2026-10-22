@@ -24,6 +24,18 @@ const catalogRow = entry => ({
   ...(entry.trimmedFrom ? { trimmedFrom: entry.trimmedFrom } : {}),
 });
 
+// Mirrors client lib/mediaSearch.js buildMediaHaystack: field-scoped, so a token
+// like "prompt" or "true" cannot match JSON key names or flags.
+const haystack = entry => [
+  entry.prompt, entry.metadata?.prompt, entry.negativePrompt, entry.negative_prompt, entry.modelId, entry.model,
+  entry.filename, entry.id, entry.seed != null ? `seed ${entry.seed}` : '',
+  entry.width && entry.height ? `${entry.width}x${entry.height}` : '',
+  ...[entry.loraFilenames, entry.lora_filenames].flatMap(v => Array.isArray(v) ? v : []),
+  entry.universeName, entry.entryName, entry.entryLabel, entry.entryCategory, entry.entryKind,
+  entry.extractedFromVideoId ? 'extracted frame' : '', entry.stitchedFrom ? 'stitched' : '',
+  entry.upscaledFrom ? 'upscaled 2x' : '',
+].filter(v => typeof v === 'string' || typeof v === 'number').join(' ').toLowerCase();
+
 const time = value => Date.parse(value) || 0;
 
 /**
@@ -36,7 +48,7 @@ export async function listVideoHistoryQuery({ limit, offset, q, hidden, compact 
   const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matching = (Array.isArray(history) ? history : []).filter(entry => entry
     && (hidden === undefined || !!entry.hidden === hidden)
-    && (!tokens.length || tokens.every(token => JSON.stringify(entry).toLowerCase().includes(token))));
+    && (!tokens.length || (text => tokens.every(token => text.includes(token)))(haystack(entry))));
   const paged = limit !== undefined;
   const ordered = paged
     ? [...matching].sort((a, b) => time(b.createdAt) - time(a.createdAt) || String(a.id).localeCompare(String(b.id)))

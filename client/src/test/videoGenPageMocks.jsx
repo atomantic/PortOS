@@ -70,6 +70,8 @@ export const state = {
   universeStyle: DEFAULT_UNIVERSE_STYLE,
   /** `GET /api/video-gen/history`; a spy so a suite can defer it, reject it, or seed records. */
   listVideoHistory: vi.fn(),
+  /** `GET /api/video-gen/history/:id`, the fallback for a record older than the page load. */
+  getVideoHistoryItem: vi.fn(),
   /**
    * Last props handed to the panels below, captured by mocks that still render
    * NOTHING — the five older suites assert over the DOM, so a probe element
@@ -96,7 +98,7 @@ export const state = {
   runtimeStatus: { installed: true, ready: true, current: true },
 };
 
-const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'previewVideoPrompt', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory', 'listLorasFull'];
+const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'previewVideoPrompt', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory', 'getVideoHistoryItem', 'listLorasFull'];
 
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetVideoGenMockState() {
@@ -123,6 +125,7 @@ export function resetVideoGenMockState() {
   state.runtimeStatus = { installed: true, ready: true, current: true };
   for (const key of SPIES) state[key].mockReset();
   state.listVideoHistory.mockResolvedValue([]);
+  state.getVideoHistoryItem.mockRejectedValue(new Error('Video history entry not found'));
   state.previewVideoPrompt.mockResolvedValue(null);
   state.listLorasFull.mockImplementation(async () => state.availableLoras);
 }
@@ -191,7 +194,7 @@ vi.mock('../services/api', () => ({
   previewVideoPrompt: (...args) => state.previewVideoPrompt(...args),
   cancelVideoGen: vi.fn(async () => ({})),
   listVideoHistory: (...args) => state.listVideoHistory(...args),
-  getVideoHistoryItem: vi.fn(async () => { throw new Error('Video history entry not found'); }),
+  getVideoHistoryItem: (...args) => state.getVideoHistoryItem(...args),
   deleteVideoHistoryItem: vi.fn(async () => ({})),
   setVideoHidden: vi.fn(async () => ({})),
   extractLastFrame: vi.fn(async () => ({})),

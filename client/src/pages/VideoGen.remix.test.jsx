@@ -192,6 +192,15 @@ describe('VideoGen cross-page Remix handoff', () => {
     ]));
   });
 
+  it('restores a record older than the history page by hydrating it by id', async () => {
+    state.listVideoHistory.mockResolvedValue([]);
+    state.getVideoHistoryItem.mockResolvedValue(RECORD);
+    await renderVideoGenPage(`/media/video?remix=${RECORD.id}`);
+    await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(RECORD.prompt));
+    expect(state.getVideoHistoryItem).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/no longer in your history/)).toBeNull();
+  });
+
   it('says nothing about a missing record while the history fetch is still in flight', async () => {
     let settleHistory;
     state.listVideoHistory.mockReturnValue(new Promise((resolve) => { settleHistory = resolve; }));

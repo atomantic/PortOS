@@ -42,6 +42,8 @@ describe('listVideoHistoryQuery', () => {
   it('searches the full prompt beyond the compact preview and honors hidden', async () => {
     const hit = await listVideoHistoryQuery(parse({ q: 'needle', compact: 'true' }), history);
     expect(hit.map(r => r.id)).toEqual(['new']);
+    const keyName = await listVideoHistoryQuery(parse({ q: 'createdat', compact: 'true' }), history);
+    expect(keyName).toEqual([]);
     const visible = await listVideoHistoryQuery(parse({ hidden: 'false', compact: 'true' }), history);
     expect(visible.map(r => r.id)).toEqual(['old', 'mid']);
   });

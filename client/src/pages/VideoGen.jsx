@@ -581,10 +581,15 @@ export default function VideoGen() {
     }
     // The page loads only the newest HISTORY_PAGE_LIMIT records, so an older
     // clip is hydrated by id before it is called missing.
-    getVideoHistoryItem(remixHandoffId, { silent: true })
-      .then((older) => { applyRemix(older); setRemixHandoffProblem(null); })
-      .catch(() => setRemixHandoffProblem('missing'))
-      .finally(consumeRemixHandoff);
+    // The id is marked settled above, so a history refresh mid-flight cannot
+    // start a second lookup. A handoff that changed or cleared meanwhile resets
+    // that ref, which makes this answer stale.
+    const id = remixHandoffId;
+    const current = () => settledRemixHandoffRef.current === id;
+    getVideoHistoryItem(id, { silent: true })
+      .then((older) => { if (current()) { applyRemix(older); setRemixHandoffProblem(null); } })
+      .catch(() => { if (current()) setRemixHandoffProblem('missing'); })
+      .finally(() => { if (current()) consumeRemixHandoff(); });
   }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
   // Back to 'loading' first, so a retry that fails again still moves the state
   // ('loading' → 'error') and re-runs the effect above.
