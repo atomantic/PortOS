@@ -270,7 +270,7 @@ export default function SongBook() {
           <p className="text-sm text-gray-500">No songs match the current filters.</p>
         )
       ) : (
-        <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
           {filtered.map((song) => (
             <li
               key={song.id}
@@ -282,7 +282,7 @@ export default function SongBook() {
                   suppress the navigation they shouldn't have triggered). */}
               <div className="flex-1 min-w-0">
                 <Link to={`/songbook/${song.id}`} className="block">
-                  <div className="text-white font-medium truncate" title={song.title}>{song.title}</div>
+                  <div className="text-white font-medium line-clamp-2 break-words" title={song.title}>{song.title}</div>
                   <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-1">
                     {song.artist && <span className="text-gray-400">{song.artist}</span>}
                     {song.instrument && <span>{instrumentLabel(song.instrument)}</span>}
@@ -308,16 +308,16 @@ export default function SongBook() {
                     ))}
                   </div>
                 )}
-              </div>
-              <div className="flex flex-col items-end gap-2 shrink-0">
                 <select
                   value={song.stage || 'new'}
                   onChange={(e) => onStageChange(song.id, e.target.value)}
                   aria-label={`Stage for ${song.title}`}
-                  className={`text-xs rounded-full border px-2 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent ${SONG_STAGE_COLORS[song.stage] || SONG_STAGE_COLORS.new}`}
+                  className={`mt-2 text-xs rounded-full border px-2 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent ${SONG_STAGE_COLORS[song.stage] || SONG_STAGE_COLORS.new}`}
                 >
                   {SONG_STAGES.map((s) => <option key={s.id} value={s.id} className="bg-port-card text-white">{s.label}</option>)}
                 </select>
+              </div>
+              <div className="flex flex-col items-end gap-2 shrink-0">
                 {isConfirming(song.id) ? (
                   <ConfirmButtonPair
                     prompt="Delete?"
