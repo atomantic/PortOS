@@ -118,12 +118,13 @@ async function fingerprintArgs(args) {
  * Plan a composed project's segments: the same preflight and clip plan as the
  * final render, then each section's keys and cache paths. Throws the render's
  * own refusals (each names its shots and the fix). Reads files, writes nothing.
+ * `options.decode: false` skips the performance-take review's ffmpeg decode.
  */
-export async function planShotSegments(project) {
+export async function planShotSegments(project, options) {
   if (project?.composition?.mode !== 'composed') {
     throw new ServerError('Shot renders need the composed render style', { status: 409, code: 'SHOT_RENDER_NEEDS_COMPOSED' });
   }
-  const { ffmpeg, audioPath, clips, audioDurationSec, soundBed, aspect } = await planMusicVideoRender(project);
+  const { ffmpeg, audioPath, clips, audioDurationSec, soundBed, aspect } = await planMusicVideoRender(project, options);
   const grade = project.composition?.grade;
   const beats = project.audioAnalysis?.beats;
   const common = { audioDurationSec, frameGrid: true, grade, beats, aspect };
@@ -488,8 +489,8 @@ export function assertSegmentCleanupIdle(projectId) {
   }
 }
 
-export async function getSegmentCleanup(projectId) {
-  const { project, plan: planned } = await planForLooks(projectId);
+export async function getSegmentCleanup(projectId, options) {
+  const { project, plan: planned } = await planForLooks(projectId, options);
   const plan = planned || { project, dir: shotSegmentDir(projectId), segments: [], outro: null };
   if (plan.error) return { available: true, error: plan.error, stale: [], unusedLooks: [] };
   const stale = await staleSegmentFiles(plan, { previews: true });
@@ -578,10 +579,10 @@ async function loadProjectScene(projectId, sceneId) {
  * final render would refuse reports that refusal (it names the shots and the
  * fix) instead of shot states, since no segment can be placed until it plans.
  */
-export async function getShotRenderStatus(projectId) {
+export async function getShotRenderStatus(projectId, options) {
   const project = await requireProject(projectId);
   if (project.composition?.mode !== 'composed') return { available: false, shots: [], outro: null, ready: 0, total: 0 };
-  const plan = await planShotSegments(project).catch((err) => {
+  const plan = await planShotSegments(project, options).catch((err) => {
     if (!err?.status || err.status >= 500) throw err;
     return { error: { message: err.message, code: err.code || null } };
   });
@@ -709,10 +710,10 @@ const rememberFilmLook = (dir, look) => updateFilmLooks(dir, (looks) => {
 
 const videoLookSegments = (plan) => [...plan.segments.filter((s) => !s.ownLook), ...(plan.outro ? [plan.outro] : [])];
 
-async function planForLooks(projectId) {
+async function planForLooks(projectId, options) {
   const project = await requireProject(projectId);
   if (project.composition?.mode !== 'composed') return { project, plan: null };
-  const plan = await planShotSegments(project).catch((err) => {
+  const plan = await planShotSegments(project, options).catch((err) => {
     if (!err?.status || err.status >= 500) throw err;
     return { error: { message: err.message, code: err.code || null } };
   });
@@ -724,8 +725,8 @@ async function planForLooks(projectId) {
  * settings, how many of the shots that use the video's look have it rendered,
  * and the disk it holds. The look in use comes first.
  */
-export async function listFilmLooks(projectId) {
-  const { project, plan } = await planForLooks(projectId);
+export async function listFilmLooks(projectId, options) {
+  const { project, plan } = await planForLooks(projectId, options);
   if (!plan) return { available: false, looks: [], total: 0 };
   if (plan.error) return { available: true, error: plan.error, looks: [], total: 0 };
   const stored = await readFilmLooks(plan.dir);

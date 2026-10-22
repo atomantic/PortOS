@@ -15,7 +15,9 @@
  * A route belongs here when it runs a process, git, npm, gh or a CoS agent on
  * the host, or when it sets what one will run (a repo path, a start command, a
  * task prompt, a shell job), or accesses live camera/microphone streams.
- * Ordinary read-only GETs stay open; raw backup archives require operator
+ * Ordinary read-only GETs stay open (a GET that only decodes media for some
+ * callers checks `requestHasHostControl` in its handler instead, as the Music
+ * Video shot, look and cleanup reads do for the song-master decode, #13156); raw backup archives require operator
  * authority because they export private records and credentials, and so does
  * the directory picker (GET /api/scaffold/directories), which enumerates any
  * readable host directory rather than a PortOS record. Mutating routes in the
@@ -1311,8 +1313,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // GET routes the process-reach trace found starting host work (#13097): the
   // dependency-impact preview decodes the current song master with ffmpeg to
   // compare sung windows, and the YouTube setup check opens or reuses a tab in
-  // the signed-in managed browser and reads it (#12488 rule).
+  // the signed-in managed browser and reads it (#12488 rule); the sharing
+  // download re-encodes the video with ffmpeg on every request (it keeps no
+  // cached copy, #13156).
   'GET /api/music-video/:id/dependency-impact',
+  'GET /api/video-gen/history/:id/sharing-download',
   'GET /api/youtube/setup-check',
 ]);
 

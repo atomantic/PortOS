@@ -173,9 +173,11 @@ function legacyMasterLookup(project, masterPath) {
  * of its old master when that file is still in the track's render history)
  * is compared with the new master. With neither, a changed master is stale.
  * The master is hashed only when there is a performance take to check, and
- * decoded only when its hash changed.
+ * decoded only when its hash changed. `decode: false` (a read-only caller
+ * without host control) never starts that ffmpeg decode: a rehashed master's
+ * window is taken as unchanged, and the renders that follow re-check it.
  */
-async function reviewPerformanceTakes(project, masterPath) {
+async function reviewPerformanceTakes(project, masterPath, { decode = true } = {}) {
   const results = [];
   const selected = [];
   let sha256 = null;
@@ -197,6 +199,7 @@ async function reviewPerformanceTakes(project, masterPath) {
   let currentEnvelope = null;
   const oldEnvelope = legacyMasterLookup(project, masterPath);
   const windowUnchanged = async (instruction) => {
+    if (!decode) return true;
     let fingerprint = instruction.audio?.windowFingerprint;
     if (!fingerprint) {
       const envelope = await oldEnvelope(instruction.audio?.sha256);
@@ -223,8 +226,8 @@ async function reviewPerformanceTakes(project, masterPath) {
 }
 
 /** The stale entries of `reviewPerformanceTakes`: `[{ sceneId, reason }]`. */
-export async function findStalePerformanceTakes(project, masterPath) {
-  return (await reviewPerformanceTakes(project, masterPath))
+export async function findStalePerformanceTakes(project, masterPath, options) {
+  return (await reviewPerformanceTakes(project, masterPath, options))
     .filter((r) => r.stale)
     .map(({ sceneId, reason }) => ({ sceneId, reason }));
 }
@@ -235,8 +238,8 @@ export async function findStalePerformanceTakes(project, masterPath) {
  * its newest cutaway clip (a video take with no performance or song-audio
  * instruction), else its still. Final renders keep the strict gate below.
  */
-export async function withDraftPerformanceFallbacks(project, masterPath) {
-  const stale = new Set((await findStalePerformanceTakes(project, masterPath)).map(({ sceneId }) => sceneId));
+export async function withDraftPerformanceFallbacks(project, masterPath, options) {
+  const stale = new Set((await findStalePerformanceTakes(project, masterPath, options)).map(({ sceneId }) => sceneId));
   if (!stale.size) return project;
   return { ...project, scenes: project.scenes.map((scene) => {
     if (!stale.has(scene.sceneId)) return scene;
@@ -259,8 +262,8 @@ export async function withDraftPerformanceFallbacks(project, masterPath) {
  * Cutaway fixes: those with no lip-sync take. A lip-sync take switched to
  * Cutaway loses its in-point and plays from its first frame, out of sync.
  */
-export async function assertCurrentPerformanceTakes(project, masterPath) {
-  const reviewed = await reviewPerformanceTakes(project, masterPath);
+export async function assertCurrentPerformanceTakes(project, masterPath, options) {
+  const reviewed = await reviewPerformanceTakes(project, masterPath, options);
   const rehashed = reviewed.filter((r) => r.reason === 'audio-rehashed').length;
   if (rehashed > 0) console.log(`🎵 Music Video: ${rehashed} lip-sync take${rehashed === 1 ? '' : 's'} still match${rehashed === 1 ? 'es' : ''} the re-mastered song in ${rehashed === 1 ? 'its' : 'their'} sung window`);
   const locks = clipLocks(project);

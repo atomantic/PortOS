@@ -728,9 +728,18 @@ router.get('/:id/render', (req, res) => {
   res.json({ jobId: getActiveRenderJobId(req.params.id) });
 });
 
+// The shot, look and cleanup reads plan the render, whose performance-take
+// review decodes the song master with ffmpeg; only a caller with host control
+// starts that decode (#13156). Others get the plan with the take unchecked.
+let authGateModule;
+const planOptions = async (req) => {
+  const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));
+  return { decode: requestHasHostControl(req) };
+};
+
 router.get('/:id/render-cleanup', asyncHandler(async (req, res) => {
   const { getRenderCleanup } = await import('../services/musicVideo/renderCleanup.js');
-  res.json(await getRenderCleanup(req.params.id));
+  res.json(await getRenderCleanup(req.params.id, await planOptions(req)));
 }));
 router.post('/:id/render-cleanup', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoRenderCleanupSchema, req.body ?? {});
@@ -742,7 +751,7 @@ router.post('/:id/render-cleanup', asyncHandler(async (req, res) => {
 // shot's render started or stopped, and a rendered shot's silent segment.
 router.get('/:id/shot-renders', asyncHandler(async (req, res) => {
   const { getShotRenderStatus } = await import('../services/musicVideo/shotSegments.js');
-  res.json(await getShotRenderStatus(req.params.id));
+  res.json(await getShotRenderStatus(req.params.id, await planOptions(req)));
 }));
 router.post('/:id/shots/:sceneId/render', asyncHandler(async (req, res) => {
   const { startShotRender } = await import('../services/musicVideo/shotSegments.js');
@@ -761,7 +770,7 @@ router.post('/:id/shot-renders/preview', asyncHandler(async (req, res) => {
 }));
 router.get('/:id/film-looks', asyncHandler(async (req, res) => {
   const { listFilmLooks } = await import('../services/musicVideo/shotSegments.js');
-  res.json(await listFilmLooks(req.params.id));
+  res.json(await listFilmLooks(req.params.id, await planOptions(req)));
 }));
 router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
   const { deleteFilmLook } = await import('../services/musicVideo/shotSegments.js');
@@ -902,7 +911,6 @@ router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req,
 // this router is reached by many suites that mock settings. Both deferred
 // imports are memoized: overlapping first loads of one specifier can resolve
 // past a test's module mock.
-let authGateModule;
 let overlayTextModule;
 const checkOverlayTextAfterImport = async (req, projectId) => {
   const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));

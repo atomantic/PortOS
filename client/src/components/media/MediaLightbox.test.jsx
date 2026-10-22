@@ -363,5 +363,5 @@ describe('MediaLightbox compact preview item', () => {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Reset poster' })).not.toBeDisabled());
   fireEvent.click(screen.getByRole('button', { name: 'Reset poster' }));
   await waitFor(() => expect(onPosterChange).toHaveBeenCalledWith(videoItem, null));
-  expect(screen.getByRole('link', { name: 'Download for sharing' })).toHaveAttribute('href', '/api/video-gen/history/abc/sharing-download');
+  expect(screen.getByRole('button', { name: 'Download for sharing' })).toBeInTheDocument();
 });
