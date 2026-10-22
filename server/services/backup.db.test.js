@@ -80,13 +80,13 @@ DECLARE r record;
 BEGIN
   FOR r IN SELECT c.oid::regclass::text AS name, c.relkind FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm', 'r', 'p', 'f')
+    WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm', 'r', 'p', 'f', 'c')
     AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass
       AND d.objid = c.oid AND d.deptype = 'e')
     ORDER BY CASE WHEN c.relkind IN ('v', 'm') THEN 0 ELSE 1 END
   LOOP
     EXECUTE format('DROP %s IF EXISTS %s CASCADE',
-      CASE r.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END, r.name);
+      CASE r.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' WHEN 'c' THEN 'TYPE' ELSE 'TABLE' END, r.name);
   END LOOP;
   FOR r IN SELECT c.oid::regclass::text AS name FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -238,7 +238,8 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
   async function prepareFixture() {
     try {
       await buildFixture();
-    } catch (error) {
+    } catch (thrown) {
+      const error = thrown instanceof Error ? thrown : new Error(String(thrown));
       try {
         await resetApplicationObjects();
         await query(await readFile(new URL('../scripts/init-db.sql', import.meta.url), 'utf8'));
