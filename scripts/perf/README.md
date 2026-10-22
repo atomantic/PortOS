@@ -181,6 +181,90 @@ Numeric and long-hex path segments collapse to `:id`; query strings, hosts, toke
 and bodies are never retained. Fixture-unavailable APIs (503) are counted under
 `unavailable`; this is shell/dashboard traffic shape, not production endpoint timing.
 
+Every traffic row also carries `duplicates` (same exact request repeated within a
+phase), `overlapping` (repeated while an identical request was still in flight)
+and `httpErrors` (status 400 or above); the exact URLs used to count them stay in
+memory only.
+
+## Live install audit (`liveBrowserAudit.mjs`)
+
+The synthetic fixture cannot show production fan-out: unavailable APIs return
+503 there, and its useful-content marker is only a visible shell. The live audit
+is a separate, explicitly selected workflow against this machine's running
+install. Its report says `"live": true, "synthetic": false`; never merge it with
+fixture evidence.
+
+~~~sh
+node scripts/perf/liveBrowserAudit.mjs /tmp/live-audit.json
+node scripts/perf/liveBrowserAudit.mjs --route=/messages/inbox --sibling=/messages/contacts --idle-ms=90000
+~~~
+
+Defaults: `--route=/media/history` (collection `/api/image-gen/gallery`),
+`--sibling=/media/collections`, `--idle-ms=60000` (60,000–600,000).
+`/messages/inbox` is also registered; any other static route needs
+`--collection-endpoint=/api/...`. `LIVE_AUDIT_BROWSER` optionally selects a
+Chromium executable. Phases:
+
+- `cold` — fresh browser context, cache disabled, full load of `--route`.
+  `usefulContentMs` ends when the route's collection response has finished, no
+  loading skeleton (`role=status aria-busy=true`) remains, and no HTTP request
+  is in flight; then a two-second tail catches eager follow-ups.
+- `sibling` — in-app navigation (a visible link, else the data router via
+  history) to `--sibling`, with the same completed-data rule. Refetching the
+  route's collection here is a finding.
+- `idle` — no interaction for the full window; `idleBytesPerMinute` reports
+  HTTP encoded/decoded and Socket.IO payload bytes separately.
+
+Per phase and endpoint pattern the report holds requests, completion, failure,
+cancellation, HTTP errors, duplicates, overlapping duplicates, encoded/decoded
+bytes and WebSocket frames/payload bytes, plus phase `totals`, `inFlight`
+requests at the end and `blocked` requests. Findings: `http-error`,
+`request-failed`, `overlapping-duplicate-request`, `sibling-collection-refetch`,
+`blocked-foreign-origin`, `blocked-mutation`, `in-flight-at-end` and
+`browser-stage-<phase>`. Exit 0 = measured with no findings, 1 = findings or a
+failed stage, 2 = UNVERIFIED.
+
+### Transport and authority
+
+- Origin: `PORTOS_URL`, else the agent key file's URL, else the local listener
+  (the same resolution as `scripts/portos-api.js`). Only plain-HTTP loopback
+  with no path or userinfo is accepted; with HTTPS on, use the `:5553` mirror.
+- Credential: the delegated agent session (`PORTOS_API_TOKEN`, else the Agent
+  API key file). The instance password is never used. A Node preflight sends it
+  as a bearer to that exact origin's `/api/auth/whoami` without following
+  redirects. A password-free install needs no credential and none is attached.
+- Browser: a fresh headless context with no profile and service workers
+  blocked. Before the credential enters it, a guard aborts every request and
+  WebSocket to any other origin (another loopback port included — cookies are
+  not port-scoped) and every same-origin non-GET/HEAD/OPTIONS request except
+  Socket.IO polling. The session is then installed as the install's
+  port-scoped, host-only, HttpOnly, SameSite=Strict session cookie, so the UI
+  and its Socket.IO handshake pass the normal auth gate; host-control and other
+  gates are unchanged. The audit starts no provider, sync, send or host action:
+  such writes are blocked and reported, not performed.
+- Missing or rejected credential, a non-loopback origin, an unreachable
+  install, no Chrome, or a redirect to `/login` produce `status: "unverified"`
+  with a fixed `unverified.reason` and `nextStep`; no browser is launched for
+  the preflight failures.
+
+### Redaction
+
+Labels come only from literals in server/routes: an API URL becomes its source
+route pattern (`/api/messages/:accountId/:messageId`); an unmatched API path
+keeps only its mount (`/api/image-gen/:unmatched`); `/assets/` and `/data/`
+collapse; pages other than `/`, `--route` and `--sibling` become `/:page` or
+`/:static`; other origins become `:foreign-origin`. Hosts, ports, queries,
+headers, cookies, bodies and frames are never stored. Playwright errors become
+fixed stage codes. Tests, from `server/`:
+
+~~~sh
+npm test -- ../scripts/perf/liveTraffic.test.js
+~~~
+
+They cover redaction of identifiers/credentials, the exact-origin bearer
+preflight (no redirect following, decoy origin never contacted), guard order and
+request/WebSocket decisions, and UNVERIFIED reports that launch no browser.
+
 ### Findings
 
 The initial synthetic run identified media contract failures tracked in #8292:
