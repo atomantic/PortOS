@@ -50,6 +50,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogCanonProjection.test.js',
   'services/catalogRefResolver.test.js',
   'lib/db/schema/beeper.db.test.js',
+  'lib/db/schema/catalogMediaLibrarySeed.db.test.js',
   'services/beeperConversations.db.test.js',
   'services/beeperTribe.db.test.js',
   'services/tribe.db.test.js',
