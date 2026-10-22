@@ -620,7 +620,10 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     mockGh(() => listing([
       thread('1501', { owner: login, repo: 'tool', reason: 'review_requested' }),
       thread('1502', { owner: 'acme', repo: 'app', reason: 'security_alert', type: 'RepositoryVulnerabilityAlert', url: null }),
+      thread('1503', { owner: login, repo: 'side', reason: 'review_requested' }),
     ]), {
+      [`repos/${login}/side/pulls/1503`]: { author: 'stranger', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/side/collaborators/stranger/permission`]: { user: { login: 'stranger' }, permission: 'read' },
       [`repos/${login}/tool/pulls/1501`]: { author: 'teammate', association: 'COLLABORATOR', state: 'open', merged: false },
       [`repos/${login}/tool/collaborators/teammate/permission`]: { user: { login: 'teammate' }, permission: 'write' },
     });
@@ -641,6 +644,12 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(alert).toMatchObject({ decision: 'surface-high' });
     expect(alert.evidence.handoff).toBeUndefined();
     expect(triggerOnDemandTask).not.toHaveBeenCalled();
+    // An outside PR never reaches the unscreened /do:review run, whatever the
+    // rule says; with no managed app it has no lane and is never a candidate.
+    const outside = await getNotification(account.id, '1503');
+    expect(outside).toMatchObject({ decision: 'suggest-untrusted-review' });
+    expect(outside.evidence.handoff).toBeUndefined();
+    expect(addTask).toHaveBeenCalledTimes(1);
     // A malformed rule is refused at the boundary.
     expect(() => updateAccount(account.id, { agentRules: [{ id: 'x', kind: 'review-request', repo: 'not a repo', agent: true }] })).toThrow('Validation failed');
     await updateAccount(account.id, { agentRules: [] });

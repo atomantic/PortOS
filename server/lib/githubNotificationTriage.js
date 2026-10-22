@@ -199,6 +199,7 @@ const RULE_KINDS = new Set(['review-request', 'security-alert', 'issue-activity'
 const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
 const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
+const REVIEW_TRUST = new Set(['yours', 'trusted']);
 
 function threadAgentKind(row) {
   if (row?.reason === 'security_alert') return 'security-alert';
@@ -211,12 +212,30 @@ function threadAgentKind(row) {
  * The account's agent rule for a kind of thread in a repo: the repo's own rule,
  * else the `*` rule, else null. A malformed stored rule is ignored.
  */
+const validRules = (rules, kind) => (Array.isArray(rules) ? rules : []).filter((rule) => rule
+  && RULE_KINDS.has(rule.kind) && rule.kind === kind
+  && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo) && typeof rule.agent === 'boolean');
+
 function matchAgentRule(rules, kind, repo) {
-  if (!Array.isArray(rules) || !kind) return null;
-  const valid = rules.filter((rule) => rule && RULE_KINDS.has(rule.kind) && rule.kind === kind
-    && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo) && typeof rule.agent === 'boolean');
+  if (!kind) return null;
+  const valid = validRules(rules, kind);
   const name = String(repo || '').toLowerCase();
   return (name && valid.find((rule) => rule.repo.toLowerCase() === name)) || valid.find((rule) => rule.repo === '*') || null;
+}
+
+/**
+ * Which repos Autopilot hands a kind of thread off in, for its candidate query:
+ * every repo except `except` when `all`, else only the `only` repos (lowercase).
+ * The `*` rule sets the default; a kind with no `*` rule is on unless `optIn`.
+ * Mirrors `matchAgentRule` + `autopilotHandoff`, so a row a rule keeps from an
+ * agent never takes a slot in the run.
+ */
+export function agentRuleScope(rules, kind, { optIn = false } = {}) {
+  const valid = validRules(rules, kind);
+  const star = valid.find((rule) => rule.repo === '*');
+  const all = star ? star.agent : !optIn;
+  const repos = (agent) => valid.filter((rule) => rule.repo !== '*' && rule.agent === agent).map((rule) => rule.repo.toLowerCase());
+  return all ? { all, except: repos(false), only: [] } : { all, except: [], only: repos(true) };
 }
 
 const rulePin = (rule) => {
@@ -234,7 +253,8 @@ const rulePin = (rule) => {
  * the link from the stored html url, never from a title or body.
  *
  * Lanes: an outside PR's review request in a managed app goes to
- * `pr-reviewer`; any other review request to a review-only `/do:review` run
+ * `pr-reviewer`; a review request for a PR by you or a trusted author goes to
+ * a review-only `/do:review` run
  * (`do-review`, opt-in for Autopilot through an agent rule); outside issue
  * activity to `issue-watcher`; a security alert to the app's
  * `dependency-updates`, or, in a repo of yours with no app or a global
@@ -250,11 +270,11 @@ export function agentHandoff({ account, row }) {
   let plan = null;
   if (kind === 'review-request' && REVIEW_DECISIONS.has(row.decision)) {
     const pullNumber = Number(PULL_PATH_RE.exec(String(row.subject_api_url || ''))?.[1]);
-    if (pullNumber > 0) {
-      plan = row.decision === 'suggest-untrusted-review' && evidence.repoManaged === true
-        ? { lane: 'pr-reviewer', pullNumber }
-        : { lane: 'do-review', pullNumber, repo: row.repo_full_name, optIn: true };
-    }
+    // Only a PR by you or a trusted author goes to a plain /do:review run; an
+    // outside PR goes to pr-reviewer, which screens untrusted content first and
+    // needs a managed app (`needsApp` below refuses it otherwise).
+    if (pullNumber > 0 && REVIEW_TRUST.has(row.trust)) plan = { lane: 'do-review', pullNumber, repo: row.repo_full_name, optIn: true };
+    else if (pullNumber > 0 && row.decision === 'suggest-untrusted-review') plan = { lane: 'pr-reviewer', pullNumber };
   } else if (kind === 'issue-activity' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
     plan = { lane: 'issue-watcher' };
   } else if (kind === 'security-alert' && row.decision === 'surface-high') {

@@ -20,7 +20,7 @@
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { advisoryIdFromUrl } from '../lib/githubNotificationParse.js';
-import { agentHandoff, autopilotHandoff } from '../lib/githubNotificationTriage.js';
+import { agentHandoff, agentRuleScope, autopilotHandoff } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { managedAppsByRepoKey } from './githubNotificationTriage.js';
 import { queueSecurityFixTask } from './githubSecurityFixTask.js';
@@ -31,16 +31,18 @@ import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 
 // Threads per run, not agent runs: a run queues at most one agent per repo and lane.
 const MAX_HANDOFFS_PER_RUN = 50;
-// The SQL mirror of `agentHandoff`'s lane rules, so a run's limit is spent
-// only on threads that can be handed off and an older eligible thread is never
-// starved by newer ones the rule would reject.
-// `$2` is whether an agent rule switches review requests on: without one only
-// an outside PR in a managed app is reviewed, so the rest never take a slot.
-const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest'
-    AND (decision = 'suggest-untrusted-review' OR ($2::boolean AND decision IN ('suggest-review', 'needs-you', 'surface'))))
+// The SQL mirror of `agentHandoff`'s lane rules and the account's agent
+// rules, so a run's limit is spent only on threads that can be handed off and
+// an older eligible thread is never starved by newer ones the rules would
+// reject. `inScope(n)` reads one `agentRuleScope` as parameters $n..$n+2.
+const inScope = (n) => `(($${n}::boolean AND NOT (lower(repo_full_name) = ANY($${n + 1}::text[]))) OR lower(repo_full_name) = ANY($${n + 2}::text[]))`;
+const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest' AND (
+      (decision = 'suggest-untrusted-review' AND COALESCE(trust, '') NOT IN ('yours', 'trusted') AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(2)})
+      OR (decision IN ('suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface') AND trust IN ('yours', 'trusted') AND ${inScope(5)})))
   OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface') AND (trust = 'outside' OR evidence->>'commenter' IS NOT NULL)
-    AND (evidence->>'repoManaged')::boolean IS TRUE)
-  OR (reason = 'security_alert' AND decision = 'surface-high'))`;
+    AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(8)})
+  OR (reason = 'security_alert' AND decision = 'surface-high' AND ${inScope(11)}))`;
+const scopeParams = ({ all, except, only }) => [all, except, only];
 
 // Lanes that run without a managed app: a scratch clone, or `gh` in PR mode.
 const APP_FREE_LANES = new Set(['security-fix', 'do-review']);
@@ -110,12 +112,18 @@ async function recordHandoff(account, row, handoff, actor = 'automation') {
  */
 export async function autopilotAccountNotifications(account) {
   if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };
-  const reviewRules = Array.isArray(account.agentRules) && account.agentRules.some((rule) => rule?.kind === 'review-request' && rule.agent === true);
+  const rules = account.agentRules;
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
        AND ${CANDIDATE_SQL} AND NOT (evidence ? 'handoff')
      ORDER BY gh_updated_at DESC LIMIT ${MAX_HANDOFFS_PER_RUN}`,
-    [account.id, reviewRules],
+    [
+      account.id,
+      ...scopeParams(agentRuleScope(rules, 'review-request')),
+      ...scopeParams(agentRuleScope(rules, 'review-request', { optIn: true })),
+      ...scopeParams(agentRuleScope(rules, 'issue-activity')),
+      ...scopeParams(agentRuleScope(rules, 'security-alert')),
+    ],
   );
   const plans = rows.map((row) => ({ row, plan: autopilotHandoff({ account, row }) })).filter((entry) => entry.plan);
   if (!plans.length) return { handedOff: 0, agentRuns: 0 };
