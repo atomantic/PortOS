@@ -3,6 +3,7 @@ import SettingsLoadError from '../ui/SettingsLoadError';
 import { Link } from 'react-router';
 import { Save, Loader2, MessageSquare, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
+import FullDiskAccessSteps from './FullDiskAccessSteps';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatDateTime } from '../../utils/formatters';
 import { useSyncSourceSettings } from '../../hooks/useSyncSourceSettings';
@@ -152,7 +153,9 @@ export function IMessageSettingsPanel({ onSynced }) {
           ) : (
             <div className="text-sm text-gray-300 space-y-2">
               <p className="text-port-error">{setup.error}</p>
-              {setup.remediation && <p className="text-gray-400">{setup.remediation}</p>}
+              {setup.fullDiskAccess
+                ? <FullDiskAccessSteps target={setup.fullDiskAccess} onRecheck={handleCheck} rechecking={checking} />
+                : setup.remediation && <p className="text-gray-400">{setup.remediation}</p>}
             </div>
           )}
         </div>

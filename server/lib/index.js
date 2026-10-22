@@ -378,6 +378,7 @@ export * from './zipStream.js';
 export * from './zipWriter.js';
 
 // === Process execution ===
+export * from './fullDiskAccess.js';
 export * from './agentGuard/index.js';
 export * from './agentFinalVerdict.js';
 export * from './agentOutcome.js';
