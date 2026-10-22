@@ -39,7 +39,7 @@
     "model-comparison-refresh": "f66e070fa08e30edda2c3020289f0c67",
     "module-hygiene": "1637fd164737e20db284fe5c2b440453",
     "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
-    "performance": "4f8ddada54d7c6f31b7fb35aeb0f29db",
+    "performance": "45aa35e50c45cf9f4e7d3d7125bf4b5b",
     "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
     "plan-task": "b718701c2d4ed2b4900225fc58857208",
     "plan-task-claim": "07f6252f00905f9c6e4134a3d3587310",
@@ -104,7 +104,7 @@
     "model-comparison-refresh": 4,
     "module-hygiene": 3,
     "observability": 2,
-    "performance": 6,
+    "performance": 7,
     "plan-feature": 6,
     "plan-task": 24,
     "pr-reviewer": 5,
@@ -417,7 +417,8 @@
       "672bd3958b12afb0f382bcebb6dc3b33",
       "d7e3a80f42903fbf90be0efc9b559c0b",
       "b69bf4cbd2b3c272b5650608c62cede3",
-      "8b297d723f9f39154c9cf6d501738494"
+      "8b297d723f9f39154c9cf6d501738494",
+      "4f8ddada54d7c6f31b7fb35aeb0f29db"
     ],
     "plan-feature": [
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",

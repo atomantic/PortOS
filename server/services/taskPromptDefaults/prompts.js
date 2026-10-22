@@ -404,6 +404,12 @@ be scoped to visible consumers. Use synthetic large collections to verify
 server page limits, compact list projections, lazy details, bounded rendered
 rows, and no full history hydration hidden behind client-side slicing.
 
+If the app is PortOS (it ships scripts/perf/browserCollectionAudit.mjs) and the
+live browser is unauthenticated, run
+node scripts/perf/browserCollectionAudit.mjs --route=/ --sibling=<tab> against
+the synthetic fixture (see scripts/perf/README.md) for the cold, sibling and idle
+counts above.
+
 Do not claim UI performance passed from source inspection or a small/empty
 fixture alone. If browser access, an authorized session, or usable large-fixture
 evidence is unavailable, explicitly mark UI load/idle transfer UNVERIFIED and
