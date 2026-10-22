@@ -1170,12 +1170,6 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
   const skipped = [];
   const claimMarkersHeld = [];
   for (const b of merged) {
-    // Re-verify at action time — state may have shifted since the gather.
-    const hasMergeEvidence = await hasBranchMergeEvidence(repoPath, b.branch, defaultBranch);
-    if (!hasMergeEvidence) {
-      skipped.push({ branch: b.branch, reason: 'not-merged-on-recheck' });
-      continue;
-    }
     const retired = await retireBranch(repoPath, b, {
       activeAgentIds,
       claimOwners,
@@ -1186,7 +1180,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
     });
     if (!retired.ok) {
       const { ok, ...failure } = retired;
-      skipped.push({ branch: b.branch, ...(b.worktreePath && { path: b.worktreePath }), ...failure });
+      skipped.push({ branch: b.branch, ...(failure.reason !== 'not-merged-on-recheck' && b.worktreePath && { path: b.worktreePath }), ...failure });
       continue;
     }
     const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin, forgeExec });
@@ -1388,18 +1382,19 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
   if (!defaultBranch) return stop({ ok: false, reason: 'default-branch-unavailable' });
   if (b.branch === defaultBranch) return stop({ ok: false, reason: 'protected-branch' });
+  const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-  const readPolicyHold = () => readBranchCompletionHold({ repoPath, branch: b.branch, retirement: mergedRetirement });
+  const readPolicyHold = (tip = expectedHead) => readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
   const policyHold = await readPolicyHold();
   if (policyHold) return stop({ ok: false, reason: policyHold });
   let archiveTree = null;
   let claimCompletion = null;
-  const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
+  let holders = null;
   if (mergedRetirement) {
     // Completion audits may know only the branch. Resolve its actual holder,
     // and pin merge evidence to its current commit rather than the scan's flag.
-    const holders = await listWorktrees(repoPath).catch(() => null);
+    holders = await listWorktrees(repoPath).catch(() => null);
     if (!holders) return stop({ ok: false, reason: 'worktree-ownership-unreadable' });
     const holder = holders.find(wt => wt.branch === `refs/heads/${b.branch}`);
     if (!await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return stop({ ok: false, reason: 'not-merged-on-recheck' });
@@ -1450,7 +1445,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
       const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
       if (!records) return stop({ ok: false, reason: 'claim-ownership-unreadable' });
       if (await hasCompletedCheckoutEvidence(records, {
-        repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
+        repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead, worktrees: holders,
       })) claimCompletion = 'receipt';
       else {
         const hold = await manualClaimShippedHold(repoPath, b, expectedHead, forgeAccount);
@@ -1460,7 +1455,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
         claimCompletion = 'forge-merged';
       }
     }
-    const tree = (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
+    const tree = holders ? holders.find(wt => wt.path === b.worktreePath) : (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
     if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
     archiveTree = tree;
   }
@@ -1511,15 +1506,16 @@ export async function checkoutIdleMs(worktreePath) {
  * `prepare` backup, each taken after admission with the ownership lock released.
  */
 async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion }, { prepared = null, preservation = null } = {}) {
+  let removal = null;
   if (b.worktreePath) {
-    const verifyRemoval = async (holder) => {
+    const verifyRemoval = async (holder, worktrees) => {
       if (!holder || holder.branch !== `refs/heads/${b.branch}` || holder.head !== expectedHead) return 'worktree-holder-changed';
       if (claimOwners !== undefined) {
         const agents = claimOwners?.readAgents ? await claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
         const reason = claimCheckoutOwnerReason({ branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents });
         if (reason) return reason;
       }
-      const policyHold = await readPolicyHold();
+      const policyHold = await readPolicyHold(expectedHead);
       if (policyHold) return policyHold;
       // A forge-merged exact head cannot un-merge, and the holder check above
       // pins that head; only a run receipt can be superseded by a later owner.
@@ -1528,7 +1524,7 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
         const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
         const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
         if (!records || !await hasCompletedCheckoutEvidence(records, {
-          repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
+          repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead, worktrees,
         })) return 'claim-completion-unverified';
       }
       const dirtyPaths = await worktreeDirtyPaths(b.worktreePath);
@@ -1539,19 +1535,19 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       if (mergedRetirement && !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return 'not-merged-on-recheck';
       return preservation ? preservation.verify(holder) : null;
     };
-    const removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval });
+    removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval });
     // The branch is still checked out by a surviving worktree: deleting it would
     // fail, and reporting success would mark the branch reconciled while it is held.
     if (!removal.removed) return { ok: false, reason: removal.reason || 'worktree-remove-failed' };
   }
-  const latestPolicyHold = await readPolicyHold();
+  const latestPolicyHold = await readPolicyHold(expectedHead);
   if (latestPolicyHold) return { ok: false, reason: latestPolicyHold };
   if (claimOwners !== undefined) {
     const agents = claimOwners?.readAgents ? await claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
     const reason = claimCheckoutOwnerReason({ branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents });
     if (reason) return { ok: false, reason };
   }
-  const holders = await listWorktrees(repoPath).catch(() => null);
+  const holders = removal?.entries || await listWorktrees(repoPath).catch(() => null);
   if (!holders || holders.some(wt => wt.branch === `refs/heads/${b.branch}`)) return { ok: false, reason: 'branch-has-new-holder' };
   if (mergedRetirement) {
     if (!await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return { ok: false, reason: 'not-merged-on-recheck' };
@@ -1578,8 +1574,8 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
  * @param {string} defaultBranch
  * @returns {Promise<{path:string, head:string|null, locked:boolean, worktreeAgeMs:number|null, dirtyPaths:string[]}[]>}
  */
-async function gatherDetachedWorktrees(repoPath, defaultBranch) {
-  const worktrees = await listWorktrees(repoPath).catch(() => []);
+async function gatherDetachedWorktrees(repoPath, defaultBranch, preloadedTrees = null) {
+  const worktrees = preloadedTrees || await listWorktrees(repoPath).catch(() => []);
   const detached = [];
   for (const [index, entry] of worktrees.entries()) {
     // git lists the main checkout first; the path check covers a caller whose list is not ordered.
@@ -1603,8 +1599,8 @@ const isCommitOnBranch = (repoPath, sha, branch) =>
 
 // Read after cleanup so removed holders cannot survive in the recovery report.
 // No content or ownership inference: retirement still uses its existing gates.
-async function gatherRecoveryWorktrees(repoPath) {
-  const trees = await listWorktrees(repoPath).catch(() => null);
+async function gatherRecoveryWorktrees(repoPath, preloadedTrees = null) {
+  const trees = preloadedTrees || await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return null;
   return trees.slice(1).filter(tree => !tree.bare).map(tree => {
     const managed = worktreeOwnershipReason({ path: tree.path, roots: reconcileWorktreeRoots(repoPath), allowLiveClaim: true }) !== 'worktree-unmanaged-location';
@@ -1865,8 +1861,10 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
   // Detached worktrees have no branch, so nothing above can see them (#10825).
+  const postCleanupWorktrees = await listWorktrees(repoPath).catch(() => []);
+  const detachedWorktrees = await gatherDetachedWorktrees(repoPath, defaultBranch, postCleanupWorktrees);
   const detachedReap = cleanup
-    ? await reapDetachedWorktrees(repoPath, defaultBranch, await gatherDetachedWorktrees(repoPath, defaultBranch), { activeAgentIds, claimOwners })
+    ? await reapDetachedWorktrees(repoPath, defaultBranch, detachedWorktrees, { activeAgentIds, claimOwners })
     : { cleaned: [], skipped: [], held: [] };
   const cleaned = [...new Set([...cleanedWorktrees, ...cleanedBranches, ...detachedReap.cleaned])];
 
@@ -1897,7 +1895,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     skipped: [...skipped, ...supersededReap.skipped, ...detachedReap.skipped],
     // Detached trees at merged commits that were NOT removed, managed or not.
     detachedWorktrees: detachedReap.held,
-    worktreeInventory: await gatherRecoveryWorktrees(repoPath),
+    worktreeInventory: await gatherRecoveryWorktrees(repoPath, detachedReap.cleaned.length === 0 ? postCleanupWorktrees : null),
     orphanRemotes,
     prStateUnavailable
   };

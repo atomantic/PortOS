@@ -25,10 +25,11 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 }));
 afterAll(cleanupTempDataRoots);
 
-const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {} }));
+const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {}, gitSpawns: [] }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
+    injected.gitSpawns.push({ args, cwd });
     // Git reports forward slashes even when path.join uses Windows separators.
     if (args[0] === 'status' && injected.statusPath && cwd?.replaceAll('\\', '/') === injected.statusPath.replaceAll('\\', '/')) {
       if (injected.statusThrows || !options?.ignoreExitCode) throw new Error('synthetic unreadable index');
@@ -87,7 +88,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   let external;
 
   beforeEach(async () => {
-    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {} });
+    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {}, gitSpawns: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-reconcile-own-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -226,12 +227,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await execGit(['worktree', 'lock', locked], repo);
     const clean = await addCompletedClaim();
 
+    injected.gitSpawns.length = 0;
     const result = await reconcileWithoutOwners();
     expect(result.cleaned).toEqual(['claim/issue-11']);
     expect(existsSync(clean)).toBe(false);
     expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'claim/issue-12', reason: 'worktree-locked' }));
     expect(existsSync(locked)).toBe(true);
     expect(await branches()).toEqual(expect.arrayContaining(['claim/issue-12']));
+    // Pinned spawn-count ceiling for single-checkout retirement (#13154):
+    // Reduced from ~120 serial spawns down to <=105 by sharing Git reads inside
+    // the critical section (e.g. 1 worktree list per admission, repo common-dir cache).
+    expect(injected.gitSpawns.length).toBeLessThanOrEqual(105);
   });
 
   it('holds a claim checkout with uncommitted or unmerged work', async () => {
