@@ -9,7 +9,7 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => (
 const app = { id: 'example', repoPath: '/example/repo' };
 const head = 'a'.repeat(40);
 const branch = { branch: 'claim/issue-42', tip: head, worktreePath: '/example/checkout', isMerged: false,
-  completionPolicyReason: 'pr-completion-review-required' };
+  rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' };
 const tree = { branch: branch.branch, path: branch.worktreePath, head, managed: true, locked: false, lockReason: null };
 const scan = (b = {}, t = {}) => ({ wip: [{ ...branch, ...b }], worktreeInventory: [{ ...tree, ...t }] });
 const setup = () => ({
@@ -129,6 +129,15 @@ describe('historical completed-checkout review obligations', () => {
       expect(await prepareReconcileRetirements(app, scan(behind), deps)).toMatchObject({ candidates: [], retired: [], held: [] });
     }
     expect(await prepareReconcileRetirements(app, scan({ ...behind, isMerged: false }), deps)).toMatchObject({ candidates: [], retired: [] });
+    expect(deps.retire).not.toHaveBeenCalled();
+    expect(deps.prepare).not.toHaveBeenCalled();
+  });
+
+  it('never retires a draft that also carries a completion-policy hold (rule draft)', async () => {
+    const deps = setup();
+    deps.retire = vi.fn();
+    const draft = { rule: 'draft', isMerged: true, openPr: { isDraft: true, headRefOid: 'c'.repeat(40) } };
+    expect(await prepareReconcileRetirements(app, scan(draft), deps)).toMatchObject({ candidates: [], retired: [], held: [] });
     expect(deps.retire).not.toHaveBeenCalled();
     expect(deps.prepare).not.toHaveBeenCalled();
   });

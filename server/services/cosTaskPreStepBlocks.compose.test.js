@@ -159,7 +159,7 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
 
   it('a user run retires merged review holds and generates review work only for the rest', async () => {
     const rows = [1, 2, 3, 4].map(n => ({ branch: `claim/issue-${n}`, tip: String(n).repeat(40),
-      worktreePath: `/example/checkouts/${n}`, isMerged: n !== 2, completionPolicyReason: 'pr-completion-review-required' }));
+      worktreePath: `/example/checkouts/${n}`, isMerged: n !== 2, rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' }));
     reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: rows, worktreeInventory: rows.map(row => ({
       branch: row.branch, path: row.worktreePath, head: row.tip, managed: true, locked: false, lockReason: null,
     })) }));
@@ -207,7 +207,7 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { autoMerge: false, resolveConflicts } });
     const branch = 'fix/no-auto-merge';
     const path = '/example/checkouts/held';
-    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch, worktreePath: path, completionPolicyReason: 'pr-completion-review-required', openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }],
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch, worktreePath: path, rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required', openPr: { url: 'https://github.com/example/repo/pull/9', isDraft: false } }],
       worktreeInventory: [{ branch, path, head: 'a'.repeat(40), locked: false, managed: true }] }));
     inspectOpenDeliveryRepair.mockResolvedValue({ headSha: 'a'.repeat(40), evidence: { head: 'a'.repeat(40), conflicts: true } });
     expect(await generate()).toBeNull();
@@ -237,7 +237,7 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
   it('a normal user reconcile drains machine-proven retirement without generating an agent', async () => {
     const release = { branch: 'claim/issue-1', path: '/example/checkouts/1', head: 'a'.repeat(40), managed: true, locked: false };
     reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch: release.branch, worktreePath: release.path, tip: release.head,
-      completionPolicyReason: 'pr-completion-review-required' }], worktreeInventory: [release] }));
+      rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' }], worktreeInventory: [release] }));
     mergedPrRead.mockResolvedValue('https://github.com/example/repo/pull/1');
     prepareRetirement.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'completed-owner' }] },
       forge: { prHead: release.head }, comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
