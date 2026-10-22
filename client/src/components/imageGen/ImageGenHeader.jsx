@@ -13,6 +13,7 @@ const CONNECTED_MODE_LABELS = {
   [IMAGE_GEN_MODE.GROK]: 'grok CLI',
   [IMAGE_GEN_MODE.AGY]: 'agy CLI',
   [IMAGE_GEN_MODE.FAL]: 'fal.ai',
+  [IMAGE_GEN_MODE.RUNWAY]: 'Runway',
 };
 
 export default function ImageGenHeader({ status, backends, remix, actions }) {

@@ -18,6 +18,14 @@ import { FAL_IMAGE_DEFAULT_MODEL } from '../../lib/falImageModels.js';
 const settingsWith = (imageGen) => ({ imageGen });
 
 describe('resolveCloudProviderConfig', () => {
+  it('carries Runway model and resolution without the shared secret, and rejects an unknown paid model', () => {
+    const settings = { imageGen: { runway: { enabled: true, model: 'gen4_image_turbo', resolution: '1080p' } }, videoGen: { runway: { apiKey: 'test-secret' } } };
+    const resolved = resolveRenderTargetConfig(settings, 'universe-bible', { mode: 'runway' }).cloud;
+    expect(resolved.jobParams).toEqual({ mode: 'runway', model: 'gen4_image_turbo', resolution: '1080p' });
+    expect(() => resolveRenderTargetConfig(settings, 'universe-bible', { mode: 'runway', model: 'unknown' })).toThrow('has no model');
+    expect(resolveCloudProviderConfig({}, 'runway').enabled).toBe(false);
+  });
+
   it('returns null for non-cloud modes', () => {
     expect(resolveCloudProviderConfig(settingsWith({}), IMAGE_GEN_MODE.LOCAL)).toBeNull();
     expect(resolveCloudProviderConfig(settingsWith({}), IMAGE_GEN_MODE.EXTERNAL)).toBeNull();

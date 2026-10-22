@@ -1,3 +1,4 @@
+import RunwayModelSelect from '../imageGen/RunwayModelSelect';
 /**
  * Media settings — the install-wide routing sections: the Backend tile
  * picker and the Defaults tab (default video backend, display sleep, the
@@ -24,6 +25,7 @@ const BACKEND_TILES = [
   { mode: IMAGE_GEN_MODE.CODEX, icon: Terminal, label: 'Codex CLI', blurb: 'Route through the Codex CLI built-in image_gen tool. Counts against your Codex plan.', enabledKey: 'codexEnabled' },
   { mode: IMAGE_GEN_MODE.GROK, icon: Sparkles, label: 'Grok CLI', blurb: 'Route through the Grok Build CLI built-in image_gen tool. Counts against your Grok plan.', enabledKey: 'grokEnabled' },
   { mode: IMAGE_GEN_MODE.AGY, icon: Terminal, label: 'Agy CLI', blurb: "Text-to-image through Antigravity's generate_image tool and your selected model.", enabledKey: 'agyEnabled' },
+  { mode: IMAGE_GEN_MODE.RUNWAY, icon: Cloud, label: 'Runway', blurb: 'Hosted Gen-4 stills with up to three tagged references. Billed per image.', enabledKey: 'runwayEnabled' },
   { mode: IMAGE_GEN_MODE.FAL, icon: Sparkles, label: 'fal.ai', blurb: "Hosted image and reference-edit models through fal.ai's API. Billed per image to your fal.ai account.", enabledKey: 'falEnabled' },
 ];
 
@@ -236,12 +238,21 @@ export default function ImageGenBackendSections({ mediaTab, form, credentials })
                     className={`${SELECT_CLASS} sm:w-44`}
                   >
                     <option value="">Auto (install default)</option>
-                    {[IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL].map((m) => (
+                    {[IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY].map((m) => (
                       <option key={m} value={m}>{modeLabel(m)}</option>
                     ))}
                   </select>
                 </FormField>
-                {pinnedMode === IMAGE_GEN_MODE.FAL ? (
+                {pinnedMode === IMAGE_GEN_MODE.RUNWAY ? (
+                  <FormField label={`${label} model`} labelClassName="sr-only" className="contents">
+                    <RunwayModelSelect
+                      id={modelInputId}
+                      value={entry.imageModel}
+                      onChange={(v) => setPin('imageModel', v)}
+                      className={`${SELECT_CLASS} sm:w-52`}
+                    />
+                  </FormField>
+                ) : pinnedMode === IMAGE_GEN_MODE.FAL ? (
                   <FormField label={`${label} model`} labelClassName="sr-only" className="contents">
                     <FalModelSelect
                       id={modelInputId}

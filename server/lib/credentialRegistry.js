@@ -46,7 +46,7 @@ export const CREDENTIALS = Object.freeze([
   }),
   Object.freeze({
     id: 'runway', label: 'Runway', privateStore: true,
-    unlocks: 'Video generation through Runway\'s developer API.', tier: 'metered',
+    unlocks: 'Image and video generation through Runway\'s developer API.', tier: 'metered',
     getUrl: 'https://dev.runwayml.com/', envVars: Object.freeze(['RUNWAYML_API_SECRET']),
     settingsPath: 'videoGen.runway.apiKey', configurePath: '/settings/credentials',
   }),

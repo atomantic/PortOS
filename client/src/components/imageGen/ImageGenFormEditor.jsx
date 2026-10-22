@@ -17,6 +17,7 @@ import LoraPicker from './LoraPicker';
 import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
 import {
+  RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL,
   AGY_IMAGEGEN_DEFAULT_MODEL, FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE, falImageFamily,
 } from '../../lib/imageGenBackends';
 
@@ -41,7 +42,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
     effectiveMode,
     isLocalMode,
     isAgyMode,
-    isFalMode,
+    isFalMode, isRunwayMode, effectiveRunwayModel,
     remoteTarget,
     effectiveAgyModel,
     effectiveFalModel,
@@ -240,11 +241,11 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             modelStatus={isLocalMode ? modelDownload.getStatus(fields.modelId) : null}
             onModelDownload={isLocalMode ? modelDownload.start : undefined}
             onModelDownloadCancel={modelDownload.cancel}
-            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : []}
-            cloudModel={isFalMode ? effectiveFalModel : effectiveAgyModel}
-            onCloudModelChange={isFalMode ? fields.setFalModel : fields.setAgyModel}
-            cloudModelLabel={isFalMode ? 'fal.ai model' : 'Agent model'}
-            cloudModelDefaultLabel={isFalMode
+            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isRunwayMode ? RUNWAY_IMAGE_MODELS : []}
+            cloudModel={isRunwayMode ? effectiveRunwayModel : isFalMode ? effectiveFalModel : effectiveAgyModel}
+            onCloudModelChange={isRunwayMode ? fields.setRunwayModel : isFalMode ? fields.setFalModel : fields.setAgyModel}
+            cloudModelLabel={isRunwayMode ? 'Runway model' : isFalMode ? 'fal.ai model' : 'Agent model'}
+            cloudModelDefaultLabel={isRunwayMode ? settings.savedRunwayModel || RUNWAY_IMAGE_DEFAULT_MODEL : isFalMode
               ? falImageFamily(settings.savedFalModel || FAL_IMAGE_DEFAULT_MODEL)?.label || FAL_IMAGE_DEFAULT_MODEL
               : settings.savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
           />

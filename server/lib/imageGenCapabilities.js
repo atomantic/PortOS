@@ -189,6 +189,10 @@ export const IMAGE_GEN_PROVIDER_CAPABILITIES = Object.freeze({
     // render has nothing to send.
     promptRequiredWithInputImage: true,
   }),
+  [IMAGE_GEN_MODE.RUNWAY]: Object.freeze({
+    supportsModelOverride: true, maxInputImages: 3, maxReferences: 3,
+    multiCharacterPreservation: true, promptRequiredWithInputImage: true,
+  }),
   [IMAGE_GEN_MODE.FAL]: Object.freeze({
     // The model IS the product here — each catalog family is a different
     // price and look (lib/falImageModels.js), and a per-render override is

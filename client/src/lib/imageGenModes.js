@@ -187,6 +187,8 @@ export const MODE_LABELS = Object.freeze({
 // text-to-image endpoint (the provider switches to the family's /edit endpoint
 // on its own whenever a render carries input images), labeled with its price
 // because each choice is a different cost per image.
+export { RUNWAY_IMAGE_DISCLOSURE, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../../server/lib/runwayImageModels.js';
+
 export const FAL_IMAGE_MODEL_OPTIONS = Object.freeze(FAL_IMAGE_FAMILIES.map((family) => Object.freeze({
   id: family.textEndpoint,
   label: `${family.label} (${falImagePriceLabel(family)}, up to ${family.maxInputImages} refs)`,

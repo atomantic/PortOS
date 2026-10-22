@@ -18,6 +18,7 @@ import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } fro
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
 import { IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { RUNWAY_IMAGE_MODEL_IDS } from './runwayImageModels.js';
 import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
@@ -2234,6 +2235,14 @@ export const videoModelTermsSchema = z.object({
 // PUT /api/settings/credentials/fal). `model` must name a catalog endpoint
 // (lib/falImageModels.js): each id is a different price, so free text is
 // refused rather than persisted and discovered at render time.
+export const imageGenRunwaySettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  model: z.preprocess((v) => v === '' ? undefined : v, z.enum(RUNWAY_IMAGE_MODEL_IDS).optional()),
+  resolution: z.enum(['720p', '1080p']).optional(),
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
+});
+
 export const imageGenFalSettingsSchema = z.object({
   enabled: z.boolean().optional(),
   model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(FAL_IMAGE_MODEL_IDS).optional()),
@@ -2356,6 +2365,7 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.grok': imageGenGrokSettingsSchema.strict(),
   'imageGen.agy': imageGenAgySettingsSchema.strict(),
   'imageGen.fal': imageGenFalSettingsSchema.strict(),
+  'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
   videoGen: videoGenSettingsSchema.pick({ mode: true, defaultModelId: true, displaySleep: true }).strict(),

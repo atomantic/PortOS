@@ -29,6 +29,7 @@ import {
   renderTargetDefaults,
   resolveRenderTargetPins,
 } from '../../lib/renderModeLadder.js';
+import { RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../lib/runwayImageModels.js';
 import { FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_IDS, isFalImageModel } from '../../lib/falImageModels.js';
 import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
@@ -126,6 +127,13 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
       // Such a caller says so with `overrideIsShippedDefault` instead.
       modelIsShippedDefault: overrideIsShippedDefault || (!override && !a.model),
     }),
+  }),
+  [IMAGE_GEN_MODE.RUNWAY]: Object.freeze({
+    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.RUNWAY],
+    label: 'Runway Imagegen', errorCode: 'RUNWAY_IMAGEGEN_DISABLED',
+    knownModels: RUNWAY_IMAGE_MODEL_IDS, unknownModelCode: 'RUNWAY_IMAGE_MODEL_UNKNOWN',
+    modelId: (c, override) => override || (getRunwayImageModel(c.model) ? c.model : RUNWAY_IMAGE_DEFAULT_MODEL),
+    params: (c, override) => ({ model: override || (getRunwayImageModel(c.model) ? c.model : RUNWAY_IMAGE_DEFAULT_MODEL), resolution: c.resolution || '720p' }),
   }),
   [IMAGE_GEN_MODE.FAL]: Object.freeze({
     ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.FAL],

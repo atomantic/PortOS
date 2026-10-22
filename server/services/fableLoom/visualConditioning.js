@@ -16,6 +16,7 @@ import {
   matchCharactersInText, matchObjectsInText, matchPlacesInText,
 } from '../../lib/scenePrompt.js';
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
+import { IMAGE_GEN_PROVIDER_CAPABILITIES } from '../../lib/imageGenCapabilities.js';
 import { CLOUD_IMAGE_GEN_MODES } from '../../lib/generationModes.js';
 import { buildFableLoomVisualPrompts } from '../../lib/fableLoomVisualPrompts.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -434,11 +435,11 @@ export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4
     referenceRoles: localFlux2 || cloudEdit
       ? ['temporal-predecessor', 'character-neutral', 'character-profile', 'character-full-body', 'character-expression-gesture', 'character-wardrobe', 'character-prop-scale', 'character-negative-identity', 'character-draft-reference', 'environment', 'object']
       : [],
-    referenceBudget: localFlux2 || cloudEdit ? inputBudget : 0,
+    referenceBudget: localFlux2 || cloudEdit ? Math.min(inputBudget, IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.maxInputImages ?? inputBudget) : 0,
     supportsLora: localFlux2 || (mode === 'local' && model?.runner === 'mflux'),
     loraCompatKey: model?.loraCompatKey || null,
     loraBudget: 8,
-    multiCharacterPreservation: localFlux2,
+    multiCharacterPreservation: localFlux2 || IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.multiCharacterPreservation === true,
   });
 }
 

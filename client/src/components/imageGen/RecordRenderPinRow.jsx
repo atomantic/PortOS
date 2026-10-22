@@ -1,3 +1,4 @@
+import RunwayModelSelect from './RunwayModelSelect';
 import ModelSelect from '../ModelSelect';
 import FalModelSelect from './FalModelSelect';
 import {
@@ -7,7 +8,7 @@ import {
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
 
-const DEFAULT_MODES = [IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL];
+const DEFAULT_MODES = [IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY];
 const FIELD = 'w-full max-w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
 // Per-record render pin editor (#3231 Phase 3) — one row pinning a record's
@@ -71,6 +72,14 @@ export default function RecordRenderPinRow({
           installDefault={installDefault}
           value={imageModelId}
           onChange={(modelId) => onChange({ imageMode: pinnedMode, imageModelId: modelId })}
+        />
+      ) : pinnedMode === IMAGE_GEN_MODE.RUNWAY ? (
+        <RunwayModelSelect
+          id={`${idPrefix}-model`}
+          aria-label={`${label} model`}
+          value={imageModelId}
+          onChange={(v) => onChange({ imageMode: pinnedMode, imageModelId: v })}
+          className={`${FIELD} sm:w-52`}
         />
       ) : pinnedMode === IMAGE_GEN_MODE.FAL ? (
         <FalModelSelect

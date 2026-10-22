@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
 import {
-  FAL_IMAGE_MODEL_IDS,
+  FAL_IMAGE_MODEL_IDS, RUNWAY_IMAGE_MODEL_IDS,
   IMAGE_GEN_MODE,
   isCloudCliMode,
   modeLabel,
@@ -68,6 +68,7 @@ function useImageGenBackendRuntime() {
   const isCloudMode = isCloudCliMode(effectiveMode);
   const cloudModeLabel = modeLabel(effectiveMode);
   const isAgyMode = effectiveMode === IMAGE_GEN_MODE.AGY;
+  const isRunwayMode = effectiveMode === IMAGE_GEN_MODE.RUNWAY;
   const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
   const remoteTarget = useFederatedMediaTarget('image');
   const remoteTargetActive = effectiveMode !== IMAGE_GEN_MODE.GROK && remoteTarget.isRemote;
@@ -111,6 +112,7 @@ function useImageGenBackendRuntime() {
     isCloudMode,
     cloudModeLabel,
     isAgyMode,
+    isRunwayMode,
     isFalMode,
     remoteTarget,
     remoteTargetActive,
@@ -165,7 +167,8 @@ export function useImageGenPageRuntime() {
   const effectiveAgyModel = backend.agy.models.includes(fields.agyModel) ? fields.agyModel : '';
   // Only a catalog id is ever sent — the server refuses anything else.
   const effectiveFalModel = FAL_IMAGE_MODEL_IDS.includes(fields.falModel) ? fields.falModel : '';
-  const effectiveCloudModel = backend.isAgyMode ? effectiveAgyModel : backend.isFalMode ? effectiveFalModel : '';
+  const effectiveRunwayModel = RUNWAY_IMAGE_MODEL_IDS.includes(fields.runwayModel) ? fields.runwayModel : '';
+  const effectiveCloudModel = backend.isAgyMode ? effectiveAgyModel : backend.isFalMode ? effectiveFalModel : backend.isRunwayMode ? effectiveRunwayModel : '';
 
   useEffect(() => {
     if (!effectiveMode) return;
@@ -540,7 +543,7 @@ export function useImageGenPageRuntime() {
 
   return {
     form,
-    backend: { ...backend, effectiveAgyModel, effectiveFalModel },
+    backend: { ...backend, effectiveAgyModel, effectiveFalModel, effectiveRunwayModel },
     generation: {
       handleGenerate,
       handleCancel,

@@ -243,6 +243,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
       [IMAGE_GEN_MODE.GROK]: () => import('../imageGen/grok.js'),
       [IMAGE_GEN_MODE.AGY]: () => import('../imageGen/agy.js'),
       [IMAGE_GEN_MODE.FAL]: () => import('../imageGen/fal.js'),
+      [IMAGE_GEN_MODE.RUNWAY]: () => import('../imageGen/runway.js'),
       default: () => import('../imageGen/local.js'),
     },
     invoke: (mod, request) => mod.generateImage(request),

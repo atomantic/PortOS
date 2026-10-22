@@ -61,7 +61,7 @@ const UNKNOWN_BLOCK_TTL_MS = 60 * 60 * 1000;
 // account, not drawn from a subscription quota window, so there is no reset to
 // observe and its failures (content policy, bad input) are not quota blocks.
 // Its spend is recorded per render instead (`estimatedCostUsd` in the sidecar).
-export const isQuotaTrackedImageMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode) && mode !== IMAGE_GEN_MODE.FAL;
+export const isQuotaTrackedImageMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode) && ![IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY].includes(mode);
 
 /** Card id for the image-gen quota card, in the same namespace as the provider
  * family ids in providerUsage.js — a per-family read has to be able to name it. */

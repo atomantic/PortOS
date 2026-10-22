@@ -1,5 +1,5 @@
 /**
- * Runway developer API — the task transport for the Runway video backend.
+ * Runway developer API — the shared task transport for image and video backends.
  *
  * Runway runs every generation as a task: POST the input to
  * `/v1/image_to_video` (or `/v1/text_to_video`), which answers `{ id }`; poll
@@ -78,7 +78,7 @@ export async function cancelRunwayTask(entry) {
   if (!entry.remoteTerminal) maintenance.markCurrentUnsettled();
 }
 
-/** Submit one paid generation to `endpoint` ('image_to_video' | 'text_to_video'). Resolves to the task id. */
+/** Submit one paid generation to a generation endpoint. Resolves to the task id. */
 export async function submitRunwayTask({ apiKey, endpoint, body }) {
   const res = await fetchWithTimeout(`${RUNWAY_API_BASE}/v1/${endpoint}`, {
     method: 'POST', headers: headers(apiKey, true), body: JSON.stringify(body),
@@ -113,7 +113,7 @@ async function getRunwayTask({ apiKey, taskId }) {
  * THROTTLED, RUNNING) for the caller's progress wording.
  */
 export async function awaitRunwayTask({
-  entry, apiKey, deadline, timeoutMs, onPoll = () => {}, onStatus = () => {}, pollIntervalMs = RUNWAY_POLL_INTERVAL_MS,
+  entry, apiKey, deadline, timeoutMs, onPoll = () => {}, onStatus = () => {}, pollIntervalMs = RUNWAY_POLL_INTERVAL_MS, verbatimFailure = false,
 }) {
   let statusFailures = 0;
   // A cancel (entry.controller.abort()) ends the wait at once rather than after the next interval.
@@ -147,13 +147,13 @@ export async function awaitRunwayTask({
       entry.remoteTerminal = true;
       if (entry.aborted) return { outcome: 'canceled' };
       const outputUrl = Array.isArray(task.output) ? task.output.find((url) => typeof url === 'string' && url.trim()) : null;
-      return outputUrl ? { outcome: 'completed', outputUrl } : { outcome: 'failed', reason: 'Runway finished but returned no video URL' };
+      return outputUrl ? { outcome: 'completed', outputUrl } : { outcome: 'failed', reason: 'Runway finished but returned no output URL' };
     }
     if (task?.status === 'FAILED' || task?.status === 'CANCELLED' || task?.status === 'CANCELED') {
       entry.remoteTerminal = true;
       if (entry.aborted) return { outcome: 'canceled' };
       const code = typeof task.failureCode === 'string' ? ` (${task.failureCode})` : '';
-      return { outcome: 'failed', reason: `Runway render failed: ${task.failure || task.status.toLowerCase()}${code}` };
+      return { outcome: 'failed', reason: verbatimFailure && task.failure ? task.failure : `Runway render failed: ${task.failure || task.status.toLowerCase()}${code}` };
     }
     onStatus(task?.status, Number.isFinite(task?.progress) ? task.progress : null);
     await wait();
