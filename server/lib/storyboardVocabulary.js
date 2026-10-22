@@ -48,4 +48,9 @@ export const STORYBOARD_LIMITS = Object.freeze({
   panelSecondsMax: 600,
   notes: 4000,
   tempTrackName: 200,
+  songSections: 60,
+  sectionLabel: 80,
+  lyricLines: 400,
+  lyricLine: 300,
+  markerAtMax: 7200,
 });

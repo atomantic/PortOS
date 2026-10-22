@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Pin, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { STORYBOARD_LIMITS, STORYBOARD_MUSICAL_ROLES } from '../../../../server/lib/storyboardVocabulary.js';
 import { formatTimecode } from '../../utils/formatters';
@@ -16,12 +16,13 @@ const iconButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-c
  */
 export default function BeatSection({
   beat, beatIndex, beatCount, firstPanelNumber, aspectRatio, selectedPanelId, sketchNonce,
-  onUpdate, onMove, onDelete, onAddPanel, onOpenPanel, addingPanel = false,
+  onUpdate, onMove, onDelete, onAddPanel, onOpenPanel, addingPanel = false, pinOptions = [],
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const seconds = beatSeconds(beat);
   const fieldId = (name) => `beat-${beat.id}-${name}`;
+  const pin = beat.pin ? pinOptions.find((option) => option.id === beat.pin) : null;
 
   return (
     <section className="rounded-xl border border-port-border bg-port-card/60" aria-label={beat.title || `Beat ${beatIndex + 1}`}>
@@ -58,6 +59,11 @@ export default function BeatSection({
           {STORYBOARD_MUSICAL_ROLES.map((role) => <option key={role} value={role}>{MUSICAL_ROLE_LABELS[role] || role}</option>)}
         </select>
         <span className="text-xs text-gray-500 tabular-nums" title="Estimated length of this beat">{formatTimecode(seconds)}</span>
+        {pin && (
+          <span className="inline-flex max-w-[12rem] items-center gap-1 text-[11px] text-port-accent" title={`Starts at ${pin.label}`}>
+            <Pin size={12} aria-hidden="true" /><span className="truncate">{pin.label}</span>
+          </span>
+        )}
         <div className="flex items-center ml-auto">
           <button type="button" className={`${iconButton} ${showDetails ? 'text-port-accent' : ''}`} onClick={() => setShowDetails((v) => !v)}
             aria-expanded={showDetails} aria-controls={fieldId('details')} aria-label="Beat details">
@@ -93,6 +99,16 @@ export default function BeatSection({
             <label htmlFor={fieldId('section')} className="block text-[11px] text-gray-500 mb-0.5">Song section note</label>
             <CommitField id={fieldId('section')} value={beat.sectionHint} maxLength={STORYBOARD_LIMITS.sectionHint} placeholder="e.g. first chorus, half-time" onCommit={(sectionHint) => onUpdate({ sectionHint })} />
           </div>
+          {pinOptions.length > 0 && (
+            <div className="sm:col-span-2">
+              <label htmlFor={fieldId('pin')} className="block text-[11px] text-gray-500 mb-0.5">Starts at (temp track)</label>
+              <select id={fieldId('pin')} value={beat.pin || ''} onChange={(event) => onUpdate({ pin: event.target.value || null })}
+                className="min-h-[44px] w-full bg-port-bg border border-port-border rounded px-2 text-sm text-white">
+                <option value="">Not pinned: follows the beat before it</option>
+                {pinOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </div>
+          )}
         </div>
       ) : null}
 

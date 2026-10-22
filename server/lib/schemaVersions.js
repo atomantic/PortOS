@@ -263,7 +263,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // both, so only the storyboards category pauses until it upgrades.
   // v3 = board-level `tempTrack` (the demo song the animatic plays with); a v2
   // peer would strip it the same way.
-  storyboards: 3,
+  // v4 = song markers on the temp track (`sections`, `lines`) and a beat's
+  // `pin` to one of them.
+  storyboards: 4,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

@@ -25,7 +25,7 @@ const notFound = (what = 'Storyboard') => new ServerError(`${what} not found`, {
 const tooMany = (message) => new ServerError(message, { status: 409, code: 'STORYBOARD_LIMIT' });
 
 const BOARD_FIELDS = ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'plot', 'tempTrack'];
-const BEAT_FIELDS = ['title', 'what', 'why', 'emotion', 'musicalRole', 'sectionHint'];
+const BEAT_FIELDS = ['title', 'what', 'why', 'emotion', 'musicalRole', 'sectionHint', 'pin'];
 const PANEL_FIELDS = ['action', 'dialogue', 'framing', 'camera', 'seconds', 'castIds', 'environmentIds', 'objectIds', 'notes'];
 
 const pickFields = (patch, fields) => Object.fromEntries(

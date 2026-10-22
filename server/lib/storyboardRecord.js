@@ -138,6 +138,8 @@ function sanitizeBeat(raw, budget = { panels: STORYBOARD_LIMITS.panelsTotal }) {
     emotion: trimTo(raw.emotion, STORYBOARD_LIMITS.emotion),
     musicalRole: pick(raw.musicalRole, ROLE_SET),
     sectionHint: trimTo(raw.sectionHint, STORYBOARD_LIMITS.sectionHint),
+    // A song section or lyric line on the temp track this beat starts at.
+    pin: trimTo(raw.pin, STORYBOARD_LIMITS.refId) || null,
     panels,
   };
 }
@@ -157,6 +159,10 @@ export function sanitizeStoryboard(raw) {
     beats.push(beat);
   }
   const createdAt = isoOr(raw.createdAt, now);
+  const tempTrack = sanitizeTempTrack(raw.tempTrack);
+  // A pin outlives neither its marker nor the track (markers live on it).
+  const markerIds = new Set([...(tempTrack?.sections || []), ...(tempTrack?.lines || [])].map((marker) => marker.id));
+  for (const beat of beats) if (beat.pin && !markerIds.has(beat.pin)) beat.pin = null;
   return {
     id: raw.id,
     name: trimTo(raw.name, STORYBOARD_LIMITS.name) || 'Untitled storyboard',
@@ -169,7 +175,7 @@ export function sanitizeStoryboard(raw) {
     // The plot summary beats are drawn from, and the LLM last picked for it.
     plot: trimTo(raw.plot, BEAT_EXTRACT_LIMITS.plot),
     plotLlm: sanitizeLlmPick(raw.plotLlm),
-    tempTrack: sanitizeTempTrack(raw.tempTrack),
+    tempTrack,
     beats,
     createdAt,
     updatedAt: isoOr(raw.updatedAt, createdAt),
@@ -177,10 +183,33 @@ export function sanitizeStoryboard(raw) {
   };
 }
 
-/** The demo or draft song the animatic plays with, or null. */
+/** A time on the temp track in seconds (hundredths), or null. */
+function markerAt(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return Math.round(Math.min(value, STORYBOARD_LIMITS.markerAtMax) * 100) / 100;
+}
+
+function uniqueById(items) {
+  const seen = new Set();
+  return items.filter((item) => item && !seen.has(item.id) && seen.add(item.id));
+}
+
+/**
+ * The demo or draft song the animatic plays with, or null. Sections are
+ * marked times (kept in time order); lyric lines keep the song's order, each
+ * with the time it was stamped at, or null before it is stamped.
+ */
 function sanitizeTempTrack(raw) {
   if (!isStoryboardTempTrackFilename(raw?.filename)) return null;
-  return { filename: raw.filename, name: trimTo(raw.name, STORYBOARD_LIMITS.tempTrackName) || raw.filename };
+  const sections = uniqueById((Array.isArray(raw.sections) ? raw.sections : []).slice(0, STORYBOARD_LIMITS.songSections).map((item) => {
+    const at = markerAt(item?.at);
+    return at === null ? null : { id: entityId(item.id, 'sec'), label: trimTo(item.label, STORYBOARD_LIMITS.sectionLabel) || 'Section', at };
+  })).sort((a, b) => a.at - b.at);
+  const lines = uniqueById((Array.isArray(raw.lines) ? raw.lines : []).slice(0, STORYBOARD_LIMITS.lyricLines).map((item) => {
+    const text = trimTo(item?.text, STORYBOARD_LIMITS.lyricLine);
+    return text ? { id: entityId(item.id, 'line'), text, at: markerAt(item.at) } : null;
+  }));
+  return { filename: raw.filename, name: trimTo(raw.name, STORYBOARD_LIMITS.tempTrackName) || raw.filename, sections, lines };
 }
 
 function sanitizeLlmPick(raw) {
