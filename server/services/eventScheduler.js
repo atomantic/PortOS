@@ -50,6 +50,11 @@ const scheduledEvents = new Map()
 // Active timers
 const activeTimers = new Map()
 
+// Cancellation removes an event from the registry while its handler can still
+// be writing. Keep those runs until shutdown has drained them before DB close.
+const activeRuns = new Set()
+let quiesced = false
+
 // Event history
 const eventHistory = []
 const MAX_HISTORY = 500
@@ -418,7 +423,7 @@ function schedule(config) {
     nextRunAt: null,
     lastRunAt: parsedLastRunAt,
     runCount: 0,
-    active: true,
+    active: !quiesced,
     lastRunSucceeded: null,
     lastRunSkipped: null,
     lastSkipReason: null,
@@ -474,7 +479,7 @@ function schedule(config) {
  * @param {Object} event - Event object
  */
 function scheduleNextRun(event) {
-  if (!event.active || !event.nextRunAt) return
+  if (quiesced || !event.active || !event.nextRunAt) return
 
   const delay = event.nextRunAt - Date.now()
   if (delay < 0) {
@@ -600,9 +605,12 @@ function recordEventHistory(event, { startTime, success, error, skipped, skipRea
  */
 function runEvent(event) {
   if (event.inFlight) return event.inFlight
+  if (quiesced) return Promise.resolve()
   event.inFlight = executeEvent(event).finally(() => {
+    activeRuns.delete(event.inFlight)
     event.inFlight = null
   })
+  activeRuns.add(event.inFlight)
   return event.inFlight
 }
 
@@ -727,6 +735,7 @@ function pause(id) {
  * @returns {boolean} - True if event was found and resumed
  */
 function resume(id) {
+  if (quiesced) return false
   const event = scheduledEvents.get(id)
   if (!event) return false
 
@@ -843,6 +852,17 @@ function cancelAll() {
   return count
 }
 
+/** Stop admitting runs for process exit; active handlers retain their ownership. */
+function quiesce() {
+  quiesced = true
+  for (const event of scheduledEvents.values()) deactivate(event)
+}
+
+/** Quiesce first; the shutdown caller owns the bounded wait before closing DB. */
+function drain() {
+  return Promise.allSettled([...activeRuns])
+}
+
 /**
  * Trigger an event immediately (for testing or manual runs). A trigger that
  * lands while the event's timer run is still in flight joins that run rather
@@ -853,6 +873,7 @@ function cancelAll() {
  *   on a run already in progress.
  */
 async function triggerNow(id) {
+  if (quiesced) return false
   const event = scheduledEvents.get(id)
   if (!event) return false
 
@@ -907,6 +928,8 @@ export {
   getHistory,
   getStats,
   cancelAll,
+  quiesce,
+  drain,
   triggerNow,
   parseCronToNextRun,
   parseCronToPrevRun,

@@ -117,6 +117,22 @@ describe('shutdown handler — request drain ordering (#8323)', () => {
 // Issue #11756: the IdeaLoom export debounce is in memory, so shutdown must
 // flush it — after the servers close (nothing can schedule another export),
 // bounded by a grace, overlapping the DB close, and awaited before exit.
+describe('shutdown handler — scheduled handlers finish before the DB pool closes', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('quiesces and starts a bounded drain before any await, then joins it before DB close', () => {
+    const firstAwait = code.indexOf('await ');
+    expect(code.indexOf('quiesceScheduledEvents()')).toBeGreaterThan(-1);
+    expect(code.indexOf('quiesceScheduledEvents()')).toBeLessThan(firstAwait);
+    expect(code.indexOf('drainScheduledEvents()')).toBeGreaterThan(code.indexOf('quiesceScheduledEvents()'));
+    expect(code.indexOf('drainScheduledEvents()')).toBeLessThan(firstAwait);
+    expect(code).toContain("withGrace('Scheduled events', HTTP_DRAIN_WINDOW_MS,");
+    const joinAt = code.indexOf('await scheduledEventsDrained');
+    expect(joinAt).toBeGreaterThan(code.indexOf('closeServer('));
+    expect(joinAt).toBeLessThan(code.indexOf("withGrace('DB pool'"));
+  });
+});
+
 describe('shutdown handler — IdeaLoom auto-sync flush (#11756)', () => {
   const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
 

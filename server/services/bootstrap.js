@@ -45,6 +45,7 @@ import { markHostShuttingDown, writeHostShutdownMarker } from '../lib/hostShutdo
 import { signalDetachedGroups } from '../lib/credentialBootstrap.js';
 import { createHttpDrain } from '../lib/httpDrain.js';
 import { createEventLoopLagProbe } from '../lib/eventLoopLagProbe.js';
+import { quiesce as quiesceScheduledEvents, drain as drainScheduledEvents } from './eventScheduler.js';
 import { setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { runMigrations } from '../../scripts/run-migrations.js';
 
@@ -1158,6 +1159,14 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // during teardown must not promote a waiting job the process is about to
     // abandon — the next boot fails a running record but restores a queued one.
     quiesceMediaJobQueue();
+    quiesceScheduledEvents();
+    // Start alongside the request drain so a stuck background handler spends
+    // no additional shutdown budget. The DB remains open until both settle.
+    const scheduledEventsDrained = withGrace('Scheduled events', HTTP_DRAIN_WINDOW_MS, ({ finish, finishWithError }) =>
+      drainScheduledEvents().then(
+        () => finish('✅ Scheduled events drained'),
+        (err) => finishWithError('⚠️ Scheduled events drain failed', err),
+      ));
     const timing = createEventLoopLagProbe().begin('tailcat');
     // Concurrent steps settle out of phase order; recorded as ms since the signal.
     const settledMs = {};
@@ -1326,6 +1335,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
         (err) => finishWithError('⚠️ Peer sync shutdown failed', err),
       ));
 
+    await scheduledEventsDrained;
     timing.mark('dbPool');
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
