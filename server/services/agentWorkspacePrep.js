@@ -111,7 +111,7 @@ export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/tas
  *
  * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|{ refused: string }|null>}
  */
-async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true, reviewTarget = null }) {
+async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true, reviewTarget = null, preserveLockfiles = false }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
@@ -155,7 +155,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
     const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: holder.path, requireCheckout: true, launchTaskId: taskId });
     if (refused) return { refused };
   }
-  const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName, ...(deepResume ? [{ deepResume: true }] : [])).catch(err => {
+  const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName, ...(deepResume || preserveLockfiles ? [{ ...(deepResume && { deepResume }), ...(preserveLockfiles && { preserveLockfiles }) }] : [])).catch(err => {
     if (err.code === 'DEEP_RESUME_PRESERVED') return { refused: err.message };
     emitLog('warn', `🌳 Could not adopt ${holder.path} holding ${branchName} for task ${taskId}: ${err.message}`, { taskId });
     return null;
@@ -270,6 +270,7 @@ async function prepareRequestedWorktree({
       // can prove both. Releasing an idle sibling holder in place stays allowed.
       adopt: !pinnedHead,
       reviewTarget,
+      preserveLockfiles: isolateDependencies,
     })
     : Promise.resolve(null);
 

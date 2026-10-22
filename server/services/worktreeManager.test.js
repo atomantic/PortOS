@@ -253,6 +253,11 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
     expect(r.lockfileOnly).toBe(false);
   });
 
+  it('preserveLockfiles reports lockfiles as real changes', () => {
+    const r = classifyWorktreeDirt(' M package-lock.json\n', { preserveLockfiles: true });
+    expect(r).toMatchObject({ lockfileOnly: false, hasRealChanges: true, realChangePaths: ['package-lock.json'], lockfilePaths: [] });
+  });
+
   it('recognizes a lockfile-only working tree and extracts paths', () => {
     const r = classifyWorktreeDirt(' M package-lock.json\n M client/package-lock.json');
     expect(r.lockfileOnly).toBe(true);
@@ -878,6 +883,17 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(result.removed).toBe(true);
     expect(rm).toHaveBeenCalledWith(join(PATHS.worktrees, 'agent-x', 'package-lock.json'), { force: true });
     expect(calledWith(['checkout', '--', 'package-lock.json'])).toBe(false);
+  });
+
+  it('dependency-updates lockfile-only dirt is preserved, not discarded', async () => {
+    scriptGit({ porcelain: ' M package-lock.json' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false, preserveLockfiles: true });
+
+    expect(result).toMatchObject({ removed: false, merged: false });
+    expect(result.warnings.join(' ')).toMatch(/uncommitted changes detected.*package-lock\.json/);
+    expect(calledWith(['checkout', '--', 'package-lock.json'])).toBe(false);
+    expect(calledWith(['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'])).toBe(false);
   });
 
   it('restores a modified tracked lockfile with checkout before removal', async () => {
