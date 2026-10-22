@@ -42,7 +42,7 @@ function SourceChip({ source, index }) {
       type="button"
       onClick={onClick}
       title={source.snippet || source.title}
-      className="inline-flex items-center gap-1.5 max-w-[260px] truncate px-2 py-1 rounded-md bg-port-bg border border-port-border hover:border-port-accent/60 transition-colors text-xs"
+      className="inline-flex items-center min-h-[44px] min-w-[44px] gap-1.5 max-w-[260px] truncate px-2 py-1 rounded-md bg-port-bg border border-port-border hover:border-port-accent/60 transition-colors text-xs"
     >
       <span className="text-gray-500">[{index + 1}]</span>
       <Icon size={12} className={meta.tone} />
@@ -54,12 +54,12 @@ function SourceChip({ source, index }) {
 
 function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, onRequestDelete, onConfirmDelete, onCancelDelete, loading, streaming }) {
   return (
-    <aside className="w-full md:w-64 md:shrink-0 border-r border-port-border bg-port-card md:h-full md:overflow-y-auto">
+    <aside className="w-full shrink-0 max-h-[25%] overflow-y-auto md:w-64 md:max-h-none border-r border-port-border bg-port-card md:h-full">
       <div className="p-3 border-b border-port-border flex items-center gap-2">
         <button
           onClick={onNew}
           disabled={streaming}
-          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-port-accent/15 text-port-accent hover:bg-port-accent/25 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex-1 min-h-[44px] flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-port-accent/15 text-port-accent hover:bg-port-accent/25 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <MessageCircle size={14} /> New conversation
         </button>
@@ -85,7 +85,7 @@ function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, o
                 aria-current={c.id === activeId ? 'page' : undefined}
                 onClick={() => onPick(c.id)}
                 title={lockedSwitch ? 'Wait for the current answer to finish' : c.title}
-                className={`flex-1 min-w-0 text-left px-3 py-2 hover:bg-port-border/30 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent`}
+                className="flex-1 min-w-0 min-h-[44px] text-left pl-3 pr-14 py-2 hover:bg-port-border/30 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
               >
                 <div className="text-sm truncate">{c.title}</div>
                 <div className="text-xs text-gray-500 flex items-center gap-1.5">
@@ -98,6 +98,7 @@ function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, o
               {isConfirmingDelete(c.id) ? (
                 <div className="absolute inset-y-0 right-0 flex items-center pr-2 bg-port-card/95 rounded">
                   <ConfirmButtonPair
+                    largeTouchTargets
                     prompt="Delete?"
                     ariaLabel={`Confirm delete conversation: ${c.title}`}
                     onConfirm={() => onConfirmDelete(c.id)}
@@ -109,7 +110,7 @@ function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, o
                   type="button"
                   disabled={streaming && c.id === activeId}
                   onClick={() => onRequestDelete(c.id)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-gray-500 hover:text-port-error transition-opacity disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-500"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 sm:opacity-0 sm:group-hover:opacity-100 pointer-coarse:opacity-100 focus-visible:opacity-100 text-gray-500 hover:text-port-error transition-opacity disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-500"
                   aria-label={`Delete conversation: ${c.title}`}
                   title="Delete conversation"
                 >
@@ -204,7 +205,7 @@ function PromoteButton({ label, savedLabel, icon: Icon, savedRef, pending, disab
   const navigate = useNavigate();
   const isSaved = !!savedRef;
   const text = isSaved ? savedLabel : label;
-  const cls = `inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors border ${
+  const cls = `inline-flex items-center min-h-[44px] min-w-[44px] gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors border ${
     isSaved
       ? 'bg-port-success/15 border-port-success/40 text-port-success hover:bg-port-success/20'
       : 'bg-port-bg border-port-border text-gray-300 hover:border-port-accent/60 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed'
@@ -228,7 +229,7 @@ function GoalPicker({ goals, pending, disabled, open, onToggle, onPick }) {
         type="button"
         onClick={onToggle}
         disabled={disabled}
-        className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium bg-port-bg border border-port-border text-gray-300 hover:border-port-accent/60 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="inline-flex items-center min-h-[44px] min-w-[44px] gap-1.5 px-2 py-1 rounded-md text-xs font-medium bg-port-bg border border-port-border text-gray-300 hover:border-port-accent/60 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {pending ? <Loader2 size={12} className="animate-spin" /> : <Target size={12} />}
         <span>Attach to goal…</span>
@@ -236,7 +237,7 @@ function GoalPicker({ goals, pending, disabled, open, onToggle, onPick }) {
     );
   }
   return (
-    <div className="inline-flex items-center gap-1.5">
+    <div className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
       <select
         aria-label="Attach to goal"
         defaultValue=""
@@ -245,7 +246,7 @@ function GoalPicker({ goals, pending, disabled, open, onToggle, onPick }) {
           if (id) onPick(id);
         }}
         disabled={pending}
-        className="px-2 py-1 rounded-md text-xs bg-port-bg border border-port-border text-gray-300 focus:outline-none focus:border-port-accent/60"
+        className="min-h-[44px] min-w-[44px] max-w-full px-2 py-1 rounded-md text-xs bg-port-bg border border-port-border text-gray-300 focus:outline-none focus:border-port-accent/60"
       >
         <option value="" disabled>Pick a goal…</option>
         {(goals || []).map((g) => (
@@ -255,7 +256,7 @@ function GoalPicker({ goals, pending, disabled, open, onToggle, onPick }) {
       <button
         type="button"
         onClick={onToggle}
-        className="text-xs text-gray-500 hover:text-white"
+        className="min-h-[44px] min-w-[44px] text-xs text-gray-500 hover:text-white"
         aria-label="Cancel goal picker"
       >
         Cancel
@@ -643,8 +644,8 @@ export default function Ask() {
         streaming={streaming}
       />
 
-      <section className="flex-1 flex flex-col min-w-0">
-        <div className="px-4 md:px-6 py-3 border-b border-port-border flex items-center gap-3 flex-wrap">
+      <section className="flex-1 flex flex-col min-w-0 min-h-0">
+        <div className="shrink-0 px-4 md:px-6 py-3 border-b border-port-border flex items-center gap-3 flex-wrap">
           <h1 className="text-lg font-semibold flex items-center gap-2"><MessageCircle size={18} /> Ask Yourself</h1>
           <div className="flex items-center gap-1 ml-auto">
             {ASK_MODES.map((m) => (
@@ -652,7 +653,7 @@ export default function Ask() {
                 key={m.id}
                 onClick={() => setMode(m.id)}
                 title={m.help}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                className={`min-h-[44px] min-w-[44px] px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                   mode === m.id ? 'bg-port-accent/20 text-port-accent border border-port-accent/40' : 'text-gray-400 hover:text-white border border-transparent'
                 }`}
               >
@@ -664,7 +665,7 @@ export default function Ask() {
                 onClick={handlePromote}
                 aria-label={activeConv.promoted ? 'Unpin conversation' : 'Pin conversation'}
                 title={activeConv.promoted ? 'Unpin (allow auto-expiry after 30d)' : 'Pin (exempt from auto-expiry)'}
-                className={`p-1.5 rounded-md transition-colors ${activeConv.promoted ? 'text-amber-400 hover:text-amber-300' : 'text-gray-500 hover:text-white'}`}
+                className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-md transition-colors ${activeConv.promoted ? 'text-amber-400 hover:text-amber-300' : 'text-gray-500 hover:text-white'}`}
               >
                 <Pin size={14} />
               </button>
@@ -705,7 +706,7 @@ export default function Ask() {
           )}
         </div>
 
-        <form onSubmit={handleSend} className="border-t border-port-border bg-port-card p-3 md:p-4">
+        <form onSubmit={handleSend} className="shrink-0 border-t border-port-border bg-port-card p-3 md:p-4">
           <div className="flex items-end gap-2">
             <textarea
               aria-label="Question"
@@ -721,7 +722,7 @@ export default function Ask() {
             <button
               type="submit"
               disabled={streaming || !question.trim()}
-              className="px-3 py-2 rounded-md bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 text-sm font-medium"
+              className="min-h-[44px] min-w-[44px] px-3 py-2 rounded-md bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 text-sm font-medium"
             >
               {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               {streaming ? 'Streaming…' : 'Send'}
