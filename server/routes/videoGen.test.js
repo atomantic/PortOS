@@ -2983,8 +2983,28 @@ describe('videoGen routes', () => {
         { id: 'running-b', kind: 'video', status: 'running' },
       ].filter((j) => (!status || j.status === status) && (!kind || j.kind === kind)));
       const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'finished-a' });
-      expect(r.body.ok).toBe(false);
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('ALREADY_TERMINAL');
       expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 NOT_FOUND for a named id the queue does not know', async () => {
+      mediaJobQueue.listJobs.mockReturnValue([{ id: 'running-b', kind: 'video', status: 'running' }]);
+      const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'ghost' });
+      expect(r.status).toBe(404);
+      expect(r.body.code).toBe('NOT_FOUND');
+      expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['ALREADY_TERMINAL', 409],
+      ['NOT_FOUND', 404],
+    ])('maps a queue refusal %s to %i instead of 200', async (code, status) => {
+      mediaJobQueue.listJobs.mockReturnValue([{ id: 'running-b', kind: 'video', status: 'running' }]);
+      mediaJobQueue.cancelJob.mockResolvedValue({ ok: false, code });
+      const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'running-b' });
+      expect(r.status).toBe(status);
+      expect(r.body.code).toBe(code);
     });
 
     // No running job and no jobId — fall back to newest queued so the user

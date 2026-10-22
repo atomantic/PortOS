@@ -948,7 +948,13 @@ export default function VideoGen() {
     // Cancel targets only the run this page owns — started here or resumed
     // after a reload. With nothing owned there is no job id to name, and an
     // unscoped cancel could kill an unrelated parallel render.
-    await cancelRun();
+    // A refused cancel (job already finishing, or unknown) leaves the run and
+    // its stream attached, so only a server-accepted cancel reads as Cancelled.
+    const refused = await cancelRun().then(() => false, (err) => {
+      toast.error(err.message || 'Cancel failed');
+      return true;
+    });
+    if (refused) return;
     setGenerating(false);
     setStatusMsg('Cancelled');
   };

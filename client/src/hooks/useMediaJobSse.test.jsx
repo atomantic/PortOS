@@ -173,6 +173,42 @@ describe('useMediaJobSse run owner', () => {
     expect(cancelJob).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['a rejected request', () => vi.fn(async () => { throw new Error('ALREADY_TERMINAL'); })],
+    ['an ok:false body', () => vi.fn(async () => ({ ok: false, reason: 'no active render' }))],
+  ])('a refused cancel (%s) rejects and keeps the run and its stream attached', async (_label, makeCancel) => {
+    const cancelJob = makeCancel();
+    const { result } = renderHook(() => useMediaJobSse('video', { cancelJob }));
+    const onComplete = vi.fn(() => 'done');
+    const run = settle(result.current.start(async () => ({ jobId: 'job-a' }), { onComplete }));
+    await act(async () => {});
+
+    await expect(act(async () => result.current.cancel())).rejects.toThrow();
+    expect(last().closed).toBe(false);
+
+    last().emit({ type: 'complete', result: {} });
+    expect(await run).toBe('resolved');
+  });
+
+  it('a double cancel shares one in-flight request', async () => {
+    const pending = deferred();
+    const cancelJob = vi.fn(() => pending.promise);
+    const { result } = renderHook(() => useMediaJobSse('video', { cancelJob }));
+    settle(result.current.start(async () => ({ jobId: 'job-a' })));
+    await act(async () => {});
+
+    let first; let second;
+    await act(async () => {
+      first = result.current.cancel();
+      second = result.current.cancel();
+      pending.resolve({ ok: true });
+      await Promise.all([first, second]);
+    });
+    expect(cancelJob).toHaveBeenCalledTimes(1);
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+  });
+
   it('a resumed (adopted) job is cancellable by its id', async () => {
     const cancelJob = vi.fn(async () => ({}));
     const { result } = renderHook(() => useMediaJobSse('video', { cancelJob }));
