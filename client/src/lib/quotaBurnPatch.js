@@ -44,16 +44,10 @@ export function mergeQuotaBurnPatch(base, patch) {
  */
 export const quotaBurnJobIsSpent = (job, ranAt) => Boolean(job?.runOnce && ranAt);
 
-/**
- * `QUOTA_BURN_UNLIMITED_DISPATCHES` in `server/lib/quotaBurnConfig.js`: the
- * `maxDispatchesPerWindow` value that means the window is not counted at all,
- * and the default. Mirrored (not imported) for the same reason the merge above
- * is — the client cannot reach into `server/`.
- */
-export const UNLIMITED_DISPATCHES = -1;
-
-/** Mirrors the server's `isUnlimitedDispatchCap`: any negative cap means no cap. */
-export const isUnlimitedDispatchCap = (cap) => Number(cap) < 0;
+import { QUOTA_BURN_UNLIMITED_DISPATCHES, isUnlimitedDispatchCap } from '../../../server/lib/quotaBurnDispatchCap.js';
+export { isUnlimitedDispatchCap };
+/** The `maxDispatchesPerWindow` "no cap" sentinel (the server default). */
+export const UNLIMITED_DISPATCHES = QUOTA_BURN_UNLIMITED_DISPATCHES;
 
 /**
  * What to PUT for a dispatch cap the user just typed.

@@ -19,6 +19,7 @@ import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
 import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
 import { hostedVideoRetryValidator } from '../services/videoGen/hostedSubmission.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
+import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
 import { VIDEO_STREAMING_MODES, isDefaultVideoStreamingMode } from '../lib/videoStreamingMode.js';
 
@@ -270,7 +271,7 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
   seed: z.number().int().min(0).nullable().optional(),
   numFrames: z.number().int().min(1).max(1024).optional(),
   fps: z.number().int().min(1).max(60).optional(),
-  tiling: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
+  tiling: z.enum(VIDEO_TILING_MODES).optional(),
   disableAudio: z.boolean().optional(),
   imageStrength: z.number().min(0).max(1).nullable().optional(),
   // What the conditioning image promises (#4874). `null` clears it back to the
