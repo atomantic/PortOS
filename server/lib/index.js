@@ -522,6 +522,8 @@ export * from './taskStatusTransition.js';
 export * from './taskTargetBranch.js';
 export * from './claimContinuation.js';
 export * from './scheduledTaskTypes.js';
+export * from './taskTypeBucket.js';
+export * from './taskTypeRenames.js';
 export * from './scheduleRunOrder.js';
 export * from './taskReadinessReasons.js';
 export * from './taskTargetScope.js';
