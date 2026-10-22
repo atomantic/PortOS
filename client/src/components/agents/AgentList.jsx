@@ -43,7 +43,6 @@ export default function AgentList() {
   const [scheduleCounts, setScheduleCounts] = useState({});
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     setLoadError(false);
     // silent: the inline error below owns the failure UI, so no toast per call.
     await Promise.all([
@@ -85,6 +84,12 @@ export default function AgentList() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Spinner only on a retry; background refreshes keep the current view mounted.
+  const retry = () => {
+    setLoading(true);
+    fetchData();
+  };
 
   // Sync raw text fields when formData changes
   useEffect(() => {
@@ -176,7 +181,7 @@ export default function AgentList() {
   if (loadError) {
     return (
       <div className="p-6">
-        <ListLoadError what="social agents" onRetry={fetchData} />
+        <ListLoadError what="social agents" onRetry={retry} />
       </div>
     );
   }

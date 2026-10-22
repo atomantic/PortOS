@@ -15,7 +15,6 @@ export default function ActivityTab({ agentId }) {
   const [loadError, setLoadError] = useState(false);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     setLoadError(false);
     await api.getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
       .then((activitiesData) => {
@@ -29,6 +28,12 @@ export default function ActivityTab({ agentId }) {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Spinner only on a retry; background refreshes keep the current view mounted.
+  const retry = () => {
+    setLoading(true);
+    fetchData();
+  };
 
   const loadMore = async () => {
     if (activities.length === 0) return;
@@ -70,7 +75,7 @@ export default function ActivityTab({ agentId }) {
   if (loadError) {
     return (
       <div className="p-4">
-        <ListLoadError what="activity log" onRetry={fetchData} />
+        <ListLoadError what="activity log" onRetry={retry} />
       </div>
     );
   }
