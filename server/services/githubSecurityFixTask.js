@@ -9,16 +9,16 @@
  * the account's host and login, a repo name matching REPO_RE and GHSA ids
  * matching their fixed format. No notification title or body reaches it.
  */
+import { GHSA_RE } from '../lib/githubNotificationParse.js';
 import { addTask } from './cosTaskStore.js';
 
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
-const GHSA_RE = /^GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}$/;
 const HOST_RE = /^[A-Za-z0-9.-]{1,253}$/;
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
 const SCRATCH_STEPS = (cloneTarget) => [
   `Clone it into a new scratch directory outside the PortOS checkout you start in: \`dir=$(mktemp -d) && gh repo clone ${cloneTarget} "$dir/repo"\`. Make every change in that clone; never edit, commit or push anything in the PortOS checkout.`,
-  'If Dependabot already opened a pull request that fixes an alert and its checks pass, merge that pull request instead of writing your own.',
+  'If Dependabot already opened a pull request that fixes an alert (author login exactly `dependabot[bot]`, head branch in this same repo, not a fork) and its checks pass, merge that pull request instead of writing your own. Never merge any other pull request you did not open.',
   'Otherwise update each vulnerable dependency to a patched version (lockfiles included), run the repo\'s tests, and open one pull request from a new branch with all the fixes.',
   'Wait for the checks. When they pass, squash-merge the pull request. If a fix needs a breaking upgrade you cannot make safely, or a check fails for a reason you cannot fix, leave the pull request open and say why in it.',
   'Delete the scratch directory when you are done.',

@@ -54,7 +54,7 @@ export function repoApiPath(url, host) {
   return /^repos(?:\/[A-Za-z0-9_.-]{1,100}){3,5}$/.test(path) && !path.split('/').includes('..') ? path : null;
 }
 
-const GHSA_RE = /^GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}$/;
+export const GHSA_RE = /^GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}$/;
 
 /**
  * The GHSA id of a global security advisory thread (one that names no single

@@ -59,6 +59,14 @@ const syncFlightFor = (accountId) => {
   return syncFlights.get(accountId);
 };
 
+// The stored Last-Modified cursor names the listing it came from. A cursor
+// saved by the older unread-only listing is not reused: a 304 against it would
+// skip the first read of the whole inbox until something new arrived.
+const LISTING_CURSOR_PREFIX = 'all:';
+const listingCursor = (stored) => (typeof stored === 'string' && stored.startsWith(LISTING_CURSOR_PREFIX)
+  ? stored.slice(LISTING_CURSOR_PREFIX.length) || null
+  : null);
+
 const isNotModified = (error) => /\bHTTP 304\b/.test(String(error?.ghStderr || error?.message || ''));
 
 async function requireAccountEnv(account) {
@@ -143,7 +151,7 @@ async function runAutomation(account, env, automate) {
 async function syncAccountNow(account, automate) {
   const env = await requireAccountEnv(account);
   const cursor = (await query('SELECT last_modified FROM github_notification_sync WHERE account_id = $1', [account.id])).rows[0];
-  const first = await fetchPage(account, env, 1, cursor?.last_modified || null);
+  const first = await fetchPage(account, env, 1, listingCursor(cursor?.last_modified));
   if (first.notModified) {
     await query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
     // Threads past the last run's triage cap still need a decision.
@@ -187,7 +195,7 @@ async function syncAccountNow(account, automate) {
        VALUES ($1, $2, $3, NOW(), '', NOW())
        ON CONFLICT (account_id) DO UPDATE SET last_modified = EXCLUDED.last_modified,
          poll_interval_seconds = EXCLUDED.poll_interval_seconds, last_sync_at = NOW(), last_error = '', updated_at = NOW()`,
-      [account.id, first.headers['last-modified'] || null, pollIntervalSeconds(first.headers['x-poll-interval'])],
+      [account.id, first.headers['last-modified'] ? `${LISTING_CURSOR_PREFIX}${first.headers['last-modified']}` : null, pollIntervalSeconds(first.headers['x-poll-interval'])],
     );
   });
   const triage = await triageAccountNotifications(account, env);

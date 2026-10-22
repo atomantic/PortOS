@@ -152,6 +152,10 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await syncAccountNotifications(account.id);
     expect(seen[0]).toContain('notifications?all=true&per_page=50&page=1');
     expect(seen[1]).toContain('If-Modified-Since: Thu, 01 Oct 2026 10:00:00 GMT');
+    // A cursor saved by the older unread-only listing is not sent.
+    await query("UPDATE github_notification_sync SET last_modified = 'Thu, 01 Oct 2026 09:00:00 GMT' WHERE account_id = $1", [account.id]);
+    await syncAccountNotifications(account.id);
+    expect(seen[2].some((arg) => String(arg).startsWith('If-Modified-Since'))).toBe(false);
     const rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
     // Read on GitHub but still in its inbox: open here too. Gone from the inbox: done.
     expect(rows.find((row) => row.threadId === '102')).toMatchObject({ unread: false, state: 'open' });
