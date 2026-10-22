@@ -37,7 +37,6 @@ import {
   bucketUpdateInputSchema,
   bucketReorderSchema,
   brainSyncQuerySchema,
-  brainSyncPushSchema,
   memoryInputSchema,
   songInputSchema,
   songUpdateSchema,
@@ -795,48 +794,6 @@ describe('brainValidation.js', () => {
     it('should reject limit of 0', () => {
       const result = brainSyncQuerySchema.safeParse({ limit: 0 });
       expect(result.success).toBe(false);
-    });
-  });
-
-  describe('brainSyncPushSchema', () => {
-    const validChange = {
-      seq: 1,
-      op: 'create',
-      type: 'people',
-      id: 'abc-123',
-      record: { name: 'Test' },
-      originInstanceId: 'inst-1',
-      ts: '2026-01-01T00:00:00Z'
-    };
-
-    it('should accept valid push with one change', () => {
-      const result = brainSyncPushSchema.safeParse({ changes: [validChange] });
-      expect(result.success).toBe(true);
-    });
-
-    it('should reject empty changes array', () => {
-      const result = brainSyncPushSchema.safeParse({ changes: [] });
-      expect(result.success).toBe(false);
-    });
-
-    it('should reject invalid op values', () => {
-      const result = brainSyncPushSchema.safeParse({
-        changes: [{ ...validChange, op: 'upsert' }]
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it('should accept delete with null record', () => {
-      const result = brainSyncPushSchema.safeParse({
-        changes: [{ ...validChange, op: 'delete', record: null }]
-      });
-      expect(result.success).toBe(true);
-    });
-
-    it('should accept change without optional fields', () => {
-      const { originInstanceId, record, ...minimal } = validChange;
-      const result = brainSyncPushSchema.safeParse({ changes: [minimal] });
-      expect(result.success).toBe(true);
     });
   });
 

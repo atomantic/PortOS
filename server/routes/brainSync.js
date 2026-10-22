@@ -10,13 +10,11 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   brainSyncQuerySchema,
-  brainSyncPushSchema,
   brainBridgeSyncSchema,
   brainParityCheckSchema
 } from '../lib/brainValidation.js';
 import { syncAllBrainData, getEmbeddingCoverage } from '../services/brainMemoryBridge.js';
 import * as brainSyncLog from '../services/brainSyncLog.js';
-import * as brainSync from '../services/brainSync.js';
 import * as brainReconcile from '../services/brainReconcile.js';
 import * as brainParity from '../services/brainParity.js';
 
@@ -64,16 +62,6 @@ router.get('/sync', asyncHandler(async (req, res) => {
   const { since, limit } = validateRequest(brainSyncQuerySchema, req.query);
   await authorizeBrainPull(req, 'brain sync');
   const result = await brainSyncLog.getChangesSince(since, limit);
-  res.json(result);
-}));
-
-/**
- * POST /api/brain/sync
- * Receive remote brain changes from a peer
- */
-router.post('/sync', asyncHandler(async (req, res) => {
-  const { changes } = validateRequest(brainSyncPushSchema, req.body);
-  const result = await brainSync.applyRemoteChanges(changes);
   res.json(result);
 }));
 

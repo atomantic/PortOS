@@ -5,7 +5,6 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { canonicalThreadRefKind } from './threadRefKinds.js';
 import { THREAD_STATUSES, THREAD_PRIORITIES } from './brainThreads.js';
 import { MAX_QUALITY } from './spacedRepetition.js';
-import { parseTsMs } from './lwwTimestamp.js';
 
 // Destination enum. `links` is reachable only from the bare-URL capture
 // short-circuit (a pasted URL is filed straight to the links collection) — the
@@ -584,26 +583,6 @@ export const linkReorderSchema = z.object({
 export const brainSyncQuerySchema = z.object({
   since: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(1000).optional().default(100)
-});
-
-// Brain sync change object schema
-const brainSyncChangeSchema = z.object({
-  seq: z.number().int(),
-  op: z.enum(['create', 'update', 'delete']),
-  type: z.string(),
-  id: z.string(),
-  // Missing records/clocks retain the legacy skipped-change behavior. A clock
-  // that IS supplied must be parseable; keep other record fields for newer peers.
-  record: z.object({
-    updatedAt: z.string().refine(value => parseTsMs(value) !== null, 'Invalid record timestamp').optional(),
-  }).passthrough().nullable().optional(),
-  originInstanceId: z.string().optional(),
-  ts: z.string()
-});
-
-// Brain sync push schema (POST /api/brain/sync body)
-export const brainSyncPushSchema = z.object({
-  changes: z.array(brainSyncChangeSchema).min(1).max(1000)
 });
 
 // Brain parity check body (POST /api/brain/reconcile/parity). `peerId` is the
