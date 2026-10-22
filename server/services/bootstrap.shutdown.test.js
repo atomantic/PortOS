@@ -100,6 +100,11 @@ describe('shutdown handler — request drain ordering (#8323)', () => {
     expect(code.indexOf('closeAllConnections')).toBe(-1);
   });
 
+  it('reports requests that outlive the drain window on stdout: closing them is the bounded handling', () => {
+    expect(code).toMatch(/remaining > 0\) console\.log\(`⏱️ /);
+    expect(code).not.toMatch(/remaining > 0\) console\.(warn|error)\(/);
+  });
+
   it('fits the drain window and the close graces inside the shutdown ceiling', () => {
     const constant = (name) => Number(SRC.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
     const closeGrace = Number(SRC.match(/const closeServer = \(server, label, graceMs = (\d+)\)/)?.[1]);

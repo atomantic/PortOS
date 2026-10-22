@@ -150,6 +150,7 @@ import { isOllamaBackedProvider } from './providers.js';
 // Real module — the flag is a plain process-local boolean, so driving it
 // directly exercises the same code path production does.
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
+import { emitLog } from './cosEvents.js';
 import { existsSync } from 'fs';
 import { spawn } from '../lib/childProcess.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
@@ -1659,6 +1660,9 @@ describe('stream error containment', () => {
       ), { interval: 5 });
       expect(releaseAgentLane).not.toHaveBeenCalled();
       expect(finalizeAgent).not.toHaveBeenCalled();
+      // A restart the operator caused, preserved for resume, is the normal path: info, never warn.
+      expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('interrupted by a PortOS host restart'), expect.any(Object));
+      expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('interrupted by a PortOS host restart'), expect.anything());
     });
   });
 

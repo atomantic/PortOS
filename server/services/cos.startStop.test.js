@@ -149,6 +149,20 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
     expect(statuses.at(-1)).toEqual({ running: false });
   });
 
+  it('a second start() while the daemon runs is refused at info, not reported as a fault', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const starting = start();
+    await waitFor(() => typeof releaseRecovery === 'function');
+    releaseRecovery();
+    await starting;
+
+    await expect(start()).resolves.toEqual({ success: false, error: 'Already running' });
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('CoS already running'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('CoS already running'));
+  });
+
   it('the handoff follow-up poll shares the pending-merge gate and is cancelled on stop', async () => {
     persisted = { ...persisted, paused: false, config: { ...persisted.config, domainAutonomy: { cos: 'execute' } } };
     const starting = start();

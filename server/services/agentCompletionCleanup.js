@@ -139,7 +139,7 @@ export async function handlePipelineProgression(task, agentId, success) {
       await updateTask(task.id, {
         metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
       }, task.taskType);
-      emitLog('warn', `⏭️ Pipeline ${pipeline.id} stage ${nextStageIndex} precondition failed: ${check.reason}`, { pipelineId: pipeline.id });
+      emitLog('info', `⏭️ Pipeline ${pipeline.id} stage ${nextStageIndex} precondition failed: ${check.reason}`, { pipelineId: pipeline.id });
       return;
     }
   }
@@ -232,7 +232,7 @@ export async function handlePipelineProgression(task, agentId, success) {
       emitLog('info', `🔗 Pipeline ${pipeline.id} advancing to stage ${nextStageIndex} by reviving blocked task ${persisted.id}: ${nextStage.name}`, { pipelineId: pipeline.id, agentId });
       return;
     }
-    emitLog('warn', `⚠️ Pipeline ${pipeline.id} stage ${nextStageIndex} already queued as ${persisted.id} (${persisted.status}) — skipping duplicate advance`, { pipelineId: pipeline.id, agentId });
+    emitLog('info', `⏭️ Pipeline ${pipeline.id} stage ${nextStageIndex} already queued as ${persisted.id} (${persisted.status}) — skipping duplicate advance`, { pipelineId: pipeline.id, agentId });
     return;
   }
   emitLog('info', `🔗 Pipeline ${pipeline.id} advancing to stage ${nextStageIndex}: ${nextStage.name}`, { pipelineId: pipeline.id, agentId });
@@ -370,7 +370,9 @@ async function runCompletionCleanupSteps(context, { onStepError }) {
   // spawners run this from a `finally`, so they reach here on exactly that
   // path. An unreadable record counts as not-over: leaving the file for the
   // stale sweep is the recoverable direction, destroying a deliverable is not.
-  if (context.agentState?.status === 'completed') {
+  // `failed` is an outcome too: left behind in a preserved worktree, the sentinel
+  // reads as uncommitted work and blocks every later merged-worktree cleanup.
+  if (['completed', 'failed'].includes(context.agentState?.status)) {
     await removeCompletionSentinel(context)
       .catch(err => emitLog('warn', `Completion sentinel removal failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId }));
   }

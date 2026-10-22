@@ -298,7 +298,7 @@ export async function generateEmbedding(text) {
     if (result.ok) return result.data.data?.[0]?.embedding || null;
     if (result.overflow && maxChars > 500) {
       maxChars = Math.floor(maxChars / 2); // undershoot — shrink and retry
-      console.warn(`⚠️ Embedding input over context; retrying at ${maxChars} chars`);
+      console.log(`🔁 Embedding input over context; retrying at ${maxChars} chars`);
       continue;
     }
     console.error(`❌ Embedding generation failed: ${result.error}`);
@@ -339,7 +339,7 @@ export async function generateBatchEmbeddings(texts) {
     if (result.overflow) {
       // One member still overflowed — re-embed each individually so the rest
       // aren't lost to a single oversized input.
-      console.warn('⚠️ Batch embedding over context; falling back to per-item embedding');
+      console.log('🔁 Batch embedding over context; falling back to per-item embedding');
       const out = [];
       for (const t of texts) out.push(await generateEmbedding(t));
       return out;

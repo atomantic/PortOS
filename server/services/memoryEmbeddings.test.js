@@ -183,8 +183,13 @@ describe('memoryEmbeddings — context-budget truncation + overflow retry', () =
 
   it('shrinks and retries when the backend still reports a context overflow', async () => {
     wireFetch([contextOverflow, embedOk]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const emb = await embeddings.generateEmbedding('x'.repeat(50000));
+    // The shrink-and-retry is the designed handling of an over-long input: stdout, not stderr.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Embedding input over context; retrying at'));
+    expect(warn).not.toHaveBeenCalled();
 
     expect(emb).toEqual([0.1, 0.2, 0.3]);
     const calls = embedCalls();
@@ -220,8 +225,12 @@ describe('memoryEmbeddings — context-budget truncation + overflow retry', () =
   it('batch: falls back to per-item embedding when the batch overflows', async () => {
     // Batch POST overflows; then each of the 2 items embeds individually.
     wireFetch([contextOverflow, embedOk, embedOk]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const out = await embeddings.generateBatchEmbeddings(['a', 'b']);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('falling back to per-item embedding'));
+    expect(warn).not.toHaveBeenCalled();
 
     expect(out).toEqual([[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]]);
     expect(embedCalls().length).toBe(3);

@@ -86,7 +86,7 @@ async function sunoRefusalSignals(page) {
 }
 
 // An older Suno UI may lack one of the Advanced options: skip it, but say so.
-const skipped = (control) => console.warn(`⚠️ ${LABEL}: ${control} not found — continuing without it`);
+const skipped = (control) => console.log(`⏭️ ${LABEL}: ${control} not found — continuing without it`);
 
 /**
  * The brief's optional Advanced-form controls (model version, exclude styles,

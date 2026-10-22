@@ -107,6 +107,27 @@ it('stops at one message instead of walking the chain when the backend is unreac
   warn.mockRestore();
 });
 
+// A chain entry that will not install is the designed fallback to the next entry, not a fault.
+it('moves to the next chain entry on stdout when an install does not take', async () => {
+  vi.clearAllMocks();
+  const backend = fakeBackend({
+    listModels: vi.fn(async () => []),
+    install: vi.fn(async () => ({ ok: false, reason: 'registry refused' })),
+  });
+  getVoiceProvisioner.mockReturnValue(backend);
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  const outcome = await ensureToolCapableModel(toolsOn());
+
+  expect(outcome).toHaveProperty('failed');
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('unavailable (registry refused) — trying next'));
+  expect(warn.mock.calls.some(([line]) => line.includes('trying next'))).toBe(false);
+  // Exhausting the whole chain is a real failure and still reaches stderr.
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('exhausted'));
+  vi.restoreAllMocks();
+});
+
 it('installs from the chain when the backend is reachable with nothing capable', async () => {
   vi.clearAllMocks();
   const backend = fakeBackend({

@@ -111,6 +111,8 @@ describe('createShellSession', () => {
   });
 
   it('emits shell:error and returns null when max sessions reached', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (let i = 0; i < 20; i++) shell.createShellSession(makeSocket(`s${i}`));
     const socket = makeSocket('over');
     const id = shell.createShellSession(socket);
@@ -118,6 +120,9 @@ describe('createShellSession', () => {
     expect(socket.emit).toHaveBeenCalledWith('shell:error', {
       error: 'Max 20 shell sessions. Kill an existing session first.',
     });
+    // The cap refusing a request is the answer the caller already got: stdout, not stderr.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Max total sessions reached (20)'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Max total sessions'));
   });
 
   it('does not throw when over-cap and socket is missing', () => {

@@ -778,6 +778,13 @@ ${JSON.stringify({ title: issue.title, body })}`;
 const noFidelityVerdict = (error = null) => ({ verdict: null, review: null, error });
 
 /**
+ * A run the gate declines to grade because a diff cannot answer its objective.
+ * That is the designed outcome, not a reviewer fault, so `skipped` keeps it off
+ * the stderr path a bare `error` takes.
+ */
+const fidelityNotJudged = (reason) => ({ verdict: null, review: null, error: reason, skipped: true });
+
+/**
  * The goal-fidelity answer for a run whose objective is to LAND a change
  * request (`mergeOutcomeObjective`), established from forge state instead of
  * from a model's read of a diff.
@@ -856,7 +863,8 @@ async function hasEmptyDependencyInventories(workspacePath) {
  * no gate: it would convert an ollama restart into a queue of runs marked
  * needs-attention.
  *
- * @returns {Promise<{verdict: string|null, review: Object|null, error: string|null}>}
+ * @returns {Promise<{verdict: string|null, review: Object|null, error: string|null, skipped?: boolean}>}
+ *   `skipped` marks a deliberate decline (see `fidelityNotJudged`); a bare `error` is a fault.
  */
 async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   if (!workspacePath || !task?.id) return noFidelityVerdict();
@@ -902,7 +910,9 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       }
     }
   }
-  if (!objective) return noFidelityVerdict(claimFlow ? 'Claimed issue requirements unavailable; claim workflow is not a code objective.' : null);
+  if (!objective) return claimFlow
+    ? fidelityNotJudged('Claimed issue requirements unavailable; claim workflow is not a code objective.')
+    : noFidelityVerdict();
 
   // Retain the actual compared commits for an investigator on another checkout.
   // Pin before reading the diff so a moving HEAD cannot misattribute the review.
@@ -925,11 +935,11 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   if (!claimFlow && resolveTaskHookType(task) === 'dependency-updates'
       && isDependencyAuditSummaryDiff({ diff, truncated })
       && await hasEmptyDependencyInventories(workspacePath).catch(() => false)) {
-    return noFidelityVerdict('Dependency audit summary is not judgeable from a diff: independent forge queries found no open alerts or PRs, but the diff cannot verify the audit execution or scanner coverage.');
+    return fidelityNotJudged('Dependency audit summary is not judgeable from a diff: independent forge queries found no open alerts or PRs, but the diff cannot verify the audit execution or scanner coverage.');
   }
 
   if (!claimFlow && isForgeRemediationTestFixDiff({ analysisType: resolveTaskHookType(task), diff })) {
-    return noFidelityVerdict('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
+    return fidelityNotJudged('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
   }
 
   const result = await runLocalGoalFidelityReview({
@@ -1764,6 +1774,8 @@ export async function finalizeAgent({
     emitLog(fidelityDowngrade ? 'warn' : 'info', `${goalFidelityLogMarker(fidelity.review)} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
       agentId, taskId: task?.id, verdict: fidelity.verdict
     });
+  } else if (fidelity.skipped) {
+    emitLog('info', `⏭️ Goal-fidelity review skipped for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   } else if (fidelity.error) {
     emitLog('warn', `Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   }

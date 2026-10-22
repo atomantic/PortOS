@@ -219,6 +219,8 @@ describe('ollamaManager.pullModel transient-error retry', () => {
 
   it('retries a mid-stream {"error":"EOF"} frame and succeeds on a later attempt', async () => {
     const pullModel = await loadPullModel()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { pullUrls } = stubFetch([
       makeStreamResponse([{ status: 'pulling manifest' }, { status: 'downloading', total: 100, completed: 40 }, { error: 'EOF' }]),
       makeStreamResponse([{ status: 'downloading', total: 100, completed: 100 }, { status: 'success' }])
@@ -228,6 +230,9 @@ describe('ollamaManager.pullModel transient-error retry', () => {
 
     expect(result).toEqual({ success: true, modelId: 'smollm:135m' })
     expect(pullUrls).toHaveLength(2) // one retry
+    // The bounded retry is the designed handling of a dropped download: stdout, not stderr.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Ollama pull smollm:135m hit transient error'))
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('hit transient error'))
   })
 
   it('retries a dropped-connection read rejection (undici "terminated")', async () => {

@@ -1218,7 +1218,7 @@ export async function queueDueInstallWideImprovementTasks({
     const taskKey = taskType;
     if (existingTaskTypes.has(taskKey)) {
       if (blockedTaskTypes.has(taskKey)) {
-        emitLog('warn', `⛔ Skipping install-wide ${taskType}: blocked task ${blockedTaskTypes.get(taskKey)} already exists — resolve or delete it to resume`, { analysisType: taskType });
+        emitLog('info', `⏸️ Skipping install-wide ${taskType}: blocked task ${blockedTaskTypes.get(taskKey)} already exists — resolve or delete it to resume`, { analysisType: taskType });
       } else {
         emitLog('debug', `Install-wide improvement task ${taskType} already queued`);
       }
@@ -1374,7 +1374,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       const taskKey = `app:${app.id}:${nextType}`;
       if (existingTaskTypes.has(taskKey)) {
         if (blockedTaskTypes.has(taskKey)) {
-          emitLog('warn', `⛔ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
+          emitLog('info', `⏸️ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
         } else {
           emitLog('debug', `Improvement task ${nextType} for ${app.name} already queued`);
         }

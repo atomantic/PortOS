@@ -615,7 +615,8 @@ async function mergeOrPreserveWorktree({ agentId, sourceWorkspace, worktreeBranc
 // observes the surviving worktree and files the recovery that retries removal
 // and drives the PR). The PR itself is untouched: it stays open/merged as it was.
 function deferFollowUpWhileBranchHeld({ agentId, worktreeBranch, worktreePath, warnings }, prUrl) {
-  emitLog('warn', `🌳 Deferring follow-up for ${prUrl} — worktree ${agentId} still holds ${worktreeBranch}`, { agentId, prUrl, branchName: worktreeBranch });
+  // The failed removal that left the branch held reported itself; this line only records the deferral.
+  emitLog('info', `🌳 Deferring follow-up for ${prUrl} — worktree ${agentId} still holds ${worktreeBranch}`, { agentId, prUrl, branchName: worktreeBranch });
   warnings.push(`PR follow-up for ${prUrl} deferred — worktree ${worktreePath || agentId} still holds branch ${worktreeBranch}; retry the worktree cleanup, then re-dispatch the follow-up`);
 }
 

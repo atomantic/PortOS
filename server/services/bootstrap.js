@@ -1276,7 +1276,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // rest closed below — a handler mid-write loses its response only at the deadline.
     timing.mark('requestDrain');
     const { remaining } = await requestsDrained;
-    if (remaining > 0) console.warn(`⚠️ ${remaining} request(s) still running after the ${HTTP_DRAIN_WINDOW_MS}ms drain — closing them`);
+    // The drain window is bounded on purpose, so closing what outlives it is the handling.
+    if (remaining > 0) console.log(`⏱️ ${remaining} request(s) still running after the ${HTTP_DRAIN_WINDOW_MS}ms drain — closing them`);
     // Close BOTH servers explicitly. The drain already stopped both listeners
     // (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
     // the bounded backstop in closeServer guarantees neither can hang shutdown even

@@ -51,7 +51,7 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
   },
   {
     "key": "errorLogTriage.js :: stateFile",
-    "reason": "No non-strict write-back: the triage run reads its state strictly before writing; only readLastTriageSummary reads non-strictly, and it never writes."
+    "reason": "No failed-read write-back: readState reads strictly (strict:true), so a corrupt store throws instead of resetting the cursors; only an absent file seeds the empty state."
   },
   {
     "key": "imageTo3d/sourceKeying.js :: preparedCacheMetadataPath ( targetPath )",

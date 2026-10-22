@@ -84,6 +84,7 @@ vi.mock('./deepAudit.js', () => ({ getDeepAuditSourceRevision: vi.fn().mockResol
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 import { updateTask, addTask, getAgents } from './cos.js';
+import { emitLog } from './cosEvents.js';
 import { ensureLatest, isRepo, fetchOrigin } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
@@ -1011,6 +1012,9 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     // The cooldown stamp is what the sweeper in cosTaskGenerator revives on.
     expect(new Date(patch.metadata.cooldownUntil).getTime()).toBeGreaterThan(Date.now());
     expect(patch.metadata.worktreeBusyAttempts).toBe(1);
+    // A retried busy branch is handled, not a fault: the pause reports at info and stderr stays quiet.
+    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('retrying after a short cooldown'), expect.any(Object));
+    expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('Worktree creation failed'), expect.anything());
   });
 
   it('counts up from the attempts already recorded on the task', async () => {
@@ -1032,6 +1036,8 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     // The git error rides along — "worktree creation failed" alone said nothing
     // about which branch was held, or by what.
     expect(patch.metadata.blockedReason).toContain('already used by worktree');
+    // Once the retry budget is spent nothing retries it, so the failure is a fault again.
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Worktree creation failed for task'), expect.any(Object));
   });
 
   // A terminal session's own worktree holds the branch for good: nothing PortOS

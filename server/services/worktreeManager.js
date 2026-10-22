@@ -444,6 +444,9 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
     .catch(error => ({ removed: false, reason: error.message, warning: 'Checkout retained: repository reservation unavailable' }));
 }
 
+// Hold reasons that mean the cleanup could not even decide, rather than a gate declining.
+const REMOVAL_FAULT_HOLDS = new Set(['worktree-ownership-unreadable', 'worktree-removal-refused']);
+
 async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, beforeMutation = async () => {} } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
@@ -484,7 +487,13 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
   });
   const outcome = removalOutcome(worktreePath, await probeWorktreeRemoval(repo, worktreePath), heldReason || lastFailure);
   if (heldReason) outcome.reason = heldReason;
-  if (!outcome.removed && label) console.warn(`⚠️ ${outcome.warning}`);
+  if (!outcome.removed && label) {
+    // A gate keeping the checkout is the cleanup working as designed (the warning
+    // says "retryable"); an unreadable registry or a removal Git refused is a fault.
+    const designedHold = heldReason && !REMOVAL_FAULT_HOLDS.has(heldReason);
+    if (designedHold) console.log(`⏸️ ${outcome.warning}`);
+    else console.warn(`⚠️ ${outcome.warning}`);
+  }
   return outcome;
 }
 
@@ -1794,7 +1803,8 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
         // deleting it would fail, and `removed: true` would tell the caller it may
         // queue work onto a branch the old worktree still owns. Report the truth with
         // a retryable warning; `merged` stays accurate for the publication outcome.
-        console.warn(`⚠️ Worktree for ${agentId} was not removed — branch ${branchName} kept`);
+        // `forceRemoveWorktreeDir` above already reported why on the right stream.
+        console.log(`⏸️ Worktree for ${agentId} was not removed — branch ${branchName} kept`);
         warnings.push(removal.warning);
         return { merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
       }
