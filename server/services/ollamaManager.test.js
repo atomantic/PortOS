@@ -733,6 +733,37 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ importing: true }))
   })
 
+  it.each(['request', 'body'])('explains how to recover from an interrupted checkpoint %s', async (phase) => {
+    hfTokenMock.token = 'hf_example_token'
+    const transportError = new TypeError(phase === 'request' ? 'fetch failed' : 'terminated', {
+      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const href = String(url)
+      if (href.endsWith('/api/version')) return versionResponse()
+      if (href.includes('/api/models/example/Qwen-MLX')) {
+        return Response.json({ siblings: [
+          { rfilename: '4-bit/config.json', size: 2 },
+          { rfilename: '4-bit/model.safetensors', size: 7 }
+        ] })
+      }
+      if (href.endsWith('/config.json')) return new Response('{}')
+      if (href.endsWith('/model.safetensors')) {
+        if (phase === 'request') throw transportError
+        return new Response(new ReadableStream({ start(controller) { controller.error(transportError) } }))
+      }
+      throw new Error(`unexpected fetch: ${href}`)
+    }))
+    execMock.impl = (_cmd, args, _opts, cb) => args[0] === '--version'
+      ? cb(null, { stdout: 'ollama 0.31.0', stderr: '' })
+      : cb(new Error('An interrupted download must not reach ollama create'))
+    const { importModelFromHfSafetensors } = await loadManager()
+
+    await expect(importModelFromHfSafetensors(spec)).resolves.toMatchObject({
+      success: false, error: expect.stringMatching(/Hugging Face checkpoint download.*interrupted.*connection.*retry/i)
+    })
+  })
+
   it('fails before downloading when the gated repository has no token', async () => {
     stubFetch([])
     const { importModelFromHfSafetensors } = await loadManager()
