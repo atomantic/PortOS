@@ -487,6 +487,34 @@ describe('perpetualWork', () => {
       expect(out).toMatchObject({ actionable: false, reason: 'gh-unavailable', transient: true });
     });
 
+    it('lists open PRs with an explicit limit and excludes PR-backed issues beyond the first 30', async () => {
+      const prRefs = Array.from({ length: 40 }, (_, i) => `claim/issue-${i + 100}`).join('\n');
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 139, title: 'deep PR', assignees: [], labels: [] },
+          { number: 500, title: 'free', assignees: [], labels: [] }
+        ]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: prRefs }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out.sample).toEqual([500]);
+      expect(out.inFlightCount).toBe(1);
+      const prCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args[0] === 'pr');
+      expect(prCall[1]).toEqual(expect.arrayContaining(['--limit', '500']));
+    });
+
+    it('stays transient instead of under-counting in-flight work when gh pr list fails', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([{ number: 7, title: 'has a PR', assignees: [], labels: [] }]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '', code: 1, stderr: 'API rate limit exceeded' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ actionable: false, reason: 'gh-unavailable', transient: true });
+      expect(out.inFlightCount).toBeUndefined();
+    });
+
     it('reports the open/in-flight breakdown when nothing is claimable (the "40 open but parked" case)', async () => {
       routeSpawn({
         'gh issue': { stdout: JSON.stringify([
