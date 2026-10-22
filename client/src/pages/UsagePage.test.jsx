@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   getProviderUsage: vi.fn(),
   getUsage: vi.fn(),
   getUsageBackfillStatus: vi.fn(),
+  getUsageRollingCost: vi.fn(() => Promise.resolve({ windowDays: 30, instanceCount: 1, series: [], points: [] })),
   startUsageBackfill: vi.fn(),
   updateSubscriptionCosts: vi.fn()
 }));

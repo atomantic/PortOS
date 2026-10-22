@@ -1606,6 +1606,11 @@ export const usageQuerySchema = z.object({
   to: isoDay.optional()
 }).refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be on or before to' });
 
+/** Query for GET /api/usage/rolling-cost — the chart's span, independent of the report window. */
+export const usageRollingCostQuerySchema = z.object({
+  range: z.enum(['1m', '3m', '6m', '1y', 'all']).optional()
+});
+
 /** Query for GET /api/usage/providers. `family` narrows the read to a single
  * quota card (the per-card Refresh on the usage page) so one slow TUI scrape
  * isn't paid for every provider at once. */

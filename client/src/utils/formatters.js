@@ -368,6 +368,7 @@ export function formatCompactCountOrDash(n) {
 // currency anchor, so there is nothing for its separators to contradict.
 const GROUPED_INTEGER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const USD_CENTS = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const USD_COMPACT = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 
 /**
  * Thousands-separated count for a number the user is meant to read exactly:
@@ -462,15 +463,16 @@ export function formatPercent(value, { decimals = 1, fallback = '—' } = {}) {
  * `trimWhole` drops the `.00` on a round figure — for a price the user typed
  * ($200/mo), not for a computed total, where aligned cents are the point.
  * Amounts past a thousand are grouped (`$4,610.09`) — an unseparated `$4610.09`
- * is read as the wrong order of magnitude at a glance.
+ * is read as the wrong order of magnitude at a glance. `compact` abbreviates
+ * (`$9.4K`) for chart axes and labels where width is tight.
  *
  * @param {number} value - Dollar amount (nullish renders as $0.00; a non-nullish
  *   value that fails to parse as a finite number — NaN, a broken calc — renders
  *   `fallback` instead, so a computation failure never masquerades as "$0.00")
- * @param {{ signed?: boolean, trimWhole?: boolean, fallback?: string, maximumFractionDigits?: number }} [options]
+ * @param {{ signed?: boolean, trimWhole?: boolean, compact?: boolean, fallback?: string, maximumFractionDigits?: number }} [options]
  * @returns {string} e.g. "$12.34", "-$5.00", "$200"
  */
-export function formatUsd(value, { signed = false, trimWhole = false, fallback = '—', maximumFractionDigits = 2 } = {}) {
+export function formatUsd(value, { signed = false, trimWhole = false, compact = false, fallback = '—', maximumFractionDigits = 2 } = {}) {
   const n = value === null || value === undefined ? 0 : Number(value);
   if (!Number.isFinite(n)) return fallback;
   // Anything under half a cent renders as zero, and Intl signs it (`-$0.00`)
@@ -480,7 +482,7 @@ export function formatUsd(value, { signed = false, trimWhole = false, fallback =
   const raw = signed ? Math.abs(n) : n;
   const precision = Number.isInteger(maximumFractionDigits) ? Math.max(2, Math.min(8, maximumFractionDigits)) : 2;
   const magnitude = Math.abs(raw) < 0.5 * 10 ** -precision ? 0 : raw;
-  const body = trimWhole && Number.isInteger(magnitude)
+  const body = compact ? USD_COMPACT.format(magnitude) : trimWhole && Number.isInteger(magnitude)
     ? GROUPED_INTEGER.format(magnitude)
     : precision === 2 ? USD_CENTS.format(magnitude) : new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: precision }).format(magnitude);
   return `${signed && n < 0 && magnitude !== 0 ? '-' : ''}$${body}`;
