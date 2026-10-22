@@ -368,6 +368,36 @@ describe('NotesTab request lifetimes', () => {
     expect(mockToast.success).not.toHaveBeenCalledWith('Note saved');
   });
 
+  it('keeps text typed during a deferred save visible and unsaved, and the next save sends it', async () => {
+    const saved = deferred();
+    api.updateNote.mockReturnValueOnce(saved.promise);
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByText('first')); });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const editor = screen.getByRole('textbox', { name: 'Note content' });
+    fireEvent.change(editor, { target: { value: 'Submitted body' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(editor, { target: { value: 'Later unsaved body' } });
+    await act(async () => { saved.resolve(note('first', 'Submitted body')); });
+    expect(screen.getByRole('textbox', { name: 'Note content' })).toHaveValue('Later unsaved body');
+    api.updateNote.mockResolvedValueOnce(note('first', 'Later unsaved body'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(api.updateNote).toHaveBeenLastCalledWith('a', 'first.md', 'Later unsaved body', { force: false });
+    expect(screen.queryByRole('textbox', { name: 'Note content' })).toBeNull();
+  });
+
+  it('keeps text typed during a deferred save when the save fails', async () => {
+    const saved = deferred();
+    api.updateNote.mockReturnValueOnce(saved.promise);
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByText('first')); });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Note content' }), { target: { value: 'typed later' } });
+    await act(async () => { saved.reject(new Error('nope')); });
+    expect(screen.getByRole('textbox', { name: 'Note content' })).toHaveValue('typed later');
+  });
+
   it('does not remove the previous vault row when a delete finishes after browser back', async () => {
     const deleted = deferred();
     api.deleteNote.mockReturnValueOnce(deleted.promise);

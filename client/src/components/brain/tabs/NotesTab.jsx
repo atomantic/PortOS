@@ -108,7 +108,7 @@ export default function NotesTab() {
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete } = useConfirmDelete();
 
   // Owns the write plus the iCloud force-save escape hatch (#3717).
-  const { saving, save, forceOffered, dismissForce } = useNoteSave({
+  const { saving, save, forceOffered, dismissForce, bufferChangedSince } = useNoteSave({
     vaultId: selectedVaultId,
     notePath: selectedNote?.path || null,
     content: noteContent
@@ -314,10 +314,13 @@ export default function NotesTab() {
   const handleSaveNote = async (options) => {
     const scope = vaultScopeRef.current;
     const sequence = selectSeqRef.current;
+    const submitted = noteContent;
     const data = await save(options);
     if (!data || !isCurrentScope(scope) || sequence !== selectSeqRef.current) return;
     setSelectedNote(data);
-    setEditing(false);
+    // Text typed while the write was in flight was never submitted: keep it
+    // visible and unsaved instead of closing the editor over it.
+    if (!bufferChangedSince(submitted)) setEditing(false);
     toast.success('Note saved');
     loadNotes(); // Refresh metadata
   };

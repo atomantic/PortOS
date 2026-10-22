@@ -36,7 +36,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const mountedRef = useMounted();
 
   // Owns the write plus the iCloud force-save escape hatch (#3717).
-  const { saving, save, forceOffered, dismissForce } = useNoteSave({
+  const { saving, save, forceOffered, dismissForce, bufferChangedSince } = useNoteSave({
     vaultId,
     notePath: selectedNote?.path || null,
     content: noteContent
@@ -59,10 +59,13 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const handleSaveNote = async (options) => {
     if (!selectedNote) return;
     const sequence = noteSequence.current;
+    const submitted = noteContent;
     const data = await save(options);
     if (!data || !mountedRef.current || sequence !== noteSequence.current) return;
     setSelectedNote(data);
-    setEditing(false);
+    // Text typed while the write was in flight was never submitted: keep it
+    // visible and unsaved instead of closing the editor over it.
+    if (!bufferChangedSince(submitted)) setEditing(false);
     toast.success('Note saved');
     onRefresh();
   };
