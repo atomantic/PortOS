@@ -9,7 +9,7 @@
  */
 
 import * as storage from './brainStorage.js';
-import { runDailyDigest, runWeeklyReview } from './brain.js';
+import { runDailyDigest, runWeeklyReview, TOOL_FREE_REQUIRED } from './brain.js';
 
 let schedulerInterval = null;
 let lastCheckTime = null;
@@ -123,6 +123,14 @@ function isWeeklyReviewMissed(settings, now) {
 /**
  * Run the scheduler check
  */
+// A provider that cannot run tool-free is a deliberate policy refusal (the user
+// must pick another provider), not a defect, so it stays off stderr.
+function logRunFailure(err, label, isCatchUp) {
+  const refused = err.code === TOOL_FREE_REQUIRED;
+  const log = refused ? console.log : console.error;
+  log(`🧠 Scheduler: ${refused ? '🚫 ' : ''}${label} ${refused ? 'skipped' : 'failed'}: ${err.message}${isCatchUp ? ' (retry in 30min)' : ''}`);
+}
+
 async function checkSchedule() {
   const now = new Date();
   const settings = await storage.loadMeta();
@@ -144,7 +152,7 @@ async function checkSchedule() {
     runDailyDigest()
       .catch(err => {
         lastDailyFailure = new Date();
-        console.error(`🧠 Scheduler: ${isCatchUp ? 'Catch-up d' : 'D'}aily digest failed: ${err.message}${isCatchUp ? ' (retry in 30min)' : ''}`);
+        logRunFailure(err, `${isCatchUp ? 'Catch-up d' : 'D'}aily digest`, isCatchUp);
       })
       .finally(() => { dailyRunning = false; });
   }
@@ -158,7 +166,7 @@ async function checkSchedule() {
     runWeeklyReview()
       .catch(err => {
         lastWeeklyFailure = new Date();
-        console.error(`🧠 Scheduler: ${isCatchUp ? 'Catch-up w' : 'W'}eekly review failed: ${err.message}${isCatchUp ? ' (retry in 30min)' : ''}`);
+        logRunFailure(err, `${isCatchUp ? 'Catch-up w' : 'W'}eekly review`, isCatchUp);
       })
       .finally(() => { weeklyRunning = false; });
   }

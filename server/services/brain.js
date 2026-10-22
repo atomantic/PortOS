@@ -16,6 +16,8 @@ import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';
+import { isToolFreeOneShotProvider } from '../lib/providerVendors.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { getDomainAutonomyMode } from './cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { deleteMemoryAssets } from './chatgptImport.js';
@@ -35,6 +37,8 @@ import {
   extractedMemorySchema
 } from '../lib/brainValidation.js';
 
+export const TOOL_FREE_REQUIRED = 'TOOL_FREE_REQUIRED';
+
 // Extracted field validators by destination
 const EXTRACTED_VALIDATORS = {
   people: extractedPeopleSchema,
@@ -45,15 +49,25 @@ const EXTRACTED_VALIDATORS = {
 };
 
 /**
- * Call AI provider with a prompt
+ * Call AI provider with a prompt.
+ * `toolFree` is for prompts that embed stored Brain records (writable by any
+ * caller on a password-free install): the run is pinned to a provider that can
+ * disable its host tools, with no fallback to one that cannot.
  */
-async function callAI(promptStageName, variables, providerOverride, modelOverride) {
+async function callAI(promptStageName, variables, providerOverride, modelOverride, { toolFree = false } = {}) {
   const provider = providerOverride
     ? await getProviderById(providerOverride)
     : await getActiveProvider();
 
   if (!provider || !provider.enabled) {
     throw new Error('No AI provider available');
+  }
+
+  if (toolFree && !isToolFreeOneShotProvider(provider)) {
+    throw new ServerError(
+      `Brain provider '${provider.id}' cannot run without tools, so it cannot process stored Brain records unattended. Choose an API provider or a tool-free CLI (claude, grok, pi).`,
+      { status: 400, code: TOOL_FREE_REQUIRED }
+    );
   }
 
   const prompt = await buildPrompt(promptStageName, variables);
@@ -78,6 +92,8 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
 
   const { text, model: effectiveModel } = await runPromptThroughProvider({
     provider: providerForCall, prompt, source: `brain-${promptStageName}`, model,
+    // Pin the admitted provider so runtime fallback cannot switch to one with tools.
+    ...(toolFree && { toolFree: true, allowFallback: false }),
   });
   return { content: text, model: effectiveModel || model, providerId: provider.id, prompt };
 }
@@ -627,7 +643,8 @@ export async function runDailyDigest(providerOverride, modelOverride) {
       now: new Date().toISOString()
     },
     providerOverride || meta.defaultProvider,
-    modelOverride || meta.defaultModel
+    modelOverride || meta.defaultModel,
+    { toolFree: true }
   );
 
   const parsed = parseJsonResponse(aiResult.content, digestOutputSchema, aiResult.prompt);
@@ -689,7 +706,8 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
       now: new Date().toISOString()
     },
     providerOverride || meta.defaultProvider,
-    modelOverride || meta.defaultModel
+    modelOverride || meta.defaultModel,
+    { toolFree: true }
   );
 
   const parsed = parseJsonResponse(aiResult.content, reviewOutputSchema, aiResult.prompt);

@@ -1467,6 +1467,37 @@ describe('brain service', () => {
       ]);
     });
 
+    it('runs tool-free with no fallback so stored records cannot steer a tool-capable agent', async () => {
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
+      storage.getAdminItems.mockResolvedValue([]);
+      storage.getPeople.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([]);
+      storage.createDigest.mockImplementation(async (data) => ({ id: 'd1', ...data }));
+      getProviderById.mockResolvedValue({ id: 'lmstudio', enabled: true, type: 'api', endpoint: 'http://localhost:1234/v1', defaultModel: 'test' });
+      runPromptThroughProvider.mockResolvedValue({
+        text: JSON.stringify({ digestText: 'd', topActions: ['a'], stuckThing: 's', smallWin: 'w' }),
+        runId: 'r', model: 'test'
+      });
+
+      await runDailyDigest('lmstudio');
+
+      expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({ toolFree: true, allowFallback: false }));
+    });
+
+    it.each([
+      ['digest', () => runDailyDigest('codex-tui')],
+      ['review', () => runWeeklyReview('codex-tui')]
+    ])('refuses a provider without a tool-disable switch for the %s and starts no run', async (_name, run) => {
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
+      storage.getAdminItems.mockResolvedValue([]);
+      storage.getPeople.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([{ id: 'i1', capturedAt: new Date().toISOString() }]);
+      getProviderById.mockResolvedValue({ id: 'codex-tui', enabled: true, type: 'cli', command: 'unknown-agent', args: [], defaultModel: 'm' });
+
+      await expect(run()).rejects.toMatchObject({ code: 'TOOL_FREE_REQUIRED', message: expect.stringContaining("'codex-tui'") });
+      expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    });
+
     it('does not clone the provider when headlessArgs is empty/absent', async () => {
       storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
