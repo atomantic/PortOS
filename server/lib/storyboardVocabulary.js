@@ -23,6 +23,10 @@ export const STORYBOARD_ART_STYLES = Object.freeze(['pencil', 'clean-line', 'gre
 export const STORYBOARD_MUSICAL_ROLES = Object.freeze([
   'intro', 'verse', 'pre-chorus', 'chorus', 'bridge', 'build', 'drop', 'breakdown', 'instrumental', 'outro',
 ]);
+export const STORYBOARD_MUSICAL_ROLE_LABELS = Object.freeze({
+  intro: 'Intro', verse: 'Verse', 'pre-chorus': 'Pre-chorus', chorus: 'Chorus', bridge: 'Bridge',
+  build: 'Build', drop: 'Drop', breakdown: 'Breakdown', instrumental: 'Instrumental', outro: 'Outro',
+});
 export const STORYBOARD_PANEL_FRAMINGS = SHOT_TYPES;
 export const STORYBOARD_TAKE_SOURCES = Object.freeze(['upload', 'gallery', 'catalog', 'moodBoard', 'sketch', 'generated']);
 
@@ -43,4 +47,5 @@ export const STORYBOARD_LIMITS = Object.freeze({
   takes: 30,
   panelSecondsMax: 600,
   notes: 4000,
+  tempTrackName: 200,
 });

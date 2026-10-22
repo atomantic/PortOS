@@ -11,6 +11,7 @@ import {
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS as R, RECIPE_NODE_TYPES, RECIPE_PORT_LABELS } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
+import { isStoryboardTempTrackFilename } from './storyboardRecord.js';
 
 const text = (max) => z.string().max(max);
 const ref = z.string().trim().min(1).max(L.refId);
@@ -27,6 +28,11 @@ export const storyboardCreateSchema = z.object({
   universeId: nullableRef.optional(),
   moodBoardId: nullableRef.optional(),
   plot: text(BEAT_EXTRACT_LIMITS.plot).optional(),
+  // An audio file already in /api/uploads; null takes the temp track off.
+  tempTrack: z.object({
+    filename: z.string().refine(isStoryboardTempTrackFilename, { message: 'tempTrack.filename must name an uploaded audio file' }),
+    name: text(L.tempTrackName).optional(),
+  }).strict().nullable().optional(),
 }).strict();
 
 export const storyboardUpdateSchema = storyboardCreateSchema;

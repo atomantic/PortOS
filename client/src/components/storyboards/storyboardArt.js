@@ -27,18 +27,7 @@ export const formatPanelSeconds = (sec) => (Number.isFinite(sec) && sec > 0 ? `$
 
 export const beatSeconds = (beat) => (beat?.panels || []).reduce((sum, panel) => sum + (panel.seconds || 0), 0);
 
-export const MUSICAL_ROLE_LABELS = Object.freeze({
-  intro: 'Intro',
-  verse: 'Verse',
-  'pre-chorus': 'Pre-chorus',
-  chorus: 'Chorus',
-  bridge: 'Bridge',
-  build: 'Build',
-  drop: 'Drop',
-  breakdown: 'Breakdown',
-  instrumental: 'Instrumental',
-  outro: 'Outro',
-});
+export { STORYBOARD_MUSICAL_ROLE_LABELS as MUSICAL_ROLE_LABELS } from '../../../../server/lib/storyboardVocabulary.js';
 
 /** Find a panel and its beat by id, or null. */
 export function findPanel(board, panelId) {
