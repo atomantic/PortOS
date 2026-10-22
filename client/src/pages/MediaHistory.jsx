@@ -7,7 +7,7 @@ import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
  * into Video Gen.
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -23,6 +23,7 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
+import socket from '../services/socket';
 import {
   deleteVideoHistoryItem, stitchVideos, deleteImage,
 } from '../services/api';
@@ -41,6 +42,9 @@ export default function MediaHistory() {
   const [stitchMode, setStitchMode] = useState(false);
   const [selected, setSelected] = useState([]); // video ids
   const [stitching, setStitching] = useState(false);
+  // Stitch job ids still running server-side; the toast waits for the job's own
+  // terminal event rather than the enqueue response (#13000).
+  const stitchJobsRef = useRef(new Set());
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, updateAnnotation: saveAnnotation, getCardProps } = useMediaAnnotations();
   const [annotationSaves, setAnnotationSaves] = useState(0);
@@ -71,19 +75,34 @@ export default function MediaHistory() {
   }, []);
   const handleSelectCard = useCallback((item) => toggleSelect(item.id), [toggleSelect]);
 
+  useEffect(() => {
+    const settle = (event, onSettled) => {
+      if (!stitchJobsRef.current.delete(event?.generationId)) return;
+      if (stitchJobsRef.current.size === 0) setStitching(false);
+      onSettled();
+    };
+    const onCompleted = (event) => settle(event, () => { toast.success('Stitched videos'); refresh(); });
+    const onFailed = (event) => settle(event, () => toast.error(event.error || 'Stitch failed'));
+    socket.on('video-gen:completed', onCompleted);
+    socket.on('video-gen:failed', onFailed);
+    return () => {
+      socket.off('video-gen:completed', onCompleted);
+      socket.off('video-gen:failed', onFailed);
+    };
+  }, [refresh]);
+
   const handleStitch = async () => {
     if (selected.length < 2) return;
     setStitching(true);
     try {
-      await stitchVideos(selected, { silent: true });
-      toast.success(`Stitched ${selected.length} videos`);
+      const { job } = await stitchVideos(selected, { silent: true });
+      stitchJobsRef.current.add(job.jobId);
+      toast('Stitch queued — it lands in history when it finishes');
       setStitchMode(false);
       setSelected([]);
-      refresh();
     } catch (err) {
-      toast.error(err.message || 'Stitch failed');
-    } finally {
       setStitching(false);
+      toast.error(err.message || 'Stitch failed');
     }
   };
 

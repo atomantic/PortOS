@@ -47,7 +47,6 @@ import {
   setHistoryItemHidden,
   updateHistoryItemPrompt,
   extractLastFrame,
-  stitchVideos,
   upscaleHistoryItem,
   planUpscaleHistoryItem,
   resolveFflfLtx2PixelBudget,
@@ -58,6 +57,7 @@ import {
 // re-declaring it just so this file's route schemas can be built.
 import { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../services/videoGen/upscalePlan.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
+import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
@@ -1375,8 +1375,9 @@ const stitchBodySchema = z.object({
 router.post('/stitch', asyncHandler(async (req, res) => {
   const parsed = stitchBodySchema.safeParse(req.body || {});
   if (!parsed.success) failValidation(parsed);
-  const stitched = await stitchVideos(parsed.data.videoIds);
-  res.json({ ok: true, video: stitched });
+  // The concat runs as a media job (#13000); the row lands in history when it
+  // finishes. A repeat POST of the same ordered ids returns the live job.
+  res.json({ ok: true, job: await enqueueStitch(parsed.data.videoIds) });
 }));
 
 export default router;

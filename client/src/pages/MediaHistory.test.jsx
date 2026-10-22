@@ -1,18 +1,20 @@
 const batchApi = vi.hoisted(() => ({ importGalleryFile: vi.fn(), assignImportedMedia: vi.fn() }));
 vi.mock('../services/apiMedia', () => batchApi);
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants } = vi.hoisted(() => ({ fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
+const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants, stitchVideos, toast, socketHandlers } = vi.hoisted(() => ({ stitchVideos: vi.fn(), toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }), socketHandlers: new Map(), fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
 vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage, getGalleryImages, getVideoHistoryItem, listImageVariants }));
-vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, deleteVideoHistoryItem: vi.fn(), stitchVideos: vi.fn() }));
+vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, deleteVideoHistoryItem: vi.fn(), stitchVideos }));
+vi.mock('../services/socket', () => ({ default: { on: (event, fn) => socketHandlers.set(event, fn), off: (event) => socketHandlers.delete(event) } }));
+vi.mock('../components/ui/Toast', () => ({ default: toast }));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: () => {} }));
 vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: saveAnnotation, getCardProps: () => ({}) }) }));
 vi.mock('../hooks/useMediaPreviewActions', () => ({ default: () => ({}) }));
 vi.mock('../components/media/VideoUpscaleDrawer', () => ({ default: () => null }));
 vi.mock('../components/media/MediaPreview', () => ({ default: ({ preview }) => preview ? <div role="dialog">{preview.prompt}{preview.detailError && ' [details unavailable]'}</div> : null }));
-vi.mock('../components/media/MediaCard', () => ({ default: ({ item, onDelete, onToggleStar, onPreview }) => <div><button type="button" onClick={() => onPreview(item)}>{item.prompt}</button><button type="button" onClick={() => onToggleStar(item)}>Favorite {item.filename}</button><button type="button" onClick={() => onDelete(item)}>Delete {item.filename}</button></div> }));
+vi.mock('../components/media/MediaCard', () => ({ default: ({ item, onDelete, onToggleStar, onPreview, onClick }) => <div>{onClick && <button type="button" onClick={() => onClick(item)}>Pick {item.filename}</button>}<button type="button" onClick={() => onPreview(item)}>{item.prompt}</button><button type="button" onClick={() => onToggleStar(item)}>Favorite {item.filename}</button><button type="button" onClick={() => onDelete(item)}>Delete {item.filename}</button></div> }));
 vi.mock('../components/media/MediaHistoryGrid', () => ({ default: ({ items, children }) => <div>{items.map(children)}</div> }));
 import MediaHistory from './MediaHistory';
 
@@ -142,4 +144,32 @@ it('imports a mixed batch from History and inserts both returned records', async
   expect(await screen.findByText('Imported image prompt')).toBeInTheDocument();
   expect(await screen.findByText('Imported video prompt')).toBeInTheDocument();
   expect(batchApi.assignImportedMedia).not.toHaveBeenCalled();
+});
+
+describe('stitch job', () => {
+  it('toasts success only when the job settles, and surfaces an enqueue failure', async () => {
+    rows = ['a', 'b'].map(id => ({ kind: 'video', data: { id, filename: `${id}.mp4`, prompt: `Clip ${id}`, createdAt: '2026-01-01' } }));
+    stitchVideos.mockResolvedValueOnce({ ok: true, job: { jobId: 'job-1', status: 'queued' } });
+    open();
+    await screen.findByText('Clip a');
+    fireEvent.click(screen.getByRole('button', { name: 'Stitch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick a.mp4' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick b.mp4' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stitch 2' }));
+    await waitFor(() => expect(stitchVideos).toHaveBeenCalledWith(['a', 'b'], { silent: true }));
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(toast.success).not.toHaveBeenCalled();
+    await act(async () => socketHandlers.get('video-gen:completed')({ generationId: 'unrelated-job' }));
+    expect(toast.success).not.toHaveBeenCalled();
+    await act(async () => socketHandlers.get('video-gen:completed')({ generationId: 'job-1' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+
+    stitchVideos.mockRejectedValueOnce(new Error('Queue full'));
+    fireEvent.click(screen.getByRole('button', { name: 'Stitch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick a.mp4' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick b.mp4' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stitch 2' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Queue full'));
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
 });

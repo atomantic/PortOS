@@ -218,6 +218,15 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     modules: { default: () => import('../videoGen/upscaleJob.js') },
     invoke: (mod, request) => mod.runVideoUpscale(request),
   },
+  // Hand stitching (#13000): ffmpeg only, so it never touches the GPU lane's
+  // render state, and local-only like the upscale (no peer map names it).
+  'video-stitch': {
+    events: videoGenEvents,
+    verb: 'Stitching',
+    watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
+    modules: { default: () => import('../videoGen/stitchJob.js') },
+    invoke: (mod, request) => mod.runVideoStitch(request),
+  },
   'video-sharing': {
     events: videoGenEvents,
     verb: 'Generating',
