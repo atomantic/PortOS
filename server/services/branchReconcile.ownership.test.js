@@ -199,12 +199,43 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(left).toContain('claim/issue-5');
   });
 
-  it('retires a fresh claim with exact completion evidence while preserving locked and unfinished work', async () => {
+  // A real-Git `reconcile` is hundreds of serial Git spawns, and retiring even
+  // one checkout re-verifies it ~100 times (that floor is the production
+  // admission contract). The scenarios below therefore keep one retirement per
+  // test; a single test holding every sibling exhausted the 30s budget when
+  // pregate loaded the host (#13113).
+  async function addCompletedClaim() {
     const root = join(repo, '.claude', 'worktrees');
     await mkdir(root, { recursive: true });
     const clean = await addTree(join(root, 'claim-issue-11'), 'claim/issue-11');
+    const owner = { id: 'completed-claim', status: 'running', startedAt: new Date(Date.now() - 1000).toISOString(),
+      metadata: { sourceWorkspace: repo, claimPicksOwnBranch: true, claimBranches: ['claim/issue-11'] } };
+    const completedCheckouts = await captureCompletedCheckouts(owner, { success: true });
+    expect(completedCheckouts).toHaveLength(1);
+    injected.policies = [{ ...owner, status: 'completed', result: { success: true }, completedAt: new Date().toISOString(),
+      metadata: { ...owner.metadata, completedCheckouts } }];
+    return clean;
+  }
+  const reconcileWithoutOwners = () => reconcile(repo, {
+    activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] },
+  });
+
+  it('retires a fresh claim with exact completion evidence while preserving a locked sibling', async () => {
+    const root = join(repo, '.claude', 'worktrees');
     const locked = await addTree(join(root, 'claim-issue-12'), 'claim/issue-12');
     await execGit(['worktree', 'lock', locked], repo);
+    const clean = await addCompletedClaim();
+
+    const result = await reconcileWithoutOwners();
+    expect(result.cleaned).toEqual(['claim/issue-11']);
+    expect(existsSync(clean)).toBe(false);
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'claim/issue-12', reason: 'worktree-locked' }));
+    expect(existsSync(locked)).toBe(true);
+    expect(await branches()).toEqual(expect.arrayContaining(['claim/issue-12']));
+  });
+
+  it('holds a claim checkout with uncommitted or unmerged work', async () => {
+    const root = join(repo, '.claude', 'worktrees');
     const dirty = await addTree(join(root, 'claim-issue-13'), 'claim/issue-13');
     await writeFile(join(dirty, 'unfinished.txt'), 'preserve this work\n');
     const unmerged = await addTree(join(root, 'claim-issue-14'), 'claim/issue-14');
@@ -212,27 +243,17 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await execGit(['add', 'committed.txt'], unmerged);
     await execGit(['commit', '-m', 'feat: unfinished work'], unmerged);
 
-    const owner = { id: 'completed-claim', status: 'running', startedAt: new Date(Date.now() - 1000).toISOString(),
-      metadata: { sourceWorkspace: repo, claimPicksOwnBranch: true, claimBranches: ['claim/issue-11'] } };
-    const completedCheckouts = await captureCompletedCheckouts(owner, { success: true });
-    expect(completedCheckouts).toHaveLength(1);
-    injected.policies = [{ ...owner, status: 'completed', result: { success: true }, completedAt: new Date().toISOString(),
-      metadata: { ...owner.metadata, completedCheckouts } }];
-
-    const result = await reconcile(repo, {
-      activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] },
-    });
-    expect(result.cleaned).toEqual(['claim/issue-11']);
-    expect(existsSync(clean)).toBe(false);
-    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'claim/issue-12', reason: 'worktree-locked' }));
+    const result = await reconcileWithoutOwners();
+    expect(result.cleaned).toEqual([]);
     expect(result.inFlight).toEqual(expect.arrayContaining([
       expect.objectContaining({ branch: 'claim/issue-13', state: 'ABANDONED_WIP' }),
     ]));
     // This hermetic repo has no forge, so committed work is held until PR state
     // can be established rather than being retired as merged.
     expect(result.wip).toContainEqual(expect.objectContaining({ branch: 'claim/issue-14' }));
-    for (const path of [locked, dirty, unmerged]) expect(existsSync(path)).toBe(true);
-    expect(await branches()).toEqual(expect.arrayContaining(['claim/issue-12', 'claim/issue-13', 'claim/issue-14']));
+    for (const path of [dirty, unmerged]) expect(existsSync(path)).toBe(true);
+    expect(existsSync(join(dirty, 'unfinished.txt'))).toBe(true);
+    expect(await branches()).toEqual(expect.arrayContaining(['claim/issue-13', 'claim/issue-14']));
   });
 
   // A manual /claim: commit in the checkout, merge it into main, leave the tree
@@ -261,17 +282,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(await branches()).toEqual(expect.arrayContaining(held.map(claim => claim.branch)));
   };
 
-  // The two #12849 contracts below are separate real-Git runs: every extra
-  // checkout adds dozens of serial Git spawns to `reconcile`, so one nine-tree
-  // fixture exhausted the budget when pregate loaded the host (#13113). Each
-  // contract keeps the siblings that can only be told apart by its own gate.
-  it('retires a forge-merged manual claim without a run receipt and holds checkouts with local ownership or work (#12849)', async () => {
+  it('retires a forge-merged manual claim without a run receipt while an actively owned sibling stays (#12849)', async () => {
     const shipped = await addManualClaim(21);
-    const dirty = await addManualClaim(22);
-    await writeFile(join(dirty.path, 'unsaved.txt'), 'preserve\n');
-    await utimes(dirty.path, new Date(Date.now() - 2 * HOUR), new Date(Date.now() - 2 * HOUR));
-    const locked = await addManualClaim(23);
-    await execGit(['worktree', 'lock', locked.path], repo);
     const owned = await addManualClaim(24);
     injected.owners = [{ id: 'agent-live-claim', status: 'running', sourceWorkspace: repo, workspacePath: repo,
       metadata: { sourceWorkspace: repo, claimBranches: [owned.branch] } }];
@@ -282,21 +294,43 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(existsSync(shipped.path)).toBe(false);
     expect(await branches()).not.toContain(shipped.branch);
     expect((await execGit(['rev-parse', `refs/portos/completed/${shipped.head}`], repo)).stdout.trim()).toBe(shipped.head);
-
-    const reasonFor = branch => result.skipped.find(row => row.branch === branch)?.reason;
-    expect(reasonFor(locked.branch), context).toBe('worktree-locked');
-    expect(reasonFor(owned.branch), context).toBe('claim-owner-active');
-    expect(result.inFlight).toContainEqual(expect.objectContaining({ branch: dirty.branch, state: 'ABANDONED_WIP' }));
-    expect(existsSync(join(dirty.path, 'unsaved.txt'))).toBe(true);
-    await expectHeld([dirty, locked, owned]);
+    expect(result.skipped.find(row => row.branch === owned.branch)?.reason, context).toBe('claim-owner-active');
+    await expectHeld([owned]);
   });
 
-  it('holds manual claims whose merge the forge cannot prove for the exact head, or that are too fresh to retire (#12849)', async () => {
+  it('holds a merged manual claim that is dirty or locked (#12849)', async () => {
+    const dirty = await addManualClaim(22);
+    await writeFile(join(dirty.path, 'unsaved.txt'), 'preserve\n');
+    await utimes(dirty.path, new Date(Date.now() - 2 * HOUR), new Date(Date.now() - 2 * HOUR));
+    const locked = await addManualClaim(23);
+    await execGit(['worktree', 'lock', locked.path], repo);
+
+    const result = await reconcileManualClaims();
+    const context = JSON.stringify({ cleaned: result.cleaned, skipped: result.skipped });
+    expect(result.cleaned, context).toEqual([]);
+    expect(result.skipped.find(row => row.branch === locked.branch)?.reason, context).toBe('worktree-locked');
+    expect(result.inFlight).toContainEqual(expect.objectContaining({ branch: dirty.branch, state: 'ABANDONED_WIP' }));
+    expect(existsSync(join(dirty.path, 'unsaved.txt'))).toBe(true);
+    await expectHeld([dirty, locked]);
+  });
+
+  it('holds a manual claim whose merge the forge cannot prove for its exact head (#12849)', async () => {
     const unmerged = await addManualClaim(25, { merge: false });
     const forgeDown = await addManualClaim(26);
     injected.forge[forgeDown.branch] = 'unavailable';
     const otherHead = await addManualClaim(27);
     injected.forge[otherHead.branch] = { head: 'f'.repeat(40), mergedAt: mergedLongAgo() };
+
+    const result = await reconcileManualClaims();
+    const context = JSON.stringify({ cleaned: result.cleaned, skipped: result.skipped });
+    expect(result.cleaned, context).toEqual([]);
+    const reasonFor = branch => result.skipped.find(row => row.branch === branch)?.reason;
+    for (const held of [forgeDown, otherHead]) expect(reasonFor(held.branch), context).toBe('claim-completion-unverified');
+    expect(result.wip).toContainEqual(expect.objectContaining({ branch: unmerged.branch }));
+    await expectHeld([unmerged, forgeDown, otherHead]);
+  });
+
+  it('holds a forge-merged manual claim that was merged or created too recently to retire (#12849)', async () => {
     const justMerged = await addManualClaim(28);
     injected.forge[justMerged.branch].mergedAt = new Date().toISOString();
     const young = await addManualClaim(29, { ageMs: 0 });
@@ -304,10 +338,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     const result = await reconcileManualClaims();
     const context = JSON.stringify({ cleaned: result.cleaned, skipped: result.skipped });
     expect(result.cleaned, context).toEqual([]);
-    const reasonFor = branch => result.skipped.find(row => row.branch === branch)?.reason;
-    for (const held of [forgeDown, otherHead, justMerged, young]) expect(reasonFor(held.branch), context).toBe('claim-completion-unverified');
-    expect(result.wip).toContainEqual(expect.objectContaining({ branch: unmerged.branch }));
-    await expectHeld([unmerged, forgeDown, otherHead, justMerged, young]);
+    for (const held of [justMerged, young]) expect(result.skipped.find(row => row.branch === held.branch)?.reason, context).toBe('claim-completion-unverified');
+    await expectHeld([justMerged, young]);
   });
 
   it('holds a clean agent tree at the default HEAD while its dispatch is still registering (#11775)', async () => {
