@@ -2050,6 +2050,27 @@ async function publishAppSnapshotFileAfterAudit(appId) {
   }
 }
 
+// A run is a clean baseline only when it succeeded, recorded its assessment and
+// that assessment verified no material finding (worstSeverity 0) from a real
+// scan; anything else drops the baseline so the next launch runs.
+async function recordInputGateBaseline({ task, taskType, agentId, success, auditAssessment, workspacePath }) {
+  const appId = task?.metadata?.app;
+  const { TASK_INPUT_PATHS } = await import('./taskScheduleRegistry.js');
+  if (!appId || !TASK_INPUT_PATHS[taskType]) return;
+  const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+  const { parseAuditQualityReport } = await import('../lib/auditQuality.js');
+  const path = workspacePath ? doneSentinelPath(workspacePath, agentId) : null;
+  const report = success && auditAssessment.status === 'recorded' && path
+    ? parseAuditQualityReport(parseSentinelPayload(await tryReadFile(path)).summary, taskType) : null;
+  const clean = report?.worstSeverity === 0 && report.scannedFiles > 0;
+  const { readHead } = await import('./taskInputGate.js');
+  const { recordCleanInputBaseline } = await import('./taskSchedule.js');
+  const head = clean ? await readHead(workspacePath) : null;
+  await recordCleanInputBaseline(taskType, appId, head).catch(err => {
+    emitLog('warn', `⚠️ Input-gate baseline was not saved for ${taskType}: ${err.message}`, { taskType, agentId });
+  });
+}
+
 /**
  * Where a hook's `.agent-done` payload may be read from. A live completion falls
  * back to the task's repoPath; a recovery run trusts only the persisted
@@ -2159,6 +2180,8 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
         return { status: 'persistence-failed' };
       });
     const recorded = auditAssessment.status === 'recorded';
+    await recordInputGateBaseline({ task, taskType, agentId, success, auditAssessment, workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
+      .catch(err => emitLog('warn', `⚠️ Input-gate baseline failed for ${agentId}: ${err.message}`, { agentId }));
     // A review-only run must not land a separate snapshot behind the user's back.
     if (!isLegacyDeepAudit(task.metadata) && recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
       await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
