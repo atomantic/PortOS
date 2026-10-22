@@ -67,3 +67,10 @@ export const saveStoryboardRecipe = (name, recipe, options) =>
   request('/storyboards/recipes', { ...json('POST', { name, recipe }), ...options });
 export const deleteStoryboardRecipe = (recipeId, options) =>
   request(`/storyboards/recipes/${enc(recipeId)}`, { method: 'DELETE', ...options });
+
+// Beats from a plot summary. extract → { board, beats, sentPrompt, promptAdditions }: the
+// beats are a preview; the board keeps only the plot and LLM pick. add appends beats.
+export const extractStoryboardBeats = (id, input, options) =>
+  request(`/storyboards/${enc(id)}/beats/extract`, { ...json('POST', input), ...options });
+export const addStoryboardBeats = (id, beats, options) =>
+  request(`/storyboards/${enc(id)}/beats/add`, { ...json('POST', { beats }), ...options });

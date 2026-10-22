@@ -10,6 +10,7 @@ import {
   STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS as R, RECIPE_NODE_TYPES, RECIPE_PORT_LABELS } from './storyboardRecipe.js';
+import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
 
 const text = (max) => z.string().max(max);
 const ref = z.string().trim().min(1).max(L.refId);
@@ -25,6 +26,7 @@ export const storyboardCreateSchema = z.object({
   artStyle: z.enum(STORYBOARD_ART_STYLES).optional(),
   universeId: nullableRef.optional(),
   moodBoardId: nullableRef.optional(),
+  plot: text(BEAT_EXTRACT_LIMITS.plot).optional(),
 }).strict();
 
 export const storyboardUpdateSchema = storyboardCreateSchema;
@@ -105,4 +107,25 @@ export const storyboardPanelNodeUpdateSchema = z.object({
   text: text(R.text).optional(),
   excludedRefs: z.array(z.string().trim().min(1).max(200)).max(40).optional(),
   extraRefs: z.array(recipeImage).max(R.images).optional(),
+}).strict();
+
+// Beats from a plot summary: the plot and the LLM pick (blank = the active provider).
+const llmField = z.string().trim().max(256).optional();
+export const storyboardPlotExtractSchema = z.object({
+  plot: text(BEAT_EXTRACT_LIMITS.plot),
+  providerId: llmField,
+  model: llmField,
+  effort: llmField,
+}).strict();
+
+// The previewed beats the user adds, each with its panels.
+const addedPanel = z.object({
+  action: text(L.panelText).optional(),
+  dialogue: text(L.panelText).optional(),
+  framing: panelFields.framing,
+  camera: panelFields.camera,
+  seconds: panelFields.seconds,
+}).strict();
+export const storyboardBeatsAddSchema = z.object({
+  beats: z.array(z.object({ ...beatFields, panels: z.array(addedPanel).max(L.panelsPerBeat) }).strict()).min(1).max(L.beats),
 }).strict();

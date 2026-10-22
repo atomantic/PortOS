@@ -27,6 +27,7 @@ import {
   STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS, sanitizePanelMake, sanitizeRecipe } from './storyboardRecipe.js';
+import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
 
 const SKETCH_KEY_PATTERN = /^sketch:[A-Za-z0-9-]{1,80}$/;
 const ENTITY_ID_PATTERN = /^[a-z]+-[A-Za-z0-9-]{1,80}$/;
@@ -159,11 +160,19 @@ export function sanitizeStoryboard(raw) {
     universeId: trimTo(raw.universeId, STORYBOARD_LIMITS.refId) || null,
     moodBoardId: trimTo(raw.moodBoardId, STORYBOARD_LIMITS.refId) || null,
     recipe: sanitizeRecipe(raw.recipe),
+    // The plot summary beats are drawn from, and the LLM last picked for it.
+    plot: trimTo(raw.plot, BEAT_EXTRACT_LIMITS.plot),
+    plotLlm: sanitizeLlmPick(raw.plotLlm),
     beats,
     createdAt,
     updatedAt: isoOr(raw.updatedAt, createdAt),
     ...sanitizeSoftDeleteFields(raw),
   };
+}
+
+function sanitizeLlmPick(raw) {
+  const field = (value) => trimTo(value, 256);
+  return { providerId: field(raw?.providerId), model: field(raw?.model), effort: field(raw?.effort) };
 }
 
 /**
