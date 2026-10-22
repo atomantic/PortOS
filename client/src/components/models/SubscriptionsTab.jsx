@@ -253,12 +253,20 @@ export default function SubscriptionsTab() {
 
   // One row saves at a time — each row's own controls are disabled while it is
   // in flight, so a single slot says everything a set would.
+  // try/finally: a throw from the inner callback must not leave the row stuck
+  // busy with its controls disabled.
   const withBusy = async (family, fn) => {
     setBusyFamily(family);
-    await fn();
-    setBusyFamily(null);
+    try {
+      await fn();
+    } finally {
+      setBusyFamily(null);
+    }
   };
 
+  // The failed request is toasted once by `request()` (no `silent`, since this
+  // catch adds no toast of its own), and the draft stays so the typed value
+  // survives for a retry.
   const onSave = (row, patch) => withBusy(row.family, async () => {
     // One request for both maps, and its response IS the refreshed row set —
     // no follow-up GET. Only a PRICE moves the savings figures, so a tier-only
@@ -266,8 +274,9 @@ export default function SubscriptionsTab() {
     const body = {};
     if (patch.cost !== undefined) body.costs = { [row.family]: patch.cost };
     if (patch.tier !== undefined) body.tiers = { [row.family]: patch.tier };
-    const result = await api.updateSubscriptions(body, { silent: true }).catch(() => null);
-    if (result?.families) setRows(result.families);
+    const result = await api.updateSubscriptions(body).catch(() => null);
+    if (!result?.families) return;
+    setRows(result.families);
     if (patch.cost !== undefined) await loadSavings();
     // Cleared only after the new rows land: dropping the draft first would
     // flash the pre-save value back onto the row in between.
@@ -281,7 +290,6 @@ export default function SubscriptionsTab() {
   const onToggle = (row) => withBusy(row.family, async () => {
     const result = await api.setSubscriptionEnabled(
       { family: row.family, enabled: !row.enabled },
-      { silent: true },
     ).catch(() => null);
     if (!result?.families) return;
     // The handler's own re-read, not a local patch: enablement is DERIVED from

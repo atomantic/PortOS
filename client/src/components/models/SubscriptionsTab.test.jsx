@@ -143,7 +143,6 @@ describe('SubscriptionsTab', () => {
     fireEvent.click(screen.getByLabelText('Enable the Codex subscription'));
     await waitFor(() => expect(api.setSubscriptionEnabled).toHaveBeenCalledWith(
       { family: 'codex', enabled: true },
-      expect.anything(),
     ));
     // The handler's own rows are applied, so no follow-up GET is needed to
     // learn the state it just computed.
@@ -173,7 +172,6 @@ describe('SubscriptionsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save the Claude Code plan' }));
     await waitFor(() => expect(api.updateSubscriptions).toHaveBeenCalledWith(
       { costs: { claude: 100 }, tiers: { claude: 'Max 20x' } },
-      expect.anything(),
     ));
     expect(api.updateSubscriptions).toHaveBeenCalledTimes(1);
   });
@@ -211,6 +209,31 @@ describe('SubscriptionsTab', () => {
     renderTab();
     expect(await screen.findByText(/No provider configured/i)).toBeInTheDocument();
     expect(screen.getByLabelText('Enable the Grok subscription')).toBeDisabled();
+  });
+
+  // A failed save must keep the typed price on screen so the user can retry;
+  // clearing the draft unconditionally is what made the value silently revert.
+  it('keeps the typed price when the save is rejected', async () => {
+    api.updateSubscriptions.mockRejectedValue(new Error('server error'));
+    renderTab();
+    await screen.findByText('Claude Code');
+    fireEvent.change(screen.getByLabelText('Monthly cost for Claude Code'), { target: { value: '100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save the Claude Code plan' }));
+    await waitFor(() => expect(api.updateSubscriptions).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.getByLabelText('Monthly cost for Claude Code')).toHaveValue(100);
+  });
+
+  // The switch is controlled by the server's rows, so a rejected toggle must
+  // leave it on the stored state rather than flipping it optimistically.
+  it('leaves the switch on the server state when the toggle is rejected', async () => {
+    api.setSubscriptionEnabled.mockRejectedValue(new Error('server error'));
+    renderTab();
+    await screen.findByText('Codex');
+    fireEvent.click(screen.getByLabelText('Enable the Codex subscription'));
+    await waitFor(() => expect(api.setSubscriptionEnabled).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.getByLabelText('Enable the Codex subscription')).toHaveAttribute('aria-checked', 'false');
   });
 
   it('says so when there is nothing to manage', async () => {
