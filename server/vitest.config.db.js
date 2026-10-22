@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { applyRunnerSelection, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
 import { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
+import { VITEST_WATCH_OPTIONS } from '../scripts/lib/vitestWatch.js';
 
 // This independent runner owns the same fixture/browser scratch as npm test.
 const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
@@ -44,6 +45,7 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  * checkHealth consumer is left out.
  */
 const config = defineConfig({
+  server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest-db', import.meta.url)),
   test: {
