@@ -9,14 +9,15 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
-  storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelUpdateSchema, storyboardTakeCreateSchema,
-  storyboardUpdateSchema,
+  storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
+  storyboardRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
   listStoryboards, moveBeat, movePanel, removePanelTake, selectPanelTake, updateBeat, updatePanel,
   updateStoryboard,
 } from '../services/storyboards/index.js';
+import { getPanelMake, runPanelNode, updatePanelNode, updateRecipe } from '../services/storyboards/make.js';
 
 const router = Router();
 
@@ -85,6 +86,26 @@ router.post('/:id/panels/:panelId/takes/:takeId/select', asyncHandler(async (req
 
 router.delete('/:id/panels/:panelId/takes/:takeId', asyncHandler(async (req, res) => {
   res.json(await removePanelTake(req.params.id, req.params.panelId, req.params.takeId));
+}));
+
+// Panel maker (Make tab): the board's recipe, and each node's run for one panel.
+router.put('/:id/recipe', asyncHandler(async (req, res) => {
+  const { recipe } = validateRequest(storyboardRecipeSchema, req.body ?? {});
+  res.json(await updateRecipe(req.params.id, recipe));
+}));
+
+router.get('/:id/panels/:panelId/make', asyncHandler(async (req, res) => {
+  res.json(await getPanelMake(req.params.id, req.params.panelId));
+}));
+
+router.patch('/:id/panels/:panelId/make/:nodeId', asyncHandler(async (req, res) => {
+  res.json(await updatePanelNode(req.params.id, req.params.panelId, req.params.nodeId, validateRequest(storyboardPanelNodeUpdateSchema, req.body ?? {})));
+}));
+
+// An LLM node answers when its run finishes; an image node answers once its
+// frames are queued (storyboard:make follows each frame).
+router.post('/:id/panels/:panelId/make/:nodeId/run', asyncHandler(async (req, res) => {
+  res.json(await runPanelNode(req.params.id, req.params.panelId, req.params.nodeId));
 }));
 
 export default router;

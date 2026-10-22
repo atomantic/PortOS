@@ -469,6 +469,22 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       required: ['boardId', 'requestId', 'status', 'revision', 'epoch', 'items'], additionalProperties: false,
     },
   },
+  'storyboard:make': {
+    direction: 'server-to-client',
+    summary: 'A storyboard panel maker node started, finished, failed, or received a frame; reload the board.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        storyboardId: { type: 'string' },
+        panelId: { type: 'string' },
+        nodeId: { type: 'string' },
+        status: { type: 'string', enum: ['running', 'queued', 'frame', 'done', 'failed'] },
+        error: { type: 'string' },
+      },
+      required: ['storyboardId', 'panelId', 'nodeId', 'status'],
+      additionalProperties: false,
+    },
+  },
   'mood-board:item-render': {
     direction: 'server-to-client',
     summary: 'A mood board text note render was queued, finished (the note is now an image item) or failed; reload the board.',

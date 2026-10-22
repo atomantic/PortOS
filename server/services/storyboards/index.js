@@ -65,7 +65,7 @@ export async function createStoryboard(input = {}) {
  * queue. The mutator edits the draft in place and may return a value for the
  * caller; the sanitized board is persisted with a fresh `updatedAt`.
  */
-async function mutateStoryboard(id, mutate) {
+export async function mutateStoryboard(id, mutate) {
   if (!isValidStoryboardId(id)) throw notFound();
   return queueStoryboardWrite(id, async () => {
     const current = await readLive(id);

@@ -12,15 +12,20 @@ const api = vi.hoisted(() => ({
   updateStoryboardPanel: vi.fn(),
   addStoryboardPanelTake: vi.fn(),
   createBlankSketch: vi.fn(),
+  runStoryboardPanelNode: vi.fn(),
+  updateStoryboardRecipe: vi.fn(),
 }));
 vi.mock('../services/api', () => {
   const rest = ['deleteStoryboardBeat', 'deleteStoryboardPanel', 'moveStoryboardBeat', 'moveStoryboardPanel',
-    'removeStoryboardPanelTake', 'selectStoryboardPanelTake', 'updateStoryboardBeat', 'listCatalogIngredientsByIds', 'getMoodBoard'];
+    'removeStoryboardPanelTake', 'selectStoryboardPanelTake', 'updateStoryboardBeat', 'listCatalogIngredientsByIds', 'getMoodBoard',
+    'updateStoryboardPanelNode', 'getStoryboardPanelMake'];
   return { ...api, ...Object.fromEntries(rest.map((name) => [name, vi.fn(() => Promise.resolve([]))])) };
 });
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../components/imageGen/GalleryImagePicker', () => ({ default: () => null }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
+vi.mock('../components/musicVideo/MusicVideoLlmPicker', () => ({ default: () => null }));
+vi.mock('../components/imageGen/RecordRenderPinRow', () => ({ default: () => null }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const panel = (id, extra = {}) => ({
@@ -115,5 +120,34 @@ describe('StoryboardDetail', () => {
     api.getStoryboard.mockResolvedValue(board());
     renderAt('/storyboards/sb-1/panel/panel-missing');
     expect(await screen.findByText('This panel is no longer on the storyboard.')).toBeTruthy();
+  });
+
+  it('runs a recipe node from the Make tab and duplicates a node from its right-click menu', async () => {
+    api.getStoryboard.mockResolvedValue(board({ beats: [{ ...board().beats[0], panels: [panel('panel-1', { action: 'Doors swing open' })] }] }));
+    api.runStoryboardPanelNode.mockResolvedValue(board({
+      updatedAt: '2026-10-22T00:00:02.000Z',
+      beats: [{ ...board().beats[0], panels: [panel('panel-1', {
+        action: 'Doors swing open',
+        make: { nodes: { 'node-writer': { text: 'A pencil frame of doors', status: 'done', error: '', sentPrompt: '', promptAdditions: [], providerId: 'example', model: '', runId: 'r1', jobIds: [], failedJobIds: [], takeIds: [], excludedRefs: [], extraRefs: [], sentRefs: [], runAt: null } } },
+      })] }],
+    }));
+    api.updateStoryboardRecipe.mockImplementation(async (_id, recipe) => board({ recipe, updatedAt: '2026-10-22T00:00:03.000Z' }));
+    renderAt('/storyboards/sb-1/panel/panel-1?panelTab=make');
+
+    const textNode = await screen.findByRole('region', { name: 'Shot description node' });
+    expect(textNode.textContent).toContain('Doors swing open');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run: Prompt writer' }));
+    await waitFor(() => expect(api.runStoryboardPanelNode).toHaveBeenCalledWith('sb-1', 'panel-1', 'node-writer'));
+    await waitFor(() => expect(screen.getByLabelText('Written prompt (yours to edit)').value).toBe('A pencil frame of doors'));
+
+    fireEvent.contextMenu(screen.getByRole('region', { name: 'Image node' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Duplicate/ }));
+    await waitFor(() => expect(api.updateStoryboardRecipe).toHaveBeenCalled());
+    const [, recipe] = api.updateStoryboardRecipe.mock.calls[0];
+    const copy = recipe.nodes.find((n) => n.title === 'Image copy');
+    expect(copy).toMatchObject({ type: 'image', settings: { count: 4 } });
+    // The copy keeps the original's inputs.
+    expect(recipe.edges.filter((e) => e.to === copy.id).map((e) => e.toPort).sort()).toEqual(['images', 'prompt']);
   });
 });

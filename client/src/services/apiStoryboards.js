@@ -42,3 +42,15 @@ export const selectStoryboardPanelTake = (id, panelId, takeId, options) =>
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/takes/${enc(takeId)}/select`, { method: 'POST', ...options });
 export const removeStoryboardPanelTake = (id, panelId, takeId, options) =>
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/takes/${enc(takeId)}`, { method: 'DELETE', ...options });
+
+// Panel maker. `recipe: null` restores the board's default recipe.
+export const updateStoryboardRecipe = (id, recipe, options) =>
+  request(`/storyboards/${enc(id)}/recipe`, { ...json('PUT', { recipe }), ...options });
+// → { linkedRefs: [{ refId, image, label }] } — the panel's catalog images.
+export const getStoryboardPanelMake = (id, panelId, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make`, options);
+// patch: `{ text }` (an LLM node's output), `{ excludedRefs }` or `{ extraRefs }`.
+export const updateStoryboardPanelNode = (id, panelId, nodeId, patch, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}`, { ...json('PATCH', patch), ...options });
+export const runStoryboardPanelNode = (id, panelId, nodeId, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}/run`, { method: 'POST', ...options });

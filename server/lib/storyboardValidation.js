@@ -9,6 +9,7 @@ import {
   STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS as L, STORYBOARD_MUSICAL_ROLES,
   STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
+import { RECIPE_LIMITS as R, RECIPE_NODE_TYPES, RECIPE_PORT_LABELS } from './storyboardRecipe.js';
 
 const text = (max) => z.string().max(max);
 const ref = z.string().trim().min(1).max(L.refId);
@@ -67,3 +68,35 @@ export const storyboardTakeCreateSchema = z.object({
   (take) => (take.source === 'sketch' ? !!take.sketchKey && !take.image : !!take.image && !take.sketchKey),
   { message: 'A sketch take needs sketchKey; every other take needs image' },
 );
+
+// Panel maker. The recipe graph is normalized by sanitizeRecipe; the route
+// refuses an over-limit node rather than letting the normalizer drop it.
+const recipeImage = z.object({ image: z.string().trim().min(1).max(200), label: text(R.title).optional() }).strict();
+const recipeNode = z.object({
+  id: z.string().trim().regex(/^node-[A-Za-z0-9-]{1,80}$/),
+  type: z.enum(RECIPE_NODE_TYPES),
+  title: text(R.title).optional(),
+  x: z.number().finite().optional(),
+  y: z.number().finite().optional(),
+  text: text(R.text).optional(),
+  settings: z.record(z.union([z.string().max(256), z.number(), z.boolean(), z.null()])).optional(),
+  images: z.array(recipeImage).max(R.images).optional(),
+}).strict();
+const recipeEdge = z.object({
+  from: z.string().trim().min(1).max(90),
+  to: z.string().trim().min(1).max(90),
+  toPort: z.enum(Object.keys(RECIPE_PORT_LABELS)),
+}).strict();
+
+export const storyboardRecipeSchema = z.object({
+  recipe: z.object({
+    nodes: z.array(recipeNode).max(R.nodes),
+    edges: z.array(recipeEdge).max(R.nodes * 3),
+  }).strict().nullable(),
+}).strict();
+
+export const storyboardPanelNodeUpdateSchema = z.object({
+  text: text(R.text).optional(),
+  excludedRefs: z.array(z.string().trim().min(1).max(200)).max(40).optional(),
+  extraRefs: z.array(recipeImage).max(R.images).optional(),
+}).strict();

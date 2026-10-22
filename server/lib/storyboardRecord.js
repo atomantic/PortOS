@@ -26,6 +26,7 @@ import {
   isValidStoryboardId, newStoryboardEntityId, STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS,
   STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
+import { sanitizePanelMake, sanitizeRecipe } from './storyboardRecipe.js';
 
 const SKETCH_KEY_PATTERN = /^sketch:[A-Za-z0-9-]{1,80}$/;
 const ENTITY_ID_PATTERN = /^[a-z]+-[A-Za-z0-9-]{1,80}$/;
@@ -106,6 +107,7 @@ function sanitizePanel(raw) {
     notes: trimTo(raw.notes, STORYBOARD_LIMITS.notes),
     takes,
     selectedTakeId,
+    make: sanitizePanelMake(raw.make, takeIds),
   };
 }
 
@@ -156,6 +158,7 @@ export function sanitizeStoryboard(raw) {
     artStyle: pick(raw.artStyle, ART_STYLE_SET, 'pencil'),
     universeId: trimTo(raw.universeId, STORYBOARD_LIMITS.refId) || null,
     moodBoardId: trimTo(raw.moodBoardId, STORYBOARD_LIMITS.refId) || null,
+    recipe: sanitizeRecipe(raw.recipe),
     beats,
     createdAt,
     updatedAt: isoOr(raw.updatedAt, createdAt),

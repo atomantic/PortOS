@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ChevronLeft, ChevronRight, Clapperboard, Drama, ImagePlus, Loader2, Mountain, Package, Palette, PenLine, Plus,
-  StickyNote, Trash2, Users, X,
+  StickyNote, Trash2, Users, Wand2, X,
 } from 'lucide-react';
 import Drawer from '../Drawer';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
@@ -13,10 +13,12 @@ import { SHOT_TYPES, SHOT_TYPE_LABELS } from '../../lib/shotGrammar';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import CommitField from './CommitField';
 import MoodBoardPinPicker from './MoodBoardPinPicker';
+import PanelMakeTab from './PanelMakeTab';
 import { aspectClass, selectedTake, takeSrc } from './storyboardArt';
 
 const TABS = [
   { id: 'shot', label: 'Shot', icon: Clapperboard },
+  { id: 'make', label: 'Make', icon: Wand2 },
   { id: 'cast', label: 'Cast & sets', icon: Users },
   { id: 'notes', label: 'Notes', icon: StickyNote },
 ];
@@ -296,6 +298,8 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
     >
       {!found ? (
         <p className="text-sm text-gray-400">This panel is no longer on the storyboard.</p>
+      ) : activeTab === 'make' ? (
+        <PanelMakeTab board={board} found={found} sketchNonce={sketchNonce} handlers={handlers} />
       ) : activeTab === 'cast' ? (
         <CastTab panel={found.panel} onPatch={handlers.onPatch} />
       ) : activeTab === 'notes' ? (
