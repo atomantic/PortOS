@@ -5,6 +5,7 @@ import { RefreshCw, Network, ZoomIn, ZoomOut } from 'lucide-react';
 import { WIKI_CATEGORIES } from '../constants.jsx';
 import BrailleSpinner from '../../BrailleSpinner';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
+import useLatestRequest from '../../../hooks/useLatestRequest.js';
 
 export default function GraphTab({ vaultId }) {
   const navigate = useNavigate();
@@ -18,16 +19,19 @@ export default function GraphTab({ vaultId }) {
   const [hoveredNode, setHoveredNode] = useState(null);
   const nodesRef = useRef([]);
   const connectionCountsRef = useRef(new Map());
+  const beginLoad = useLatestRequest();
 
   const loadGraph = useCallback(async () => {
+    const isCurrent = beginLoad();
     setLoading(true);
     const data = await api.getNotesVaultGraph(vaultId).catch(() => null);
+    if (!isCurrent()) return;
     if (data && !data.error) {
       setGraphData(data);
       layoutNodes(data);
     }
     setLoading(false);
-  }, [vaultId]);
+  }, [vaultId, beginLoad]);
 
   useEffect(() => {
     loadGraph();

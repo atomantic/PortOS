@@ -98,3 +98,17 @@ describe('TrustTab failed reads', () => {
     expect(screen.getByText('No entries found.')).toBeInTheDocument();
   });
 });
+
+describe('TrustTab filter reloads (#12951)', () => {
+  it('keeps an in-progress settings edit when only the status filter changes', async () => {
+    await renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const input = screen.getByLabelText('Confidence Threshold');
+    fireEvent.change(input, { target: { value: '0.9' } });
+
+    fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'filed' } });
+    await act(async () => {});
+
+    expect(screen.getByLabelText('Confidence Threshold')).toHaveValue(0.9);
+  });
+});

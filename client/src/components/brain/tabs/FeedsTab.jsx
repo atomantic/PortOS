@@ -15,6 +15,7 @@ import { timeAgo } from '../../../utils/formatters';
 import { normalizeUrl } from '../../../utils/urlNormalize';
 import LoadFailedState from '../../ui/LoadFailedState';
 import ListLoadError from '../../ui/ListLoadError';
+import useLatestRequest from '../../../hooks/useLatestRequest.js';
 
 export default function FeedsTab({ onRefresh }) {
   const [inputUrl, setInputUrl] = useState('');
@@ -29,6 +30,7 @@ export default function FeedsTab({ onRefresh }) {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const inputRef = useRef(null);
+  const beginItemsLoad = useLatestRequest();
 
   const fetchFeeds = useCallback(async () => {
     try {
@@ -43,14 +45,17 @@ export default function FeedsTab({ onRefresh }) {
   }, []);
 
   const fetchItems = useCallback(async () => {
+    const isCurrent = beginItemsLoad();
     try {
       const data = await api.getFeedItems({ feedId: selectedFeedId, unreadOnly });
+      if (!isCurrent()) return;
       setItems(data || []);
       setItemsError(null);
     } catch (error) {
+      if (!isCurrent()) return;
       setItemsError(error instanceof Error ? error : new Error('Request failed'));
     }
-  }, [selectedFeedId, unreadOnly]);
+  }, [selectedFeedId, unreadOnly, beginItemsLoad]);
 
   useEffect(() => {
     Promise.all([fetchFeeds(), fetchItems()]).then(() => setLoading(false));

@@ -14,6 +14,7 @@ import {
   rowCells,
 } from '../usage/SubscriptionSavingsCard';
 import { useQuotaUpdates } from '../../hooks/useQuotaUpdates';
+import useLatestRequest from '../../hooks/useLatestRequest.js';
 import useUrlParams from '../../hooks/useUrlParams';
 import { USAGE_PERIOD_OPTIONS, resolveUsagePeriod, DEFAULT_USAGE_PERIOD } from '../../lib/usagePeriods';
 
@@ -194,6 +195,7 @@ export default function SubscriptionsTab() {
   const [quotas, setQuotas] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [busyFamily, setBusyFamily] = useState(null);
+  const beginSavingsLoad = useLatestRequest();
 
   const loadPlans = useCallback(async () => {
     const data = await api.getSubscriptions({ silent: true }).catch(() => null);
@@ -201,9 +203,11 @@ export default function SubscriptionsTab() {
   }, []);
 
   const loadSavings = useCallback(async () => {
+    const isCurrent = beginSavingsLoad();
     const data = await api.getUsage({ period }).catch(() => null);
+    if (!isCurrent()) return;
     setSavings(data?.subscriptionSavings ?? null);
-  }, [period]);
+  }, [period, beginSavingsLoad]);
 
   const loadQuotas = useCallback(async (refresh = false) => {
     const data = await api.getProviderUsage({ refresh }).catch(() => null);

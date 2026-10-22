@@ -6,6 +6,7 @@ import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
+import useLatestRequest from '../../hooks/useLatestRequest.js';
 import { formatMonthDay, localDateKey } from '../../utils/formatters';
 
 const VIEWS = [
@@ -23,10 +24,12 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
   const [view, setView] = useState('30d');
   const [unit, setUnit] = useState('grams'); // 'grams' or 'drinks'
   const chartColors = useChartColors();
+  const beginLoad = useLatestRequest();
 
   const dailyMax = sex === 'female' ? 1 : 2;
 
   const fetchData = useCallback(async () => {
+    const isCurrent = beginLoad();
     const days = VIEWS.find(v => v.id === view)?.days || 30;
     const from = new Date();
     from.setDate(from.getDate() - days);
@@ -34,6 +37,7 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
     const toStr = localDateKey();
 
     const entries = await api.getDailyAlcohol(fromStr, toStr, { silent: true }).catch(() => null);
+    if (!isCurrent()) return;
     setFailed(entries === null);
     if (entries === null) {
       // Do not zero-fill: a failed load must not read as a month of abstinence.
@@ -65,7 +69,7 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
 
     setData(chartData);
     setLoading(false);
-  }, [view]);
+  }, [view, beginLoad]);
 
   useEffect(() => {
     fetchData();

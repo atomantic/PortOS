@@ -6,6 +6,7 @@ import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
+import useLatestRequest from '../../hooks/useLatestRequest.js';
 import { formatMonthDay, localDateKey } from '../../utils/formatters';
 
 const VIEWS = [
@@ -29,12 +30,14 @@ const CustomTooltip = ({ active, payload, label }) => {
 
 export default function NicotineChart({ onRefreshKey, onViewChange }) {
   const chartColors = useChartColors();
+  const beginLoad = useLatestRequest();
   const [data, setData] = useState([]);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('30d');
 
   const fetchData = useCallback(async () => {
+    const isCurrent = beginLoad();
     const days = VIEWS.find(v => v.id === view)?.days || 30;
     const from = new Date();
     from.setDate(from.getDate() - days);
@@ -42,6 +45,7 @@ export default function NicotineChart({ onRefreshKey, onViewChange }) {
     const toStr = localDateKey();
 
     const entries = await api.getDailyNicotine(fromStr, toStr, { silent: true }).catch(() => null);
+    if (!isCurrent()) return;
     setFailed(entries === null);
     if (entries === null) {
       // Do not zero-fill: a failed load must not read as zero consumption.
@@ -71,7 +75,7 @@ export default function NicotineChart({ onRefreshKey, onViewChange }) {
 
     setData(chartData);
     setLoading(false);
-  }, [view]);
+  }, [view, beginLoad]);
 
   useEffect(() => {
     fetchData();

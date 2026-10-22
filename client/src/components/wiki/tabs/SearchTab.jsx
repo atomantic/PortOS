@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
 import { Search, FileText, X, RefreshCw, Tag } from 'lucide-react';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
+import useLatestRequest from '../../../hooks/useLatestRequest.js';
 
 export default function SearchTab({ vaultId }) {
   const navigate = useNavigate();
@@ -11,14 +12,17 @@ export default function SearchTab({ vaultId }) {
   const [results, setResults] = useState(null);
   const [searching, setSearching] = useState(false);
   const inputRef = useRef(null);
+  const beginSearch = useLatestRequest();
 
   const handleSearch = useCallback(async () => {
     if (!query.trim() || !vaultId) return;
+    const isCurrent = beginSearch();
     setSearching(true);
     const data = await api.searchNotes(vaultId, query.trim(), 50).catch(() => null);
+    if (!isCurrent()) return;
     setSearching(false);
     if (data) setResults(data);
-  }, [query, vaultId]);
+  }, [query, vaultId, beginSearch]);
 
   const openNote = (notePath) => {
     const next = new URLSearchParams(searchParams);

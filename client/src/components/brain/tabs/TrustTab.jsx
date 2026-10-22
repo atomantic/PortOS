@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import useLatestRequest from '../../../hooks/useLatestRequest.js';
 import * as api from '../../../services/api';
 import {
   RefreshCw,
@@ -30,8 +31,12 @@ export default function TrustTab({ onRefresh }) {
   const [expandedId, setExpandedId] = useState(null);
   const [editingSettings, setEditingSettings] = useState(false);
   const [settingsForm, setSettingsForm] = useState({});
+  const beginLoad = useLatestRequest();
+  // Seed the edit form once; an inbox-filter reload must not discard in-progress edits.
+  const formSeededRef = useRef(false);
 
   const fetchData = useCallback(async () => {
+    const isCurrent = beginLoad();
     const asError = (error) => (error instanceof Error ? error : new Error('Request failed'));
     // The rows own their error UI (silent), and a failure is carried as a
     // value so it never reads as an empty log or as default settings.
@@ -41,6 +46,7 @@ export default function TrustTab({ onRefresh }) {
       api.getBrainSettings({ silent: true })
         .then((data) => ({ data }), (error) => ({ error: asError(error) })),
     ]);
+    if (!isCurrent()) return;
 
     setInboxError(inboxResult.error || null);
     if (inboxResult.data) {
@@ -50,10 +56,13 @@ export default function TrustTab({ onRefresh }) {
     setSettingsError(settingsResult.error || null);
     if (settingsResult.data) {
       setSettings(settingsResult.data);
-      setSettingsForm(settingsResult.data);
+      if (!formSeededRef.current) {
+        formSeededRef.current = true;
+        setSettingsForm(settingsResult.data);
+      }
     }
     setLoading(false);
-  }, [statusFilter]);
+  }, [statusFilter, beginLoad]);
 
   useEffect(() => {
     fetchData();
