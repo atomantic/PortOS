@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createTrafficAccumulator, endpointFor, inspectCollection, trafficFailures } from './collectionTraffic.js';
+import { createTrafficAccumulator, endpointFor, idleBytesPerMinute, inspectCollection, parseAuditArgs, trafficFailures } from './collectionTraffic.js';
 import { CARDINALITIES, messageFixture, mediaFixture } from './collectionFixtureData.js';
 const start = (t, id = 'one', path = '/api/messages/inbox?secret=never-retain') => t.event('requestWillBeSent', { requestId: id, request: { url: 'http://example.com' + path } });
 
@@ -65,5 +65,35 @@ describe('collection regression gates', () => {
     t.setPhase('idle'); t.event('webSocketFrameReceived', { requestId: 's', response: { opcode: 1, payloadData: '2' } });
     t.setPhase('cold'); start(t, 'detail', '/api/messages/account/record'); start(t, 'history', '/api/video-gen/history');
     expect(trafficFailures(t.snapshot()).map(f => f.reason)).toEqual(['sibling-inbox-fetch', 'eager-detail-request', 'full-history-fetch']);
+  });
+});
+
+describe('--route report mode', () => {
+  it('reports arbitrary-route traffic by endpoint pattern with no hosts, tokens, ids or bodies', () => {
+    const traffic = createTrafficAccumulator();
+    const urls = ['http://127.0.0.1:4567/api/things/12345?token=SECRET', 'http://127.0.0.1:4567/api/blobs/0123456789abcdef0123/meta', 'http://127.0.0.1:4567/api/settings?key=SECRET'];
+    urls.forEach((url, i) => {
+      const requestId = 'r' + i;
+      traffic.event('requestWillBeSent', { requestId, request: { url } });
+      traffic.event('dataReceived', { requestId, dataLength: 10, encodedDataLength: 5 });
+      traffic.event('loadingFinished', { requestId, encodedDataLength: 5 });
+    });
+    traffic.setPhase('idle');
+    traffic.event('webSocketCreated', { requestId: 's', url: 'ws://127.0.0.1:4567/socket.io/?EIO=4&sid=SECRET' });
+    traffic.event('webSocketFrameReceived', { requestId: 's', response: { opcode: 1, payloadData: '3' } });
+    const phases = traffic.snapshot();
+    const text = JSON.stringify({ phases, idle: idleBytesPerMinute(phases.idle, 30000) });
+    expect(Object.keys(phases.cold)).toEqual(['/api/blobs/:id/meta', '/api/settings', '/api/things/:id']);
+    expect(text).not.toMatch(/SECRET|127\.0\.0\.1|12345|0123456789abcdef/);
+    expect(phases.idle['/socket.io/'].socketReceivedFrames).toBe(1);
+    expect(idleBytesPerMinute(phases.idle, 30000).socketPayload).toBe(2);
+  });
+
+  it('accepts only same-origin absolute route paths and bounded idle windows', () => {
+    expect(parseAuditArgs(['out.json', '--route=/', '--sibling=/settings', '--idle-ms=5000']))
+      .toEqual({ output: 'out.json', route: '/', sibling: '/settings', idleMs: 5000 });
+    expect(parseAuditArgs([])).toMatchObject({ route: null, idleMs: 60000 });
+    for (const bad of ['--route=//evil.example', '--route=https://evil.example', '--route=x', '--idle-ms=5', '--bogus'])
+      expect(() => parseAuditArgs([bad])).toThrow();
   });
 });

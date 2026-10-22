@@ -4,19 +4,20 @@ import { writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
 import { startCollectionFixture } from './collectionFixture.js';
-import { createTrafficAccumulator, endpointFor, inspectCollection, trafficFailures } from './collectionTraffic.js';
+import { createTrafficAccumulator, endpointFor, idleBytesPerMinute, inspectCollection, parseAuditArgs, trafficFailures } from './collectionTraffic.js';
 
 const { chromium } = createRequire(new URL('../../server/package.json', import.meta.url))('playwright-core');
 const events = ['requestWillBeSent', 'responseReceived', 'dataReceived', 'loadingFinished', 'loadingFailed',
   'webSocketCreated', 'webSocketClosed', 'webSocketFrameSent', 'webSocketFrameReceived'];
-const output = process.argv[2];
+const args = parseAuditArgs(process.argv.slice(2));
+const output = args.output;
 let browser;
 let fixture;
 const abort = new AbortController();
 const stop = () => { abort.abort(); browser?.close().catch(() => {}); };
 process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
-const report = { version: 1, synthetic: true, idleTargetMs: 60000, scenarios: [], failures: [] };
+const report = { version: 1, synthetic: true, idleTargetMs: args.idleMs, scenarios: [], failures: [] };
 
 async function mediaWindow(page, cdp, rows, result) {
   const samples = result.windowSamples = [];
@@ -184,17 +185,50 @@ async function scenario(route) {
     result.listResponses = listResponses;
     result.returnedRows = returnedRows;
     result.details = details;
-    if (result.idleMs) {
-      const entries = Object.values(result.phases.idle || {});
-      const total = key => entries.reduce((sum, value) => sum + value[key], 0);
-      result.idleBytesPerMinute = {
-        encoded: Math.round(total('encodedBytes') * 60000 / result.idleMs),
-        decoded: Math.round(total('decodedBytes') * 60000 / result.idleMs),
-        socketPayload: Math.round((total('socketSentBytes') + total('socketReceivedBytes')) * 60000 / result.idleMs),
-      };
-    }
+    if (result.idleMs) result.idleBytesPerMinute = idleBytesPerMinute(result.phases.idle, result.idleMs);
     failures.push(...trafficFailures(result.phases));
     report.failures.push(...failures);
+    report.scenarios.push(result);
+    await context.close();
+  }
+}
+
+// --route mode: generic cold-load + sibling + idle accounting for any route, so
+// the performance lane can measure shell traffic when the live UI is behind a
+// password. Only endpoint patterns and aggregates enter the report.
+async function routeScenario(route, sibling) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const cdp = await context.newCDPSession(page);
+  const traffic = createTrafficAccumulator();
+  const result = { route: endpointFor(fixture.url + route), sibling: endpointFor(fixture.url + sibling), usefulContentMs: null, phases: {} };
+  let phase = 'cold';
+  const advance = name => { phase = name; traffic.setPhase(name); };
+  try {
+    for (const name of events) cdp.on('Network.' + name, event => traffic.event(name, event));
+    await cdp.send('Network.enable');
+    await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+    const started = performance.now();
+    await page.goto(fixture.url + route, { waitUntil: 'domcontentloaded' });
+    await page.locator('main, #root > *').first().waitFor({ state: 'visible' });
+    result.usefulContentMs = Math.round(performance.now() - started);
+    await delay(2000, undefined, { signal: abort.signal });
+    const dismiss = page.getByRole('button', { name: 'Dismiss and don’t show again', exact: true });
+    if (await dismiss.isVisible()) await dismiss.click();
+    advance('sibling');
+    await page.goto(fixture.url + sibling, { waitUntil: 'domcontentloaded' });
+    await delay(2000, undefined, { signal: abort.signal });
+    advance('idle');
+    const idleStart = performance.now();
+    await delay(args.idleMs, undefined, { signal: abort.signal });
+    result.idleMs = Math.round(performance.now() - idleStart);
+  } catch {
+    report.failures.push({ endpoint: result.route, reason: 'browser-stage-' + phase, bytes: 0 });
+  } finally {
+    result.phases = traffic.snapshot();
+    result.pendingRequests = traffic.pending();
+    if (result.idleMs) result.idleBytesPerMinute = idleBytesPerMinute(result.phases.idle, result.idleMs);
     report.scenarios.push(result);
     await context.close();
   }
@@ -206,8 +240,11 @@ try {
   report.cardinalities = fixture.cardinalities;
   browser = await chromium.launch({ headless: true, ...(process.env.COLLECTION_AUDIT_BROWSER
     ? { executablePath: process.env.COLLECTION_AUDIT_BROWSER } : { channel: 'chrome' }) });
-  await scenario('/media/history');
-  await scenario('/messages/inbox');
+  if (args.route) await routeScenario(args.route, args.sibling);
+  else {
+    await scenario('/media/history');
+    await scenario('/messages/inbox');
+  }
 } catch (error) {
   if (error.fixtureStartup) report.startup = error.fixtureStartup;
   report.failures.push({ endpoint: fixture ? 'browser' : 'fixture',
