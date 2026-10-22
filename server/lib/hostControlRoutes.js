@@ -75,6 +75,13 @@
  *     POST /api/meatspace/post/drill is gated only when `type` is an LLM
  *     drill; math, memory and cognitive drills stay open. Cover compose,
  *     lettering saves and promotion reads stay open.
+ *   - Storyboards (#12952): plot beat extraction, a panel node run and the
+ *     make-empty batch hand caller text (the plot, or node prompts saved
+ *     through the open recipe/node writes) to a caller-chosen provider that is
+ *     not tool-free, or queue image renders; gated whole-operation like
+ *     mood-board generate. Board, beat, panel and take CRUD, the recipe and
+ *     node PATCH, beats/add, the recipe library and the plan/make reads only
+ *     store or read records and stay open.
  *   - Importer, Brain and analytics AI (#11036): classify/analyze/retry-issues,
  *     model-personality run, goal-scorecard narrative, Brain capture (it can
  *     dispatch classification or repository intake), inbox retry, digest/review
@@ -188,6 +195,22 @@
  * other read-only GET route. Mutable routes (`PUT` flags/secrets, `POST`
  * archive/unarchive, `POST` secret sync) execute `gh` with the user's GitHub
  * account and change external state; they require operator authority.
+ * The notifications inbox (#12952) follows the same rule: thread actions,
+ * audit apply and both undo routes write to the account with `gh`; the
+ * automation schedule arms a CoS System task (the same change as the gated
+ * CoS job routes); account create/edit choose the identity `gh` acts as, arm
+ * Assist/Autopilot, or widen provider exposure, so they are gated whole.
+ * `POST /api/github/notifications/sync` stays open as a refresh, but a caller
+ * without host control gets fetch and metadata triage only — the handler
+ * skips Assist/Autopilot for that request. Account and learned-rule DELETEs,
+ * the read-only audit run (`POST /api/github/audit/:accountId`, a `gh` GET)
+ * and every GET stay open.
+ *
+ * Every mounted mutating route is classified: it is in HOST_CONTROL_ROUTES,
+ * gated per body (COMPILED_BODY_ROUTES), or recorded with a reason in REVIEWED_OPEN_MUTATIONS
+ * (server/hostControlCoverage.test.js), which fails CI on a new, stale or
+ * double-listed route. Classify a new route when you add it, using the
+ * family notes above.
  */
 
 import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from './objects.js';
@@ -875,6 +898,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/mood-boards/:id/compose-prompt',
   'POST /api/mood-boards/:id/analyze',
   'POST /api/mood-boards/:id/generate',
+  // Storyboards (#12952): the plot and saved node prompts reach a
+  // caller-chosen, non-tool-free provider; node runs and make-empty also
+  // queue image renders.
+  'POST /api/storyboards/:id/beats/extract',
+  'POST /api/storyboards/:id/panels/:panelId/make/:nodeId/run',
+  'POST /api/storyboards/:id/make-empty',
   'POST /api/cos/tasks/enhance',
   // Music Video cover design/generation and promotion planning, and POST LLM
   // drills (#10989). Each hands free text and/or a caller-chosen provider to
@@ -898,6 +927,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // network caller to run it. Direct API sync, push ingestion and CRUD stay open.
   'POST /api/calendar/sync/:accountId/google',
   'POST /api/calendar/sync/:accountId/discover',
+  // Google OAuth auto-configure drives the operator's signed-in host browser
+  // through Google Cloud Console and captures the client secret it creates;
+  // the token test intercepts an Outlook bearer token. Same class as the gated
+  // Messages Gmail enable helper and token test (#11433, #11449; #12952).
+  'POST /api/calendar/google/auto-configure/start',
+  'POST /api/calendar/google/auto-configure/capture',
+  'POST /api/calendar/google/auto-configure/run',
+  'POST /api/calendar/debug/test-token',
 
   // Writers Room authoring reaches the staged runner, including CLI/TUI
   // fallback. Stored prose and live cursor text are caller-controlled; a
@@ -984,6 +1021,17 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/github/secrets/:name/sync',
   // Resolve with agent queues CoS agent work against the thread's app.
   'POST /api/github/notifications/:accountId/:threadId/agent',
+  // Notifications inbox (#12952): thread actions (and the learned rules an
+  // operator action trains), audit apply and the undo routes write to the
+  // account with `gh`; the schedule arms a CoS System task; account
+  // create/edit pick the `gh` identity, mode, trust and allowed providers.
+  'POST /api/github/notifications/:accountId/:threadId',
+  'POST /api/github/audit/:accountId/apply',
+  'POST /api/github/audit-changes/:id/undo',
+  'POST /api/github/automations/activity/:id/undo',
+  'PUT /api/github/automations/schedule',
+  'POST /api/github/accounts',
+  'PUT /api/github/accounts/:id',
 
   // Beeper outbox creation records approved send intent; send spends the
   // operator's saved connection, and breaker reset re-arms that capability.
@@ -1205,12 +1253,17 @@ const COMPILED_BODY_ROUTES = [
   ['PATCH /api/apps/:appId/reference-repos/:refId', (body) => ['repoUrl', 'branch'].filter((key) => body?.[key] !== undefined)],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
+const bodyRouteEntry = (method, path) => (
+  typeof method === 'string' && typeof path === 'string'
+    ? COMPILED_BODY_ROUTES.find((entry) => entry.method === method.toUpperCase() && entry.pattern.test(path))
+    : undefined
+);
+
+/** The per-body gated route that `method path` matches, or null. */
+export const hostControlBodyRouteFor = (method, path) => bodyRouteEntry(method, path)?.route ?? null;
+
 /** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */
-export const hostControlBodyKeys = (method, path, body) => {
-  if (typeof method !== 'string' || typeof path !== 'string') return [];
-  const verb = method.toUpperCase();
-  return COMPILED_BODY_ROUTES.find((entry) => entry.method === verb && entry.pattern.test(path))?.pick(body) ?? [];
-};
+export const hostControlBodyKeys = (method, path, body) => bodyRouteEntry(method, path)?.pick(body) ?? [];
 
 const valueAt = (object, path) => path.split('.').reduce(
   (node, key) => (isPlainObject(node) && Object.hasOwn(node, key) ? node[key] : undefined),

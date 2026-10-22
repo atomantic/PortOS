@@ -583,6 +583,35 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await setNotificationCadence('off')).toMatchObject({ cadence: 'off', cronExpression: '*/15 * * * 1-5' });
   });
 
+  it('fetches and triages without Assist or Autopilot when the sync caller lacks host control (#12952)', async () => {
+    await updateAccount(account.id, { mode: 'autopilot' });
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(listExternalOpenPullRequests).mockResolvedValue({ ok: true, prs: [{ number: 1201, headRefOid: 'b'.repeat(40) }] });
+    vi.mocked(triggerOnDemandTask).mockReset().mockImplementation(async (taskType) => ({ id: `demand-${taskType}` }));
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: true, value: { verdict: 'done' } });
+    const actions = mockGh(() => listing([
+      thread('1201', { owner: 'acme', repo: 'app', reason: 'review_requested' }),
+      thread('1202', { owner: account.login }),
+    ]), {
+      'repos/acme/app/pulls/1201': { author: 'mallory', association: 'NONE', state: 'open', merged: false },
+      'repos/acme/app/collaborators/mallory/permission': { user: { login: 'mallory' }, permission: 'read' },
+      [`repos/${account.login}/hello/pulls/1202`]: { author: account.login, association: 'OWNER', state: 'closed', merged: true },
+    });
+
+    const refresh = await syncAccountNotifications(account.id, { automate: false });
+    expect(refresh).toMatchObject({ fetched: 2, triage: expect.objectContaining({ triaged: 2 }), assist: { skipped: 'no-host-control', handedOff: 0 } });
+    expect(await getNotification(account.id, '1201')).toMatchObject({ state: 'open' });
+    expect(triggerOnDemandTask).not.toHaveBeenCalled();
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
+    expect(actions).toEqual([]);
+
+    // An operator/agent refresh (and the scheduled check) keeps the full run.
+    expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 1 });
+    expect(triggerOnDemandTask).toHaveBeenCalledWith('pr-reviewer', 'app-acme', expect.objectContaining({ targetPullRequest: 1201 }));
+    expect(actions).toEqual([['DELETE', 'notifications/threads/1202']]);
+    vi.mocked(getAllApps).mockResolvedValue([]);
+  });
+
   it('runs the scheduled pass without any model call, respecting the poll interval', async () => {
     mockGh(() => listing([thread('801')]));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network in this test'));

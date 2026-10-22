@@ -514,6 +514,9 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner (#12048): server/index.js can mount a new router that no
   // test imports, with no import edge from that router to this guard.
   'server/routeTestCoverageConventions.test.js',
+  // Whole-tree scanner (#12952): server/index.js can mount a mutating route that
+  // no host-control classification names, with no import edge to this guard.
+  'server/hostControlCoverage.test.js',
   'server/routeValidationConventions.test.js',
   'server/floatingAsyncConventions.test.js',
   'server/timerCallbackConventions.test.js',
