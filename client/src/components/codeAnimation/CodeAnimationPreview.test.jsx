@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -274,6 +274,46 @@ describe('CodeAnimationPreview', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(previewOpens().at(-1)[1].withAudio).toBe(false);
     expect(previewOpens().at(-1)[1].audioUrl).toBeUndefined();
+  });
+});
+
+describe('CodeAnimationPreview playhead', () => {
+  beforeEach(() => {
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:frame');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    socket.emit.mockReset();
+    socket.emit.mockImplementation(socket.reply);
+    socket.__handlers.clear();
+    socket.__sessions.clear();
+    socket.connected = true;
+    localStorage.clear();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const seeks = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:seek').map(([, payload]) => payload);
+
+  it('holds the film at the playhead, scrubs it, and plays the soundtrack here in sync', async () => {
+    const user = userEvent.setup();
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    renderPreview({ audioUrl: '/data/music/take.wav', jobId: '00000000-0000-4000-8000-000000000009' });
+    await user.click(screen.getByRole('button', { name: 'Preview without audio' }));
+    // The session opens on the film's own loop; the player takes it over at 0.
+    await waitFor(() => expect(seeks().at(-1)).toMatchObject({ t: 0, playing: false }));
+    expect(screen.getByText(/0\.00s \/ 5\.00s · f0/)).toBeTruthy();
+
+    const scrub = screen.getByLabelText('Playhead');
+    fireEvent.change(scrub, { target: { value: '2.5' } });
+    await waitFor(() => expect(seeks().at(-1)).toMatchObject({ t: 2.5, playing: false }));
+    expect(screen.getByText(/2\.50s \/ 5\.00s · f60/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Mute' }));
+    expect(JSON.parse(localStorage.getItem('portos.codeAnimation.previewAudio'))).toMatchObject({ muted: true });
+    await user.click(screen.getByRole('button', { name: 'Play' }));
+    expect(play).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(screen.getByRole('button', { name: 'Play' })).toBeTruthy();
   });
 });
 

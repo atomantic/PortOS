@@ -8,6 +8,7 @@ import { downloadBlob } from '../../lib/downloadBlob';
 import { importsThree, inlineThreeVendor } from '../../lib/threeVendorImportMap';
 import { formatLoudness } from '../../utils/formatters';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
+import CodeAnimationTransport from './CodeAnimationTransport';
 
 // Seconds past the film's own duration before a silent recording is abandoned
 // (a page that never answers the handshake must not leave Record spinning).
@@ -197,6 +198,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   }, [preview.recording]);
 
   const duration = Number(meta?.duration) || frame?.durationSeconds || 0;
+  const fps = Number(meta?.fps) || frame?.fps || 24;
   const fileBase = slug(title);
 
   const handleRecord = () => {
@@ -269,7 +271,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
       <div className="overflow-hidden rounded-lg border border-port-border bg-black" style={{ aspectRatio: aspect, maxHeight: '70vh' }}>
         {request ? (
           preview.frameUrl ? (
-            <img title="Code animation preview" alt="" src={preview.frameUrl} className="h-full w-full border-0 object-contain" />
+            <img ref={preview.imageRef} onLoad={preview.onFrameLoad} title="Code animation preview" alt="" src={preview.frameUrl} className="h-full w-full border-0 object-contain" />
           ) : (
             <div className="flex h-full items-center justify-center gap-2 p-5 text-center text-sm text-gray-400">
               {preview.status === 'unavailable' || preview.status === 'error'
@@ -309,6 +311,11 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
           </div>
         )}
       </div>
+
+      {request && (
+        <CodeAnimationTransport preview={preview} duration={duration} fps={fps} audioUrl={audioUrl}
+          disabled={recording} label={title || ''} />
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         {request && preview.status === 'idle' && <button type="button" className={BUTTON_SECONDARY} onClick={preview.resume}>Resume preview</button>}
