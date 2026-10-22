@@ -833,7 +833,9 @@ export async function importToPortOS() {
     if (store[key] !== undefined) assertRows(store[key], key);
   }
   for (const row of store.bloodTests || []) {
-    if (row.markers != null && !isPlainObject(row.markers)) {
+    const reserved = ['id', 'date', 'createdAt', 'updatedAt', 'aliasIds', 'markers'];
+    if (row.markers != null && (!isPlainObject(row.markers)
+      || reserved.some(key => Object.hasOwn(row.markers, key)))) {
       throw new Error('MortalLoom import blood markers malformed');
     }
   }
@@ -869,7 +871,7 @@ export async function importToPortOS() {
     for (const item of mlArr) {
       // MortalLoom nests blood markers; the local reader consumes flat fields.
       const { markers, ...rest } = item;
-      const row = mlKey === 'bloodTests' ? { ...rest, ...(markers || {}) } : item;
+      const row = mlKey === 'bloodTests' ? { ...(markers || {}), ...rest } : item;
       const keys = keysFor(row);
       if (keys.some(key => seen.has(key) || isTombstoned(document[ROW_TOMBSTONES_KEY], key, undefined, 'id'))) {
         skipped++;

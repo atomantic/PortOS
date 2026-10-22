@@ -119,6 +119,8 @@ it('retains all concurrently submitted local workouts', async () => {
 it.each([
   ['source collection', { bloodTests: {} }, { tests: [] }],
   ['destination wrapper', { bloodTests: [{ id: 'incoming', date: '2026-01-02' }] }, { tests: 'invalid' }],
+  ['source marker date', { bloodTests: [{ id: 'incoming', date: '2026-01-02', markers: { date: 123 } }] }, { tests: [] }],
+  ['source marker identity', { bloodTests: [{ id: 'incoming', date: '2026-01-02', markers: { id: 'another-record' } }] }, { tests: [] }],
 ])('refuses a malformed %s before importing any goals or health records', async (_label, incoming, local) => {
   const goals = { goals: [{ id: 'retained-goal' }] };
   await source({ ...incoming, goals: [{ id: 'incoming-goal' }] });
