@@ -50,6 +50,10 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No write-back cycle: reports are generated from agent records and written whole; getReport only projects a stored report."
   },
   {
+    "key": "errorLogTriage.js :: stateFile",
+    "reason": "No non-strict write-back: the triage run reads its state strictly before writing; only readLastTriageSummary reads non-strictly, and it never writes."
+  },
+  {
     "key": "imageTo3d/sourceKeying.js :: preparedCacheMetadataPath ( targetPath )",
     "reason": "Cache-only: source bytes and the explicit keying/framing request rebuild the prepared image metadata."
   },
