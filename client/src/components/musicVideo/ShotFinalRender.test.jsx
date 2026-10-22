@@ -16,7 +16,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
 
 import ShotFinalRender from './ShotFinalRender.jsx';
 import { filmLookPreset } from '../../lib/filmLook.js';
-import { getMusicVideoShotRenders, renderMusicVideoShot } from '../../services/apiMusicVideo.js';
+import { cancelMusicVideoShotRender, getMusicVideoShotRenders, renderMusicVideoShot } from '../../services/apiMusicVideo.js';
 
 const project = { id: 'mv-1', composition: { mode: 'composed' }, filmLook: { preset: 'vhs' }, scenes: [{ sceneId: 'a' }, { sceneId: 'b' }] };
 const fieldId = (name) => `f-${name}`;
@@ -57,6 +57,16 @@ describe('ShotFinalRender', () => {
     expect(screen.getByLabelText('Film look').value).toBe('polaroid');
     fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'video' } });
     expect(onChange).toHaveBeenLastCalledWith({ filmLook: null });
+  });
+
+  it('keeps Stop available for a retry when the stop request fails', async () => {
+    getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [{ ...shot('a', 'stale'), rendering: true }], ready: 0, total: 1 });
+    cancelMusicVideoShotRender.mockRejectedValueOnce(new Error('render server down'));
+    render(<ShotFinalRender project={project} scene={project.scenes[0]} onChange={() => {}} fieldId={fieldId} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Stop/ }));
+    await waitFor(() => expect(cancelMusicVideoShotRender).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /Stop/ }));
+    expect(cancelMusicVideoShotRender).toHaveBeenCalledTimes(2);
   });
 
   it('offers the saved looks, sets one on the shot, and shows it as picked', async () => {

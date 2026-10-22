@@ -120,10 +120,12 @@ export default function MediaPreview({
     if (!nextItem) return;
     setPreview(nextItem);
   }, [setPreview]);
-  const savePrompt = useCallback(async (item, prompt) => {
+  // Lightbox Save already shows its own inline error, so it stays silent; the
+  // analysis path has no error UI of its own and passes { silent: false } to toast.
+  const savePrompt = useCallback(async (item, prompt, { silent = true } = {}) => {
     const result = item.kind === 'image'
-      ? await updateImagePrompt(item.filename, prompt, { silent: true })
-      : await updateVideoPrompt(item.id, prompt, { silent: true });
+      ? await updateImagePrompt(item.filename, prompt, { silent })
+      : await updateVideoPrompt(item.id, prompt, { silent });
     const nextPrompt = result?.prompt || '(no prompt)';
     setPromptOverride({ key: item.key, prompt: nextPrompt });
     onPromptSaved?.(item, nextPrompt);
@@ -131,7 +133,7 @@ export default function MediaPreview({
   }, [onPromptSaved]);
   const handlePromptAnalysis = useCallback((item, result) => {
     const prompt = item.kind === 'video' ? result?.videoPrompt : result?.imagePrompt;
-    if (prompt) savePrompt(item, prompt).catch(() => {});
+    if (prompt) savePrompt(item, prompt, { silent: false }).catch(() => {});
   }, [savePrompt]);
   return (
     <MediaLightbox

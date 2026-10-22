@@ -19,9 +19,10 @@ vi.mock('../../services/apiImageVideo', () => ({
 // its own interaction coverage; this stub exposes the item it receives and
 // invokes the same callback the real Save prompt button uses.
 vi.mock('./MediaLightbox', () => ({
-  default: ({ item, onPromptChange, onPosterChange, onTrimStart, variantGroup, onSelectVariant }) => item ? (
+  default: ({ item, onPromptChange, onPromptAnalysis, onPosterChange, onTrimStart, variantGroup, onSelectVariant }) => item ? (
     <div data-testid="lightbox">
       {onTrimStart && <button type="button" onClick={() => onTrimStart(item, 1.25)}>Start clip here</button>}
+      <button type="button" onClick={() => onPromptAnalysis(item, { videoPrompt: 'analysed prompt' })}>Analyze prompt</button>
       <span data-testid="lightbox-poster">{item.previewUrl}</span>
       <button onClick={() => onPosterChange(item, 12.4)}>Save poster</button>
       <span data-testid="lightbox-prompt">{item.prompt}</span>
@@ -103,6 +104,21 @@ describe('MediaPreview prompt saving', () => {
       expect(screen.getByTestId('lightbox-prompt')).toHaveTextContent('a saved prompt');
     });
     expect(screen.getByTestId('location')).toHaveTextContent('preview=video%3Avideo-1');
+  });
+
+  it('saves an analysed prompt non-silently so a failure reaches the user', async () => {
+    render(
+      <MemoryRouter>
+        <PromptSaveHarness />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open video' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze prompt' }));
+
+    await waitFor(() => {
+      expect(updateVideoPrompt).toHaveBeenCalledWith('video-1', 'analysed prompt', { silent: false });
+    });
   });
 
   it('keeps the saved prompt visible when the host has no card-state callback', async () => {
