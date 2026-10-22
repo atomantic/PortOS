@@ -121,3 +121,24 @@ describe('storyboard federation', () => {
     expect(await svc.restoreStoryboard(id, {})).toBeNull();
   });
 });
+
+describe('storyboard conflict restore', () => {
+  it('restores plot, temp track and beat pins together', async () => {
+    const board = await svc.createStoryboard({ name: 'Pinned' });
+    const { beatId } = await svc.addBeat(board.id, { title: 'Opening' });
+    const original = {
+      ...(await svc.getStoryboard(board.id)),
+      plot: 'The original plot',
+      tempTrack: { filename: 'track.mp3', name: 'Demo', sections: [{ id: 'sec-1', label: 'Verse', at: 1 }], lines: [] },
+    };
+    original.beats = original.beats.map((beat) => (beat.id === beatId ? { ...beat, pin: 'sec-1' } : beat));
+    // The peer's revision replaced plot and track; the pin lost its marker.
+    await svc.restoreStoryboard(board.id, { plot: 'Peer plot', tempTrack: null, beats: original.beats });
+    expect((await svc.getStoryboard(board.id)).beats[0].pin).toBeNull();
+
+    const restored = await svc.restoreStoryboard(board.id, original);
+    expect(restored.plot).toBe('The original plot');
+    expect(restored.tempTrack.sections.map((s) => s.id)).toEqual(['sec-1']);
+    expect(restored.beats[0].pin).toBe('sec-1');
+  });
+});
