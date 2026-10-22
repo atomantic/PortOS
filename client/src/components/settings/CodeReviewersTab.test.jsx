@@ -8,6 +8,7 @@ import toast from '../ui/Toast';
 vi.mock('../../services/api', () => ({
   getCodeReviewDefaults: vi.fn(),
   updateSettings: vi.fn(),
+  getReviewerIdentities: vi.fn(),
 }));
 
 const pickerData = vi.hoisted(() => ({ current: { ctxById: {} } }));
@@ -32,6 +33,7 @@ describe('CodeReviewersTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pickerData.current = { ctxById: {} };
+    api.getReviewerIdentities.mockResolvedValue({ identities: [] });
   });
 
   afterEach(() => {
@@ -422,5 +424,22 @@ describe('CodeReviewersTab', () => {
     renderTab(<CodeReviewersTab />, '/models/code-reviewers/not-a-view');
     expect(await screen.findByRole('region', { name: 'Primary' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Review chain' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('names a saved reviewer the forge does not know, without touching the roster', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], usernames: ['ghost-user', 'flaky-user'] });
+    api.getReviewerIdentities.mockResolvedValue({ identities: [
+      { token: 'ghost-user', kind: 'user', status: 'missing', required: true, reason: 'GitHub user "ghost-user" does not exist' },
+      { token: 'flaky-user', kind: 'user', status: 'unavailable', required: true, reason: 'gh command timed out' },
+    ] });
+    api.updateSettings.mockResolvedValue({});
+    renderTab(<CodeReviewersTab />);
+    expect(await screen.findByText(/@ghost-user: GitHub user "ghost-user" does not exist/)).toBeInTheDocument();
+    expect(screen.getByText(/required reviewer/)).toBeInTheDocument();
+    // An inconclusive lookup is not a fault to show.
+    expect(screen.queryByText(/flaky-user:/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
+    expect(api.updateSettings.mock.calls[0][0].codeReview.usernames).toEqual(['ghost-user', 'flaky-user']);
   });
 });

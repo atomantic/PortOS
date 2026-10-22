@@ -17,6 +17,9 @@ vi.mock('../services/codeReview.js', () => ({
   reportReviewerSuccess: vi.fn(),
 }))
 
+const execGhMock = vi.hoisted(() => vi.fn())
+vi.mock('../services/github.js', () => ({ execGh: (...args) => execGhMock(...args) }))
+
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(),
 }))
@@ -24,6 +27,7 @@ vi.mock('../services/settings.js', () => ({
 const codeReviewSvc = await import('../services/codeReview.js')
 const settingsSvc = await import('../services/settings.js')
 const { default: routes } = await import('./codeReview.js')
+const { __resetReviewerIdentityCache } = await import('../services/reviewerIdentity.js')
 
 const makeApp = () => {
   const app = express()
@@ -35,6 +39,7 @@ const makeApp = () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  __resetReviewerIdentityCache()
   // Default settings stub — tests override as needed
   settingsSvc.getSettings.mockResolvedValue({})
   codeReviewSvc.getCodeReviewDefaults.mockResolvedValue({
@@ -334,3 +339,54 @@ describe('POST /api/code-review/report-failure', () => {
   })
 })
 
+
+describe('GET /api/code-review/reviewer-identities (#13115)', () => {
+  const notFound = () => Object.assign(new Error('gh: Not Found (HTTP 404)'), { ghNoAccess: true, ghStderr: 'gh: Not Found (HTTP 404)' })
+  const configure = (defaults) => codeReviewSvc.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['copilot'], ...defaults })
+
+  it('separates verified, missing, unavailable and team results without altering the roster', async () => {
+    configure({ usernames: ['real-user', 'ghost-user', 'flaky-user', 'acme/core-team'], optionalReviewers: ['@ghost-user'] })
+    execGhMock.mockImplementation(async (args) => {
+      const path = args.at(-1)
+      if (path === 'users/ghost-user') throw notFound()
+      if (path === 'users/flaky-user') throw new Error('gh command timed out after 8000ms')
+      return '{}'
+    })
+    const res = await request(makeApp()).get('/api/code-review/reviewer-identities')
+    expect(res.status).toBe(200)
+    const byToken = Object.fromEntries(res.body.identities.map(e => [e.token, e]))
+    expect(byToken['real-user']).toMatchObject({ status: 'verified', required: true })
+    expect(byToken['ghost-user']).toMatchObject({ status: 'missing', required: false })
+    // A transport failure is never reported as a fabricated 404.
+    expect(byToken['flaky-user']).toMatchObject({ status: 'unavailable' })
+    expect(byToken['acme/core-team']).toMatchObject({ status: 'verified', kind: 'team' })
+  })
+
+  it('does not call a team missing just because the caller cannot see it', async () => {
+    configure({ usernames: ['acme/hidden-team'] })
+    execGhMock.mockImplementation(async (args) => {
+      if (args.at(-1).startsWith('orgs/')) throw notFound()
+      return '{}'
+    })
+    const res = await request(makeApp()).get('/api/code-review/reviewer-identities')
+    expect(res.body.identities[0]).toMatchObject({ token: 'acme/hidden-team', status: 'unavailable' })
+  })
+
+  it('reports a team of a nonexistent organization as missing', async () => {
+    configure({ usernames: ['nowhere/team'] })
+    execGhMock.mockRejectedValue(notFound())
+    const res = await request(makeApp()).get('/api/code-review/reviewer-identities')
+    expect(res.body.identities[0]).toMatchObject({ status: 'missing' })
+  })
+
+  it('skips lookups for a GitLab target and caches GitHub answers', async () => {
+    configure({ usernames: ['someone'] })
+    const gitlab = await request(makeApp()).get('/api/code-review/reviewer-identities?forge=gitlab')
+    expect(gitlab.body.identities[0].status).toBe('skipped')
+    expect(execGhMock).not.toHaveBeenCalled()
+    execGhMock.mockResolvedValue('{}')
+    await request(makeApp()).get('/api/code-review/reviewer-identities')
+    await request(makeApp()).get('/api/code-review/reviewer-identities')
+    expect(execGhMock).toHaveBeenCalledTimes(1)
+  })
+})
