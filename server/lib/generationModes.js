@@ -20,7 +20,7 @@ export const IMAGE_GEN_MODE = Object.freeze({
 
 export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
 
-// Cloud image backends spend remote quota (or money, for fal.ai) and run
+// Cloud image backends spend remote quota or metered credit and run
 // through the media queue's parallel cloud lane rather than the local
 // accelerator lane.
 export const CLOUD_IMAGE_GEN_MODES = Object.freeze([
