@@ -581,6 +581,65 @@ describe('verifyAgentRepoState — never fires', () => {
   });
 });
 
+// A gate that returns a skip without recording it leaves the cleanup ledger
+// silent about a held branch; one that records a different reason than it
+// returns makes the Agent card and the completion audit disagree.
+describe('verifyAgentRepoState — every hold records the reason it returns', () => {
+  const merged = () => findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+  it.each([
+    ['ownership-unreadable', REPO_STATE_SKIPS.GATE_UNREADABLE, {}, () => getAllTasks.mockRejectedValue(new Error('tasks file unreadable'))],
+    ['checkout-inventory-unavailable', 'checkout-inventory-unavailable', {}, () => listWorktrees.mockRejectedValue(new Error('not a git repository'))],
+    ['checkout-incarnation-changed', 'checkout-incarnation-changed', {}, () => listWorktrees.mockResolvedValue([{ ...RELEASE, path: '/repo/new-owner' }])],
+    ['claim-ownership-unreadable', 'claim-ownership-unreadable', { owners: [] }, () => readClaimOwnershipAgents.mockRejectedValue(new Error('agents unreadable'))],
+    ['probe-incomplete', REPO_STATE_SKIPS.PROBE_INCOMPLETE, {}, () => readLocalBranchPresence.mockRejectedValue(new Error('git crashed'))],
+    ['probe-incomplete', REPO_STATE_SKIPS.PROBE_INCOMPLETE, {}, () => readCheckoutPathPresence.mockResolvedValue(null)],
+    ['deterministic-cleanup-pending', 'deterministic-cleanup-pending', {}, () => existsSync.mockReturnValue(true), { prExpected: false }],
+    ['delivery-evidence-unavailable', 'delivery-evidence-unavailable', {}, () => { localBranch(true); hasBranchMergeEvidence.mockResolvedValue(false); }, { prExpected: false }],
+    ['delivery-ci-or-review-pending', 'delivery-ci-or-review-pending', {}, () => {
+      localBranch(true); hasBranchMergeEvidence.mockResolvedValue(false);
+      findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/9', detail: 'OPEN', headRefOid: HEAD });
+    }],
+    ['active-agent-owner', 'active-agent-owner', {}, () => {
+      existsSync.mockReturnValue(true); localBranch(true); merged();
+      listWorktrees.mockResolvedValue([RELEASE]);
+      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'active-agent-owner' });
+    }],
+    ['retirement-outcome-uncertain', 'retirement-outcome-uncertain', {}, () => {
+      existsSync.mockReturnValue(true); localBranch(true); merged();
+      listWorktrees.mockResolvedValue([RELEASE]);
+      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+      retireInventoriedCheckout.mockRejectedValue(new Error('archive write failed'));
+    }],
+  ])('records %s and returns %s', async (reason, skipReason, extra, arrange, overrides = {}) => {
+    arrange();
+    const result = await run(overrides);
+    expect(result).toMatchObject({ verified: false, skipReason, recoveryTaskId: null });
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', { status: 'blocked', reason, branch: BRANCH, path: WORKTREE, ...extra });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('records the queued completed-review as pending under the task it returns', async () => {
+    localBranch(true);
+    hasBranchMergeEvidence.mockResolvedValue(false);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/9', detail: 'OPEN', headRefOid: HEAD });
+    execGh.mockResolvedValue(openView({ mergeable: 'CONFLICTING' }));
+    inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'queued-review', reason: 'code-repair-queued', taskId: 'review-1' });
+    expect(await run()).toMatchObject({ verified: false, skipReason: 'code-repair-queued', recoveryTaskId: 'review-1' });
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', { status: 'pending', reason: 'code-repair-queued', branch: BRANCH, path: WORKTREE, taskId: 'review-1' });
+  });
+
+  it('records each held swarm branch under the reason it returns', async () => {
+    readClaimOwnershipAgents.mockRejectedValue(new Error('agents unreadable'));
+    const state = agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo', claimPicksOwnBranch: true, claimBranches: ['claim/issue-11'] });
+    expect((await run({ agentState: state })).branches).toEqual([{ branch: 'claim/issue-11', verified: false, skipReason: 'claim-ownership-unreadable', issues: [], recoveryTaskId: null }]);
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', { branch: 'claim/issue-11', status: 'blocked', reason: 'claim-ownership-unreadable', owners: [] });
+
+    readClaimOwnershipAgents.mockResolvedValue([]);
+    expect((await run({ agentState: state })).branches).toEqual([{ branch: 'claim/issue-11', verified: false, skipReason: 'claim-checkout-identity-unverified', issues: [], recoveryTaskId: null }]);
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', { branch: 'claim/issue-11', status: 'blocked', reason: 'claim-checkout-identity-unverified' });
+  });
+});
+
 describe('remediation coverage', () => {
   it('has a remediation for every issue code', () => {
     // The map is what makes "a new check must say what to do about it" real — the
