@@ -370,8 +370,10 @@ function invalidateOverviewScan() {
 }
 
 async function scanDataTree(strict) {
+  let rootUnreadable = false;
   const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch((err) => {
     if (strict) throw err;
+    rootUnreadable = true;
     return [];
   });
   const dirs = entries.filter(e => e.isDirectory());
@@ -398,10 +400,10 @@ async function scanDataTree(strict) {
   const fileSizes = values.slice(dirs.length);
 
   let totalSize = fileSizes.reduce((sum, n) => sum + n, 0);
-  let totalFileCount = topFiles.length;
+  let totalFileCount = rootUnreadable ? null : topFiles.length;
   for (const r of dirResults) {
     totalSize += r.size;
-    // A failed non-strict walk reports a null count; keep the total unknown too.
+    // A failed non-strict walk or root listing reports a null count; keep the total unknown too.
     totalFileCount = totalFileCount === null || r.fileCount === null ? null : totalFileCount + r.fileCount;
   }
   return { dirs, dirResults, totalSize, totalFileCount };

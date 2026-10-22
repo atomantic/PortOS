@@ -145,3 +145,10 @@ describe('dataManager overview scan sharing (#12994)', () => {
     await expect(getDataOverview({ strict: true })).resolves.toMatchObject({ dataDir: 'data' });
   });
 });
+
+it('reports an unreadable data root as an unknown count rather than an empty tree', async () => {
+  rmSync(testDataRoot, { recursive: true, force: true });
+  const overview = await getDataOverview();
+  expect(overview.categories).toEqual([]);
+  expect(overview.totalFileCount).toBeNull();
+});
