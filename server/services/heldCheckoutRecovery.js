@@ -422,7 +422,7 @@ async function ownerReason({ repoPath, tree, branch, readAgents, reviewed = fals
   ]);
   // The released lock is excluded here on purpose: it was matched against the
   // release above, and a NEW lock is caught by the registration recheck.
-  const live = resolveLiveOwnerReason({ branch, path: tree.path, locked: false, activeAgentIds: buildActiveOwnerIds(getActiveAgentIds(), agents) });
+  const live = resolveLiveOwnerReason({ branch, path: tree.path, locked: false, activeAgentIds: buildActiveOwnerIds(new Set(getActiveAgentIds()), agents) });
   if (live) return live;
   if (!branch || reviewed) return null;
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');

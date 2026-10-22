@@ -311,6 +311,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(existsSync(tree)).toBe(false);
   });
 
+  // #12990: omitted ids used to become `new Set(null)` — "nobody running" — so an
+  // agent tree in its dispatch-registration window was retired by the default call.
+  it('holds an agent tree when the operator cleanup is not given live-agent ids', async () => {
+    const tree = await addTree(join(repo, '.claude', 'worktrees', 'agent-registering'), 'agent/registering');
+    await addOrigin();
+    markAgentDispatching('agent-registering');
+    try {
+      const unknown = await deleteMergedBranches(repo);
+      expect(unknown.deleted).toEqual([]);
+      expect(unknown.skipped).toContain('agent/registering (local: agent liveness unknown)');
+      expect(existsSync(tree)).toBe(true);
+    } finally {
+      clearAgentDispatching('agent-registering');
+    }
+    const known = await deleteMergedBranches(repo, { activeAgentIds: new Set() });
+    expect(known.deleted.map((row) => row.name)).toEqual(['agent/registering']);
+    expect(existsSync(tree)).toBe(false);
+  });
+
   it('keeps an unmanaged checkout held at the operator merged-branch cleanup boundary', async () => {
     const loose = await addTree(join(external, 'loose'), 'loose-br', { ageMs: 30 * DAY });
 
