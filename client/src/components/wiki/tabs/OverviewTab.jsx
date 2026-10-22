@@ -1,9 +1,12 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
 import { FolderOpen, RefreshCw, AlertTriangle } from 'lucide-react';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
 import { WIKI_CATEGORIES, PageTypeIcon } from '../constants.jsx';
+import MarkdownOutput from '../../cos/MarkdownOutput';
+
+const LINT_REPORT_PATH = 'wiki/lint-report.md';
 
 const WIKI_JOB_ID = 'job-wiki-maintenance';
 
@@ -50,8 +53,9 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
   const [searchParams] = useSearchParams();
   const [lintReport, setLintReport] = useState(null);
   const [loadingLint, setLoadingLint] = useState(false);
+  const [lintError, setLintError] = useState(false);
 
-  const lintExists = allNotes?.some(n => n.path === 'wiki/lint-report.md');
+  const lintExists = allNotes?.some(n => n.path === LINT_REPORT_PATH);
 
   const openNote = (notePath) => {
     const next = new URLSearchParams(searchParams);
@@ -59,16 +63,34 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
     navigate({ pathname: '/wiki/browse', search: next.toString() });
   };
 
+  // Each load gets a generation; a response from a superseded load (vault switched, Retry, report removed) is dropped.
+  const lintRequestRef = useRef(0);
+
   useEffect(() => {
     if (lintExists) loadLintReport();
-    else setLintReport(null);
+    else {
+      lintRequestRef.current++;
+      setLoadingLint(false);
+      setLintReport(null);
+      setLintError(false);
+    }
   }, [vaultId, lintExists]);
 
-  const loadLintReport = async () => {
+  // A failed read is kept distinct from "no report yet" so it never reads as an absent report.
+  const loadLintReport = () => {
+    const requestId = ++lintRequestRef.current;
+    const isCurrent = () => requestId === lintRequestRef.current;
     setLoadingLint(true);
-    const data = await api.getNote(vaultId, 'wiki/lint-report.md').catch(() => null);
-    setLintReport(data?.error ? null : data);
-    setLoadingLint(false);
+    setLintError(false);
+    setLintReport(null);
+    api.getNote(vaultId, LINT_REPORT_PATH, { silent: true })
+      .then(data => {
+        if (!isCurrent()) return;
+        if (data?.error) throw new Error(data.error);
+        setLintReport(data);
+      })
+      .catch(() => { if (isCurrent()) { setLintReport(null); setLintError(true); } })
+      .finally(() => { if (isCurrent()) setLoadingLint(false); });
   };
 
   const recentPages = useMemo(() =>
@@ -128,7 +150,10 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
           <div className="px-4 py-3 border-b border-port-border flex items-center justify-between">
             <h3 className="text-sm font-medium text-white">Health Report</h3>
             {lintReport && (
-              <span className="text-xs text-gray-500">Updated {timeAgo(lintReport.modifiedAt)}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-500">Updated {timeAgo(lintReport.modifiedAt)}</span>
+                <button onClick={() => openNote(LINT_REPORT_PATH)} className="text-xs text-port-accent hover:underline">Open full report</button>
+              </div>
             )}
           </div>
           <div className="p-4">
@@ -136,9 +161,14 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
               <div className="flex items-center justify-center h-20">
                 <RefreshCw size={16} className="animate-spin text-port-accent" />
               </div>
+            ) : lintError ? (
+              <div className="text-center py-6">
+                <p className="text-sm text-gray-500">Couldn't load the health report</p>
+                <button onClick={loadLintReport} className="text-xs text-port-accent hover:underline mt-2">Retry</button>
+              </div>
             ) : lintReport ? (
-              <div className="text-sm text-gray-300 whitespace-pre-wrap max-h-64 overflow-auto font-mono text-xs leading-relaxed">
-                {lintReport.body?.slice(0, 2000) || 'Report empty'}
+              <div className="text-sm text-gray-300 max-h-64 overflow-auto">
+                {lintReport.body?.trim() ? <MarkdownOutput content={lintReport.body} baseLevel={4} /> : <p className="text-gray-500">Report empty</p>}
               </div>
             ) : (
               <div className="text-center py-6">
