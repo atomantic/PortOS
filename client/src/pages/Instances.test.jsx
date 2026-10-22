@@ -119,6 +119,38 @@ describe('AddPeerForm tailcat path', () => {
   });
 });
 
+// Regression: on a phone the mode toggles, fields, disclosure and submit measured
+// 17-38px high. jsdom has no layout, so pin the 44px touch floor (`min-h-11`) on
+// every interactive control in each mode instead of a pixel measurement.
+describe('AddPeerForm touch targets', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getTailcatServe.mockResolvedValue({
+      enabled: false, status: 'stopped', live: false, localPort: 5555,
+      keyName: 'portos-api', tcAddress: null, tcAddressRedacted: null, hasAddress: false,
+    });
+  });
+
+  it.each([
+    ['classic host/port', () => {}],
+    ['tailcat dial them', () => fireEvent.click(screen.getByRole('button', { name: 'Tailcat' }))],
+    ['tailcat they dial us', () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Tailcat' }));
+      fireEvent.click(screen.getByRole('button', { name: 'They dial us' }));
+    }],
+  ])('gives every interactive Add Peer control a 44px touch height in %s mode', async (_label, selectMode) => {
+    const { container } = render(<AddPeerForm onAdd={() => {}} />);
+    selectMode();
+    fireEvent.click(screen.getByRole('button', { name: /Add credentials|Hide credentials/ }));
+    await waitFor(() => expect(getTailcatServe).toHaveBeenCalled());
+    const controls = [...container.querySelectorAll('form button, form input:not([type="checkbox"]), form label')];
+    expect(controls.length).toBeGreaterThan(0);
+    for (const control of controls) {
+      expect(control.className, control.outerHTML.slice(0, 120)).toMatch(/\bmin-h-11\b/);
+    }
+  });
+});
+
 describe('AddPeerForm dial direction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
