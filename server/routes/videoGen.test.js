@@ -3034,6 +3034,14 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(200);
       expect(r.body).toHaveLength(2);
     });
+
+    it('validates the opt-in query and returns a bounded page', async () => {
+      videoGenService.loadHistory.mockResolvedValue([{ id: 'a', createdAt: '2026-01-01' }, { id: 'b', createdAt: '2026-02-01' }]);
+      const page = await request(app).get('/api/video-gen/history?limit=1&compact=true');
+      expect(page.status).toBe(200);
+      expect(page.body.map((i) => i.id)).toEqual(['b']);
+      expect((await request(app).get('/api/video-gen/history?limit=999')).status).toBe(400);
+    });
   });
 
   describe('GET /history/:id', () => {
