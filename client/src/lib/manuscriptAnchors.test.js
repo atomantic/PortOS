@@ -97,3 +97,12 @@ describe('buildHighlightSegments', () => {
   });
 });
 // @vitest-environment node
+
+import { locateFind as sharedLocateFind, locateFindSpan as sharedLocateFindSpan } from '../../../server/lib/manuscriptLocate.js';
+
+describe('locator parity with the server accept path', () => {
+  it('client preview re-exports the shared server locator', () => {
+    expect(locateFind).toBe(sharedLocateFind);
+    expect(locateFindSpan).toBe(sharedLocateFindSpan);
+  });
+});

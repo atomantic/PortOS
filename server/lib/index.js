@@ -954,3 +954,4 @@ export * from './checkoutRetirementAdmission.js';
 export * from './moltworldExplore.js';
 export * from './pgJson.js';
 export * from './errorLogFingerprint.js';
+export * from './manuscriptLocate.js';

@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { locateFindSpan, normalizeFix, PROMPT_EXAMPLE_PLACEHOLDERS } from './manuscriptFix.js';
+import { locateFindSpan as sharedLocateFindSpan } from '../../lib/manuscriptLocate.js';
 
 describe('locateFindSpan', () => {
   it('locates an exact substring', () => {
@@ -117,5 +118,11 @@ describe('normalizeFix — echoed-placeholder guard', () => {
     for (const placeholder of bracketed) {
       expect(prompt).toContain(placeholder);
     }
+  });
+});
+
+describe('locateFindSpan parity with the client preview', () => {
+  it('is the shared locator the client impact preview resolves spans with', () => {
+    expect(locateFindSpan).toBe(sharedLocateFindSpan);
   });
 });
