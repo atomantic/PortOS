@@ -22,6 +22,7 @@ let runPrompt;
 let enqueue;
 let emitted;
 let batchEvents;
+let onBatchEvent;
 
 beforeEach(() => {
   runPrompt = vi.fn(async () => ({ text: '  A wide pencil frame of gym doors  ' }));
@@ -29,6 +30,7 @@ beforeEach(() => {
   enqueue = vi.fn(async () => ({ jobId: `job-${(n += 1)}` }));
   emitted = [];
   batchEvents = [];
+  onBatchEvent = null;
   __setDepsForTests({
     resolveProvider: async () => ({ provider, selectedModel: 'example-model' }),
     runPrompt,
@@ -38,7 +40,7 @@ beforeEach(() => {
     linkedMedia: async (ids) => new Map(ids.map((id) => [id, [{ kind: 'portrait', mediaKey: `${id}.png` }]])),
     ingredient: async (id) => ({ id, name: `Name of ${id}` }),
     emit: (payload) => { emitted.push(payload); },
-    emitBatch: (payload) => { batchEvents.push(payload); },
+    emitBatch: (payload) => { batchEvents.push(payload); onBatchEvent?.(payload); },
   });
 });
 
@@ -175,18 +177,22 @@ describe('storyboard panel maker', () => {
       ['node-writer', 'Example · example-model', 0], ['node-image', 'Default image model', 4],
     ]);
 
+    // Signals from the mocks themselves, so the test never polls against a wall-clock budget on a slow runner.
     let answer;
-    runPrompt.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    let promptReached;
+    const reached = new Promise((resolve) => { promptReached = resolve; });
+    runPrompt.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; promptReached(); }));
+    const finished = new Promise((resolve) => { onBatchEvent = (event) => { if (event.status === 'done') resolve(event); }; });
     // Two taps at once: only one batch starts.
     const both = await Promise.all([api('post', `/${id}/make-empty`), api('post', `/${id}/make-empty`)]);
     expect(both.map((res) => res.status).sort()).toEqual([202, 409]);
     const start = both.find((res) => res.status === 202);
     expect(start.body.batch).toMatchObject({ status: 'running', total: 2, done: 0 });
-    await vi.waitFor(() => expect(answer).toBeTypeOf('function'));
+    await reached;
     expect((await api('post', `/${id}/make-empty`)).status).toBe(409);
 
     answer({ text: 'A gym floor frame' });
-    await vi.waitFor(() => expect(batchEvents.at(-1)).toMatchObject({ status: 'done', done: 2, failed: 0 }));
+    expect(await finished).toMatchObject({ status: 'done', done: 2, failed: 0 });
     // The kept prompt was not rewritten; the blank panel got one; the panel with art was left alone.
     expect(runPrompt).toHaveBeenCalledTimes(1);
     expect(runPrompt.mock.calls[0][0].prompt).toContain('Gym floor');
