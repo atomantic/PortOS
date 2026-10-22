@@ -145,13 +145,12 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   // tree wedges the next `git worktree add` for that path. The cheap disk check
   // first, so the common leaked-directory case skips the `git worktree list` spawn.
   const probeWorktree = async () => {
-    const present = worktreePath ? await readCheckoutPathPresence(worktreePath) : null;
+    // A pathless swarm branch (no completion receipt) is present while any checkout holds it.
+    const present = worktreePath ? await readCheckoutPathPresence(worktreePath) : false;
     if (present !== false) return present;
     const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
     if (!worktrees) return null;
-    return worktrees.some(wt =>
-      wt.path === worktreePath
-    );
+    return worktrees.some(wt => (worktreePath ? wt.path === worktreePath : wt.branch?.replace(/^refs\/heads\//, '') === branchName));
   };
 
   const probeLocalBranch = () => readLocalBranchPresence(sourceWorkspace, branchName);
@@ -357,13 +356,17 @@ async function verifyRunBranches(input) {
     // A current branch holder is not evidence of the old claim's checkout.
     // Only the server's completion capture names its original incarnation.
     const original = meta.completedCheckouts?.find(row => row.branch === branch);
-    if (!original?.path) {
+    // With no checkout and no local ref left, there is no incarnation to confuse:
+    // only the delivery evidence remains to settle.
+    const absent = !original?.path && !trees.some(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch)
+      && await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) === false;
+    if (!original?.path && !absent) {
       results.push(await holdBranch(branch, 'claim-checkout-identity-unverified'));
       continue;
     }
     results.push({ branch, ...await verifyAgentBranchState({ ...input, prExpected: true,
       agentState: { ...input.agentState, metadata: { ...meta, isWorktree: true,
-        worktreeBranch: branch, sourceWorkspace, workspacePath: original.path } },
+        worktreeBranch: branch, sourceWorkspace, workspacePath: original?.path ?? null } },
     }) });
   }
   return { verified: results.every(result => result.verified), branches: results,

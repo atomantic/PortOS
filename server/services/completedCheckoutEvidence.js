@@ -42,6 +42,16 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
   return { repoPath: repository, branch, path: checkout, head, incarnation: { pointer, gitdir: { path: gitdir, ...administration } } };
 }
 
+/** The repository a run's checkouts belong to. A claim run that picks its own
+ * branch runs in the source checkout itself, so its workspace is the
+ * repository and it records no separate sourceWorkspace.
+ */
+function runRepository(meta) {
+  if (typeof meta?.sourceWorkspace === 'string' && meta.sourceWorkspace) return meta.sourceWorkspace;
+  return isTruthyMeta(meta?.claimPicksOwnBranch) && meta.isWorktree !== true
+    && typeof meta.workspacePath === 'string' && meta.workspacePath ? meta.workspacePath : null;
+}
+
 /** Called under the agent-state lock while the successful run still owns its
  * current claim bindings. Never manufacture evidence for historical releases.
  * Capture errors withhold cleanup authority without breaking completion.
@@ -49,12 +59,14 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
 export async function captureCompletedCheckouts(agent, { success } = {}) {
   const meta = agent?.metadata;
   if (success !== true || !['running', 'paused'].includes(agent?.status) || !agent.id
-    || !Number.isFinite(Date.parse(agent.startedAt)) || typeof meta?.sourceWorkspace !== 'string') return [];
+    || !Number.isFinite(Date.parse(agent.startedAt))) return [];
+  const repoPath = runRepository(meta);
+  if (!repoPath) return [];
   const claim = isTruthyMeta(meta.claimPicksOwnBranch);
   const branches = claim ? meta.claimBranches : meta.isWorktree === true && meta.worktreeBranch ? [meta.worktreeBranch] : null;
   if (!Array.isArray(branches)) return [];
   const { listWorktrees } = await import('./worktreeManager.js');
-  const trees = await listWorktrees(meta.sourceWorkspace).catch(() => null);
+  const trees = await listWorktrees(repoPath).catch(() => null);
   if (!trees) return [];
   const receipts = [];
   for (const branch of new Set(branches)) {
@@ -65,7 +77,7 @@ export async function captureCompletedCheckouts(agent, { success } = {}) {
       const recordedPath = typeof meta.workspacePath === 'string' ? await realpath(meta.workspacePath).catch(() => null) : null;
       if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) continue;
     }
-    const target = { repoPath: meta.sourceWorkspace, branch, path: holders[0].path, head: holders[0].head };
+    const target = { repoPath, branch, path: holders[0].path, head: holders[0].head };
     const first = await readCompletedCheckoutIdentity(target).catch(() => null);
     if (!first || !same(first, await readCompletedCheckoutIdentity(target).catch(() => null))) continue;
     receipts.push({ version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), ...first });
@@ -85,8 +97,9 @@ export async function hasCompletedCheckoutEvidence(records, target) {
     const branches = [meta?.worktreeBranch,
       ...(Array.isArray(meta?.claimBranches) ? meta.claimBranches : []),
       ...(Array.isArray(meta?.claimReleasedBranches) ? meta.claimReleasedBranches : [])];
-    if (!branches.includes(current.branch) || typeof meta?.sourceWorkspace !== 'string') return null;
-    return await realpath(meta.sourceWorkspace).catch(() => null) === current.repoPath ? agent : null;
+    const repoPath = runRepository(meta);
+    if (!branches.includes(current.branch) || !repoPath) return null;
+    return await realpath(repoPath).catch(() => null) === current.repoPath ? agent : null;
   }))).filter(Boolean);
   return scoped.some(agent => agent?.status === 'completed' && agent.result?.success === true
     // A later run can reuse an existing checkout without changing its inode or
