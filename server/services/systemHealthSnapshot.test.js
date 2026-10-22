@@ -5,6 +5,8 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('./pm2.js', () => ({ listProcessesStrict: vi.fn() }));
 vi.mock('./appProcessStatus.js', () => ({ getAppStatusSummary: vi.fn(), annotateExpectedExit: vi.fn() }));
 vi.mock('./cos.js', () => ({}));
+vi.mock('./cosAgentLifecycle.js', () => ({}));
+vi.mock('./cosTaskStore.js', () => ({}));
 vi.mock('./instanceIdentity.js', () => ({ getSelf: vi.fn() }));
 vi.mock('../lib/db.js', () => ({ checkHealth: vi.fn() }));
 vi.mock('./updateChecker.js', () => ({ getCurrentVersion: vi.fn() }));

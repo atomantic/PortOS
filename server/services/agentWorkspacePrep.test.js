@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./cos.js', () => ({}));
 vi.mock('./cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
 const publication = vi.hoisted(() => ({ active: false, refuse: false }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
@@ -23,9 +24,11 @@ vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn().mockImplementation(async args => ({ stdout: args.includes('--is-inside-work-tree') ? 'true' : '', stderr: '', exitCode: 0 })),
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue({}),
   addTask: vi.fn().mockResolvedValue({}),
+}));
+vi.mock('./cosAgentLifecycle.js', () => ({
   getAgents: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn().mockResolvedValue(null) }));
@@ -88,7 +91,8 @@ vi.mock('fs', async (importOriginal) => {
 
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
-import { updateTask, addTask, getAgents } from './cos.js';
+import { updateTask, addTask } from './cosTaskStore.js';
+import { getAgents } from './cosAgentLifecycle.js';
 import { emitLog } from './cosEvents.js';
 import { ensureLatest, isRepo, fetchOrigin, createBranch } from './git.js';
 import { getAppDataForTask } from './agentAppWorkspace.js';

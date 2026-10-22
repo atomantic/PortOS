@@ -116,7 +116,8 @@ export async function spawnPrDoReviewTask({
   app, pullRequest, repoFullName = '', provider, model, effort,
   selfReview = false, reviewerConfig = null,
 } = {}) {
-  const { addTask, forceSpawnTask } = await import('./cos.js');
+  const { addTask } = await import('./cosTaskStore.js');
+  const { forceSpawnTask } = await import('./cos.js');
   const { number, url } = pullRequest;
   const appLabel = String(app.name || app.id).replace(/\s+/g, ' ').trim();
   const repoLabel = repoFullName || appLabel;

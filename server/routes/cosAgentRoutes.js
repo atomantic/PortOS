@@ -4,8 +4,12 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import * as cos from '../services/cos.js';
-// Lifecycle transitions go through the facade (#3450), not the `cos.js` barrel.
+import { cleanupZombieAgents, deleteAgent, getAgent, getAgentPrompt, getAgents, sendBtwToAgent } from '../services/cosAgentLifecycle.js';
+import { clearCompletedAgents } from '../services/cosAgentArchive.js';
+import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cosAgentIndex.js';
+import { getFeedbackStats, getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cosAgentFeedback.js';
+import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
+// Lifecycle transitions go through the facade (#3450).
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { toAgentListItems } from '../lib/cosAgentListProjection.js';
@@ -81,13 +85,13 @@ const agentQuerySchema = z.object({
 
 // GET /api/cos/health - Get health status
 router.get('/health', asyncHandler(async (req, res) => {
-  const health = await cos.getHealthStatus();
+  const health = await getHealthStatus();
   res.json(health);
 }));
 
 // POST /api/cos/health/check - Force health check
 router.post('/health/check', asyncHandler(async (req, res) => {
-  const result = await cos.runHealthCheck();
+  const result = await runHealthCheck();
   res.json(result);
 }));
 
@@ -100,11 +104,11 @@ router.get('/agents', asyncHandler(async (req, res) => {
   // The state listing is still useful while that repair runs, so keep cleanup
   // off the response critical path and let it complete independently; the next
   // normal refresh will see any repaired records.
-  void cos.cleanupZombieAgents().catch((err) => {
+  void cleanupZombieAgents().catch((err) => {
     console.error(`🧹 Background zombie cleanup failed: ${err.message}`);
   });
   const { active } = validateRequest(z.object({ active: z.literal('1').optional() }), req.query);
-  const agents = await cos.getAgents();
+  const agents = await getAgents();
   res.json(toAgentListItems(active ? agents.filter(agent => agent.status !== 'completed') : agents));
 }));
 
@@ -115,7 +119,7 @@ const completedQuerySchema = z.object({
 });
 router.get('/agents/completed', asyncHandler(async (req, res) => {
   const query = validateRequest(completedQuerySchema, req.query);
-  const page = await cos.getCompletedAgentPage({ ...query, liveAgents: await cos.getAgents() });
+  const page = await getCompletedAgentPage({ ...query, liveAgents: await getAgents() });
   res.json({ ...page, items: toAgentListItems(page.items) });
 }));
 
@@ -131,14 +135,14 @@ const historyQuerySchema = z.object({ hydrate: z.literal('1').optional() });
 
 router.get('/agents/history', asyncHandler(async (req, res) => {
   const { hydrate } = validateRequest(historyQuerySchema, req.query);
-  const dates = await cos.getAgentDates();
+  const dates = await getAgentDates();
   if (!hydrate) return res.json({ dates });
   // `latest: null` is the answer for an install with no archived runs at all —
   // distinct from a bucket that read back empty, which the client must not
   // mistake for "not hydrated" and re-request.
   const latestDate = dates[0]?.date;
   const latest = latestDate
-    ? { date: latestDate, agents: toAgentListItems(await cos.getAgentsByDate(latestDate)) }
+    ? { date: latestDate, agents: toAgentListItems(await getAgentsByDate(latestDate)) }
     : null;
   res.json({ dates, latest });
 }));
@@ -149,7 +153,7 @@ router.get('/agents/history/:date', asyncHandler(async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new ServerError('Invalid date format (expected YYYY-MM-DD)', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const agents = await cos.getAgentsByDate(date);
+  const agents = await getAgentsByDate(date);
   res.json(toAgentListItems(agents));
 }));
 
@@ -167,12 +171,12 @@ router.get('/agents/feedback/pending', asyncHandler(async (req, res) => {
     limit: z.coerce.number().int().min(1).max(100).optional(),
     cursor: z.string().max(512).optional(),
   }), req.query);
-  if (countOnly) return res.json({ count: await cos.getPendingAgentFeedbackCount() });
+  if (countOnly) return res.json({ count: await getPendingAgentFeedbackCount() });
   if (limit) {
-    const page = await cos.getPendingAgentFeedbackPage({ limit, cursor });
+    const page = await getPendingAgentFeedbackPage({ limit, cursor });
     return res.json({ ...page, items: toAgentListItems(page.items) });
   }
-  const pending = await cos.getPendingAgentFeedback({ includeUnavailable: true });
+  const pending = await getPendingAgentFeedback({ includeUnavailable: true });
   res.json({
     count: pending.count,
     agents: toAgentListItems(pending.agents),
@@ -183,7 +187,7 @@ router.get('/agents/feedback/pending', asyncHandler(async (req, res) => {
 // GET /api/cos/agents/:id - Get agent by ID (transcript hydrated as a capped tail)
 router.get('/agents/:id', asyncHandler(async (req, res) => {
   const { lines } = validateRequest(agentQuerySchema, req.query);
-  const agent = await cos.getAgent(req.params.id, lines ? { limit: lines } : {});
+  const agent = await getAgent(req.params.id, lines ? { limit: lines } : {});
   if (!agent) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -194,7 +198,7 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
 // The service throws a ServerError (404) when the agent or prompt file is
 // missing — asyncHandler renders the standard envelope.
 router.get('/agents/:id/prompt', asyncHandler(async (req, res) => {
-  const result = await cos.getAgentPrompt(req.params.id);
+  const result = await getAgentPrompt(req.params.id);
   res.json(result);
 }));
 
@@ -252,14 +256,14 @@ router.get('/agents/:id/stats', asyncHandler(async (req, res) => {
 
 // DELETE /api/cos/agents/completed - Clear completed agents (must be before :id route)
 router.delete('/agents/completed', asyncHandler(async (req, res) => {
-  const result = await cos.clearCompletedAgents();
+  const result = await clearCompletedAgents();
   res.json(result);
 }));
 
 // DELETE /api/cos/agents/:id - Delete a single agent
 // The service throws a ServerError (404) when the agent doesn't exist.
 router.delete('/agents/:id', asyncHandler(async (req, res) => {
-  const result = await cos.deleteAgent(req.params.id);
+  const result = await deleteAgent(req.params.id);
   res.json(result);
 }));
 
@@ -269,7 +273,7 @@ router.post('/agents/:id/feedback', asyncHandler(async (req, res) => {
 
   // The service throws a ServerError — 404 when the agent is missing, 400
   // (INVALID_STATE) when it isn't completed — so no result-shape mapping here.
-  const result = await cos.submitAgentFeedback(req.params.id, { rating, comment });
+  const result = await submitAgentFeedback(req.params.id, { rating, comment });
   res.json(result);
 }));
 
@@ -280,13 +284,13 @@ router.post('/agents/:id/btw', asyncHandler(async (req, res) => {
   // The service throws a ServerError — 404 when the agent is missing, 400
   // (INVALID_STATE) for the not-running / not-a-Claude-TUI refusals — so no
   // result-shape string-matching here.
-  const result = await cos.sendBtwToAgent(req.params.id, message);
+  const result = await sendBtwToAgent(req.params.id, message);
   res.json(result);
 }));
 
 // GET /api/cos/feedback/stats - Get feedback statistics
 router.get('/feedback/stats', asyncHandler(async (req, res) => {
-  const stats = await cos.getFeedbackStats();
+  const stats = await getFeedbackStats();
   res.json(stats);
 }));
 

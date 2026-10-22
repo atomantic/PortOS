@@ -14,11 +14,14 @@ vi.mock('./cosState.js', () => ({
   readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.disk) }),
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('./cos.js', () => ({
-  addTask: async task => { f.tasks[task.id] = { ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }; return task; },
-  forceSpawnTask: vi.fn(), getAgents: async () => [], updateTask: vi.fn(),
+vi.mock('./cosTaskStore.js', () => ({
+  addTask: async task => { f.tasks[task.id] = { ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }; return task; }, updateTask: vi.fn(),
+  getTaskById: async id => f.tasks[id],
 }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id] }));
+vi.mock('./cos.js', () => ({
+  forceSpawnTask: vi.fn(),
+}));
+vi.mock('./cosAgentLifecycle.js', async importOriginal => ({ ...(await importOriginal()), getAgents: async () => [] }));
 vi.mock('../lib/gitRemote.js', async importOriginal => ({ ...(await importOriginal()),
   getOriginInfo: async path => ({ host: f.originHost, fullName: path === '/repos/worktree' ? f.workspaceRepo : 'example/repo' }) }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async () => JSON.stringify(f.row)) }));

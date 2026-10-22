@@ -30,7 +30,7 @@ import { basename, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import { execGit } from '../lib/execGit.js';
 import { emitLog } from './cosEvents.js';
-import { updateTask, addTask } from './cos.js';
+import { updateTask, addTask } from './cosTaskStore.js';
 import { getAppById } from './apps.js';
 import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
@@ -115,7 +115,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
-  const { getAgents } = await import('./cos.js');
+  const { getAgents } = await import('./cosAgentLifecycle.js');
   const agents = await getAgents().catch(err => {
     emitLog('warn', `🌳 Skipping worktree adoption for task ${taskId} — could not read the agent list: ${err.message}`, { taskId });
     return null;
@@ -170,7 +170,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
  * @returns {Promise<boolean>} true when the holder was released
  */
 async function releaseOwnerlessForeignHolderForTask({ workspacePath, branchName, agentId, taskId }) {
-  const { getAgents } = await import('./cos.js');
+  const { getAgents } = await import('./cosAgentLifecycle.js');
   const agents = await getAgents().catch(() => null);
   if (!Array.isArray(agents)) return false;
   const activeIds = protectedAgentIds(agents);
@@ -404,7 +404,7 @@ async function prepareRequestedWorktree({
  * Read-only: nothing here rebases, commits, pushes, moves or removes.
  */
 async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWorkspace }) {
-  const { getAgents } = await import('./cos.js');
+  const { getAgents } = await import('./cosAgentLifecycle.js');
   const [agents, worktrees] = await Promise.all([
     getAgents().catch(() => null),
     listWorktrees(sourceWorkspace).catch(() => null),

@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn(),
+}));
+vi.mock('./cos.js', () => ({
   forceSpawnTask: vi.fn(),
 }));
 
-import { addTask, forceSpawnTask } from './cos.js';
+import { addTask } from './cosTaskStore.js';
+import { forceSpawnTask } from './cos.js';
 import { isDoReviewTask, spawnPrDoReviewTask } from './prDoReviewTask.js';
 
 const APP = { id: 'app-001', name: 'Widget' };

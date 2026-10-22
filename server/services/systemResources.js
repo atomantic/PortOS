@@ -24,7 +24,9 @@ import { listModelStore } from './modelStoreStorage.js';
 import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
 import { getQueueCapacity } from './mediaJobQueue/index.js';
-import * as cos from './cos.js';
+import { getAgents } from './cosAgentLifecycle.js';
+import { getAllTasks } from './cosTaskStore.js';
+import { getStatus } from './cos.js';
 import { runningAgentsByTaskId, countSpawningTasks } from '../lib/cosSpawnWindow.js';
 import { getSettings } from './settings.js';
 import {
@@ -343,7 +345,7 @@ function loadedModelInventory({ ollamaLoaded, lmStudioLoaded }) {
 let agentCensusUnavailable = false;
 
 function readAgentCensus() {
-  return cos.getAgents().then((agents) => {
+  return getAgents().then((agents) => {
     if (agentCensusUnavailable) console.log('✅ Resource probe recovered (source=agent-census)');
     agentCensusUnavailable = false;
     return agents;
@@ -448,8 +450,8 @@ export async function buildSystemResourceReport() {
     dirSize(npmCachePath, { strict: true }).catch(() => null),
     Promise.all(dependencyPaths.map((path) => dirSize(path, { strict: true }).catch(() => null))),
     dirSize(PATHS.browserDownloads, { strict: true }).catch(() => null),
-    cos.getAllTasks().catch(() => null),
-    cos.getStatus().catch(() => null),
+    getAllTasks().catch(() => null),
+    getStatus().catch(() => null),
     readAgentCensus(),
     scanModelDuplicates().catch(() => ({ pinokioDetected: null, items: [], totalReclaimableBytes: 0, error: 'Duplicate model scan unavailable' })),
   ]);

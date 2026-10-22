@@ -13,6 +13,7 @@ vi.mock('./cosState.js', () => ({
   saveState: async state => { f.state = state; f.disk = structuredClone(state); },
   readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: structuredClone(f.disk.agents) }),
   readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.disk) }),
+  getConfig: async () => ({}),
 }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgentRecord: vi.fn(async id => f.state.agents[id]),
@@ -26,8 +27,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn(), isLiveAgentRecord: agent => agent?.status === 'running',
   AGENT_RECORD_UNREADABLE: Symbol('unreadable'),
 }));
-vi.mock('./cos.js', () => ({
-  getConfig: async () => ({}),
+vi.mock('./cosTaskStore.js', () => ({
   getTaskById: vi.fn(async id => f.tasks[id] || null),
   reviveBlockedTask: vi.fn(async (id, patch) => {
     f.tasks[id] = { ...f.tasks[id], status: 'pending', metadata: { ...f.tasks[id].metadata, ...patch.metadata } };
@@ -39,8 +39,11 @@ vi.mock('./cos.js', () => ({
       status: 'pending', metadata: { ...metadata, ...Object.fromEntries(Object.entries(input).filter(([k, v]) => k !== 'description' && v !== undefined)) } };
     return f.tasks.replacement;
   }),
-  forceSpawnTask: vi.fn(), evaluateTasks: vi.fn(),
 }));
+vi.mock('./cos.js', () => ({
+  forceSpawnTask: vi.fn(),
+}));
+vi.mock('./cosTaskGenerator.js', () => ({ evaluateTasks: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn() }));
 vi.mock('./agentRunTracking.js', () => ({ createAgentRun: async () => ({ runId: 'run-new' }), completeAgentRun: vi.fn() }));
@@ -108,7 +111,8 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettle
 
 import { resumeAgent } from './agentManagement.js';
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
-import { forceSpawnTask, addTask, getTaskById } from './cos.js';
+import { forceSpawnTask } from './cos.js';
+import { addTask, getTaskById } from './cosTaskStore.js';
 import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { spawnDirectly } from './agentCliSpawning.js';
 import { setUseRunner } from './agentState.js';

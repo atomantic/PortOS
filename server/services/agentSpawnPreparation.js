@@ -1,7 +1,7 @@
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState } from './cosState.js';
 import { hasActiveTaskOwner } from './agentState.js';
-import { getTaskById, updateTask } from './cos.js';
+import { getTaskById, updateTask } from './cosTaskStore.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isRetryHeld } from '../lib/taskRetryHold.js';

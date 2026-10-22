@@ -73,7 +73,7 @@ export async function syncRunnerAgents() {
   console.log(`🔄 Syncing ${agents.length} running agents from CoS Runner`);
 
   // Get all tasks to find task data for each agent
-  const { getAllTasks } = await import('./cos.js');
+  const { getAllTasks } = await import('./cosTaskStore.js');
   const allTasksData = await getAllTasks().catch(() => ({ user: {}, cos: {} }));
 
   // Build a task lookup map from all task sources, tagging each with its taskType

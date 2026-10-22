@@ -439,7 +439,7 @@ async function recoverHeldCleanup(app, entry, binding) {
       ? { ...entry, cleanup: { ...entry.cleanup, status: 'pending', retryAt: 0, recoveryCompleted: true } } : entry;
   }
   if (await currentHandoffOwnerPolicy(binding, { recovery: true })) return entry;
-  const { addTask } = await import('./cos.js');
+  const { addTask } = await import('./cosTaskStore.js');
   const task = await addTask({
     description: `[Recovery] Prepare retained checkout for coordinator retirement: ${entry.prBranch} in ${app.name || app.id}`,
     app: app.id, priority: 'HIGH', isRecovery: true, useWorktree: false,

@@ -171,7 +171,7 @@ export async function reconcileVideoExecution(projectId, { restarting = false, r
   if (!restarting) {
     const liveAgents = (snapshot?.videoExecution?.attempts || []).filter(attempt => !isMediaAttempt(attempt) && LIVE_ATTEMPTS.has(attempt.status) && attempt.taskId);
     if (liveAgents.length) {
-      const { getTaskById } = await import('../cos.js');
+      const { getTaskById } = await import('../cosTaskStore.js');
       for (const attempt of liveAgents) tasks.set(attempt.taskId, await getTaskById(attempt.taskId));
     }
   }

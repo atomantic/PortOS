@@ -9,7 +9,9 @@ vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublicatio
   f.publicationActive = true;
   try { return await work(); } finally { f.publicationActive = false; }
 }) }));
-vi.mock('./cos.js', () => ({ getConfig: async () => ({}), updateTask: vi.fn(async () => f.updateResult) }));
+vi.mock('./cos.js', () => ({}));
+vi.mock('./cosState.js', () => ({ getConfig: async () => ({}) }));
+vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => f.updateResult) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn(() => f.registerGate),
   updateAgent: vi.fn(),
@@ -55,7 +57,7 @@ import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { getActiveAgentIds, protectedAgentIds, setUseRunner } from './agentState.js';
 import { spawnDirectly } from './agentCliSpawning.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
-import { updateTask } from './cos.js';
+import { updateTask } from './cosTaskStore.js';
 import { registerAgent } from './cosAgentLifecycle.js';
 import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 

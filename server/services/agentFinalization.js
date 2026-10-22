@@ -31,7 +31,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // import, which puts it inside the facade's closure, so the facade is out of
 // reach here.
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
-import { updateTask } from './cos.js';
+import { updateTask } from './cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderUnavailable } from './providerStatus.js';

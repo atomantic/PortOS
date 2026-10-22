@@ -29,7 +29,7 @@ vi.mock('../services/messageAccounts.js', () => ({
 vi.mock('../services/memoryBackend.js', () => ({
   countMemories: vi.fn(async () => 7),
 }));
-vi.mock('../services/cos.js', () => ({
+vi.mock('../services/cosState.js', () => ({
   getConfig: vi.fn(async () => ({ embeddingProviderId: 'lmstudio' })),
 }));
 vi.mock('../services/voice/config.js', () => ({

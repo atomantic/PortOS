@@ -1,7 +1,8 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { getConfig, updateTask } from './cos.js';
+import { getConfig } from './cosState.js';
+import { updateTask } from './cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';

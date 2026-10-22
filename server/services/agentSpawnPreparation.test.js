@@ -6,7 +6,7 @@ const hasActiveTaskOwner = vi.hoisted(() => vi.fn());
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./cosState.js', () => ({ loadState }));
 vi.mock('./agentState.js', () => ({ hasActiveTaskOwner }));
-vi.mock('./cos.js', () => ({ getTaskById: vi.fn(), updateTask: vi.fn() }));
+vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn(), updateTask: vi.fn() }));
 vi.mock('./toolStateMachine.js', () => ({
   createToolExecution: vi.fn(), startExecution: vi.fn(), completeExecution: vi.fn(), errorExecution: vi.fn(),
 }));
@@ -17,7 +17,7 @@ vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn() }));
 
 import { prepareAgentSpawn, createAgentSpawnContext } from './agentSpawnPreparation.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { updateTask } from './cos.js';
+import { updateTask } from './cosTaskStore.js';
 import { release } from './executionLanes.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 

@@ -25,7 +25,7 @@ vi.mock('./agentCompletionCleanup.js', () => ({
   removeCompletionSentinel: vi.fn(async () => undefined),
 }));
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
-vi.mock('./cos.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(async () => ({ id: 'investigation-test' })) }));
+vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(async () => ({ id: 'investigation-test' })) }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 vi.mock('./taskTypeHooks.js', () => ({
   canRunTaskOutputHookWithoutPayload: vi.fn(() => true),

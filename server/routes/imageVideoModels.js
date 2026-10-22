@@ -123,7 +123,7 @@ const supportRequestSchema = z.object({
 }).strict();
 router.post('/support-request', asyncHandler(async (req, res) => {
   const { kind, request } = validateRequest(supportRequestSchema, req.body);
-  const { addTask } = await import('../services/cos.js');
+  const { addTask } = await import('../services/cosTaskStore.js');
   const task = await addTask({
     description: `Add ${kind} generation support: ${request.split('\n')[0].slice(0, 160)}`,
     prompt: `Investigate and implement ${kind} generation model or method support in PortOS.

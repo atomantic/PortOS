@@ -2,7 +2,9 @@ import os from 'os';
 import { stat, statfs } from 'fs/promises';
 import { listProcessesStrict } from './pm2.js';
 import { getAppStatusSummary, annotateExpectedExit } from './appProcessStatus.js';
-import * as cos from './cos.js';
+import { getAgents } from './cosAgentLifecycle.js';
+import { getPendingTaskIds } from './cosTaskStore.js';
+import { getStatus } from './cos.js';
 import { getSelf } from './instanceIdentity.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from './updateChecker.js';
@@ -103,13 +105,13 @@ function probeHealthInputs() {
       console.error(`❌ App health probe failed (operation=getAppStatusSummary, code=${probeErrorCode(error)})`);
       return FAILED_PROBE;
     }),
-    cosProbe('cos-status', () => cos.getStatus()),
+    cosProbe('cos-status', () => getStatus()),
     // Queue depth is read here rather than taken off `getStatus()`, which has no
     // such field — `cosStatus.queueLength` never existed, so the widget's
     // "N queued" was dead and always rendered 0. Both reads ride the same
     // `loadState()`/parse caches `getStatus()` above already warmed.
-    cosProbe('cos-queue', () => cos.getPendingTaskIds()),
-    cosProbe('cos-agents', () => cos.getAgents()),
+    cosProbe('cos-queue', () => getPendingTaskIds()),
+    cosProbe('cos-agents', () => getAgents()),
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),

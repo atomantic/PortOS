@@ -3,7 +3,8 @@
  */
 
 import { Router } from 'express';
-import * as cos from '../services/cos.js';
+import { addTask, reviveBlockedTask } from '../services/cosTaskStore.js';
+import { forceSpawnTask } from '../services/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
@@ -220,7 +221,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
   // metadata. addTask maps these top-level keys back onto metadata; without
   // them an app-scoped job triggered manually would run in the PortOS root
   // (the scheduled path emits the full task object via task:ready and is unaffected).
-  const taskResult = await cos.addTask({
+  const taskResult = await addTask({
     // The generator's own field projection — the app scope, the git-workflow
     // options, the provider/model/effort pins, the job:spawned markers and the
     // no-change-success contract — so a manual trigger queues exactly what the
@@ -246,7 +247,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     // with a fresh retry budget (#2614) instead of silently pointing the user
     // at a task that will never run; an active twin is surfaced as-is.
     if (taskResult.status === 'blocked') {
-      await cos.reviveBlockedTask(taskResult.id, { priority: task.priority, metadata: task.metadata }, 'internal');
+      await reviveBlockedTask(taskResult.id, { priority: task.priority, metadata: task.metadata }, 'internal');
       res.json({ success: true, type: 'agent', status: 'queued', taskId: taskResult.id, revived: true });
       return;
     }
@@ -267,7 +268,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
   // leave this freshly-created task pending until a later evaluation or manual
   // start. Keep the task queued when the spawn cannot proceed (for example, no
   // capacity), but report the actionable reason instead of claiming it started.
-  const spawnResult = await cos.forceSpawnTask(taskResult.id);
+  const spawnResult = await forceSpawnTask(taskResult.id);
   if (spawnResult?.error) {
     res.json({
       success: false,

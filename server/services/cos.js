@@ -1,5 +1,4 @@
 import { maintenance } from '../lib/maintenanceAdmission.js';
-import { getPendingTaskIds as readPendingTaskIds } from './cosTaskStore.js';
 import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
  * Chief of Staff (CoS) Service
@@ -53,49 +52,16 @@ import { useRunner, spawningTasks } from './agentState.js';
 // Shared state management (extracted to avoid circular deps)
 import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
 
-// Events and logging (canonical source: cosEvents.js)
+// Events and logging
 import { cosEvents, emitLog } from './cosEvents.js';
-export { cosEvents, emitLog };
 
-// Agent lifecycle (re-export for backward compat with `import * as cos`).
-//
-// Sourced from the four modules that DECLARE these, not from a barrel: the
-// `cosAgents.js` barrel these used to come through is retired (#3450), so this
-// block is the last remaining second address for an agent function and the next
-// one to collapse.
-//
-// `pauseAgent` / `killAgent` / `getAgentProcessStats` are deliberately NOT here:
-// they are process-layer transitions, and re-exporting them from the task store
-// is what forced the `await import()` forwarders in `cosAgentLifecycle.js`.
-// Callers ask `agentOrchestrator.js` for those (#3450).
-export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgent, getAgentRecord, getAgentPrompt, terminateAgent, sendBtwToAgent, cleanupZombieAgents, deleteAgent } from './cosAgentLifecycle.js';
-export { getAgentDates, getAgentsByDate, getCompletedAgentPage, pruneOldAgentArchives } from './cosAgentIndex.js';
-export {
-  submitAgentFeedback,
-  getFeedbackStats,
-  getPendingAgentFeedback,
-  getPendingAgentFeedbackCount,
-  getPendingAgentFeedbackPage,
-  initializeAgentFeedback,
-} from './cosAgentFeedback.js';
-export { archiveStaleAgents, clearCompletedAgents } from './cosAgentArchive.js';
+import { runHealthCheck } from './cosHealthMonitor.js';
 
-// Reports and activity (re-export for backward compat with `import * as cos`)
-export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getWhileAwayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';
-
-// Health monitoring (imported for internal use by start()/init() and re-exported
-// for backward compat with `import * as cos` and the cos route handlers)
-import { runHealthCheck, getHealthStatus } from './cosHealthMonitor.js';
-export { runHealthCheck, getHealthStatus };
-
-// Task store: CRUD + queue persistence (the `cos_tasks` queues). Imported for
-// internal use by evaluateTasks/dequeueNextTask/generators and re-exported for
-// backward compat with `import * as cos` and the cos route handlers. The store
+// Task store: CRUD + queue persistence (the `cos_tasks` queues). Callers import
+// these from the declaring modules, not from here. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
-export { getPendingTaskIds } from './cosTaskStore.js';
-export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTaskView, getTasks, getTaskById, findTaskWithSource, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
+import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, getAllTasks, getTaskById, addTask, updateTask, sweepResolvedFailureTasks } from './cosTaskStore.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
@@ -129,9 +95,7 @@ import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 // Task generation + evaluation engine (extracted to cosTaskGenerator.js).
 // `evaluateTasks` and the generators emit `task:ready`; the spawn-side
 // scheduler (dequeueNextTask / tryImmediateSpawn) below reacts to that. Most of
-// these are imported for internal use by the scheduler; checkStagePrecondition
-// is re-exported for agentCompletionCleanup.js, applyAppWorktreeDefault for the
-// suite, and evaluateTasks for the cos route + `import * as cos`.
+// these are imported for internal use by the scheduler.
 import {
   evaluateTasks,
   queueEligibleImprovementTasks,
@@ -140,11 +104,8 @@ import {
   resolveAutonomyBudget,
   countRunningAgentsByProject,
   isWithinProjectLimit,
-  checkStagePrecondition,
-  applyAppWorktreeDefault,
   unblockExpiredCooldowns
 } from './cosTaskGenerator.js';
-export { evaluateTasks, checkStagePrecondition, applyAppWorktreeDefault };
 
 // Autonomous-job + improvement-check timer machinery (extracted to
 // cosJobScheduler.js). Imported for internal use by start()/stop()/init() and
@@ -180,19 +141,6 @@ import {
 // executes once it is actually running, but that a static edge instantiated in
 // every suite importing cos.js for an unrelated helper.
 
-export {
-  getPersistentMindState,
-  setPersistentMindEnabled,
-  startPersistentMind,
-  pausePersistentMind,
-  resumePersistentMind,
-  stopPersistentMind,
-  enqueuePersistentMindMessage,
-  requestPersistentMindWake,
-  registerPersistentMindTurnAdapter,
-  unregisterPersistentMindTurnAdapter,
-} from './persistentMindSupervisor.js';
-
 /**
  * Get current CoS status
  */
@@ -224,10 +172,6 @@ export async function getStatus() {
     provider: provider ? { id: provider.id, name: provider.name } : null
   };
 }
-
-// Get current configuration (moved to cosState.js to break an import cycle;
-// re-exported here for backward compat with `import * as cos`).
-export { getConfig } from './cosState.js';
 
 /**
  * Update configuration
@@ -1007,9 +951,6 @@ export async function getScript(name) {
 
   return { name, content, metadata };
 }
-
-// Agent and report functions are now in the cosAgent* modules and cosReports.js
-// Re-exported above for backward compat with `import * as cos from './cos.js'`
 
 /**
  * Check if daemon is running

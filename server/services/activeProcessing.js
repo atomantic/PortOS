@@ -9,7 +9,9 @@ import { listActiveAppOperations } from './appOperations.js';
 import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { listActiveRenders } from './renderActivity.js';
-import * as cos from './cos.js';
+import { getAgents } from './cosAgentLifecycle.js';
+import { getPendingTaskIds } from './cosTaskStore.js';
+import { getStatus } from './cos.js';
 
 // Lazy — NOT a static top-level import. `services/runner.js` and
 // `services/backup.js` both drag heavy subtrees (provider CLI spawning;
@@ -134,10 +136,10 @@ export async function getSystemActivity({ includeOllama = false } = {}) {
     // building. Both of these degrade to the value that unlocks a restart, so
     // neither may be manufactured from a failed read.
     listGeneratingModelSummaries().catch(() => null),
-    cos.getPendingTaskIds().catch(() => null),
+    getPendingTaskIds().catch(() => null),
     // `null` = the read FAILED, distinct from `[]` = read fine, no agents. The
     // counts degrade differently for the two, so they must stay separable.
-    cos.getAgents().catch(() => null),
+    getAgents().catch(() => null),
     // Same contract one layer down: the reader reports `trusted: false` rather
     // than an empty mind, so an unreadable state cannot read as an idle one.
     readPersistentMindStateForSafetyCheck().catch(() => ({ trusted: false, persistentMind: null })),
@@ -153,7 +155,7 @@ export async function getSystemActivity({ includeOllama = false } = {}) {
     importBackup().then((m) => m.isBackupInProgress()).catch(() => true),
     includeOllama ? getOllamaTelemetry() : null,
   ]);
-  const cosStatus = agents === null ? await cos.getStatus().catch(() => null) : null;
+  const cosStatus = agents === null ? await getStatus().catch(() => null) : null;
   const slices = {
     jobs: jobs.map(sanitizeJob),
     // `null` survives to the verdict as a blocker; the widget's own

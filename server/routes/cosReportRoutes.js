@@ -4,7 +4,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import * as cos from '../services/cos.js';
+import { generateReport, getBriefing, getLatestBriefing, getReport, getTodayActivity, getTodayReport, getWhileAwayActivity, listBriefings, listReports } from '../services/cosReports.js';
+import { getScript, listScripts } from '../services/cos.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -38,20 +39,20 @@ const whileAwayQuerySchema = z.object({
 
 // GET /api/cos/reports - List all reports
 router.get('/reports', asyncHandler(async (req, res) => {
-  const reports = await cos.listReports();
+  const reports = await listReports();
   res.json(reports);
 }));
 
 // GET /api/cos/reports/today - Get today's report
 router.get('/reports/today', asyncHandler(async (req, res) => {
-  const report = await cos.getTodayReport();
+  const report = await getTodayReport();
   res.json(report);
 }));
 
 // GET /api/cos/reports/:date - Get report by date
 router.get('/reports/:date', asyncHandler(async (req, res) => {
   const { date } = validateRequest(dateParamSchema, req.params);
-  const report = await cos.getReport(date);
+  const report = await getReport(date);
   if (!report) {
     throw new ServerError('Report not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -61,26 +62,26 @@ router.get('/reports/:date', asyncHandler(async (req, res) => {
 // POST /api/cos/reports/generate - Generate report for date
 router.post('/reports/generate', asyncHandler(async (req, res) => {
   const { date } = validateRequest(generateReportSchema, req.body);
-  const report = await cos.generateReport(date);
+  const report = await generateReport(date);
   res.json(report);
 }));
 
 // GET /api/cos/briefings - List all briefings
 router.get('/briefings', asyncHandler(async (req, res) => {
-  const briefings = await cos.listBriefings();
+  const briefings = await listBriefings();
   res.json({ briefings });
 }));
 
 // GET /api/cos/briefings/latest - Get latest briefing
 router.get('/briefings/latest', asyncHandler(async (req, res) => {
-  const briefing = await cos.getLatestBriefing();
+  const briefing = await getLatestBriefing();
   res.json(briefing);
 }));
 
 // GET /api/cos/briefings/:date - Get briefing by date
 router.get('/briefings/:date', asyncHandler(async (req, res) => {
   const { date } = validateRequest(dateParamSchema, req.params);
-  const briefing = await cos.getBriefing(date);
+  const briefing = await getBriefing(date);
   if (!briefing) {
     throw new ServerError('Briefing not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -101,13 +102,13 @@ router.get('/claude-changelog/cached', asyncHandler(async (req, res) => {
 
 // GET /api/cos/scripts - List generated scripts
 router.get('/scripts', asyncHandler(async (req, res) => {
-  const scripts = await cos.listScripts();
+  const scripts = await listScripts();
   res.json(scripts);
 }));
 
 // GET /api/cos/scripts/:name - Get script content
 router.get('/scripts/:name', asyncHandler(async (req, res) => {
-  const script = await cos.getScript(req.params.name);
+  const script = await getScript(req.params.name);
   if (!script) {
     throw new ServerError('Script not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -138,7 +139,7 @@ router.post('/app-activity/:appId/clear-cooldown', asyncHandler(async (req, res)
 
 // GET /api/cos/activity/today - Get today's activity summary
 router.get('/activity/today', asyncHandler(async (req, res) => {
-  const activity = await cos.getTodayActivity();
+  const activity = await getTodayActivity();
   res.json(activity);
 }));
 
@@ -146,7 +147,7 @@ router.get('/activity/today', asyncHandler(async (req, res) => {
 // client's last-visit marker). Powers the "While You Were Away" dashboard card.
 router.get('/activity/while-away', asyncHandler(async (req, res) => {
   const { since } = validateRequest(whileAwayQuerySchema, req.query);
-  const activity = await cos.getWhileAwayActivity(since);
+  const activity = await getWhileAwayActivity(since);
   res.json(activity);
 }));
 

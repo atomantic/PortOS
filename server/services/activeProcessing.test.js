@@ -9,7 +9,9 @@ vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob:
 vi.mock('./mediaJobQueue/sanitizeJob.js', () => ({ sanitizeJob: (job) => ({ id: job.id, kind: job.kind, status: job.status, params: { musicStudio: job.params.musicStudio } }) }));
 vi.mock('./imageTo3d/models.js', () => ({ listGeneratingModelSummaries: deps.models }));
 vi.mock('./ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: () => null }));
-vi.mock('./cos.js', () => ({ getPendingTaskIds: deps.tasks, getStatus: deps.status, getAgents: deps.agents }));
+vi.mock('./cosTaskStore.js', () => ({ getPendingTaskIds: deps.tasks }));
+vi.mock('./cos.js', () => ({ getStatus: deps.status }));
+vi.mock('./cosAgentLifecycle.js', () => ({ getAgents: deps.agents }));
 vi.mock('./cosState.js', () => ({ readPersistentMindStateForSafetyCheck: deps.mind }));
 vi.mock('./appOperations.js', () => ({ listActiveAppOperations: deps.operations }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: deps.updating }));
