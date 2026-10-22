@@ -10,6 +10,8 @@ import { resolveTestChrome } from '../../../../../scripts/lib/testChrome.js';
 
 const auditCdp = process.env.PORTOS_AUDIT_CDP;
 const chrome = resolveTestChrome();
+const failureReason = 'Example provider could not start after validating the configured connection and model.\nThe selected model is unavailable: https://example.invalid/' + 'model-segment-'.repeat(20);
+const suggestedFix = 'Open AI Services and choose an available model before resuming this run.';
 
 // Happy DOM cannot expose hover-gated opacity or real touch geometry. Exercise
 // the actual row actions and stylesheet, without calling the running instance.
@@ -51,11 +53,12 @@ describe.skipIf(!chrome && !auditCdp)('run actions without hover', () => {
                 providerName: 'Example provider', model: 'sample-model', prompt: 'Example running task',
                 startTime: '2026-01-01T12:00:00Z' };
               const failed = { ...running, id: 'failed-example', success: false,
-                prompt: 'Example failed task', error: 'Example failure', exitCode: 1 };
+                prompt: 'Example failed task', error: new URLSearchParams(location.search).has('failure') ? ${JSON.stringify(failureReason)} : 'Example failure', suggestedFix: ${JSON.stringify(suggestedFix)}, exitCode: 1 };
               let stopped = false;
               window.runsFixture = { loads: 0, stops: [] };
               export async function getRuns() {
                 window.runsFixture.loads++;
+                if (new URLSearchParams(location.search).has('failure')) return { runs: [failed] };
                 return { runs: [stopped ? { ...running, success: false, exitCode: 143 } : running, failed] };
               }
               export function stopRun(id) {
@@ -140,6 +143,53 @@ describe.skipIf(!chrome && !auditCdp)('run actions without hover', () => {
       });
     })().finally(() => fixture?.close());
   });
+
+  it('keeps complete failure guidance in narrow desktop containers without opening diagnostics', async () => {
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    const url = `${fixture.origin}runs-test?failure=1`;
+    await cdp.send('Page.navigate', { url });
+    await page.waitForURL(url, { timeout: 20000 });
+    await page.getByRole('alert').waitFor({ timeout: 20000 });
+    if (auditCdp) await page.evaluate(() => { window.name = 'portos-ui-quality-audit'; });
+
+    const guidance = page.getByRole('alert');
+    expect(await guidance.innerText()).toContain(failureReason);
+    expect(await guidance.innerText()).toContain(suggestedFix);
+    expect(await page.getByRole('button', { name: 'Collapse run details' }).count()).toBe(0);
+    for (const width of [240, 320, 480]) {
+      await page.evaluate(width => { document.getElementById('root').style.width = `${width}px`; }, width);
+      const geometry = await guidance.evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        const text = el.querySelector('p');
+        const textRect = text.getBoundingClientRect();
+        return { x: rect.x, right: rect.right, width: rect.width,
+          textLeft: textRect.left, textRight: textRect.right,
+          scrollWidth: text.scrollWidth, clientWidth: text.clientWidth };
+      });
+      expect(geometry.width).toBeGreaterThan(0);
+      expect(geometry.x).toBeGreaterThanOrEqual(0);
+      expect(geometry.right).toBeLessThanOrEqual(width);
+      expect(geometry.textLeft).toBeGreaterThanOrEqual(geometry.x);
+      expect(geometry.textRight).toBeLessThanOrEqual(geometry.right);
+      expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+      const actions = await page.getByTestId('run-row-failed-example').evaluate(row => {
+        const card = row.closest('[class*="bg-port-card"][class*="border-port-border"]');
+        const cardRect = card.getBoundingClientRect();
+        return [...row.querySelectorAll('button')].map(el => {
+          const rect = el.getBoundingClientRect();
+          return { label: el.getAttribute('aria-label'), left: rect.left - cardRect.left,
+            right: rect.right - cardRect.left, cardWidth: cardRect.width };
+        });
+      });
+      for (const action of actions) {
+        expect(action.left, action.label).toBeGreaterThanOrEqual(0);
+        expect(action.right, action.label).toBeLessThanOrEqual(action.cardWidth);
+      }
+    }
+    expect(page.url()).toBe(url);
+    expect(errors).toEqual([]);
+  }, 30000);
 
   it.each([[360, 800, true], [768, 1024, true], [1440, 900, false]])(
     'keeps row actions visible and reachable at %ix%i (touch=%s)', async (width, height, touch) => {
