@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, Clapperboard, Download, FileCode2, LoaderCircle, Save } from 'lucide-react';
+import { Circle, Clapperboard, Download, FileCode2, LoaderCircle } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../ui/Toast';
-import { cancelCodeAnimationExport, exportCodeAnimation, getCodeAnimationPackage, getCodeAnimationThreeVendor, uploadGalleryVideo } from '../../services/api';
+import { cancelCodeAnimationExport, exportCodeAnimation, getCodeAnimationPackage, getCodeAnimationThreeVendor } from '../../services/api';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { importsThree, inlineThreeVendor } from '../../lib/threeVendorImportMap';
@@ -85,8 +85,9 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const [meta, setMeta] = useState(null);
   const [recording, setRecording] = useState(false);
   const [recordProgress, setRecordProgress] = useState(0);
+  // The recording as saved to Media History: { id, filename, url }.
   const [video, setVideo] = useState(null);
-  const [saving, setSaving] = useState(false);
+  const [savingRecording, setSavingRecording] = useState(false);
   const [packageDownloading, setPackageDownloading] = useState(false);
   const recordTimerRef = useRef(null);
   const recordingSessionRef = useRef(null);
@@ -159,15 +160,9 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     clearTimeout(recordTimerRef.current);
     setMeta(null);
     setRecording(false);
+    setSavingRecording(false);
     setVideo(null);
   }, [request]);
-
-  // Keyed on the URL, not the object: marking a video saved replaces the
-  // object but keeps its URL alive.
-  const videoUrl = video?.url;
-  useEffect(() => () => {
-    if (videoUrl) URL.revokeObjectURL(videoUrl);
-  }, [videoUrl]);
 
   useEffect(() => () => clearTimeout(recordTimerRef.current), []);
 
@@ -191,10 +186,13 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   }, [preview.lastEvent, messages]);
 
   useEffect(() => {
-    if (!preview.recording) return;
+    const saved = preview.recording;
+    if (!saved) { setSavingRecording(false); return; }
     clearTimeout(recordTimerRef.current);
     setRecording(false);
-    setVideo({ blob: preview.recording.blob, url: preview.recording.url, saved: false });
+    setSavingRecording(saved.status === 'saving');
+    if (saved.status === 'saved') setVideo(saved.video);
+    if (saved.status === 'failed') toast.error(saved.message);
   }, [preview.recording]);
 
   const duration = Number(meta?.duration) || frame?.durationSeconds || 0;
@@ -202,11 +200,11 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const fileBase = slug(title);
 
   const handleRecord = () => {
-    if (!preview.ready || recording || !messages?.record) return;
+    if (!preview.ready || recording || savingRecording || !messages?.record) return;
     recordingSessionRef.current = preview.sessionId;
     setRecording(true);
     setRecordProgress(0);
-    preview.command('record', { message: { type: messages.record } });
+    preview.command('record', { message: { type: messages.record }, title: title || '' });
     clearTimeout(recordTimerRef.current);
     recordTimerRef.current = setTimeout(() => {
       setRecording(false);
@@ -228,20 +226,6 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     setExportNotes(queued.notes || []);
     for (const note of queued.notes || []) toast(note);
     setExportJob(queued.jobId);
-  };
-
-  const handleSave = async () => {
-    if (!video || video.saved || saving) return;
-    setSaving(true);
-    const saved = await uploadGalleryVideo(video.blob, `${fileBase}.webm`, { silent: true }).catch((error) => {
-      toast.error(error.message || 'Failed to save the video');
-      return null;
-    });
-    setSaving(false);
-    if (saved?.id) {
-      setVideo((current) => (current?.blob === video.blob ? { ...current, saved: true } : current));
-      toast.success('Saved to Media History');
-    }
   };
 
   const handleDownloadPackage = async () => {
@@ -322,11 +306,12 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
         <button
           type="button"
           onClick={handleRecord}
-          disabled={!preview.ready || recording}
+          disabled={!preview.ready || recording || savingRecording}
           className="inline-flex items-center gap-2 rounded-lg bg-port-error/90 px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {recording ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Circle className="h-4 w-4 fill-current" />}
-          {recording ? `Recording ${Math.floor(recordProgress)}s / ${Math.round(duration)}s` : 'Record (real-time)'}
+          {recording || savingRecording ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Circle className="h-4 w-4 fill-current" />}
+          {recording ? `Recording ${Math.floor(recordProgress)}s / ${Math.round(duration)}s`
+            : savingRecording ? 'Saving MP4…' : 'Record (real-time)'}
         </button>
         {jobId && (
           <button
@@ -392,27 +377,12 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
 
       {video && (
         <div className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">
-          <video src={video.url} controls className="max-h-80 w-full rounded bg-black" aria-label="Recorded animation" />
+          <video src={video.url} controls playsInline className="max-h-80 w-full rounded bg-black" aria-label="Recorded animation" />
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => downloadBlob(video.blob, `${fileBase}.webm`)}
-              className={BUTTON_SECONDARY}
-            >
-              <Download className="h-4 w-4" /> Download WebM
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving || video.saved}
-              className={BUTTON_PRIMARY}
-            >
-              {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              {video.saved ? 'Saved' : 'Save to Media History'}
-            </button>
-            {video.saved && (
-              <Link to="/media/history" className="text-xs text-port-accent hover:underline">Open Media History</Link>
-            )}
+            <a href={video.url} download={`${fileBase}.${video.filename?.split('.').pop() || 'mp4'}`} className={BUTTON_SECONDARY}>
+              <Download className="h-4 w-4" /> Download {video.filename?.endsWith('.webm') ? 'WebM' : 'MP4'}
+            </a>
+            <Link to="/media/history" className="text-xs text-port-accent hover:underline">Saved to Media History</Link>
           </div>
         </div>
       )}

@@ -11,7 +11,9 @@ vi.mock('./codeAnimationPage.js', async (importOriginal) => ({
   ...await importOriginal(),
   stageCodeAnimationPage: async () => ({ scratchRoot: null, directory: 'example-animation' }),
 }));
-vi.mock('../htmlComposition/browser.js', () => ({ openComposition: async () => fixture.page }));
+vi.mock('../htmlComposition/browser.js', () => ({ openComposition: async (_directory, options) => { fixture.onEvent = options.onEvent; return fixture.page; } }));
+const saveRecording = vi.hoisted(() => vi.fn());
+vi.mock('./recordingSave.js', () => ({ saveRecordingToMediaHistory: saveRecording }));
 import { AUTHORED_PREVIEW_PLAYBACK_TARGET } from '../../lib/generatedPreviewPlaybackSchema.js';
 import { closeSession, registerGeneratedPreviewHandlers } from './sessions.js';
 
@@ -629,5 +631,42 @@ describe('code animation playhead', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     const after = frames;
     await vi.waitFor(() => expect(frames).toBeGreaterThan(after + 3));
+  });
+});
+
+// Catches a page filling Media History with blobs nobody asked for, and the
+// saved video failing to reach the viewer that pressed Record.
+describe('code animation real-time recording', () => {
+  it('saves only a requested recording and hands the viewer its library video', async () => {
+    saveRecording.mockResolvedValue({ id: 'upload-1', filename: 'upload-1.mp4', durationSec: 4 });
+    const win = { requestAnimationFrame: (callback) => setTimeout(() => callback(performance.now()), 1), postMessage: vi.fn() };
+    fixture.page = {
+      evaluate: (source) => new Function('window', 'return ' + source)(win),
+      send: async () => ({ data: 'frame' }),
+      close: async () => {},
+    };
+    registerGeneratedPreviewHandlers(socket);
+    const requestId = '00000000-0000-4000-8000-000000000004';
+    socket.handlers.get('generated-preview:open')({ requestId, kind: 'code-animation', html: '<canvas></canvas>' });
+    await vi.waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:opened', expect.any(Object)));
+    const sessionId = socket.emit.mock.calls.find(([event]) => event === 'generated-preview:opened')[1].sessionId;
+    const recordings = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:recording').map(([, payload]) => payload);
+
+    // An unrequested blob is refused synchronously; an accepted one reaches the
+    // save before the handler's first await.
+    fixture.onEvent({ method: 'Portos.preview', params: { type: 'example:recorded', hasBlob: true } });
+    expect(saveRecording).not.toHaveBeenCalled();
+
+    await socket.handlers.get('generated-preview:command')({ requestId, sessionId, action: 'record', message: { type: 'example:record' }, title: 'Station boot' });
+    fixture.onEvent({ method: 'Portos.preview', params: { type: 'example:recorded', hasBlob: true } });
+    await vi.waitFor(() => expect(recordings().at(-1)).toMatchObject({ status: 'saved' }));
+    expect(saveRecording).toHaveBeenCalledWith(fixture.page, { title: 'Station boot' });
+    expect(recordings()).toEqual([
+      { requestId, sessionId, status: 'saving' },
+      { requestId, sessionId, status: 'saved', video: { id: 'upload-1', filename: 'upload-1.mp4', url: '/data/videos/upload-1.mp4', durationSec: 4 } },
+    ]);
+
+    fixture.onEvent({ method: 'Portos.preview', params: { type: 'example:recorded', hasBlob: true } });
+    expect(saveRecording).toHaveBeenCalledTimes(1);
   });
 });

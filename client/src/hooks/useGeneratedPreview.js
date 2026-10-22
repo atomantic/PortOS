@@ -50,7 +50,6 @@ export default function useGeneratedPreview({ active, request, controls = null }
   const decodedUrl = useRef('');
   const frameUrls = useRef(new Map());
   const presentation = useRef({ lease: 0, current: null, queue: [], blocked: true, task: 0, raf: 0, deadline: 0 });
-  const recordingUrl = useRef('');
   const controlsRef = useRef(controls);
   controlsRef.current = controls;
   const [state, setState] = useState(EMPTY);
@@ -346,7 +345,6 @@ export default function useGeneratedPreview({ active, request, controls = null }
       return undefined;
     }
     let requestId = null;
-    const recordingChunks = new Map();
     let stoppedStatus = null;
     // Sessions belong to one socket connection. Never buffer an open/command
     // while offline: the server has already destroyed the previous session.
@@ -374,8 +372,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
     const onDisconnect = () => {
       cancelPlayback();
       pending.current = null;
-      recordingChunks.clear();
-      if (mounted.current) setState((prev) => ({ ...prev, status: 'disconnected', sessionId: null, ready: false, lastEvent: null }));
+      // A save in flight reports to the lost connection; Media History still gets it.
+      if (mounted.current) setState((prev) => ({ ...prev, status: 'disconnected', sessionId: null, ready: false, lastEvent: null, recording: null }));
     };
     const onConnect = () => {
       if (!stoppedStatus) open();
@@ -494,30 +492,22 @@ export default function useGeneratedPreview({ active, request, controls = null }
       if (!mine(payload) || !mounted.current) return;
       setState((prev) => ({ ...prev, lastEvent: payload }));
     };
+    // The server saves a requested recording to Media History and reports
+    // `saving`, then `saved` with the library video or `failed` with a reason.
     const onRecording = (payload) => {
-      if (!mine(payload) || typeof payload.chunk !== 'string' || !payload.count) return;
-      const gen = payload.generation ?? 0;
-      let genChunks = recordingChunks.get(gen);
-      if (!genChunks) {
-        genChunks = [];
-        recordingChunks.set(gen, genChunks);
+      if (!mine(payload) || !mounted.current) return;
+      if (payload.status === 'saving') setState((prev) => ({ ...prev, recording: { status: 'saving' } }));
+      else if (payload.status === 'saved' && typeof payload.video?.url === 'string') {
+        setState((prev) => ({ ...prev, recording: { status: 'saved', video: payload.video } }));
+      } else if (payload.status === 'failed') {
+        setState((prev) => ({ ...prev, recording: { status: 'failed', message: String(payload.message || 'The recording could not be saved.') } }));
       }
-      genChunks[payload.index] = payload.chunk;
-      if (genChunks.filter(Boolean).length !== payload.count) return;
-      recordingChunks.delete(gen);
-      const blob = new Blob(genChunks.map((chunk) => decode(chunk)), { type: payload.mime || 'video/webm' });
-      const url = URL.createObjectURL(blob);
-      if (recordingUrl.current) URL.revokeObjectURL(recordingUrl.current);
-      recordingUrl.current = url;
-      if (!mounted.current) return;
-      setState((prev) => ({ ...prev, recording: { blob, url, mime: payload.mime || 'video/webm' } }));
     };
     const onClosed = (payload) => {
       if (!pending.current?.sessionId || payload?.sessionId !== pending.current.sessionId) return;
       const failed = pending.current.hasError;
       cancelPlayback();
       pending.current = null;
-      recordingChunks.clear();
       stoppedStatus = failed ? 'error' : 'idle';
       if (!mounted.current) return;
       // Idle/capacity cleanup stays effective until the viewer explicitly
@@ -590,7 +580,6 @@ export default function useGeneratedPreview({ active, request, controls = null }
       URL.revokeObjectURL(url);
       frameUrls.current.delete(url);
     }
-    if (recordingUrl.current) URL.revokeObjectURL(recordingUrl.current);
   }, []);
 
   return { ...state, seek, command, resume, preparePlayback, startPlayback, syncPlayback, pausePlayback, imageRef, onFrameLoad, captureFrame };
