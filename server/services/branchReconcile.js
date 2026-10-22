@@ -220,7 +220,7 @@ const CLASSIFY_RULES = [
  *   An `openPr.isDraft` is an explicit human-review handoff.
  * @returns {{state:'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP', rule:string}}
  */
-export function classifyBranchRule(input) {
+function classifyBranchRule(input) {
   const rule = CLASSIFY_RULES.find((candidate) => candidate.when({ hasOrigin: false, ahead: null, ...input }));
   return { state: typeof rule.state === 'function' ? rule.state(input) : rule.state, rule: rule.id };
 }
@@ -236,7 +236,7 @@ export function classifyBranch(input) {
  * even though the completion-policy rule outranks the live-owner rule in the
  * classified state; that difference is intentional and persisted as skipCauses.
  */
-export function wipParkCause(entry) {
+function wipParkCause(entry) {
   return entry.openPr?.isDraft ? 'draft-review-required' : entry.liveOwnerReason || entry.completionPolicyReason || 'unfinished-work';
 }
 

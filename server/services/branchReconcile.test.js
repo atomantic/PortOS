@@ -124,7 +124,7 @@ vi.mock('./supersededBackup.js', () => ({
 }));
 
 import {
-  classifyBranch, classifyBranches, wipParkCause, cleanupMerged as retireMerged, reconcile, gatherBranchState, worktreeProtectionReason,
+  classifyBranch, classifyBranches, cleanupMerged as retireMerged, reconcile, gatherBranchState, worktreeProtectionReason,
   isAbandonedAgentWorktree, isAbandonedClaimWorktree, resolveLiveOwnerReason, gatherDivergence,
   actionOn, filterActionable, desiredEndState, formatInFlightForPrompt, actionableSignature,
   limitBranchesForAgent,
@@ -356,7 +356,6 @@ describe('classifyBranches rule ids and wipParkCause', () => {
   it('parks a policy hold with a live owner as WIP under the live-owner cause', () => {
     const entry = classifyBranches([{ ...base, completionPolicyReason: 'pr-completion-review-required', liveOwnerReason: 'active-agent' }])[0];
     expect(entry).toMatchObject({ state: 'WIP', rule: 'completion-policy' });
-    expect(wipParkCause(entry)).toBe('active-agent');
     expect(describeIdleReconcilePark([], [], { wip: [entry] }).skipCauses).toEqual({ 'active-agent': 1 });
   });
 });
