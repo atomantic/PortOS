@@ -312,6 +312,32 @@ describe('health archive/import coordination (#10698)', () => {
   }
 });
 
+describe('archive and delete operations leave a log line (#12979)', () => {
+  it('logs the health archive counts and the deleted archive name', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await seedHealth();
+      const result = await archiveCategory('health', { daysToKeep: 365 });
+      const archiveName = basename(result.archivePath);
+      expect(log).toHaveBeenCalledWith(`📦 Archived data/health to ${archiveName}: 1 days, 1 removed, 0 retained, 0 already absent`);
+      await deleteBackup(archiveName);
+      expect(log).toHaveBeenCalledWith(`🗑️ Deleted backup archive ${archiveName}`);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('does not log a refused delete', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await expect(deleteBackup('state.json')).rejects.toMatchObject({ code: 'INVALID_FILENAME' });
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Deleted backup archive'));
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
 describe('backup directory shared with the backup service state (#11781)', () => {
   it('lists and deletes only archive-shaped names, never state.json', async () => {
     const backup = join(root, 'backup');
