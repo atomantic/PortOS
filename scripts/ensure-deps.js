@@ -135,7 +135,7 @@ function install(dir, label) {
 // and only performs installs when run as `node scripts/ensure-deps.js`.
 function main() {
   // Ordinary CoS worktrees borrow the source checkout's dependencies. Refuse
-  // the entire repair before any install, cleanup, patch or receipt write;
+  // the entire repair before any install, cleanup or receipt write;
   // checking inside the repair loop could already mutate an earlier workspace.
   // lstat also catches dangling links and Windows directory junctions.
   for (const { dir, label } of WORKSPACES) {

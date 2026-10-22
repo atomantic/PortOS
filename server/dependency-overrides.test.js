@@ -170,6 +170,15 @@ describe('dependency override parity across manifests (#2848)', () => {
     expect(stale).toEqual([]);
   });
 
+  // PortOS dropped its local braces depth guard (#9906) once pm2 7.1.0 stopped
+  // pulling braces in. A dependency that brings it back would run unguarded, so
+  // the guard has to return with it.
+  it.each(['package.json', 'server/package.json'])('%s resolves no braces install', rel => {
+    const resolved = Object.keys(readLockPackages(lockfileFor(rel)))
+      .filter((path) => packageNameFromLockPath(path) === 'braces');
+    expect(resolved).toEqual([]);
+  });
+
   // The three mechanisms that govern a dependency tree — the manifest `overrides`
   // block, a Dependabot entry, and the assertions above — were all hardcoded to
   // root/server/client, so `autofixer/` (a fourth npm install prefix with its own
