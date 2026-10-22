@@ -87,6 +87,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({});
   const [statusFilter, setStatusFilter] = useState('');
+  const currentStatusFilter = useRef(statusFilter);
+  currentStatusFilter.current = statusFilter;
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [backendStatus, setBackendStatus] = useState(null);
@@ -284,7 +286,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       toast.success('Saved');
       if (session.id === selectedRecordId.current) setDetailResult({ id: session.id, type: session.type, record: result });
       if (editSession.current === session) cancelEdit();
-      paged.setItems(items => items.map(item => item.id === session.id ? result : item));
+      if (currentStatusFilter.current && result.status !== currentStatusFilter.current) paged.removeItem(session.id);
+      else paged.setItems(items => items.map(item => item.id === session.id ? result : item));
       onRefresh?.();
     }
   };

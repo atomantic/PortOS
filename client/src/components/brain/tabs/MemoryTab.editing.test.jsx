@@ -6,6 +6,7 @@ import MemoryTab from './MemoryTab';
 const api = vi.hoisted(() => ({
   getBrainMemories: vi.fn(), getBrainMemory: vi.fn(), updateBrainMemory: vi.fn(),
   getBrainPeople: vi.fn(), updateBrainPerson: vi.fn(),
+  getBrainProjects: vi.fn(), updateBrainProject: vi.fn(),
   getMemoryBackendStatus: vi.fn(),
 }));
 vi.mock('../../../services/api', () => api);
@@ -128,5 +129,28 @@ describe('Brain record editor ownership', () => {
     await act(async () => { full.resolve(memory('a')); });
     expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Example person');
     expect(screen.getByRole('textbox', { name: /Context/ })).toHaveValue('Person context');
+  });
+
+  it('removes an edited project from the active filter without resetting the list or filter', async () => {
+    let project = { id: 'project-a', name: 'Example project', status: 'active', nextAction: 'Example action' };
+    api.getBrainProjects.mockImplementation(({ status }) => {
+      const items = !status || project.status === status ? [project] : [];
+      return Promise.resolve({ items, total: items.length, nextCursor: null });
+    });
+    api.updateBrainProject.mockImplementation((_id, patch) => {
+      project = { ...project, ...patch };
+      return Promise.resolve(project);
+    });
+    await mount([memory('a')]);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Projects' })); });
+    await act(async () => { fireEvent.change(screen.getByRole('combobox', { name: 'Filter by status' }), { target: { value: 'active' } }); });
+    const list = screen.getByRole('region', { name: 'Memory entries' });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit', exact: true }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Status', exact: true }), { target: { value: 'done' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true })); });
+    expect(api.updateBrainProject).toHaveBeenCalledWith('project-a', expect.objectContaining({ status: 'done' }), { silent: true });
+    expect(screen.queryByText('Example project')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Memory entries' })).toBe(list);
+    expect(screen.getByRole('combobox', { name: 'Filter by status' })).toHaveValue('active');
   });
 });
