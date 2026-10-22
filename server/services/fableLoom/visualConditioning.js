@@ -427,6 +427,7 @@ export async function compileFableLoomVisualRequest({
 
 export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4 }) {
   const localFlux2 = mode === 'local' && model?.runner === 'flux2';
+  const runwayCapability = mode === 'runway' ? IMAGE_GEN_PROVIDER_CAPABILITIES.runway : null;
   // Every cloud image backend accepts reference images (imageGenCapabilities.js).
   const cloudEdit = CLOUD_IMAGE_GEN_MODES.includes(mode);
   return Object.freeze({
@@ -435,11 +436,11 @@ export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4
     referenceRoles: localFlux2 || cloudEdit
       ? ['temporal-predecessor', 'character-neutral', 'character-profile', 'character-full-body', 'character-expression-gesture', 'character-wardrobe', 'character-prop-scale', 'character-negative-identity', 'character-draft-reference', 'environment', 'object']
       : [],
-    referenceBudget: localFlux2 || cloudEdit ? Math.min(inputBudget, IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.maxInputImages ?? inputBudget) : 0,
+    referenceBudget: localFlux2 || cloudEdit ? Math.min(inputBudget, runwayCapability?.maxInputImages ?? inputBudget) : 0,
     supportsLora: localFlux2 || (mode === 'local' && model?.runner === 'mflux'),
     loraCompatKey: model?.loraCompatKey || null,
     loraBudget: 8,
-    multiCharacterPreservation: localFlux2 || IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.multiCharacterPreservation === true,
+    multiCharacterPreservation: localFlux2 || runwayCapability?.multiCharacterPreservation === true,
   });
 }
 

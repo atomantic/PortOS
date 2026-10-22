@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback, useId } from 'react';
+import { Link } from 'react-router';
 import { AlertTriangle, Check, Sparkles, Terminal } from 'lucide-react';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
@@ -525,7 +526,7 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
       {mediaTab === 'runway' && (
         <div className={SECTION_CLASS}>
           <h2 className="text-lg font-semibold text-white">Runway Imagegen</h2>
-          <p className="text-xs text-gray-400">Uses the Runway credential from <a href="/settings/credentials" className="text-port-accent hover:underline">Settings → Credentials</a>, shared with video generation.</p>
+          <p className="text-xs text-gray-400">Uses the Runway credential from <Link to="/settings/credentials" className="text-port-accent hover:underline">Settings → Credentials</Link>, shared with video generation.</p>
           <p className="text-xs text-gray-400">{runwayCredential == null ? 'Checking credential…' : runwayCredential.configured ? 'Runway credential configured.' : 'Add a Runway credential to render.'}</p>
           <p className="text-xs text-gray-400">{RUNWAY_IMAGE_DISCLOSURE.summary} <a href={RUNWAY_IMAGE_DISCLOSURE.termsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">Runway’s terms</a> and moderation apply. {RUNWAY_IMAGE_DISCLOSURE.billing}</p>
           <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={values.runwayEnabled} onChange={toggleProvider('runwayEnabled', IMAGE_GEN_MODE.RUNWAY)} /><span>Enable Runway Imagegen</span></label>
@@ -535,7 +536,13 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
             </select>
           </FormField>
           <FormField label="Resolution" labelClassName={FIELD_LABEL_CLASS}>
-            <select value={values.runwayResolution} onChange={(e) => set('runwayResolution', e.target.value)} className={INPUT_CLASS}><option value="720p">720p · Gen-4: 5 credits / Turbo: 2 credits</option><option value="1080p">1080p · Gen-4: 8 credits / Turbo: 2 credits</option></select>
+            <select value={values.runwayResolution} onChange={(e) => set('runwayResolution', e.target.value)} className={INPUT_CLASS}>
+              {['720p', '1080p'].map((resolution) => (
+                <option key={resolution} value={resolution}>
+                  {resolution} · {RUNWAY_IMAGE_MODELS.map((model) => `${model.label}: ${formatCount(model.credits[resolution])} credits`).join(' / ')}
+                </option>
+              ))}
+            </select>
           </FormField>
           <CleanersToggles mode={IMAGE_GEN_MODE.RUNWAY} form={form} />
         </div>

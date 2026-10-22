@@ -2230,11 +2230,7 @@ export const videoModelTermsSchema = z.object({
   accepted: z.boolean(),
 });
 
-// fal.ai Imagegen settings slice (`imageGen.fal`). The API key is NOT here —
-// it is the fal.ai credential the video backend already owns (write-only via
-// PUT /api/settings/credentials/fal). `model` must name a catalog endpoint
-// (lib/falImageModels.js): each id is a different price, so free text is
-// refused rather than persisted and discovered at render time.
+// Runway images share the private video credential; only render settings live here.
 export const imageGenRunwaySettingsSchema = z.object({
   enabled: z.boolean().optional(),
   model: z.preprocess((v) => v === '' ? undefined : v, z.enum(RUNWAY_IMAGE_MODEL_IDS).optional()),
@@ -2243,6 +2239,11 @@ export const imageGenRunwaySettingsSchema = z.object({
   denoise: z.boolean().optional(),
 });
 
+// fal.ai Imagegen settings slice (`imageGen.fal`). The API key is NOT here —
+// it is the fal.ai credential the video backend already owns (write-only via
+// PUT /api/settings/credentials/fal). `model` must name a catalog endpoint
+// (lib/falImageModels.js): each id is a different price, so free text is
+// refused rather than persisted and discovered at render time.
 export const imageGenFalSettingsSchema = z.object({
   enabled: z.boolean().optional(),
   model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(FAL_IMAGE_MODEL_IDS).optional()),
