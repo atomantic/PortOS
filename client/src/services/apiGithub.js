@@ -43,6 +43,8 @@ export const applyGitHubNotificationAction = (accountId, threadId, action, optio
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}`, {
     method: 'POST', body: JSON.stringify({ action }), ...options,
   });
+export const resolveGitHubNotificationWithAgent = (accountId, threadId, options = {}) =>
+  request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/agent`, { method: 'POST', ...options });
 export const getGitHubNotification = (accountId, threadId, options = {}) =>
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}`, options);
 

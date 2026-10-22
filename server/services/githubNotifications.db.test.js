@@ -45,7 +45,7 @@ const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const {
   syncAccountNotifications, listNotifications, applyNotificationAction, getNotification, runScheduledNotificationCheck,
-  listAutomationActivity, undoAutomationAction, listLearnedRules,
+  listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent,
 } = await import('./githubNotifications.js');
 const { buildTaskInput } = await import('./githubNotificationsHooks.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
@@ -283,8 +283,10 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const ci = (id, updatedAt) => thread(id, { owner: login, reason: 'ci_activity', type: 'CheckSuite', url: null, updatedAt, title: 'CI workflow run failed for main branch' });
     mockGh(() => listing([ci('701', '2026-10-01T10:00:00Z'), ci('702', '2026-10-01T11:00:00Z')]), { [`repos/${login}/hello`]: 'main' });
     await syncAccountNotifications(account.id);
-    const rows = (await listNotifications({ accountId: account.id })).notifications;
+    const rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
     expect(rows.map((row) => [row.threadId, row.decision])).toEqual([['702', 'surface'], ['701', 'duplicate']]);
+    // The folded notice is Handled while still open, so red main shows once in Needs you.
+    expect((await listNotifications({ accountId: account.id })).notifications.map((row) => row.threadId)).toEqual(['702']);
   });
 
   it('sorts undecided threads only in Assist, acts only on trusted ones, and undoes into a learned rule', async () => {
@@ -325,7 +327,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
 
     await updateAccount(account.id, { mode: 'assist' });
     const result = await syncAccountNotifications(account.id);
-    expect(result.assist).toEqual({ sorted: 2, acted: 2, handedOff: 0 });
+    expect(result.assist).toEqual({ sorted: 2, acted: 2, handedOff: 0, agentRuns: 0 });
     expect(runUntrustedContentAnalysis).toHaveBeenCalledTimes(3);
     // Same activity time on every thread, so compare without order.
     expect([...actions].sort()).toEqual([['DELETE', 'notifications/threads/903'], ['PATCH', 'notifications/threads/901']]);
@@ -470,6 +472,81 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(triggerOnDemandTask).toHaveBeenCalledTimes(2);
     const activity = (await listAutomationActivity()).filter((entry) => entry.accountId === account.id);
     expect(activity.map((entry) => [entry.threadId, entry.action, entry.undoable]).sort()).toEqual([['1101', 'handed-off', false], ['1102', 'handed-off', false]]);
+    vi.mocked(getAllApps).mockResolvedValue([]);
+  });
+
+  it('files your own PRs under Handled, and batches Autopilot to one agent run per repo and lane', async () => {
+    await updateAccount(account.id, { mode: 'autopilot' });
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(triggerOnDemandTask).mockReset().mockImplementation(async (taskType) => ({ id: `demand-${taskType}` }));
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+    const alert = (id) => thread(id, { owner: 'acme', repo: 'app', reason: 'security_alert', type: 'RepositoryVulnerabilityAlert', url: null, title: 'Your repository has dependencies with security vulnerabilities' });
+    mockGh(() => listing([
+      thread('1201', { owner: 'acme', repo: 'app' }),
+      thread('1202', { owner: 'acme', repo: 'app', commentUrl: 'https://api.github.com/repos/acme/app/issues/comments/9' }),
+      alert('1203'), alert('1204'), alert('1205'),
+      thread('1206', { owner: 'acme', repo: 'app', reason: 'review_requested' }),
+      thread('1207', { owner: 'acme', repo: 'app', reason: 'review_requested' }),
+    ]), {
+      'repos/acme/app/pulls/1201': { author: account.login, association: 'OWNER', state: 'open', merged: false },
+      'repos/acme/app/pulls/1202': { author: account.login, association: 'OWNER', state: 'open', merged: false },
+      'repos/acme/app/issues/comments/9': { author: 'visitor', association: 'NONE', mentions: 0 },
+      'repos/acme/app/collaborators/visitor/permission': { user: { login: 'visitor' }, permission: 'read' },
+      'repos/acme/app/pulls/1206': { author: 'mallory', association: 'NONE', state: 'open', merged: false },
+      'repos/acme/app/pulls/1207': { author: 'mallory', association: 'NONE', state: 'open', merged: false },
+      'repos/acme/app/collaborators/mallory/permission': { user: { login: 'mallory' }, permission: 'read' },
+    });
+
+    expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 5, agentRuns: 2 });
+    // Three alerts make one dependency-updates run; two outside PRs make one
+    // pr-reviewer sweep rather than a targeted run each.
+    const calls = [...vi.mocked(triggerOnDemandTask).mock.calls].sort((a, b) => a[0].localeCompare(b[0]));
+    expect(calls).toEqual([
+      ['dependency-updates', 'app-acme', { origin: 'github-notification' }],
+      ['pr-reviewer', 'app-acme', { origin: 'github-notification' }],
+    ]);
+    expect((await getNotification(account.id, '1204')).evidence.handoff).toMatchObject({ lane: 'dependency-updates', requestId: 'demand-dependency-updates', batchSize: 3 });
+    // Your own PR waits for you only when someone outside commented on it.
+    const needsYou = (await listNotifications({ accountId: account.id, view: 'needs-you' })).notifications.map((row) => row.threadId);
+    expect(needsYou).toEqual(['1202']);
+    const handled = (await listNotifications({ accountId: account.id, view: 'handled' })).notifications;
+    // Autopilot includes Assist, which marks it done on GitHub.
+    expect(handled.find((row) => row.threadId === '1201')).toMatchObject({ state: 'done', decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' });
+
+    // A thread decided under older rules is decided again without new activity.
+    await query(
+      `UPDATE github_notifications SET state = 'open', decision = 'needs-you', evidence = evidence - 'rulesVersion' || '{"rule":"default"}'::jsonb
+       WHERE account_id = $1 AND thread_id = '1201'`,
+      [account.id],
+    );
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '1201')).toMatchObject({ decision: 'handled-by-pr-workflow' });
+    vi.mocked(getAllApps).mockResolvedValue([]);
+  });
+
+  it('resolves one thread with an agent on a tap in any mode, and refuses a repo PortOS does not manage', async () => {
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(triggerOnDemandTask).mockReset().mockImplementation(async (taskType) => ({ id: `demand-${taskType}` }));
+    mockGh(() => listing([
+      thread('1301', { owner: 'acme', repo: 'app', reason: 'subscribed', type: 'Issue', url: 'https://api.github.com/repos/acme/app/issues/1301' }),
+      thread('1302', { owner: 'someone', repo: 'other', reason: 'security_alert', type: 'RepositoryVulnerabilityAlert', url: null }),
+    ]), {
+      'repos/acme/app/issues/1301': { author: 'visitor', association: 'NONE', state: 'open', merged: false },
+      'repos/acme/app/collaborators/visitor/permission': { user: { login: 'visitor' }, permission: 'read' },
+    });
+    await syncAccountNotifications(account.id);
+    const listed = (await listNotifications({ accountId: account.id, view: 'needs-you' })).notifications;
+    expect(Object.fromEntries(listed.map((row) => [row.threadId, row.agent]))).toEqual({
+      1301: { lane: 'issue-watcher', refused: null },
+      1302: { lane: 'dependency-updates', refused: 'no-managed-app' },
+    });
+    expect(triggerOnDemandTask).not.toHaveBeenCalled();
+
+    expect(await resolveWithAgent(account.id, '1301')).toMatchObject({ decision: 'handed-off', agent: null });
+    expect(triggerOnDemandTask).toHaveBeenCalledWith('issue-watcher', 'app-acme', { origin: 'user' });
+    expect((await getNotification(account.id, '1301')).events.find((event) => event.kind === 'handed-off')).toMatchObject({ actor: 'operator' });
+    await expect(resolveWithAgent(account.id, '1302')).rejects.toMatchObject({ status: 409 });
+    expect(triggerOnDemandTask).toHaveBeenCalledTimes(1);
     vi.mocked(getAllApps).mockResolvedValue([]);
   });
 

@@ -170,6 +170,13 @@ router.post('/notifications/:accountId/:threadId', asyncHandler(async (req, res)
 }));
 
 /**
+ * POST /api/github/notifications/:accountId/:threadId/agent — Resolve with agent: queue the thread's lane now
+ */
+router.post('/notifications/:accountId/:threadId/agent', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req)));
+}));
+
+/**
  * GET /api/github/automations — the notification check's cadence and each account's last run
  */
 router.get('/automations', asyncHandler(async (req, res) => {

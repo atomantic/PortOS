@@ -48,6 +48,7 @@ function HandoffLine({ handoff }) {
       {handoff.appId && lane && (
         <> for <Link to={`/apps/${encodeURIComponent(handoff.appId)}/${lane.tab}`} className="text-port-accent">{handoff.appName || handoff.appId}</Link></>
       )}
+      {handoff.batchSize > 1 && `, in one run with ${handoff.batchSize - 1} other notification${handoff.batchSize === 2 ? '' : 's'}`}
     </p>
   );
 }

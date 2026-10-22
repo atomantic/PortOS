@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
-import { ExternalLink, RefreshCw } from 'lucide-react';
+import { Bot, ExternalLink, RefreshCw } from 'lucide-react';
 import Pill from '../ui/Pill';
 import GitHubThreadDrawer from './GitHubThreadDrawer';
-import { DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
+import { AGENT_REFUSED_LABELS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
 import socket from '../../services/socket';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -14,6 +14,7 @@ import {
   getGitHubNotifications,
   syncGitHubNotifications,
   applyGitHubNotificationAction,
+  resolveGitHubNotificationWithAgent,
 } from '../../services/api';
 
 const VIEWS = [
@@ -58,11 +59,16 @@ const chipClass = (active) => `shrink-0 rounded-full border px-3 py-1.5 text-xs 
   ? 'border-port-accent/40 bg-port-accent/20 text-port-accent'
   : 'border-port-border bg-port-bg text-gray-400'}`;
 
+// Mirrors ELSEWHERE_DECISIONS in server/lib/githubNotificationTriage.js:
+// something else already has these threads, so they sit under Handled.
+const ELSEWHERE_DECISIONS = new Set(['handled-by-pr-workflow', 'duplicate', 'handed-off']);
+const isElsewhere = (row) => !row.suspect && ELSEWHERE_DECISIONS.has(row.decision);
+
 // Whether a row still belongs in the view after an action moved it.
 const VIEW_MATCHERS = {
-  'needs-you': (row) => row.state === 'open' && !row.suspect,
+  'needs-you': (row) => row.state === 'open' && !row.suspect && !isElsewhere(row),
   suspect: (row) => row.state === 'open' && row.suspect,
-  handled: (row) => row.state !== 'open',
+  handled: (row) => row.state !== 'open' || isElsewhere(row),
   all: () => true,
 };
 const belongsInView = (row, view) => VIEW_MATCHERS[view](row);
@@ -90,6 +96,9 @@ function NotificationCard({ notification, accountLabel, busy, onAction }) {
         {notification.title}
       </Link>
       {decision && <p className="mt-1"><Pill tone={decision.tone}>{decision.label}</Pill></p>}
+      {!handled && notification.agent?.refused && (
+        <p className="mt-1 text-xs text-gray-500">{AGENT_REFUSED_LABELS[notification.agent.refused] || notification.agent.refused}</p>
+      )}
       {accountLabel && <p className="mt-0.5 text-xs text-gray-500">{accountLabel}</p>}
       <div className="mt-2 flex flex-wrap gap-2">
         {notification.htmlUrl && (
@@ -101,6 +110,16 @@ function NotificationCard({ notification, accountLabel, busy, onAction }) {
           >
             <ExternalLink size={12} aria-hidden="true" /> Open
           </a>
+        )}
+        {!handled && notification.agent && !notification.agent.refused && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onAction(notification, 'agent')}
+            className="inline-flex items-center gap-1 rounded border border-port-accent/40 bg-port-accent/10 px-3 py-1.5 text-xs text-port-accent disabled:opacity-50"
+          >
+            <Bot size={12} aria-hidden="true" /> Resolve with agent
+          </button>
         )}
         {(handled ? [UNDO_ACTIONS[notification.state]].filter(Boolean) : OPEN_ACTIONS).map(({ action, label }) => (
           <button
@@ -177,7 +196,9 @@ export default function GitHubInboxTab() {
   const handleAction = async (row, action) => {
     const key = keyOf(row);
     setBusyKey(key);
-    const updated = await applyGitHubNotificationAction(row.accountId, row.threadId, action).catch(() => null);
+    const updated = await (action === 'agent'
+      ? resolveGitHubNotificationWithAgent(row.accountId, row.threadId)
+      : applyGitHubNotificationAction(row.accountId, row.threadId, action)).catch(() => null);
     setBusyKey(null);
     if (!updated) return;
     if (belongsInView(updated, view)) {

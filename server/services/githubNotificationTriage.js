@@ -12,7 +12,7 @@
  */
 import { query, withTransaction } from '../lib/db.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
-import { applyLearnedRule, computeThreadTrust, decideThread, parseCiBranch, spamSignals } from '../lib/githubNotificationTriage.js';
+import { applyLearnedRule, computeThreadTrust, decideThread, parseCiBranch, spamSignals, TRIAGE_RULES_VERSION } from '../lib/githubNotificationTriage.js';
 import { parseGitRemoteUrl, readOriginRemoteUrl } from '../lib/gitRemote.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -23,6 +23,11 @@ import { listAccounts } from './githubAccounts.js';
 const GH_TIMEOUT_MS = 20_000;
 // Each thread costs a few API calls; the rest wait for the next run.
 const MAX_THREADS_PER_RUN = 25;
+// Open threads a rules-version bump re-decides without new activity: version 2
+// only changed your own PRs. A thread already handed off keeps its hand-off,
+// and one an Assist model sorted is not read again.
+const REDECIDE_SQL = `(state = 'open' AND reason = 'author' AND subject_type = 'PullRequest' AND NOT (evidence ? 'handoff')
+  AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')`;
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
@@ -138,8 +143,10 @@ async function triageThread(row, ctx) {
   const signalSet = new Set(actorLogin
     ? await signalsFor(actorLogin, trust, subjectAuthor ? subject.association : comment?.association, subjectAuthor ? 0 : comment?.mentions ?? 0)
     : []);
+  let commenterTrust = null;
   if (commenter && subjectAuthor && commenter.toLowerCase() !== subjectAuthor.toLowerCase()) {
-    for (const signal of await signalsFor(commenter, await trustOf(commenter), comment.association, comment.mentions ?? 0)) signalSet.add(signal);
+    commenterTrust = await trustOf(commenter);
+    for (const signal of await signalsFor(commenter, commenterTrust, comment.association, comment.mentions ?? 0)) signalSet.add(signal);
   }
   const signals = [...signalSet];
 
@@ -152,6 +159,7 @@ async function triageThread(row, ctx) {
     subjectState: subject?.state || null,
     subjectMerged: subject?.merged === true,
     trust,
+    commenterTrust,
     suspect: signals.length > 0,
     repoOwned,
     repoManaged,
@@ -173,6 +181,7 @@ async function triageThread(row, ctx) {
       subjectState: subject ? (subject.merged === true ? 'merged' : subject.state || null) : null,
       ciBranch,
       metadataMissing: Boolean(subjectPath && !subject),
+      rulesVersion: TRIAGE_RULES_VERSION,
     },
   };
 }
@@ -207,9 +216,10 @@ async function foldCiDuplicates(client, accountId) {
  */
 export async function triageAccountNotifications(account, env, { now = Date.now() } = {}) {
   const { rows } = await query(
-    `SELECT * FROM github_notifications WHERE account_id = $1 AND (triaged_for IS NULL OR triaged_for < gh_updated_at)
+    `SELECT * FROM github_notifications WHERE account_id = $1 AND (triaged_for IS NULL OR triaged_for < gh_updated_at
+       OR (${REDECIDE_SQL} AND COALESCE((evidence->>'rulesVersion')::int, 0) < $2))
      ORDER BY gh_updated_at DESC LIMIT ${MAX_THREADS_PER_RUN}`,
-    [account.id],
+    [account.id, TRIAGE_RULES_VERSION],
   );
   if (!rows.length) return { triaged: 0, decisions: {} };
   const reader = createReader(account, env);

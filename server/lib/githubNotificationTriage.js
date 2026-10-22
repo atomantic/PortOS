@@ -34,6 +34,14 @@ export const TRIAGE_DECISIONS = Object.freeze([
 
 export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unknown']);
 
+// Bump when a rule change should re-decide threads that have no new activity;
+// open threads triaged under an older version are triaged again.
+export const TRIAGE_RULES_VERSION = 2;
+
+// Decisions that mean something else already has the thread. They leave the
+// Needs you view for Handled even before anything acts on GitHub.
+export const ELSEWHERE_DECISIONS = Object.freeze(['handled-by-pr-workflow', 'duplicate', 'handed-off']);
+
 const NEW_ACCOUNT_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const MASS_MENTION_THRESHOLD = 10;
@@ -82,13 +90,20 @@ export function parseCiBranch(title) {
 
 /**
  * One decision from the fixed rule table (reason × source). First match wins:
- * suspect, security alert, invitation, finished thread, CI, review request,
- * mention elsewhere, then Needs you.
+ * suspect, security alert, invitation, your own PR in a managed repo,
+ * finished thread, CI, review request, mention elsewhere, then Needs you.
+ *
+ * `commenterTrust` is the latest commenter's trust when it differs from the
+ * subject author. Activity on your own PR goes to the PR workflow that opened
+ * and drives it, unless someone outside commented: that waits for you.
  */
-export function decideThread({ reason, subjectType, subjectState, subjectMerged = false, trust, suspect = false, repoOwned = false, repoManaged = false, ciBranch = null, defaultBranch = null }) {
+export function decideThread({ reason, subjectType, subjectState, subjectMerged = false, trust, commenterTrust = null, suspect = false, repoOwned = false, repoManaged = false, ciBranch = null, defaultBranch = null }) {
   if (suspect) return { decision: 'suspect', rule: 'spam-signal' };
   if (reason === 'security_alert') return { decision: 'surface-high', rule: 'security-alert' };
   if (reason === 'invitation') return { decision: 'surface', rule: 'invitation-never-accepted' };
+  if (reason === 'author' && subjectType === 'PullRequest' && trust === 'yours' && repoManaged && commenterTrust !== 'outside') {
+    return { decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' };
+  }
   const finished = subjectMerged === true || subjectState === 'closed';
   if (finished && reason !== 'review_requested') return { decision: 'suggest-mark-read', rule: 'finished-thread' };
   if (reason === 'ci_activity' || subjectType === 'CheckSuite') {
@@ -169,29 +184,40 @@ export function selectNotificationProvider({ account, providers = [], policy = {
   return { code: 'github-notification-provider-not-allowed' };
 }
 
-// Autopilot (#12874) hands a thread to the lane that already owns that kind of
-// work. Issue activity qualifies while it would otherwise wait for you.
+// A thread goes to the lane that already owns its kind of work. Issue
+// activity qualifies while it would otherwise wait for you.
 const HANDOFF_ISSUE_DECISIONS = new Set(['needs-you', 'surface']);
 const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 
 /**
- * Which lane Autopilot may hand a thread to, or null to leave it with you.
- * Only threads in a PortOS managed app's repo qualify (the lanes run per app),
- * never a Suspect or closed one. A Private account's hand-off is refused: the
- * lanes use their own providers, which its provider allow-list cannot bind.
- * The pull number comes from the subject's API url, never from a title or body.
+ * Which lane an agent may resolve a thread in, or null when no lane fits. A
+ * plan with `refused` names why it cannot go: only a PortOS managed app's
+ * repo has lanes (they run per app), and a Private account's threads never
+ * go, because the lanes use their own providers, which its provider
+ * allow-list cannot bind. Suspect and closed threads never qualify. The pull
+ * number comes from the subject's API url, never from a title or body. Used
+ * by Autopilot (#12874) and the inbox's Resolve with agent button.
  */
-export function autopilotHandoff({ account, row }) {
-  if (account?.mode !== 'autopilot' || row?.state !== 'open' || row.suspect) return null;
+export function agentHandoff({ account, row }) {
+  if (row?.state !== 'open' || row.suspect) return null;
   const evidence = row.evidence || {};
-  if (evidence.repoManaged !== true) return null;
   let plan = null;
   if (row.decision === 'suggest-untrusted-review' && row.subject_type === 'PullRequest') {
     const pullNumber = Number(PULL_PATH_RE.exec(String(row.subject_api_url || ''))?.[1]);
     if (pullNumber > 0) plan = { lane: 'pr-reviewer', pullNumber };
   } else if (row.subject_type === 'Issue' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
     plan = { lane: 'issue-watcher' };
+  } else if (row.reason === 'security_alert' && row.decision === 'surface-high') {
+    // The lane reads the repo's own Dependabot alerts and PRs, not the thread.
+    plan = { lane: 'dependency-updates' };
   }
   if (!plan) return null;
-  return account.trust === 'private' ? { ...plan, refused: 'private-account' } : plan;
+  if (account?.trust === 'private') return { ...plan, refused: 'private-account' };
+  if (evidence.repoManaged !== true) return { ...plan, refused: 'no-managed-app' };
+  return plan;
+}
+
+/** Autopilot's plan for a thread: `agentHandoff`, only in Autopilot mode. */
+export function autopilotHandoff({ account, row }) {
+  return account?.mode === 'autopilot' ? agentHandoff({ account, row }) : null;
 }
