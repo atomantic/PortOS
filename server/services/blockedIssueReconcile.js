@@ -35,7 +35,6 @@ export const BLOCKED_LABEL = 'blocked';
 // Bound the forge queries — single-user repos never realistically truncate at
 // this size (mirrors issueReconcile.js's GH_LIST_LIMIT / GL_PER_PAGE).
 const GH_LIST_LIMIT = 100;
-const GH_ALL_STATE_LIMIT = 300;
 const GL_PER_PAGE = 100;
 
 /**
@@ -67,46 +66,58 @@ export function parseBlockingIssueNumbers(body) {
 }
 
 /**
+ * Resolve one GitHub blocker number to 'closed' or 'open'. `issues/{n}` serves
+ * issues AND pull requests (they share a number space), at any age. A PR is
+ * satisfied only once merged: closed-unmerged means the dependency was
+ * abandoned, which needs a human rather than an automatic unblock. Returns
+ * null when the lookup fails, so the number stays absent and reads as open.
+ */
+async function resolveGithubBlockerState({ repoSpec, apiHost, fullName }, number) {
+  const raw = await execGh(['api', `repos/${fullName}/issues/${number}`, '--hostname', apiHost], undefined, { backoffKey: repoSpec }).catch((err) => {
+    console.error(`❌ blocked-issue-reconcile: blocker lookup #${number} failed for ${repoSpec}: ${err.message}`);
+    return null;
+  });
+  const blocker = safeJSONParse(raw, null);
+  if (!blocker || typeof blocker !== 'object') return null;
+  if (blocker.pull_request) return blocker.pull_request.merged_at ? 'closed' : 'open';
+  return normalizeIssueState(blocker.state);
+}
+
+/**
  * Fetch GitHub's open `blocked` issues plus a `number → state` map covering
- * every issue (open + closed, bounded by GH_ALL_STATE_LIMIT) so each blocker
- * reference can be resolved from one extra call rather than one `gh issue view`
- * per blocker. Returns null on any gh failure — the caller treats null as
- * "skip this cycle", never as "no blocked issues" or "every blocker is open".
+ * each distinct blocker they name, looked up individually so PR blockers and
+ * blockers of any age resolve. Returns null on a gh failure listing the blocked
+ * issues — the caller treats null as "skip this cycle", never as "no blocked
+ * issues". A failed per-blocker lookup is left out of the map (reads as open).
  * @returns {Promise<{ blocked: object[], stateByNumber: Map<number,string> }|null>}
  */
 async function getGithubBlockedState(repoSpec, apiHost, fullName) {
   const forge = await ensureForgeReachable('blocked-issue-reconcile', { hostname: apiHost });
   if (!forge.ok) return null;
 
-  const ghList = (args, what) => execGh(args, undefined, { backoffKey: repoSpec }).catch((err) => {
-    console.error(`❌ blocked-issue-reconcile: ${what} failed for ${repoSpec}: ${err.message}`);
+  const blockedRaw = await execGh(['issue', 'list', '--repo', repoSpec, '--state', 'open',
+    '--label', BLOCKED_LABEL, '--limit', String(GH_LIST_LIMIT),
+    '--json', 'number,title,body,url,author'], undefined, { backoffKey: repoSpec }).catch((err) => {
+    console.error(`❌ blocked-issue-reconcile: gh issue list --label blocked failed for ${repoSpec}: ${err.message}`);
     return null;
   });
-
-  const [blockedRaw, allRaw] = await Promise.all([
-    ghList(['issue', 'list', '--repo', repoSpec, '--state', 'open',
-      '--label', BLOCKED_LABEL, '--limit', String(GH_LIST_LIMIT),
-      '--json', 'number,title,body,url,author'], 'gh issue list --label blocked'),
-    ghList(['issue', 'list', '--repo', repoSpec, '--state', 'all',
-      '--limit', String(GH_ALL_STATE_LIMIT), '--json', 'number,state'], 'gh issue list --state all'),
-  ]);
 
   const blocked = safeJSONParse(blockedRaw, null);
   if (!Array.isArray(blocked)) return null;
   // The blocked list can legitimately be empty (nothing to unblock) — a caller
   // reads that as "no candidates", not "gh failed", because it parsed fine.
-  const all = safeJSONParse(allRaw, null);
-  if (!Array.isArray(all)) return null;
 
   const trust = await createGithubActorTrust({ runGh: execGh, host: apiHost, repoFullName: fullName });
   const trustedBlocked = [];
   for (const issue of blocked) {
     if (await trust.isTrusted(issue.author?.login)) trustedBlocked.push(issue);
   }
+  const blockerNumbers = new Set(trustedBlocked.flatMap((i) => parseBlockingIssueNumbers(i.body)));
   const stateByNumber = new Map();
-  for (const issue of all) {
-    if (Number.isInteger(issue?.number)) stateByNumber.set(issue.number, normalizeIssueState(issue.state));
-  }
+  await Promise.all([...blockerNumbers].map(async (n) => {
+    const state = await resolveGithubBlockerState({ repoSpec, apiHost, fullName }, n);
+    if (state) stateByNumber.set(n, state);
+  }));
   return {
     blocked: trustedBlocked.map((i) => ({ number: i.number, title: i.title || '', url: i.url || '', body: i.body || '' })),
     stateByNumber,
