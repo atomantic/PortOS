@@ -50,5 +50,6 @@ describe('listVideoHistoryQuery', () => {
 
   it('rejects an oversized page', () => {
     expect(() => parse({ limit: '500' })).toThrow();
+    expect(() => parse({ offset: '5' })).toThrow();
   });
 });

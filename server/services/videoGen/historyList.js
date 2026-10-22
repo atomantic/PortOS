@@ -5,16 +5,18 @@ import { z } from 'zod';
 import { compactGalleryRecord } from '../mediaAssetIndex/logic.js';
 import { withMediaFileSizes } from '../../lib/mediaFileInfo.js';
 
-export const historyListQuerySchema = z.object({
+const queryShape = {
   limit: z.coerce.number().int().min(1).max(200).optional(),
-  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   q: z.string().max(500).default(''),
   hidden: z.enum(['true', 'false']).optional().transform(v => v === undefined ? undefined : v === 'true'),
   compact: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
-});
+};
+
+export const historyListQuerySchema = z.object(queryShape).refine(v => v.offset === undefined || v.limit !== undefined, { message: 'offset requires limit', path: ['offset'] });
 
 export const isHistoryListQuery = query =>
-  Object.keys(historyListQuerySchema.shape).some(key => query[key] !== undefined);
+  Object.keys(queryShape).some(key => query[key] !== undefined);
 
 // The shared card projection plus the two lineage/ownership scalars the timeline
 // surfaces read (the gallery's compact source drops them).
@@ -44,7 +46,7 @@ const time = value => Date.parse(value) || 0;
  * (callers that need every clip, e.g. the timeline editor). Only the returned
  * rows are `stat`ed, and compact rows are never `stat`ed.
  */
-export async function listVideoHistoryQuery({ limit, offset, q, hidden, compact }, history) {
+export async function listVideoHistoryQuery({ limit, offset = 0, q, hidden, compact }, history) {
   const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matching = (Array.isArray(history) ? history : []).filter(entry => entry
     && (hidden === undefined || !!entry.hidden === hidden)

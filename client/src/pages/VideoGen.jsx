@@ -587,9 +587,17 @@ export default function VideoGen() {
     const id = remixHandoffId;
     const current = () => settledRemixHandoffRef.current === id;
     getVideoHistoryItem(id, { silent: true })
-      .then((older) => { if (current()) { applyRemix(older); setRemixHandoffProblem(null); } })
-      .catch(() => { if (current()) setRemixHandoffProblem('missing'); })
-      .finally(() => { if (current()) consumeRemixHandoff(); });
+      .then((older) => {
+        if (!current()) return;
+        applyRemix(older);
+        setRemixHandoffProblem(null);
+        consumeRemixHandoff();
+      })
+      .catch((err) => {
+        if (!current()) return;
+        // Only a 404 means the clip is gone; any other failure keeps the param so Retry resolves it.
+        if (err?.status === 404) { setRemixHandoffProblem('missing'); consumeRemixHandoff(); } else setRemixHandoffProblem('error');
+      });
   }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
   // Back to 'loading' first, so a retry that fails again still moves the state
   // ('loading' → 'error') and re-runs the effect above.

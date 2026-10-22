@@ -125,7 +125,7 @@ export function resetVideoGenMockState() {
   state.runtimeStatus = { installed: true, ready: true, current: true };
   for (const key of SPIES) state[key].mockReset();
   state.listVideoHistory.mockResolvedValue([]);
-  state.getVideoHistoryItem.mockRejectedValue(new Error('Video history entry not found'));
+  state.getVideoHistoryItem.mockRejectedValue(Object.assign(new Error('Video history entry not found'), { status: 404 }));
   state.previewVideoPrompt.mockResolvedValue(null);
   state.listLorasFull.mockImplementation(async () => state.availableLoras);
 }
