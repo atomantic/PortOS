@@ -23,6 +23,8 @@ import {
   REVISION_SOURCES,
   rowToIngredient,
   rowToRevision,
+  CANONICAL_REFS_CTE,
+  inSet,
   HAS_LIVE_HOMING_REF,
   HAS_ANY_HOMING_REF,
   HOMING_REF_KINDS_SQL,
@@ -360,33 +362,47 @@ export async function reviveDeletedIngredient(id, { type, name, payload = {}, ta
 // directly instead of fetching-then-JS-filtering.
 const INGREDIENT_LIGHT_COLS = 'id, type, name, payload, tags, embedding_model, origin_instance_id, created_at, updated_at, deleted, deleted_at, sync_sequence';
 
-// Correlated subquery that yields the card-thumbnail media key for each row:
-// the live portrait when set, otherwise the most recent live reference image.
-// Non-image media kinds (audio/video/document) are excluded so a card never
-// points an <img> at an unrenderable key. Working images filed with a role —
-// reference sheets (`sheet:*`), looks (`look:*`) and plates — never become the
-// cover. Used only by listIngredients' light path (see the note there).
-const THUMBNAIL_KEY_SUBQUERY = `(
-    SELECT m.media_key FROM catalog_identity_read_media m
-     WHERE catalog_canonical_ingredient_id(m.ingredient_id) = catalog_ingredients.id
-       AND m.deleted = false
-       AND m.kind IN ('portrait', 'reference')
-       AND (m.role IS NULL OR NOT (m.role LIKE 'sheet:%' OR m.role LIKE 'look:%' OR m.role LIKE 'archive:%' OR m.role = 'plate'))
-     ORDER BY (m.kind = 'portrait') DESC, m.created_at DESC
-     LIMIT 1
-  ) AS thumbnail_key`;
-
-// Per-kind count of the distinct records each row is linked to ({ universe: 1,
-// series: 2 }), for the "used in" line on library cards. Same light-path scope
-// as the thumbnail subquery.
-const REF_USAGE_SUBQUERY = `(
-    SELECT jsonb_object_agg(u.ref_kind, u.n) FROM (
-      SELECT r.ref_kind, COUNT(DISTINCT r.ref_id) AS n FROM catalog_identity_read_refs r
-       WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
-         AND (r.ref_kind NOT IN (${HOMING_REF_KINDS_SQL}) OR ${liveHomingTargetSql('r')})
-       GROUP BY r.ref_kind
-    ) u
-  ) AS ref_usage`;
+// Card decorations for one already-limited page, in one grouped pass over each
+// identity read view (#12989 — a per-row correlated subquery re-evaluated the
+// whole view for every row). Light list path only (see listIngredients).
+//  - thumbnail_key: the live portrait when set, otherwise the most recent live
+//    reference image. Mirrors listMediaForIngredient's `(kind='portrait') DESC,
+//    created_at DESC` ordering so the card shows the detail page's avatar.
+//    Non-image kinds are excluded so a card never points an <img> at an
+//    unrenderable key, and role-filed working images — reference sheets
+//    (`sheet:*`), looks (`look:*`), archives and plates — never become the cover.
+//  - ref_usage: per-kind count of the distinct records the row is linked to
+//    ({ universe: 1, series: 2 }) for the "used in" line; a homing kind counts
+//    only live targets.
+async function decorateIngredientPage(ids) {
+  if (ids.length === 0) return new Map();
+  const result = await query(
+    `WITH page AS (SELECT DISTINCT unnest($1::text[]) AS id),
+     usage AS (
+       SELECT cid, jsonb_object_agg(ref_kind, n) AS ref_usage FROM (
+         SELECT r.cid, r.ref_kind, COUNT(DISTINCT r.ref_id) AS n
+           FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, ref_kind, ref_id
+                   FROM catalog_identity_read_refs WHERE deleted = false) r
+          WHERE ${inSet('r.cid', 'SELECT id FROM page')}
+            AND (r.ref_kind NOT IN (${HOMING_REF_KINDS_SQL}) OR ${liveHomingTargetSql('r')})
+          GROUP BY r.cid, r.ref_kind
+       ) u GROUP BY cid
+     ),
+     thumbs AS (
+       SELECT DISTINCT ON (m.cid) m.cid, m.media_key
+         FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, media_key, kind, created_at
+                 FROM catalog_identity_read_media
+                WHERE deleted = false AND kind IN ('portrait', 'reference')
+                  AND (role IS NULL OR NOT (role LIKE 'sheet:%' OR role LIKE 'look:%' OR role LIKE 'archive:%' OR role = 'plate'))) m
+        WHERE ${inSet('m.cid', 'SELECT id FROM page')}
+        ORDER BY m.cid, (m.kind = 'portrait') DESC, m.created_at DESC
+     )
+     SELECT page.id, thumbs.media_key AS thumbnail_key, usage.ref_usage
+       FROM page LEFT JOIN thumbs ON thumbs.cid = page.id LEFT JOIN usage ON usage.cid = page.id`,
+    [ids],
+  );
+  return new Map(result.rows.map((row) => [row.id, row]));
+}
 
 export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, scrapId = null, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
   const conditions = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)'];
@@ -397,6 +413,8 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
   // caller gets exactly the requested (still non-deleted) rows.
   const byIds = Array.isArray(ids) && ids.length > 0;
   let qIdx = null;
+  // Set by any filter that reads canonical_refs (CANONICAL_REFS_CTE).
+  let needsRefs = false;
   if (byIds) {
     conditions.push(`id IN (SELECT catalog_canonical_ingredient_id(requested) FROM unnest($${idx++}::text[]) requested)`);
     params.push(ids);
@@ -414,10 +432,12 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
       conditions.push(`search_tsv @@ websearch_to_tsquery('english', $${qIdx})`);
       params.push(q);
     }
-    // Album/facet filters (#1762). EXISTS subquery (not a JOIN) so a row linked
-    // under multiple roles isn't duplicated — no DISTINCT needed. Composes with
-    // type/tag/q above. `unlinked` and `orphaned` are mutually exclusive views
-    // of the un-homed set; the route schema rejects combining them with ref.
+    // Album/facet filters (#1762). A set-membership test (not a JOIN) so a row
+    // linked under multiple roles isn't duplicated — no DISTINCT needed — over
+    // the statement-level canonical_refs CTE, so the read view is evaluated once
+    // per statement, not once per row (#12989). Composes with type/tag/q above.
+    // `unlinked` and `orphaned` are mutually exclusive views of the un-homed
+    // set; the route schema rejects combining them with ref.
     if (refKind === 'universe' && refId) {
       // A universe album/filter is the universe's WHOLE membership: ingredients
       // linked directly to the universe OR to any live series under it (decision
@@ -425,33 +445,35 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
       // ingredient must still land in its parent universe). $refId is referenced
       // twice via one placeholder.
       const refIdx = idx++;
-      conditions.push(`EXISTS (SELECT 1 FROM catalog_identity_read_refs r
-        WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
-          AND ((r.ref_kind = 'universe' AND r.ref_id = $${refIdx})
+      needsRefs = true;
+      conditions.push(inSet('id', `SELECT r.cid FROM canonical_refs r
+        WHERE (r.ref_kind = 'universe' AND r.ref_id = $${refIdx})
             OR (r.ref_kind = 'series' AND r.ref_id IN (
-                  SELECT id FROM pipeline_series WHERE universe_id = $${refIdx} AND deleted = false))))`);
+                  SELECT id FROM pipeline_series WHERE universe_id = $${refIdx} AND deleted = false))`));
       params.push(refId);
     } else if (refKind && refId) {
-      conditions.push(`EXISTS (SELECT 1 FROM catalog_identity_read_refs r
-        WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
-          AND r.ref_kind = $${idx++} AND r.ref_id = $${idx++})`);
+      needsRefs = true;
+      conditions.push(inSet('id', `SELECT r.cid FROM canonical_refs r WHERE r.ref_kind = $${idx++} AND r.ref_id = $${idx++}`));
       params.push(refKind, refId);
     } else if (unlinked) {
       // "Unsorted / Raw": no universe/series ref at all.
-      conditions.push(`NOT ${HAS_ANY_HOMING_REF}`);
+      needsRefs = true;
+      conditions.push(`NOT (${HAS_ANY_HOMING_REF})`);
     } else if (orphaned) {
       // "Orphaned": has a universe/series ref, but none resolve to a live target.
+      needsRefs = true;
       conditions.push(HAS_ANY_HOMING_REF);
-      conditions.push(`NOT ${HAS_LIVE_HOMING_REF}`);
+      conditions.push(`NOT (${HAS_LIVE_HOMING_REF})`);
     }
   }
   // Source-scrap filter (#7617): "everything extracted from this piece" — a
   // provenance dimension independent of the ids/type/tag/q/ref branches above,
   // so it composes with any of them (unlike unlinked/orphaned/refKind, which
   // are mutually exclusive album views enforced at the schema level).
+  // One hashed pass over the sources read view (#12989).
   if (scrapId) {
-    conditions.push(`EXISTS (SELECT 1 FROM catalog_identity_read_sources cis
-      WHERE catalog_canonical_ingredient_id(cis.ingredient_id) = catalog_ingredients.id AND cis.scrap_id = $${idx++})`);
+    conditions.push(inSet('id', `SELECT catalog_canonical_ingredient_id(cis.ingredient_id)
+      FROM catalog_identity_read_sources cis WHERE cis.scrap_id = $${idx++}`));
     params.push(scrapId);
   }
   if (embeddingMissing) {
@@ -471,21 +493,23 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
     ? `ORDER BY ts_rank_cd(search_tsv, websearch_to_tsquery('english', $${qIdx})) DESC, created_at DESC`
     : `ORDER BY created_at DESC`;
   params.push(limit, offset);
-  // Card-thumbnail key: the live portrait if one exists, else the most recent
-  // reference image. Mirrors listMediaForIngredient's `(kind='portrait') DESC,
-  // created_at DESC` ordering so the card shows the same image the detail page
-  // treats as the avatar. Scoped to the light-column list path only — the
-  // includeEmbedding admin paths (re-embed/backfill) don't render cards and
-  // don't pay for the correlated subquery. The field rides ALONGSIDE
-  // rowToIngredient's shape (attached below), so the sync/revision payloads
-  // that share rowToIngredient stay untouched.
-  const cols = includeEmbedding ? '*' : `${INGREDIENT_LIGHT_COLS}, ${THUMBNAIL_KEY_SUBQUERY}, ${REF_USAGE_SUBQUERY}`;
+  // Card decorations (thumbnailKey, usage) are computed for the returned page
+  // only, and only on the light-column path — the includeEmbedding admin paths
+  // (re-embed/backfill) don't render cards. They ride ALONGSIDE
+  // rowToIngredient's shape, so the sync/revision payloads that share
+  // rowToIngredient stay untouched.
+  const cols = includeEmbedding ? '*' : INGREDIENT_LIGHT_COLS;
+  const withClause = needsRefs ? `WITH ${CANONICAL_REFS_CTE} ` : '';
   const result = await query(
-    `SELECT ${cols} FROM catalog_ingredients ${where} ${orderBy} LIMIT $${idx++} OFFSET $${idx}`,
+    `${withClause}SELECT ${cols} FROM catalog_ingredients ${where} ${orderBy} LIMIT $${idx++} OFFSET $${idx}`,
     params,
   );
+  const decorations = includeEmbedding ? new Map() : await decorateIngredientPage(result.rows.map((row) => row.id));
   return {
-    items: result.rows.map((row) => ({ ...rowToIngredient(row), thumbnailKey: row.thumbnail_key ?? null, usage: row.ref_usage ?? {} })),
+    items: result.rows.map((row) => {
+      const decoration = decorations.get(row.id);
+      return { ...rowToIngredient(row), thumbnailKey: decoration?.thumbnail_key ?? null, usage: decoration?.ref_usage ?? {} };
+    }),
     nextOffset: offset + result.rows.length,
   };
 }

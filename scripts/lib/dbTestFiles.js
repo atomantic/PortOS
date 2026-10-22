@@ -31,6 +31,7 @@ export const DB_TEST_INCLUDE = [
   'services/backup.db.test.js',
   'services/catalogDB.test.js',
   'services/catalogDB.facets.db.test.js',
+  'services/catalogDB/listIngredients.db.test.js',
   'services/catalogDB.media.db.test.js',
   'services/catalogSync.tombstoneRevival.db.test.js',
   'services/catalogSync.changeClock.db.test.js',
