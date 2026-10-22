@@ -95,7 +95,18 @@ describe('music-video scene completion hooks → takes', () => {
     musicVideoEvents.off('scene-failure', onFailure);
   });
 
-  afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
+  // A hook still settling when the file ends can write the project store after the
+  // root is gone, and that write recreates the directory (#12883). Detach first so
+  // nothing new is accepted, drain what is in flight, then remove the root; a
+  // second removal after a tick catches a straggler that recreated it anyway.
+  afterAll(async () => {
+    imageHook.__testing.reset();
+    videoHook.__testing.reset();
+    await Promise.all([imageHook.__testing.settled(), videoHook.__testing.settled()]);
+    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+    await new Promise((r) => setTimeout(r, 50));
+    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+  });
 
   it('keeps both of two out-of-order renders; the first to land fills the empty slot', async () => {
     // The newer-queued render completes first, then the older one lands late —
