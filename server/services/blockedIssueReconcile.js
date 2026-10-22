@@ -35,6 +35,8 @@ export const BLOCKED_LABEL = 'blocked';
 // Bound the forge queries — single-user repos never realistically truncate at
 // this size (mirrors issueReconcile.js's GH_LIST_LIMIT / GL_PER_PAGE).
 const GH_LIST_LIMIT = 100;
+// Concurrent `gh api` blocker lookups per batch — bounds spawned processes.
+const GH_LOOKUP_BATCH = 8;
 const GL_PER_PAGE = 100;
 
 /**
@@ -104,8 +106,7 @@ async function getGithubBlockedState(repoSpec, apiHost, fullName) {
 
   const blocked = safeJSONParse(blockedRaw, null);
   if (!Array.isArray(blocked)) return null;
-  // The blocked list can legitimately be empty (nothing to unblock) — a caller
-  // reads that as "no candidates", not "gh failed", because it parsed fine.
+  // An empty list parsed fine: "no candidates", not "gh failed".
 
   const trust = await createGithubActorTrust({ runGh: execGh, host: apiHost, repoFullName: fullName });
   const trustedBlocked = [];
@@ -114,10 +115,13 @@ async function getGithubBlockedState(repoSpec, apiHost, fullName) {
   }
   const blockerNumbers = new Set(trustedBlocked.flatMap((i) => parseBlockingIssueNumbers(i.body)));
   const stateByNumber = new Map();
-  await Promise.all([...blockerNumbers].map(async (n) => {
-    const state = await resolveGithubBlockerState({ repoSpec, apiHost, fullName }, n);
-    if (state) stateByNumber.set(n, state);
-  }));
+  const numbers = [...blockerNumbers];
+  for (let i = 0; i < numbers.length; i += GH_LOOKUP_BATCH) {
+    await Promise.all(numbers.slice(i, i + GH_LOOKUP_BATCH).map(async (n) => {
+      const state = await resolveGithubBlockerState({ repoSpec, apiHost, fullName }, n);
+      if (state) stateByNumber.set(n, state);
+    }));
+  }
   return {
     blocked: trustedBlocked.map((i) => ({ number: i.number, title: i.title || '', url: i.url || '', body: i.body || '' })),
     stateByNumber,
