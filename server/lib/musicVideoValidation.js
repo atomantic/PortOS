@@ -58,6 +58,7 @@ import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from 
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
+import { STORYBOARD_ID_PATTERN } from './storyboardVocabulary.js';
 import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
@@ -1462,6 +1463,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
   // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
   statsOutro: musicVideoStatsOutroSchema.nullable().optional(),
+  // The Create › Storyboards board this video is planned from; null unlinks.
+  storyboardId: z.string().regex(STORYBOARD_ID_PATTERN, 'storyboardId must be a storyboard id').nullable().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server

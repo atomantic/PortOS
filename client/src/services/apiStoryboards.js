@@ -74,3 +74,7 @@ export const extractStoryboardBeats = (id, input, options) =>
   request(`/storyboards/${enc(id)}/beats/extract`, { ...json('POST', input), ...options });
 export const addStoryboardBeats = (id, beats, options) =>
   request(`/storyboards/${enc(id)}/beats/add`, { ...json('POST', { beats }), ...options });
+
+// A new board built from a music video's shots, linked to it → { board, project }.
+export const makeStoryboardFromMusicVideo = (projectId, options) =>
+  request(`/storyboards/from-music-video/${enc(projectId)}`, { method: 'POST', ...options });
