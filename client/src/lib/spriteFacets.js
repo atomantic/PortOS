@@ -24,12 +24,8 @@
  *   atlas/<file>                              imported props atlas family
  */
 
-// Mirrors server/services/sprites/prompts.js SPRITE_DIRECTIONS (the client
-// can't import server modules; WalkWorkflow mirrors WALK_PHASES the same way).
-export const SPRITE_DIRECTIONS = [
-  'south', 'south-east', 'east', 'north-east',
-  'north', 'north-west', 'west', 'south-west',
-];
+import { SPRITE_DIRECTIONS } from '../../../server/lib/spriteVocabulary.js';
+export { SPRITE_DIRECTIONS };
 
 /**
  * Every role. The first seven, in this order, are the groups the collection

@@ -17,6 +17,10 @@
 
 import { randomUUID } from 'crypto';
 import { trimTo } from './textUtils.js';
+import { TEMPO_MIN, TEMPO_MAX, PARTNERS_MAX, SCORE_PARTS_MAX } from './roundsBounds.js';
+
+// Tempo and part-count bounds live in roundsBounds.js (a browser-safe leaf); re-exported here for the service and routes.
+export { TEMPO_MIN, TEMPO_MAX, PARTNERS_MAX, SCORE_PARTS_MAX };
 
 // --- Shape bounds (shared with routes/rounds.js#roundInputSchema) -------------
 export const TITLE_MAX_LENGTH = 200;
@@ -24,17 +28,13 @@ export const ARTIST_MAX_LENGTH = 200;
 export const KEY_MAX_LENGTH = 24;
 export const FIELD_MAX_LENGTH = 4000;      // lyrics body / general notes
 export const SCORE_MAX_LENGTH = 8000;      // sheet-music notation (lead-sheet DSL)
-export const SCORE_PARTS_MAX = 12;         // harmony variations of the sheet music
 export const LABEL_MAX_LENGTH = 120;       // section + layer labels
 export const PART_MAX_LENGTH = 60;         // layer voice (e.g. "Bass")
 export const ID_MAX_LENGTH = 60;           // rhythm-shape / layer ids
-export const TEMPO_MIN = 20;
-export const TEMPO_MAX = 320;
 export const SECTIONS_MAX = 60;
 export const LAYERS_MAX = 24;
 export const RECORDINGS_MAX = 64;      // saved vocal takes for layered playback
 export const REFERENCES_MAX = 12;      // reference links/videos (e.g. TikTok)
-export const PARTNERS_MAX = 12;        // partner-song ids (rounds sung together)
 export const URL_MAX_LENGTH = 512;     // uploaded-file path/url
 // Reference-audio analysis (#2106): labeled time ranges on a reference's
 // attached audio ("0:00–0:14 melody alone"). Bounded so a hand-edited file

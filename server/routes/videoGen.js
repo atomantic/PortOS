@@ -96,6 +96,7 @@ import {
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
+import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 
 const router = Router();
 
@@ -250,7 +251,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
     (v) => (v == null || v === '' ? undefined : v),
     z.enum(I2V_REFERENCE_MODES).optional(),
   ),
-  [VIDEO_GEN_LOCAL_ONLY_FIELDS.TILING]: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
+  [VIDEO_GEN_LOCAL_ONLY_FIELDS.TILING]: z.enum(VIDEO_TILING_MODES).optional(),
   // Which prompt conditioner reads the prompt (lib/videoTextEncoders.js).
   // Validated loosely here and resolved against the MODEL's own option list in
   // the service — the set is per-runtime, so a route-level enum would either

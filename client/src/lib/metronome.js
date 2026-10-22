@@ -16,11 +16,12 @@
 
 import { parseScore } from './scoreNotation.js';
 import { getAudioContext as audioContext, resumeAudioContext } from './audioContext.js';
+import { TEMPO_MIN, TEMPO_MAX } from '../../../server/lib/roundsBounds.js';
 
-// BPM band — mirrors the server `tempo` validation (services/rounds.js
-// TEMPO_MIN / TEMPO_MAX, also enforced by the Zod schema in routes/rounds.js).
-export const METRONOME_BPM_MIN = 20;
-export const METRONOME_BPM_MAX = 320;
+// BPM band — the rounds tempo bounds (server/lib/roundsBounds.js), so the
+// metronome and the server's `tempo` validation cannot drift.
+export const METRONOME_BPM_MIN = TEMPO_MIN;
+export const METRONOME_BPM_MAX = TEMPO_MAX;
 export const DEFAULT_BPM = 120;
 
 const DEFAULT_BEATS_PER_BAR = 4;

@@ -4,7 +4,7 @@ export * from './publicGuestRoutes.js';
 // See client/src/lib/README.md for the human-readable catalog and
 // AGENTS.md "Module organization" for the maintenance convention.
 
-// === Prompt & rendering (mirror server/lib/ — keep byte-for-byte in sync) ===
+// === Prompt & rendering (some re-export server/lib/, others are byte-for-byte mirrors; see client/src/lib/README.md) ===
 export * from './canonPrompt.js';
 export * from './cleanPlatePrompt.js';
 export * from './composeStyledPrompt.js';
