@@ -206,6 +206,7 @@ export * from './agentApiToken.js';
 export * from './localReviewBridge.js';
 export * from './agentCompletionMode.js';
 export * from './localEndpoint.js';
+export * from './localLlmConcurrency.js';
 export * from './cliProviderArgs.js';
 export * from './cliProviderRun.js';
 export * from './cliStderrNoise.js';
