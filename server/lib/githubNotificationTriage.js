@@ -200,7 +200,7 @@ const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
 const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
 
-export function threadAgentKind(row) {
+function threadAgentKind(row) {
   if (row?.reason === 'security_alert') return 'security-alert';
   if (row?.reason === 'review_requested' && row.subject_type === 'PullRequest') return 'review-request';
   if (row?.subject_type === 'Issue') return 'issue-activity';
@@ -211,7 +211,7 @@ export function threadAgentKind(row) {
  * The account's agent rule for a kind of thread in a repo: the repo's own rule,
  * else the `*` rule, else null. A malformed stored rule is ignored.
  */
-export function matchAgentRule(rules, kind, repo) {
+function matchAgentRule(rules, kind, repo) {
   if (!Array.isArray(rules) || !kind) return null;
   const valid = rules.filter((rule) => rule && RULE_KINDS.has(rule.kind) && rule.kind === kind
     && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo) && typeof rule.agent === 'boolean');
