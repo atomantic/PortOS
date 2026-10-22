@@ -257,6 +257,9 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           <GoalLinkedActivities
             goal={goal}
             activities={s.activities}
+            activitiesState={s.activitiesState}
+            activitiesError={s.activitiesError}
+            retryActivities={s.retryActivities}
             selectedActivity={s.selectedActivity}
             setSelectedActivity={s.setSelectedActivity}
             handleLinkActivity={s.handleLinkActivity}
@@ -267,6 +270,9 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           <GoalLinkedCalendars
             goal={goal}
             subcalendars={s.subcalendars}
+            subcalendarsState={s.subcalendarsState}
+            subcalendarsError={s.subcalendarsError}
+            retrySubcalendars={s.retrySubcalendars}
             selectedCalendar={s.selectedCalendar}
             setSelectedCalendar={s.setSelectedCalendar}
             calendarMatchPattern={s.calendarMatchPattern}

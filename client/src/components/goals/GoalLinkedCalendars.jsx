@@ -1,7 +1,8 @@
 import { CalendarDays, Unlink } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 
 export default function GoalLinkedCalendars({
-  goal, subcalendars, selectedCalendar, setSelectedCalendar,
+  goal, subcalendars, subcalendarsState, subcalendarsError, retrySubcalendars, selectedCalendar, setSelectedCalendar,
   calendarMatchPattern, setCalendarMatchPattern, handleLinkCalendar, handleUnlinkCalendar
 }) {
   return (
@@ -32,6 +33,13 @@ export default function GoalLinkedCalendars({
             </div>
           ))}
         </div>
+      )}
+      {subcalendarsState === 'error' && (
+        <ListLoadError what="calendars" error={subcalendarsError} onRetry={retrySubcalendars} />
+      )}
+      {subcalendarsState === 'loading' && <p className="text-xs text-gray-500">Loading calendars…</p>}
+      {subcalendarsState === 'ready' && subcalendars.length === 0 && (
+        <p className="text-xs text-gray-500">No calendars available to link.</p>
       )}
       {subcalendars.length > 0 && (
         <div className="space-y-1">
