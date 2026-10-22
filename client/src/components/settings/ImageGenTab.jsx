@@ -100,12 +100,12 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   agyEnabled: false,
   agyPath: '',
   agyModel: '',
-  // fal.ai image backend — a metered API, gated by its own toggle like the
-  // CLIs. The API key is NOT part of this slice: it is the fal.ai credential
-  // the video backend already owns (the Defaults tab's key row).
   runwayEnabled: false,
   runwayModel: 'gen4_image',
   runwayResolution: '720p',
+  // fal.ai image backend — a metered API, gated by its own toggle like the
+  // CLIs. The API key is NOT part of this slice: it is the fal.ai credential
+  // the video backend already owns (the Defaults tab's key row).
   falEnabled: false,
   // '' = no pin → FAL_IMAGE_DEFAULT_MODEL server-side.
   falModel: '',

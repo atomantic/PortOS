@@ -96,10 +96,10 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const [selectedLoras, setSelectedLoras] = useState([]);
   const [agyModel, setAgyModel] = useState('');
   const [savedAgyModel, setSavedAgyModel] = useState('');
-  // Per-render fal.ai model ('' = the Settings default) and that default, for
-  // the picker's "Settings default (…)" row.
   const [runwayModel, setRunwayModel] = useState('');
   const [savedRunwayModel, setSavedRunwayModel] = useState('');
+  // Per-render fal.ai model ('' = the Settings default) and that default, for
+  // the picker's "Settings default (…)" row.
   const [falModel, setFalModel] = useState('');
   const [savedFalModel, setSavedFalModel] = useState('');
   const [savedLocalModelId, setSavedLocalModelId] = useState(null);

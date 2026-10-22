@@ -68,6 +68,13 @@ describe('Runway image workflow', () => {
     expect(sidecar.referenceTags.map((r) => r.filename)).toEqual(['hero.png', 'rival.png']);
     expect(JSON.stringify(sidecar)).not.toContain(root);
   });
+  it('reports the supplied and added prompt lengths before spending instead of silently cutting text', async () => {
+    await expect(runway.generateImage({ prompt: 'x'.repeat(990), negativePrompt: 'a long negative' })).rejects.toMatchObject({
+      status: 400, code: 'RUNWAY_IMAGE_PROMPT_TOO_LONG',
+      message: expect.stringContaining('990 supplied, plus 24 from reference tags and the negative prompt'),
+    });
+    expect(calls).toEqual([]);
+  });
   it('refuses an oversized encoded reference before any paid submission', async () => {
     const path = join(PATHS.images, 'large.png');
     await writeFile(path, Buffer.concat([output, Buffer.alloc(4_000_000)]));

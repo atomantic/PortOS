@@ -137,6 +137,12 @@ async function generateImagePrepared({
   const outputPath = join(PATHS.images, filename);
   if (inputImages.paths.length !== (initImagePath ? 1 : 0) + referenceImagePaths.length) throw new ServerError('Runway reference inputs are unavailable or exceed the three-image limit', { status: 400, code: 'RUNWAY_IMAGE_INPUT_INVALID' });
   const { fullPrompt, references, record: sentRecord } = runwayImageSentPrompt({ prompt, negativePrompt, inputImages, initImageStrength, visualConditioning, promptAdditions });
+  if (fullPrompt.length > family.promptMaxChars) {
+    throw new ServerError(
+      `Runway's complete prompt is ${fullPrompt.length}/${family.promptMaxChars} characters: ${prompt.length} supplied, plus ${fullPrompt.length - prompt.length} from reference tags and the negative prompt. Shorten the supplied or negative prompt; the full text is available in Show full prompt. Nothing was submitted or truncated.`,
+      { status: 400, code: 'RUNWAY_IMAGE_PROMPT_TOO_LONG' },
+    );
+  }
   const request = buildRunwayImageRequest({ modelId: family.id, prompt: fullPrompt, resolution, ratio, width, height, seed, referenceImages: references.map((ref) => ({ uri: '(validated input)', tag: ref.tag })) });
 
   const meta = {
