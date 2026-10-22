@@ -14,7 +14,7 @@ import StoryboardLinkPanel from '../StoryboardLinkPanel.jsx';
 export default function PlanStage({ board }) {
   const { project, locked, busy, treatment } = board;
   const scenes = project.scenes || [];
-  // Linking a board changes no shot, so it stays usable while shots are locked.
+  // Linking a board changes no shot, so it stays usable while shots are locked; Fit to song writes them and is not.
   const linkStoryboard = (storyboardId, { saved = false } = {}) => {
     board.editProjectLocal({ storyboardId });
     if (!saved) board.saveProjectFields({ storyboardId });
@@ -43,7 +43,8 @@ export default function PlanStage({ board }) {
         )}
       </fieldset>
       <StageSection id="mv-board-storyboard" title="Storyboard" summary={project.storyboardId ? 'Linked' : 'Plan the story as beats and panels'}>
-        <StoryboardLinkPanel project={project} onLink={linkStoryboard} />
+        <StoryboardLinkPanel project={project} onLink={linkStoryboard} fitDisabled={locked || busy.planning || busy.arranging}
+          onFitted={(saved) => board.editProjectLocal(saved)} />
       </StageSection>
     </div>
   );

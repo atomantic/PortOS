@@ -139,3 +139,10 @@ const addedPanel = z.object({
 export const storyboardBeatsAddSchema = z.object({
   beats: z.array(z.object({ ...beatFields, panels: z.array(addedPanel).max(L.panelsPerBeat) }).strict()).min(1).max(L.beats),
 }).strict();
+
+// Fit to song: the board revision the preview was built from, and the beat starts the user picked.
+export const storyboardFitSchema = z.object({
+  boardUpdatedAt: z.string().min(1).max(64),
+  starts: z.record(entityId, z.number().min(0).max(36000))
+    .refine((starts) => Object.keys(starts).length <= L.beats, { message: `At most ${L.beats} picked starts` }).optional(),
+}).strict();

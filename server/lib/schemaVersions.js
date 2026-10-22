@@ -740,8 +740,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `offsetFrames`, `reverse`, `holdLastFrame`, `filmLook`, `transitionIn`/
   // `transitionOut`, `glitches`, `cutEffect`, `imageEffect`/`imageEffectSec`,
   // `stillMove` and `performanceStyle`. Optional fields on the same layout; no
-  // migration or backfill. A field added to these normalizers later needs v23.
-  musicVideoProjects: 22,
+  // migration or backfill.
+  // v23 = a shot's storyboard panel link (`scene.panelId`/`panelRev`, Fit to
+  // song), which a v22 re-plan or split rebuilds without. Optional, no backfill.
+  // A field added to these normalizers later needs v24.
+  musicVideoProjects: 23,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
