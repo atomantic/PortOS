@@ -87,6 +87,20 @@ export async function saveCodeAnimationJobRecord(job) {
   return job;
 }
 
+/** Remove the job's row; the audit trigger keeps a copy of it. */
+export async function deleteCodeAnimationJobRecord(id) {
+  if (!isCodeAnimationJobId(id)) return false;
+  const { rowCount } = await query('DELETE FROM code_animation_jobs WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
+/** The job's on-disk files (HTML, poster) that exist. */
+export async function codeAnimationJobFiles(id) {
+  const paths = [htmlPath(id), codeAnimationPosterPath(id)];
+  const found = await Promise.all(paths.map(async (path) => ((await stat(path).catch(() => null))?.isFile() ? path : null)));
+  return found.filter(Boolean);
+}
+
 export async function saveCodeAnimationHtml(id, html) {
   const destination = htmlPath(id);
   await atomicWrite(destination, html);

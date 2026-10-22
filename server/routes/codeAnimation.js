@@ -36,6 +36,7 @@ import {
   buildCodeAnimationRequest,
   captureCodeAnimationJobPoster,
   codeAnimationPosterPath,
+  deleteCodeAnimationJob,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   listCodeAnimationJobs,
@@ -223,6 +224,12 @@ router.get('/generate/:id', asyncHandler(async (req, res) => {
   const job = await getCodeAnimationJob(req.params.id);
   if (!job) throw new ServerError('Generation job not found', { status: 404, code: 'NOT_FOUND' });
   res.json(job);
+}));
+
+// Delete a gallery item: its files go to the system Trash, then the row.
+router.delete('/jobs/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await deleteCodeAnimationJob(id));
 }));
 
 const projectPageSchema = z.object({

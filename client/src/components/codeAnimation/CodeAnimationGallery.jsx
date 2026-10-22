@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock3, FileCode2, ImageOff, LoaderCircle, Sparkles } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock3, FileCode2, ImageOff, LoaderCircle, Sparkles, Trash2 } from 'lucide-react';
 import { Link } from 'react-router';
 import useMounted from '../../hooks/useMounted';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { usePagedCollection } from '../../hooks/usePagedCollection';
 import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import socket from '../../services/socket';
-import { codeAnimationPosterUrl, listCodeAnimationJobPage, requestCodeAnimationPoster } from '../../services/api';
+import { codeAnimationPosterUrl, deleteCodeAnimationJob, listCodeAnimationJobPage, requestCodeAnimationPoster } from '../../services/api';
 import { formatCount, timeAgo } from '../../utils/formatters';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import toast from '../ui/Toast';
 
 const STATUS = {
   running: { icon: Clock3, label: 'In progress', tone: 'text-port-accent' },
@@ -30,32 +33,53 @@ function PosterPlaceholder({ item, capturing }) {
   return <ImageOff className="h-8 w-8 text-gray-600" aria-hidden="true" />;
 }
 
-function GalleryCard({ item, capturing }) {
+function GalleryCard({ item, capturing, confirming, deleting, onRequestDelete, onCancelDelete, onConfirmDelete }) {
   const status = STATUS[item.status] || STATUS.failed;
   const StatusIcon = status.icon;
+  const title = item.title || 'Untitled animation';
   return (
-    <Link
-      to={`/code-animation/${encodeURIComponent(item.id)}`}
-      className="group min-w-0 overflow-hidden rounded-xl border border-port-border bg-port-card transition-colors hover:border-port-accent"
-    >
-      <div className="relative flex aspect-video items-center justify-center bg-black">
-        {item.posterVersion
-          ? <img src={codeAnimationPosterUrl(item.id, item.posterVersion)} alt="" loading="lazy" className="h-full w-full object-contain" />
-          : <PosterPlaceholder item={item} capturing={capturing} />}
-        {item.status !== 'completed' && (
-          <span className="port-media-overlay absolute left-2 top-2 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs">
-            <StatusIcon className={`h-3 w-3 ${status.tone}`} aria-hidden="true" /> {status.label}
-          </span>
-        )}
-      </div>
-      <div className="space-y-1 p-3">
-        <p className="truncate text-sm font-medium text-white group-hover:text-port-accent">{item.title || 'Untitled animation'}</p>
-        <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
-          <span className="min-w-0 truncate">{item.status === 'completed' ? (item.model || 'Completed') : status.label}</span>
-          <span className="shrink-0">{timeAgo(item.createdAt)}</span>
+    <div className="relative min-w-0">
+      <Link
+        to={`/code-animation/${encodeURIComponent(item.id)}`}
+        className="group block min-w-0 overflow-hidden rounded-xl border border-port-border bg-port-card transition-colors hover:border-port-accent"
+      >
+        <div className="relative flex aspect-video items-center justify-center bg-black">
+          {item.posterVersion
+            ? <img src={codeAnimationPosterUrl(item.id, item.posterVersion)} alt="" loading="lazy" className="h-full w-full object-contain" />
+            : <PosterPlaceholder item={item} capturing={capturing} />}
+          {item.status !== 'completed' && (
+            <span className="port-media-overlay absolute left-2 top-2 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs">
+              <StatusIcon className={`h-3 w-3 ${status.tone}`} aria-hidden="true" /> {status.label}
+            </span>
+          )}
         </div>
-      </div>
-    </Link>
+        <div className="space-y-1 p-3">
+          <p className="truncate text-sm font-medium text-white group-hover:text-port-accent">{title}</p>
+          <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
+            <span className="min-w-0 truncate">{item.status === 'completed' ? (item.model || 'Completed') : status.label}</span>
+            <span className="shrink-0">{timeAgo(item.createdAt)}</span>
+          </div>
+        </div>
+      </Link>
+      {/* A generating animation can't be deleted until it finishes. */}
+      {item.status !== 'running' && !confirming && (
+        <button type="button" onClick={() => onRequestDelete(item.id)} disabled={deleting}
+          aria-label={`Delete ${title}`}
+          className="port-media-overlay absolute right-2 top-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-gray-200 hover:text-port-error disabled:opacity-40">
+          {deleting ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+        </button>
+      )}
+      {confirming && (
+        <InlineConfirmRow
+          className="mt-2"
+          autoFocus
+          aria-label={`Delete ${title}?`}
+          question={`Delete “${title}”? Its files go to the Trash.`}
+          onConfirm={() => onConfirmDelete(item)}
+          onCancel={onCancelDelete}
+        />
+      )}
+    </div>
   );
 }
 
@@ -104,6 +128,19 @@ export default function CodeAnimationGallery() {
     }
   }, [items, setItems, mounted]);
 
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const [deleting, setDeleting] = useState(() => new Set());
+  const handleDelete = (item) => confirmDelete(async () => {
+    setDeleting((previous) => new Set(previous).add(item.id));
+    const done = await deleteCodeAnimationJob(item.id, { silent: true })
+      .catch((error) => { toast.error(error.message || 'Could not delete the animation'); return null; });
+    if (!mounted.current) return;
+    setDeleting((previous) => { const next = new Set(previous); next.delete(item.id); return next; });
+    if (!done) return;
+    setItems((previous) => previous.filter((entry) => entry.id !== item.id));
+    toast.success(`Deleted ${item.title || 'the animation'}`);
+  });
+
   const counts = gallery.meta || { running: 0, completed: 0 };
   return (
     <div className="space-y-4">
@@ -128,7 +165,9 @@ export default function CodeAnimationGallery() {
       {items.length > 0 && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {items.map((item) => (
-            <GalleryCard key={item.id} item={item} capturing={capturing.has(item.id)} />
+            <GalleryCard key={item.id} item={item} capturing={capturing.has(item.id)}
+              confirming={isConfirming(item.id)} deleting={deleting.has(item.id)}
+              onRequestDelete={requestDelete} onCancelDelete={cancelDelete} onConfirmDelete={handleDelete} />
           ))}
         </div>
       )}

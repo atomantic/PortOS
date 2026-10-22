@@ -37,9 +37,12 @@ vi.mock('../services/codeAnimation/jobStore.js', () => ({
   readCodeAnimationHtml: vi.fn(async (id) => codeAnimationHtml.get(id)),
   saveCodeAnimationHtml: vi.fn(async (id, html) => codeAnimationHtml.set(id, html)),
   saveCodeAnimationJobRecord: vi.fn(async (job) => codeAnimationRecords.set(job.id, job)),
+  deleteCodeAnimationJobRecord: vi.fn(async (id) => codeAnimationRecords.delete(id)),
+  codeAnimationJobFiles: vi.fn(async (id) => (codeAnimationHtml.has(id) ? [`/animations/${id}.html`] : [])),
   codeAnimationPosterPath: (id) => `${process.env.PORTOS_TEST_POSTER_DIR}/${id}.jpg`,
   codeAnimationPosterVersions: vi.fn(async (ids) => new Map(ids.filter((id) => codeAnimationPosters.has(id)).map((id) => [id, codeAnimationPosters.get(id)]))),
 }));
+vi.mock('../lib/nativeTrash.js', () => ({ moveToNativeTrash: vi.fn(async () => {}) }));
 vi.mock('../services/codeAnimation/poster.js', () => ({
   captureCodeAnimationPoster: vi.fn(async (id) => {
     writeFileSync(`${process.env.PORTOS_TEST_POSTER_DIR}/${id}.jpg`, 'jpeg-bytes');
@@ -81,6 +84,7 @@ vi.mock('../services/trackAlbumMembership.js', () => ({
 }));
 
 import { emitCodeAnimationChanged } from '../services/socket.js';
+import { moveToNativeTrash } from '../lib/nativeTrash.js';
 import { isEngineHealthy } from '../services/pipeline/musicGen.js';
 import { queueMusicGeneration } from '../services/musicGeneration.js';
 import { createTrackWithAlbum } from '../services/trackAlbumMembership.js';
@@ -180,6 +184,34 @@ describe('Code Animation fast-export audio notes', () => {
       } });
     }
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/code-animation/jobs/:id', () => {
+  const id = '00000000-0000-4000-8000-000000000004';
+  const finished = { id, status: 'completed', title: 'Station boot', input: {}, frame: { durationSeconds: 20 } };
+
+  it('moves the files to the Trash before removing the gallery item', async () => {
+    codeAnimationRecords.set(id, finished);
+    codeAnimationHtml.set(id, '<!doctype html>');
+    const app = makeApp();
+    const res = await request(app).delete(`/api/code-animation/jobs/${id}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ id, deleted: true });
+    expect(moveToNativeTrash).toHaveBeenCalledWith([`/animations/${id}.html`]);
+    expect(codeAnimationRecords.has(id)).toBe(false);
+    expect(emitCodeAnimationChanged).toHaveBeenCalledWith(id, 'deleted');
+    expect((await request(app).delete(`/api/code-animation/jobs/${id}`)).status).toBe(404);
+  });
+
+  it('keeps the item when the Trash refuses its files', async () => {
+    codeAnimationRecords.set(id, finished);
+    codeAnimationHtml.set(id, '<!doctype html>');
+    moveToNativeTrash.mockRejectedValueOnce(Object.assign(new Error('refused'), { code: 'TRASH_REFUSED' }));
+    const res = await request(makeApp()).delete(`/api/code-animation/jobs/${id}`);
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('CODE_ANIMATION_TRASH_FAILED');
+    expect(codeAnimationRecords.has(id)).toBe(true);
   });
 });
 
