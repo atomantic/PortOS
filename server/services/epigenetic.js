@@ -4,6 +4,8 @@ import { atomicWrite, PATHS, ensureDir, readJSONFile, unreadableStoreError } fro
 
 import { isPlainObject } from '../lib/objects.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone, userLocalToday } from './userTimezone.js';
 
 const DATA_DIR = PATHS.meatspace;
 const EPIGENETIC_FILE = join(DATA_DIR, 'epigenetic.json');
@@ -266,6 +268,10 @@ export async function addIntervention(intervention) {
  * Log a daily entry for a tracked intervention.
  */
 export async function logEntry(interventionId, entry) {
+  // One instant for the day key and loggedAt. The server runs TZ=UTC, so the
+  // default day must come from the user's timezone (#12972).
+  const now = new Date();
+  const date = entry.date || await userLocalToday(now);
   return queueWrite(async () => {
     const data = await loadData();
     const intervention = data.interventions[interventionId];
@@ -273,11 +279,11 @@ export async function logEntry(interventionId, entry) {
 
     const log = {
       id: randomUUID(),
-      date: entry.date || new Date().toISOString().split('T')[0],
+      date,
       amount: entry.amount,
       unit: intervention.trackingUnit,
       notes: entry.notes || '',
-      loggedAt: new Date().toISOString()
+      loggedAt: now.toISOString()
     };
 
     // Avoid duplicate date entries — update existing
@@ -339,10 +345,8 @@ export async function deleteIntervention(interventionId) {
  */
 export async function getComplianceSummary(days = 30) {
   const data = await loadData();
-  const today = new Date();
-  const startDate = new Date(today);
-  startDate.setDate(startDate.getDate() - days);
-  const startStr = startDate.toISOString().split('T')[0];
+  const today = todayInTimezone(await getUserTimezone());
+  const startStr = shiftDay(today, -days);
 
   const summary = {};
   for (const [id, intervention] of Object.entries(data.interventions)) {
@@ -362,7 +366,7 @@ export async function getComplianceSummary(days = 30) {
       expectedDays,
       recentLogCount: recentLogs.length,
       lastLogged: recentLogs.length > 0 ? recentLogs[recentLogs.length - 1].date : null,
-      streak: calculateStreak(intervention.logs)
+      streak: calculateStreak(intervention.logs, today)
     };
   }
 
@@ -372,30 +376,24 @@ export async function getComplianceSummary(days = 30) {
 /**
  * Calculate the current consecutive-day streak for an intervention.
  */
-function calculateStreak(logs) {
+function calculateStreak(logs, today) {
   if (logs.length === 0) return 0;
 
-  const today = new Date().toISOString().split('T')[0];
   const dates = new Set(logs.map(l => l.date));
 
   // Check if today or yesterday has an entry (grace period)
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
-
-  if (!dates.has(today) && !dates.has(yesterdayStr)) return 0;
+  const yesterday = shiftDay(today, -1);
+  if (!dates.has(today) && !dates.has(yesterday)) return 0;
 
   let streak = 0;
-  const startDate = dates.has(today) ? new Date() : yesterday;
-
-  for (let d = new Date(startDate); ; d.setDate(d.getDate() - 1)) {
-    const dateStr = d.toISOString().split('T')[0];
-    if (dates.has(dateStr)) {
-      streak++;
-    } else {
-      break;
-    }
+  for (let day = dates.has(today) ? today : yesterday; dates.has(day); day = shiftDay(day, -1)) {
+    streak++;
   }
-
   return streak;
+}
+
+// Calendar arithmetic on a YYYY-MM-DD key; UTC math keeps DST out of it.
+function shiftDay(dayStr, delta) {
+  const [y, m, d] = dayStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().split('T')[0];
 }

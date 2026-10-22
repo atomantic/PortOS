@@ -21,6 +21,15 @@ vi.mock('fs/promises', async () => {
   return { ...actual, readFile: vi.fn(actual.readFile) };
 });
 
+let mockTimezone = 'UTC';
+vi.mock('./userTimezone.js', async () => {
+  const { todayInTimezone } = await import('../lib/timezone.js');
+  return {
+    getUserTimezone: async () => mockTimezone,
+    userLocalToday: async (at = new Date()) => todayInTimezone(mockTimezone, at),
+  };
+});
+
 const { atomicWrite } = await import('../lib/fileUtils.js');
 const fileUtils = await vi.importActual('../lib/fileUtils.js');
 const { readFile: realReadFile } = await vi.importActual('fs/promises');
@@ -94,11 +103,63 @@ describe('epigenetic intervention persistence', () => {
   });
 
   afterEach(() => {
+    mockTimezone = 'UTC';
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   afterAll(cleanup);
+
+  describe('user-local day keys (#12972)', () => {
+    it('files a dateless log under the user local day, not the UTC day', async () => {
+      mockTimezone = 'America/Phoenix'; // UTC-7, no DST
+      await addTracked('tz-habit');
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-22T02:00:00Z')); // 19:00 Oct 21 local
+      const evening = await logEntry('tz-habit', { amount: 1 });
+      expect(evening.date).toBe('2026-10-21');
+
+      vi.setSystemTime(new Date('2026-10-22T15:00:00Z')); // 08:00 Oct 22 local
+      const morning = await logEntry('tz-habit', { amount: 2 });
+      expect(morning.date).toBe('2026-10-22');
+
+      const { interventions } = await getInterventions();
+      expect(interventions['tz-habit'].logs.map(l => [l.date, l.amount])).toEqual([
+        ['2026-10-21', 1],
+        ['2026-10-22', 2],
+      ]);
+    });
+
+    it('merges logs on one local day that straddle UTC midnight and honors an explicit date', async () => {
+      mockTimezone = 'America/Phoenix';
+      await addTracked('tz-merge');
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-21T15:00:00Z'));
+      await logEntry('tz-merge', { amount: 1 });
+      vi.setSystemTime(new Date('2026-10-22T02:00:00Z'));
+      await logEntry('tz-merge', { amount: 2 });
+      await logEntry('tz-merge', { amount: 3, date: '2026-01-05' });
+
+      const { interventions } = await getInterventions();
+      expect(interventions['tz-merge'].logs.map(l => [l.date, l.amount])).toEqual([
+        ['2026-01-05', 3],
+        ['2026-10-21', 2],
+      ]);
+    });
+
+    it('counts streak and compliance by local calendar across a DST change', async () => {
+      mockTimezone = 'America/Los_Angeles'; // DST ends 2026-11-01
+      await addTracked('tz-streak');
+      for (const date of ['2026-10-31', '2026-11-01', '2026-11-02']) {
+        await logEntry('tz-streak', { amount: 1, date });
+      }
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-03T05:00:00Z')); // 21:00 Nov 2 local, Nov 3 UTC
+      const { summary, startDate } = await getComplianceSummary(7);
+      expect(summary['tz-streak']).toMatchObject({ streak: 3, lastLogged: '2026-11-02' });
+      expect(startDate).toBe('2026-10-26');
+    });
+  });
 
 
   const mutations = [
