@@ -48,6 +48,7 @@ import { decryptSafeStorageValue, isRawHexKey } from '../lib/signalCrypto.js';
 import { shortSummary, localDayKey } from './humanActivity.js';
 import { captureConsistentSnapshot } from './signalSnapshot.js';
 import { getSettings } from './settings.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -392,6 +393,9 @@ function readMessages(db, cursorRowid, limit) {
  * render an actionable error (missing install, key failure, unsupported schema).
  */
 export async function checkSetup() {
+  const config = await getSignalConfig();
+  if (config.enabled !== true) return { enabled: false };
+
   const keyResult = await resolveDbKey();
   if (!keyResult.ok) {
     return { ok: false, dbPath: dbPath(), error: keyResult.error, remediation: keyResult.remediation };
@@ -423,13 +427,19 @@ export async function checkSetup() {
  * touchpoints, and advance the cursor. Returns a summary. Safe to call repeatedly
  * — dedupe keys make re-ingestion a no-op. Runs outside the request lifecycle
  * (scheduler / explicit endpoint), so every failure is try/catch-guarded and
- * returns an error report instead of throwing.
+ * returns an error report instead of throwing. Disabled sync rejects with
+ * SIGNAL_DISABLED before reading Signal files or the keychain.
  *
  * Re-entrancy guarded: a manual "Sync now" overlapping a scheduler tick would
  * double-read the same cursor — so concurrent callers share the in-flight pass.
  */
 let syncInFlight = null;
 export async function runSync() {
+  const config = await getSignalConfig();
+  if (config.enabled !== true) {
+    throw new ServerError('Enable Signal sync in Settings before syncing.', { status: 409, code: 'SIGNAL_DISABLED' });
+  }
+
   if (syncInFlight) return syncInFlight;
   syncInFlight = doRunSync().finally(() => { syncInFlight = null; });
   return syncInFlight;

@@ -38,6 +38,8 @@ vi.mock('./humanActivity.js', async () => {
   return { ...actual, recordEvents: recordEventsMock };
 });
 
+vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ signal: { enabled: true } })) }));
+
 vi.mock('./tribe.js', () => ({
   autoLogTouchpoints: autoLogTouchpointsMock,
 }));
