@@ -11,7 +11,7 @@ vi.mock('../services/apiWritersRoom', async (importOriginal) => ({
 }));
 
 import WritersRoom from './WritersRoom';
-import { listWritersRoomFolders, listWritersRoomWorks } from '../services/apiWritersRoom';
+import { listWritersRoomFolders, listWritersRoomWorks, getWritersRoomWork } from '../services/apiWritersRoom';
 
 describe('WritersRoom empty state', () => {
   it('shows a retriable error when the folder list fails to load', async () => {
@@ -69,4 +69,35 @@ it('loads 50 works, appends on demand, and restarts an expired snapshot', async 
   expect(await screen.findByText('Fresh work')).toBeInTheDocument();
   expect(screen.queryByText('First work')).toBeNull();
   expect(listWritersRoomWorks).toHaveBeenLastCalledWith({ limit: 50, cursor: null }, expect.anything());
+});
+
+describe('WritersRoom open work failures', () => {
+  const renderAt = (path) => render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/writers-room" element={<WritersRoom />} />
+        <Route path="/writers-room/works/:workId" element={<WritersRoom />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  it('shows a not-found panel for a missing work and returns to the library', async () => {
+    getWritersRoomWork.mockRejectedValueOnce(Object.assign(new Error('Invalid work id'), { status: 400 }));
+    renderAt('/writers-room/works/gone');
+    expect(await screen.findByText('This work no longer exists')).toBeInTheDocument();
+    expect(screen.queryByText('No work selected')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to library' }));
+    expect(await screen.findByText('No work selected')).toBeInTheDocument();
+  });
+
+  it('offers Retry after a failed read and opens the work once it recovers', async () => {
+    getWritersRoomWork
+      .mockRejectedValueOnce(Object.assign(new Error('offline'), { status: 503 }))
+      .mockResolvedValueOnce({ id: 'w1', title: 'Recovered', drafts: [], activeDraftVersionId: null });
+    renderAt('/writers-room/works/w1');
+    expect(await screen.findByText("Couldn't open this work")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText("Couldn't open this work")).toBeNull());
+    expect(getWritersRoomWork).toHaveBeenCalledTimes(2);
+  });
 });

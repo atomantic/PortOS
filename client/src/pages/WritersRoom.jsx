@@ -17,6 +17,7 @@ import { usePagedCollection } from '../hooks/usePagedCollection';
 import useListResource from '../hooks/useListResource';
 import useMounted from '../hooks/useMounted';
 import ListLoadError from '../components/ui/ListLoadError';
+import LoadFailedState from '../components/ui/LoadFailedState';
 
 const LIBRARY_COLLAPSED_KEY = 'wr.libraryCollapsed';
 
@@ -33,6 +34,8 @@ export default function WritersRoom() {
   const [activeWork, setActiveWork] = useState(null);
   const [creatingWork, setCreatingWork] = useState(null);
   const [loadingWork, setLoadingWork] = useState(false);
+  const [workError, setWorkError] = useState(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [showExercise, setShowExercise] = useState(false);
   const [editorDirty, setEditorDirty] = useState(false);
   const [draftMutation, setDraftMutation] = useState(null);
@@ -78,18 +81,19 @@ export default function WritersRoom() {
 
   // Load the active work when the URL changes
   useEffect(() => {
+    setWorkError(null);
     if (!workId) {
       setActiveWork(null);
       return;
     }
     let cancelled = false;
     setLoadingWork(true);
-    getWritersRoomWork(workId)
+    getWritersRoomWork(workId, { silent: true })
       .then((work) => { if (!cancelled) setActiveWork(work); })
-      .catch(() => { if (!cancelled) setActiveWork(null); })
+      .catch((err) => { if (!cancelled) { setActiveWork(null); setWorkError(err); } })
       .finally(() => { if (!cancelled) setLoadingWork(false); });
     return () => { cancelled = true; };
-  }, [workId]);
+  }, [workId, retryNonce]);
 
   const selectWork = (id) => {
     if (!id) {
@@ -238,7 +242,26 @@ export default function WritersRoom() {
 
         <section aria-label="Work editor" className="min-h-0 flex flex-col flex-1">
           {loadingWork && <div className="p-6 text-sm text-gray-500">Loading work…</div>}
-          {!loadingWork && !activeWork && (
+          {!loadingWork && !activeWork && workError && (
+            <div className="flex-1 flex items-center justify-center p-8">
+              {workError.status === 404 || workError.status === 400 ? (
+                <EmptyState
+                  icon={NotebookPen}
+                  title="This work no longer exists"
+                  message="The link may be stale or the work was deleted."
+                  actionLabel="Back to library"
+                  onAction={() => selectWork(null)}
+                />
+              ) : (
+                <LoadFailedState
+                  title="Couldn't open this work"
+                  hint={workError.message}
+                  onRetry={() => setRetryNonce((n) => n + 1)}
+                />
+              )}
+            </div>
+          )}
+          {!loadingWork && !activeWork && !workError && !workId && (
             <div className="flex-1 flex items-center justify-center p-8">
               <EmptyState
                 icon={NotebookPen}
