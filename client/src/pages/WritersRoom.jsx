@@ -243,7 +243,7 @@ export default function WritersRoom() {
         <section aria-label="Work editor" className="min-h-0 flex flex-col flex-1">
           {loadingWork && <div className="p-6 text-sm text-gray-500">Loading work…</div>}
           {!loadingWork && !activeWork && workError && (
-            <div className="flex-1 flex items-center justify-center p-8">
+            <div role="status" className="flex-1 flex items-center justify-center p-8">
               {workError.status === 404 || workError.status === 400 ? (
                 <EmptyState
                   icon={NotebookPen}
