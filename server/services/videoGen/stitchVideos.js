@@ -171,7 +171,7 @@ export async function stitchVideos(videoIds, opts = {}) {
     const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: captureStderr ? ['ignore', 'ignore', 'pipe'] : 'ignore' }));
     const onAbort = () => killWithEscalation(proc, { label: 'stitch ffmpeg child', stillRunning: () => true });
     signal?.addEventListener('abort', onAbort, { once: true });
-    proc.once('close', () => signal?.removeEventListener('abort', onAbort));
+    proc.on('close', () => signal?.removeEventListener('abort', onAbort));
     let tail = '';
     proc.stderr?.on('data', (d) => { tail = `${tail}${d}`.slice(-400); });
     proc.on('close', (code) => {
