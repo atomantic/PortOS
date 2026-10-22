@@ -118,9 +118,9 @@ describe('CreativeCommissionDetail render-history project resolution (#4148)', (
 
     await waitFor(() => expect(screen.getAllByTestId('preview-cd-1')).toHaveLength(2));
     // cd-2 was requested but is gone (pruned project) — no preview, and the
-    // placeholder must read "unavailable" rather than staying on "loading…".
+    // placeholder must read "removed" rather than staying on "loading…".
     expect(screen.queryByTestId('preview-cd-2')).toBeNull();
-    expect(screen.getByText('render unavailable')).toBeTruthy();
+    expect(screen.getByText('1 older render is no longer available')).toBeTruthy();
   });
 });
 
@@ -221,7 +221,7 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
     api.getCreativeDirectorProjectsByIds.mockResolvedValue([]);
 
     await mountLoaded();
-    expect(screen.getByText('render unavailable')).toBeTruthy();
+    expect(screen.getByText('1 older render is no longer available')).toBeTruthy();
     const prunedCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
 
     await settle(30000);
