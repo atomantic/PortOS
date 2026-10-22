@@ -187,6 +187,11 @@ export default function GalleryVideoPicker({
             ))}
           </div>
         )}
+        {state === 'ready' && items.length >= PICKER_PAGE_LIMIT && (
+          <p className="pt-3 text-center text-xs text-gray-500">
+            Showing the newest {PICKER_PAGE_LIMIT} videos — search to find older ones.
+          </p>
+        )}
       </div>
     </Modal>
   );
