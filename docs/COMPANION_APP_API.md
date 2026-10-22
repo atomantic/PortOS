@@ -101,9 +101,11 @@ not satisfy it, no matter how correct the password is:
 
 - **Peer management** (`POST/PUT/DELETE /api/instances/peers/*`, except
   `POST /peers/announce` and the one-time `POST /peers/pair-secret` Basic
-  bootstrap — see [§3](#3-instance-management)) requires an operator session.
-  A Basic-only request gets `403 PEER_SETTINGS_OPERATOR_REQUIRED`, whether or
-  not a password is set.
+  bootstrap — see [§3](#3-instance-management)) requires an operator session,
+  or a local connection on a password-free install. A Basic-only request gets
+  `403 PEER_SETTINGS_OPERATOR_REQUIRED`, as does a remote caller on a
+  password-free install. `POST /peers/sync-categories` additionally accepts a
+  paired peer's scoped credential acting for its own instance id.
 - **Host control** (`/api/commands/*` and the routes audited in
   `server/lib/hostControlRoutes.js` — app lifecycle, CoS agent queueing, git,
   scaffold, provider/runtime installs, autopilot start, and the matching
