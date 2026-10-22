@@ -64,14 +64,8 @@ export function describeFleetHostError(err) {
   return String(err?.message ?? err).split('\n')[0].slice(0, 200);
 }
 
-const HOST_START_REMEDY = 'open AI Providers → Model host setup';
-
 export async function startFleetLlmHost() {
   if (gateway) return;
-  await bindFleetLlmHost().catch((err) => console.error(`❌ Dedicated model host listener could not start (${describeFleetHostError(err)}); check this cause, then ${HOST_START_REMEDY}.`));
-}
-
-async function bindFleetLlmHost() {
   const enabled = parseEnvContents((await tryReadFile(PORTOS_ENV_PATH)) || '').get(ENABLED_KEY) === '1';
   if (!enabled) return;
   const { apiKey } = await readHostEnv();

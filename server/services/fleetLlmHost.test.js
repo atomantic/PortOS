@@ -3,7 +3,7 @@ vi.mock('./fleetLlmStartup.js', () => ({
   isFleetHostLoginTaskInstalled: async () => true,
   removeFleetHostLoginTask: async () => { state.loginTaskRemoved = true; return { success: true }; },
 }));
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ providers: [], writes: [], enabled: '', loginTaskRemoved: false, specs: { platform: 'win32', cuda: { gpus: [{ name: 'NVIDIA RTX 3090', vramGb: 24 }] } }, peers: [], peerResponses: new Map() }));
 // The usage ledger has its own suite and its own disk; here it would only pull
 // `readJSONFile` into the narrow `fileUtils` double this file already declares.
@@ -37,7 +37,7 @@ vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn(async ()
 vi.mock('./vllmQwenManager.js', () => ({ ensureVllmProjectDir: async () => null, provisionVllmQwenProject: async () => ({ success: true }) }));
 vi.mock('./providers.js', () => ({ getAllProviders: async () => ({ providers: state.providers }), createProvider: async (record) => state.providers.push(record), updateProvider: async (id, patch) => Object.assign(state.providers.find(p => p.id === id), patch) }));
 vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: () => ({ server: { once(_evt, fail) { this.fail = fail; }, on() {}, listen(_port, _host, done) { if (state.listenError) this.fail(state.listenError); else done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }) }));
-import { configureFleetLlmHost, disableFleetLlmHost, startFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
+import { configureFleetLlmHost, describeFleetHostError, disableFleetLlmHost, startFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.enabled = ''; state.loginTaskRemoved = false; state.providers = []; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
 describe('dedicated host setup workflow', () => {
@@ -164,25 +164,22 @@ describe('fleet peer host discovery', () => {
 describe('dedicated host startup failures', () => {
   beforeEach(() => {
     state.enabled = 'PORTOS_FLEET_LLM_ENABLED=1';
+  });
+  afterEach(() => {
     state.readError = null;
     state.listenError = null;
+    vi.restoreAllMocks();
   });
 
-  it('names the port conflict instead of only the setup remedy', async () => {
+  it('rejects with a port-conflict cause the boot log can name', async () => {
     state.listenError = Object.assign(new Error('listen EADDRINUSE: address already in use 0.0.0.0:1'), { code: 'EADDRINUSE', syscall: 'listen', port: 1 });
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await startFleetLlmHost();
-    expect(errors.mock.calls.flat().join('\n')).toContain('EADDRINUSE listen 1');
-    errors.mockRestore();
+    const err = await startFleetLlmHost().catch((e) => e);
+    expect(describeFleetHostError(err)).toBe('EADDRINUSE listen 1');
   });
 
-  it('reports a rejected env read without echoing the API key', async () => {
-    state.readError = Object.assign(new Error('EACCES: permission denied\nVLLM_API_KEY=example-api-key-with-32-characters'), { code: 'EACCES' });
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await startFleetLlmHost();
-    const logged = errors.mock.calls.flat().join('\n');
-    expect(logged).toContain('EACCES');
-    expect(logged).not.toContain('example-api-key');
-    errors.mockRestore();
+  it('describes a rejected env read without echoing the API key', async () => {
+    state.readError = new Error('permission denied\nVLLM_API_KEY=example-api-key-with-32-characters');
+    const err = await startFleetLlmHost().catch((e) => e);
+    expect(describeFleetHostError(err)).toBe('permission denied');
   });
 });

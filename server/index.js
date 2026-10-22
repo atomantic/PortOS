@@ -599,7 +599,9 @@ if (!isSmokeBoot()) {
   // Reminders for scheduled human action steps (Brain threads); zero provider calls.
   import('./services/humanActionReminders.js').then(({ initHumanActionReminders }) => initHumanActionReminders())
     .catch((err) => console.error(`❌ Human action reminders could not start: ${err.message}`));
-  import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
+  import('./services/fleetLlmHost.js').then(({ startFleetLlmHost, describeFleetHostError }) => startFleetLlmHost().catch((err) => {
+    console.error(`❌ Dedicated model host listener could not start (${describeFleetHostError(err)}); open AI Providers → Model host setup.`);
+  }))
     .catch((err) => console.error(`❌ Dedicated model host listener could not load: ${err.message}`));
   // Local file scan only (no provider calls); keeps the federated Claude Code
   // token history current even when the usage page is never opened.
