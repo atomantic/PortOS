@@ -1086,6 +1086,21 @@ CREATE INDEX IF NOT EXISTS idx_mood_boards_updated ON mood_boards (updated_at DE
 -- Partial index for the live-list filter (deleted = FALSE).
 CREATE INDEX IF NOT EXISTS idx_mood_boards_live ON mood_boards (deleted) WHERE deleted = FALSE;
 
+-- Storyboards (Create › Storyboards): beats → panels → art takes inline in
+-- `data` JSONB. Mirrors the storyboards block in db/schema/media.js.
+CREATE TABLE IF NOT EXISTS storyboards (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  universe_id TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE;
+
 -- Media asset index (Phase 3.2, issue #1000). One row per generated image or
 -- video. The bytes stay on disk (data/images, data/videos) and the image
 -- sidecars + data/video-history.json remain authoritative — this table is a
@@ -2266,6 +2281,8 @@ DROP TRIGGER IF EXISTS trg_fableloom_stories_audit ON fableloom_stories;
 CREATE TRIGGER trg_fableloom_stories_audit AFTER UPDATE OR DELETE ON fableloom_stories FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_mood_boards_audit ON mood_boards;
 CREATE TRIGGER trg_mood_boards_audit AFTER UPDATE OR DELETE ON mood_boards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_storyboards_audit ON storyboards;
+CREATE TRIGGER trg_storyboards_audit AFTER UPDATE OR DELETE ON storyboards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;
 CREATE TRIGGER trg_lora_training_runs_audit AFTER UPDATE OR DELETE ON lora_training_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_authors_audit ON authors;

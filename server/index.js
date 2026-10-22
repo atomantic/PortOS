@@ -154,6 +154,7 @@ import musicVideoCharacterStyleRoutes from './routes/musicVideoCharacterStyles.j
 import humanActionRoutes from './routes/humanActions.js';
 import spriteRoutes from './routes/sprites.js';
 import moodBoardRoutes from './routes/moodBoard.js';
+import storyboardRoutes from './routes/storyboards.js';
 import deckRoutes from './routes/decks.js';
 import threejsModelsRoutes from './routes/threejsModels.js';
 import filmStylesRoutes from './routes/filmStyles.js';
@@ -474,6 +475,7 @@ app.use('/api/music-video/character-styles', musicVideoCharacterStyleRoutes);
 app.use('/api/music-video', musicVideoRoutes);
 app.use('/api/sprites', spriteRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);
+app.use('/api/storyboards', storyboardRoutes);
 app.use('/api/decks', deckRoutes);
 app.use('/api/threejs-models', threejsModelsRoutes);
 app.use('/api/film-styles', filmStylesRoutes);
