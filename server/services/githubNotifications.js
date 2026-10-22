@@ -2,9 +2,10 @@
  * GitHub notifications inbox (#12870): fetch each account's notification
  * threads into Postgres and apply the operator's one-tap thread actions.
  *
- * Only metadata is fetched (repo, reason, subject title/type); no thread body
- * or linked page is ever read here, and no model sees any of it. Triage and
- * automations build on these rows in later phases.
+ * Only metadata is fetched here (repo, reason, subject title/type); no thread
+ * body or linked page is read and no model sees any of it. Triage decides from
+ * metadata; only an account switched to Assist has its undecided threads'
+ * text screened and sorted (githubNotificationAssist.js).
  */
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -21,6 +22,9 @@ import { execGh } from './github.js';
 import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccounts.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { triageAccountNotifications } from './githubNotificationTriage.js';
+import { assistAccountNotifications } from './githubNotificationAssist.js';
+import { learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 const GH_TIMEOUT_MS = 30_000;
 const PER_PAGE = 50;
@@ -113,6 +117,10 @@ async function recordSyncError(accountId, message) {
   );
 }
 
+const runAssist = (account, env) => assistAccountNotifications(account, env, {
+  act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail }),
+});
+
 async function syncAccountNow(account) {
   const env = await requireAccountEnv(account);
   const cursor = (await query('SELECT last_modified FROM github_notification_sync WHERE account_id = $1', [account.id])).rows[0];
@@ -121,8 +129,9 @@ async function syncAccountNow(account) {
     await query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
     // Threads past the last run's triage cap still need a decision.
     const triage = await triageAccountNotifications(account, env);
-    if (triage.triaged) githubNotificationEvents.emit('changed', { accountId: account.id });
-    return { accountId: account.id, changed: false, fetched: 0, triage };
+    const assist = await runAssist(account, env);
+    if (triage.triaged || assist.sorted || assist.acted) githubNotificationEvents.emit('changed', { accountId: account.id });
+    return { accountId: account.id, changed: false, fetched: 0, triage, assist };
   }
   const threads = [...first.threads];
   let page = first;
@@ -159,9 +168,10 @@ async function syncAccountNow(account) {
     );
   });
   const triage = await triageAccountNotifications(account, env);
+  const assist = await runAssist(account, env);
   githubNotificationEvents.emit('changed', { accountId: account.id });
-  console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}, triaged ${triage.triaged}`);
-  return { accountId: account.id, changed: true, fetched: records.length, truncated, triage };
+  console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}, triaged ${triage.triaged}, sorted ${assist.sorted}, acted on ${assist.acted}`);
+  return { accountId: account.id, changed: true, fetched: records.length, truncated, triage, assist };
 }
 
 /** Fetch one account's unread notifications, coalescing concurrent requests. */
@@ -241,8 +251,32 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
   };
 }
 
-/** Apply one operator action to a thread on GitHub, then mirror it locally. */
-export async function applyNotificationAction(accountId, threadId, action) {
+/**
+ * Teach a learned rule from an operator action that disagrees with the
+ * thread's decision, and move the thread to that decision so Assist does not
+ * act on it again.
+ */
+async function learnFromOperator(client, row, action) {
+  const lesson = learnedDecisionForAction(action);
+  if (!lesson || row.suspect || row.decision === lesson) return;
+  await client.query(
+    `INSERT INTO github_notification_rules (account_id, repo_full_name, reason, actor, decision) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (account_id, repo_full_name, reason, actor) DO UPDATE SET
+       hits = CASE WHEN github_notification_rules.decision = EXCLUDED.decision THEN github_notification_rules.hits + 1 ELSE 1 END,
+       decision = EXCLUDED.decision, updated_at = NOW()`,
+    [row.account_id, row.repo_full_name.toLowerCase(), row.reason, String(row.evidence?.actor || '').toLowerCase(), lesson],
+  );
+  await client.query(
+    `UPDATE github_notifications SET decision = $3, evidence = evidence || '{"rule":"learned"}'::jsonb WHERE account_id = $1 AND thread_id = $2`,
+    [row.account_id, row.thread_id, lesson],
+  );
+}
+
+/**
+ * Apply one thread action on GitHub, then mirror it locally. The operator's
+ * actions teach learned rules; an automation's carry the decision behind it.
+ */
+export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {} } = {}) {
   const spec = ACTION_SPECS[action];
   const account = await getAccount(accountId);
   const existing = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
@@ -257,21 +291,92 @@ export async function applyNotificationAction(accountId, threadId, action) {
       { env },
     );
   }
-  const result = await query(
-    `UPDATE github_notifications SET
-       unread = CASE WHEN $3::text IN ('read','done') THEN FALSE ELSE unread END,
-       state = COALESCE($4::text, state),
-       state_changed_at = CASE WHEN $4::text IS NULL THEN state_changed_at ELSE NOW() END,
-       updated_at = NOW()
-     WHERE account_id = $1 AND thread_id = $2 RETURNING *`,
-    [account.id, threadId, action, spec.state],
-  );
-  await query(
-    `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, 'operator', $3, '{}'::jsonb)`,
-    [account.id, threadId, action],
-  );
+  const row = await withTransaction(async (client) => {
+    if (actor === 'operator') await learnFromOperator(client, existing, action);
+    const result = await client.query(
+      `UPDATE github_notifications SET
+         unread = CASE WHEN $3::text IN ('read','done') THEN FALSE ELSE unread END,
+         state = COALESCE($4::text, state),
+         state_changed_at = CASE WHEN $4::text IS NULL THEN state_changed_at ELSE NOW() END,
+         updated_at = NOW()
+       WHERE account_id = $1 AND thread_id = $2 RETURNING *`,
+      [account.id, threadId, action, spec.state],
+    );
+    await client.query(
+      'INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, $3, $4, $5::jsonb)',
+      [account.id, threadId, actor, action, toPgJson(detail)],
+    );
+    return result.rows[0];
+  });
   githubNotificationEvents.emit('changed', { accountId: account.id });
-  return toApi(result.rows[0], new Map([[account.id, account]]));
+  return toApi(row, new Map([[account.id, account]]));
+}
+
+// An automation action can be undone while the thread is still where it left
+// it. GitHub has no "mark unread", so a read stays.
+const UNDO_ACTIONS = { done: { action: 'reopen', state: 'done' }, mute: { action: 'resubscribe', state: 'muted' } };
+
+/** Recent automation actions across accounts, newest first, for the Automations tab. */
+export async function listAutomationActivity({ limit = 50 } = {}) {
+  const accounts = await listAccounts();
+  const labels = new Map(accounts.map((account) => [account.id, account.label]));
+  const { rows } = await query(
+    `SELECT e.id, e.account_id, e.thread_id, e.kind, e.detail, e.created_at, n.subject_title, n.repo_full_name, n.state
+     FROM github_notification_events e JOIN github_notifications n ON n.account_id = e.account_id AND n.thread_id = e.thread_id
+     WHERE e.actor = 'automation' AND e.kind = ANY($1::text[]) AND e.account_id = ANY($2::text[])
+     ORDER BY e.created_at DESC, e.id DESC LIMIT $3`,
+    [NOTIFICATION_ACTIONS, accounts.map((account) => account.id), limit],
+  );
+  return rows.map((row) => ({
+    id: String(row.id),
+    accountId: row.account_id,
+    accountLabel: labels.get(row.account_id) || row.account_id,
+    threadId: row.thread_id,
+    action: row.kind,
+    title: row.subject_title,
+    repoFullName: row.repo_full_name,
+    decision: row.detail?.decision || null,
+    rule: row.detail?.rule || null,
+    at: toIso(row.created_at),
+    undoable: UNDO_ACTIONS[row.kind]?.state === row.state,
+  }));
+}
+
+/** Reverse one automation action as the operator, which also teaches a learned rule. */
+export async function undoAutomationAction(eventId) {
+  const event = (await query("SELECT * FROM github_notification_events WHERE id = $1 AND actor = 'automation'", [eventId])).rows[0];
+  if (!event) throw new ServerError('Automation action not found', { status: 404, code: 'GITHUB_AUTOMATION_ACTION_NOT_FOUND' });
+  const undo = UNDO_ACTIONS[event.kind];
+  if (!undo) throw new ServerError('GitHub cannot mark a thread unread again', { status: 409, code: 'GITHUB_AUTOMATION_NOT_UNDOABLE' });
+  const row = (await query('SELECT state FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [event.account_id, event.thread_id])).rows[0];
+  if (row?.state !== undo.state) throw new ServerError('The thread has changed since; open it in the inbox instead', { status: 409, code: 'GITHUB_AUTOMATION_NOT_UNDOABLE' });
+  return applyNotificationAction(event.account_id, event.thread_id, undo.action);
+}
+
+export async function listLearnedRules() {
+  const accounts = await listAccounts();
+  const labels = new Map(accounts.map((account) => [account.id, account.label]));
+  const { rows } = await query(
+    'SELECT * FROM github_notification_rules WHERE account_id = ANY($1::text[]) ORDER BY updated_at DESC LIMIT 200',
+    [accounts.map((account) => account.id)],
+  );
+  return rows.map((row) => ({
+    id: String(row.id),
+    accountId: row.account_id,
+    accountLabel: labels.get(row.account_id) || row.account_id,
+    repoFullName: row.repo_full_name,
+    reason: row.reason,
+    actor: row.actor || null,
+    decision: row.decision,
+    hits: row.hits,
+    updatedAt: toIso(row.updated_at),
+  }));
+}
+
+export async function deleteLearnedRule(id) {
+  const { rowCount } = await query('DELETE FROM github_notification_rules WHERE id = $1', [id]);
+  if (!rowCount) throw new ServerError('Rule not found', { status: 404, code: 'GITHUB_NOTIFICATION_RULE_NOT_FOUND' });
+  return { ok: true };
 }
 
 /** One thread with its triage evidence and action log, newest event first. */
@@ -297,7 +402,7 @@ export const readLastScheduledSummary = () => lastScheduledSummary;
 /**
  * The `github-notifications` scheduled pass: sync and triage every enabled
  * account whose poll interval has elapsed. Observe mode records decisions
- * only; nothing here writes to GitHub or calls a model.
+ * only; an Assist account also sorts and acts (githubNotificationAssist.js).
  */
 export async function runScheduledNotificationCheck({ now = Date.now() } = {}) {
   const accounts = (await listAccounts()).filter((account) => account.enabled);
@@ -326,7 +431,9 @@ export function describeScheduledCheck(results) {
   const failed = results.filter((result) => !result.ok).length;
   const fetched = checked.reduce((sum, result) => sum + (result.fetched || 0), 0);
   const triaged = checked.reduce((sum, result) => sum + (result.triage?.triaged || 0), 0);
+  const acted = checked.reduce((sum, result) => sum + (result.assist?.acted || 0), 0);
   const parts = [`checked ${checked.length} of ${results.length} account(s)`, `${fetched} new or updated`, `${triaged} triaged`];
+  if (acted) parts.push(`${acted} handled`);
   if (failed) parts.push(`${failed} failed`);
   return parts.join(', ');
 }

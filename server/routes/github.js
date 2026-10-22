@@ -183,4 +183,37 @@ router.put('/automations/schedule', asyncHandler(async (req, res) => {
   res.json(await githubNotifications.setNotificationCadence(cadence));
 }));
 
+const numericIdParam = (req) => {
+  if (!/^\d{1,18}$/.test(req.params.id)) throw new ServerError('Invalid id', { status: 400 });
+  return req.params.id;
+};
+
+/**
+ * GET /api/github/automations/activity — recent Assist actions, newest first
+ */
+router.get('/automations/activity', asyncHandler(async (req, res) => {
+  res.json({ actions: await githubNotifications.listAutomationActivity() });
+}));
+
+/**
+ * POST /api/github/automations/activity/:id/undo — reverse one Assist action (reopen a done thread, unmute)
+ */
+router.post('/automations/activity/:id/undo', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.undoAutomationAction(numericIdParam(req)));
+}));
+
+/**
+ * GET /api/github/automations/rules — rules learned from the operator's corrections
+ */
+router.get('/automations/rules', asyncHandler(async (req, res) => {
+  res.json({ rules: await githubNotifications.listLearnedRules() });
+}));
+
+/**
+ * DELETE /api/github/automations/rules/:id — forget one learned rule
+ */
+router.delete('/automations/rules/:id', asyncHandler(async (req, res) => {
+  res.json(await githubNotifications.deleteLearnedRule(numericIdParam(req)));
+}));
+
 export default router;

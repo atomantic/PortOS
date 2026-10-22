@@ -7,7 +7,13 @@
  * ownership and forge permissions, never from a title, comment body, label or
  * GitHub's self-reported `author_association`. Content may only ADD suspicion
  * (a mass-mention count); it can never raise trust or clear a signal.
+ *
+ * Assist mode (#12872) adds three inputs, none of which can raise trust:
+ * a learned rule (the operator's own past correction), a model verdict from a
+ * fixed enum, and the one automatic action `assistAction` allows.
  */
+import { isUntrustedContentProvider } from './untrustedContent.js';
+import { isLocalInstanceEndpoint } from './localEndpoint.js';
 
 export const TRIAGE_DECISIONS = Object.freeze([
   'suspect',
@@ -19,6 +25,8 @@ export const TRIAGE_DECISIONS = Object.freeze([
   'suggest-mark-read',
   'handled-by-pr-workflow',
   'duplicate',
+  'suggest-done',
+  'suggest-mute',
 ]);
 
 export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unknown']);
@@ -92,4 +100,68 @@ export function decideThread({ reason, subjectType, subjectState, subjectMerged 
   }
   if (MENTION_REASONS.has(reason) && !repoOwned) return { decision: 'surface', rule: 'mention-elsewhere' };
   return { decision: 'needs-you', rule: 'default' };
+}
+
+// What a model may answer for a thread the rule table left undecided. Any
+// other output fails the response schema and the thread stays with you.
+export const ASSIST_VERDICTS = Object.freeze(['surface', 'done', 'suggest-mute']);
+const VERDICT_DECISIONS = Object.freeze({ surface: 'surface', done: 'suggest-done', 'suggest-mute': 'suggest-mute' });
+
+export function decisionFromVerdict(verdict) {
+  const decision = VERDICT_DECISIONS[verdict];
+  return decision ? { decision, rule: `ai-${verdict}` } : null;
+}
+
+// A learned rule replays the operator's own choice for a repo, reason and
+// actor; it never overrides a spam signal, a security alert or an invitation.
+const LEARNED_DECISIONS = Object.freeze(['surface', 'suggest-done', 'suggest-mute']);
+const PINNED_RULES = new Set(['spam-signal', 'security-alert', 'invitation-never-accepted']);
+const ACTION_LESSONS = Object.freeze({ done: 'suggest-done', unsubscribe: 'suggest-done', mute: 'suggest-mute', reopen: 'surface', resubscribe: 'surface' });
+
+/** The decision an operator action teaches, or null when it teaches nothing (a plain read). */
+export const learnedDecisionForAction = (action) => ACTION_LESSONS[action] || null;
+
+// One correction is enough to bring threads back to you; quieting them
+// automatically takes the same correction twice.
+const LEARN_QUIET_AFTER = 2;
+
+/** `learned` is a stored rule `{ decision, hits }`, or undefined. */
+export function applyLearnedRule(result, learned) {
+  if (!learned || !LEARNED_DECISIONS.includes(learned.decision) || PINNED_RULES.has(result.rule)) return result;
+  if (learned.decision !== 'surface' && !(learned.hits >= LEARN_QUIET_AFTER)) return result;
+  return { decision: learned.decision, rule: 'learned' };
+}
+
+/**
+ * The one GitHub write Assist may make for a thread, or null to leave it for
+ * the operator. Outside and Suspect threads are never acted on; a mute needs a
+ * trusted source or the operator's own learned rule.
+ */
+export function assistAction({ decision, rule, trust, suspect = false, unread = true, state = 'open' }) {
+  if (suspect || state !== 'open' || trust === 'outside') return null;
+  const vouched = trust === 'yours' || trust === 'trusted' || rule === 'learned';
+  if (decision === 'handled-by-pr-workflow') return 'done';
+  if (decision === 'suggest-mark-read') return unread ? 'read' : null;
+  if (decision === 'suggest-done' && vouched) return 'done';
+  if (decision === 'suggest-mute' && vouched) return 'mute';
+  return null;
+}
+
+/**
+ * The provider a thread's text may go to. A Public account uses the
+ * `github-notification` source policy as-is (`provider: null`). A Private
+ * account only reaches its `allowedProviders`, or local endpoints when that is
+ * unset, and a source pin outside that set fails closed.
+ */
+export function selectNotificationProvider({ account, providers = [], policy = {} }) {
+  if (account?.trust !== 'private') return { provider: null, model: null };
+  const allowed = Array.isArray(account.allowedProviders) ? new Set(account.allowedProviders) : null;
+  const eligible = providers.filter((provider) => isUntrustedContentProvider(provider, 'github-notification')
+    && (allowed ? allowed.has(provider.id) : isLocalInstanceEndpoint(provider.endpoint)));
+  const candidates = policy.providerId ? eligible.filter((provider) => provider.id === policy.providerId) : eligible;
+  for (const provider of candidates) {
+    const model = policy.model || provider.defaultModel;
+    if (model) return { provider, model };
+  }
+  return { code: 'github-notification-provider-not-allowed' };
 }

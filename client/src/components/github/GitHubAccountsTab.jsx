@@ -13,6 +13,7 @@ import {
   updateGitHubAccount,
   deleteGitHubAccount,
   getGitHubAccountStatus,
+  getProviders,
 } from '../../services/api';
 
 const GITHUB_DOT_COM = 'github.com';
@@ -31,20 +32,53 @@ const STATUS_VIEW = {
 };
 
 const defaultTrustForHost = (host) => (host.trim().toLowerCase() === GITHUB_DOT_COM ? 'public' : 'private');
-const emptyForm = () => ({ host: GITHUB_DOT_COM, login: '', label: '', trust: 'public', trustTouched: false });
+const emptyForm = () => ({ host: GITHUB_DOT_COM, login: '', label: '', trust: 'public', trustTouched: false, allowedProviders: [] });
 const formFromAccount = (account) => ({
   host: account.host,
   login: account.login || '',
   label: account.label || '',
   trust: account.trust,
   trustTouched: true,
+  allowedProviders: account.allowedProviders || [],
 });
+// No provider ticked = the Private default, local providers only (null).
 const payloadFromForm = (form) => ({
   host: form.host.trim(),
   login: form.login.trim() || null,
   label: form.label.trim(),
   trust: form.trust,
+  allowedProviders: form.trust === 'private' && form.allowedProviders.length ? form.allowedProviders : null,
 });
+
+function AllowedProviders({ form, setForm }) {
+  const [providers, setProviders] = useState(null);
+  useEffect(() => {
+    getProviders({ silent: true })
+      .then((data) => setProviders((data?.providers || []).filter((provider) => provider.type === 'api')))
+      .catch(() => setProviders([]));
+  }, []);
+  const toggle = (id) => setForm((prev) => ({
+    ...prev,
+    allowedProviders: prev.allowedProviders.includes(id) ? prev.allowedProviders.filter((value) => value !== id) : [...prev.allowedProviders, id],
+  }));
+  return (
+    <fieldset className="space-y-1">
+      <legend className="text-sm text-gray-300">AI providers allowed to read this account's notifications</legend>
+      <p className="text-xs text-gray-500">None ticked keeps it to local providers on this machine.</p>
+      {providers === null && <p className="text-xs text-gray-500">Loading providers…</p>}
+      {providers?.length === 0 && <p className="text-xs text-gray-500">No API providers configured.</p>}
+      {providers?.map((provider) => {
+        const id = `github-allowed-${provider.id}`;
+        return (
+          <div key={provider.id} className="flex items-center gap-2">
+            <input id={id} type="checkbox" checked={form.allowedProviders.includes(provider.id)} onChange={() => toggle(provider.id)} />
+            <label htmlFor={id} className="min-w-0 truncate text-sm text-gray-300">{provider.name || provider.id}</label>
+          </div>
+        );
+      })}
+    </fieldset>
+  );
+}
 
 function AccountForm({ form, setForm, onSubmit, onCancel, saving, submitLabel }) {
   const setField = (field) => (event) => {
@@ -78,6 +112,7 @@ function AccountForm({ form, setForm, onSubmit, onCancel, saving, submitLabel })
           </select>
         </FormField>
       </div>
+      {form.trust === 'private' && <AllowedProviders form={form} setForm={setForm} />}
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={saving || !form.host.trim()} className="px-4 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-50">
           {saving ? 'Saving…' : submitLabel}

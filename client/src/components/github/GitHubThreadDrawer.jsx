@@ -6,7 +6,7 @@ import Pill from '../ui/Pill';
 import { formatDateTime } from '../../utils/formatters';
 import { getGitHubNotification } from '../../services/api';
 import socket from '../../services/socket';
-import { DECISION_VIEW, RULE_LABELS, SIGNAL_LABELS, TRUST_VIEW } from './githubTriageLabels';
+import { AI_SKIP_LABELS, DECISION_VIEW, RULE_LABELS, SIGNAL_LABELS, TRUST_VIEW } from './githubTriageLabels';
 
 const EVENT_LABELS = {
   triaged: 'Triaged',
@@ -24,6 +24,11 @@ function describeEvent(event) {
   const decision = DECISION_VIEW[event.detail?.decision]?.label || 'Needs you';
   return `${label}: ${decision}${event.detail?.mode ? ` (${event.detail.mode})` : ''}`;
 }
+
+const eventActorSuffix = (event) => {
+  if (event.actor !== 'automation') return ' by you';
+  return event.kind === 'triaged' ? '' : ' by Assist';
+};
 
 /** One thread's triage evidence and action log, opened from the Inbox at /devtools/github/inbox/:accountId/:threadId. */
 export default function GitHubThreadDrawer({ accountId, threadId }) {
@@ -80,6 +85,7 @@ export default function GitHubThreadDrawer({ accountId, threadId }) {
               {evidence.commenter && <p className="text-xs text-gray-400">Latest comment by <span className="font-mono">@{evidence.commenter}</span></p>}
               {evidence.subjectState && <p className="text-xs text-gray-400">Thread is {evidence.subjectState}</p>}
               {evidence.foldedInto && <p className="text-xs text-gray-400">Same failure as a newer notice</p>}
+              {evidence.ai?.skipped && <p className="text-xs text-gray-400">Assist did not sort it: {AI_SKIP_LABELS[evidence.ai.skipped] || 'screening or the provider failed'}</p>}
               {evidence.metadataMissing && <p className="text-xs text-port-warning">GitHub did not return the thread's details; decided from the notification alone.</p>}
               {current.signals.length > 0 && (
                 <ul className="list-disc space-y-0.5 pl-5 text-xs text-port-error">
@@ -97,7 +103,7 @@ export default function GitHubThreadDrawer({ accountId, threadId }) {
               <ul className="space-y-1">
                 {current.events.map((event, index) => (
                   <li key={`${event.at}-${index}`} className="flex flex-wrap justify-between gap-x-3 text-xs">
-                    <span className="text-gray-300">{describeEvent(event)}{event.actor === 'automation' ? '' : ' by you'}</span>
+                    <span className="text-gray-300">{describeEvent(event)}{eventActorSuffix(event)}</span>
                     <span className="text-gray-500">{formatDateTime(event.at)}</span>
                   </li>
                 ))}

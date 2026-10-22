@@ -1959,6 +1959,19 @@ CREATE TABLE IF NOT EXISTS github_notification_events (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_github_notification_events_thread ON github_notification_events (account_id, thread_id, created_at DESC);
+-- Learned rules (#12872): the operator's own corrections ('' actor = any).
+CREATE TABLE IF NOT EXISTS github_notification_rules (
+  id BIGSERIAL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  repo_full_name TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  decision TEXT NOT NULL CHECK (decision IN ('surface','suggest-done','suggest-mute')),
+  hits INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (account_id, repo_full_name, reason, actor)
+);
 
 -- Beeper conversation mirror (#27). Machine-local mirror of the Beeper Desktop
 -- API — accounts, conversations, messages, participants, attachment metadata,
