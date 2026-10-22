@@ -132,7 +132,7 @@ import {
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS, SUPERSEDED_UNMANAGED_IDLE_MS,
   isMalformedClaimBranch,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
-  reapSupersededBranches
+  reapSupersededBranches, buildActiveOwnerIds
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
@@ -716,6 +716,28 @@ describe('worktreeProtectionReason', () => {
     expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', allowLiveClaim: true })).toBeNull();
     expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', allowLiveClaim: true, locked: true })).toBe('worktree-locked');
     expect(worktreeProtectionReason({ head: RETIRE_HEAD, path: '/x/claim-foo', allowLiveClaim: true, activeAgentIds: new Set(['claim-foo']) })).toBe('worktree-active-agent');
+  });
+
+  // #12990: unknown liveness is a hold, an empty Set is "nobody running", and a
+  // missing path is never the null that means "safe to remove".
+  it('holds agent trees on unknown liveness and never answers null for a missing path', () => {
+    for (const activeAgentIds of [undefined, null]) {
+      expect(worktreeProtectionReason({ path: '/x/agent-1', activeAgentIds })).toBe('worktree-agent-liveness-unknown');
+    }
+    expect(worktreeProtectionReason({ path: '/x/agent-1', activeAgentIds: new Set() })).toBeNull();
+    expect(worktreeProtectionReason({ path: '' })).toBe('worktree-missing-path');
+    expect(worktreeProtectionReason({ path: null, activeAgentIds: new Set() })).toBe('worktree-missing-path');
+  });
+});
+
+describe('buildActiveOwnerIds', () => {
+  it('keeps unknown runtime liveness unknown instead of coercing it to an empty Set', () => {
+    const live = [{ id: 'agent-live', status: 'running', workspacePath: '/wt/claim-x' }];
+    expect(buildActiveOwnerIds(null, live)).toBeNull();
+    expect(buildActiveOwnerIds(undefined, live)).toBeNull();
+    expect(buildActiveOwnerIds(new Set(), null)).toBeNull();
+    expect([...buildActiveOwnerIds(new Set(['agent-rt']), live)].sort()).toEqual(['agent-live', 'agent-rt', 'claim-x']);
+    expect(buildActiveOwnerIds(new Set(), [])).toEqual(new Set());
   });
 });
 

@@ -64,6 +64,21 @@ export function isAgentWorktreeId(agentId) {
   return typeof agentId === 'string' && agentId.startsWith('agent-');
 }
 
+/**
+ * The live-agent sentinel every destructive caller reads the same way: a `Set`
+ * (INCLUDING an empty one — "nobody is running") is an authoritative answer and
+ * passes through; anything else, `null` and `undefined` included, is UNKNOWN
+ * liveness and comes back as `null`. Never coerce unknown to `new Set()` — an
+ * empty Set lets `agent-*` trees be removed, which is how a checkout in its
+ * dispatch-registration window was exposed (#12990).
+ *
+ * @param {*} value
+ * @returns {Set<string>|null}
+ */
+export function knownAgentIds(value) {
+  return value instanceof Set ? value : null;
+}
+
 function normalizedRoots(roots) {
   return (Array.isArray(roots) ? roots : [])
     .filter((root) => typeof root?.path === 'string' && root.path);
@@ -139,8 +154,9 @@ export function worktreeOwnershipReason({
     return 'worktree-missing-agent-id';
   }
   if (locked) return 'worktree-locked';
-  if (activeAgentIds instanceof Set && activeAgentIds.has(agentId)) return 'worktree-active-agent';
-  if (requireKnownLiveness && isAgentWorktreeId(agentId) && !(activeAgentIds instanceof Set)) {
+  const liveIds = knownAgentIds(activeAgentIds);
+  if (liveIds?.has(agentId)) return 'worktree-active-agent';
+  if (requireKnownLiveness && isAgentWorktreeId(agentId) && !liveIds) {
     return 'worktree-agent-liveness-unknown';
   }
 

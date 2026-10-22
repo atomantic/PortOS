@@ -454,7 +454,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // stored on the run, so the live records' workspace basenames join the
   // ownership set — and a run that cut its own claim tree keeps the source repo
   // as its workspace, so its registered branch bindings are passed as well.
-  const activeAgentIds = buildActiveOwnerIds(getActiveAgentIds(), liveAgents);
+  const activeAgentIds = buildActiveOwnerIds(new Set(getActiveAgentIds()), liveAgents);
   // Action toggles were merged (global → per-app override) + value-constrained
   // by sanitizeTaskMetadata into `metadata`; each is ON unless explicitly false.
   const actions = {
