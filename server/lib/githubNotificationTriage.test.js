@@ -178,6 +178,20 @@ describe('autopilotHandoff', () => {
       .toMatchObject({ lane: 'pr-reviewer', refused: 'no-managed-app' });
   });
 
+  it('applies the repo rule over the * rule, case-insensitively, and ignores a malformed rule', () => {
+    const rules = [
+      { id: 'all', kind: 'security-alert', repo: '*', agent: true, model: 'wide' },
+      { id: 'one', kind: 'security-alert', repo: 'ACME/App', agent: false },
+      { id: 'bad', kind: 'security-alert', repo: 'not a repo', agent: true },
+    ];
+    const alert = { ...review, reason: 'security_alert', decision: 'surface-high', subject_type: 'RepositoryVulnerabilityAlert', trust: 'unknown' };
+    expect(autopilotHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/app' } })).toBeNull();
+    expect(agentHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/app' } }))
+      .toMatchObject({ lane: 'dependency-updates', rule: { id: 'one', agent: false } });
+    expect(autopilotHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/other' } }))
+      .toMatchObject({ lane: 'dependency-updates', pin: { model: 'wide' }, rule: { id: 'all' } });
+  });
+
   it('scopes Autopilot candidates the way the rules decide them', () => {
     const rules = [
       { kind: 'review-request', repo: '*', agent: true },

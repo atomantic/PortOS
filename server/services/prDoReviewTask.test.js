@@ -84,6 +84,16 @@ describe('spawnPrDoReviewTask', () => {
     expect(result).toMatchObject({ duplicate: false, dispatch: { started: true, reason: null } });
   });
 
+  it('leaves an automated run to the normal queue, and needs no app for a PR read through gh', async () => {
+    const result = await queue({ app: null, immediate: false });
+
+    expect(addTask).toHaveBeenCalledWith(expect.anything(), 'user', { suppressDequeue: false });
+    expect(queuedTask().app).toBeUndefined();
+    expect(queuedTask().description).toBe('Review PR #17 for acme/widget');
+    expect(forceSpawnTask).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ duplicate: false, dispatch: { started: false, reason: null } });
+  });
+
   it('reports a refused dispatch as queued-not-started rather than as a running agent', async () => {
     forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (3/3)' });
 
