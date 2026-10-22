@@ -62,7 +62,7 @@ export async function listSavedRecipes() {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-export async function getSavedRecipe(id) {
+async function getSavedRecipe(id) {
   if (!isValidStoryboardRecipeId(id)) throw notFound();
   const record = sanitizeSavedRecipe(await (await backend()).readRaw(id));
   if (!record || record.deleted) throw notFound();
