@@ -17,8 +17,11 @@ import { invalidateMeatspace, invalidateMortalLoomChanges } from './meatspaceEve
 import { randomUUID } from 'crypto';
 import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir, sleep } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isEvictedStats, materializeAndWait, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
-import { isPlainObject } from '../lib/objects.js';
+import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { rowIdentityKeys, ROW_TOMBSTONES_KEY } from '../lib/meatspaceRowIdentity.js';
+import { isTombstoned } from '../lib/tombstones.js';
+import { queueHealthWrite } from './meatspaceWriteQueues.js';
 import { getSettings, settingsEvents } from './settings.js';
 
 const DEFAULT_ICLOUD_PATH = join(
@@ -810,36 +813,79 @@ export async function importToPortOS() {
   const collectionFiles = [
     ['alcoholDrinks', 'alcohol-drinks.json'],
     ['nicotineEntries', 'nicotine-entries.json'],
-    ['bloodTests', 'blood-tests.json'],
+    ['bloodTests', 'blood-tests.json', 'tests'],
     ['bodyEntries', 'body-entries.json'],
-    ['epigeneticTests', 'epigenetic-tests.json'],
-    ['eyeExams', 'eyes.json'],
+    ['epigeneticTests', 'epigenetic-tests.json', 'tests'],
+    ['eyeExams', 'eyes.json', 'exams'],
     ['saunaSessions', 'sauna-sessions.json'],
     ['habits', 'habits.json'],
-    ['healthMetrics', 'health-metrics.json']
+    ['healthMetrics', 'health-metrics.json', 'entries']
   ];
+  const assertRows = (rows, label) => {
+    if (!Array.isArray(rows) || rows.some(row => !isPlainObject(row)
+      || (row.date != null && typeof row.date !== 'string')
+      || (row.id != null && typeof row.id !== 'string'))) {
+      throw new Error(`MortalLoom import ${label} malformed`);
+    }
+  };
+  // Validate the whole input before even goals can be committed.
+  for (const key of ['goals', ...collectionFiles.map(([key]) => key)]) {
+    if (store[key] !== undefined) assertRows(store[key], key);
+  }
+  for (const row of store.bloodTests || []) {
+    if (row.markers != null && !isPlainObject(row.markers)) {
+      throw new Error('MortalLoom import blood markers malformed');
+    }
+  }
+  if ((store.healthMetrics || []).some(row => !row.date)) {
+    throw new Error('MortalLoom import health metric date malformed');
+  }
+  const readDestination = async ({ localPath, fileName, arrayKey }) => {
+    const document = await readJSONFile(localPath, arrayKey ? { [arrayKey]: [] } : [], { strict: true });
+    if (arrayKey && !isPlainObject(document)) {
+      throw new Error(`MortalLoom import ${fileName} malformed`);
+    }
+    const rows = arrayKey ? document[arrayKey] : document;
+    assertRows(rows, fileName);
+    return { document, rows };
+  };
   // Preflight all destinations before the first write; one unreadable local file
-  // must not turn the import into an unreported partially applied batch.
-  const collections = await Promise.all(collectionFiles.map(async ([mlKey, fileName]) => {
+  // must not turn the import into an unreported partially applied batch. These
+  // snapshots are validation only: the queued write re-reads the current rows.
+  const collections = await Promise.all(collectionFiles.map(async ([mlKey, fileName, arrayKey]) => {
     const mlArr = store[mlKey] || [];
-    const localPath = dataPath('meatspace', fileName);
-    const local = mlArr.length ? await readJSONFile(localPath, [], { strict: true }) : [];
-    return { mlKey, mlArr, localPath, local };
+    const collection = { mlKey, mlArr, fileName, arrayKey, localPath: dataPath('meatspace', fileName) };
+    if (mlArr.length) await readDestination(collection);
+    return collection;
   }));
-  const mergeById = async (mlArr, localPath, pathDir, local) => {
-    const localArr = Array.isArray(local) ? local : [];
-    const seen = new Set(localArr.map(x => x.id).filter(Boolean));
+  const mergeById = async (collection) => queueHealthWrite(async () => {
+    const { mlKey, mlArr, localPath, arrayKey } = collection;
+    const { document, rows } = await readDestination(collection);
+    const keysFor = row => arrayKey
+      ? (mlKey === 'healthMetrics' ? [row.date] : rowIdentityKeys(row))
+      : [row.id || canonicalStringify(row)];
+    const seen = new Set(rows.flatMap(keysFor));
     let added = 0, skipped = 0;
     for (const item of mlArr) {
-      if (item?.id && seen.has(item.id)) { skipped++; continue; }
-      localArr.push(item); added++;
+      // MortalLoom nests blood markers; the local reader consumes flat fields.
+      const { markers, ...rest } = item;
+      const row = mlKey === 'bloodTests' ? { ...rest, ...(markers || {}) } : item;
+      const keys = keysFor(row);
+      if (keys.some(key => seen.has(key) || isTombstoned(document[ROW_TOMBSTONES_KEY], key, undefined, 'id'))) {
+        skipped++;
+        continue;
+      }
+      rows.push(row);
+      keys.forEach(key => seen.add(key));
+      added++;
     }
     if (added > 0) {
-      await ensureDir(pathDir);
-      await atomicWrite(localPath, localArr);
+      rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      await ensureDir(dataPath('meatspace'));
+      await atomicWrite(localPath, arrayKey ? { ...document, [arrayKey]: rows } : rows);
     }
     return { added, skipped };
-  };
+  });
 
   // Goals live in a wrapper object, not a bare array
   const { editGoals } = await import('./identity/store.js');
@@ -857,11 +903,14 @@ export async function importToPortOS() {
     report.skipped.goals = skipped;
   }, { localOnly: true });
 
-  for (const { mlKey, mlArr, localPath, local } of collections) {
+  for (const collection of collections) {
+    const { mlKey, mlArr } = collection;
     if (mlArr.length === 0) { report.added[mlKey] = 0; report.skipped[mlKey] = 0; continue; }
-    const { added, skipped } = await mergeById(mlArr, localPath, dataPath('meatspace'), local);
+    const { added, skipped } = await mergeById(collection);
     report.added[mlKey] = added; report.skipped[mlKey] = skipped;
   }
+
+  invalidateMeatspace(['overview', 'blood', 'epigenetic', 'eyes', 'body', 'alcohol']);
 
   if (store.profile && typeof store.profile === 'object') {
     const profilePath = dataPath('meatspace', 'profile.json');

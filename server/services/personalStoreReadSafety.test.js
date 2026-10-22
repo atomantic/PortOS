@@ -99,6 +99,14 @@ beforeAll(async () => { ({ importToPortOS } = await import('./mortalLoomStore.js
 const cases = [
   ['alcohol daily log', () => join(PATHS.meatspace, 'daily-log.json'), () => logDrink({ name: 'Example', oz: 12, abv: 5, date: '2026-01-02' })],
   ['nicotine daily log', () => join(PATHS.meatspace, 'daily-log.json'), () => logNicotine({ product: 'Example', mgPerUnit: 1, date: '2026-01-02' })],
+  ['blood pressure', () => join(PATHS.meatspace, 'health-metrics.json'), async () => {
+    const { addBloodPressureReading } = await import('./meatspaceHealth.js');
+    return addBloodPressureReading({ date: '2026-01-02', systolic: 120, diastolic: 80 });
+  }],
+  ['workouts', () => join(PATHS.meatspace, 'workouts.json'), async () => {
+    const { addWorkout } = await import('./meatspaceHealth.js');
+    return addWorkout({ date: '2026-01-02', type: 'Example exercise' });
+  }],
   ['POST config', () => join(PATHS.meatspace, 'post-config.json'), () => updatePostConfig({ enabled: true })],
   ['memory items', () => join(PATHS.meatspace, 'post-memory-items.json'), () => createMemoryItem({ title: 'Example', lines: ['Example line'] })],
   ['review schedule', () => join(PATHS.meatspace, 'post-review-schedule.json'), () => applySessionToReviewSchedule({ masteredSkills: [{ skillId: 'example' }] })],
