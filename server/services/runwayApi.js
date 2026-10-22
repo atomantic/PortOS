@@ -1,3 +1,4 @@
+import { assertRunwayCatalogModel } from './runwayModelCatalog.js';
 /**
  * Runway developer API — the shared task transport for image and video backends.
  *
@@ -80,6 +81,7 @@ export async function cancelRunwayTask(entry) {
 
 /** Submit one paid generation to a generation endpoint. Resolves to the task id. */
 export async function submitRunwayTask({ apiKey, endpoint, body }) {
+  assertRunwayCatalogModel(endpoint, body.model);
   const res = await fetchWithTimeout(`${RUNWAY_API_BASE}/v1/${endpoint}`, {
     method: 'POST', headers: headers(apiKey, true), body: JSON.stringify(body),
   }, RUNWAY_SUBMIT_TIMEOUT_MS).catch((err) => {

@@ -31,7 +31,7 @@ import {
   listLorasFull,
 } from '../services/api';
 
-const REFERENCE_SLOT_COUNT = 10;
+const REFERENCE_SLOT_COUNT = 16;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
 const IMAGE_GEN_RESTORE_PARAM_KEYS = ['prompt', 'negativePrompt', 'modelId', 'width', 'height', 'seed', 'steps', 'guidance', 'quantize'];
 const IMAGE_GEN_HANDOFF_PARAM_KEYS = ['remix', ...IMAGE_GEN_RESTORE_PARAM_KEYS, 'initImageFile'];
@@ -481,10 +481,10 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     hasInitImage: initImage.source != null,
     // fal.ai's edit models take 9–14 references (a mood board is the point),
     // so it gets every form slot; the per-model cap below still bounds it.
-    maxSlots: (isLocalMode && isQwen21Model) || isFalMode ? REFERENCE_SLOT_COUNT : 4,
+    maxSlots: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? REFERENCE_SLOT_COUNT : (isLocalMode && isQwen21Model) || isFalMode ? 10 : 4,
     localSupportsReferences: isFlux2Model || isQwen21Model,
     localInputCap: isQwen21Model ? 10 : null,
-    cloudModelId: isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL) : null,
+    cloudModelId: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? (runwayModel || savedRunwayModel || 'gen4_image') : isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL) : null,
   });
   const activeStylePresets = useMemo(() => [
     selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,

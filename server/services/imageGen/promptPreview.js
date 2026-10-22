@@ -70,7 +70,7 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
     return { mode, ...agySentPrompt({ ...common, stagingPath: jobOutputPath('portos-agy'), inputImages: previewInputImages(mode, params) }).record };
   }
   if (mode === IMAGE_GEN_MODE.RUNWAY) {
-    return { mode, ...runwayImageSentPrompt({ ...common, inputImages: previewInputImages(mode, params), visualConditioning: params.visualConditioning }).record };
+    return { mode, ...runwayImageSentPrompt({ ...common, modelId: cloud?.providerParams.model, inputImages: previewInputImages(mode, params, cloud?.providerParams.model), visualConditioning: params.visualConditioning }).record };
   }
   if (mode === IMAGE_GEN_MODE.FAL) {
     const family = falImageFamily(cloud?.providerParams.model || FAL_IMAGE_DEFAULT_MODEL) || falImageFamily(FAL_IMAGE_DEFAULT_MODEL);

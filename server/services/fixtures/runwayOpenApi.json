@@ -1,0 +1,786 @@
+{
+  "info": {
+    "version": "2024-11-06"
+  },
+  "paths": {
+    "/v1/text_to_image": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promptText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "seed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      "ratio": {
+                        "type": "string",
+                        "enum": [
+                          "1024:1024",
+                          "1080:1080",
+                          "1168:880",
+                          "1360:768",
+                          "1440:1080",
+                          "1080:1440",
+                          "1808:768",
+                          "1920:1080",
+                          "1080:1920",
+                          "2112:912",
+                          "1280:720",
+                          "720:1280",
+                          "720:720",
+                          "960:720",
+                          "720:960",
+                          "1680:720"
+                        ]
+                      },
+                      "referenceImages": {
+                        "maxItems": 3,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "uri": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 13,
+                                  "maxLength": 2048,
+                                  "pattern": "^https:\\/\\/.*"
+                                },
+                                {
+                                  "type": "string",
+                                  "minLength": 13,
+                                  "maxLength": 5000,
+                                  "pattern": "^runway:\\/\\/.*"
+                                },
+                                {
+                                  "type": "string",
+                                  "minLength": 13,
+                                  "maxLength": 5242880,
+                                  "pattern": "^data:image\\/.*"
+                                }
+                              ]
+                            },
+                            "tag": {
+                              "type": "string",
+                              "minLength": 3,
+                              "maxLength": 16,
+                              "pattern": "^[a-z][a-z0-9_]+$"
+                            }
+                          },
+                          "required": [
+                            "uri"
+                          ]
+                        }
+                      },
+                      "contentModeration": {
+                        "type": "object",
+                        "properties": {
+                          "publicFigureThreshold": {
+                            "type": "string",
+                            "enum": [
+                              "auto",
+                              "low"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "gen4_image"
+                      }
+                    },
+                    "required": [
+                      "promptText",
+                      "ratio",
+                      "model"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promptText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32000
+                      },
+                      "ratio": {
+                        "type": "string",
+                        "enum": [
+                          "2048:880",
+                          "1920:1088",
+                          "1920:1280",
+                          "1920:1440",
+                          "1920:1536",
+                          "1920:1920",
+                          "1536:1920",
+                          "1440:1920",
+                          "1280:1920",
+                          "1088:1920",
+                          "2912:1248",
+                          "2560:1440",
+                          "2560:1712",
+                          "2560:1920",
+                          "2560:2048",
+                          "2560:2560",
+                          "2048:2560",
+                          "1920:2560",
+                          "1712:2560",
+                          "1440:2560",
+                          "3840:1648",
+                          "3840:2160",
+                          "3504:2336",
+                          "3264:2448",
+                          "3200:2560",
+                          "2880:2880",
+                          "2560:3200",
+                          "2448:3264",
+                          "2336:3504",
+                          "2160:3840",
+                          "auto"
+                        ]
+                      },
+                      "quality": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          "auto"
+                        ]
+                      },
+                      "background": {
+                        "type": "string",
+                        "enum": [
+                          "transparent",
+                          "opaque",
+                          "auto"
+                        ]
+                      },
+                      "referenceImages": {
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "uri": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 13,
+                                  "maxLength": 2048,
+                                  "pattern": "^https:\\/\\/.*"
+                                },
+                                {
+                                  "type": "string",
+                                  "minLength": 13,
+                                  "maxLength": 5000,
+                                  "pattern": "^runway:\\/\\/.*"
+                                },
+                                {
+                                  "type": "string",
+                                  "minLength": 13,
+                                  "maxLength": 5242880,
+                                  "pattern": "^data:image\\/.*"
+                                }
+                              ]
+                            },
+                            "tag": {
+                              "type": "string",
+                              "minLength": 3,
+                              "maxLength": 16,
+                              "pattern": "^[a-z][a-z0-9_]+$"
+                            }
+                          },
+                          "required": [
+                            "uri"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "outputCount": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "gpt_image_2"
+                      }
+                    },
+                    "required": [
+                      "promptText",
+                      "ratio",
+                      "model"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/image_to_video": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promptText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "promptImage": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 2048,
+                                "pattern": "^https:\\/\\/.*"
+                              },
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 5000,
+                                "pattern": "^runway:\\/\\/.*"
+                              },
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 5242880,
+                                "pattern": "^data:image\\/.*"
+                              }
+                            ]
+                          },
+                          {
+                            "minItems": 1,
+                            "maxItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "uri": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 2048,
+                                      "pattern": "^https:\\/\\/.*"
+                                    },
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5000,
+                                      "pattern": "^runway:\\/\\/.*"
+                                    },
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5242880,
+                                      "pattern": "^data:image\\/.*"
+                                    }
+                                  ]
+                                },
+                                "position": {
+                                  "type": "string",
+                                  "const": "first"
+                                }
+                              },
+                              "required": [
+                                "uri",
+                                "position"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        ]
+                      },
+                      "seed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      "ratio": {
+                        "type": "string",
+                        "enum": [
+                          "1280:720",
+                          "720:1280",
+                          "1104:832",
+                          "960:960",
+                          "832:1104",
+                          "1584:672"
+                        ]
+                      },
+                      "duration": {
+                        "type": "integer",
+                        "minimum": 2,
+                        "maximum": 10
+                      },
+                      "contentModeration": {
+                        "type": "object",
+                        "properties": {
+                          "publicFigureThreshold": {
+                            "type": "string",
+                            "enum": [
+                              "auto",
+                              "low"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "outputFormat": {
+                        "type": "string",
+                        "enum": [
+                          "mp4",
+                          "prores",
+                          "png_sequence",
+                          "hdr10",
+                          "hlg",
+                          "sdr_rec709_10bit",
+                          "hdr_pq_12bit_master",
+                          "hdr_prores",
+                          "hdr_png_sequence",
+                          "hdr_exr_sequence",
+                          "hdr_exr_acescg_sequence_1_3",
+                          "hdr_exr_acescg_sequence_2_0"
+                        ]
+                      },
+                      "proresProfile": {
+                        "type": "string",
+                        "enum": [
+                          "422",
+                          "4444",
+                          "422 Proxy",
+                          "422 LT",
+                          "422 HQ",
+                          "4444 XQ"
+                        ]
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "gen4.5"
+                      }
+                    },
+                    "required": [
+                      "promptText",
+                      "promptImage",
+                      "ratio",
+                      "duration",
+                      "model"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promptText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "promptImage": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 2048,
+                                "pattern": "^https:\\/\\/.*"
+                              },
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 5000,
+                                "pattern": "^runway:\\/\\/.*"
+                              },
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 5242880,
+                                "pattern": "^data:image\\/.*"
+                              }
+                            ]
+                          },
+                          {
+                            "minItems": 1,
+                            "maxItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "uri": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 2048,
+                                      "pattern": "^https:\\/\\/.*"
+                                    },
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5000,
+                                      "pattern": "^runway:\\/\\/.*"
+                                    },
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5242880,
+                                      "pattern": "^data:image\\/.*"
+                                    }
+                                  ]
+                                },
+                                "position": {
+                                  "type": "string",
+                                  "const": "first"
+                                }
+                              },
+                              "required": [
+                                "uri",
+                                "position"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        ]
+                      },
+                      "seed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      "ratio": {
+                        "type": "string",
+                        "enum": [
+                          "1280:720",
+                          "720:1280",
+                          "1104:832",
+                          "832:1104",
+                          "960:960",
+                          "1584:672"
+                        ]
+                      },
+                      "duration": {
+                        "type": "integer",
+                        "minimum": 2,
+                        "maximum": 10
+                      },
+                      "contentModeration": {
+                        "type": "object",
+                        "properties": {
+                          "publicFigureThreshold": {
+                            "type": "string",
+                            "enum": [
+                              "auto",
+                              "low"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "gen4_turbo"
+                      }
+                    },
+                    "required": [
+                      "promptImage",
+                      "ratio",
+                      "model"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promptText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "promptImage": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 2048,
+                                "pattern": "^https:\\/\\/.*"
+                              },
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 5000,
+                                "pattern": "^runway:\\/\\/.*"
+                              },
+                              {
+                                "type": "string",
+                                "minLength": 13,
+                                "maxLength": 5242880,
+                                "pattern": "^data:image\\/.*"
+                              }
+                            ]
+                          },
+                          {
+                            "minItems": 1,
+                            "maxItems": 2,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "uri": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 2048,
+                                      "pattern": "^https:\\/\\/.*"
+                                    },
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5000,
+                                      "pattern": "^runway:\\/\\/.*"
+                                    },
+                                    {
+                                      "type": "string",
+                                      "minLength": 13,
+                                      "maxLength": 5242880,
+                                      "pattern": "^data:image\\/.*"
+                                    }
+                                  ]
+                                },
+                                "position": {
+                                  "type": "string",
+                                  "enum": [
+                                    "first",
+                                    "last"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "uri",
+                                "position"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        ]
+                      },
+                      "ratio": {
+                        "type": "string",
+                        "enum": [
+                          "1280:720",
+                          "720:1280",
+                          "1080:1920",
+                          "1920:1080"
+                        ]
+                      },
+                      "audio": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "negativePrompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "seed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      "duration": {
+                        "type": "number",
+                        "enum": [
+                          4,
+                          6,
+                          8
+                        ]
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "veo3.1"
+                      }
+                    },
+                    "required": [
+                      "promptImage",
+                      "ratio",
+                      "model"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/text_to_video": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promptText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "ratio": {
+                        "type": "string",
+                        "enum": [
+                          "1280:720",
+                          "720:1280"
+                        ]
+                      },
+                      "duration": {
+                        "type": "integer",
+                        "minimum": 2,
+                        "maximum": 10
+                      },
+                      "seed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      "contentModeration": {
+                        "type": "object",
+                        "properties": {
+                          "publicFigureThreshold": {
+                            "type": "string",
+                            "enum": [
+                              "auto",
+                              "low"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "outputFormat": {
+                        "type": "string",
+                        "enum": [
+                          "mp4",
+                          "prores",
+                          "png_sequence",
+                          "hdr10",
+                          "hlg",
+                          "sdr_rec709_10bit",
+                          "hdr_pq_12bit_master",
+                          "hdr_prores",
+                          "hdr_png_sequence",
+                          "hdr_exr_sequence",
+                          "hdr_exr_acescg_sequence_1_3",
+                          "hdr_exr_acescg_sequence_2_0"
+                        ]
+                      },
+                      "proresProfile": {
+                        "type": "string",
+                        "enum": [
+                          "422",
+                          "4444",
+                          "422 Proxy",
+                          "422 LT",
+                          "422 HQ",
+                          "4444 XQ"
+                        ]
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "gen4.5"
+                      }
+                    },
+                    "required": [
+                      "promptText",
+                      "ratio",
+                      "duration",
+                      "model"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promptText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "ratio": {
+                        "type": "string",
+                        "enum": [
+                          "1280:720",
+                          "720:1280",
+                          "1080:1920",
+                          "1920:1080"
+                        ]
+                      },
+                      "audio": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "negativePrompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "seed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      },
+                      "duration": {
+                        "type": "number",
+                        "enum": [
+                          4,
+                          6,
+                          8
+                        ]
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "veo3.1"
+                      }
+                    },
+                    "required": [
+                      "promptText",
+                      "ratio",
+                      "model"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

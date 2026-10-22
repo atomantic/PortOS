@@ -354,7 +354,7 @@ const generateBodySchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.enum(REACTOR_ASPECTS).optional(),
   ),
-  prompt: z.string().min(1).max(8000),
+  prompt: z.string().min(1).max(20000),
   negativePrompt: z.string().max(8000).optional(),
   modelId: z.string().max(64).optional(),
   width: optionalNum(64, 2048, 'width'),

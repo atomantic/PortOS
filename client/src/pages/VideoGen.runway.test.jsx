@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 import {
@@ -28,7 +28,8 @@ describe('VideoGen Runway text lane', () => {
     expect(model).toHaveValue('gen4_turbo');
     fireEvent.click(modes.getByRole('button', { name: 'Text' }));
     await waitFor(() => expect(model).toHaveValue('gen4.5'));
-    expect([...model.options].map(option => option.value)).toEqual(['gen4.5']);
+    expect([...model.options].map(option => option.value)).toEqual(expect.arrayContaining(['gen4.5', 'veo3.1', 'seedance2_5']));
+    expect([...model.options].map(option => option.value)).not.toContain('gen4_turbo');
     expect(screen.getByText(/about \$0.60 at list price/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
     fireEvent.click(await findEnabledByRole('button', { name: /Add to queue/ }));
@@ -39,3 +40,5 @@ describe('VideoGen Runway text lane', () => {
     expect(payload.sourceImage).toBe('');
   });
 });
+
+vi.mock('../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));

@@ -1,3 +1,4 @@
+import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import { ChevronDown, Sparkles, X } from 'lucide-react';
 import StylePresetPicker from '../media/StylePresetPicker';
 import UniverseStylePicker from '../media/UniverseStylePicker';
@@ -17,7 +18,7 @@ import LoraPicker from './LoraPicker';
 import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
 import {
-  RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL,
+  RUNWAY_IMAGE_DEFAULT_MODEL,
   AGY_IMAGEGEN_DEFAULT_MODEL, FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE, falImageFamily,
 } from '../../lib/imageGenBackends';
 
@@ -28,6 +29,7 @@ const ERROR_HEADINGS = {
 };
 
 export default function ImageGenFormEditor({ form, backend, generation }) {
+  const runwayCatalog = useRunwayCatalog(backend?.isRunwayMode);
   const {
     fields,
     catalogs,
@@ -82,7 +84,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
       >
         <button
           type="submit"
-          disabled={derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || (derived.remoteTargetActive
+          disabled={(isRunwayMode && !runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel)) || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || (derived.remoteTargetActive
             ? derived.remoteBlocked !== null
             : (derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt))}
           title={derived.unsupportedLocalInputs ? 'Remove unsupported LoRAs and input images in Options before rendering.' : loraTest.pending ? 'Preparing this LoRA test…' : loraTest.error || (remix.pending
@@ -241,7 +243,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             modelStatus={isLocalMode ? modelDownload.getStatus(fields.modelId) : null}
             onModelDownload={isLocalMode ? modelDownload.start : undefined}
             onModelDownloadCancel={modelDownload.cancel}
-            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isRunwayMode ? RUNWAY_IMAGE_MODELS : []}
+            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isRunwayMode ? [...runwayCatalog.imageModels, ...(!runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel) ? [{ id: effectiveRunwayModel, label: `${effectiveRunwayModel} (unavailable)` }] : [])] : []}
             cloudModel={isRunwayMode ? effectiveRunwayModel : isFalMode ? effectiveFalModel : effectiveAgyModel}
             onCloudModelChange={isRunwayMode ? fields.setRunwayModel : isFalMode ? fields.setFalModel : fields.setAgyModel}
             cloudModelLabel={isRunwayMode ? 'Runway model' : isFalMode ? 'fal.ai model' : 'Agent model'}

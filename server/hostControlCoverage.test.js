@@ -563,6 +563,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/image-gen/models/:modelId/repair', MODEL_DATA],
   ['POST /api/image-gen/models/verify', MODEL_DATA],
   ['POST /api/image-gen/prompt-preview', READ_OVER_POST],
+  // Refreshes public Runway documentation into a fixed disposable cache; no credentials, process or paid inference.
+  ['POST /api/image-gen/runway-models/refresh', READ_OVER_POST],
   ['POST /api/image-gen/setup/create-venv', HANDLER_GATED],
   ['POST /api/image-gen/setup/flux2-install', MANAGED_INSTALL],
   ['DELETE /api/image-gen/setup/hf-token', REMOVES_RECORD],

@@ -1,3 +1,5 @@
+import { useRunwayCatalog } from '../hooks/useRunwayCatalog.js';
+import RunwayCatalogStatus from '../components/imageGen/RunwayCatalogStatus.jsx';
 /**
  * Video Generation page (LTX models via mlx_video on macOS, diffusers on
  * Windows), with local, Grok, and federated render targets.
@@ -106,8 +108,8 @@ import {
 } from '../lib/falVideoModels.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import {
-  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, describeRunwayVideoRate, estimateRunwayVideoCostUsd, getRunwayVideoModel,
-  runwayModelTakesText, runwayVideoLengths, runwayVideoResolutions,
+  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, describeRunwayVideoRate, estimateRunwayVideoCostUsd, getRunwayVideoModel,
+  runwayVideoLengths, runwayVideoResolutions,
 } from '../lib/runwayVideoModels.js';
 import { videoGenEnqueuePolicy } from '../lib/videoGenEnqueuePolicy.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
@@ -996,8 +998,10 @@ export default function VideoGen() {
   const modelFieldVisible = !modelsLoading || modelContextLoading;
   const falModel = getFalVideoModel(falModelId);
   const falResolutions = falVideoResolutions(falModel);
+  const runwayCatalog = useRunwayCatalog(isRunway, mode);
   const runwayModel = getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
-  const runwayResolutions = runwayVideoResolutions(runwayModel);
+  const runwaySizeModel = mode === 'text' && runwayModel?.textToVideo ? { ...runwayModel, size: runwayModel.textToVideo.size } : runwayModel;
+  const runwayResolutions = runwayVideoResolutions(runwaySizeModel);
 
   const notConnected = !!status && status.connected === false && !needsByovProbe;
 
@@ -1069,7 +1073,7 @@ export default function VideoGen() {
   const effectiveBatchSize = rendersOnThisMachine
     && currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1;
 
-  const { canEnqueue, generateTitle, queueTitle, optionsHint } = videoGenEnqueuePolicy({
+  const { canEnqueue: backendCanEnqueue, generateTitle, queueTitle, optionsHint } = videoGenEnqueuePolicy({
     prompt,
     remixHandoffPending,
     promptOverLimit,
@@ -1091,6 +1095,7 @@ export default function VideoGen() {
     keyframesBlocked,
     keyframesError,
   });
+  const canEnqueue = backendCanEnqueue && (!isRunway || runwayCatalog.videoModels.some((m) => m.id === runwayModel?.id));
 
   return (
     <div className="space-y-3">
@@ -1689,6 +1694,7 @@ export default function VideoGen() {
             </div>
           ) : isRunway ? (
             <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2"><RunwayCatalogStatus catalog={runwayCatalog} /></div>
               <FormField className="col-span-2" label="Runway model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                 <select
                   id="runway-video-model"
@@ -1696,9 +1702,10 @@ export default function VideoGen() {
                   onChange={(e) => setRunwayModelId(e.target.value)}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                 >
-                  {RUNWAY_VIDEO_MODELS.filter((m) => mode !== 'text' || runwayModelTakesText(m)).map((m) => (
+                  {!runwayCatalog.videoModels.some((m) => m.id === runwayModel?.id) && <option value={runwayModel?.id || runwayModelId}>{runwayModel?.label || runwayModelId} (unavailable)</option>}
+                  {runwayCatalog.videoModels.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {`${m.label} · ${describeRunwayVideoRate(m.id)}${m.id === RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL ? ' (default)' : ''}`}
+                      {`${m.label} · ${describeRunwayVideoRate(m.id) || 'price varies'}${m.id === RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL ? ' (default)' : ''}`}
                     </option>
                   ))}
                 </select>
@@ -1731,8 +1738,8 @@ export default function VideoGen() {
                     onChange={(e) => setRunwayResolution(e.target.value)}
                     className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                   >
-                    <option value="">{`${runwayModel.size.default} (default)`}</option>
-                    {runwayResolutions.map((res) => <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res)}`}</option>)}
+                    <option value="">{`${runwaySizeModel.size.default} (default)`}</option>
+                    {runwayResolutions.map((res) => <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res) || 'price varies'}`}</option>)}
                   </select>
                 </FormField>
               )}
