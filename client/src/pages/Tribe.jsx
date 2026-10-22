@@ -243,15 +243,17 @@ function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, sav
           <Edit3 size={18} className="text-port-accent shrink-0" aria-hidden="true" />
           <h2 className="text-sm font-semibold text-white truncate">{isExisting ? 'Relationship' : 'New Relationship'}</h2>
         </div>
-        <button
-          type="button"
-          onClick={onNew}
-          title="New relationship"
-          aria-label="New relationship"
-          className="inline-flex h-9 w-9 items-center justify-center rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/40"
-        >
-          <Plus size={16} aria-hidden="true" />
-        </button>
+        {isExisting && (
+          <button
+            type="button"
+            onClick={onNew}
+            title="New relationship"
+            aria-label="New relationship"
+            className="inline-flex h-9 w-9 items-center justify-center rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/40"
+          >
+            <Plus size={16} aria-hidden="true" />
+          </button>
+        )}
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -660,7 +662,7 @@ function BeeperIdentitiesPanel({ personId }) {
   );
 }
 
-function EmptyState({ onNew }) {
+function EmptyState() {
   return (
     <div className="flex min-h-[280px] flex-col items-center justify-center rounded border border-dashed border-port-border bg-port-card/60 p-8 text-center">
       <Users size={42} className="text-gray-600" aria-hidden="true" />
@@ -668,14 +670,6 @@ function EmptyState({ onNew }) {
       <p className="mt-2 max-w-md text-sm text-gray-500">
         Add the first person in your circle, then PortOS can keep cadence, ring size, and care queue visible.
       </p>
-      <button
-        type="button"
-        onClick={onNew}
-        className="mt-5 inline-flex items-center gap-2 rounded bg-port-accent px-3 py-2 text-sm font-medium text-black hover:bg-port-accent/90"
-      >
-        <Plus size={15} aria-hidden="true" />
-        Add Relationship
-      </button>
     </div>
   );
 }
@@ -847,7 +841,7 @@ function OutreachQueue() {
   );
 }
 
-function CareQueue({ contacts, statusFilter, onStatusFilterChange, onSelect, onLogTouch, onNew }) {
+function CareQueue({ contacts, statusFilter, onStatusFilterChange, onSelect, onLogTouch }) {
   // External people are outside the tribe — no care cadence is owed, so they
   // never appear in the queue (otherwise their null daysRemaining would sort
   // them to the top alongside genuinely-overdue contacts). Memoized + status
@@ -864,7 +858,7 @@ function CareQueue({ contacts, statusFilter, onStatusFilterChange, onSelect, onL
   // A filtered-to-empty queue is a success state ("nobody is overdue"), not the
   // "no relationships yet" onboarding empty — only show the latter when the whole
   // roster is empty.
-  if (!queue.length && statusFilter === DEFAULT_STATUS) return <EmptyState onNew={onNew} />;
+  if (!queue.length && statusFilter === DEFAULT_STATUS) return <EmptyState />;
 
   return (
     <div className="grid gap-3">
@@ -1428,7 +1422,7 @@ export default function Tribe() {
                 </div>
 
                 {contacts.length === 0 ? (
-                  <EmptyState onNew={startNewRelationship} />
+                  <EmptyState />
                 ) : (
                   <div className="grid gap-3 md:grid-cols-2">
                     {filteredContacts.map((contact) => (
@@ -1471,7 +1465,7 @@ export default function Tribe() {
 
           {activeTab === 'map' && (
             contacts.length === 0 ? (
-              <EmptyState onNew={startNewRelationship} />
+              <EmptyState />
             ) : (
               <TribeCircleMap
                 contacts={contacts}
@@ -1492,7 +1486,6 @@ export default function Tribe() {
                   onStatusFilterChange={setStatusFilter}
                   onSelect={(contact) => { selectContact(contact); setActiveTab('circle'); }}
                   onLogTouch={logTouch}
-                  onNew={startNewRelationship}
                 />
               </div>
               <ContactForm

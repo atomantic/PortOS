@@ -45,6 +45,7 @@ export default function XPage() {
   const [drafts, setDrafts] = useState([]);
   const [resourcesAccountId, setResourcesAccountId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [accountsReadFailed, setAccountsReadFailed] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -95,6 +96,7 @@ export default function XPage() {
   const loadAccounts = useCallback(async () => {
     const result = await api.getXAccounts({ silent: true }).catch((err) => ({ error: err.message, accounts: [] }));
     if (result.error) setError(result.error);
+    setAccountsReadFailed(Boolean(result.error));
     setAccounts(result.accounts || []);
     setLoading(false);
   }, []);
@@ -266,5 +268,5 @@ export default function XPage() {
 
   const notFound = Boolean(accountId && !selected);
   if (loading) return <PageSkeleton header="bar" label="Loading X" tabs={TABS.length} cards={3} />;
-  return <div className="flex h-full min-h-0 flex-col"><PageHeader icon={AtSign} title="X" subtitle="Account health, reach diagnostics, and review-gated drafts" actions={accountSwitcher} /><TabPills tabs={TABS} activeTab={activeTab} onChange={(nextTab) => selected ? navigate(accountPath(selected.id, nextTab)) : navigate('/x')} ariaLabel="X sections" /><section className="flex-1 overflow-auto p-4">{error && <div role="status" className="mb-3 rounded border border-port-error p-3 text-sm text-port-error">{error}</div>}{notice && <div className="mb-3 rounded border border-port-border p-3 text-sm text-gray-200">{notice}</div>}{notFound && <div className="mb-3 rounded border border-port-error p-4 text-sm text-port-error">This X account was not found. <button type="button" className="underline" onClick={() => navigate('/x')}>Return to accounts.</button></div>}{activeTab === 'health' && selected && renderHealth()}{activeTab === 'posts' && selected && renderPosts()}{activeTab === 'drafts' && selected && renderDrafts()}{activeTab === 'accounts' && renderAccounts()}{accountDrawer}</section></div>;
+  return <div className="flex h-full min-h-0 flex-col"><PageHeader icon={AtSign} title="X" subtitle="Account health, reach diagnostics, and review-gated drafts" actions={accounts.length === 0 && !accountsReadFailed ? null : accountSwitcher} /><TabPills tabs={TABS} activeTab={activeTab} onChange={(nextTab) => selected ? navigate(accountPath(selected.id, nextTab)) : navigate('/x')} ariaLabel="X sections" /><section className="flex-1 overflow-auto p-4">{error && <div role="status" className="mb-3 rounded border border-port-error p-3 text-sm text-port-error">{error}</div>}{notice && <div className="mb-3 rounded border border-port-border p-3 text-sm text-gray-200">{notice}</div>}{notFound && <div className="mb-3 rounded border border-port-error p-4 text-sm text-port-error">This X account was not found. <button type="button" className="underline" onClick={() => navigate('/x')}>Return to accounts.</button></div>}{activeTab === 'health' && selected && renderHealth()}{activeTab === 'posts' && selected && renderPosts()}{activeTab === 'drafts' && selected && renderDrafts()}{activeTab === 'accounts' && renderAccounts()}{accountDrawer}</section></div>;
 }

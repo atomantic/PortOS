@@ -12,12 +12,15 @@ import { formatCount } from '../utils/formatters';
 export default function FeatureAgents() {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Only a successful zero-record read counts as empty; a failed read keeps the header action.
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const fetchAgents = useCallback(() => {
     api.getFeatureAgents().then(data => {
       setAgents(data || []);
+      setLoadFailed(false);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => { setLoadFailed(true); setLoading(false); });
   }, []);
 
   useEffect(() => {
@@ -95,12 +98,14 @@ export default function FeatureAgents() {
             >
               <RefreshCw size={16} />
             </button>
-            <Link
-              to="/feature-agents/create"
-              className="flex items-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm font-medium hover:bg-port-accent/80 transition-colors"
-            >
-              <Plus size={16} /> New Agent
-            </Link>
+            {(loading || loadFailed || agents.length > 0) && (
+              <Link
+                to="/feature-agents/create"
+                className="flex items-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm font-medium hover:bg-port-accent/80 transition-colors"
+              >
+                <Plus size={16} /> New Agent
+              </Link>
+            )}
           </>
         }
       />

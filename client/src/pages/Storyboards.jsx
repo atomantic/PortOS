@@ -94,7 +94,7 @@ export default function Storyboards() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PageHeader icon={LayoutPanelLeft} title="Storyboards" subtitle="Plan story beats and panels before the song or the edit." actions={newButton} />
+      <PageHeader icon={LayoutPanelLeft} title="Storyboards" subtitle="Plan story beats and panels before the song or the edit." actions={state === 'ready' && boards.length === 0 ? null : newButton} />
       <div className="flex-1 min-h-0 overflow-auto p-3 sm:p-4">
         {state === 'error' ? (
           <ListLoadError what="storyboards" error={error} onRetry={retry} />
