@@ -297,7 +297,7 @@ function cleanupOptions({ prCreation = PR_CREATION.NEVER, prCompletion = null, r
 }
 
 // A lockfile-only diff is a legitimate deliverable for dependency-updates only.
-export const lockfileDeliverable = (task) => ({ preserveLockfiles: resolveTaskHookType(task) === 'dependency-updates' });
+export const lockfileDeliverable = (task) => (resolveTaskHookType(task) === 'dependency-updates' ? { preserveLockfiles: true } : {});
 
 async function discardAgentWorktree({ agentId, sourceWorkspace, worktreeBranch }) {
   emitLog('info', `🌳 Discarding worktree for reasoning agent ${agentId} (no merge, no PR)`, { agentId, branchName: worktreeBranch });
