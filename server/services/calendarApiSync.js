@@ -151,5 +151,5 @@ export async function syncOutlookCalendarApi(account, _cache, io, options = {}) 
 
   // Declined/cancelled filtering handled universally by calendarSync.filterDeclinedAndCancelled at read time
   console.log(`📅 Calendar API sync complete: ${events.length} events in ${page} page(s)`);
-  return { events, status: 'success', syncMethod: 'api' };
+  return { events, status: 'success', syncMethod: 'api', dateRange: { pastDate: startRange, futureDate: endRange } };
 }
