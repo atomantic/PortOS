@@ -11,6 +11,8 @@
  * Assist mode (#12872) adds three inputs, none of which can raise trust:
  * a learned rule (the operator's own past correction), a model verdict from a
  * fixed enum, and the one automatic action `assistAction` allows.
+ * Autopilot (#12874) only picks a lane with `autopilotHandoff`; the lane
+ * re-screens its own input.
  */
 import { isUntrustedContentProvider } from './untrustedContent.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
@@ -27,6 +29,7 @@ export const TRIAGE_DECISIONS = Object.freeze([
   'duplicate',
   'suggest-done',
   'suggest-mute',
+  'handed-off',
 ]);
 
 export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unknown']);
@@ -164,4 +167,31 @@ export function selectNotificationProvider({ account, providers = [], policy = {
     if (model) return { provider, model };
   }
   return { code: 'github-notification-provider-not-allowed' };
+}
+
+// Autopilot (#12874) hands a thread to the lane that already owns that kind of
+// work. Issue activity qualifies while it would otherwise wait for you.
+const HANDOFF_ISSUE_DECISIONS = new Set(['needs-you', 'surface']);
+const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
+
+/**
+ * Which lane Autopilot may hand a thread to, or null to leave it with you.
+ * Only threads in a PortOS managed app's repo qualify (the lanes run per app),
+ * never a Suspect or closed one. A Private account's hand-off is refused: the
+ * lanes use their own providers, which its provider allow-list cannot bind.
+ * The pull number comes from the subject's API url, never from a title or body.
+ */
+export function autopilotHandoff({ account, row }) {
+  if (account?.mode !== 'autopilot' || row?.state !== 'open' || row.suspect) return null;
+  const evidence = row.evidence || {};
+  if (evidence.repoManaged !== true) return null;
+  let plan = null;
+  if (row.decision === 'suggest-untrusted-review' && row.subject_type === 'PullRequest') {
+    const pullNumber = Number(PULL_PATH_RE.exec(String(row.subject_api_url || ''))?.[1]);
+    if (pullNumber > 0) plan = { lane: 'pr-reviewer', pullNumber };
+  } else if (row.subject_type === 'Issue' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
+    plan = { lane: 'issue-watcher' };
+  }
+  if (!plan) return null;
+  return account.trust === 'private' ? { ...plan, refused: 'private-account' } : plan;
 }

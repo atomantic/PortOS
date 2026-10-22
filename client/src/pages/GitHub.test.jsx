@@ -457,6 +457,18 @@ describe('GitHub inbox triage', () => {
     expect(screen.getByText('Triaged: Suspect (observe)')).toBeTruthy();
     expect(mock.getGitHubNotification).toHaveBeenCalledWith('github-com', '101', { silent: true });
   });
+
+  it('shows which lane Autopilot handed a thread to, linked to its app', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [], sync: {} });
+    mock.getGitHubNotification.mockResolvedValue({
+      ...NOTIFICATION, decision: 'handed-off', trust: 'outside', suspect: false, signals: [],
+      evidence: { rule: 'review-outside-author', actor: 'mallory', handoff: { lane: 'pr-reviewer', appId: 'app-acme', appName: 'Acme App', pullNumber: 101, requestId: 'demand-1' } },
+      events: [{ actor: 'automation', kind: 'handed-off', detail: { lane: 'pr-reviewer', appId: 'app-acme' }, at: '2026-10-01T10:05:00.000Z' }],
+    });
+    renderTab('inbox/github-com/101');
+    expect((await screen.findByRole('link', { name: 'Acme App' })).getAttribute('href')).toBe('/apps/app-acme/pull-requests');
+    expect(screen.getByText('Handed off to Untrusted:Review by Autopilot')).toBeTruthy();
+  });
 });
 
 describe('GitHub automations tab', () => {
@@ -556,5 +568,15 @@ describe('GitHub audit tab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Undo/ }));
     expect(await screen.findByText('Undone')).toBeTruthy();
     expect(mock.undoGitHubAuditChange).toHaveBeenCalledWith('5');
+  });
+
+  it('turns on the monthly audit report for the selected account', async () => {
+    mock.updateGitHubAccount.mockResolvedValue({ ...ACCOUNT, auditReport: true });
+    renderTab('audit');
+    const toggle = await screen.findByLabelText(/Send me this audit monthly/);
+    expect(toggle.checked).toBe(false);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(screen.getByLabelText(/Send me this audit monthly/).checked).toBe(true));
+    expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { auditReport: true });
   });
 });

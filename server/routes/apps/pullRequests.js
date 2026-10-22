@@ -36,7 +36,6 @@ import { claimSafeReviewers, normalizeReviewers, validateRequest } from '../../l
 import { PR_COMPLETIONS, isSelfReviewMode } from '../../lib/prDisposition.js';
 import { isTruthyMeta } from '../../services/agentState.js';
 import { resolveReviewLoopOptions } from '../../services/codeReview.js';
-import { getAllTasks } from '../../services/cos.js';
 import { spawnReviewLoopFollowUp } from '../../services/agentWorktreeCleanup.js';
 import { listAppPullRequests } from '../../services/appPullRequests.js';
 import {
@@ -48,10 +47,15 @@ import {
 import { isDoReviewTask, spawnPrDoReviewTask } from '../../services/prDoReviewTask.js';
 import {
   isReviewablePullRequest,
-  listExternalOpenPullRequests,
   resolvePrReviewerTargetScope,
 } from '../../services/prReviewerSecurity.js';
-import { getOnDemandRequests, triggerOnDemandTask } from '../../services/taskSchedule.js';
+import {
+  ACTIVE_TASK_STATUSES,
+  queueTargetedPrReview,
+  readActiveTasks,
+  readPendingOnDemandRequests,
+  reviewActionFor,
+} from '../../services/prReviewerTargetedRun.js';
 import { loadApp } from './shared.js';
 
 const router = Router();
@@ -68,32 +72,12 @@ const pullRequestMergeSchema = z.object({
   deleteBranch: z.boolean().optional(),
 });
 
-const ACTIVE_TASK_STATUSES = new Set(['pending', 'in_progress', 'blocked']);
-const PR_REVIEWER_TASK_TYPE = 'pr-reviewer';
-
-const flattenTasks = (taskData) => [
-  ...(Array.isArray(taskData?.user?.tasks) ? taskData.user.tasks : []),
-  ...(Array.isArray(taskData?.cos?.tasks) ? taskData.cos.tasks : []),
-];
-
 const isResolveTaskFor = (task, appId, pullRequest) => {
   const metadata = task?.metadata;
   return ACTIVE_TASK_STATUSES.has(task?.status)
     && isTruthyMeta(metadata?.reviewLoopFollowUp)
     && metadata?.app === appId
     && Number(metadata.reviewLoopPRNumber) === pullRequest.number;
-};
-
-// A pr-reviewer run narrowed to this one request (`targetPullRequest` is stamped
-// by the generator's security preflight). The unnarrowed sweep is deliberately
-// NOT matched: it covers every external PR, so reporting it as this row's action
-// would hide the per-row trigger behind an unrelated run.
-const isReviewTaskFor = (task, appId, pullRequest) => {
-  const metadata = task?.metadata;
-  return ACTIVE_TASK_STATUSES.has(task?.status)
-    && metadata?.analysisType === PR_REVIEWER_TASK_TYPE
-    && metadata?.app === appId
-    && Number(metadata.targetPullRequest) === pullRequest.number;
 };
 
 // A `/do:review` run pinned to this request. It shares `targetPullRequest` with
@@ -106,41 +90,6 @@ const isDoReviewTaskFor = (task, appId, pullRequest) => {
     && metadata?.app === appId
     && Number(metadata.targetPullRequest) === pullRequest.number;
 };
-
-const isReviewRequestFor = (request, appId, pullRequest) => (
-  request?.taskType === PR_REVIEWER_TASK_TYPE
-  && request?.appId === appId
-  && Number(request?.targetPullRequest) === pullRequest.number
-);
-
-async function readActiveTasks() {
-  const taskData = await getAllTasks().catch(err => {
-    console.error(`❌ app-pull-requests: could not read CoS tasks: ${err.message}`);
-    return null;
-  });
-  if (!Array.isArray(taskData?.user?.tasks) || !Array.isArray(taskData?.cos?.tasks)) {
-    if (taskData) console.error('❌ app-pull-requests: CoS task response had an invalid shape');
-    return null;
-  }
-  return flattenTasks(taskData);
-}
-
-// Queued on-demand requests that have not yet become tasks. A pr-reviewer run
-// is queued through the on-demand lane, so without these a row would show no
-// action at all between the click and the generator's next cycle — and a page
-// refresh in that window would offer the button again.
-//
-// `null` means UNREADABLE, which is not the same as "nothing queued": collapsing
-// the two would let the review route miss an existing request and queue a
-// duplicate scan of the same public PR. The POST fails closed on it; the GET,
-// which only paints a button, degrades to showing no queued action.
-async function readPendingOnDemandRequests() {
-  const requests = await getOnDemandRequests().catch(err => {
-    console.error(`❌ app-pull-requests: could not read on-demand requests: ${err.message}`);
-    return null;
-  });
-  return Array.isArray(requests) ? requests : null;
-}
 
 // Per-row pr-reviewer eligibility, resolved from the SAME facts the security
 // preflight filters on. Without it the tab would paint a Review button on every
@@ -180,18 +129,6 @@ function actionFor(pullRequest, tasks, appId, matches) {
   if (!tasks) return null;
   const task = tasks.find(candidate => matches(candidate, appId, pullRequest));
   return task ? { taskId: task.id, status: task.status } : null;
-}
-
-function reviewActionFor(pullRequest, tasks, requests, appId) {
-  const task = tasks?.find(candidate => isReviewTaskFor(candidate, appId, pullRequest));
-  if (task) return { taskId: task.id, status: task.status };
-  const queued = requests?.find(request => isReviewRequestFor(request, appId, pullRequest));
-  if (queued) return { taskId: null, status: 'pending' };
-  const failure = tasks?.findLast(candidate => candidate.status === 'completed'
-    && candidate.metadata?.analysisType === PR_REVIEWER_TASK_TYPE
-    && candidate.metadata?.app === appId
-    && Number(candidate.metadata?.targetPullRequest) === pullRequest.number);
-  return failure?.metadata?.preflightFailure ? { taskId: failure.id, status: 'failed', error: failure.metadata.note } : null;
 }
 
 const taskResponse = task => task ? {
@@ -447,10 +384,8 @@ router.post('/:id/pull-requests/:number/merge', loadApp, asyncHandler(async (req
 // for itself which of the app's external PRs to sweep; a targeted request pins
 // it to the row the user pressed.
 //
-// Eligibility is answered by the same reader the generator's security preflight
-// uses, so the answer here is the answer there: GitHub only, open against the
-// default branch, and opened by someone other than the signed-in gh account.
-// Checking now turns "the run silently produced nothing an hour later" into an
+// Eligibility and the duplicate check live in `queueTargetedPrReview`, shared
+// with the GitHub notifications Autopilot hand-off. Checking now turns "the run silently produced nothing an hour later" into an
 // immediate, explained refusal.
 router.post('/:id/pull-requests/:number/review', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
@@ -461,65 +396,16 @@ router.post('/:id/pull-requests/:number/review', loadApp, asyncHandler(async (re
   // warning rather than honored, same as any other pr-reviewer pin.
   const { provider, model, effort } = validateRequest(pullRequestProviderOverrideSchema, req.body || {});
 
-  const target = await listExternalOpenPullRequests(app);
-  if (!target.ok) {
-    throw new ServerError('Could not read the reviewable pull requests for this app', {
-      status: 503,
-      code: 'FORGE_UNAVAILABLE',
-      context: { reason: target.code || 'security-scan-target-unavailable' },
-    });
-  }
-  const pullRequest = target.prs.find(candidate => candidate.number === number);
-  if (!pullRequest) {
-    throw new ServerError(
-      `Pull request #${number} is not reviewable — PR review covers open GitHub pull requests against the default branch from an untrusted contributor`,
-      { status: 409, code: 'PULL_REQUEST_NOT_REVIEWABLE' },
-    );
-  }
-  // The security scan fingerprints the PR set by head commit, and the reader
-  // normalizes an unusable `headRefOid` to null. Accepting one anyway would
-  // return 202 for a run the preflight then drops on a null fingerprint — the UI
-  // would show a queued review that can never start.
-  if (!pullRequest.headRefOid) {
-    throw new ServerError(
-      `Pull request #${number} has no resolvable head commit, so its content cannot be safety-screened`,
-      { status: 502, code: 'PULL_REQUEST_CONTEXT_UNAVAILABLE' },
-    );
-  }
-
-  const [tasks, requests] = await Promise.all([readActiveTasks(), readPendingOnDemandRequests()]);
-  // Fail CLOSED on unreadable task or on-demand state, matching /resolve:
-  // `reviewActionFor` reads either as "no run in flight", so queueing anyway would
-  // spend a second model-abuse scan and code review on a public PR already being
-  // reviewed.
-  if (tasks === null || requests === null) {
-    throw new ServerError('Could not inspect existing CoS actions before queueing this review', {
-      status: 503,
-      code: 'AGENT_ACTION_UNAVAILABLE',
-    });
-  }
-  const existing = reviewActionFor({ number }, tasks, requests, app.id);
-  if (existing && existing.status !== 'failed') {
-    res.json({ appId: app.id, appName: app.name, number, reviewAction: existing, duplicate: true });
+  const queued = await queueTargetedPrReview(app, number, { provider, model, effort });
+  if (queued.duplicate) {
+    res.json({ appId: app.id, appName: app.name, number, reviewAction: queued.reviewAction, duplicate: true });
     return;
   }
-
-  const request = await triggerOnDemandTask(PR_REVIEWER_TASK_TYPE, app.id, {
-    targetPullRequest: number,
-    provider,
-    model,
-    effort,
-  });
-  if (request?.error) {
-    throw new ServerError(request.error, { status: 409, code: 'PR_REVIEWER_UNAVAILABLE' });
-  }
-
-  console.log(`🔍 Queued pr-reviewer request ${request.id} for app ${app.id} request #${number}`);
   res.status(202).json({
     appId: app.id,
     appName: app.name,
     number,
-    requestId: request.id,
+    requestId: queued.request.id,
     reviewAction: { taskId: null, status: 'pending' },
     duplicate: false,
   });

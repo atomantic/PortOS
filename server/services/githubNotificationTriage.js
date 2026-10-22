@@ -31,18 +31,20 @@ const COMMENT_JQ = '{author: .user.login, association: .author_association, ment
 
 const loginOrNull = (value) => (typeof value === 'string' && LOGIN_RE.test(value) ? value : null);
 
-/** Repos of PortOS managed apps, as lower-cased `host/owner/repo`. */
-async function managedRepoKeys() {
+/** PortOS managed apps keyed by their repo, as lower-cased `host/owner/repo`. */
+export async function managedAppsByRepoKey() {
   const { getAllApps } = await import('./apps.js');
   const apps = await getAllApps({ includeArchived: false }).catch(() => []);
-  const keys = new Set();
+  const byKey = new Map();
   for (const app of apps) {
     if (!app.repoPath) continue;
     const parsed = parseGitRemoteUrl(await readOriginRemoteUrl(app.repoPath).catch(() => null));
-    if (parsed) keys.add(`${parsed.host}/${parsed.owner}/${parsed.repo}`.toLowerCase());
+    if (parsed) byKey.set(`${parsed.host}/${parsed.owner}/${parsed.repo}`.toLowerCase(), app);
   }
-  return keys;
+  return byKey;
 }
+
+const managedRepoKeys = async () => new Set((await managedAppsByRepoKey()).keys());
 
 /** Per-run, per-account reader that caches each forge answer once. */
 function createReader(account, env) {

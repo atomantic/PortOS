@@ -80,4 +80,9 @@ export const githubNotificationsDdl = [
     applied_at TIMESTAMPTZ DEFAULT NOW(),
     undone_at TIMESTAMPTZ
   )`,
+  // Monthly audit report (#12874): when each account's report last went out.
+  `CREATE TABLE IF NOT EXISTS github_notification_audit_reports (
+    account_id TEXT PRIMARY KEY,
+    last_sent_at TIMESTAMPTZ NOT NULL
+  )`,
 ];

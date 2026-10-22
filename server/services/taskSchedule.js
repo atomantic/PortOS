@@ -1342,9 +1342,10 @@ export async function triggerOnDemandTask(taskType, appId = null, {
       // Per-app enablement is a rung for an UNATTENDED origin only. A human
       // pressing Run is deliberately overriding the app's cadence switch — the
       // drain's applyOnDemandRunResets exists for exactly that — while a burn
-      // picks its own step and must respect the switch the user set. Omitted,
+      // or a notification hand-off picks its own target and must respect the
+      // switch the user set. Omitted,
       // the ladder skips the rung.
-      appIds: origin === ON_DEMAND_ORIGINS.QUOTA_BURN && !manual
+      appIds: (origin === ON_DEMAND_ORIGINS.QUOTA_BURN || origin === ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION) && !manual
         ? enabledAppIdsByTaskType(await getActiveApps().catch(() => [])).get(taskType) || []
         : undefined,
     } : null;
