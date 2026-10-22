@@ -133,6 +133,15 @@ describe('historical completed-checkout review obligations', () => {
     expect(deps.prepare).not.toHaveBeenCalled();
   });
 
+  it('never retires a draft that also carries a completion-policy hold (rule draft)', async () => {
+    const deps = setup();
+    deps.retire = vi.fn();
+    const draft = { rule: 'draft', isMerged: true, openPr: { isDraft: true, headRefOid: 'c'.repeat(40) } };
+    expect(await prepareReconcileRetirements(app, scan(draft), deps)).toMatchObject({ candidates: [], retired: [], held: [] });
+    expect(deps.retire).not.toHaveBeenCalled();
+    expect(deps.prepare).not.toHaveBeenCalled();
+  });
+
   it.each(['claim-owner-active', 'retirement-local-objects-missing', 'retirement-submodule-not-uninitialized', 'retirement-policy-not-legacy-completed'])('keeps a fresh preview refusal visible: %s', async reason => {
     const deps = setup(); deps.prepare.mockResolvedValue({ ok: false, reason });
     expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({ candidates: [], held: [{ branch: branch.branch, reason }] });

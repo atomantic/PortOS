@@ -225,7 +225,12 @@ function classifyBranchRule(input) {
   return { state: typeof rule.state === 'function' ? rule.state(input) : rule.state, rule: rule.id };
 }
 
-/** Same as classifyBranchRule, state only. */
+/**
+ * Same as classifyBranchRule, state only. Input is the same facts object (see
+ * classifyBranchRule); a draft is deliberately `draft`, never `completion-policy`.
+ * @param {Parameters<typeof classifyBranchRule>[0]} input
+ * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
+ */
 export function classifyBranch(input) {
   return classifyBranchRule(input).state;
 }
