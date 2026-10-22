@@ -12,7 +12,10 @@ import {
   effectiveRecipe, nodeInputValue, panelNodeState, RECIPE_LIMITS, RECIPE_NODE_PORTS, RECIPE_PORT_LABELS, RECIPE_TYPE_TITLES,
   recipeRunOrder, textNodeValue, upstreamNode,
 } from '../../../../server/lib/storyboardRecipe.js';
+import TabPills from '../ui/TabPills';
+import useUrlParams from '../../hooks/useUrlParams';
 import CommitField from './CommitField';
+import RecipeCanvas from './RecipeCanvas';
 import RecipeNodeCard, { NODE_ICONS } from './RecipeNodeCard';
 import { takeSrc } from './storyboardArt';
 
@@ -29,6 +32,7 @@ const ADDABLE = [
   { type: 'panel', title: 'Panel' },
 ];
 const RUNNABLE = new Set(['llm', 'image']);
+const VIEW_TABS = [{ id: 'chain', label: 'Chain' }, { id: 'canvas', label: 'Canvas' }];
 
 const reaches = (edges, start, target) => {
   const stack = [start];
@@ -99,6 +103,9 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
   const [pickingRefsFor, setPickingRefsFor] = useState(null);
   const [adding, setAdding] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [searchParams, updateParams] = useUrlParams();
+  const canvas = searchParams.get('makeView') === 'canvas';
+  const selectedNode = recipe.nodes.find((n) => n.id === searchParams.get('node')) || null;
   const linkKey = [...panel.castIds, ...panel.environmentIds, ...panel.objectIds].join(',');
 
   useEffect(() => {
@@ -123,6 +130,13 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
     ...recipe,
     edges: [...recipe.edges.filter((e) => !(e.to === node.id && e.toPort === port)), ...(fromId ? [{ from: fromId, to: node.id, toPort: port }] : [])],
   });
+  // A canvas wire: the dropped-on input must take the output's kind.
+  const connect = (fromId, toId, port) => {
+    const from = recipe.nodes.find((n) => n.id === fromId);
+    const to = recipe.nodes.find((n) => n.id === toId);
+    if (!from || !to || RECIPE_NODE_PORTS[to.type].inputs[port] !== RECIPE_NODE_PORTS[from.type].output) return;
+    wire(to)(port, fromId);
+  };
   const duplicate = (node) => {
     const copy = { ...structuredClone(node), id: newStoryboardEntityId('node'), title: `${node.title} copy`.slice(0, RECIPE_LIMITS.title), x: node.x + 40, y: node.y + 40 };
     const inbound = recipe.edges.filter((e) => e.to === node.id).map((e) => ({ ...e, to: copy.id }));
@@ -316,6 +330,26 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
     return title;
   };
 
+  const nodeCard = (node) => {
+    const state = panelNodeState(panel, node.id);
+    return (
+      <RecipeNodeCard
+        key={node.id}
+        node={node}
+        status={state.status}
+        running={runningId === node.id}
+        canRun={RUNNABLE.has(node.type)}
+        runLabel={node.type === 'image' ? `Make ${node.settings.count} frame${node.settings.count === 1 ? '' : 's'}` : 'Run'}
+        onRun={() => run(node)}
+        onDuplicate={() => duplicate(node)}
+        onDelete={() => remove(node)}
+        settings={settingsFor(node)}
+      >
+        {bodyFor(node)}
+      </RecipeNodeCard>
+    );
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -334,25 +368,25 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
           onConfirm={() => { setConfirmReset(false); saveRecipe(null); }} onCancel={() => setConfirmReset(false)} />
       )}
       <p className="text-[11px] text-gray-500">The recipe is shared by every panel on this board. Each node runs only when you tap it.</p>
-      {order.map((node) => {
-        const state = panelNodeState(panel, node.id);
-        return (
-          <RecipeNodeCard
-            key={node.id}
-            node={node}
-            status={state.status}
-            running={runningId === node.id}
-            canRun={RUNNABLE.has(node.type)}
-            runLabel={node.type === 'image' ? `Make ${node.settings.count} frame${node.settings.count === 1 ? '' : 's'}` : 'Run'}
-            onRun={() => run(node)}
-            onDuplicate={() => duplicate(node)}
-            onDelete={() => remove(node)}
-            settings={settingsFor(node)}
-          >
-            {bodyFor(node)}
-          </RecipeNodeCard>
-        );
-      })}
+      <div className="hidden lg:block">
+        <TabPills tabs={VIEW_TABS} activeTab={canvas ? 'canvas' : 'chain'} variant="pills" size="sm" ariaLabel="Recipe view"
+          onChange={(next) => updateParams({ makeView: next === 'canvas' ? 'canvas' : null }, { replace: true })} />
+      </div>
+      {canvas ? (
+        <>
+          <div className="h-[420px]">
+            <RecipeCanvas
+              recipe={recipe}
+              statusOf={(nodeId) => panelNodeState(panel, nodeId).status}
+              selectedId={selectedNode?.id || null}
+              onSelect={(nodeId) => updateParams({ node: nodeId }, { replace: true })}
+              onMove={(nodeId, pos) => editNode(nodeId, pos)}
+              onConnect={connect}
+            />
+          </div>
+          {selectedNode ? nodeCard(selectedNode) : <p className="text-xs text-gray-500">Tap a node to open it here. Drag from a node's blue dot to an input to wire it.</p>}
+        </>
+      ) : order.map(nodeCard)}
       {adding ? (
         <div className="rounded-xl border border-dashed border-port-border p-2">
           <p className="text-[11px] text-gray-500 mb-1">Add a node</p>

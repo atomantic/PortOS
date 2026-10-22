@@ -150,4 +150,15 @@ describe('StoryboardDetail', () => {
     // The copy keeps the original's inputs.
     expect(recipe.edges.filter((e) => e.to === copy.id).map((e) => e.toPort).sort()).toEqual(['images', 'prompt']);
   });
+
+  it('opens the recipe canvas at its deep link and selects a node into the URL', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    renderAt('/storyboards/sb-1/panel/panel-1?panelTab=make&makeView=canvas&node=node-image');
+    expect(await screen.findByRole('region', { name: 'Image node' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Prompt writer node' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Prompt writer (llm)' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('node=node-writer'));
+    expect(await screen.findByRole('region', { name: 'Prompt writer node' })).toBeInTheDocument();
+  });
 });

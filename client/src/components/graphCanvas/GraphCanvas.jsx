@@ -18,6 +18,12 @@
  *     The SVG keeps its canvas-unit `viewBox` and scales its pixel size, so
  *     positions and `onMove` coordinates stay in canvas units at any zoom.
  *
+ * Wiring (`onConnect`): a card element marked `data-port-out` starts a wire
+ * drag (any pointer, since it begins on an explicit handle); releasing over an
+ * element marked `data-port-in="<port>"` inside another card calls
+ * `onConnect(fromId, toId, port)`. The draft wire is drawn by `renderWireDraft`
+ * (canvas-unit start and end points) so the caller keeps its edge styling.
+ *
  * Touch never drags a card (it would fight scrolling), and `canDragNodes={false}`
  * turns card drags off entirely — a stacked phone layout's coordinates must
  * not persist as desktop positions; its cards are pannable surface instead.
@@ -61,7 +67,7 @@ export default function GraphCanvas({
   renderDefs, renderEdges, renderNode, renderNodeHtml, htmlInset,
   nodeLabel, nodeClassName,
   ariaLabel, surfaceProps = {}, surfaceClassName = '',
-  zoomControls = true, children,
+  zoomControls = true, children, onConnect, renderWireDraft,
 }) {
   const dragRef = useRef(null);
   const draggedRef = useRef(false);
@@ -74,6 +80,7 @@ export default function GraphCanvas({
   const htmlRefs = useRef(new Map());
   const measureRef = useRef(null);
   const [zoom, setZoom] = useState(1);
+  const [wire, setWire] = useState(null);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
 
@@ -129,8 +136,42 @@ export default function GraphCanvas({
     return () => surface.removeEventListener('wheel', onWheel);
   });
 
+  // Client px → canvas units, through the surface's scroll and the zoom.
+  const toCanvas = (event) => {
+    const surface = measureRef.current;
+    const rect = surface.getBoundingClientRect();
+    const z = zoomRef.current;
+    return { x: (event.clientX - rect.left + surface.scrollLeft) / z, y: (event.clientY - rect.top + surface.scrollTop) / z };
+  };
+
+  const startWire = (event, node) => {
+    event.stopPropagation();
+    event.preventDefault();
+    const from = toCanvas(event);
+    setWire({ fromId: node.id, from, to: from });
+    const onMoveWire = (e) => setWire((w) => (w ? { ...w, to: toCanvas(e) } : w));
+    const onUpWire = (e) => {
+      window.removeEventListener('pointermove', onMoveWire);
+      window.removeEventListener('pointerup', onUpWire);
+      window.removeEventListener('pointercancel', onUpWire);
+      setWire(null);
+      draggedRef.current = true;
+      if (e.type !== 'pointerup') return;
+      const target = document.elementFromPoint?.(e.clientX, e.clientY)?.closest?.('[data-port-in]');
+      const toId = target?.closest('[data-node-id]')?.getAttribute('data-node-id');
+      if (toId && toId !== node.id) onConnect(node.id, toId, target.getAttribute('data-port-in'));
+    };
+    window.addEventListener('pointermove', onMoveWire);
+    window.addEventListener('pointerup', onUpWire);
+    window.addEventListener('pointercancel', onUpWire);
+  };
+
   const handlePointerDown = (event, node) => {
     if (event.button !== 0) return;
+    if (onConnect && event.target?.closest?.('[data-port-out]')) {
+      startWire(event, node);
+      return;
+    }
     if (event.pointerType !== 'mouse' || !canDragNodes || !onMove) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     const origin = positions[node.id] || { x: 0, y: 0 };
@@ -212,6 +253,7 @@ export default function GraphCanvas({
         >
           {renderDefs && <defs>{renderDefs()}</defs>}
           <g>{renderEdges?.()}</g>
+          {wire && renderWireDraft && <g pointerEvents="none">{renderWireDraft(wire.from, wire.to)}</g>}
           <g>
             {nodes.map((node) => {
               const pos = positions[node.id];
