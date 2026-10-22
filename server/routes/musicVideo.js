@@ -897,12 +897,18 @@ router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req,
 // The check renders the document in the headless composition browser, so it
 // runs only for a caller with host control (#13055); anyone else gets the
 // import alone, and the gated production-review text check runs it later.
-// authGate loads lazily: this router is reached by many suites that mock settings.
-const checkOverlayTextAfterImport = (req, projectId) => {
-  import('../services/authGate.js')
-    .then(({ requestHasHostControl }) => requestHasHostControl(req)
-      && import('../services/musicVideo/overlayTextService.js')
-        .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId)))
+// Decide before responding: once the response ends the socket can close and
+// lose the address that makes a caller local. authGate loads lazily because
+// this router is reached by many suites that mock settings. Both deferred
+// imports are memoized: overlapping first loads of one specifier can resolve
+// past a test's module mock.
+let authGateModule;
+let overlayTextModule;
+const checkOverlayTextAfterImport = async (req, projectId) => {
+  const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));
+  if (!requestHasHostControl(req)) return;
+  (overlayTextModule ??= import('../services/musicVideo/overlayTextService.js'))
+    .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId))
     .catch((err) => console.error(`❌ Overlay text check did not start: ${err.message}`));
 };
 
@@ -921,8 +927,9 @@ router.get('/:id/composition/document', asyncHandler(async (req, res) => {
 router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(async (req, res) => {
   if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
   try {
-    res.status(201).json(await importDocumentZip(req.params.id, req.file.path, req.file.originalname));
-    checkOverlayTextAfterImport(req, req.params.id);
+    const imported = await importDocumentZip(req.params.id, req.file.path, req.file.originalname);
+    await checkOverlayTextAfterImport(req, req.params.id);
+    res.status(201).json(imported);
   } finally {
     await unlink(req.file.path).catch(() => {});
   }
@@ -930,8 +937,9 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
 
 router.post('/:id/composition/document/directory', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentDirectoryImportSchema, req.body || {});
-  res.status(201).json(await importDocumentDirectory(req.params.id, directory));
-  checkOverlayTextAfterImport(req, req.params.id);
+  const imported = await importDocumentDirectory(req.params.id, directory);
+  await checkOverlayTextAfterImport(req, req.params.id);
+  res.status(201).json(imported);
 }));
 
 router.post('/:id/composition/document/template', asyncHandler(async (req, res) => {
@@ -966,8 +974,9 @@ router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHan
 
 router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
-  res.json(await acceptMixedMediaDocument(req.params.id, directory));
-  checkOverlayTextAfterImport(req, req.params.id);
+  const accepted = await acceptMixedMediaDocument(req.params.id, directory);
+  await checkOverlayTextAfterImport(req, req.params.id);
+  res.json(accepted);
 }));
 
 router.delete('/:id/composition/document/candidate', asyncHandler(async (req, res) => {

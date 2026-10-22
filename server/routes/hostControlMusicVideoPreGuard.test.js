@@ -251,7 +251,8 @@ describe('Music Video pre-guard operator authority (#13055)', () => {
       }
     };
     await importAs('127.0.0.1');
-    await vi.waitFor(() => expect(effects.checkOverlayTextInBackground).toHaveBeenCalledTimes(2));
+    // The check starts behind two lazy imports, which a cold CI worker loads slowly.
+    await vi.waitFor(() => expect(effects.checkOverlayTextInBackground).toHaveBeenCalledTimes(2), { timeout: 10_000 });
     expect(effects.checkOverlayTextInBackground).toHaveBeenLastCalledWith('example-project');
 
     // The check starts behind a dynamic import of a now-cached module, so a
@@ -259,7 +260,7 @@ describe('Music Video pre-guard operator authority (#13055)', () => {
     await importAs('192.0.2.10');
     for (const [, effect] of imports) expect(effect).toHaveBeenCalledTimes(2);
     await importAs('127.0.0.1');
-    await vi.waitFor(() => expect(effects.checkOverlayTextInBackground.mock.calls.length).toBeGreaterThanOrEqual(4));
+    await vi.waitFor(() => expect(effects.checkOverlayTextInBackground.mock.calls.length).toBeGreaterThanOrEqual(4), { timeout: 10_000 });
     expect(effects.checkOverlayTextInBackground).toHaveBeenCalledTimes(4);
   });
 
