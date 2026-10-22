@@ -8,7 +8,7 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => (
 
 const app = { id: 'example', repoPath: '/example/repo' };
 const head = 'a'.repeat(40);
-const branch = { branch: 'claim/issue-42', tip: head, worktreePath: '/example/checkout', isMerged: true,
+const branch = { branch: 'claim/issue-42', tip: head, worktreePath: '/example/checkout', isMerged: false,
   completionPolicyReason: 'pr-completion-review-required' };
 const tree = { branch: branch.branch, path: branch.worktreePath, head, managed: true, locked: false, lockReason: null };
 const scan = (b = {}, t = {}) => ({ wip: [{ ...branch, ...b }], worktreeInventory: [{ ...tree, ...t }] });
@@ -18,6 +18,26 @@ const setup = () => ({
 });
 
 describe('historical completed-checkout review obligations', () => {
+  it('archives and retires a checkout whose commits are all on the default branch without a PR read or dispatch', async () => {
+    const deps = setup();
+    deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
+    const result = await prepareReconcileRetirements(app, scan({ isMerged: true }), deps);
+    expect(result).toMatchObject({ candidates: [], held: [], retired: [expect.objectContaining({ branch: branch.branch, head })] });
+    expect(deps.readPr).not.toHaveBeenCalled();
+    expect(deps.retire).toHaveBeenCalledWith({ appId: app.id, release: { branch: tree.branch, path: tree.path, head, locked: false, lockReason: null } },
+      { beforeMutation: expect.any(Function), settleMergedReviewObligation: true });
+  });
+
+  it('keeps a merged checkout the fenced service refuses, with its reason', async () => {
+    const deps = setup();
+    deps.retire = vi.fn(async () => ({ ok: false, reason: 'pr-completion-human-handoff' }));
+    expect(await prepareReconcileRetirements(app, scan({ isMerged: true }), deps)).toMatchObject({
+      retired: [], held: [{ branch: branch.branch, reason: 'pr-completion-human-handoff' }],
+    });
+    deps.retire = vi.fn(async () => { throw new Error('daemon-stopped'); });
+    expect((await prepareReconcileRetirements(app, scan({ isMerged: true }), deps)).held[0].reason).toBe('daemon-stopped');
+  });
+
   it('retires integrated exact-head work without cognitive dispatch through the fenced service', async () => {
     const deps = setup();
     const prepared = await deps.prepare();
@@ -66,11 +86,11 @@ describe('historical completed-checkout review obligations', () => {
 
   it('reviews nonancestral squash/supersession work only through fresh merged-PR proof', async () => {
     const deps = setup();
-    const result = await prepareReconcileRetirements(app, scan({ isMerged: false }), deps);
+    const result = await prepareReconcileRetirements(app, scan(), deps);
     expect(result.candidates).toHaveLength(1);
     expect(deps.prepare).toHaveBeenCalledOnce();
     deps.prepare.mockResolvedValue({ ok: false, reason: 'retirement-pr-not-matching-merged' });
-    expect(await prepareReconcileRetirements(app, scan({ isMerged: false }), deps)).toMatchObject({
+    expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({
       candidates: [], held: [{ reason: 'retirement-pr-not-matching-merged' }],
     });
   });
@@ -82,10 +102,14 @@ describe('historical completed-checkout review obligations', () => {
     [{ worktreeDirty: true }, {}],
     [{ worktreeStatusUnavailable: true }, {}],
     [{}, { locked: true }], [{}, { managed: false }], [{}, { head: 'b'.repeat(40) }],
-  ])('never dispatches an unsafe or intentionally held candidate: %j %j', async (b, t) => {
+  ])('never dispatches or retires an unsafe or intentionally held candidate: %j %j', async (b, t) => {
     const deps = setup();
-    expect((await prepareReconcileRetirements(app, scan(b, t), deps)).candidates).toEqual([]);
+    deps.retire = vi.fn();
+    for (const isMerged of [false, true]) {
+      expect(await prepareReconcileRetirements(app, scan({ isMerged, ...b }, t), deps)).toMatchObject({ candidates: [], retired: [] });
+    }
     expect(deps.prepare).not.toHaveBeenCalled();
+    expect(deps.retire).not.toHaveBeenCalled();
   });
 
   it.each(['claim-owner-active', 'retirement-local-objects-missing', 'retirement-submodule-not-uninitialized', 'retirement-policy-not-legacy-completed'])('keeps a fresh preview refusal visible: %s', async reason => {

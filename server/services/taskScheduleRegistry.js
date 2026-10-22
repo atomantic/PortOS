@@ -209,7 +209,8 @@ const TASK_INTERVAL_DEFAULTS = {
   // resolveConflicts / autoMerge / finishAbandoned) are per-app taskMetadata
   // booleans (each ON unless explicitly false); `finishAbandoned` covers the work
   // a dead agent left UNCOMMITTED in its worktree — commit + ship it, or report it
-  // as unfinished. `branchesPerAgent` bounds each coordinator prompt to a
+  // as unfinished; `reapSuperseded` retires a branch with a fresh SUPERSEDED
+  // verdict after writing its recoverable backup. `branchesPerAgent` bounds each coordinator prompt to a
   // prioritized batch so a large backlog drains across several agents. It is
   // independently overridable per app. useWorktree/openPR are LOCKED off
   // (MANAGED_AGENT_OPTIONS):
@@ -219,7 +220,7 @@ const TASK_INTERVAL_DEFAULTS = {
   // SIBLING worktrees, never in its own cwd — hence the shared non-committing
   // -coordinator posture above. On-demand by default — a manual Run is the
   // explicit consent to drive PRs; choosing a cadence enables scheduled runs.
-  'branch-reconcile':    { type: INTERVAL_TYPES.ON_DEMAND, perpetual: true, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true, finishAbandoned: true, branchesPerAgent: DEFAULT_BRANCHES_PER_AGENT } },
+  'branch-reconcile':    { type: INTERVAL_TYPES.ON_DEMAND, perpetual: true, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, cleanupMerged: true, reapSuperseded: true, openPr: true, resolveConflicts: true, autoMerge: true, finishAbandoned: true, branchesPerAgent: DEFAULT_BRANCHES_PER_AGENT } },
   // issue-reconcile heals ZOMBIE issues: open + `in-progress` (claimed) yet with
   // their PR already MERGED and no live claim anywhere — a partial ship left the
   // claim marker on, so the queue (which skips `in-progress`) never re-picks the

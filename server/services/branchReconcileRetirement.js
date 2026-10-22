@@ -23,6 +23,18 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
     const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
     if (!tree || tree.managed !== true || tree.locked !== false || tree.head !== branch.tip) continue;
     const release = { branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
+    // Every commit is already on the default branch, so no PR identity or owner
+    // history is needed to prove nothing is lost: archive and retire it. The
+    // service re-proves merge evidence and ownership under its fence.
+    if (branch.isMerged === true) {
+      const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;
+      const outcome = await retire({ appId: app.id, release },
+        { beforeMutation: assertAutomaticRetirementAllowed, settleMergedReviewObligation: true })
+        .catch(error => ({ ok: false, reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-receipt-unverified' }));
+      if (outcome.ok && outcome.archiveDir && outcome.branchDeleted === true) retired.push(release);
+      else held.push({ ...release, reason: outcome.reason || outcome.branchRetainedReason || 'retirement-receipt-unverified' });
+      continue;
+    }
     try {
       const prUrl = await readPr(app, branch.branch, release.head);
       const prepared = await prepare({ appId: app.id, release, prUrl });
