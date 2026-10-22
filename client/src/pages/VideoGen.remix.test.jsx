@@ -201,6 +201,24 @@ describe('VideoGen cross-page Remix handoff', () => {
     expect(screen.queryByText(/no longer in your history/)).toBeNull();
   });
 
+  it('reports a missing record when the by-id lookup answers 404', async () => {
+    state.listVideoHistory.mockResolvedValue([]);
+    state.getVideoHistoryItem.mockRejectedValue(Object.assign(new Error('Not found'), { status: 404 }));
+    await renderVideoGenPage('/media/video?remix=vid-gone');
+    await screen.findByText(/no longer in your history/);
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
+  it('offers Retry after a non-404 by-id failure and restores once it succeeds', async () => {
+    state.listVideoHistory.mockResolvedValue([]);
+    state.getVideoHistoryItem
+      .mockRejectedValueOnce(Object.assign(new Error('Server error'), { status: 500 }))
+      .mockResolvedValue(RECORD);
+    await renderVideoGenPage(`/media/video?remix=${RECORD.id}`);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Retry' })); });
+    await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(RECORD.prompt));
+  });
+
   it('says nothing about a missing record while the history fetch is still in flight', async () => {
     let settleHistory;
     state.listVideoHistory.mockReturnValue(new Promise((resolve) => { settleHistory = resolve; }));

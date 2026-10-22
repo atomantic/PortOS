@@ -66,6 +66,28 @@ describe('GalleryVideoPicker', () => {
     }));
   });
 
+  it('says only the newest page is shown, and refines the copy during a search', async () => {
+    const full = Array.from({ length: 60 }, (_, i) => ({ ...HISTORY[0], id: `id-${i}`, filename: `v${i}.mp4`, prompt: `clip ${i}` }));
+    listVideoHistory.mockResolvedValue(full);
+    render(<GalleryVideoPicker open onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(await screen.findByText(/Showing the newest 60 videos/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Search videos'), { target: { value: 'clip' } });
+    expect(await screen.findByText(/Showing the first 60 matches/)).toBeInTheDocument();
+  });
+
+  it('shows no-match copy for an empty search and Clear search refetches with an empty query', async () => {
+    render(<GalleryVideoPicker open onClose={vi.fn()} onSelect={vi.fn()} />);
+    await screen.findByText('a neon chase');
+    listVideoHistory.mockResolvedValue([]);
+    fireEvent.change(screen.getByLabelText('Search videos'), { target: { value: 'zzz' } });
+    expect(await screen.findByText('No videos match your search.')).toBeInTheDocument();
+    listVideoHistory.mockResolvedValue(HISTORY);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    await waitFor(() => expect(listVideoHistory).toHaveBeenLastCalledWith({
+      silent: true, query: { limit: 60, compact: true, hidden: false, q: '' },
+    }));
+  });
+
   it('shows a load error with Retry instead of the empty copy when the history read fails', async () => {
     listVideoHistory.mockRejectedValueOnce(new Error('History unavailable'));
     render(<GalleryVideoPicker open onClose={vi.fn()} onSelect={vi.fn()} />);
