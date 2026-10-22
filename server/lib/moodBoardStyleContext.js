@@ -22,29 +22,28 @@ const CONTEXT_ITEMS_MAX = 60;
 const CONTEXT_FIELD_MAX = 600;
 const CONTEXT_TOTAL_CHARS_MAX = 24000;
 
-const LOCAL_MEDIA_KEY = /^(?:image|video):/;
 const EXTERNAL_SOURCE = /^(?:https?:|frame:)/i;
 
 /**
- * The caption a model may read for a board item, or `''`. Only a pin from
- * PortOS's own gallery carries a caption PortOS wrote (its generation prompt).
- * A pin imported from X, Pinterest or another page — and a frame cut from one —
- * can hold someone else's text: misleading at best, a prompt injection at
- * worst. That text stays on the board for display, but only the prompt the
- * item's analysis inferred from its pixels reaches a model.
+ * The caption a model may read for a board item, or `''`. A pin imported from
+ * X, Pinterest or another page (its `source` is that page) — and a frame cut
+ * from one — can hold someone else's text: misleading at best, a prompt
+ * injection at worst. That text stays on the board for display, but only the
+ * prompt the item's analysis inferred from its pixels reaches a model. Captions
+ * the user or PortOS wrote (gallery pins, uploads, notes) still count.
  */
 export function moodBoardItemCaption(item) {
   if (typeof item?.caption !== 'string' || !item.caption.trim()) return '';
-  if (typeof item.mediaKey !== 'string' || !LOCAL_MEDIA_KEY.test(item.mediaKey)) return '';
   if (typeof item.source === 'string' && EXTERNAL_SOURCE.test(item.source)) return '';
   return item.caption.trim();
 }
 
 /**
  * Reduce a board to the style-relevant text fragments the LLM sees. An item
- * contributes only what it actually carries: a text note, a PortOS-written
- * caption (`moodBoardItemCaption`), and/or a persisted analysis (prompt + negative + rationale). Media items without any
- * of those contribute nothing — synthesis reads text, not pixels (analyzing
+ * contributes only what it actually carries: a text note, a caption that did
+ * not come from an imported page (`moodBoardItemCaption`), and/or a persisted
+ * analysis (prompt + negative + rationale). Media items without any of those
+ * contribute nothing — synthesis reads text, not pixels (analyzing
  * an item is Phase 3's explicit per-item vision step).
  */
 export function collectBoardStyleContext(board) {

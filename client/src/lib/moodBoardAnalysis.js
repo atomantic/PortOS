@@ -44,7 +44,7 @@ export function moodBoardAnalysisFromResult(item, result) {
  * then a gallery item's caption prompt. A pin imported from X, Pinterest or
  * another page (or a frame cut from one) never offers its caption: that text is
  * someone else's, so only an analysis inferred from its pixels is a prompt.
- * Mirrors the server's `moodBoardItemCaption`. Returns empty string if no prompt exists.
+ * Same imported-pin rule as the server's `moodBoardItemCaption`. Returns empty string if no prompt exists.
  */
 export function moodBoardItemPrompt(item) {
   if (item?.analysis?.prompt && typeof item.analysis.prompt === 'string' && item.analysis.prompt.trim()) {

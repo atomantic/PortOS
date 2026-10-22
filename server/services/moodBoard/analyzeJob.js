@@ -21,9 +21,12 @@ import { getBoard, updateBoard, updateBoardItem, backfillGalleryPrompts } from '
 
 const jobs = new Map();
 
-// An imported pin's caption is not a prompt, so that pin still gets analyzed.
+// A gallery pin's caption is its generation prompt; an imported pin's caption
+// is not a prompt at all, so that pin still gets analyzed.
 function itemHasPrompt(item) {
-  return hasText(item?.analysis?.prompt) || hasText(item?.prompt) || Boolean(moodBoardItemCaption(item));
+  if (hasText(item?.analysis?.prompt) || hasText(item?.prompt)) return true;
+  const galleryKey = typeof item?.mediaKey === 'string' && /^(image|video):/.test(item.mediaKey);
+  return galleryKey && Boolean(moodBoardItemCaption(item));
 }
 
 // `{ kind, filename }` for an item prompt-from-media can read, else null.
