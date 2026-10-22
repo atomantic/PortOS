@@ -1,6 +1,21 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import * as api from '../services/api';
+import useListResource from './useListResource';
 import { MAX_TAGS, MAX_TAG_LENGTH } from '../components/goals/goalConstants';
+
+// Module-level so useListResource sees a stable fetcher. silent: the pickers
+// render their own inline error + Retry, so the default toast would duplicate it.
+const fetchActivities = () => api.getActivities({ silent: true });
+const fetchSubcalendars = async () => {
+  const accounts = await api.getCalendarAccounts({ silent: true });
+  const scs = [];
+  for (const account of (accounts || [])) {
+    for (const sc of (account.subcalendars || [])) {
+      if (sc.enabled && !sc.dormant) scs.push({ ...sc, accountName: account.name });
+    }
+  }
+  return scs;
+};
 
 // State + handlers backing GoalDetailPanel. Extracted so the panel can stay a
 // thin composition shell; behavior is identical to the prior inline logic.
@@ -13,14 +28,16 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   const [milestoneSubmitting, setMilestoneSubmitting] = useState(false);
   const milestoneSubmittingRef = useRef(false);
   const [milestoneActions, setMilestoneActions] = useState(() => new Set());
-  const [activities, setActivities] = useState([]);
+  const activitiesList = useListResource(fetchActivities);
+  const activities = activitiesList.items;
   const [selectedActivity, setSelectedActivity] = useState('');
   const [showProgressForm, setShowProgressForm] = useState(false);
   const todayISO = new Date().toISOString().slice(0, 10);
   const [progressForm, setProgressForm] = useState({ date: todayISO, note: '', durationMinutes: '' });
   const [progressSubmitting, setProgressSubmitting] = useState(false);
   const progressSubmittingRef = useRef(false);
-  const [subcalendars, setSubcalendars] = useState([]);
+  const subcalendarsList = useListResource(fetchSubcalendars);
+  const subcalendars = subcalendarsList.items;
   const [selectedCalendar, setSelectedCalendar] = useState('');
   const [calendarMatchPattern, setCalendarMatchPattern] = useState('');
   const [newTodoTitle, setNewTodoTitle] = useState('');
@@ -37,24 +54,6 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   const [schedulingBusy, setSchedulingBusy] = useState(false);
   const [checkInsOpen, setCheckInsOpen] = useState(false);
   const [checkingIn, setCheckingIn] = useState(false);
-
-  useEffect(() => {
-    api.getActivities().then(setActivities).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    api.getCalendarAccounts().then(accounts => {
-      const scs = [];
-      for (const account of (accounts || [])) {
-        for (const sc of (account.subcalendars || [])) {
-          if (sc.enabled && !sc.dormant) {
-            scs.push({ ...sc, accountName: account.name });
-          }
-        }
-      }
-      setSubcalendars(scs);
-    }).catch(() => {});
-  }, []);
 
   const startEdit = () => {
     setForm({
@@ -443,12 +442,12 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     tagInput, setTagInput,
     newMilestone, setNewMilestone,
     milestoneSubmitting, milestoneActions,
-    activities,
+    activities, activitiesState: activitiesList.state, activitiesError: activitiesList.error, retryActivities: activitiesList.retry,
     selectedActivity, setSelectedActivity,
     showProgressForm, setShowProgressForm,
     progressForm, setProgressForm,
     progressSubmitting,
-    subcalendars,
+    subcalendars, subcalendarsState: subcalendarsList.state, subcalendarsError: subcalendarsList.error, retrySubcalendars: subcalendarsList.retry,
     selectedCalendar, setSelectedCalendar,
     calendarMatchPattern, setCalendarMatchPattern,
     newTodoTitle, setNewTodoTitle,
