@@ -51,8 +51,8 @@ export function createVitestTempFixture(host, workspace, body, config = 'vitest.
 
 const READY_POLL_MS = 15;
 
-function readinessAborted(signal) {
-  const error = new Error('fixture readiness wait aborted');
+function fixtureAborted(signal, message = 'fixture readiness wait aborted') {
+  const error = new Error(message);
   error.name = 'AbortError';
   if (signal?.reason) error.cause = signal.reason;
   return error;
@@ -66,7 +66,7 @@ function readinessAborted(signal) {
  */
 export function waitForFixtureReady(file, { signal } = {}) {
   if (existsSync(file)) return Promise.resolve();
-  if (signal?.aborted) return Promise.reject(readinessAborted(signal));
+  if (signal?.aborted) return Promise.reject(fixtureAborted(signal));
   return new Promise((resolve, reject) => {
     let settled = false;
     let watcher;
@@ -80,7 +80,7 @@ export function waitForFixtureReady(file, { signal } = {}) {
       if (error) reject(error);
       else resolve();
     };
-    const onAbort = () => finish(readinessAborted(signal));
+    const onAbort = () => finish(fixtureAborted(signal));
     const seen = () => { if (existsSync(file)) finish(); };
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
@@ -90,7 +90,7 @@ export function waitForFixtureReady(file, { signal } = {}) {
       return;
     }
     timer = setInterval(seen, READY_POLL_MS);
-    if (signal?.aborted) finish(readinessAborted(signal));
+    if (signal?.aborted) finish(fixtureAborted(signal));
     else seen();
   });
 }
@@ -132,10 +132,12 @@ function killProcessTree(child, { sweepGroup = false } = {}) {
  * Run a fixture to completion. The only clock is one generous ceiling — a cold
  * import graph on a loaded host can take over a minute, so `createVitestTempFixture`'s
  * fixed `timeout` (kept for spawnSync callers) is dropped. Resolves like spawnSync's
- * result; `error` is set only when the ceiling is reached, after the whole detached
- * process group is killed.
+ * result; `error` is set only when the ceiling is reached or `signal` aborts, after
+ * the whole detached process group is killed. Pass the calling test's `signal`:
+ * a fail-fast cancellation otherwise leaves the body awaiting the nested run while
+ * the worker tears down, so its `finally` never removes the host (#12924).
  */
-export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RUN_CEILING_MS) {
+export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RUN_CEILING_MS, { signal } = {}) {
   const { timeout: _bounded, ...spawnOptions } = options;
   return new Promise((resolve) => {
     const child = spawn(process.execPath, args, {
@@ -153,6 +155,7 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
       if (done) return;
       done = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       killProcessTree(child, { sweepGroup: true }); // reap any worker the run left behind
       resolve({ status, stdout, stderr, error });
     };
@@ -162,6 +165,13 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
       // A survivor holding the pipes would defer 'close'; settle regardless.
       setTimeout(() => finish(null), 2000);
     }, ceilingMs);
+    const abort = () => {
+      error = fixtureAborted(signal, 'fixture run aborted');
+      killProcessTree(child, { sweepGroup: true });
+      setTimeout(() => finish(null), 2000);
+    };
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
     child.once('error', (spawnError) => { error = spawnError; finish(null); });
     child.once('close', finish);
     // Output ends at 'close', which a surviving worker holding the pipes defers:

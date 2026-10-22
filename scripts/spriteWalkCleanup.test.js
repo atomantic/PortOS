@@ -1,19 +1,26 @@
-import { expect, it } from 'vitest';
+import { afterAll, expect, it as vitestIt } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ownTestBodies } from '../server/lib/mockPathsDataRoot.js';
 import { createVitestTempFixture, fixtureReadyFailureSource, runFixtureToCompletion } from './lib/vitestTempRootFixture.js';
 
 // The nested run's own ceiling; the outer budget adds headroom so it is never tighter.
 const RUN_CEILING_MS = 120000;
+
+// A fail-fast failure in another file cancels this body while it awaits the nested
+// run; own it so teardown waits for its `finally` to remove the host (#12924).
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+afterAll(() => owned.drain());
 
 // Pins the regression uniquely (#12660): a different worker's --bail=1 failure
 // settles a sprite-walk test's wrapper while its body is still writing into the
 // suite's tmpdir root. Teardown must wait for that body, or the body's next
 // store write recreates the root after `rmSync` and the run reports
 // `test temp leak: sprite-walk-test-`.
-it('drains sprite-walk fixture writes after another worker triggers fail-fast', async () => {
+it('drains sprite-walk fixture writes after another worker triggers fail-fast', async ({ signal }) => {
   const host = mkdtempSync(join(tmpdir(), 'sprite-walk-cancel-'));
   try {
     const fixtureRun = createVitestTempFixture(host, 'server', '');
@@ -49,7 +56,8 @@ afterAll(async () => {
     writeFileSync(join(fixture, 'failure.test.js'), fixtureReadyFailureSource(ready));
     args[args.indexOf('--maxWorkers') + 1] = '2';
     args.push('--bail=1', '--testNamePattern', `${targetName}|controlled sibling failure`);
-    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS);
+    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS, { signal });
+    if (signal.aborted) return;
     const output = `${result.stdout}\n${result.stderr}`;
     expect(result.error, output).toBeUndefined();
     expect(result.status, output).toBe(1);

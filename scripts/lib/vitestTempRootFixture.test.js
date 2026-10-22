@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { waitForFixtureReady } from './vitestTempRootFixture.js';
+import { runFixtureToCompletion, waitForFixtureReady } from './vitestTempRootFixture.js';
 
 describe('waitForFixtureReady', () => {
   it('resolves for a file that is already present and for one that appears later', async () => {
@@ -38,5 +38,21 @@ describe('waitForFixtureReady', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('runFixtureToCompletion', () => {
+  // A cancelled caller must not wait out the ceiling: its `finally` has to
+  // remove the fixture host before the worker tears down (#12924).
+  it('kills the nested run and settles promptly when the caller signal aborts', async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = runFixtureToCompletion({
+      args: ['-e', 'setInterval(() => {}, 1000)'], options: { env: process.env, timeout: 1 },
+    }, 60000, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 100);
+    const result = await pending;
+    expect(result.error).toMatchObject({ name: 'AbortError', message: 'fixture run aborted' });
+    expect(Date.now() - started).toBeLessThan(10000);
   });
 });
