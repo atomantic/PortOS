@@ -20,7 +20,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   getAgentRecord: async id => runtime.agents[id],
   updateAgent: async (id, patch) => { runtime.agents[id].metadata = { ...runtime.agents[id].metadata, ...patch.metadata }; },
 }));
-vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn(async args => ({ exitCode: 0,
+vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn(async args => ({ exitCode: args[0] === 'merge-base' && !runtime.merged ? 1 : 0,
   stdout: args[0] === 'rev-parse' ? runtime.tip : args[0] === 'rev-list' ? '0\t1' : '',
 })) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'example/repository' }) }));
