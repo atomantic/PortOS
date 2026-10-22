@@ -54,7 +54,7 @@ function SourceChip({ source, index }) {
 
 function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, onRequestDelete, onConfirmDelete, onCancelDelete, loading, streaming }) {
   return (
-    <aside className="w-full shrink-0 max-h-40 overflow-y-auto md:w-64 md:max-h-none border-r border-port-border bg-port-card md:h-full">
+    <aside className="w-full shrink-0 max-h-[25%] overflow-y-auto md:w-64 md:max-h-none border-r border-port-border bg-port-card md:h-full">
       <div className="p-3 border-b border-port-border flex items-center gap-2">
         <button
           onClick={onNew}
