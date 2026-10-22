@@ -24,9 +24,9 @@ import { atomicWrite, safeJSONParse, sleep } from '../lib/fileUtils.js'
 import { killWithEscalation } from '../lib/killWithEscalation.js'
 import { findOpenFileHolders } from '../lib/openFileHolders.js'
 
-export const STAGING_PREFIX = 'portos-ollama-hf-import-'
+const STAGING_PREFIX = 'portos-ollama-hf-import-'
 const MARKER_NAME = 'portos-import.json'
-export const CREATE_IDLE_LIMIT_MS = 10 * 60_000
+const CREATE_IDLE_LIMIT_MS = 10 * 60_000
 const CREATE_CHECK_INTERVAL_MS = 15_000
 const CREATE_KILL_GRACE_MS = 10_000
 // After SIGKILL a live child exits within milliseconds; still being there this
@@ -46,7 +46,7 @@ const RATE_RE = /\b\d+(?:\.\d+)?\s?[KMGT]?i?B\/s\b/gi
 const DURATION_RE = /\b(?:\d+h)?(?:\d+m)?\d+(?:\.\d+)?(?:ms|s)\b|\b\d+h\d+m\b|\b\d+m\b/g
 
 /** Complete output segments, reduced to the text that changes only on real progress. */
-export function normalizeCreateOutput(text) {
+function normalizeCreateOutput(text) {
   return String(text).replace(ANSI_RE, '').split(/[\r\n]+/)
     .map((line) => line.replace(SPINNER_RE, '').replace(RATE_RE, '').replace(DURATION_RE, '').replace(/\s+/g, ' ').trim())
     .filter(Boolean)
