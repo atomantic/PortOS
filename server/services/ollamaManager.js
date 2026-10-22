@@ -43,7 +43,7 @@ import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
 import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
 import {
   awaitStagingRelease, blobStoreSignature, createImportStaging, findImportStaging, removeImportStaging,
-  runSupervisedOllamaCreate, stagedFilesComplete, updateImportStaging
+  runSupervisedOllamaCreate, stagedFilesComplete, sweepImportStaging, updateImportStaging
 } from './ollamaSafetensorsImport.js'
 
 const execFileAsync = promisify(execFile)
@@ -1637,6 +1637,8 @@ async function runSafetensorsImport({ modelId, repo, subdir, files, headers, onP
   // A staging directory from an earlier attempt (a stalled create, or a
   // PortOS restart mid-import) is reused when it holds the whole checkpoint;
   // an incomplete one is retired only once nothing holds it open.
+  await sweepImportStaging({ modelId, activeModelIds: activeImports })
+    .catch((err) => console.error(`❌ Safetensors staging sweep failed: ${err.message}`))
   const retained = await findImportStaging(modelId)
   if (retained) {
     const complete = await stagedFilesComplete(join(retained.tempRoot, 'model'), files)

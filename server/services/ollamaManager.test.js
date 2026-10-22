@@ -971,6 +971,29 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
     })
 
+    it('reclaims week-old retained staging for other models before importing, once nothing holds it', async () => {
+      const day = 24 * 60 * 60_000
+      const stage = async (modelId, retainedAgoMs) => {
+        const root = await mkdtemp(join(tmpdir(), 'portos-ollama-hf-import-'))
+        stagingRoots.add(root)
+        const at = new Date(Date.now() - retainedAgoMs).toISOString()
+        await writeFile(join(root, 'portos-import.json'), JSON.stringify({ modelId, phase: 'retained', createdAt: at, retainedAt: at }))
+        return root
+      }
+      const abandoned = await stage('example/abandoned:4bit', 8 * day)
+      const recent = await stage('example/recent:4bit', 1 * day)
+      const { importModelFromHfSafetensors } = await loadManager()
+      await scriptCreate((c, _cmd, args) => { stagingOf(args); queueMicrotask(() => c.exit(0)) })
+
+      let result
+      importModelFromHfSafetensors(specFor('fresh')).then((r) => { result = r })
+      await advanceUntil(() => result, { stepMs: 0 })
+
+      expect(result).toEqual({ success: true, modelId: 'example/fresh:4bit' })
+      await expect(stat(abandoned)).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(stat(recent)).resolves.toBeTruthy()
+    })
+
     it('retains staging another process still reads, and refuses to stack a second create on it', async () => {
       const modelSpec = specFor('daemon-held')
       const { importModelFromHfSafetensors } = await loadManager()

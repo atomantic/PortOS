@@ -35,6 +35,7 @@ const CREATE_EXIT_BOUND_MS = 30_000
 const RELEASE_PROBE_ATTEMPTS = 4
 const RELEASE_PROBE_DELAY_MS = 15_000
 const OUTPUT_TAIL_CHARS = 8_192
+const STAGING_MAX_AGE_MS = 7 * 24 * 60 * 60_000
 const SEEN_LINES_CAP = 5_000
 
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g
@@ -171,18 +172,62 @@ export async function updateImportStaging(tempRoot, fields) {
   await atomicWrite(markerPath(tempRoot), JSON.stringify({ ...marker, ...fields }))
 }
 
-/** Newest staging directory left behind for `modelId`, or null. */
-export async function findImportStaging(modelId) {
+async function listImportStaging() {
   const names = await readdir(tmpdir()).catch(() => [])
-  let found = null
+  const entries = []
   for (const name of names) {
     if (!name.startsWith(STAGING_PREFIX)) continue
     const tempRoot = join(tmpdir(), name)
-    const marker = await readMarker(tempRoot)
-    if (marker?.modelId !== modelId) continue
-    if (!found || String(marker.createdAt) > String(found.marker.createdAt)) found = { tempRoot, marker }
+    const mtimeMs = await stat(tempRoot).then((s) => s.mtimeMs, () => null)
+    if (mtimeMs == null) continue
+    entries.push({ tempRoot, mtimeMs, marker: await readMarker(tempRoot) })
   }
-  return found
+  return entries
+}
+
+function newestByModel(entries) {
+  const newest = new Map()
+  for (const entry of entries) {
+    const id = entry.marker?.modelId
+    if (!id) continue
+    const current = newest.get(id)
+    if (!current || String(entry.marker.createdAt) > String(current.marker.createdAt)) newest.set(id, entry)
+  }
+  return newest
+}
+
+/** Newest staging directory left behind for `modelId`, or null. */
+export async function findImportStaging(modelId) {
+  return newestByModel(await listImportStaging()).get(modelId) ?? null
+}
+
+/**
+ * Reclaim staging nobody will reuse: older duplicates for a model, and any
+ * directory untouched for `maxAgeMs` (including marker-less ones an older
+ * PortOS left after a crash). `modelId`'s newest staging is left to the
+ * caller, and models in `activeModelIds` are skipped. Each removal still
+ * requires the open-file probe to prove nothing holds the directory.
+ */
+export async function sweepImportStaging({ modelId, activeModelIds = new Set(), maxAgeMs = STAGING_MAX_AGE_MS, now = Date.now() } = {}) {
+  const entries = await listImportStaging()
+  const newest = newestByModel(entries)
+  for (const entry of entries) {
+    const id = entry.marker?.modelId
+    if (id && id !== modelId && activeModelIds.has(id)) continue
+    const isNewest = id ? newest.get(id) === entry : false
+    if (isNewest && id === modelId) continue
+    const stampedAt = Date.parse(entry.marker?.retainedAt || entry.marker?.createdAt || '')
+    const age = now - (Number.isFinite(stampedAt) ? stampedAt : entry.mtimeMs)
+    // An older duplicate is never reused; anything else waits out the age limit.
+    const ageGated = isNewest || !entry.marker
+    if (ageGated && age <= maxAgeMs) continue
+    // The probe's canary is the marker, so a marker-less directory gets one first.
+    if (!entry.marker) await updateImportStaging(entry.tempRoot, { phase: 'orphaned' })
+    const release = await awaitStagingRelease(entry.tempRoot, { attempts: 1 })
+    if (!release.free) continue
+    console.log(`🧹 Removing unused Safetensors import staging${id ? ` for ${id}` : ''}`)
+    await removeImportStaging(entry.tempRoot)
+  }
 }
 
 /** True when every expected file is staged at its published size. */
