@@ -28,7 +28,8 @@ export default function StoryboardLinkPanel({ project, onLink, fitDisabled, onFi
   useEffect(() => {
     if (!linkedId) return undefined;
     let active = true;
-    if (!reads) setBoard(undefined);
+    // A re-read of the same board keeps it on screen; another board shows as loading.
+    setBoard((current) => (current?.id === linkedId ? current : undefined));
     getStoryboard(linkedId, { silent: true })
       .then((next) => { if (active) setBoard(next); })
       .catch(() => { if (active) setBoard(null); });

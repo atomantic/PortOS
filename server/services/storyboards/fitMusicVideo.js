@@ -33,7 +33,8 @@ export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, sta
     if (!song) throw new ServerError('Analyze the song first; the fit places beats on its sections.', { status: 409, code: 'SONG_NOT_ANALYZED' });
     const locked = Object.values(shotLocks(current) || {}).filter((lock) => lock !== 'open').length;
     if (locked) {
-      throw new ServerError(`${locked} shot${locked === 1 ? ' is' : 's are'} locked. Fit to song replaces every shot and never moves a locked one; unlock them first.`,
+      // A lock marked changed (edited after locking) still holds until unlocked.
+      throw new ServerError(`${locked} shot${locked === 1 ? ' has a lock' : 's have locks'} on Shots. Fit to song replaces every shot and never moves a locked one; unlock them first.`,
         { status: 409, code: 'SHOTS_LOCKED' });
     }
     const fit = fitStoryboardToSong(board, song, { starts });
