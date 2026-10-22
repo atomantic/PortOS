@@ -35,7 +35,7 @@ import {
   unmergedIndexPaths,
 } from './pregate.js';
 import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash } from './lib/pregateReport.js';
-import { probeTestDatabase, TEST_DATABASE, testDatabaseStageEnv } from './lib/pregateResources.js';
+import { probeTestDatabase, TEST_DATABASE, uncreatableExtensions, testDatabaseStageEnv } from './lib/pregateResources.js';
 
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { BROWSER_FIDELITY_FILES } from './lib/browserTestProfiles.js';
@@ -1048,6 +1048,15 @@ describe('testDatabaseStageEnv', () => {
     expect(testDatabaseStageEnv({ saved: { PGMODE: 'docker' } }).PGPORT).toBe('5561');
     expect(testDatabaseStageEnv({ saved: { PGMODE: 'docker', PGPORT_DOCKER: '5599' } }).PGPORT).toBe('5599');
     expect(testDatabaseStageEnv({ saved: { PGMODE: 'native', PGPORT: '5433' } }).PGPORT).toBe('5433');
+  });
+});
+
+describe('uncreatableExtensions', () => {
+  it('flags a missing extension a non-superuser cannot create, and nothing else', () => {
+    expect(uncreatableExtensions({ installed: ['pgcrypto'], trusted: [], superuser: false })).toEqual(['vector']);
+    expect(uncreatableExtensions({ installed: [], trusted: ['vector', 'pgcrypto'], superuser: false })).toEqual([]);
+    expect(uncreatableExtensions({ installed: ['vector', 'pgcrypto'], trusted: [], superuser: false })).toEqual([]);
+    expect(uncreatableExtensions({ installed: [], trusted: [], superuser: true })).toEqual([]);
   });
 });
 

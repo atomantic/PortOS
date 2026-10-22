@@ -59,6 +59,18 @@ export function resolveTestDatabaseStageEnv(repoRoot, env = process.env) {
   return testDatabaseStageEnv({ env, saved: parseEnvFile(join(repoRoot, '.env')) });
 }
 
+/** Extensions init-db.sql creates; keep in sync with server/scripts/init-db.sql. */
+const REQUIRED_EXTENSIONS = ['vector', 'pgcrypto'];
+
+/**
+ * Names the extensions `setup:db:test` would fail to create: absent from the
+ * database and neither creatable by a superuser nor marked trusted. Pure.
+ */
+export function uncreatableExtensions({ installed, trusted, superuser }) {
+  if (superuser) return [];
+  return REQUIRED_EXTENSIONS.filter((name) => !installed.includes(name) && !trusted.includes(name));
+}
+
 /**
  * Is a Postgres answering at the DB stage's endpoint? A missing `portos_test`
  * is fine (the provisioning stage creates it); an unreachable server, refused
@@ -85,6 +97,25 @@ export async function probeTestDatabase(stageEnv, { repoRoot }) {
   try {
     await client.connect();
     await client.query('SELECT 1');
+    // CREATE EXTENSION IF NOT EXISTS is a no-op for installed extensions, so only
+    // a missing one needs privilege; a non-superuser role cannot supply it (#13134).
+    const [present, available, role] = await Promise.all([
+      client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_EXTENSIONS]),
+      client.query('SELECT DISTINCT name FROM pg_available_extension_versions WHERE trusted AND name = ANY($1)', [REQUIRED_EXTENSIONS]),
+      client.query('SELECT rolsuper FROM pg_roles WHERE rolname = current_user'),
+    ]);
+    const blocked = uncreatableExtensions({
+      installed: present.rows.map((row) => row.extname),
+      trusted: available.rows.map((row) => row.name),
+      superuser: role.rows[0]?.rolsuper === true,
+    });
+    if (blocked.length > 0) {
+      return {
+        ok: false,
+        endpoint,
+        reason: `Postgres extension(s) ${blocked.join(', ')} missing in ${TEST_DATABASE} and the test role is not a superuser; as a superuser run \`psql -d ${TEST_DATABASE} -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;'\``,
+      };
+    }
     return { ok: true, endpoint, provision: false };
   } catch (error) {
     // 3D000: the database does not exist yet — `npm run setup:db:test` creates it.
