@@ -51,7 +51,7 @@ async function resolveToken(ghApi, host, token) {
   if (!team) {
     const r = await lookup(ghApi, host, `users/${encodeURIComponent(owner)}`);
     if (r === 'found') return { status: IDENTITY_STATUS.VERIFIED };
-    if (r === 'not-found') return { status: IDENTITY_STATUS.MISSING, reason: `GitHub user "${owner}" does not exist` };
+    if (r === 'not-found') return { status: IDENTITY_STATUS.MISSING, reason: `GitHub user "${owner}" does not exist on ${host}` };
     return { status: IDENTITY_STATUS.UNAVAILABLE, reason: r.error };
   }
   const t = await lookup(ghApi, host, `orgs/${encodeURIComponent(owner)}/teams/${encodeURIComponent(team)}`);
@@ -60,7 +60,7 @@ async function resolveToken(ghApi, host, token) {
   // GitHub answers 404 for a team the caller cannot see, so a team 404 only
   // proves absence when the owning organization itself does not exist.
   const o = await lookup(ghApi, host, `users/${encodeURIComponent(owner)}`);
-  if (o === 'not-found') return { status: IDENTITY_STATUS.MISSING, reason: `GitHub organization "${owner}" does not exist` };
+  if (o === 'not-found') return { status: IDENTITY_STATUS.MISSING, reason: `GitHub organization "${owner}" does not exist on ${host}` };
   return {
     status: IDENTITY_STATUS.UNAVAILABLE,
     reason: o === 'found' ? `Team "${bare}" is not visible to the signed-in gh account` : o.error,
