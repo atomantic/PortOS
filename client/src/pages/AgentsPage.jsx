@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, Fragment } from 'react';
 import PageHeader from '../components/PageHeader';
-import { RefreshCw, Activity, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
+import { RefreshCw, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import * as api from '../services/api';
 import { useSocketResource } from '../hooks/useSocketResource';
 import socket from '../services/socket';
