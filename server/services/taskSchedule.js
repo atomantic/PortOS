@@ -48,6 +48,7 @@ import {
 } from './taskScheduleConstants.js';
 import {
   DEFAULT_TASK_INTERVALS,
+  TASK_INPUT_PATHS,
   INSTALL_WIDE_TASK_TYPES,
   MANAGED_APP_TARGET_TASK_TYPES,
   MANAGED_AGENT_OPTIONS,
@@ -60,6 +61,7 @@ import {
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
 import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
+import { inputsUnchangedSince } from './taskInputGate.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { recordUserAction } from './userActions.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
@@ -368,6 +370,31 @@ export async function recordRecommendedAudits(taskType, appId, items) {
     };
     return { result: schedule.executions[key].recommendedAudits, changed: true };
   });
+}
+
+/**
+ * Baseline for the `inputs-unchanged` gate: the repo HEAD of the last clean run
+ * of an input-gated task. A failed or finding-producing run passes `null`, which
+ * drops the baseline so the next automatic launch runs.
+ */
+export async function recordCleanInputBaseline(taskType, appId, head) {
+  if (!TASK_INPUT_PATHS[taskType] || !appId) return false;
+  return updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, taskType, appId);
+    if ((record.lastCleanHead ?? null) === (head ?? null)) return { result: false, changed: false };
+    if (head) record.lastCleanHead = head;
+    else delete record.lastCleanHead;
+    return { result: true, changed: true };
+  });
+}
+
+// True when the task declares input paths and none changed since its last clean run.
+async function inputsUnchangedForTask(taskType, appId, schedule) {
+  const inputPaths = TASK_INPUT_PATHS[taskType];
+  const lastCleanHead = inputPaths && appId ? resolveExecutionRecord(schedule, taskType, appId)?.lastCleanHead : null;
+  if (!lastCleanHead) return false;
+  const app = await getAppById(appId).catch(() => null);
+  return inputsUnchangedSince({ repoPath: app?.repoPath, lastCleanHead, inputPaths });
 }
 
 // ============================================================
@@ -1217,6 +1244,10 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
     }
   }
 
+  if (result.shouldRun && await inputsUnchangedForTask(taskType, appId, schedule)) {
+    return { shouldRun: false, reason: TASK_READINESS_REASON.INPUTS_UNCHANGED };
+  }
+
   return result;
 }
 
@@ -1327,6 +1358,11 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   // the schedule interval and the app's own per-app override.
   const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
   const manual = isManualOnDemandRequest({ origin, burn: burnProvenance });
+  // Unattended launches (burn, refill) of an input-gated audit are declined while
+  // nothing it reads changed since its last clean run; a human Run always goes.
+  if (!manual && await inputsUnchangedForTask(taskType, appId, await loadSchedule())) {
+    return { error: `Task type '${taskType}' inputs are unchanged since its last clean run`, reason: TASK_READINESS_REASON.INPUTS_UNCHANGED };
+  }
   const request = await updateSchedule(async (schedule) => {
     const tasks = schedule.tasks || {};
     const config = Object.prototype.hasOwnProperty.call(tasks, taskType) ? tasks[taskType] : null;

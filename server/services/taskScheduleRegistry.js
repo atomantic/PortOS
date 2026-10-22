@@ -495,6 +495,23 @@ export const DEFAULT_TASK_INTERVALS = Object.fromEntries(
   ])
 );
 
+// Repo paths whose change makes a repeat of an expensive executed audit worth
+// buying. An automatic launch is skipped (`inputs-unchanged`) while none differ
+// from the HEAD of the last clean run (#12907); a user-origin launch always runs.
+// Git pathspecs relative to the app's repo root. The prompt version stands in
+// for the prompt body: a body change requires a bump.
+export const TASK_INPUT_PATHS = Object.freeze({
+  'upgrade-rehearsal': Object.freeze([
+    'scripts/run-migrations.js',
+    'scripts/lib/',
+    'scripts/migrations/',
+    'data.reference/',
+    'server/services/backup.js',
+    'server/services/backupRestore*',
+    'server/services/taskPromptDefaults/versions.js',
+  ]),
+});
+
 // Agent-options that a task manages internally — UI locks the toggle, and
 // loadSchedule/updateTaskInterval enforce the default value regardless of
 // what's persisted or POSTed. The reasoning lives next to each task above

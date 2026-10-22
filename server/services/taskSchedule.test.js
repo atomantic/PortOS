@@ -71,6 +71,8 @@ vi.mock('./apps.js', () => ({
   clearAllIssueWatcherState: vi.fn().mockResolvedValue({ changed: false })
 }))
 
+vi.mock('./taskInputGate.js', () => ({ inputsUnchangedSince: vi.fn().mockResolvedValue(false), readHead: vi.fn() }))
+
 vi.mock('./instanceFeatures.js', () => ({
   isInstanceFeatureEnabled: vi.fn().mockResolvedValue(true),
 }))
@@ -203,6 +205,8 @@ import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun } from './eventScheduler.js'
 import { addNotification, exists as notificationExists, removeByMetadata } from './notifications.js'
 import { isInstanceFeatureEnabled } from './instanceFeatures.js'
+import { inputsUnchangedSince } from './taskInputGate.js'
+import { getAppById } from './apps.js'
 
 const mockSchedule = ({ tasks = {}, executions = {}, templates = [], onDemandRequests = [] } = {}) => {
   readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates, onDemandRequests })
@@ -2155,6 +2159,48 @@ describe('taskSchedule', () => {
   describe('triggerOnDemandTask', () => {
     beforeEach(() => {
       loadState.mockResolvedValue({ config: { improvementEnabled: true } })
+    })
+
+    describe('inputs-unchanged gate (#12907)', () => {
+      const HEAD = 'a'.repeat(40)
+      const gated = (lastCleanHead) => mockSchedule({
+        tasks: { 'upgrade-rehearsal': { type: 'on-demand', enabled: true } },
+        executions: { 'task:upgrade-rehearsal': { perApp: { 'app-1': { lastRun: null, count: 0, ...(lastCleanHead ? { lastCleanHead } : {}) } } } }
+      })
+      beforeEach(() => {
+        getAppById.mockResolvedValue({ id: 'app-1', repoPath: '/repo' })
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        inputsUnchangedSince.mockReset().mockResolvedValue(true)
+      })
+
+      it('declines unattended launches while no declared input changed since the clean baseline, but never a user Run', async () => {
+        gated(HEAD)
+        const refill = await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })
+        expect(refill).toMatchObject({ reason: 'inputs-unchanged' })
+        expect(inputsUnchangedSince).toHaveBeenCalledWith(expect.objectContaining({ repoPath: '/repo', lastCleanHead: HEAD }))
+        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1')).toMatchObject({ taskType: 'upgrade-rehearsal', origin: ON_DEMAND_ORIGINS.USER })
+      })
+
+      it('launches when an input changed or no clean baseline exists', async () => {
+        gated(HEAD)
+        inputsUnchangedSince.mockResolvedValue(false)
+        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })).toMatchObject({ taskType: 'upgrade-rehearsal' })
+        gated(null)
+        inputsUnchangedSince.mockClear()
+        expect(await triggerOnDemandTask('upgrade-rehearsal', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })).toMatchObject({ taskType: 'upgrade-rehearsal' })
+        expect(inputsUnchangedSince).not.toHaveBeenCalled()
+      })
+
+      it('reports inputs-unchanged from readiness instead of a due cron slot', async () => {
+        mockSchedule({
+          tasks: { 'upgrade-rehearsal': { type: 'cron', enabled: true, cronExpression: '* * * * *' } },
+          executions: { 'task:upgrade-rehearsal': { perApp: { 'app-1': { lastRun: null, count: 0, lastCleanHead: HEAD } } } }
+        })
+        parseCronToNextRun.mockReturnValue(new Date(Date.now() - 1000))
+        expect(await shouldRunTask('upgrade-rehearsal', 'app-1')).toMatchObject({ shouldRun: false, reason: 'inputs-unchanged' })
+        inputsUnchangedSince.mockResolvedValue(false)
+        expect(await shouldRunTask('upgrade-rehearsal', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
+      })
     })
 
     it('keeps model research global for both scheduled and manual dispatch', async () => {
