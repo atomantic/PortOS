@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import {
   ChevronLeft, ChevronRight, Clapperboard, Drama, ImagePlus, Loader2, Mountain, Package, Palette, PenLine, Plus,
   StickyNote, Trash2, Users, Wand2, X,
@@ -283,6 +284,9 @@ function CastTab({ panel, onPatch }) {
  */
 export default function PanelDrawer({ open, board, found, panelNumber, sketchNonce, busy, onClose, handlers }) {
   const [activeTab, setActiveTab] = useDrawerTab('panelTab', 'shot', TAB_IDS);
+  const [searchParams] = useSearchParams();
+  // The recipe canvas (desktop) needs the room; every other tab stays a column.
+  const wide = activeTab === 'make' && searchParams.get('makeView') === 'canvas';
 
   return (
     <Drawer
@@ -290,7 +294,7 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
       onClose={onClose}
       title={found ? `Panel ${panelNumber}` : 'Panel'}
       subtitle={found ? (found.beat.title || `Beat ${found.beatIndex + 1}`) : undefined}
-      size="md"
+      size={wide ? 'xl' : 'md'}
       tabs={found ? TABS : null}
       activeTab={activeTab}
       onTabChange={setActiveTab}

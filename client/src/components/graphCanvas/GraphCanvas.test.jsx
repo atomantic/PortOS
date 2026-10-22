@@ -86,4 +86,38 @@ describe('GraphCanvas', () => {
     fireEvent.pointerUp(card, { pointerId: 2, pointerType: 'mouse' });
     expect(onMove).not.toHaveBeenCalled();
   });
+
+  it('wires an output dot to another card\'s input when the drag is released over it', () => {
+    const onConnect = vi.fn();
+    const onSelect = vi.fn();
+    renderCanvas({
+      onConnect,
+      onSelect,
+      renderNode: (node) => (
+        <>
+          <rect width={160} height={80} />
+          <circle data-port-out="true" data-testid={`out-${node.id}`} cx={160} cy={20} r={8} />
+          <g data-port-in="prompt"><circle data-testid={`in-${node.id}`} cx={0} cy={50} r={7} /></g>
+        </>
+      ),
+      renderWireDraft: () => <path data-testid="wire-draft" />,
+    });
+    fireEvent.pointerDown(screen.getByTestId('out-a'), { button: 0, pointerId: 1, pointerType: 'mouse', clientX: 180, clientY: 40 });
+    fireEvent.pointerMove(window, { clientX: 250, clientY: 60 });
+    expect(screen.getByTestId('wire-draft')).toBeInTheDocument();
+
+    const target = screen.getByTestId('in-b');
+    const original = document.elementFromPoint;
+    document.elementFromPoint = () => target;
+    try {
+      fireEvent.pointerUp(window, { clientX: 300, clientY: 70 });
+    } finally {
+      document.elementFromPoint = original;
+    }
+    expect(onConnect).toHaveBeenCalledWith('a', 'b', 'prompt');
+    expect(screen.queryByTestId('wire-draft')).toBeNull();
+    // The click that ends the wire drag doesn't also select the card.
+    fireEvent.click(screen.getByLabelText('Node: Alpha'));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });
