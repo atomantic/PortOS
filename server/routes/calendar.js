@@ -181,6 +181,11 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   // the cache. Retry cleanup even if an earlier attempt removed the account.
   await calendarAccounts.deleteAccount(req.params.id);
   await calendarSync.deleteCache(req.params.id);
+  // Derived copies (titles, attendees) live in the Timeline and Tribe (#12984).
+  // Lazy: these reach settings/DB modules that most route suites (and boot) never need.
+  const [humanActivity, { deleteAutoTouchpoints }] = await Promise.all([import('../services/humanActivity.js'), import('../services/tribe.js')]);
+  await humanActivity.deleteEvents({ accountId: req.params.id });
+  await deleteAutoTouchpoints({ accountId: req.params.id });
   req.app.get('io')?.emit('calendar:changed', {});
   res.status(204).send();
 }));

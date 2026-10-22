@@ -3,6 +3,8 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
 
+vi.mock('../services/humanActivity.js', () => ({ deleteEvents: vi.fn().mockResolvedValue({ deleted: 0 }) }));
+vi.mock('../services/tribe.js', () => ({ deleteAutoTouchpoints: vi.fn().mockResolvedValue({ touchpoints: 0, auditRows: 0 }) }));
 vi.mock('../services/calendarAccounts.js', () => ({
   listAccounts: vi.fn(),
   createAccount: vi.fn(),
@@ -65,6 +67,8 @@ vi.mock('../services/userTimezone.js', () => ({
 import calendarRoutes from './calendar.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
+import * as humanActivity from '../services/humanActivity.js';
+import * as tribe from '../services/tribe.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import * as dailyReview from '../services/dailyReview.js';
 import * as calendarGoogleSync from '../services/calendarGoogleSync.js';
@@ -118,6 +122,10 @@ describe('Calendar Routes — normalized error handling', () => {
       }
       expect(calendarSync.deleteCache).toHaveBeenCalledTimes(3);
       expect(calendarSync.deleteCache).toHaveBeenLastCalledWith(ACCOUNT_ID);
+      // Derived Timeline/Tribe copies go only after the cache is gone, and again on retry (#12984).
+      expect(humanActivity.deleteEvents).toHaveBeenCalledTimes(2);
+      expect(humanActivity.deleteEvents).toHaveBeenLastCalledWith({ accountId: ACCOUNT_ID });
+      expect(tribe.deleteAutoTouchpoints).toHaveBeenLastCalledWith({ accountId: ACCOUNT_ID });
       expect(io.emit.mock.calls.filter(([event]) => event === 'calendar:changed')).toHaveLength(2);
     });
 
