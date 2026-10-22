@@ -33,9 +33,14 @@ describe('branch reconciliation completion', () => {
   it('settles a non-perpetual run immediately using fresh ownership and its target account', async () => {
     expect(await settleBranchReconcileRun(agent)).toMatchObject({ cleaned: ['merged'], reapedSuperseded: ['superseded'] });
     expect(reconcile).toHaveBeenCalledWith('/example/repo', {
-      cleanup: true, pendingMergeBranches: new Set(['claim/queued']), activeAgentIds: new Set(['active']),
+      cleanup: true, reapSuperseded: true, pendingMergeBranches: new Set(['claim/queued']), activeAgentIds: new Set(['active']),
       claimOwners: { agents: [], readAgents: readClaimOwnershipAgents }, forgeAccount: 'example-account'
     });
+  });
+  it('keeps superseded branches when the task turns reapSuperseded off', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-example', metadata: { reapSuperseded: false } });
+    await settleBranchReconcileRun(agent);
+    expect(reconcile).toHaveBeenCalledWith('/example/repo', expect.objectContaining({ cleanup: true, reapSuperseded: false }));
   });
   it('records an incomplete outcome instead of throwing when the run has no managed app', async () => {
     const appless = { ...agent, metadata: { ...agent.metadata, taskApp: null } };

@@ -31,6 +31,7 @@ export async function settleBranchReconcileRun(agent) {
   const pendingMergeBranches = new Set(readPendingMergePrs(app).map((entry) => entry?.prBranch).filter(Boolean));
   const result = await reconcile(app.repoPath, {
     cleanup: true,
+    reapSuperseded: task.metadata.reapSuperseded !== false,
     pendingMergeBranches,
     activeAgentIds: buildActiveOwnerIds(getActiveAgentIds(), agents),
     claimOwners: { agents, readAgents: readClaimOwnershipAgents },

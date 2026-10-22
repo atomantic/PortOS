@@ -918,7 +918,8 @@ export const MAX_TOTAL_SPAWNS = 5;
 // `cleanupMerged` / `openPr` / `resolveConflicts` / `autoMerge` /
 // `finishAbandoned` are the per-app action toggles for the `branch-reconcile`
 // task type (`finishAbandoned` governs committing + shipping the uncommitted
-// work left in a dead agent's worktree); `autoClose` is
+// work left in a dead agent's worktree; `reapSuperseded` governs backup-first
+// retirement of branches with a fresh SUPERSEDED verdict); `autoClose` is
 // the `issue-reconcile` toggle (ON unless explicitly false — OFF forbids the
 // coordinator from closing an issue or filing a follow-up, leaving it to only
 // comment + release the claim). Each lives in the shared task-metadata
@@ -949,7 +950,7 @@ export { DEPFREE_MODES, DEFAULT_DEPFREE_MODE } from './auditCatalog.js';
 
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly', 'claimFlow',
-  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'finishAbandoned', 'autoClose',
+  'cleanupMerged', 'reapSuperseded', 'openPr', 'resolveConflicts', 'autoMerge', 'finishAbandoned', 'autoClose',
   // repo-sync's action toggles (REPO_SYNC_ACTION_KEYS above): publish branches
   // strictly ahead of their upstream, fast-forward the default branch, return the
   // checkout to it, delete merged branches, drop provably-redundant stashes, and

@@ -117,7 +117,12 @@ repair the exact existing backlink rather than minting another merge authority.
 Missing tasks, unreadable state, active owners and explicit leave-open policy
 never grant recovery permission. GitHub auto-merge enabled alone is unfinished.
 
-When cleanup is enabled, completed local review obligations become bounded
+When cleanup is enabled, a clean, unlocked, ownerless checkout held only by a
+review obligation whose commits are already on the default branch (ancestor or
+patch-equivalent) is archived and retired directly: no PR identity, owner
+history or agent review is needed to show nothing is lost, and the retirement
+service re-proves merge evidence and ownership under its fence. Human handoffs
+and unreadable policy stay held. Other completed local review obligations become bounded
 `REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,
 checkout identity and ownership. The task records the exact release and review
 digest, reads the complete original/current code comparison, and uses the live
@@ -136,9 +141,13 @@ It joins the pending-merge coordinator, does not spend its periodic tick budget,
 and leaves remote-only receipts and concurrent replacement receipts untouched.
 A single locked checkout no longer labels unrelated review holds as live owners.
 
-Routine reconciliation retains superseded but unmerged branches. Their separate
-backup-and-retire workflow requires explicit `reapSuperseded: true`; merged cleanup
-does not enable it.
+A branch with a fresh SUPERSEDED verdict (its replacement still on the default
+branch, its tip and dirty paths unchanged) is backed up under
+`data/cos/abandoned-worktree-backups/` and retired by the scheduled
+reconciliation, behind the same owner and lock gates as merged cleanup. The
+per-app `reapSuperseded` toggle (on unless `false`, and off whenever
+`cleanupMerged` is off) keeps such branches instead; direct `reconcile()`
+callers still opt in explicitly.
 
 The Git page's merged badge is a display hint. Delete merged branches and
 completion cleanup use the same retirement path: resolve the current checkout,

@@ -157,7 +157,7 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     getTaskInterval.mockResolvedValue({ type: 'on-demand', perpetual: true, drainDispatchCap: 5, taskMetadata: { branchesPerAgent: 3 } });
   });
 
-  it('a user run with only historical merged review holds generates bounded durable review work', async () => {
+  it('a user run retires merged review holds and generates review work only for the rest', async () => {
     const rows = [1, 2, 3, 4].map(n => ({ branch: `claim/issue-${n}`, tip: String(n).repeat(40),
       worktreePath: `/example/checkouts/${n}`, isMerged: n !== 2, completionPolicyReason: 'pr-completion-review-required' }));
     reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: rows, worktreeInventory: rows.map(row => ({
@@ -167,14 +167,28 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     prepareRetirement.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'completed-owner' }] }, comparison: { disposition: 'review-supersession', localPatch: '+old', difference: '+replacement' } } });
     const task = await generate({ onDemand: true });
     expect(task).not.toBeNull();
-    expect(task.metadata.reconcileRetirements).toHaveLength(3);
+    // Ancestral checkouts retire through the fenced service; only the
+    // non-ancestral one needs a cognitive review.
+    expect(retireCheckout).toHaveBeenCalledTimes(3);
+    expect(retireCheckout).toHaveBeenCalledWith(expect.objectContaining({ release: expect.objectContaining({ branch: 'claim/issue-1' }) }),
+      expect.objectContaining({ settleMergedReviewObligation: true }));
+    expect(task.metadata.reconcileRetirements).toHaveLength(1);
+    expect(task.metadata.reconcileRetirements[0].release.branch).toBe('claim/issue-2');
     expect(task.description).toContain('[REVIEW_RETIREMENT]');
     expect(task.description).toContain('checkouts/retire');
     expect(task.description).not.toContain('claim-ownership');
     expect(parkPerpetual).not.toHaveBeenCalled();
     expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({
-      remaining: expect.arrayContaining([expect.objectContaining({ branch: 'claim/issue-4', head: '4'.repeat(40), reason: 'retirement-review-pending' })]),
+      remaining: expect.arrayContaining([expect.objectContaining({ branch: 'claim/issue-2', head: '2'.repeat(40), reason: 'retirement-review-pending' })]),
     }));
+  });
+
+  it.each([
+    [{}, true], [{ reapSuperseded: false }, false], [{ cleanupMerged: false }, false],
+  ])('retires verified-superseded branches unless a toggle refuses it: %j', async (taskMetadata, expected) => {
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', perpetual: true, drainDispatchCap: 5, taskMetadata: { branchesPerAgent: 3, ...taskMetadata } });
+    await generate();
+    expect(reconcileMock).toHaveBeenCalledWith(APP.repoPath, expect.objectContaining({ reapSuperseded: expected }));
   });
 
   it('does not generate repeated agents for a healthy open PR waiting for CI', async () => {

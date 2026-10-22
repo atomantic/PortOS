@@ -697,6 +697,24 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
 
+  it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
+    const c = await reviewedCheckout('settled', { normalMerge: true, superseded: true });
+    await execGit(['worktree', 'unlock', c.path], repo);
+    const release = { ...c.release, locked: false, lockReason: null };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'pr-completion-review-required' }] });
+    const retire = (more = {}) => retireInventoriedCheckout({ appId: 'app-1', release }, { ...c.opts, ...more });
+    injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+    expect(await retire({ settleMergedReviewObligation: true })).toMatchObject({ ok: false, reason: 'pr-completion-human-handoff' });
+    injected.policies[0].metadata.prCompletionPolicy = 'review-then-merge';
+    expect(await retire()).toMatchObject({ ok: false, reason: 'pr-completion-review-required' });
+    expect(await registered(release.path)).toBe(true);
+    const result = await retire({ settleMergedReviewObligation: true });
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(await registered(release.path)).toBe(false);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/restored-settled'], repo);
+    expect((await execGit(['rev-parse', 'restored-settled'], repo)).stdout.trim()).toBe(release.head);
+  });
+
   function reusedBranchOwners(c) {
     const current = { id: 'current-review-owner', status: 'completed', result: { success: true },
       startedAt: '2026-03-01T00:00:00Z', completedAt: '2026-03-01T01:00:00Z',
