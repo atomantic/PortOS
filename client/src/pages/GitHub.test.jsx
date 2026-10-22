@@ -37,6 +37,10 @@ const mock = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/api', () => mock);
+vi.mock('../services/apiLocalLlm', () => ({
+  getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
+  getVisionModels: vi.fn().mockResolvedValue({ models: [] }),
+}));
 
 vi.mock('../services/socket', () => {
   const listeners = new Map();
@@ -424,13 +428,27 @@ describe('GitHub inbox tab', () => {
     });
     mock.applyGitHubNotificationAction.mockImplementation(async (_account, threadId) => ({ ...NOTIFICATION, threadId, state: 'open' }));
     renderTab('inbox');
-    fireEvent.click(await screen.findByRole('button', { name: 'Handled' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Handled/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Back to inbox' }));
     fireEvent.click(screen.getByRole('button', { name: 'Unmute' }));
     await waitFor(() => expect(mock.applyGitHubNotificationAction).toHaveBeenCalledTimes(2));
     expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'reopen');
     expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '102', 'resubscribe');
     await act(async () => {});
+  });
+
+  it('shows each view count in its tile and narrows the list to one repository', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [NOTIFICATION, { ...NOTIFICATION, threadId: '102', title: 'Other repo change', repoFullName: 'octocat/other' }],
+      counts: { 'needs-you': 2, suspect: 0, handled: 14, all: 16, 'with-agents': 3 },
+      sync: {},
+    });
+    renderTab('inbox');
+    expect(await screen.findByRole('button', { name: 'Handled 14' })).toBeTruthy();
+    expect(screen.getByText('3 with an agent now')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octocat/other' } });
+    expect(screen.queryByText('Example change')).toBeNull();
+    expect(screen.getByText('Other repo change')).toBeTruthy();
   });
 
   it('shows a failed sync for the account instead of an empty inbox', async () => {
@@ -458,7 +476,7 @@ describe('GitHub inbox triage', () => {
     expect(await screen.findByText('Suggest Untrusted:Review')).toBeTruthy();
     expect(screen.getByText('Outside')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Suspect' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Suspect/ }));
     await waitFor(() => expect(mock.getGitHubNotifications).toHaveBeenLastCalledWith({ accountId: null, view: 'suspect' }, { silent: true }));
 
     const calls = mock.getGitHubNotifications.mock.calls.length;
@@ -546,6 +564,30 @@ describe('GitHub automations tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run now/ }));
     await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
     await waitFor(() => expect(mock.getGitHubAutomations).toHaveBeenCalledTimes(2));
+  });
+
+  it('adds an agent rule for review requests in one repo and refuses a duplicate', async () => {
+    mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
+    mock.getGitHubAutomations.mockResolvedValue({
+      ...OVERVIEW,
+      accounts: [{ ...OVERVIEW.accounts[0], mode: 'autopilot', agentRules: [{ id: 'rule-1', kind: 'review-request', repo: '*', agent: false }], repos: ['octocat/hello'] }],
+    });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+
+    expect(await screen.findByText("Don't start an agent")).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Add rule/ }));
+    // Same kind and repo as the existing rule: refused until changed.
+    expect(await screen.findByText(/There is already a rule/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: 'octocat/hello' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', {
+      agentRules: [
+        { id: 'rule-1', kind: 'review-request', repo: '*', agent: false },
+        expect.objectContaining({ kind: 'review-request', repo: 'octocat/hello', agent: true }),
+      ],
+    }));
+    expect(await screen.findByText('octocat/hello', { selector: 'span' })).toBeTruthy();
   });
 });
 

@@ -160,6 +160,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     // Read on GitHub but still in its inbox: open here too. Gone from the inbox: done.
     expect(rows.find((row) => row.threadId === '102')).toMatchObject({ unread: false, state: 'open' });
     expect(rows.find((row) => row.threadId === '101')).toMatchObject({ unread: false, state: 'done' });
+    expect((await listNotifications({ accountId: account.id })).counts).toEqual({ 'needs-you': 1, suspect: 0, handled: 1, all: 2, 'with-agents': 0 });
   });
 
   it('treats a 304 as unchanged and keeps rows', async () => {
@@ -555,8 +556,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await syncAccountNotifications(account.id);
     const listed = (await listNotifications({ accountId: account.id, view: 'needs-you' })).notifications;
     expect(Object.fromEntries(listed.map((row) => [row.threadId, row.agent]))).toEqual({
-      1301: { lane: 'issue-watcher', refused: null },
-      1302: { lane: 'dependency-updates', refused: 'no-managed-app' },
+      1301: { lane: 'issue-watcher', refused: null, pin: null },
+      1302: { lane: 'dependency-updates', refused: 'no-managed-app', pin: null },
     });
     expect(triggerOnDemandTask).not.toHaveBeenCalled();
 
@@ -600,6 +601,50 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await getNotification(account.id, '1403')).toMatchObject({ decision: 'surface-high' });
     await syncAccountNotifications(account.id);
     expect(addTask).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows agent rules: a review request starts a pinned Do:Review run, and a rule can switch a kind off', async () => {
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(triggerOnDemandTask).mockReset().mockImplementation(async (taskType) => ({ id: `demand-${taskType}` }));
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+    let taskCount = 0;
+    vi.mocked(addTask).mockReset().mockImplementation(async (task) => ({ id: `task-${++taskCount}`, description: task.description }));
+    await updateAccount(account.id, {
+      mode: 'autopilot',
+      agentRules: [
+        { id: 'rule-review', kind: 'review-request', repo: '*', agent: true, provider: 'example-provider', model: 'example-model', effort: 'high' },
+        { id: 'rule-quiet', kind: 'security-alert', repo: 'acme/app', agent: false },
+      ],
+    });
+    const login = account.login;
+    mockGh(() => listing([
+      thread('1501', { owner: login, repo: 'tool', reason: 'review_requested' }),
+      thread('1502', { owner: 'acme', repo: 'app', reason: 'security_alert', type: 'RepositoryVulnerabilityAlert', url: null }),
+    ]), {
+      [`repos/${login}/tool/pulls/1501`]: { author: 'teammate', association: 'COLLABORATOR', state: 'open', merged: false },
+      [`repos/${login}/tool/collaborators/teammate/permission`]: { user: { login: 'teammate' }, permission: 'write' },
+    });
+
+    expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 1, agentRuns: 1 });
+    const [review] = vi.mocked(addTask).mock.calls.map(([task]) => task);
+    expect(review).toMatchObject({
+      description: `Review PR #1501 for ${login}/tool`,
+      slashdoCommand: 'review',
+      slashdoArgs: `https://github.com/${login}/tool/pull/1501 --no-apply`,
+      provider: 'example-provider', model: 'example-model', effort: 'high',
+      noCodeOutput: true,
+    });
+    expect(review.app).toBeUndefined();
+    expect((await getNotification(account.id, '1501')).evidence.handoff).toMatchObject({ lane: 'do-review', taskId: 'task-1', pin: { provider: 'example-provider', effort: 'high' } });
+    // Switched off for this repo: the alert stays with you, untouched.
+    const alert = await getNotification(account.id, '1502');
+    expect(alert).toMatchObject({ decision: 'surface-high' });
+    expect(alert.evidence.handoff).toBeUndefined();
+    expect(triggerOnDemandTask).not.toHaveBeenCalled();
+    // A malformed rule is refused at the boundary.
+    expect(() => updateAccount(account.id, { agentRules: [{ id: 'x', kind: 'review-request', repo: 'not a repo', agent: true }] })).toThrow('Validation failed');
+    await updateAccount(account.id, { agentRules: [] });
+    vi.mocked(getAllApps).mockResolvedValue([]);
   });
 
   it('sends the opt-in monthly audit report once per window, as suggestions only', async () => {
