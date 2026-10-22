@@ -60,7 +60,7 @@ export function connectToPeer(peer) {
     socket.emit('cos:subscribe');
 
     // Fetch initial agent state via HTTP
-    fetchPeerAgents(conn);
+    void fetchPeerAgents(conn);
   });
 
   socket.on('disconnect', () => {

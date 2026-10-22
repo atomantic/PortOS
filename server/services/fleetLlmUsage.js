@@ -88,7 +88,7 @@ export function scheduleFleetHostUsagePersist() {
   if (persistTimer) return;
   persistTimer = setTimeout(() => {
     persistTimer = null;
-    writeLedger();
+    void writeLedger();
   }, PERSIST_DEBOUNCE_MS);
   // Never hold the process open for a usage report.
   persistTimer.unref?.();

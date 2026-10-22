@@ -112,6 +112,7 @@ export const TEST_MEMO_NEVER = Object.freeze({
   'server/childListenerOrderConventions.test.js': 'scans the whole server tree',
   'server/routeTestCoverageConventions.test.js': 'scans server/index.js mounts against every test',
   'server/routeValidationConventions.test.js': 'scans every route module',
+  'server/floatingAsyncConventions.test.js': 'scans the whole server tree',
   'server/timerCallbackConventions.test.js': 'scans the whole server tree',
   'client/src/lib/index.test.js': 'enumerates the client/src/lib directory against its README and barrel',
   'client/src/hooks/index.test.js': 'enumerates the client/src/hooks directory against its README and barrel',

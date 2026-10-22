@@ -515,6 +515,7 @@ export const ALWAYS_RUN_TESTS = [
   // test imports, with no import edge from that router to this guard.
   'server/routeTestCoverageConventions.test.js',
   'server/routeValidationConventions.test.js',
+  'server/floatingAsyncConventions.test.js',
   'server/timerCallbackConventions.test.js',
   // Whole-tree scanner (#12815): any server file can bind a bare JSON.stringify to
   // a jsonb parameter, with no import edge to this guard.

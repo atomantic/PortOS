@@ -515,7 +515,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
     instanceEvents.emit('peers:updated', data.peers);
     return entry;
   });
-  announceSelf(peer);
+  void announceSelf(peer);
   return peer;
 }
 
@@ -1114,7 +1114,7 @@ export async function probePeer(peer) {
     const firstSighting = isFirstOnlineSighting(peer.id);
     const transitioned = previousStatus !== 'online';
     if (stored) {
-      if (transitioned) announceSelf(stored);
+      if (transitioned) void announceSelf(stored);
       if (transitioned || firstSighting) instanceEvents.emit('peer:online', stored);
     }
   }
@@ -1317,8 +1317,15 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
   return result;
 }
 
+// Owns every rejection: callers in addPeer/probePeer fire it without awaiting.
 async function announceSelf(peer) {
-  const data = await loadData();
+  let data;
+  try {
+    data = await loadData();
+  } catch (err) {
+    console.log(`🌐 Announce skipped: instances data unreadable: ${err.message}`);
+    return;
+  }
   if (!data.self) return;
 
   const selfPort = parseInt(process.env.PORT, 10) || DEFAULT_PEER_PORT;

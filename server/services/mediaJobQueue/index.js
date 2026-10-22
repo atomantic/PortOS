@@ -992,10 +992,10 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
         // never delete a file the job merely referenced (gallery image,
         // prior render, etc). audioFilePath is the same kind of staged
         // upload (a2v/voice/video jobs) — needs the same cleanup.
-        safeUnlinkUpload(j.params?.uploadedTempPath);
-        safeUnlinkUpload(j.params?.audioFilePath);
+        void safeUnlinkUpload(j.params?.uploadedTempPath);
+        void safeUnlinkUpload(j.params?.audioFilePath);
         for (const p of normalizeTempPaths(j.params?.uploadedTempPaths)) {
-          safeUnlinkUpload(p);
+          void safeUnlinkUpload(p);
         }
       } else if (j.status === 'queued') {
         queue.push({ ...j, params: restoredParams(j) });

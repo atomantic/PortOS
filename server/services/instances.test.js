@@ -211,6 +211,29 @@ describe('instances.js', () => {
       expect(atomicWrite).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ peers: [secure, plain, classic] }));
     });
 
+    it('logs and skips the self-announce when instances data becomes unreadable (#12978)', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      const writesBefore = atomicWrite.mock.calls.length;
+      // addPeer persists first; only the fire-and-forget announce reads afterwards.
+      readJSONFile.mockImplementation(async () => {
+        if (atomicWrite.mock.calls.length > writesBefore) throw new Error('EIO: read failed');
+        return { self: null, peers: [] };
+      });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      try {
+        await addPeer({ address: '192.0.2.30' });
+        // Suite may run fake timers: flush microtasks instead of sleeping.
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('Announce skipped'));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+        log.mockRestore();
+      }
+    });
+
     it('should add a peer with correct defaults', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
       fetch.mockRejectedValue(new Error('not reachable'));

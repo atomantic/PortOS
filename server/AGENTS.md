@@ -26,6 +26,7 @@ These apply to Express/service/model code. Universal constraints (no try/catch o
 ## Timers
 
 - **An `async` timer callback must own its rejections.** Inside `setTimeout(async …)` / `setInterval(async …)`, every `await` needs either an enclosing `try { … } catch` or a `.catch(…)` on the awaited chain. A timer fires outside the request lifecycle, so nothing holds the promise the callback returns and a rejection escapes as an unhandled rejection — fatal on Node >= 15. The CoS runner shipped that at boot: its orphan-cleanup timer awaited a state-file read/write, so one truncated `agents` file killed the runner seconds after start and PM2 restart-looped it against the same file (#5668). Log and continue in the catch unless the callback genuinely owns a failure verdict. `server/timerCallbackConventions.test.js` scans the whole server tree for this and carries no allowlist; the worked example is the watchdog in `server/services/mediaJobQueue/index.js`.
+- **A statement-level call to an `async` function must be `await`ed, end in `.catch(…)`, or start with `void`.** A bare `announceSelf(peer);` leaves a rejection with no owner, which becomes an `unhandledRejection` that `autoFixer` turns into an AI task for what was best-effort bookkeeping (#12978). `void` means "this function owns its rejections, fire-and-forget on purpose" — make that true first. `server/floatingAsyncConventions.test.js` resolves module-scope async functions (local and relatively imported) across the server tree and carries no allowlist.
 
 ## Child processes
 

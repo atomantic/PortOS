@@ -172,7 +172,7 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   // `metadata` already carries the endTime stamped above, which bounds the
   // transcript window. Owns its own error handling.
   if (metadata.providerId && metadata.model) {
-    recordCompletedRunUsage(metadata, output);
+    void recordCompletedRunUsage(metadata, output);
   }
 
   // Close the run's ledger entry (#4540). This is the terminal event for every

@@ -545,6 +545,18 @@ describe('recordCompletedRunUsage', () => {
     expect(record.tokensIn).toBeGreaterThan(0);
   });
 
+  it('does not reject when the synchronous estimate prefix throws (#12978)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // A getter that throws stands in for any malformed metadata the prefix touches.
+      const metadata = { providerId: 'claude-code', get promptLength() { throw new Error('bad metadata'); } };
+      await expect(recordCompletedRunUsage(metadata, 'out')).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('Failed to record usage: bad metadata'));
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('skips a run with no providerId instead of creating an unknown bucket', async () => {
     await recordCompletedRunUsage({ workspacePath: WORKSPACE, promptLength: 10 }, 'out');
     expect(recordRunUsage).not.toHaveBeenCalled();
