@@ -185,6 +185,73 @@ describe('createOutputSpooler', () => {
   });
 });
 
+describe('createOutputSpooler — run directory removed under the spool', () => {
+  let errorSpy;
+  let logSpy;
+  const enoent = () => Object.assign(new Error("ENOENT: no such file or directory, open '/tmp/agent/raw.txt'"), { code: 'ENOENT' });
+  const transcriptFlags = () => vi.mocked(updateAgent).mock.calls.filter(([, p]) => p?.metadata?.transcriptWriteFailed);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('still logs and flags ENOENT while the run is live (no final drain yet)', async () => {
+    const s = makeSpooler();
+    vi.mocked(appendFile).mockRejectedValueOnce(enoent());
+
+    s.pushRaw('chunk');
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(errorSpy.mock.calls.filter(([m]) => String(m).includes('raw.txt write failed (ENOENT)'))).toHaveLength(1);
+    expect(transcriptFlags()).toHaveLength(1);
+  });
+
+  it('treats a straggler flush that hits a removed directory after the final drain as benign', async () => {
+    const s = makeSpooler();
+    s.pushRaw('before');
+    await s.drainRaw();
+    expect(appendFile).toHaveBeenCalledWith(RAW_FILE, 'before');
+
+    // The completion path archived the directory; a late chunk now cannot land.
+    vi.mocked(appendFile).mockRejectedValueOnce(enoent());
+    s.pushRaw('late');
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(transcriptFlags()).toHaveLength(0);
+  });
+
+  it('does not let the debounce timer start a second flush while a drain is writing', async () => {
+    const s = makeSpooler();
+    let finishAppend;
+    vi.mocked(appendFile).mockImplementationOnce(() => new Promise((resolve) => { finishAppend = resolve; }));
+
+    s.pushRaw('a');
+    let drained = false;
+    const drain = s.drainRaw().then(() => { drained = true; });
+    await vi.advanceTimersByTimeAsync(1000);
+    s.pushRaw('b'); // arrives mid-drain; the drain, not the timer, must write it
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(appendFile).toHaveBeenCalledTimes(1);
+    expect(drained).toBe(false);
+
+    finishAppend();
+    await drain;
+    expect(appendFile).toHaveBeenCalledTimes(2);
+    expect(appendFile).toHaveBeenLastCalledWith(RAW_FILE, 'b');
+  });
+});
+
 describe('createTranscriptWriteReporter', () => {
   let errorSpy;
 
