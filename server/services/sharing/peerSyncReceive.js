@@ -614,7 +614,6 @@ export async function applyIncomingPush(payload, authorization) {
     ? await reconcileWriterRoomBodies({ record, draftBodyManifest, bibleManifest, workMergeApplied, sourceInstanceId, pending })
     : [];
 
-
   return {
     missingAssets,
     // Surfaced like missingAssets so the sender withholds lastPushedHash while
