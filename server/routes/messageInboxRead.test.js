@@ -130,6 +130,21 @@ describe('inbox summary reads through the production HTTP/service boundary', () 
     expect(tryReadFile).toHaveBeenCalledTimes(3);
   });
 
+  it('rejects repeated query fields as a validation error before reading any cache', async () => {
+    await seed(1);
+    const repeated = [
+      'search=first&search=second',
+      `accountId=${ACCOUNT_IDS[0]}&accountId=${ACCOUNT_IDS[1]}`,
+      'summary=true&summary=false'
+    ];
+    for (const query of repeated) {
+      const response = await request(app).get('/inbox?' + query);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    }
+    expect(tryReadFile).not.toHaveBeenCalled();
+  });
+
   it('never serves old summaries after unreadable, corrupt, missing or empty caches', async () => {
     const id = ACCOUNT_IDS[0];
     const restore = () => writeFile(cachePath(id), JSON.stringify({ messages: [messageFixture(id, 1)] }));

@@ -2062,6 +2062,16 @@ export function parsePagination(query, { defaultLimit = 50, maxLimit = 200 } = {
   return { limit, offset };
 }
 
+// Express turns a repeated `?k=a&k=b` into an array; each field must be scalar
+// before any cache read (#13150). Pagination stays lenient via parsePagination.
+export const messageInboxQuerySchema = z.object({
+  accountId: z.string().optional(),
+  search: z.string().optional(),
+  summary: z.string().optional(),
+  limit: z.string().optional(),
+  offset: z.string().optional()
+});
+
 /**
  * Did the caller explicitly ask for pagination? True when either `limit` or
  * `offset` is present in the query string. Lets a list endpoint stay
