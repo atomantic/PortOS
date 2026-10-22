@@ -80,6 +80,7 @@ import {
   pruneTombstonedCommissions, listCommissionIdsForSync,
 } from '../creativeCommissions/store.js';
 import { listDeckIdsForSync, pruneTombstonedDecks } from '../decks.js';
+import { listStoryboardIdsForSync, pruneTombstonedStoryboards } from '../storyboards/index.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
@@ -122,6 +123,7 @@ const LIVE_ID_LISTERS = Object.freeze({
   commissionFeedback: () => listCommissionFeedbackIdsForSync(),
   creativeCommission: () => listCommissionIdsForSync(),
   deck: () => listDeckIdsForSync(),
+  storyboard: () => listStoryboardIdsForSync(),
 });
 
 // Each peer-subscribable kind's UNCAPPED id source INCLUDING tombstones —
@@ -157,6 +159,7 @@ const ALL_ID_LISTERS = Object.freeze({
   commissionFeedback: () => listCommissionFeedbackIdsForSync({ includeDeleted: true }),
   creativeCommission: () => listCommissionIdsForSync({ includeDeleted: true }),
   deck: () => listDeckIdsForSync({ includeDeleted: true }),
+  storyboard: () => listStoryboardIdsForSync({ includeDeleted: true }),
 });
 
 // Build a kind-aware id-membership resolver for ONE sweep: lazily list each
@@ -479,6 +482,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     commissionFeedbackCutoff,
     creativeCommissionCutoff,
     deckCutoff,
+    storyboardCutoff,
   ] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs }),
     cutoffForKind('series', { peers, subs, now, graceMs }),
@@ -497,10 +501,11 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     cutoffForKind('commissionFeedback', { peers, subs, now, graceMs }),
     cutoffForKind('creativeCommission', { peers, subs, now, graceMs }),
     cutoffForKind('deck', { peers, subs, now, graceMs }),
+    cutoffForKind('storyboard', { peers, subs, now, graceMs }),
   ]);
   const issueCutoff = seriesCutoff;
   const itemRemovalCutoff = collectionItemRemovalCutoff({ mediaCollectionCutoff, universeCutoff, seriesCutoff });
-  const [u, s, i, c, cir, a, ar, al, t, cd, mv, mb, fl, wr, wrf, wre, cfb, cc, dk] = await Promise.all([
+  const [u, s, i, c, cir, a, ar, al, t, cd, mv, mb, fl, wr, wrf, wre, cfb, cc, dk, sb] = await Promise.all([
     universeCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedUniverses(universeCutoff),
     seriesCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedSeries(seriesCutoff),
     issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
@@ -520,6 +525,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     commissionFeedbackCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCommissionFeedback(commissionFeedbackCutoff),
     creativeCommissionCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCommissions(creativeCommissionCutoff),
     deckCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedDecks(deckCutoff),
+    storyboardCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedStoryboards(storyboardCutoff),
   ]);
   // Backstop AFTER the tombstone prunes: the prune paths already evict a freshly
   // hard-deleted record's base hash, so this sweep mops up only keys that
@@ -555,9 +561,10 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     commissionFeedback: cfb.pruned,
     creativeCommissions: cc.pruned,
     decks: dk.pruned,
+    storyboards: sb.pruned,
     orphanBaseHashes: orphan.pruned,
     orphanSubscriptions: orphanSubs.pruned,
-    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff }),
+    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff, storyboardCutoff }),
   };
 }
 
@@ -568,7 +575,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
 // snapshot coverage matters), so this hardcodes graceMs:0 internally.
 export async function getSweepStatus({ now = Date.now() } = {}) {
   const { peers, subs } = await loadState();
-  const [universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff] = await Promise.all([
+  const [universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff, storyboardCutoff] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('series', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('mediaCollection', { peers, subs, now, graceMs: 0 }),
@@ -586,9 +593,10 @@ export async function getSweepStatus({ now = Date.now() } = {}) {
     cutoffForKind('commissionFeedback', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('creativeCommission', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('deck', { peers, subs, now, graceMs: 0 }),
+    cutoffForKind('storyboard', { peers, subs, now, graceMs: 0 }),
   ]);
   return {
-    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff }),
+    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff, deckCutoff, storyboardCutoff }),
     heldByPausedPeers: pausedPeersHoldingKinds(peers, subs),
   };
 }

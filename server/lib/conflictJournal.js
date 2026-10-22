@@ -571,6 +571,9 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // `restoreDeck`, not offered as an individually-overlayable field), and the
   // install-capability pins never reach a snapshot (stripped from the wire).
   deck: ['name', 'description', 'styleNotes', 'influences', 'layoutPrompt', 'samples', 'cardSize', 'universeId'],
+  // A storyboard restores its authored plan: identity fields, the panel-maker
+  // recipe and the beats → panels → takes tree. Id and timestamps stay structural.
+  storyboard: ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'recipe', 'beats'],
   // FableLoom restores the authored story graph, playback configuration, and
   // story-level render preferences.
   // Universe/series ids are structural links and stay on the live record.

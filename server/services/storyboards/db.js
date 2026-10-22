@@ -44,3 +44,28 @@ export async function writeRaw(id, record) {
   );
   return record;
 }
+
+export async function deleteRaw(id) {
+  await query('DELETE FROM storyboards WHERE id = $1', [id]);
+}
+
+/** Every board id (live AND tombstones). */
+export async function listIds() {
+  const { rows } = await query('SELECT id FROM storyboards');
+  return rows.map((row) => row.id);
+}
+
+/** Live board ids only — id-only projection hitting idx_storyboards_live. */
+export async function listLiveIds() {
+  const { rows } = await query('SELECT id FROM storyboards WHERE deleted = FALSE');
+  return rows.map((row) => row.id);
+}
+
+/** Tombstoned board ids deleted before `beforeMs` — the GC candidate scan. */
+export async function listTombstoneIdsBefore(beforeMs) {
+  const { rows } = await query(
+    'SELECT id FROM storyboards WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1',
+    [new Date(beforeMs).toISOString()],
+  );
+  return rows.map((row) => row.id);
+}
