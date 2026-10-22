@@ -228,6 +228,28 @@ Phase 4 — Report:
     updatedAt: null
   },
   {
+    // Syncs and triages the accounts on Dev Tools › GitHub (#12871). One pass
+    // for the whole install, so a System task rather than a per-app scheduled
+    // task. Off by default so other installs do not start polling GitHub on
+    // upgrade; the GitHub Automations tab turns it on in one tap. The cron is
+    // GITHUB_NOTIFICATION_CADENCES['weekdays-15m'] (lib/validation.js).
+    id: 'job-github-notifications',
+    name: 'GitHub Notifications Check',
+    description: 'Check each GitHub account on Dev Tools › GitHub for new notifications and apply its triage rules. Observe accounts only record decisions; Assist and Autopilot accounts also act. Never polls faster than GitHub allows.',
+    category: 'github-notifications',
+    interval: 'custom',
+    intervalMs: 15 * 60 * 1000,
+    cronExpression: '*/15 * * * 1-5',
+    enabled: false,
+    priority: 'LOW',
+    type: 'script',
+    scriptHandler: 'github-notifications',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
     id: 'job-eidoverse-projection',
     name: 'Eidoverse PortOS World Projection',
     description: 'Project current PortOS apps, agents, tasks, features, peers, productivity, goals, memory summaries, storage, Jira, operations, and health into the private Eidoverse world. Deterministic and does not call an AI provider.',

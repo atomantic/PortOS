@@ -44,10 +44,9 @@ const { addNotification } = await import('./notifications.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const {
-  syncAccountNotifications, listNotifications, applyNotificationAction, getNotification, runScheduledNotificationCheck,
-  listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent,
+  syncAccountNotifications, listNotifications, applyNotificationAction, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
+  listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
-const { buildTaskInput } = await import('./githubNotificationsHooks.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
 
 let dbReady = false;
@@ -575,15 +574,22 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await updateAccount(account.id, { auditReport: false });
   });
 
+  it('turns the System task on and off from the Automations tab, keeping its cron', async () => {
+    const { getJob } = await import('./autonomousJobs.js');
+    expect(await getJob('job-github-notifications')).toMatchObject({ enabled: false, type: 'script', scriptHandler: 'github-notifications' });
+    expect((await getAutomationsOverview()).cadence).toBe('off');
+    expect(await setNotificationCadence('weekdays-15m')).toMatchObject({ cadence: 'weekdays-15m', cronExpression: '*/15 * * * 1-5' });
+    expect(await getJob('job-github-notifications')).toMatchObject({ enabled: true, cronExpression: '*/15 * * * 1-5' });
+    expect(await setNotificationCadence('off')).toMatchObject({ cadence: 'off', cronExpression: '*/15 * * * 1-5' });
+  });
+
   it('runs the scheduled pass without any model call, respecting the poll interval', async () => {
     mockGh(() => listing([thread('801')]));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network in this test'));
-    const first = await buildTaskInput({ app: { id: null } });
-    expect(first.skip.reason).toMatch(/^checked \d+ of \d+ account\(s\)/);
+    expect(describeScheduledCheck(await runScheduledNotificationCheck())).toMatch(/^checked \d+ of \d+ account\(s\)/);
     const second = await runScheduledNotificationCheck();
     expect(second.find((result) => result.accountId === account.id)).toMatchObject({ skipped: 'poll-interval' });
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(await buildTaskInput({ app: { id: 'app-1' } })).toEqual({ skip: { reason: 'install-wide-only' } });
     fetchSpy.mockRestore();
   });
 });

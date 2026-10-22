@@ -26,17 +26,17 @@ function modeHint(account) {
   const where = account.trust === 'private'
     ? 'Text goes only to local AI providers unless you allow others in Accounts.'
     : 'Text goes to the GitHub notifications provider in Models › LLMs › Abuse Guard.';
-  const assist = `Screens and sorts notifications no rule decided, marks CI noise done and closed threads read. Never acts on outside or suspect threads. ${where}`;
+  const assist = `Screens and sorts notifications no rule decided, marks CI noise and closed threads done. Never acts on outside or suspect threads. ${where}`;
   if (account.mode !== 'autopilot') return assist;
   const handoff = account.trust === 'private'
     ? 'Private accounts never hand threads off.'
-    : 'Also hands outside review requests and issues in your PortOS apps to Untrusted:Review and the issue watcher, when those are on for the app. Nothing outside your apps is ever started.';
+    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. Nothing outside your apps is ever started.';
   return `${assist} ${handoff}`;
 }
 
 const CADENCE_TEXT = {
   'weekdays-15m': 'Every 15 minutes on weekdays',
-  custom: 'On a custom schedule (CoS › Schedule)',
+  custom: 'On a custom schedule (CoS › System Tasks)',
   off: 'Only when you tap Run now',
 };
 

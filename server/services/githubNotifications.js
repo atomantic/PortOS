@@ -417,10 +417,9 @@ export async function getNotification(accountId, threadId) {
 }
 
 let lastScheduledSummary = null;
-export const readLastScheduledSummary = () => lastScheduledSummary;
 
 /**
- * The `github-notifications` scheduled pass: sync and triage every enabled
+ * The GitHub Notifications Check System task: sync and triage every enabled
  * account whose poll interval has elapsed. Observe mode records decisions
  * only; an Assist account also sorts and acts (githubNotificationAssist.js).
  */
@@ -464,18 +463,19 @@ export function describeScheduledCheck(results) {
   return parts.join(', ');
 }
 
-const CADENCE_TASK_TYPE = 'github-notifications';
+// The check is the CoS System task `job-github-notifications`
+// (autonomousJobs/defaults.js): one pass for the whole install.
+const NOTIFICATION_CHECK_JOB_ID = 'job-github-notifications';
 
-function cadenceOf(interval) {
-  if (interval?.enabled && interval.type === 'cron' && interval.cronExpression === GITHUB_NOTIFICATION_CADENCES['weekdays-15m']) return 'weekdays-15m';
-  if (interval?.enabled && interval.type === 'cron') return 'custom';
-  return 'off';
+function cadenceOf(job) {
+  if (!job?.enabled) return 'off';
+  return job.cronExpression === GITHUB_NOTIFICATION_CADENCES['weekdays-15m'] ? 'weekdays-15m' : 'custom';
 }
 
 /** What the Automations tab shows: the check's cadence and each account's last run. */
 export async function getAutomationsOverview() {
-  const { getTaskInterval } = await import('./taskSchedule.js');
-  const [accounts, interval] = await Promise.all([listAccounts(), getTaskInterval(CADENCE_TASK_TYPE)]);
+  const { getJob } = await import('./autonomousJobs.js');
+  const [accounts, job] = await Promise.all([listAccounts(), getJob(NOTIFICATION_CHECK_JOB_ID)]);
   const ids = accounts.map((account) => account.id);
   const [syncRows, countRows] = await Promise.all([
     query('SELECT account_id, last_sync_at, last_error, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])', [ids]),
@@ -489,8 +489,8 @@ export async function getAutomationsOverview() {
   const syncById = new Map(syncRows.rows.map((row) => [row.account_id, row]));
   const countsById = new Map(countRows.rows.map((row) => [row.account_id, row]));
   return {
-    cadence: cadenceOf(interval),
-    cronExpression: interval?.type === 'cron' ? interval.cronExpression || null : null,
+    cadence: cadenceOf(job),
+    cronExpression: job?.cronExpression || null,
     lastSummary: lastScheduledSummary,
     accounts: accounts.map((account) => {
       const sync = syncById.get(account.id);
@@ -513,13 +513,13 @@ export async function getAutomationsOverview() {
   };
 }
 
-/** Turn the weekday 15-minute check on, or back to Run now only. */
+/** Turn the weekday 15-minute check on, or off. */
 export async function setNotificationCadence(cadence) {
-  const { updateTaskInterval } = await import('./taskSchedule.js');
+  const { updateJob } = await import('./autonomousJobs.js');
   const cron = GITHUB_NOTIFICATION_CADENCES[cadence];
-  await updateTaskInterval(CADENCE_TASK_TYPE, cron
-    ? { type: 'cron', cronExpression: cron, enabled: true }
-    : { type: 'on-demand', cronExpression: null, enabled: true });
+  // Off keeps the job's cron, so turning it back on restores the same cadence.
+  const job = await updateJob(NOTIFICATION_CHECK_JOB_ID, cron ? { enabled: true, cronExpression: cron } : { enabled: false });
+  if (!job) throw new ServerError('The GitHub notifications System task is missing; restart PortOS to restore it', { status: 409, code: 'GITHUB_NOTIFICATION_JOB_MISSING' });
   return getAutomationsOverview();
 }
 
