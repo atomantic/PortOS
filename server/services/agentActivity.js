@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import EventEmitter from 'events';
 import { ensureDir, getDateString, atomicWrite, PATHS } from '../lib/fileUtils.js';
+import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const AGENTS_DIR = PATHS.agentPersonalities;
 const ACTIVITY_DIR = join(AGENTS_DIR, 'activity');
@@ -17,6 +18,11 @@ const ACTIVITY_DIR = join(AGENTS_DIR, 'activity');
 // A day file is `<YYYY-MM-DD>.json`. Anything else in an agent directory is not
 // activity and is never read as a day nor unlinked as an expired one.
 const DAY_FILE_RE = /^\d{4}-\d{2}-\d{2}\.json$/;
+
+// Each day file is a whole-file JSON read-modify-write. Keyed per agent/day so
+// concurrent logActivity calls for one file serialize (no lost entries) while
+// different agents or days still write in parallel.
+const queueActivityWrite = createKeyedFileWriteQueue();
 
 // Event emitter for activity events
 export const activityEvents = new EventEmitter();
@@ -80,8 +86,6 @@ export async function logActivity(activity) {
   const date = new Date(timestamp || Date.now());
   const dateStr = getDateString(date);
 
-  const data = await loadActivity(agentId, date);
-
   const entry = {
     id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     accountId,
@@ -95,8 +99,11 @@ export async function logActivity(activity) {
     timestamp: timestamp || date.toISOString()
   };
 
-  data.activities.push(entry);
-  await saveActivity(agentId, dateStr, data);
+  await queueActivityWrite(`${agentId}/${dateStr}`, async () => {
+    const data = await loadActivity(agentId, date);
+    data.activities.push(entry);
+    await saveActivity(agentId, dateStr, data);
+  });
 
   // Invalidate cache for this account
   todayCache.delete(`${accountId}-${action}`);
