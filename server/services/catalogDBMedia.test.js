@@ -206,41 +206,33 @@ describe('listIngredients card thumbnail', () => {
     ...overrides,
   });
 
-  it('selects the portrait-or-latest-reference media key as thumbnail_key', async () => {
+  // The DB suites pin the decoration SQL; this pins the id join that attaches
+  // the one page-level decoration query back onto the page rows (#12989).
+  it('decorates the returned page by id, defaulting to a null thumbnail and empty usage', async () => {
     const db = await import('../lib/db.js');
-    db.query.mockResolvedValueOnce({ rows: [ingredientRow({ thumbnail_key: 'hero.png' })] });
+    db.query
+      .mockResolvedValueOnce({ rows: [ingredientRow({ id: 'cat-chr-a' }), ingredientRow({ id: 'cat-chr-b' })] })
+      .mockResolvedValueOnce({ rows: [
+        { id: 'cat-chr-b', thumbnail_key: null, ref_usage: null },
+        { id: 'cat-chr-a', thumbnail_key: 'hero.png', ref_usage: { universe: 1, 'creative-director': 2 } },
+      ] });
     const { items } = await catalogDB.listIngredients({ limit: 10 });
-    // mockResolvedValueOnce bypasses the factory's `calls` push, so read the
-    // captured SQL from the mock's own call log (as the getMaxSequences test does).
-    const sql = db.query.mock.calls.at(-1)[0].replace(/\s+/g, ' ');
-    // The correlated subquery prefers a live portrait, then the most recent
-    // live reference, and excludes unrenderable (audio/video/document) kinds.
-    expect(sql).toMatch(/FROM catalog_identity_read_media m/i);
-    expect(sql).toMatch(/m\.kind IN \('portrait', 'reference'\)/i);
-    expect(sql).toMatch(/ORDER BY \(m\.kind = 'portrait'\) DESC, m\.created_at DESC/i);
-    expect(sql).toMatch(/AS thumbnail_key/i);
-    expect(items[0].thumbnailKey).toBe('hero.png');
+    expect(db.query.mock.calls.at(-1)[1]).toEqual([['cat-chr-a', 'cat-chr-b']]);
+    expect(items.map(({ id, thumbnailKey, usage }) => ({ id, thumbnailKey, usage }))).toEqual([
+      { id: 'cat-chr-a', thumbnailKey: 'hero.png', usage: { universe: 1, 'creative-director': 2 } },
+      { id: 'cat-chr-b', thumbnailKey: null, usage: {} },
+    ]);
   });
 
-  it('maps a null thumbnail_key (no image attached) to null', async () => {
+  it('skips the decoration query for an empty page and the embedding admin path', async () => {
     const db = await import('../lib/db.js');
-    db.query.mockResolvedValueOnce({ rows: [ingredientRow({ thumbnail_key: null })] });
-    const { items } = await catalogDB.listIngredients({ limit: 10 });
-    expect(items[0].thumbnailKey).toBeNull();
-  });
-
-  it('returns per-kind link counts as usage, defaulting to an empty object', async () => {
-    const db = await import('../lib/db.js');
-    db.query.mockResolvedValueOnce({ rows: [
-      ingredientRow({ id: 'cat-chr-a', ref_usage: { universe: 1, 'creative-director': 2 } }),
-      ingredientRow({ id: 'cat-chr-b', ref_usage: null }),
-    ] });
-    const { items } = await catalogDB.listIngredients({ limit: 10 });
-    const sql = db.query.mock.calls.at(-1)[0].replace(/\s+/g, ' ');
-    expect(sql).toMatch(/COUNT\(DISTINCT r\.ref_id\)/i);
-    expect(sql).toMatch(/r\.deleted = false/i);
-    expect(items[0].usage).toEqual({ universe: 1, 'creative-director': 2 });
-    expect(items[1].usage).toEqual({});
+    db.query.mockResolvedValueOnce({ rows: [] });
+    const before = db.query.mock.calls.length;
+    expect((await catalogDB.listIngredients({ limit: 10 })).items).toEqual([]);
+    db.query.mockResolvedValueOnce({ rows: [ingredientRow()] });
+    const { items } = await catalogDB.listIngredients({ limit: 10, includeEmbedding: true });
+    expect(db.query.mock.calls.length - before).toBe(2);
+    expect(items[0]).toMatchObject({ thumbnailKey: null, usage: {} });
   });
 });
 
