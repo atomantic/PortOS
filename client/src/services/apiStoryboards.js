@@ -54,3 +54,16 @@ export const updateStoryboardPanelNode = (id, panelId, nodeId, patch, options) =
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}`, { ...json('PATCH', patch), ...options });
 export const runStoryboardPanelNode = (id, panelId, nodeId, options) =>
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/make/${enc(nodeId)}/run`, { method: 'POST', ...options });
+
+// Make empty panels. GET → { batch, panelCount, steps: [{ nodeId, title, type, model, frames }] }.
+export const getStoryboardMakeEmpty = (id, options) => request(`/storyboards/${enc(id)}/make-empty`, options);
+// → { batch } at once; `storyboard:make-batch` reports progress.
+export const startStoryboardMakeEmpty = (id, options) =>
+  request(`/storyboards/${enc(id)}/make-empty`, { method: 'POST', ...options });
+
+// The saved recipe library, shared by every board. A load copies the graph onto a board.
+export const listStoryboardRecipes = (options) => request('/storyboards/recipes', options);
+export const saveStoryboardRecipe = (name, recipe, options) =>
+  request('/storyboards/recipes', { ...json('POST', { name, recipe }), ...options });
+export const deleteStoryboardRecipe = (recipeId, options) =>
+  request(`/storyboards/recipes/${enc(recipeId)}`, { method: 'DELETE', ...options });

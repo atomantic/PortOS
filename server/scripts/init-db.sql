@@ -1101,6 +1101,19 @@ CREATE TABLE IF NOT EXISTS storyboards (
 CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE;
 
+-- Saved storyboard recipes (the Make tab's library). Mirrors the
+-- storyboard_recipes block in db/schema/media.js.
+CREATE TABLE IF NOT EXISTS storyboard_recipes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_storyboard_recipes_updated ON storyboard_recipes (updated_at DESC);
+
 -- Media asset index (Phase 3.2, issue #1000). One row per generated image or
 -- video. The bytes stay on disk (data/images, data/videos) and the image
 -- sidecars + data/video-history.json remain authoritative — this table is a
@@ -2299,6 +2312,8 @@ DROP TRIGGER IF EXISTS trg_mood_boards_audit ON mood_boards;
 CREATE TRIGGER trg_mood_boards_audit AFTER UPDATE OR DELETE ON mood_boards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_storyboards_audit ON storyboards;
 CREATE TRIGGER trg_storyboards_audit AFTER UPDATE OR DELETE ON storyboards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_storyboard_recipes_audit ON storyboard_recipes;
+CREATE TRIGGER trg_storyboard_recipes_audit AFTER UPDATE OR DELETE ON storyboard_recipes FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;
 CREATE TRIGGER trg_lora_training_runs_audit AFTER UPDATE OR DELETE ON lora_training_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_authors_audit ON authors;

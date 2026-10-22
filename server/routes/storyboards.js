@@ -10,14 +10,17 @@ import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
   storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
-  storyboardRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
+  storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
   listStoryboards, moveBeat, movePanel, removePanelTake, selectPanelTake, updateBeat, updatePanel,
   updateStoryboard,
 } from '../services/storyboards/index.js';
-import { getPanelMake, runPanelNode, updatePanelNode, updateRecipe } from '../services/storyboards/make.js';
+import {
+  getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
+} from '../services/storyboards/make.js';
+import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
 
 const router = Router();
 
@@ -27,6 +30,19 @@ router.get('/', asyncHandler(async (_req, res) => {
 
 router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(await createStoryboard(validateRequest(storyboardCreateSchema, req.body ?? {})));
+}));
+
+// The saved recipe library sits before /:id; a board id always starts "sb-".
+router.get('/recipes', asyncHandler(async (_req, res) => {
+  res.json(await listSavedRecipes());
+}));
+
+router.post('/recipes', asyncHandler(async (req, res) => {
+  res.status(201).json(await saveRecipe(validateRequest(storyboardSavedRecipeSchema, req.body ?? {})));
+}));
+
+router.delete('/recipes/:recipeId', asyncHandler(async (req, res) => {
+  res.json(await deleteSavedRecipe(req.params.recipeId));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
@@ -106,6 +122,16 @@ router.patch('/:id/panels/:panelId/make/:nodeId', asyncHandler(async (req, res) 
 // frames are queued (storyboard:make follows each frame).
 router.post('/:id/panels/:panelId/make/:nodeId/run', asyncHandler(async (req, res) => {
   res.json(await runPanelNode(req.params.id, req.params.panelId, req.params.nodeId));
+}));
+
+// Make empty panels: GET names what a run would do (panels, nodes, models);
+// POST starts it and answers at once, with storyboard:make-batch after.
+router.get('/:id/make-empty', asyncHandler(async (req, res) => {
+  res.json(await getMakeEmptyPlan(req.params.id));
+}));
+
+router.post('/:id/make-empty', asyncHandler(async (req, res) => {
+  res.status(202).json(await startMakeEmpty(req.params.id));
 }));
 
 export default router;

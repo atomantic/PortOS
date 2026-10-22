@@ -141,6 +141,18 @@ export const mediaDdl = [
     )`,
     `CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE`,
+    // Saved storyboard recipes (the Make tab's library): one named node graph
+    // per row in `data` JSONB, loaded onto any board as a copy. Mirrors init-db.sql.
+    `CREATE TABLE IF NOT EXISTS storyboard_recipes (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_storyboard_recipes_updated ON storyboard_recipes (updated_at DESC)`,
 
     // Sprite records (issue #2895, phase 1). One row per sprite subject — a
     // character or a props atlas family; the full record (spec, chromaKey,

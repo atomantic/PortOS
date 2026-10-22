@@ -12,6 +12,9 @@ export const isValidStoryboardId = (id) => typeof id === 'string' && STORYBOARD_
 // client for its vocabulary; only the server ever mints ids.
 export const newStoryboardId = () => `sb-${globalThis.crypto.randomUUID()}`;
 export const newStoryboardEntityId = (prefix) => `${prefix}-${globalThis.crypto.randomUUID()}`;
+// Saved panel maker recipes (the Make tab's library), shared across boards.
+export const STORYBOARD_RECIPE_ID_PATTERN = /^sbr-[A-Za-z0-9-]{1,80}$/;
+export const isValidStoryboardRecipeId = (id) => typeof id === 'string' && STORYBOARD_RECIPE_ID_PATTERN.test(id);
 
 export const STORYBOARD_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1', '4:5', '2.39:1']);
 export const STORYBOARD_ART_STYLES = Object.freeze(['pencil', 'clean-line', 'grey-marker', 'color']);

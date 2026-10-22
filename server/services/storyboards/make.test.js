@@ -21,12 +21,14 @@ const provider = { id: 'example-api', name: 'Example', type: 'api', enabled: tru
 let runPrompt;
 let enqueue;
 let emitted;
+let batchEvents;
 
 beforeEach(() => {
   runPrompt = vi.fn(async () => ({ text: '  A wide pencil frame of gym doors  ' }));
   let n = 0;
   enqueue = vi.fn(async () => ({ jobId: `job-${(n += 1)}` }));
   emitted = [];
+  batchEvents = [];
   __setDepsForTests({
     resolveProvider: async () => ({ provider, selectedModel: 'example-model' }),
     runPrompt,
@@ -36,6 +38,7 @@ beforeEach(() => {
     linkedMedia: async (ids) => new Map(ids.map((id) => [id, [{ kind: 'portrait', mediaKey: `${id}.png` }]])),
     ingredient: async (id) => ({ id, name: `Name of ${id}` }),
     emit: (payload) => { emitted.push(payload); },
+    emitBatch: (payload) => { batchEvents.push(payload); },
   });
 });
 
@@ -156,5 +159,54 @@ describe('storyboard panel maker', () => {
     expect(board.beats[0].panels[0].takes).toHaveLength(30);
     expect(nodeState(board, 'node-image')).toMatchObject({ status: 'done', failedJobIds: ['job-1'] });
     expect(nodeState(board, 'node-image').error).toContain('panel is full');
+  });
+
+  it('makes only the empty panels, keeping a prompt already written, and runs one batch per board at a time', async () => {
+    const { id, panelId: withArt } = await boardWithPanel({ action: 'Doors' });
+    const beatId = (await api('get', `/${id}`)).body.beats[0].id;
+    await api('post', `/${id}/panels/${withArt}/takes`, { source: 'upload', image: 'mine.png' });
+    const written = (await api('post', `/${id}/beats/${beatId}/panels`, { action: 'Hallway' })).body.panelId;
+    await api('patch', `/${id}/panels/${written}/make/node-writer`, { text: 'My hallway prompt' });
+    const blank = (await api('post', `/${id}/beats/${beatId}/panels`, { action: 'Gym floor' })).body.panelId;
+
+    const plan = await api('get', `/${id}/make-empty`);
+    expect(plan.body).toMatchObject({ batch: null, panelCount: 2 });
+    expect(plan.body.steps.map((step) => [step.nodeId, step.model, step.frames])).toEqual([
+      ['node-writer', 'Example · example-model', 0], ['node-image', 'Default image model', 4],
+    ]);
+
+    let answer;
+    runPrompt.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    // Two taps at once: only one batch starts.
+    const both = await Promise.all([api('post', `/${id}/make-empty`), api('post', `/${id}/make-empty`)]);
+    expect(both.map((res) => res.status).sort()).toEqual([202, 409]);
+    const start = both.find((res) => res.status === 202);
+    expect(start.body.batch).toMatchObject({ status: 'running', total: 2, done: 0 });
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'));
+    expect((await api('post', `/${id}/make-empty`)).status).toBe(409);
+
+    answer({ text: 'A gym floor frame' });
+    await vi.waitFor(() => expect(batchEvents.at(-1)).toMatchObject({ status: 'done', done: 2, failed: 0 }));
+    // The kept prompt was not rewritten; the blank panel got one; the panel with art was left alone.
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(runPrompt.mock.calls[0][0].prompt).toContain('Gym floor');
+    expect(enqueue.mock.calls.map((call) => [call[0].params.prompt, call[0].params.storyboardPanelRender.panelId])).toEqual([
+      ...Array(4).fill(['My hallway prompt', written]), ...Array(4).fill(['A gym floor frame', blank]),
+    ]);
+    expect((await api('get', `/${id}/make-empty`)).body.batch).toBeNull();
+  });
+
+  it('keeps a library of named recipes any board can load as a copy', async () => {
+    const recipe = { nodes: [{ id: 'node-a', type: 'text', settings: { source: 'panel' } }, { id: 'node-b', type: 'image', settings: { count: 2 } }],
+      edges: [{ from: 'node-a', to: 'node-b', toPort: 'prompt' }] };
+    const saved = await api('post', '/recipes', { name: 'Straight to image', recipe });
+    expect(saved.status).toBe(201);
+    expect(saved.body).toMatchObject({ name: 'Straight to image', recipe: { edges: recipe.edges } });
+    expect((await api('post', '/recipes', { name: 'Empty', recipe: { nodes: [], edges: [] } })).status).toBe(400);
+
+    expect((await api('get', '/recipes')).body.map((r) => r.id)).toEqual([saved.body.id]);
+    expect((await api('delete', `/recipes/${saved.body.id}`)).status).toBe(200);
+    expect((await api('get', '/recipes')).body).toEqual([]);
+    expect((await api('delete', `/recipes/${saved.body.id}`)).status).toBe(404);
   });
 });
