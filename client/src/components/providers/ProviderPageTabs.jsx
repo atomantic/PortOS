@@ -1,7 +1,5 @@
-import RouteTabsHeader from '../ui/RouteTabsHeader';
-
 /**
- * The AI Providers page's three views (#7567, epic #7561), each its own URL so
+ * The AI Providers page's three views (navigated through the Models section strip, which owns the only tab row) (#7567, epic #7561), each its own URL so
  * a card is linkable and reachable from ⌘K and voice:
  *
  *   - **Presets** — the stored records the `{ providerId, model, effort }`
@@ -23,7 +21,3 @@ export const providerPageTabForPath = (pathname) => {
   const bare = String(pathname || '').replace(/\/+$/, '');
   return PROVIDER_PAGE_TABS.find((tab) => bare === tab.to || bare.startsWith(`${tab.to}/`))?.id ?? 'presets';
 };
-
-export default function ProviderPageTabs({ activeTab }) {
-  return <RouteTabsHeader tabs={PROVIDER_PAGE_TABS} activeTab={activeTab} ariaLabel="AI provider views" />;
-}
