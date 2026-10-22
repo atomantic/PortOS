@@ -18,6 +18,7 @@ import {
   deleteSyncBaseHash,
   flushBaseHashes,
   maybeJournalBeforeOverwrite,
+  RESTORABLE_FIELDS,
   setSyncBaseHash,
   withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
@@ -29,10 +30,6 @@ import {
 } from './store.js';
 
 export const STORYBOARD_KIND = 'storyboard';
-
-// The authored fields a conflict-journal restore overlays (mirrored in
-// RESTORABLE_FIELDS.storyboard); identity and timestamps stay structural.
-const RESTORABLE_FIELDS = ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'recipe', 'beats'];
 
 /** One board's sanitized record with its tombstone surfaced, or null when unknown. */
 export async function getStoryboardForSync(id) {
@@ -121,7 +118,7 @@ export async function restoreStoryboard(id, patch = {}) {
   const restored = await queueStoryboardWrite(id, async () => {
     const current = sanitizeStoryboard(await readRaw(id));
     if (!current) return null;
-    const overlay = Object.fromEntries(RESTORABLE_FIELDS.filter((key) => key in patch).map((key) => [key, patch[key]]));
+    const overlay = Object.fromEntries(RESTORABLE_FIELDS[STORYBOARD_KIND].filter((key) => key in patch).map((key) => [key, patch[key]]));
     const next = sanitizeStoryboard({
       ...current, ...overlay, deleted: false, deletedAt: null, updatedAt: new Date().toISOString(),
     });
