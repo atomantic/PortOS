@@ -927,6 +927,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // network caller to run it. Direct API sync, push ingestion and CRUD stay open.
   'POST /api/calendar/sync/:accountId/google',
   'POST /api/calendar/sync/:accountId/discover',
+  // Google OAuth auto-configure drives the operator's signed-in host browser
+  // through Google Cloud Console and captures the client secret it creates;
+  // the token test intercepts an Outlook bearer token. Same class as the gated
+  // Messages Gmail enable helper and token test (#11433, #11449; #12952).
+  'POST /api/calendar/google/auto-configure/start',
+  'POST /api/calendar/google/auto-configure/capture',
+  'POST /api/calendar/google/auto-configure/run',
+  'POST /api/calendar/debug/test-token',
 
   // Writers Room authoring reaches the staged runner, including CLI/TUI
   // fallback. Stored prose and live cursor text are caller-controlled; a

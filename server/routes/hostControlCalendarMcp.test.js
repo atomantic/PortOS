@@ -79,9 +79,13 @@ vi.mock('../services/calendarGoogleApiSync.js', () => ({
 }));
 vi.mock('../services/dailyReview.js', () => ({}));
 vi.mock('../services/googleAuth.js', () => ({}));
-vi.mock('../services/googleOAuthAutoConfig.js', () => ({}));
+vi.mock('../services/googleOAuthAutoConfig.js', () => ({
+  startAutoConfig: vi.fn(async () => ({ status: 'opened' })),
+  captureCredentials: vi.fn(async () => ({ status: 'captured' })),
+  runAutomatedSetup: vi.fn(async () => ({ status: 'configured' })),
+}));
 vi.mock('../services/messageTokenExtractor.js', () => ({
-  getToken: vi.fn(), getTokenStatus: vi.fn(), clearTokenCache: vi.fn(),
+  getToken: vi.fn(async () => ({ token: 'example-token', fresh: true, decoded: {} })), getTokenStatus: vi.fn(), clearTokenCache: vi.fn(),
 }));
 
 import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
@@ -91,6 +95,8 @@ import { runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { getAccount, updateSyncStatus, updateSubcalendars } from '../services/calendarAccounts.js';
 import { mutateCache } from '../services/calendarSync.js';
 import { apiSyncAccount, apiDiscoverCalendars } from '../services/calendarGoogleApiSync.js';
+import { startAutoConfig, captureCredentials, runAutomatedSetup } from '../services/googleOAuthAutoConfig.js';
+import { getToken } from '../services/messageTokenExtractor.js';
 import calendarRoutes from './calendar.js';
 
 const appFor = (address = '192.0.2.10') => {
@@ -210,5 +216,45 @@ describe('Calendar MCP operator authority (#11051)', () => {
     expect(getAccount).not.toHaveBeenCalled();
     expect(getAllProviders).not.toHaveBeenCalled();
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe('Calendar host-browser automation operator authority (#12952)', () => {
+  const browserActions = [
+    ['/api/calendar/google/auto-configure/start', startAutoConfig],
+    ['/api/calendar/google/auto-configure/capture', captureCredentials],
+    ['/api/calendar/google/auto-configure/run', runAutomatedSetup],
+    ['/api/calendar/debug/test-token', getToken],
+  ];
+
+  it('refuses a remote password-free caller, direct or proxied, before the host browser is driven', async () => {
+    for (const [path, effect] of browserActions) {
+      for (const [address, headers] of [['192.0.2.10', {}], ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }]]) {
+        const pending = request(appFor(address)).post(path);
+        for (const [name, value] of Object.entries(headers)) pending.set(name, value);
+        const response = await pending.send({});
+        expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      }
+      expect(effect, path).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps local, operator-session and delegated-agent callers able to run it', async () => {
+    const operator = await createSession();
+    const agent = await createSession({ label: 'agent' });
+    for (const [enabled, address, headers] of [
+      [false, '127.0.0.1', {}],
+      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
+      [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
+    ]) {
+      auth.enabled = enabled;
+      for (const [path] of browserActions) {
+        const pending = request(appFor(address)).post(path);
+        for (const [name, value] of Object.entries(headers)) pending.set(name, value);
+        const response = await pending.send({});
+        expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(200);
+      }
+    }
+    for (const [path, effect] of browserActions) expect(effect, path).toHaveBeenCalledTimes(3);
   });
 });
