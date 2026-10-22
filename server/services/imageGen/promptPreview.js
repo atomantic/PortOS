@@ -17,6 +17,7 @@ import { codexSentPrompt } from './codex.js';
 import { grokSentPrompt } from './grok.js';
 import { agySentPrompt } from './agy.js';
 import { falImageSentPrompt } from './fal.js';
+import { runwayImageSentPrompt } from './runway.js';
 import { localSentPrompt } from './local.js';
 
 const isUploadLabel = (path) => typeof path === 'string' && path.startsWith('(uploaded image ');
@@ -67,6 +68,9 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   }
   if (mode === IMAGE_GEN_MODE.AGY) {
     return { mode, ...agySentPrompt({ ...common, stagingPath: jobOutputPath('portos-agy'), inputImages: previewInputImages(mode, params) }).record };
+  }
+  if (mode === IMAGE_GEN_MODE.RUNWAY) {
+    return { mode, ...runwayImageSentPrompt({ ...common, inputImages: previewInputImages(mode, params), visualConditioning: params.visualConditioning }).record };
   }
   if (mode === IMAGE_GEN_MODE.FAL) {
     const family = falImageFamily(cloud?.providerParams.model || FAL_IMAGE_DEFAULT_MODEL) || falImageFamily(FAL_IMAGE_DEFAULT_MODEL);

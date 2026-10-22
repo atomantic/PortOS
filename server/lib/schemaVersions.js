@@ -507,7 +507,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // nulls an unknown mode on receive, and its next edit would LWW that lost pin
   // back onto the newer peer. Backend values in `IMAGE_GEN_MODES` /
   // `VIDEO_GEN_MODES` are pinned in schemaVersions.test.js to move with this.
-  fableLoom: 10,
+  // v11 adds Runway image backend pins; older peers would erase the unknown mode.
+  fableLoom: 11,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
@@ -787,7 +788,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // value into `auto`, and its next edit would LWW that un-pinned downgrade back
   // onto the newer peer. Any new `IMAGE_GEN_MODES`/`VIDEO_GEN_MODES` value needs
   // another bump (guarded in schemaVersions.test.js).
-  creativeCommissions: 5,
+  // v6 adds Runway image backend pins; older peers would coerce them to auto.
+  creativeCommissions: 6,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep

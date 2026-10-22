@@ -18,6 +18,7 @@ import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } fro
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
 import { IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { RUNWAY_IMAGE_MODEL_IDS } from './runwayImageModels.js';
 import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
@@ -2254,6 +2255,15 @@ export const videoModelTermsSchema = z.object({
   accepted: z.boolean(),
 });
 
+// Runway images share the private video credential; only render settings live here.
+export const imageGenRunwaySettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  model: z.preprocess((v) => v === '' ? undefined : v, z.enum(RUNWAY_IMAGE_MODEL_IDS).optional()),
+  resolution: z.enum(['720p', '1080p']).optional(),
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
+});
+
 // fal.ai Imagegen settings slice (`imageGen.fal`). The API key is NOT here —
 // it is the fal.ai credential the video backend already owns (write-only via
 // PUT /api/settings/credentials/fal). `model` must name a catalog endpoint
@@ -2381,6 +2391,7 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.grok': imageGenGrokSettingsSchema.strict(),
   'imageGen.agy': imageGenAgySettingsSchema.strict(),
   'imageGen.fal': imageGenFalSettingsSchema.strict(),
+  'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
   videoGen: videoGenSettingsSchema.pick({ mode: true, defaultModelId: true, displaySleep: true }).strict(),

@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback, useId } from 'react';
+import { Link } from 'react-router';
 import { AlertTriangle, Check, Sparkles, Terminal } from 'lucide-react';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
@@ -25,7 +26,7 @@ import { getVideoGenModelContext, getProviders } from '../../services/api';
 import {
   isLocalImageConfigured, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily,
   AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL,
-  GROK_ASPECT_RATIOS, localModelSelectOptions,
+  GROK_ASPECT_RATIOS, localModelSelectOptions, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DISCLOSURE,
 } from '../../lib/imageGenBackends';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import { effortLevelsForProvider, isCodexSubscriptionProvider, providerModelList } from '../../utils/providers';
@@ -53,7 +54,7 @@ const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3
 const SECTION_CLASS = 'bg-port-card border border-port-border rounded-xl p-6 space-y-4';
 const FIELD_LABEL_CLASS = 'block text-xs font-medium text-gray-400 mb-1';
 
-export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, parallelBounds, falCredential, localRuntime, onStatusRecheck }) {
+export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, parallelBounds, falCredential, runwayCredential, localRuntime, onStatusRecheck }) {
   const { values, set } = form;
   const {
     mode, sdapiUrl, pythonPath, localModelId, localVideoModelId,
@@ -522,6 +523,30 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
       </div>
       )}
 
+      {mediaTab === 'runway' && (
+        <div className={SECTION_CLASS}>
+          <h2 className="text-lg font-semibold text-white">Runway Imagegen</h2>
+          <p className="text-xs text-gray-400">Uses the Runway credential from <Link to="/settings/credentials" className="text-port-accent hover:underline">Settings → Credentials</Link>, shared with video generation.</p>
+          <p className="text-xs text-gray-400">{runwayCredential == null ? 'Checking credential…' : runwayCredential.configured ? 'Runway credential configured.' : 'Add a Runway credential to render.'}</p>
+          <p className="text-xs text-gray-400">{RUNWAY_IMAGE_DISCLOSURE.summary} <a href={RUNWAY_IMAGE_DISCLOSURE.termsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">Runway’s terms</a> and moderation apply. {RUNWAY_IMAGE_DISCLOSURE.billing}</p>
+          <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={values.runwayEnabled} onChange={toggleProvider('runwayEnabled', IMAGE_GEN_MODE.RUNWAY)} /><span>Enable Runway Imagegen</span></label>
+          <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
+            <select value={values.runwayModel} onChange={(e) => set('runwayModel', e.target.value)} className={INPUT_CLASS}>
+              {RUNWAY_IMAGE_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}{model.minReferences ? ' (requires a reference)' : ''}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Resolution" labelClassName={FIELD_LABEL_CLASS}>
+            <select value={values.runwayResolution} onChange={(e) => set('runwayResolution', e.target.value)} className={INPUT_CLASS}>
+              {['720p', '1080p'].map((resolution) => (
+                <option key={resolution} value={resolution}>
+                  {resolution} · {RUNWAY_IMAGE_MODELS.map((model) => `${model.label}: ${formatCount(model.credits[resolution])} credits`).join(' / ')}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <CleanersToggles mode={IMAGE_GEN_MODE.RUNWAY} form={form} />
+        </div>
+      )}
       {mediaTab === 'fal' && (
       <div className={SECTION_CLASS}>
         <div className="flex items-center gap-2 text-white">

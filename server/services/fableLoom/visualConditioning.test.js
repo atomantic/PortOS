@@ -71,6 +71,20 @@ const lockedBinding = {
 };
 
 describe('FableLoom visual conditioning compiler', () => {
+  // Catches rejecting two cloud-bound characters or over-admitting their reference budget.
+  it('admits locked Runway scenes with both approved identity anchors inside three slots', async () => {
+    const loom = loomWith({ mode: 'locked', characterAppearances: [{ characterId: 'char-a' }, { characterId: 'char-b' }] });
+    const capability = fableLoomImageCapabilities({ mode: 'runway', model: { id: 'gen4_image' }, inputBudget: 8 });
+    expect(capability).toMatchObject({ referenceBudget: 3, multiCharacterPreservation: true });
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image', capability,
+      authoredPrompt: 'Two rivals', ...deps(loom),
+    });
+    expect(result.visualConditioning.status).toBe('locked');
+    expect(result.visualConditioning.assets.filter((asset) => asset.role === 'character-neutral').map((asset) => asset.label)).toEqual(['Aria', 'Bex']);
+    expect(result.referenceImagePaths).toEqual(['/approved/opening.png', '/approved/aria-neutral.png', '/approved/bex-neutral.png']);
+  });
+
   it('compiles stable bindings, approved identity assets, adapters, graph continuity and provenance', async () => {
     const loom = loomWith(lockedBinding);
     const result = await compileFableLoomVisualRequest({

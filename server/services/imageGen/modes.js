@@ -101,6 +101,7 @@ const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.GROK]: 'Grok',
   [IMAGE_GEN_MODE.AGY]: 'Agy',
   [IMAGE_GEN_MODE.FAL]: 'fal.ai',
+  [IMAGE_GEN_MODE.RUNWAY]: 'Runway',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
 });
 
@@ -176,7 +177,7 @@ export const nearestAgyAspectRatio = (width, height) => nearestAspectRatio(width
  * Resolve the queue-capable image mode for a render request: the per-request
  * override (honored only when that backend is enabled/available), else the
  * saved dispatcher default, else the first enabled cloud backend in
- * CLOUD_IMAGE_GEN_MODES order (codex → grok → agy → fal) → local. External
+ * CLOUD_IMAGE_GEN_MODES order (codex → grok → agy → fal → runway) → local. External
  * never queues. Hoisted from the pipeline visual stages (#2896) so sprite renders and
  * any future queued surface share one enable-gating ladder — see issue #2881
  * for the wider param-assembly consolidation.

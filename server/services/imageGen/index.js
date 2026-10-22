@@ -26,6 +26,7 @@ import * as codex from './codex.js';
 import * as grok from './grok.js';
 import * as agy from './agy.js';
 import * as fal from './fal.js';
+import * as runway from './runway.js';
 import {
   IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, isEditCapableMode,
 } from './modes.js';
@@ -42,6 +43,7 @@ const CLOUD_PROVIDERS = {
   [IMAGE_GEN_MODE.GROK]: grok,
   [IMAGE_GEN_MODE.AGY]: agy,
   [IMAGE_GEN_MODE.FAL]: fal,
+  [IMAGE_GEN_MODE.RUNWAY]: runway,
 };
 
 // Re-export the enum + array so the existing import surface from this module
@@ -249,7 +251,7 @@ export async function generateAvatar({ name, characterClass, prompt }) {
 // Callers wanting all of them can read individual providers via the
 // re-exports below.
 export async function getActiveJob() {
-  const jobs = [local.getActiveJob(), external.getActiveJob(), codex.getActiveJob(), grok.getActiveJob(), agy.getActiveJob(), fal.getActiveJob()].filter(Boolean);
+  const jobs = [local.getActiveJob(), external.getActiveJob(), codex.getActiveJob(), grok.getActiveJob(), agy.getActiveJob(), fal.getActiveJob(), runway.getActiveJob()].filter(Boolean);
   if (!jobs.length) return null;
   return jobs.sort((a, b) => {
     const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
@@ -267,6 +269,7 @@ export const attachSseClient = (jobId, res) => {
   if (grok.attachSseClient(jobId, res)) return true;
   if (agy.attachSseClient(jobId, res)) return true;
   if (fal.attachSseClient(jobId, res)) return true;
+  if (runway.attachSseClient(jobId, res)) return true;
   return false;
 };
 
@@ -282,7 +285,8 @@ export const cancel = () => {
   const grokCancelled = grok.cancelAll();
   const agyCancelled = agy.cancelAll();
   const falCancelled = fal.cancelAll();
-  return Boolean(localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled);
+  const runwayCancelled = runway.cancelAll();
+  return Boolean(localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled || runwayCancelled);
 };
 
 // Exact-ID cancel (#9932). The explicit-target counterpart to cancel(): stops
@@ -295,10 +299,10 @@ export const cancelJob = (jobId) => {
   if (!jobId) return false;
   const localJob = local.getActiveJob();
   if ((localJob?.id === jobId || localJob?.generationId === jobId) && local.cancel()) return true;
-  return codex.cancel(jobId) || grok.cancel(jobId) || agy.cancel(jobId) || fal.cancel(jobId);
+  return codex.cancel(jobId) || grok.cancel(jobId) || agy.cancel(jobId) || fal.cancel(jobId) || runway.cancel(jobId);
 };
 
 // Re-exports so routes can hit a specific backend directly when the request
 // is shape-specific (gallery, LoRAs). The dispatcher is for the generic
 // generate/status flow used by all modes.
-export { local, external, codex, grok, agy, fal };
+export { local, external, codex, grok, agy, fal, runway };

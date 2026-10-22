@@ -183,6 +183,8 @@ export const MODE_LABELS = Object.freeze({
   [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
 });
 
+export { RUNWAY_IMAGE_DISCLOSURE, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../../server/lib/runwayImageModels.js';
+
 // The fal.ai model picker rows — one per catalog family, keyed by its
 // text-to-image endpoint (the provider switches to the family's /edit endpoint
 // on its own whenever a render carries input images), labeled with its price

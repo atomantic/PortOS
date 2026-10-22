@@ -65,6 +65,7 @@ export const MEDIA_TABS = [
   { id: 'codex', label: 'Codex CLI', icon: Terminal, probeMode: IMAGE_GEN_MODE.CODEX },
   { id: 'grok', label: 'Grok CLI', icon: Zap, probeMode: IMAGE_GEN_MODE.GROK },
   { id: 'agy', label: 'Agy CLI', icon: Bot, probeMode: IMAGE_GEN_MODE.AGY },
+  { id: 'runway', label: 'Runway', icon: Sparkles, probeMode: IMAGE_GEN_MODE.RUNWAY },
   { id: 'fal', label: 'fal.ai', icon: Sparkles, probeMode: IMAGE_GEN_MODE.FAL },
   { id: 'tokens', label: 'Tokens', icon: Key },
   { id: 'expose', label: 'Expose', icon: Globe },
@@ -99,6 +100,9 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   agyEnabled: false,
   agyPath: '',
   agyModel: '',
+  runwayEnabled: false,
+  runwayModel: 'gen4_image',
+  runwayResolution: '720p',
   // fal.ai image backend — a metered API, gated by its own toggle like the
   // CLIs. The API key is NOT part of this slice: it is the fal.ai credential
   // the video backend already owns (the Defaults tab's key row).
@@ -106,8 +110,8 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   // '' = no pin → FAL_IMAGE_DEFAULT_MODEL server-side.
   falModel: '',
   // Per-provider cleaner toggles (see CleanersToggles in the provider sections).
-  cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false },
-  denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false },
+  cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false, runway: false },
+  denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false, runway: false },
   // Per-surface render defaults (#3231) — `{ [target]: { imageMode, imageModel, videoMode } }`.
   renderDefaults: {},
   // Install-wide video backend pin (`settings.videoGen.mode`, #3231 Phase 4). '' = no pin (local).
@@ -131,7 +135,7 @@ const mediaFormFromSettings = (s) => {
   // Per-mode cleaner reads via the shared helper (mirrored from server/lib/imageClean.js).
   const cleaners = Object.fromEntries([
     [IMAGE_GEN_MODE.EXTERNAL, ig.external], [IMAGE_GEN_MODE.LOCAL, ig.local], [IMAGE_GEN_MODE.CODEX, cx],
-    [IMAGE_GEN_MODE.GROK, gk], [IMAGE_GEN_MODE.AGY, ay], [IMAGE_GEN_MODE.FAL, fl],
+    [IMAGE_GEN_MODE.GROK, gk], [IMAGE_GEN_MODE.AGY, ay], [IMAGE_GEN_MODE.FAL, fl], [IMAGE_GEN_MODE.RUNWAY, ig.runway],
   ].map(([m, config]) => [m, resolveCleanersFromConfig(config, m)]));
   const values = {
     mode: ig.mode || IMAGE_GEN_MODE.EXTERNAL,
@@ -150,6 +154,9 @@ const mediaFormFromSettings = (s) => {
     agyEnabled: ay.enabled === true,
     agyPath: ay.agyPath || '',
     agyModel: ay.model || '',
+    runwayEnabled: ig.runway?.enabled === true,
+    runwayModel: ig.runway?.model || 'gen4_image',
+    runwayResolution: ig.runway?.resolution || '720p',
     falEnabled: fl.enabled === true,
     falModel: fl.model || '',
     cleanC2PAByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.cleanC2PA])),
@@ -221,6 +228,10 @@ const sliceFieldsOf = (f) => ({
   'imageGen.agy': {
     enabled: f.agyEnabled, agyPath: f.agyPath, model: f.agyModel,
     cleanC2PA: f.cleanC2PAByMode.agy, denoise: f.denoiseByMode.agy,
+  },
+  'imageGen.runway': {
+    enabled: f.runwayEnabled, model: f.runwayModel, resolution: f.runwayResolution,
+    cleanC2PA: f.cleanC2PAByMode.runway, denoise: f.denoiseByMode.runway,
   },
   'imageGen.fal': {
     enabled: f.falEnabled, model: falImageFamily(f.falModel) ? f.falModel : '',
@@ -489,6 +500,7 @@ export function ImageGenTab() {
           setMediaTab={setMediaTab}
           form={form}
           parallelBounds={parallelBounds}
+          runwayCredential={credentialRows.runway}
           falCredential={credentialRows.fal}
           localRuntime={localRuntime}
           onStatusRecheck={checkStatus}
