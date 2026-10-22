@@ -448,8 +448,8 @@ describe('Actions commitments workspace (#7739)', () => {
     const heading = await screen.findByRole('heading', { name: 'Stored review items' });
     const section = heading.closest('section');
     expect(section).toContainElement(screen.getByLabelText('Filter review items by status'));
-    expect(section).toContainElement(screen.getByRole('button', { name: 'Complete All' }));
-    expect(section).toContainElement(screen.getByRole('button', { name: 'Dismiss All' }));
+    expect(section).toContainElement(screen.getByRole('button', { name: 'Complete all 1' }));
+    expect(section).toContainElement(screen.getByRole('button', { name: 'Dismiss all 2 pending' }));
   });
 
   it('hides stored-item controls when the canonical queue is degraded or partial', async () => {
@@ -738,6 +738,45 @@ describe('Review Hub triage summary (#6926)', () => {
     });
     expect(summaryValue('Pending')).toBe('7');
     expect(summaryValue('Alerts')).toBe('2');
+  });
+});
+
+describe('Review Hub all-clear Today tab (#13005)', () => {
+  const historyDisclosure = () => screen.getByText(/Daily briefing ·/).closest('details');
+
+  it('states the all-clear and shows the pending stored items ahead of a stale briefing', async () => {
+    api.getReviewItems.mockResolvedValueOnce([SHORT_ITEM]);
+    api.getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: '2026-04-05T12:00:00Z', content: 'Old briefing body' });
+    render(<Review />);
+
+    expect(await screen.findByText('Nothing needs you today')).toBeInTheDocument();
+    expect(screen.getByText(/1 stored item still pending/)).toBeInTheDocument();
+    const item = (await screen.findAllByText(SHORT_ITEM.title))[0];
+    const details = historyDisclosure();
+    expect(details).not.toHaveAttribute('open');
+    expect(details).toHaveTextContent('Apr 5, 2026');
+    // The pending item renders before the collapsed briefing in document order.
+    expect(item.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dismiss all 1 pending' })).toBeInTheDocument();
+  });
+
+  it('opens the briefing automatically when it was generated within the last day', async () => {
+    api.getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: new Date().toISOString(), content: 'Fresh briefing body' });
+    render(<Review />);
+
+    await screen.findByText('Fresh briefing body');
+    await waitFor(() => expect(historyDisclosure()).toHaveAttribute('open'));
+  });
+
+  it('keeps the all-clear line off a non-empty canonical queue', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+      id: 'health:example', source: 'health', sourceLabel: 'Health anomalies', title: 'Required health action',
+      summary: 'x', required: true, operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+    }] });
+    render(<Review />);
+
+    expect(await screen.findByText('1 required')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing needs you today')).not.toBeInTheDocument();
   });
 });
 
