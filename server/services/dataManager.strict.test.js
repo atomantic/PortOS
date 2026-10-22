@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -42,11 +42,15 @@ vi.mock('./dataManagerBusy.js', () => ({
   updateDetachedBusy: vi.fn(async () => ({ busy: false })),
 }));
 
-const { getDataOverview } = await import('./dataManager.js');
+const { getDataOverview, deleteBackup } = await import('./dataManager.js');
 
+afterAll(() => vi.useRealTimers());
 afterAll(() => rmSync(testDataRoot, { recursive: true, force: true }));
 
+// Each case starts past the overview scan's 30s TTL so no result carries over.
+let clock = Date.now();
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: (clock += 60_000) });
   mocks.statErrorPath = null; mocks.countErrorPath = null; mocks.virtualCount = 0;
   rmSync(testDataRoot, { recursive: true, force: true });
   mkdirSync(join(testDataRoot, 'cache'), { recursive: true });
@@ -104,4 +108,47 @@ it('keeps byte totals with unavailable counts, and rejects enumeration errors in
   expect(overview.categories.find(c => c.key === 'cache')).toMatchObject({ size: 1024, fileCount: null });
   expect(overview.totalFileCount).toBeNull();
   await expect(getDataOverview({ strict: true })).rejects.toThrow('enumeration denied');
+});
+
+describe('dataManager overview scan sharing (#12994)', () => {
+  const duTargets = () => mocks.execFile.mock.calls.filter(([command]) => command === 'du').map(([, args]) => args[args.length - 1]);
+
+  it('sums categories and top-level files without re-walking the data root', async () => {
+    writeFileSync(join(testDataRoot, 'settings.json'), '{}');
+    mocks.execFile.mockImplementation((command, args, _options, callback) => callback(null, { stdout: `4\t${args[args.length - 1]}\n`, stderr: '' }));
+
+    const overview = await getDataOverview();
+
+    expect(duTargets().sort()).toEqual([join(testDataRoot, 'cache'), join(testDataRoot, 'runs')]);
+    expect(overview.totalFileCount).toBe(1);
+    expect(overview.totalSize).toBeGreaterThanOrEqual(2 * 4 * 1024);
+  });
+
+  it('coalesces concurrent calls into one scan and drops it after a backup deletion', async () => {
+    mocks.execFile.mockImplementation((command, args, _options, callback) => callback(null, { stdout: `1\t${args[args.length - 1]}\n`, stderr: '' }));
+    mkdirSync(join(testDataRoot, 'backup'), { recursive: true });
+    const archive = 'cache-2026-01-01T00-00-00.tar.gz';
+    writeFileSync(join(testDataRoot, 'backup', archive), 'x');
+
+    await Promise.all([getDataOverview(), getDataOverview()]);
+    await getDataOverview();
+    expect(duTargets()).toHaveLength(3);
+
+    await deleteBackup(archive);
+    await getDataOverview();
+    expect(duTargets()).toHaveLength(6);
+  });
+
+  it('does not cache a rejected strict scan', async () => {
+    await expect(getDataOverview({ strict: true })).rejects.toThrow('permission denied');
+    mocks.execFile.mockImplementation((command, args, _options, callback) => callback(null, { stdout: `1\t${args[args.length - 1]}\n`, stderr: '' }));
+    await expect(getDataOverview({ strict: true })).resolves.toMatchObject({ dataDir: 'data' });
+  });
+});
+
+it('reports an unreadable data root as an unknown count rather than an empty tree', async () => {
+  rmSync(testDataRoot, { recursive: true, force: true });
+  const overview = await getDataOverview();
+  expect(overview.categories).toEqual([]);
+  expect(overview.totalFileCount).toBeNull();
 });
