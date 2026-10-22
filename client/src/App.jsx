@@ -85,6 +85,8 @@ const Sprites = lazyWithReload(() => import('./pages/Sprites'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
 const CodeAnimation = lazyWithReload(() => import('./pages/CodeAnimation'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
+const Storyboards = lazyWithReload(() => import('./pages/Storyboards'));
+const StoryboardDetail = lazyWithReload(() => import('./pages/StoryboardDetail'));
 const Decks = lazyWithReload(() => import('./pages/Decks'));
 const DeckDetail = lazyWithReload(() => import('./pages/DeckDetail'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
@@ -632,6 +634,9 @@ export default function App() {
           <Route path="code-animation/production/:projectId" element={<CodeAnimation />} />
           <Route path="mood-boards" element={<MoodBoards />} />
           <Route path="mood-boards/:id" element={<MoodBoardDetail />} />
+          <Route path="storyboards" element={<Storyboards />} />
+          <Route path="storyboards/:id" element={<StoryboardDetail />} />
+          <Route path="storyboards/:id/panel/:panelId" element={<StoryboardDetail />} />
           <Route path="decks" element={<Decks />} />
           <Route path="decks/:id" element={<DeckDetail />} />
           <Route path="universes" element={<Universes />} />

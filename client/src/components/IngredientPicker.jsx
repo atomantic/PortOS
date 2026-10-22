@@ -124,6 +124,10 @@ export default function IngredientPicker({
       onClose={onClose}
       size="xl"
       closeOnBackdrop
+      // Portal to <body>, as GalleryImagePicker does: opened from inside a
+      // drawer or a glass-theme card, an inline fixed overlay is trapped in
+      // that ancestor's stacking context.
+      usePortal
       panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col"
       ariaLabelledBy="ingredient-picker-title"
     >

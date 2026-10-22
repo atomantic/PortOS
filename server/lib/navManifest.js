@@ -78,6 +78,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.music-video-cleanup', path: '/music-video/cleanup', label: 'Music Video Cleanup', section: 'Create', aliases: ['music-video-cleanup', 'mv-cleanup', 'music video cleanup'], keywords: ['superseded', 'renders', 'film looks', 'disk', 'cleanup'] },
   { id: 'nav.create.decks', path: '/decks', label: 'Decks', section: 'Create', aliases: ['decks', 'deck', 'card-deck', 'playing-cards', 'tarot', 'tarot-deck', 'cards'], keywords: ['playing cards', 'tarot', 'card deck', 'card design', 'suits', 'arcana', 'style guide', 'batch render', 'card art'] },
   { id: 'nav.create.mood-boards', path: '/mood-boards', label: 'Mood Boards', section: 'Create', aliases: ['mood-boards', 'mood-board', 'moodboard', 'mood', 'inspiration', 'references'], keywords: ['inspiration', 'reference', 'pin', 'visual', 'canvas', 'collect', 'pinboard', 'palette', 'ideas'] },
+  { id: 'nav.create.storyboards', path: '/storyboards', label: 'Storyboards', section: 'Create', aliases: ['storyboards', 'storyboard', 'story-board', 'shot-planner', 'beat-board'], keywords: ['story beats', 'panels', 'shots', 'animatic', 'plan', 'film', 'music video', 'sketch', 'shot list', 'previs'] },
   // Promoted out of the Media Gen tabs to a top-level Create page (#2930).
   // The id stays `nav.media.sprites` — it's opaque and stored in palette
   // history, so renaming it would orphan those entries.

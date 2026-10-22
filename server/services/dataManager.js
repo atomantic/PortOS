@@ -195,6 +195,7 @@ export const CATEGORIES = {
   'spotify': { label: 'Spotify Sync', description: 'Machine-local Spotify sync cursor and cache — purging resets the cursor and can leave a gap in imported history', archivable: true, deletable: false },
   'sprites': { label: 'Sprites', description: 'Sprite reference art, walk frames, and runtime atlases — the only copy of the generated art; records live in Postgres', archivable: false, deletable: false },
   'story-builder': { label: 'Story Builder', description: 'Story Builder project records', archivable: true, deletable: false },
+  'storyboards': { label: 'Storyboards', description: 'Storyboard beats and panels (file mirror of the Postgres store)', archivable: true, deletable: false },
   'supercollider': { label: 'SuperCollider Runtime', description: 'Machine-local readiness evidence for the managed SuperCollider image, in-flight render scratch and 24-hour render previews — re-created by npm run setup:supercollider, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'telegram': { label: 'Telegram', description: 'Telegram bot data', archivable: true, deletable: true, purgeScope: 'category' },
   'templates': { label: 'Visual Templates', description: 'Shipped layout assets used as render anchors', archivable: false, deletable: false },

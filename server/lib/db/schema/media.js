@@ -124,6 +124,24 @@ export const mediaDdl = [
     // Partial index for the live-list filter (deleted = FALSE).
     `CREATE INDEX IF NOT EXISTS idx_mood_boards_live ON mood_boards (deleted) WHERE deleted = FALSE`,
 
+    // Storyboards (Create › Storyboards): one row per board, beats → panels →
+    // art takes inline in `data` JSONB (a board is read and written whole).
+    // name/universe_id/updated_at mirror for the list sort and universe filter;
+    // the tombstone pair keeps a later peer-sync category additive. Panel art
+    // bytes stay in data/images and data/media-sketches. Mirrors init-db.sql.
+    `CREATE TABLE IF NOT EXISTS storyboards (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      universe_id TEXT,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE`,
+
     // Sprite records (issue #2895, phase 1). One row per sprite subject — a
     // character or a props atlas family; the full record (spec, chromaKey,
     // publishBinding, importedFrom) in `data` JSONB with kind/status mirrored
