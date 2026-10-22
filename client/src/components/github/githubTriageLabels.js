@@ -60,6 +60,8 @@ export const LANE_VIEW = {
   'pr-reviewer': { label: 'Untrusted:Review', tab: 'pull-requests' },
   'issue-watcher': { label: 'the issue watcher', tab: 'tasks' },
   'dependency-updates': { label: 'dependency updates', tab: 'tasks' },
+  // A one-off CoS task in a scratch clone, for a repo no app manages.
+  'security-fix': { label: 'a security fix agent', tab: null },
 };
 
 // Why Resolve with agent is unavailable for a thread.

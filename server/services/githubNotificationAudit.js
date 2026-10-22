@@ -42,7 +42,8 @@ const OUTCOMES_SQL = `
       EXISTS (SELECT 1 FROM github_notification_events e
               WHERE e.account_id = n.account_id AND e.thread_id = n.thread_id AND e.actor = 'automation' AND e.kind <> 'triaged') AS automation_acted
     FROM github_notifications n
-    WHERE n.account_id = $1 AND n.gh_updated_at > NOW() - make_interval(days => $2)
+    -- A global advisory names no repo, so there is no repo to watch or mute.
+    WHERE n.account_id = $1 AND n.repo_full_name <> '' AND n.gh_updated_at > NOW() - make_interval(days => $2)
   )
   SELECT repo_full_name, reason, COUNT(*)::int AS total,
     COUNT(*) FILTER (WHERE operator_acted)::int AS acted,

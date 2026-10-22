@@ -45,8 +45,11 @@ function HandoffLine({ handoff }) {
   return (
     <p className="text-xs text-gray-300">
       {handoff.duplicate ? 'Already with ' : 'Handed to '}{lane?.label || handoff.lane}
-      {handoff.appId && lane && (
+      {handoff.appId && lane?.tab && (
         <> for <Link to={`/apps/${encodeURIComponent(handoff.appId)}/${lane.tab}`} className="text-port-accent">{handoff.appName || handoff.appId}</Link></>
+      )}
+      {!handoff.appId && handoff.taskId && (
+        <> (<Link to="/cos/tasks" className="text-port-accent">CoS task</Link>)</>
       )}
       {handoff.batchSize > 1 && `, in one run with ${handoff.batchSize - 1} other notification${handoff.batchSize === 2 ? '' : 's'}`}
     </p>

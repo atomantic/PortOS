@@ -4,7 +4,9 @@
  * that already owns that work: a review request from an outside author to
  * `pr-reviewer` (the same targeted run as the Pull Requests tab's
  * Untrusted:Review button), outside issue activity to `issue-watcher`, and a
- * security alert to `dependency-updates`. The inbox's Resolve with agent button
+ * security alert to `dependency-updates`. A security alert in a repo of yours
+ * that no app manages, or a global advisory, goes to a one-off `security-fix`
+ * task (githubSecurityFixTask.js). The inbox's Resolve with agent button
  * hands one thread off the same way on a tap, in any mode.
  *
  * Nothing here reads thread text or starts an agent: each hand-off queues the
@@ -14,9 +16,11 @@
  */
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { advisoryIdFromUrl } from '../lib/githubNotificationParse.js';
 import { agentHandoff, autopilotHandoff } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { managedAppsByRepoKey } from './githubNotificationTriage.js';
+import { queueSecurityFixTask } from './githubSecurityFixTask.js';
 import { queueTargetedPrReview, readActiveTasks, readPendingOnDemandRequests, ACTIVE_TASK_STATUSES } from './prReviewerTargetedRun.js';
 import { triggerOnDemandTask } from './taskSchedule.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
@@ -49,7 +53,11 @@ async function queueAppLane(taskType, app, origin) {
   return request?.error ? { error: request.error } : { requestId: request.id };
 }
 
-async function queueLane(plan, app, origin) {
+async function queueLane(plan, app, origin, { account, rows }) {
+  if (plan.lane === 'security-fix') {
+    const advisories = plan.repo ? [] : rows.map((row) => advisoryIdFromUrl(row.subject_api_url, account.host)).filter(Boolean);
+    return queueSecurityFixTask({ account, repo: plan.repo || null, advisories, origin });
+  }
   if (plan.lane !== 'pr-reviewer' || !plan.pullNumber) return queueAppLane(plan.lane, app, origin);
   return queueTargetedPrReview(app, plan.pullNumber, { origin })
     .then((queued) => (queued.duplicate ? { duplicate: true, taskId: queued.reviewAction?.taskId || null } : { requestId: queued.request.id }));
@@ -84,7 +92,7 @@ export async function autopilotAccountNotifications(account) {
   if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
-       AND ${CANDIDATE_SQL} AND (evidence->>'repoManaged')::boolean IS TRUE AND NOT (evidence ? 'handoff')
+       AND ${CANDIDATE_SQL} AND ((evidence->>'repoManaged')::boolean IS TRUE OR reason = 'security_alert') AND NOT (evidence ? 'handoff')
      ORDER BY gh_updated_at DESC LIMIT ${MAX_HANDOFFS_PER_RUN}`,
     [account.id],
   );
@@ -94,6 +102,13 @@ export async function autopilotAccountNotifications(account) {
   const batches = new Map();
   const skipped = [];
   for (const entry of plans) {
+    if (!entry.plan.refused && entry.plan.lane === 'security-fix') {
+      // One run per repo, and one for every global advisory together.
+      const key = `security-fix#${entry.plan.repo || '*'}`;
+      if (!batches.has(key)) batches.set(key, { app: null, lane: 'security-fix', repo: entry.plan.repo, entries: [] });
+      batches.get(key).entries.push({ ...entry, app: null });
+      continue;
+    }
     const app = apps.get(`${account.host}/${entry.row.repo_full_name}`.toLowerCase());
     if (entry.plan.refused || !app) {
       skipped.push({ ...entry, app, outcome: { skipped: entry.plan.refused || 'no-managed-app' } });
@@ -123,18 +138,19 @@ export async function autopilotAccountNotifications(account) {
     }
   };
   for (const entry of skipped) await record(entry);
-  for (const { app, lane, entries } of batches.values()) {
+  for (const { app, lane, repo, entries } of batches.values()) {
     const pullNumbers = new Set(entries.map((entry) => entry.plan.pullNumber).filter(Boolean));
-    const batchPlan = lane === 'pr-reviewer' && pullNumbers.size === 1 ? entries[0].plan : { lane };
+    const batchPlan = lane === 'pr-reviewer' && pullNumbers.size === 1 ? entries[0].plan : { lane, repo };
     // A lane that throws (a schedule write failing) is a recorded skip, so
     // it never stops Assist or the rest of the sync for this account.
-    const queued = await queueLane(batchPlan, app, ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION).catch((error) => ({ error: error.message }));
+    const queued = await queueLane(batchPlan, app, ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION, { account, rows: entries.map((entry) => entry.row) })
+      .catch((error) => ({ error: error.message }));
     const outcome = queued.error
       ? { skipped: 'lane-unavailable', error: String(queued.error).slice(0, 300) }
       : { ...queued, ...(entries.length > 1 ? { batchSize: entries.length } : {}) };
-    if (queued.requestId) agentRuns += 1;
+    if (!queued.error && !queued.duplicate) agentRuns += 1;
     for (const entry of entries) await record({ ...entry, outcome });
-    if (!queued.error) console.log(`🤝 Autopilot handed ${entries.length} GitHub notification(s) to one ${lane} run for ${app.name}`);
+    if (!queued.error) console.log(`🤝 Autopilot handed ${entries.length} GitHub notification(s) to one ${lane} run for ${app?.name || repo || 'your repositories'}`);
   }
   return { handedOff, agentRuns };
 }
@@ -155,17 +171,17 @@ export async function handOffThread(account, threadId) {
   const plan = agentHandoff({ account, row });
   if (!plan) throw new ServerError('No agent handles this kind of notification', { status: 409, code: 'GITHUB_NOTIFICATION_NO_LANE' });
   if (plan.refused) throw new ServerError(REFUSED_MESSAGES[plan.refused], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
-  const app = (await managedAppsByRepoKey()).get(`${account.host}/${row.repo_full_name}`.toLowerCase());
-  if (!app) throw new ServerError(REFUSED_MESSAGES['no-managed-app'], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
-  const queued = await queueLane(plan, app, ON_DEMAND_ORIGINS.USER);
+  const app = plan.lane === 'security-fix' ? null : (await managedAppsByRepoKey()).get(`${account.host}/${row.repo_full_name}`.toLowerCase());
+  if (plan.lane !== 'security-fix' && !app) throw new ServerError(REFUSED_MESSAGES['no-managed-app'], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+  const queued = await queueLane(plan, app, ON_DEMAND_ORIGINS.USER, { account, rows: [row] });
   if (queued.error) throw new ServerError(String(queued.error), { status: 409, code: 'GITHUB_NOTIFICATION_LANE_UNAVAILABLE' });
   await recordHandoff(account, row, {
     lane: plan.lane,
-    appId: app.id,
-    appName: app.name || null,
+    appId: app?.id || null,
+    appName: app?.name || null,
     ...(plan.pullNumber ? { pullNumber: plan.pullNumber } : {}),
     ...queued,
     at: new Date().toISOString(),
   }, 'operator');
-  console.log(`🤝 Handed GitHub notification ${row.thread_id} to ${plan.lane} for ${app.name}`);
+  console.log(`🤝 Handed GitHub notification ${row.thread_id} to ${plan.lane} for ${app?.name || row.repo_full_name || 'your repositories'}`);
 }

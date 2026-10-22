@@ -28,9 +28,9 @@ import { toPgJson } from '../lib/pgJson.js';
 
 const GH_TIMEOUT_MS = 30_000;
 const PER_PAGE = 50;
-// GitHub lists at most 50 threads a page; past 250 unread the listing is
-// truncated and read-state is not reconciled for threads it did not return.
-const MAX_PAGES = 5;
+// GitHub lists at most 50 threads a page; past 1,000 inbox threads the
+// listing is truncated and threads it did not return are not reconciled.
+const MAX_PAGES = 20;
 const LIST_LIMIT = 200;
 
 export const NOTIFICATION_VIEWS = Object.freeze(['needs-you', 'suspect', 'handled', 'all']);
@@ -59,6 +59,14 @@ const syncFlightFor = (accountId) => {
   return syncFlights.get(accountId);
 };
 
+// The stored Last-Modified cursor names the listing it came from. A cursor
+// saved by the older unread-only listing is not reused: a 304 against it would
+// skip the first read of the whole inbox until something new arrived.
+const LISTING_CURSOR_PREFIX = 'all:';
+const listingCursor = (stored) => (typeof stored === 'string' && stored.startsWith(LISTING_CURSOR_PREFIX)
+  ? stored.slice(LISTING_CURSOR_PREFIX.length) || null
+  : null);
+
 const isNotModified = (error) => /\bHTTP 304\b/.test(String(error?.ghStderr || error?.message || ''));
 
 async function requireAccountEnv(account) {
@@ -76,7 +84,7 @@ async function requireAccountEnv(account) {
 
 async function fetchPage(account, env, page, ifModifiedSince) {
   const args = ['api', '--hostname', account.host, '--include', '--method', 'GET',
-    `notifications?per_page=${PER_PAGE}&page=${page}`];
+    `notifications?all=true&per_page=${PER_PAGE}&page=${page}`];
   if (ifModifiedSince) args.push('-H', `If-Modified-Since: ${ifModifiedSince}`);
   const output = await execGh(args, GH_TIMEOUT_MS, { env }).catch((error) => {
     if (ifModifiedSince && isNotModified(error)) return null;
@@ -143,7 +151,7 @@ async function runAutomation(account, env, automate) {
 async function syncAccountNow(account, automate) {
   const env = await requireAccountEnv(account);
   const cursor = (await query('SELECT last_modified FROM github_notification_sync WHERE account_id = $1', [account.id])).rows[0];
-  const first = await fetchPage(account, env, 1, cursor?.last_modified || null);
+  const first = await fetchPage(account, env, 1, listingCursor(cursor?.last_modified));
   if (first.notModified) {
     await query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
     // Threads past the last run's triage cap still need a decision.
@@ -170,11 +178,15 @@ async function syncAccountNow(account, automate) {
         r.subjectTitle, r.subjectApiUrl, r.htmlUrl, r.unread, r.ghUpdatedAt, r.latestCommentApiUrl,
       ]);
     }
-    // The listing holds only unread threads; one that dropped out was read
-    // elsewhere. A truncated listing proves nothing about the rest.
+    // The listing is the whole GitHub inbox, read and unread (`all=true`); a
+    // thread that dropped out was marked done on GitHub. A truncated listing
+    // proves nothing about the rest.
     if (!truncated) {
       await client.query(
-        'UPDATE github_notifications SET unread = FALSE, updated_at = NOW() WHERE account_id = $1 AND unread AND NOT (thread_id = ANY($2::text[]))',
+        `UPDATE github_notifications SET unread = FALSE,
+           state = CASE WHEN state = 'open' THEN 'done' ELSE state END,
+           state_changed_at = CASE WHEN state = 'open' THEN NOW() ELSE state_changed_at END, updated_at = NOW()
+         WHERE account_id = $1 AND (unread OR state = 'open') AND NOT (thread_id = ANY($2::text[]))`,
         [account.id, records.map((r) => r.threadId)],
       );
     }
@@ -183,7 +195,7 @@ async function syncAccountNow(account, automate) {
        VALUES ($1, $2, $3, NOW(), '', NOW())
        ON CONFLICT (account_id) DO UPDATE SET last_modified = EXCLUDED.last_modified,
          poll_interval_seconds = EXCLUDED.poll_interval_seconds, last_sync_at = NOW(), last_error = '', updated_at = NOW()`,
-      [account.id, first.headers['last-modified'] || null, pollIntervalSeconds(first.headers['x-poll-interval'])],
+      [account.id, first.headers['last-modified'] ? `${LISTING_CURSOR_PREFIX}${first.headers['last-modified']}` : null, pollIntervalSeconds(first.headers['x-poll-interval'])],
     );
   });
   const triage = await triageAccountNotifications(account, env);
@@ -194,7 +206,7 @@ async function syncAccountNow(account, automate) {
 }
 
 /**
- * Fetch one account's unread notifications, coalescing concurrent requests.
+ * Fetch one account's GitHub inbox (read and unread), coalescing concurrent requests.
  * `automate: false` (a caller without host control) skips Assist/Autopilot.
  */
 export async function syncAccountNotifications(accountId, { automate = true } = {}) {
