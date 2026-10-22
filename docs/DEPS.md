@@ -22,7 +22,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | Package | Tier | Verdict | Where Used | Notes |
 |---------|------|---------|------------|-------|
 | **Root deps** | | | | |
-| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Declared in root `dependencies` (the root manifest has no devDependencies). Pinned `7.0.4` (aligned with server pin) |
+| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Declared in root `dependencies` (the root manifest has no devDependencies). Pinned `7.1.0` (aligned with server pin) |
 | **Server deps** | | | | |
 | `@cantoo/pdf-lib` | 2 | KEEP | PDF generation for the volume / comic / prose / legacy-archive exports | Maintained MIT fork of `pdf-lib`, which has had no publish since 2022-05. Same public API (`PDFDocument`/`rgb`/`StandardFonts`); the swap was 4 import lines. On maintenance watch — see the detailed finding |
 | `pdf-lib` | — | REPLACED | PDF generation | 2026-09-02 → `@cantoo/pdf-lib` (issue #5672). Abandoned upstream: `1.17.1` is simultaneously the pinned and the latest published version, unchanged since 2022-05-12. Not deprecated and never flagged by `npm audit` — replaced ahead of an advisory, not in response to one |
@@ -38,7 +38,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
 | `playwright-core` | 1 | KEEP | `server/services/fableLoom/falVideoAutomation.js` — fal.ai scene video automation | Drives the PortOS-managed browser over CDP (`chromium.connectOverCDP`). `-core` rather than the full `playwright` package deliberately: the browser is provisioned separately by `npm run setup:browser`, so the bundled browser download would be dead weight |
-| `pm2` | 1 | KEEP | app lifecycle | Process manager. Pinned `7.0.4` (aligned with root pin) |
+| `pm2` | 1 | KEEP | app lifecycle | Process manager. Pinned `7.1.0` (aligned with root pin) |
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
@@ -173,7 +173,7 @@ An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring
 Defined in `package.json` (root + server + client + autofixer) — kept current to dodge known upstream advisories:
 
 - `ws@8.21.3` (root + server + client)
-- `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.2`, `ip-address@10.7.0` (root + server)
+- `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.2` (root + server)
 - `nanoid@3.3.18`, `socket.io-parser@4.2.7` (server + client)
 - `path-to-regexp@8.4.2`, `body-parser@2.3.0`, `qs@6.16.0` (server + autofixer — the express-reachable subset; `autofixer/` mirrors only these three because a pin for a package absent from the tree reads as protection that does not exist)
 - `engine.io@6.6.9` (server only)
@@ -201,25 +201,9 @@ These exist purely to force-bump transitive deps; revisit if `npm audit` flags n
 
 Packages that legitimately need an install script are named explicitly in the allowlist in `scripts/trusted-rebuilds.js`, the single source consumed by `npm run setup`, `scripts/ensure-deps.js`, `setup.ps1`, `update.sh` / `update.ps1`, and CI. `scripts/trusted-rebuilds.test.js` fails if a workspace `.npmrc` loses the setting, or if a dependency appears with an install hook that nobody has explicitly decided about. Because CI caches `server/node_modules` between jobs, `scripts/trusted-rebuild-stamp.js` writes a mark into the tree in the same step that rebuilds it and checks that mark after a cache restore — a tree cached before the rebuild is otherwise indistinguishable from a good one, since the allowlisted packages all ship prebuilt bindings and import fine either way.
 
-### Install-time dependency patches
+### Retired install-time dependency patches
 
-`scripts/lib/getUriFtpPatch.js` carries one narrowly scoped patch for a defect upstream has not fixed (get-uri through 8.0.1): its FTP adapter reads only `entry.modifiedAt`, which basic-ftp fills from MLSD alone, so a server with neither MDTM nor MLSD made an existing file report `ENOTFOUND` (#9462). The patch falls back to the Unix `LIST` date (`rawModifiedAt`). It runs from `scripts/trusted-rebuilds.js` (`rebuildTrusted` for every workspace, and `runCli server` for the root tree that holds pm2) because `ignore-scripts=true` rules out a postinstall hook; `scripts/trusted-rebuild-stamp.js` folds the patch fingerprint into the mark so a CI-cached tree from before a patch change is rebuilt. The patch edits by exact anchor, is idempotent, and leaves an unrecognized get-uri untouched with a warning — `server/dependency-overrides.test.js` pins the lockfile to the targeted release so a bump re-verifies the anchor.
-
-Date semantics: LIST carries no timezone, so values are read as UTC (the zone MDTM and MLSD use). `Mon d yyyy`, `d Mon yyyy` → midnight UTC (day resolution); `Mon d hh:mm`, `d Mon hh:mm` → the latest year not more than a day ahead of now; `yyyy-mm-dd hh:mm` (`-` or `/`) → as written. Anything else (non-English months, Japanese forms, impossible dates, ambiguous numeric forms) throws `EFTPLISTDATE` rather than inventing a timestamp. Cache validation compares exact instants, so a listing that switches from the time form to the year form simply redownloads. The security-patched `basic-ftp` override is unchanged.
-
-### PM2 brace recursion mitigation (#9906)
-
-As of 2026-10-03, the upstream [braces advisory GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) has no first patched release, and npm still publishes braces 3.0.3 / PM2 7.0.4. Both root and server lockfiles resolve PM2 → chokidar 3.6.0 → the hoisted braces 3.0.3. They intentionally keep those supported versions; changing the server's separate chokidar 5 dependency does not change PM2's watcher.
-
-`scripts/lib/bracesDepthPatch.js` applies a local mitigation during the existing trusted-rebuild step. It verifies the installed version and complete upstream file hashes before editing, then bounds parser nesting and recursive compile, expand, stringify, append and flatten calls to 64 levels. Excessive patterns or externally supplied ASTs throw `EBRACESDEPTH` instead of exhausting the process stack. Quoted, escaped and bracketed literals preserve their parser semantics. A missing braces install is a no-op; unfamiliar releases, modified walkers and failed writes stop startup/install so an unguarded tree cannot be marked repaired. The patch is idempotent and repairs a partly written patch on the next attempt. Re-verify the patch when bumping braces; the dependency parity test pins both its version and hoisted location.
-
-All managed setup/update paths already run trusted rebuilds. `scripts/ensure-deps.js` additionally reapplies patches to existing workspace trees before `npm start` launches PM2, covering code-only upgrades with unchanged manifests and lockfiles. The trusted-rebuild cache stamp includes this patch's fingerprint.
-
-Input authority: PortOS's own ecosystem processes disable watching, and command-launched apps set `watch: false`; the spawn helper strips inherited `watch`. Managed-app lifecycle requests can also load that app's existing ecosystem file (`server/routes/apps/lifecycle.js` → `server/services/pm2.js`). PM2's `Watcher.js` passes ecosystem `watch`, `ignore_watch`, and `watch_options` to chokidar. Those patterns therefore come from locally admitted app configuration or an operator's PM2 CLI use, rather than an anonymous API watch-pattern field. Host-control route gates remain required; this tracing is not a claim that every reachable peer is trusted or that arbitrary app configuration is safe. The mitigation guards the dependency regardless of pattern origin.
-
-Regression tests copy the actual PM2 braces consumer into disposable trees, exercise deeply nested patterns below the existing character limit and externally supplied ASTs, verify normal globs/literals, and reject unfamiliar walkers before writing. Validation also used a disposable PM2 daemon with its own `PM2_HOME` and synthetic app: start, explicit restart, brace-glob file-watch restart, stop, and daemon cleanup all passed. No live managed processes were used.
-
-Dependabot alerts 58 (`package-lock.json`) and 59 (`server/package-lock.json`) are version-based and cannot detect this install-time patch. Reconcile each only after the mitigation PR is merged, recording the merged commit, this patch and regression evidence in the dismissal comment. The `tolerable_risk` reason records the local mitigation while the upstream version remains flagged; it is not an upstream fix or a claim of non-reachability. Future upstream fixes should replace the patch and restore version-based resolution.
+PortOS used to patch two PM2 transitive dependencies during the trusted-rebuild step: get-uri's FTP adapter (#9462, with a `basic-ftp` override, #9444) and a recursion-depth guard for braces (#9906, GHSA-vfj7-8cjw-p6xm). PM2 7.1.0 dropped its `proxy-agent` dependency (and with it the get-uri → basic-ftp chain and `ip-address`) and its chokidar 3 watcher dependency, so neither package is installed any more. The patches, the `get-uri` and `ip-address` overrides, and the `patches` field of the trusted-rebuild stamp were removed with that bump. `server/dependency-overrides.test.js` fails if braces reappears in the root or server lockfile, because it would then run without the old guard.
 
 ## Inline Audit Policy
 

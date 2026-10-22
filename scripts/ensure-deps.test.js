@@ -98,12 +98,7 @@ describe('startup dependency reconciliation', () => {
     copyFileSync(join(REPO_ROOT, 'scripts', 'ensure-deps.js'), join(root, 'scripts', 'ensure-deps.js'));
     copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'directInvocation.js'), join(root, 'scripts', 'lib', 'directInvocation.js'));
     copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'workspaceDependencies.js'), join(root, 'scripts', 'lib', 'workspaceDependencies.js'));
-    writeFileSync(join(root, 'scripts', 'trusted-rebuilds.js'), `
-      import { writeFileSync } from 'fs';
-      import { join } from 'path';
-      export const rebuildTrusted = () => true;
-      export const patchInstalledDependencies = dir => writeFileSync(join(dir, 'node_modules', 'patch-applied'), 'patched');
-    `);
+    writeFileSync(join(root, 'scripts', 'trusted-rebuilds.js'), 'export const rebuildTrusted = () => true;\n');
     writeFileSync(join(root, 'server', 'lib', 'bufferedSpawn.js'), `
       import { fileURLToPath } from 'url';
       export const prepareCliSpawn = (command, args) => ({
@@ -136,7 +131,7 @@ describe('startup dependency reconciliation', () => {
     };
   }
 
-  // A worktree must never repair or patch dependencies owned by its source
+  // A worktree must never repair dependencies owned by its source
   // checkout. Check all workspaces before touching even an earlier local tree.
   it.each(['warm', 'changed', 'missing-package', 'dangling'])('refuses %s shared dependencies before any startup mutation', (state) => {
     const f = fixture();
@@ -147,7 +142,6 @@ describe('startup dependency reconciliation', () => {
       renameSync(modules, shared);
       if (state === 'changed') writeFileSync(join(f.root, 'server', 'package-lock.json'), '{"version":"new"}');
       if (state === 'missing-package') rmSync(join(shared, 'pg'), { recursive: true });
-      rmSync(join(shared, 'patch-applied'));
       const target = state === 'dangling' ? join(f.root, 'absent-deps') : shared;
       symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
 
@@ -162,7 +156,6 @@ describe('startup dependency reconciliation', () => {
       expect(readFileSync(join(f.root, 'node_modules', 'keep'), 'utf8')).toBe('original');
       expect(readFileSync(f.receipt, 'utf8')).toBe(receipt);
       expect(readFileSync(join(shared, 'installed-lock.json'), 'utf8')).toBe('{"version":"old"}');
-      expect(existsSync(join(shared, 'patch-applied'))).toBe(false);
       if (state === 'missing-package') expect(existsSync(join(shared, 'pg'))).toBe(false);
       if (state === 'dangling') expect(existsSync(target)).toBe(false);
     } finally {
@@ -183,10 +176,8 @@ describe('startup dependency reconciliation', () => {
       expect(readFileSync(join(f.client, 'package-lock.json'), 'utf8')).toBe(updated);
       expect(readFileSync(join(f.client, 'package.json'), 'utf8')).toBe('{}');
       writeFileSync(join(f.client, 'node_modules', 'keep'), 'unchanged tree');
-      rmSync(join(f.client, 'node_modules', 'patch-applied'));
       expect(f.run()).not.toContain('reinstall');
       expect(existsSync(join(f.client, 'node_modules', 'keep'))).toBe(true);
-      expect(readFileSync(join(f.client, 'node_modules', 'patch-applied'), 'utf8')).toBe('patched');
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }
