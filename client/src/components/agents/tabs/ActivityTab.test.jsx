@@ -22,12 +22,12 @@ describe('ActivityTab', () => {
 
     render(<ActivityTab agentId="agent-1" />);
     await screen.findByText('Activity Log');
-    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, null);
+    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, null, { silent: true });
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText('Filter by action'), { target: { value: 'post' } });
     });
-    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, 'post');
+    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, 'post', { silent: true });
 
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Load More' })); });
     expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(
