@@ -132,83 +132,83 @@ function RunCard({ run: r, project, focused, projectsLoading, current, onRate })
   const state = renderState(r, project, projectsLoading);
   const launchProblem = LAUNCH_PROBLEM_CLASS[r.status];
   return (
-      <div
-        id={`commission-run-${r.id}`}
-        className={`bg-port-card border rounded-lg overflow-hidden flex flex-col ${focused ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'}`}
-      >
-        {/* Produced-media preview (or a status-only placeholder). Width-capped,
-            not height-capped: ProjectPreview's box derives its height from an
-            aspect-ratio class, so clamping height with overflow-hidden crops
-            it — and pushes ProjectPreview's absolutely-centered play button
-            and bottom label below the visible area for any non-16:9 ratio.
-            Constraining width instead lets aspect-ratio derive a height that
-            already fits, matching previewMaxWidthClass's documented approach
-            in lib/creativeDirectorPreview.js. */}
-        <div className="max-w-[220px] mx-auto">
-          {project ? (
-            <ProjectPreview project={project} to={`/creative-director/${encodeURIComponent(r.projectId)}`} />
-          ) : (
-            // `project` is null in this branch, so the placeholder falls back to
-            // the default 16:9 box. Distinguish the transient load window (project
-            // list still fetching) from a genuinely pruned/missing render — a real
-            // render must not flash "unavailable" before the fetch resolves.
-            <div className={`${previewAspectClass()} bg-port-bg flex flex-col items-center justify-center gap-1 text-gray-600 text-xs`}>
-              <Film className="w-4 h-4 opacity-50" aria-hidden="true" />
-              <span>{r.projectId ? (projectsLoading ? 'loading…' : 'render removed') : 'no render'}</span>
-            </div>
-          )}
-        </div>
-
-        <div className="p-3 flex flex-col gap-2 flex-1">
-          <div className="flex items-center justify-between gap-2 text-xs">
-            <span className="text-gray-400 flex items-center gap-1.5">
-              {timeAgo(r.ranAt)}
-              {/* Runs persisted before the trigger field exist only from cron ticks — no badge. */}
-              {r.trigger === 'manual' && (
-                <span className="text-[10px] uppercase px-1 py-0.5 rounded bg-port-accent/20 text-port-accent">manual</span>
-              )}
-            </span>
-            <span className="text-right">
-              {state && <span className={state[1]}>{state[0]}</span>}
-              {launchProblem && (
-                <span className={launchProblem}>
-                  {state ? ' · ' : ''}{r.status}{r.reason ? ` · ${r.reason}` : ''}{r.error ? ` · ${r.error}` : ''}
-                </span>
-              )}
-            </span>
+    <div
+      id={`commission-run-${r.id}`}
+      className={`bg-port-card border rounded-lg overflow-hidden flex flex-col ${focused ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'}`}
+    >
+      {/* Produced-media preview (or a status-only placeholder). Width-capped,
+          not height-capped: ProjectPreview's box derives its height from an
+          aspect-ratio class, so clamping height with overflow-hidden crops
+          it — and pushes ProjectPreview's absolutely-centered play button
+          and bottom label below the visible area for any non-16:9 ratio.
+          Constraining width instead lets aspect-ratio derive a height that
+          already fits, matching previewMaxWidthClass's documented approach
+          in lib/creativeDirectorPreview.js. */}
+      <div className="max-w-[220px] mx-auto">
+        {project ? (
+          <ProjectPreview project={project} to={`/creative-director/${encodeURIComponent(r.projectId)}`} />
+        ) : (
+          // `project` is null in this branch, so the placeholder falls back to
+          // the default 16:9 box. Distinguish the transient load window (project
+          // list still fetching) from a genuinely pruned/missing render — a real
+          // render must not flash "unavailable" before the fetch resolves.
+          <div className={`${previewAspectClass()} bg-port-bg flex flex-col items-center justify-center gap-1 text-gray-600 text-xs`}>
+            <Film className="w-4 h-4 opacity-50" aria-hidden="true" />
+            <span>{r.projectId ? (projectsLoading ? 'loading…' : 'no preview') : 'no render'}</span>
           </div>
-
-          {project && (
-            <Link
-              to={`/creative-director/${encodeURIComponent(r.projectId)}`}
-              className="text-port-accent hover:text-blue-400 inline-flex items-center gap-1 text-xs"
-            >
-              <ExternalLink className="w-3 h-3" /> View output
-            </Link>
-          )}
-
-          {r.tasteRecipe && (
-            <TasteRecipeSummary recipe={r.tasteRecipe} output={r.musicOutput || project?.musicBed} />
-          )}
-
-          {/* Rate/annotate — pushed to the bottom of the card so cards align.
-              Keyed on the persisted reaction's timestamp so an externally-changed
-              note (a federated rating from another machine, arriving via a refetch)
-              remounts the control and re-seeds its local note, instead of leaving a
-              stale empty field that a Save could clobber the peer's note with. */}
-          {r.projectId && onRate && (
-            <div className="mt-auto pt-1">
-              <RunFeedback
-                key={current?.at || 'unrated'}
-                runId={r.id}
-                current={current}
-                onRate={onRate}
-                tasteAware={!!r.tasteRecipe}
-              />
-            </div>
-          )}
-        </div>
+        )}
       </div>
+
+      <div className="p-3 flex flex-col gap-2 flex-1">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-gray-400 flex items-center gap-1.5">
+            {timeAgo(r.ranAt)}
+            {/* Runs persisted before the trigger field exist only from cron ticks — no badge. */}
+            {r.trigger === 'manual' && (
+              <span className="text-[10px] uppercase px-1 py-0.5 rounded bg-port-accent/20 text-port-accent">manual</span>
+            )}
+          </span>
+          <span className="text-right">
+            {state && <span className={state[1]}>{state[0]}</span>}
+            {launchProblem && (
+              <span className={launchProblem}>
+                {state ? ' · ' : ''}{r.status}{r.reason ? ` · ${r.reason}` : ''}{r.error ? ` · ${r.error}` : ''}
+              </span>
+            )}
+          </span>
+        </div>
+
+        {project && (
+          <Link
+            to={`/creative-director/${encodeURIComponent(r.projectId)}`}
+            className="text-port-accent hover:text-blue-400 inline-flex items-center gap-1 text-xs"
+          >
+            <ExternalLink className="w-3 h-3" /> View output
+          </Link>
+        )}
+
+        {r.tasteRecipe && (
+          <TasteRecipeSummary recipe={r.tasteRecipe} output={r.musicOutput || project?.musicBed} />
+        )}
+
+        {/* Rate/annotate — pushed to the bottom of the card so cards align.
+            Keyed on the persisted reaction's timestamp so an externally-changed
+            note (a federated rating from another machine, arriving via a refetch)
+            remounts the control and re-seeds its local note, instead of leaving a
+            stale empty field that a Save could clobber the peer's note with. */}
+        {r.projectId && onRate && (
+          <div className="mt-auto pt-1">
+            <RunFeedback
+              key={current?.at || 'unrated'}
+              runId={r.id}
+              current={current}
+              onRate={onRate}
+              tasteAware={!!r.tasteRecipe}
+            />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

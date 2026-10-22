@@ -118,7 +118,7 @@ describe('CreativeCommissionDetail render-history project resolution (#4148)', (
 
     await waitFor(() => expect(screen.getAllByTestId('preview-cd-1')).toHaveLength(2));
     // cd-2 was requested but is gone (pruned project) — no preview, and the
-    // placeholder must read "removed" rather than staying on "loading…".
+    // run is grouped under the "no longer available" summary rather than staying in a loading state.
     expect(screen.queryByTestId('preview-cd-2')).toBeNull();
     expect(screen.getByText('1 older render is no longer available')).toBeTruthy();
   });
