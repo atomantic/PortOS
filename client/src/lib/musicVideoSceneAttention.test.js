@@ -31,6 +31,8 @@ describe('sceneAttention', () => {
     expect(sceneAttention(shot, { clipSec: 9.9 })).toEqual([]);
     expect(sceneAttention(shot)).toEqual([]);
     expect(sceneAttention({ ...shot, loop: true }, { clipSec: 5 })).toEqual([]);
+    expect(sceneAttention({ ...shot, holdLastFrame: true }, { clipSec: 5 })).toEqual([]);
+    expect(sceneAttention({ ...shot, reverse: true, holdLastFrame: true }, { clipSec: 5 })).toEqual([]);
   });
 
   it('flags a blocked performance, pending candidates, failures and an unverified plate', () => {

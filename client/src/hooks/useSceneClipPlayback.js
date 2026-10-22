@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVideoFileSrc } from './useVideoFileSrc.js';
-import { clipOffsetSec, clipReversed, clipSpeedRate } from '../lib/musicVideoLayers.js';
-import { COVERAGE_TOLERANCE_SEC } from '../lib/musicVideoSceneAttention.js';
+import { clipCanLoop, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipSpeedRate } from '../lib/musicVideoLayers.js';
+import { selectedPerformanceInstruction } from '../lib/musicVideoShotTiming.js';
 
 /** A shot's native clip metadata and render-adjusted coverage. Keep mounted with the card. */
 export default function useSceneClipPlayback(scene) {
@@ -17,16 +17,15 @@ export default function useSceneClipPlayback(scene) {
   const [clipMeta, setClipMeta] = useState(null);
   const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
   const clipSize = clipMeta && clipMeta.id === scene.videoHistoryId && clipMeta.width > 0 ? { width: clipMeta.width, height: clipMeta.height } : null;
-  // Absent loop preserves legacy loop-to-fill; reverse always plays once.
-  const loops = scene.loop !== false && !clipReversed(scene);
+  const edit = selectedPerformanceInstruction(scene)?.edit;
+  const canLoop = clipCanLoop(scene, edit);
+  const loops = clipLoops(scene, edit);
   const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
     ? scene.endSec - scene.startSec
     : null;
   const clipRate = clipSpeedRate(scene);
-  const clipLead = clipOffsetSec(scene);
-  const playedSec = clipSec != null ? Math.max(0, -clipLead) + Math.max(0, clipSec - Math.max(0, clipLead)) / clipRate : null;
-  const shortBySec = !loops && spanSec != null && playedSec != null ? spanSec - playedSec : 0;
-  const underCovered = shortBySec > COVERAGE_TOLERANCE_SEC;
+  const playedSec = clipSec != null ? clipPlaybackWindow(scene, edit, clipSec).sourceSec : null;
+  const underCovered = clipNeedsMoreFootage({ loop: loops, holdLastFrame: scene.holdLastFrame, spanSec, clipSec: playedSec });
   useEffect(() => { if (clipPlayerRef.current) clipPlayerRef.current.playbackRate = clipRate; }, [clipRate]);
 
   const onLoadedMetadata = (e) => {
@@ -36,5 +35,5 @@ export default function useSceneClipPlayback(scene) {
     if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec, width, height });
   };
 
-  return { clipPlayerRef, clipSrc, clipSec, clipSize, loops, spanSec, playedSec, underCovered, onLoadedMetadata };
+  return { clipPlayerRef, clipSrc, clipSec, clipSize, canLoop, loops, spanSec, playedSec, underCovered, onLoadedMetadata };
 }
