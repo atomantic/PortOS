@@ -62,7 +62,15 @@ export const LANE_VIEW = {
   'dependency-updates': { label: 'dependency updates', tab: 'tasks' },
   // A one-off CoS task in a scratch clone, for a repo no app manages.
   'security-fix': { label: 'a security fix agent', tab: null },
+  'do-review': { label: 'a Do:Review agent', tab: 'pull-requests' },
 };
+
+// The notification kinds an agent rule can name (GITHUB_AGENT_RULE_KINDS on the server).
+export const AGENT_RULE_KINDS = [
+  { value: 'review-request', label: 'Review requests', hint: 'A review request starts a review-only Do:Review run that publishes an inline review. An outside pull request in one of your apps goes to Untrusted:Review instead.' },
+  { value: 'security-alert', label: 'Security alerts', hint: 'A security alert starts a run that updates the vulnerable dependencies, opens a pull request and merges it when checks pass.' },
+  { value: 'issue-activity', label: 'Issue activity', hint: 'Outside activity on an issue in one of your apps goes to its issue watcher.' },
+];
 
 // Why Resolve with agent is unavailable for a thread.
 export const AGENT_REFUSED_LABELS = {

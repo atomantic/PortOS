@@ -17,6 +17,7 @@ import {
   updateGitHubAccount,
 } from '../../services/api';
 import { ACTION_LABELS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
+import GitHubAgentRules from './GitHubAgentRules';
 
 const MODE_OPTIONS = ['observe', 'assist', 'autopilot'];
 const MODE_LABELS = { observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
@@ -30,7 +31,7 @@ function modeHint(account) {
   if (account.mode !== 'autopilot') return assist;
   const handoff = account.trust === 'private'
     ? 'Private accounts never hand threads off.'
-    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. A security alert in another repo of yours starts one CoS task per repo that fixes it in a pull request and merges it.';
+    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. A security alert in another repo of yours starts one CoS task per repo that fixes it in a pull request and merges it. Agent rules below turn kinds on or off per repo and pick the provider.';
   return `${assist} ${handoff}`;
 }
 
@@ -40,7 +41,7 @@ const CADENCE_TEXT = {
   off: 'Only when you tap Run now',
 };
 
-function AccountCard({ account, running, onRun, onMode, savingMode }) {
+function AccountCard({ account, running, onRun, onMode, savingMode, onSaveRules, savingRules }) {
   const selectId = `github-mode-${account.id}`;
   return (
     <li className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-4">
@@ -78,6 +79,7 @@ function AccountCard({ account, running, onRun, onMode, savingMode }) {
       >
         <Play size={12} aria-hidden="true" /> {running ? 'Checking…' : 'Run now'}
       </button>
+      {account.trust !== 'private' && <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} />}
     </li>
   );
 }
@@ -141,6 +143,7 @@ export default function GitHubAutomationsTab() {
   const [actions, setActions] = useState([]);
   const [rules, setRules] = useState([]);
   const [savingModeId, setSavingModeId] = useState(null);
+  const [savingRulesId, setSavingRulesId] = useState(null);
   const [undoingId, setUndoingId] = useState(null);
 
   const load = useCallback(async () => {
@@ -183,6 +186,15 @@ export default function GitHubAutomationsTab() {
     setSavingModeId(null);
     if (!updated) return;
     setOverview((prev) => ({ ...prev, accounts: prev.accounts.map((account) => (account.id === accountId ? { ...account, mode: updated.mode } : account)) }));
+  };
+
+  const saveRules = async (accountId, agentRules) => {
+    setSavingRulesId(accountId);
+    const updated = await updateGitHubAccount(accountId, { agentRules }).catch(() => null);
+    setSavingRulesId(null);
+    if (!updated) return false;
+    setOverview((prev) => ({ ...prev, accounts: prev.accounts.map((account) => (account.id === accountId ? { ...account, agentRules: updated.agentRules || [] } : account)) }));
+    return true;
   };
 
   const undo = async (id) => {
@@ -239,7 +251,7 @@ export default function GitHubAutomationsTab() {
       ) : (
         <ul className="grid grid-cols-1 gap-3 @3xl/page:grid-cols-2">
           {overview.accounts.map((account) => (
-            <AccountCard key={account.id} account={account} running={runningId === account.id} onRun={runNow} onMode={changeMode} savingMode={savingModeId === account.id} />
+            <AccountCard key={account.id} account={account} running={runningId === account.id} onRun={runNow} onMode={changeMode} savingMode={savingModeId === account.id} onSaveRules={saveRules} savingRules={savingRulesId === account.id} />
           ))}
         </ul>
       )}

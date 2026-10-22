@@ -193,26 +193,91 @@ export function selectNotificationProvider({ account, providers = [], policy = {
 const HANDOFF_ISSUE_DECISIONS = new Set(['needs-you', 'surface']);
 const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 
+// The notification kinds an agent rule can name (GITHUB_AGENT_RULE_KINDS in
+// lib/validation.js), and the kind of a thread, or null when no rule applies.
+const RULE_KINDS = new Set(['review-request', 'security-alert', 'issue-activity']);
+const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
+// A review request still waiting on you; one you sorted as done or noise is not.
+const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
+const REVIEW_TRUST = new Set(['yours', 'trusted']);
+
+function threadAgentKind(row) {
+  if (row?.reason === 'security_alert') return 'security-alert';
+  if (row?.reason === 'review_requested' && row.subject_type === 'PullRequest') return 'review-request';
+  if (row?.subject_type === 'Issue') return 'issue-activity';
+  return null;
+}
+
+/**
+ * The account's agent rule for a kind of thread in a repo: the repo's own rule,
+ * else the `*` rule, else null. A malformed stored rule is ignored.
+ */
+const validRules = (rules, kind) => (Array.isArray(rules) ? rules : []).filter((rule) => rule
+  && RULE_KINDS.has(rule.kind) && rule.kind === kind
+  && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo) && typeof rule.agent === 'boolean');
+
+function matchAgentRule(rules, kind, repo) {
+  if (!kind) return null;
+  const valid = validRules(rules, kind);
+  const name = String(repo || '').toLowerCase();
+  return (name && valid.find((rule) => rule.repo.toLowerCase() === name)) || valid.find((rule) => rule.repo === '*') || null;
+}
+
+/**
+ * Which repos Autopilot hands a kind of thread off in, for its candidate query:
+ * every repo except `except` when `all`, else only the `only` repos (lowercase).
+ * The `*` rule sets the default; a kind with no `*` rule is on unless `optIn`.
+ * Mirrors `matchAgentRule` + `autopilotHandoff`, so a row a rule keeps from an
+ * agent never takes a slot in the run.
+ */
+export function agentRuleScope(rules, kind, { optIn = false } = {}) {
+  const valid = validRules(rules, kind);
+  const star = valid.find((rule) => rule.repo === '*');
+  const all = star ? star.agent : !optIn;
+  const repos = (agent) => valid.filter((rule) => rule.repo !== '*' && rule.agent === agent).map((rule) => rule.repo.toLowerCase());
+  return all ? { all, except: repos(false), only: [] } : { all, except: [], only: repos(true) };
+}
+
+const rulePin = (rule) => {
+  const pin = {};
+  for (const key of ['provider', 'model', 'effort']) if (typeof rule?.[key] === 'string' && rule[key]) pin[key] = rule[key];
+  return Object.keys(pin).length ? pin : null;
+};
+
 /**
  * Which lane an agent may resolve a thread in, or null when no lane fits. A
- * plan with `refused` names why it cannot go: only a PortOS managed app's
- * repo has lanes (they run per app), except a security alert in a repo of
- * yours or a global advisory (`security-fix`), and a Private account's threads never
- * go, because the lanes use their own providers, which its provider
- * allow-list cannot bind. Suspect and closed threads never qualify. The pull
- * number comes from the subject's API url, never from a title or body. Used
- * by Autopilot (#12874) and the inbox's Resolve with agent button.
+ * plan with `refused` names why it cannot go: a Private account's threads never
+ * go (the lanes use their own providers, which its allow-list cannot bind), and
+ * the per-app lanes need the repo to be a PortOS managed app. Suspect and closed
+ * threads never qualify. The pull number comes from the subject's API url and
+ * the link from the stored html url, never from a title or body.
+ *
+ * Lanes: an outside PR's review request in a managed app goes to
+ * `pr-reviewer`; a review request for a PR by you or a trusted author goes to
+ * a review-only `/do:review` run
+ * (`do-review`, opt-in for Autopilot through an agent rule); outside issue
+ * activity to `issue-watcher`; a security alert to the app's
+ * `dependency-updates`, or, in a repo of yours with no app or a global
+ * advisory, a one-off `security-fix` run in a scratch clone. The account's
+ * matching agent rule (`matchAgentRule`) adds its provider/model/effort pin.
+ * Used by Autopilot and the inbox's Resolve with agent button.
  */
 export function agentHandoff({ account, row }) {
   if (row?.state !== 'open' || row.suspect) return null;
   const evidence = row.evidence || {};
+  const kind = threadAgentKind(row);
+  const rule = matchAgentRule(account?.agentRules, kind, row.repo_full_name);
   let plan = null;
-  if (row.decision === 'suggest-untrusted-review' && row.subject_type === 'PullRequest') {
+  if (kind === 'review-request' && REVIEW_DECISIONS.has(row.decision)) {
     const pullNumber = Number(PULL_PATH_RE.exec(String(row.subject_api_url || ''))?.[1]);
-    if (pullNumber > 0) plan = { lane: 'pr-reviewer', pullNumber };
-  } else if (row.subject_type === 'Issue' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
+    // Only a PR by you or a trusted author goes to a plain /do:review run; an
+    // outside PR goes to pr-reviewer, which screens untrusted content first and
+    // needs a managed app (`needsApp` below refuses it otherwise).
+    if (pullNumber > 0 && REVIEW_TRUST.has(row.trust)) plan = { lane: 'do-review', pullNumber, repo: row.repo_full_name, optIn: true };
+    else if (pullNumber > 0 && row.decision === 'suggest-untrusted-review') plan = { lane: 'pr-reviewer', pullNumber };
+  } else if (kind === 'issue-activity' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
     plan = { lane: 'issue-watcher' };
-  } else if (row.reason === 'security_alert' && row.decision === 'surface-high') {
+  } else if (kind === 'security-alert' && row.decision === 'surface-high') {
     // A managed app's own dependency lane reads the repo's Dependabot alerts and
     // PRs, not the thread. A repo of yours with no app, or an advisory that
     // names no repo, gets a one-off security fix run that works in a scratch clone.
@@ -221,12 +286,24 @@ export function agentHandoff({ account, row }) {
       : { lane: 'dependency-updates' };
   }
   if (!plan) return null;
+  const pin = rulePin(rule);
+  if (pin) plan.pin = pin;
+  if (rule) plan.rule = { id: rule.id || null, agent: rule.agent };
   if (account?.trust === 'private') return { ...plan, refused: 'private-account' };
-  if (plan.lane !== 'security-fix' && evidence.repoManaged !== true) return { ...plan, refused: 'no-managed-app' };
+  const needsApp = plan.lane !== 'security-fix' && plan.lane !== 'do-review';
+  if (needsApp && evidence.repoManaged !== true) return { ...plan, refused: 'no-managed-app' };
   return plan;
 }
 
-/** Autopilot's plan for a thread: `agentHandoff`, only in Autopilot mode. */
+/**
+ * Autopilot's plan for a thread: `agentHandoff` in Autopilot mode, minus
+ * anything an agent rule switched off, and minus an opt-in lane no rule
+ * switched on.
+ */
 export function autopilotHandoff({ account, row }) {
-  return account?.mode === 'autopilot' ? agentHandoff({ account, row }) : null;
+  if (account?.mode !== 'autopilot') return null;
+  const plan = agentHandoff({ account, row });
+  if (!plan || plan.rule?.agent === false) return null;
+  if (plan.optIn && plan.rule?.agent !== true) return null;
+  return plan;
 }

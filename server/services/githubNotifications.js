@@ -244,7 +244,7 @@ const toIso = (value) => (value instanceof Date ? value.toISOString() : value);
 // The lane Resolve with agent would use, and why it cannot when refused.
 const agentView = (account, row) => {
   const plan = account ? agentHandoff({ account, row }) : null;
-  return plan ? { lane: plan.lane, refused: plan.refused || null } : null;
+  return plan ? { lane: plan.lane, refused: plan.refused || null, pin: plan.pin || null } : null;
 };
 
 const toApi = (row, accountsById) => {
@@ -277,16 +277,24 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
   const accounts = await listAccounts();
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const ids = accountId ? [accountId] : accounts.map((account) => account.id);
-  const [rows, syncRows] = await Promise.all([
+  const [rows, syncRows, countRows] = await Promise.all([
     query(
       `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${VIEW_FILTERS[view]}
        ORDER BY gh_updated_at DESC LIMIT ${LIST_LIMIT}`,
       [ids],
     ),
     query('SELECT account_id, last_sync_at, last_error, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])', [ids]),
+    // Every view's size for the inbox's summary, plus the open threads an agent has.
+    query(
+      `SELECT ${NOTIFICATION_VIEWS.map((name) => `COUNT(*) FILTER (WHERE ${VIEW_FILTERS[name]})::int AS "${name}"`).join(', ')},
+         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off')::int AS "with-agents"
+       FROM github_notifications WHERE account_id = ANY($1::text[])`,
+      [ids],
+    ),
   ]);
   return {
     notifications: rows.rows.map((row) => toApi(row, accountsById)),
+    counts: countRows.rows[0],
     sync: Object.fromEntries(syncRows.rows.map((row) => [row.account_id, {
       lastSyncAt: toIso(row.last_sync_at),
       lastError: row.last_error || null,
@@ -502,7 +510,7 @@ export async function getAutomationsOverview() {
   const { getJob } = await import('./autonomousJobs.js');
   const [accounts, job] = await Promise.all([listAccounts(), getJob(NOTIFICATION_CHECK_JOB_ID)]);
   const ids = accounts.map((account) => account.id);
-  const [syncRows, countRows] = await Promise.all([
+  const [syncRows, countRows, repoRows] = await Promise.all([
     query('SELECT account_id, last_sync_at, last_error, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])', [ids]),
     query(
       `SELECT account_id, COUNT(*) FILTER (WHERE NOT suspect)::int AS needs_you, COUNT(*) FILTER (WHERE suspect)::int AS suspect,
@@ -510,7 +518,14 @@ export async function getAutomationsOverview() {
        FROM github_notifications WHERE account_id = ANY($1::text[]) AND state = 'open' GROUP BY account_id`,
       [ids],
     ),
+    // The repos an agent rule can name without typing: those the inbox has seen.
+    query(
+      `SELECT account_id, array_agg(DISTINCT repo_full_name ORDER BY repo_full_name) AS repos
+       FROM github_notifications WHERE account_id = ANY($1::text[]) AND repo_full_name <> '' GROUP BY account_id`,
+      [ids],
+    ),
   ]);
+  const reposById = new Map(repoRows.rows.map((row) => [row.account_id, row.repos.slice(0, 200)]));
   const syncById = new Map(syncRows.rows.map((row) => [row.account_id, row]));
   const countsById = new Map(countRows.rows.map((row) => [row.account_id, row]));
   return {
@@ -533,6 +548,8 @@ export async function getAutomationsOverview() {
         needsYou: counts?.needs_you || 0,
         suspect: counts?.suspect || 0,
         pending: counts?.pending || 0,
+        agentRules: Array.isArray(account.agentRules) ? account.agentRules : [],
+        repos: reposById.get(account.id) || [],
       };
     }),
   };

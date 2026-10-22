@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  agentHandoff, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, parseCiBranch,
+  agentHandoff, agentRuleScope, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, parseCiBranch,
   selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
@@ -143,7 +143,7 @@ describe('selectNotificationProvider', () => {
 describe('autopilotHandoff', () => {
   const account = { mode: 'autopilot', trust: 'public' };
   const review = {
-    state: 'open', suspect: false, trust: 'outside', decision: 'suggest-untrusted-review', subject_type: 'PullRequest',
+    state: 'open', suspect: false, trust: 'outside', reason: 'review_requested', decision: 'suggest-untrusted-review', subject_type: 'PullRequest',
     subject_api_url: 'https://api.github.com/repos/acme/app/pulls/42', evidence: { repoManaged: true },
   };
   const issue = { ...review, decision: 'needs-you', subject_type: 'Issue', subject_api_url: 'https://api.github.com/repos/acme/app/issues/7' };
@@ -166,6 +166,43 @@ describe('autopilotHandoff', () => {
     expect(autopilotHandoff({ account, row: { ...issue, state: 'done' } })).toBeNull();
     // An issue from you or a collaborator with no outside comment stays with you.
     expect(autopilotHandoff({ account, row: { ...issue, trust: 'trusted' } })).toBeNull();
+  });
+
+  it('sends a trusted PR to Do:Review only when a rule switches it on, and keeps outside PRs off it', () => {
+    const trusted = { ...review, trust: 'trusted', decision: 'suggest-review', evidence: { repoManaged: false } };
+    expect(autopilotHandoff({ account, row: trusted })).toBeNull();
+    const rules = [{ id: 'r', kind: 'review-request', repo: '*', agent: true, effort: 'high' }];
+    expect(autopilotHandoff({ account: { ...account, agentRules: rules }, row: trusted }))
+      .toMatchObject({ lane: 'do-review', pullNumber: 42, pin: { effort: 'high' } });
+    expect(autopilotHandoff({ account: { ...account, agentRules: rules }, row: { ...review, evidence: { repoManaged: false } } }))
+      .toMatchObject({ lane: 'pr-reviewer', refused: 'no-managed-app' });
+  });
+
+  it('applies the repo rule over the * rule, case-insensitively, and ignores a malformed rule', () => {
+    const rules = [
+      { id: 'all', kind: 'security-alert', repo: '*', agent: true, model: 'wide' },
+      { id: 'one', kind: 'security-alert', repo: 'ACME/App', agent: false },
+      { id: 'bad', kind: 'security-alert', repo: 'not a repo', agent: true },
+    ];
+    const alert = { ...review, reason: 'security_alert', decision: 'surface-high', subject_type: 'RepositoryVulnerabilityAlert', trust: 'unknown' };
+    expect(autopilotHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/app' } })).toBeNull();
+    expect(agentHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/app' } }))
+      .toMatchObject({ lane: 'dependency-updates', rule: { id: 'one', agent: false } });
+    expect(autopilotHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/other' } }))
+      .toMatchObject({ lane: 'dependency-updates', pin: { model: 'wide' }, rule: { id: 'all' } });
+  });
+
+  it('scopes Autopilot candidates the way the rules decide them', () => {
+    const rules = [
+      { kind: 'review-request', repo: '*', agent: true },
+      { kind: 'review-request', repo: 'Acme/Quiet', agent: false },
+      { kind: 'security-alert', repo: '*', agent: false },
+      { kind: 'security-alert', repo: 'acme/app', agent: true },
+    ];
+    expect(agentRuleScope(rules, 'review-request', { optIn: true })).toEqual({ all: true, except: ['acme/quiet'], only: [] });
+    expect(agentRuleScope(rules, 'security-alert')).toEqual({ all: false, except: [], only: ['acme/app'] });
+    expect(agentRuleScope([], 'issue-activity')).toEqual({ all: true, except: [], only: [] });
+    expect(agentRuleScope([], 'review-request', { optIn: true })).toEqual({ all: false, except: [], only: [] });
   });
 
   it('refuses every hand-off on a Private account, whose provider allow-list the lanes cannot honor', () => {

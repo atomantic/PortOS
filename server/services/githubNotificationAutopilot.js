@@ -6,40 +6,53 @@
  * Untrusted:Review button), outside issue activity to `issue-watcher`, and a
  * security alert to `dependency-updates`. A security alert in a repo of yours
  * that no app manages, or a global advisory, goes to a one-off `security-fix`
- * task (githubSecurityFixTask.js). The inbox's Resolve with agent button
- * hands one thread off the same way on a tap, in any mode.
+ * task (githubSecurityFixTask.js). Any other review request goes to a
+ * review-only `/do:review` run (prDoReviewTask.js) once an agent rule switches
+ * review requests on for its repo. The account's agent rules also switch a kind
+ * off for a repo, and pin each run's provider/model/effort. The inbox's Resolve
+ * with agent button hands one thread off the same way on a tap, in any mode.
  *
- * Nothing here reads thread text or starts an agent: each hand-off queues the
- * lane's own on-demand run, which re-screens its input with its own guards. The
- * on-demand origin is automated, so the lane must be switched on for that app.
- * Mentions or requests in repos the operator does not own are never handed off.
+ * Nothing here reads thread text: each hand-off queues the lane's own run,
+ * which re-screens its input with its own guards. The on-demand origin is
+ * automated, so a per-app lane must be switched on for that app. Mentions in
+ * repos the operator does not own are never handed off.
  */
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { advisoryIdFromUrl } from '../lib/githubNotificationParse.js';
-import { agentHandoff, autopilotHandoff } from '../lib/githubNotificationTriage.js';
+import { agentHandoff, agentRuleScope, autopilotHandoff } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { managedAppsByRepoKey } from './githubNotificationTriage.js';
 import { queueSecurityFixTask } from './githubSecurityFixTask.js';
+import { spawnPrDoReviewTask } from './prDoReviewTask.js';
 import { queueTargetedPrReview, readActiveTasks, readPendingOnDemandRequests, ACTIVE_TASK_STATUSES } from './prReviewerTargetedRun.js';
 import { triggerOnDemandTask } from './taskSchedule.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 
 // Threads per run, not agent runs: a run queues at most one agent per repo and lane.
 const MAX_HANDOFFS_PER_RUN = 50;
-// The SQL mirror of `agentHandoff`'s lane rules, so a run's limit is spent
-// only on threads that can be handed off and an older eligible thread is never
-// starved by newer ones the rule would reject.
-const CANDIDATE_SQL = `((decision = 'suggest-untrusted-review' AND subject_type = 'PullRequest')
-  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface') AND (trust = 'outside' OR evidence->>'commenter' IS NOT NULL))
-  OR (reason = 'security_alert' AND decision = 'surface-high'))`;
+// The SQL mirror of `agentHandoff`'s lane rules and the account's agent
+// rules, so a run's limit is spent only on threads that can be handed off and
+// an older eligible thread is never starved by newer ones the rules would
+// reject. `inScope(n)` reads one `agentRuleScope` as parameters $n..$n+2.
+const inScope = (n) => `(($${n}::boolean AND NOT (lower(repo_full_name) = ANY($${n + 1}::text[]))) OR lower(repo_full_name) = ANY($${n + 2}::text[]))`;
+const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest' AND (
+      (decision = 'suggest-untrusted-review' AND COALESCE(trust, '') NOT IN ('yours', 'trusted') AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(2)})
+      OR (decision IN ('suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface') AND trust IN ('yours', 'trusted') AND ${inScope(5)})))
+  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface') AND (trust = 'outside' OR evidence->>'commenter' IS NOT NULL)
+    AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(8)})
+  OR (reason = 'security_alert' AND decision = 'surface-high' AND ${inScope(11)}))`;
+const scopeParams = ({ all, except, only }) => [all, except, only];
+
+// Lanes that run without a managed app: a scratch clone, or `gh` in PR mode.
+const APP_FREE_LANES = new Set(['security-fix', 'do-review']);
 
 /**
  * Queue the app's run of a whole-app lane unless one is already queued or
  * running. For pr-reviewer this is the sweep over every outside PR, so a run
  * narrowed to one PR does not count as one.
  */
-async function queueAppLane(taskType, app, origin) {
+async function queueAppLane(taskType, app, origin, pin) {
   const covers = (target) => target === undefined || target === null;
   const [tasks, requests] = await Promise.all([readActiveTasks(), readPendingOnDemandRequests()]);
   // Unreadable state is not "nothing queued": fail closed rather than queue a
@@ -49,17 +62,26 @@ async function queueAppLane(taskType, app, origin) {
     && task.metadata?.analysisType === taskType && task.metadata?.app === app.id && covers(task.metadata?.targetPullRequest));
   if (running) return { duplicate: true, taskId: running.id };
   if (requests.some((request) => request?.taskType === taskType && request?.appId === app.id && covers(request?.targetPullRequest))) return { duplicate: true };
-  const request = await triggerOnDemandTask(taskType, app.id, { origin });
+  const request = await triggerOnDemandTask(taskType, app.id, { origin, ...pin });
   return request?.error ? { error: request.error } : { requestId: request.id };
 }
 
-async function queueLane(plan, app, origin, { account, rows }) {
+async function queueLane(plan, app, origin, { account, rows, immediate = false }) {
+  const pin = plan.pin || {};
   if (plan.lane === 'security-fix') {
     const advisories = plan.repo ? [] : rows.map((row) => advisoryIdFromUrl(row.subject_api_url, account.host)).filter(Boolean);
-    return queueSecurityFixTask({ account, repo: plan.repo || null, advisories, origin });
+    return queueSecurityFixTask({ account, repo: plan.repo || null, advisories, origin, ...pin });
   }
-  if (plan.lane !== 'pr-reviewer' || !plan.pullNumber) return queueAppLane(plan.lane, app, origin);
-  return queueTargetedPrReview(app, plan.pullNumber, { origin })
+  if (plan.lane === 'do-review') {
+    // The stored html url is rebuilt from GitHub's own API url on the account's host.
+    const url = rows[0]?.html_url || '';
+    if (!url.endsWith(`/pull/${plan.pullNumber}`)) return { error: 'No pull request link for this notification' };
+    const queued = await spawnPrDoReviewTask({ app, pullRequest: { number: plan.pullNumber, url }, repoFullName: plan.repo, ...pin, immediate });
+    if (!queued.task) return { error: 'The review could not be queued' };
+    return queued.duplicate ? { duplicate: true, taskId: queued.task.id } : { taskId: queued.task.id };
+  }
+  if (plan.lane !== 'pr-reviewer' || !plan.pullNumber) return queueAppLane(plan.lane, app, origin, pin);
+  return queueTargetedPrReview(app, plan.pullNumber, { origin, ...pin })
     .then((queued) => (queued.duplicate ? { duplicate: true, taskId: queued.reviewAction?.taskId || null } : { requestId: queued.request.id }));
 }
 
@@ -90,11 +112,18 @@ async function recordHandoff(account, row, handoff, actor = 'automation') {
  */
 export async function autopilotAccountNotifications(account) {
   if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };
+  const rules = account.agentRules;
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
-       AND ${CANDIDATE_SQL} AND ((evidence->>'repoManaged')::boolean IS TRUE OR reason = 'security_alert') AND NOT (evidence ? 'handoff')
+       AND ${CANDIDATE_SQL} AND NOT (evidence ? 'handoff')
      ORDER BY gh_updated_at DESC LIMIT ${MAX_HANDOFFS_PER_RUN}`,
-    [account.id],
+    [
+      account.id,
+      ...scopeParams(agentRuleScope(rules, 'review-request')),
+      ...scopeParams(agentRuleScope(rules, 'review-request', { optIn: true })),
+      ...scopeParams(agentRuleScope(rules, 'issue-activity')),
+      ...scopeParams(agentRuleScope(rules, 'security-alert')),
+    ],
   );
   const plans = rows.map((row) => ({ row, plan: autopilotHandoff({ account, row }) })).filter((entry) => entry.plan);
   if (!plans.length) return { handedOff: 0, agentRuns: 0 };
@@ -102,20 +131,22 @@ export async function autopilotAccountNotifications(account) {
   const batches = new Map();
   const skipped = [];
   for (const entry of plans) {
-    if (!entry.plan.refused && entry.plan.lane === 'security-fix') {
-      // One run per repo, and one for every global advisory together.
-      const key = `security-fix#${entry.plan.repo || '*'}`;
-      if (!batches.has(key)) batches.set(key, { app: null, lane: 'security-fix', repo: entry.plan.repo, entries: [] });
-      batches.get(key).entries.push({ ...entry, app: null });
+    const app = apps.get(`${account.host}/${entry.row.repo_full_name}`.toLowerCase()) || null;
+    if (!entry.plan.refused && APP_FREE_LANES.has(entry.plan.lane)) {
+      // A security fix runs once per repo, and once for every global advisory
+      // together; a review runs once per pull request.
+      const target = entry.plan.lane === 'do-review' ? `${entry.row.repo_full_name}#${entry.plan.pullNumber}` : entry.plan.repo || '*';
+      const key = `${entry.plan.lane}#${target}`;
+      if (!batches.has(key)) batches.set(key, { app, lane: entry.plan.lane, repo: entry.plan.repo, plan: entry.plan, entries: [] });
+      batches.get(key).entries.push({ ...entry, app });
       continue;
     }
-    const app = apps.get(`${account.host}/${entry.row.repo_full_name}`.toLowerCase());
     if (entry.plan.refused || !app) {
       skipped.push({ ...entry, app, outcome: { skipped: entry.plan.refused || 'no-managed-app' } });
       continue;
     }
     const key = `${app.id}#${entry.plan.lane}`;
-    if (!batches.has(key)) batches.set(key, { app, lane: entry.plan.lane, entries: [] });
+    if (!batches.has(key)) batches.set(key, { app, lane: entry.plan.lane, plan: entry.plan, entries: [] });
     batches.get(key).entries.push({ ...entry, app });
   }
 
@@ -127,6 +158,7 @@ export async function autopilotAccountNotifications(account) {
       appId: app?.id || null,
       appName: app?.name || null,
       ...(plan.pullNumber ? { pullNumber: plan.pullNumber } : {}),
+      ...(plan.pin ? { pin: plan.pin } : {}),
       ...outcome,
       at: new Date().toISOString(),
     };
@@ -138,9 +170,12 @@ export async function autopilotAccountNotifications(account) {
     }
   };
   for (const entry of skipped) await record(entry);
-  for (const { app, lane, repo, entries } of batches.values()) {
+  for (const { app, lane, repo, plan, entries } of batches.values()) {
     const pullNumbers = new Set(entries.map((entry) => entry.plan.pullNumber).filter(Boolean));
-    const batchPlan = lane === 'pr-reviewer' && pullNumbers.size === 1 ? entries[0].plan : { lane, repo };
+    // One rule covers a batch (same repo and kind), so its pin is shared.
+    const batchPlan = lane === 'do-review' || (lane === 'pr-reviewer' && pullNumbers.size === 1)
+      ? plan
+      : { lane, repo, ...(plan.pin ? { pin: plan.pin } : {}) };
     // A lane that throws (a schedule write failing) is a recorded skip, so
     // it never stops Assist or the rest of the sync for this account.
     const queued = await queueLane(batchPlan, app, ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION, { account, rows: entries.map((entry) => entry.row) })
@@ -171,15 +206,16 @@ export async function handOffThread(account, threadId) {
   const plan = agentHandoff({ account, row });
   if (!plan) throw new ServerError('No agent handles this kind of notification', { status: 409, code: 'GITHUB_NOTIFICATION_NO_LANE' });
   if (plan.refused) throw new ServerError(REFUSED_MESSAGES[plan.refused], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
-  const app = plan.lane === 'security-fix' ? null : (await managedAppsByRepoKey()).get(`${account.host}/${row.repo_full_name}`.toLowerCase());
-  if (plan.lane !== 'security-fix' && !app) throw new ServerError(REFUSED_MESSAGES['no-managed-app'], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
-  const queued = await queueLane(plan, app, ON_DEMAND_ORIGINS.USER, { account, rows: [row] });
+  const app = (await managedAppsByRepoKey()).get(`${account.host}/${row.repo_full_name}`.toLowerCase()) || null;
+  if (!APP_FREE_LANES.has(plan.lane) && !app) throw new ServerError(REFUSED_MESSAGES['no-managed-app'], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+  const queued = await queueLane(plan, app, ON_DEMAND_ORIGINS.USER, { account, rows: [row], immediate: true });
   if (queued.error) throw new ServerError(String(queued.error), { status: 409, code: 'GITHUB_NOTIFICATION_LANE_UNAVAILABLE' });
   await recordHandoff(account, row, {
     lane: plan.lane,
     appId: app?.id || null,
     appName: app?.name || null,
     ...(plan.pullNumber ? { pullNumber: plan.pullNumber } : {}),
+    ...(plan.pin ? { pin: plan.pin } : {}),
     ...queued,
     at: new Date().toISOString(),
   }, 'operator');

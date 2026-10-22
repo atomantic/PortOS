@@ -62,10 +62,10 @@ function buildPrompt({ host, login, repo, advisories }) {
 
 /**
  * Queue one security-fix run for a repo (`repo`) or for a set of global
- * advisories (`advisories`). Returns `{ taskId }`, `{ duplicate: true, taskId }`
+ * advisories (`advisories`), optionally pinned to a provider/model/effort. Returns `{ taskId }`, `{ duplicate: true, taskId }`
  * when the same run is already queued or running, or `{ error }`.
  */
-export async function queueSecurityFixTask({ account, repo = null, advisories = [], origin = 'automation' }) {
+export async function queueSecurityFixTask({ account, repo = null, advisories = [], origin = 'automation', provider, model, effort }) {
   if (!HOST_RE.test(account?.host || '')) return { error: 'Invalid account host' };
   const login = LOGIN_RE.test(account.login || '') ? account.login : null;
   if (repo !== null && !REPO_RE.test(repo)) return { error: 'Invalid repository name' };
@@ -74,6 +74,7 @@ export async function queueSecurityFixTask({ account, repo = null, advisories = 
   const task = await addTask({
     description: buildPrompt({ host: account.host, login, repo, advisories: ids }),
     priority: 'HIGH',
+    provider, model, effort,
     // The deliverable is a pull request on another repo, made from a scratch
     // clone during the run: no PortOS worktree, and a clean PortOS tree is success.
     useWorktree: false,

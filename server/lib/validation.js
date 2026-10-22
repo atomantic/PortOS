@@ -951,6 +951,30 @@ export const GITHUB_ACCOUNT_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
 export const GITHUB_ACCOUNT_MODES = Object.freeze(['observe', 'assist', 'autopilot']);
 
+// Per-repo agent rules for the GitHub inbox: which kind of notification starts
+// a CoS agent, in one repo (`owner/repo`) or every repo (`*`), and on which
+// provider/model/effort. A repo rule wins over the `*` rule of the same kind.
+export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity']);
+export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
+const emptyToNullString = (value) => (value === '' ? null : value);
+export const githubAgentRuleSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+  kind: z.enum(GITHUB_AGENT_RULE_KINDS),
+  repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, or * for every repo'),
+  agent: z.boolean(),
+  provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
+  model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
+  effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
+}).strict();
+export const githubAgentRulesSchema = z.array(githubAgentRuleSchema).max(200).superRefine((rules, ctx) => {
+  const seen = new Set();
+  rules.forEach((rule, index) => {
+    const key = `${rule.kind}#${rule.repo.toLowerCase()}`;
+    if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [index, 'repo'], message: `There is already a ${rule.kind} rule for ${rule.repo}` });
+    seen.add(key);
+  });
+});
+
 export const githubAccountCreateSchema = z.object({
   label: z.string().trim().max(80).optional(),
   host: z.string().trim().toLowerCase()
@@ -963,6 +987,7 @@ export const githubAccountCreateSchema = z.object({
   mode: z.enum(GITHUB_ACCOUNT_MODES).optional(),
   // Monthly subscription audit delivered as a PortOS notification (#12874).
   auditReport: z.boolean().optional(),
+  agentRules: githubAgentRulesSchema.optional(),
   enabled: z.boolean().optional(),
 }).strict();
 
