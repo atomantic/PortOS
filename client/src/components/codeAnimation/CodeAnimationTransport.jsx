@@ -40,29 +40,37 @@ export default function CodeAnimationTransport({ preview, duration, fps = 24, au
     return clock ? clock.from + (performance.now() - clock.startedAt) / 1000 : t;
   }, [audioUrl, t]);
 
-  const pause = useCallback((time) => {
+  // Stops local playback only; `pause` also holds the film at that time.
+  const stop = useCallback((time) => {
     const next = Math.min(Math.max(0, Number.isFinite(time) ? time : 0), end);
     audioRef.current?.pause?.();
     if (audioRef.current && audioUrl) audioRef.current.currentTime = next;
     clockRef.current = null;
     setPlaying(false);
     setT(next);
-    seekPreview(next);
-  }, [end, audioUrl, seekPreview]);
+    return next;
+  }, [end, audioUrl]);
+  const pause = useCallback((time) => seekPreview(stop(time)), [stop, seekPreview]);
 
   // Effects below read the latest clock through this ref, so a tick or a new
   // session does not re-run them.
   const latest = useRef(null);
-  latest.current = { now, pause, end, duration, fps, seekPreview, playing };
+  latest.current = { now, stop, pause, end, duration, fps, seekPreview, playing };
 
   // A new session opens on the film's own loop; take it over at the start.
   useEffect(() => {
     if (preview.ready) latest.current.pause(0);
   }, [preview.ready, preview.sessionId]);
 
-  // A real-time record runs on the film's own clock.
+  // A real-time record runs on the film's own clock, so starting one stops
+  // playback without a seek (which would hold the clock again); once it ends
+  // the film is held back at the playhead.
+  const wasDisabled = useRef(disabled);
   useEffect(() => {
-    if (disabled && latest.current.playing) latest.current.pause(latest.current.now());
+    const clock = latest.current;
+    if (disabled) clock.stop(clock.now());
+    else if (wasDisabled.current) clock.pause(clock.now());
+    wasDisabled.current = disabled;
   }, [disabled]);
 
   const play = async () => {

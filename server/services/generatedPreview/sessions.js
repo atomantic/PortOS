@@ -182,9 +182,12 @@ async function applyJson(page, globalName, value) {
 // A Code Animation page runs its own requestAnimationFrame clock. A seek takes
 // that clock over: callbacks are held (not dropped) so releasing them, before a
 // real-time record, resumes the page's loop. One native frame passes after the
-// hold so a callback already queued cannot paint over the requested time.
+// hold so a callback already queued cannot paint over the requested time. A
+// page without renderFrame(t) (Record-only, or a module not yet run) keeps its
+// own loop, since nothing else could draw the held frames.
 const holdCodeAnimationClock = (time) => `(async () => {
   const w = window;
+  if (typeof w.renderFrame !== 'function') return false;
   if (!w.__portosClock) {
     const raf = w.requestAnimationFrame.bind(w);
     const clock = { raf, held: [], on: false };
@@ -200,7 +203,8 @@ const holdCodeAnimationClock = (time) => `(async () => {
     clock.on = true;
     await Promise.race([new Promise((resolve) => clock.raf(() => resolve())), new Promise((resolve) => setTimeout(resolve, 100))]);
   }
-  if (typeof w.renderFrame === 'function') w.renderFrame(${time});
+  await w.renderFrame(${time});
+  return true;
 })()`;
 
 const RELEASE_CODE_ANIMATION_CLOCK = `(() => {

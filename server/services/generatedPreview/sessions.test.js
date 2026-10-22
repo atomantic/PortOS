@@ -608,4 +608,26 @@ describe('code animation playhead', () => {
     await vi.waitFor(() => expect(win.postMessage).toHaveBeenCalledWith({ type: 'example:record' }, '*'));
     await vi.waitFor(() => expect(drawn.at(-1)).toBeGreaterThanOrEqual(100));
   });
+
+  it('leaves a page without renderFrame on its own loop', async () => {
+    let frames = 0;
+    const win = { requestAnimationFrame: (callback) => setTimeout(() => callback(performance.now()), 1), postMessage: vi.fn() };
+    const tick = () => { frames += 1; win.requestAnimationFrame(tick); };
+    fixture.page = {
+      evaluate: (source) => new Function('window', 'return ' + source)(win),
+      send: async () => ({ data: 'frame' }),
+      close: async () => {},
+    };
+    registerGeneratedPreviewHandlers(socket);
+    const requestId = '00000000-0000-4000-8000-000000000003';
+    socket.handlers.get('generated-preview:open')({ requestId, kind: 'code-animation', html: '<canvas></canvas>' });
+    await vi.waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:opened', expect.any(Object)));
+    const sessionId = socket.emit.mock.calls.find(([event]) => event === 'generated-preview:opened')[1].sessionId;
+    tick();
+
+    socket.handlers.get('generated-preview:seek')({ requestId, sessionId, generation: 1, t: 2.5 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const after = frames;
+    await vi.waitFor(() => expect(frames).toBeGreaterThan(after + 3));
+  });
 });

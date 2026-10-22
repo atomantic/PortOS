@@ -315,6 +315,33 @@ describe('CodeAnimationPreview playhead', () => {
     await user.click(screen.getByRole('button', { name: 'Pause' }));
     expect(screen.getByRole('button', { name: 'Play' })).toBeTruthy();
   });
+
+  it('leaves the film its own clock while recording, then holds it at the playhead again', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    renderPreview({ audioUrl: '/data/music/take.wav' });
+    await user.click(screen.getByRole('button', { name: 'Preview without audio' }));
+    await waitFor(() => expect(seeks().at(-1)).toMatchObject({ t: 0, playing: false }));
+    const open = previewOpens().at(-1)[1];
+    const sessionId = socket.__sessions.get(open.requestId);
+    fireEvent.change(screen.getByLabelText('Playhead'), { target: { value: '2.5' } });
+    await user.click(screen.getByRole('button', { name: 'Play' }));
+
+    await user.click(screen.getByRole('button', { name: /record \(real-time\)/i }));
+    const recordAt = socket.emit.mock.calls.findIndex(([event, payload]) => event === 'generated-preview:command' && payload.action === 'record');
+    expect(recordAt).toBeGreaterThan(-1);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled());
+    expect(socket.emit.mock.calls.slice(recordAt).some(([event]) => event === 'generated-preview:seek')).toBe(false);
+
+    await act(async () => {
+      for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
+        fn({ requestId: open.requestId, sessionId, index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
+      }
+    });
+    await waitFor(() => expect(socket.emit.mock.calls.slice(recordAt).some(([event, payload]) => event === 'generated-preview:seek' && payload.playing === false)).toBe(true));
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+  });
 });
 
 describe('CodeAnimationPreview frame-exact export', () => {
