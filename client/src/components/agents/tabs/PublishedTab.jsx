@@ -4,6 +4,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailedState from '../../ui/LoadFailedState';
 import { FormField } from '../../ui/FormField';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
+import useLatestRequest from '../../../hooks/useLatestRequest.js';
 
 export default function PublishedTab({ agentId }) {
   const [accounts, setAccounts] = useState([]);
@@ -13,6 +14,7 @@ export default function PublishedTab({ agentId }) {
   const [publishedError, setPublishedError] = useState(false);
   const [publishedDays, setPublishedDays] = useState(7);
   const [loading, setLoading] = useState(true);
+  const beginPublishedLoad = useLatestRequest();
 
   const fetchAccounts = useCallback(async () => {
     const data = await api.getPlatformAccounts(agentId);
@@ -30,21 +32,24 @@ export default function PublishedTab({ agentId }) {
   }, [fetchAccounts]);
 
   const loadPublished = useCallback(async () => {
+    const isCurrent = beginPublishedLoad();
     if (!agentId || !selectedAccountId) {
       setPublished({ posts: [], comments: [] });
+      setPublishedLoading(false);
       return;
     }
     setPublishedLoading(true);
     setPublishedError(false);
     try {
       const data = await api.getAgentPublished({ agentId, accountId: selectedAccountId, days: publishedDays }, { silent: true });
+      if (!isCurrent()) return;
       setPublished(data);
     } catch {
+      if (!isCurrent()) return;
       setPublishedError(true);
-    } finally {
-      setPublishedLoading(false);
     }
-  }, [agentId, selectedAccountId, publishedDays]);
+    setPublishedLoading(false);
+  }, [agentId, selectedAccountId, publishedDays, beginPublishedLoad]);
 
   useEffect(() => {
     loadPublished();

@@ -7,6 +7,7 @@ import LoadFailedState from '../components/ui/LoadFailedState';
 import Banner from '../components/ui/Banner';
 import ListLoadError from '../components/ui/ListLoadError';
 import useListResource from '../hooks/useListResource.js';
+import useLatestRequest from '../hooks/useLatestRequest.js';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 export function HistoryPage() {
@@ -17,6 +18,7 @@ export function HistoryPage() {
   const [filter, setFilter] = useState({ action: '', success: '' });
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
+  const beginLoad = useLatestRequest();
 
   const fetchActions = useCallback(async () => {
     const list = await api.getHistoryActions({ silent: true });
@@ -26,6 +28,7 @@ export function HistoryPage() {
   const { items: actions, state: actionsState, error: actionsError, retry: retryActions } = actionsResource;
 
   const loadData = useCallback(async () => {
+    const isCurrent = beginLoad();
     setLoading(true);
     const [historyData, statsData] = await Promise.all([
       api.getHistory({
@@ -35,11 +38,12 @@ export function HistoryPage() {
       }).catch(() => null),
       api.getHistoryStats().catch(() => null),
     ]);
+    if (!isCurrent()) return;
     setHistoryFailed(historyData === null);
     if (historyData) setHistory(historyData.entries || []);
     setStats(statsData);
     setLoading(false);
-  }, [filter]);
+  }, [filter, beginLoad]);
 
   useEffect(() => {
     loadData();
