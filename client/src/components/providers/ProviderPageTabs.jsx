@@ -1,5 +1,5 @@
 /**
- * The AI Providers page's three views (navigated through the Models section strip, which owns the only tab row) (#7567, epic #7561), each its own URL so
+ * The AI Providers page's three views (#7567, epic #7561), each its own URL so
  * a card is linkable and reachable from ⌘K and voice:
  *
  *   - **Presets** — the stored records the `{ providerId, model, effort }`
@@ -7,6 +7,9 @@
  *   - **Harnesses** — the programs that drive a model and whether each is
  *     switched on, plus the credential-bootstrap apps a composite can spawn through.
  *   - **Services** — instances of a service definition: plan, credential, catalog.
+ *
+ * Navigation between them is the Models section strip; this module is only the
+ * route resolver, with no tab row of its own.
  *
  * Exported so the page test can enumerate the views without a second list.
  */
