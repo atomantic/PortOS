@@ -69,6 +69,26 @@ describe('getActivityTimeline', () => {
     expect(second).toEqual(first);
   });
 
+  it('filters by action before the limit cut and still honors the cursor', async () => {
+    const mixed = (id, ts, action) => ({ ...entry(id, ts), action });
+    await writeDay('agent-a', '2026-08-23', [
+      mixed('say-1', '2026-08-23T00:00:09.000Z', 'mw_say'),
+      mixed('post-1', '2026-08-23T00:00:08.000Z', 'post'),
+      mixed('think-1', '2026-08-23T00:00:07.000Z', 'mw_think'),
+    ]);
+    await writeDay('agent-a', '2026-08-22', [
+      mixed('say-2', '2026-08-22T00:00:09.000Z', 'mw_say'),
+      mixed('post-2', '2026-08-22T00:00:08.000Z', 'post'),
+    ]);
+
+    const ids = async (options) => (await getActivityTimeline(options)).map(({ id }) => id);
+    await expect(ids({ limit: 2, actions: ['post'] })).resolves.toEqual(['post-1', 'post-2']);
+    await expect(ids({ limit: 3, actions: ['mw_say', 'mw_think'] })).resolves.toEqual(['say-1', 'think-1', 'say-2']);
+    await expect(ids({
+      limit: 5, actions: ['mw_say'], beforeTimestamp: '2026-08-23T00:00:09.000Z',
+    })).resolves.toEqual(['say-2']);
+  });
+
   it('skips empty days while walking backward', async () => {
     await writeDay('agent-a', '2026-08-23', []);
     await writeDay('agent-a', '2026-08-21', [entry('older', '2026-08-21T09:00:00.000Z')]);

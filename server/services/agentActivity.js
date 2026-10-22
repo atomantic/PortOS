@@ -246,7 +246,7 @@ export async function getAgentStats(agentId, days = 7) {
  * Get activity timeline for display
  */
 export async function getActivityTimeline(options = {}) {
-  const { agentIds = null, limit = 100, beforeTimestamp = null } = options;
+  const { agentIds = null, actions = null, limit = 100, beforeTimestamp = null } = options;
   const before = beforeTimestamp ? new Date(beforeTimestamp).getTime() : null;
 
   await ensureActivityDir();
@@ -272,7 +272,8 @@ export async function getActivityTimeline(options = {}) {
       const data = await loadActivity(agentId, date);
       for (const activity of data.activities || []) {
         const timestamp = new Date(activity.timestamp).getTime();
-        if (before === null || timestamp < before) {
+        // Filter before the limit cut so a filtered page stays full.
+        if ((before === null || timestamp < before) && (!actions || actions.includes(activity.action))) {
           dayActivities.push({ agentId, ...activity });
         }
       }

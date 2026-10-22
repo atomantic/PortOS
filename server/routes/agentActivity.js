@@ -31,9 +31,9 @@ router.get('/', asyncHandler(async (req, res) => {
 
 // GET /timeline - Get activity timeline (for infinite scroll)
 router.get('/timeline', asyncHandler(async (req, res) => {
-  const { limit, agentIds, before } = validateRequest(agentActivityTimelineQuerySchema, req.query);
+  const { limit, agentIds, action, before } = validateRequest(agentActivityTimelineQuerySchema, req.query);
 
-  res.json(await agentActivity.getActivityTimeline({ limit, agentIds, beforeTimestamp: before }));
+  res.json(await agentActivity.getActivityTimeline({ limit, agentIds, actions: action, beforeTimestamp: before }));
 }));
 
 // GET /agent/:agentId - Get activities for specific agent

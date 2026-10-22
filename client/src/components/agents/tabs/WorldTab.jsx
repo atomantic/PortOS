@@ -35,6 +35,9 @@ const HISTORY_ACTION_ICONS = {
   mw_interact: '🤝'
 };
 
+const MW_HISTORY_ACTIONS = ['mw_explore', 'mw_build', 'mw_think', 'mw_say', 'mw_heartbeat', 'mw_interact'];
+const HISTORY_PAGE_SIZE = 30;
+
 const HISTORY_FILTERS = [
   { value: '', label: 'All' },
   { value: 'mw_explore', label: 'Explore' },
@@ -173,23 +176,17 @@ export default function WorldTab({ agentId }) {
   // Fetch activity history
   const fetchHistory = useCallback(async (append = false, before = null) => {
     setHistoryLoading(true);
-    const mwActions = historyFilter || 'mw_explore,mw_build,mw_think,mw_say,mw_heartbeat,mw_interact';
-    let data;
-    if (before) {
-      data = await api.getAgentActivityTimeline(30, [agentId], before).catch(() => null);
-    } else {
-      data = await api.getAgentActivities(30, [agentId], mwActions).catch(() => null);
-    }
+    const mwActions = historyFilter || MW_HISTORY_ACTIONS;
+    const data = await api.getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions).catch(() => null);
     if (data) {
-      const items = Array.isArray(data) ? data : data.activities || [];
-      // Filter to mw_* actions only
-      const mwItems = items.filter(a => a.action?.startsWith('mw_'));
+      const items = Array.isArray(data) ? data : [];
       if (append) {
-        setHistory(prev => [...prev, ...mwItems]);
+        setHistory(prev => [...prev, ...items]);
       } else {
-        setHistory(mwItems);
+        setHistory(items);
       }
-      setHistoryHasMore(mwItems.length >= 30);
+      // The server already applied the filter, so a full page means more may exist.
+      setHistoryHasMore(items.length >= HISTORY_PAGE_SIZE);
     }
     setHistoryLoading(false);
   }, [agentId, historyFilter]);

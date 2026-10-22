@@ -1938,6 +1938,8 @@ export const agentActivityQuerySchema = z.object({
 export const agentActivityTimelineQuerySchema = z.object({
   limit: agentActivityLimit(50),
   agentIds: agentActivityIds,
+  // One action or a comma-separated list (the Moltworld history asks for every mw_* kind).
+  action: csvIdsParam({ max: 10, maxIdLength: 64 }),
   before: z.preprocess(emptyToUndefined, z.string().datetime().optional()),
 }).strict();
 

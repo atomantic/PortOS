@@ -4,6 +4,8 @@ import BrailleSpinner from '../../BrailleSpinner';
 import { ACTION_TYPES } from '../constants';
 import { formatDateTime } from '../../../utils/formatters';
 
+const PAGE_SIZE = 50;
+
 export default function ActivityTab({ agentId }) {
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -11,11 +13,11 @@ export default function ActivityTab({ agentId }) {
   const [hasMore, setHasMore] = useState(true);
 
   const fetchData = useCallback(async () => {
-    const activitiesData = await api.getAgentActivities(
-      50, [agentId], actionFilter || null
+    const activitiesData = await api.getAgentActivityTimeline(
+      PAGE_SIZE, [agentId], null, actionFilter || null
     );
     setActivities(activitiesData);
-    setHasMore(activitiesData.length >= 50);
+    setHasMore(activitiesData.length >= PAGE_SIZE);
     setLoading(false);
   }, [agentId, actionFilter]);
 
@@ -28,10 +30,10 @@ export default function ActivityTab({ agentId }) {
 
     const lastTimestamp = activities[activities.length - 1].timestamp;
     const moreData = await api.getAgentActivityTimeline(
-      50, [agentId], lastTimestamp
+      PAGE_SIZE, [agentId], lastTimestamp, actionFilter || null
     );
 
-    if (moreData.length < 50) {
+    if (moreData.length < PAGE_SIZE) {
       setHasMore(false);
     }
 
