@@ -1,22 +1,33 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Play } from 'lucide-react';
+import { Play, Undo2, X } from 'lucide-react';
 import Pill from '../ui/Pill';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
 import { timeAgo } from '../../utils/formatters';
 import socket from '../../services/socket';
 import {
+  deleteGitHubLearnedRule,
+  getGitHubAutomationActivity,
   getGitHubAutomations,
+  getGitHubLearnedRules,
   setGitHubNotificationCadence,
   syncGitHubNotifications,
+  undoGitHubAutomationAction,
+  updateGitHubAccount,
 } from '../../services/api';
+import { ACTION_LABELS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
 
-const MODE_VIEW = {
-  observe: { label: 'Observe', hint: 'Records a decision for each notification; changes nothing on GitHub.' },
-  assist: { label: 'Assist', hint: 'Coming next: runs only safe actions after screening.' },
-  autopilot: { label: 'Autopilot', hint: 'Coming later: hands work to agents in your own repos.' },
-};
+const MODE_OPTIONS = ['observe', 'assist'];
+const MODE_LABELS = { observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
+
+function modeHint(account) {
+  if (account.mode !== 'assist') return 'Records a decision for each notification; changes nothing on GitHub.';
+  const where = account.trust === 'private'
+    ? 'Text goes only to local AI providers unless you allow others in Accounts.'
+    : 'Text goes to the GitHub notifications provider in Models › LLMs › Abuse Guard.';
+  return `Screens and sorts notifications no rule decided, marks CI noise done and closed threads read. Never acts on outside or suspect threads. ${where}`;
+}
 
 const CADENCE_TEXT = {
   'weekdays-15m': 'Every 15 minutes on weekdays',
@@ -24,8 +35,8 @@ const CADENCE_TEXT = {
   off: 'Only when you tap Run now',
 };
 
-function AccountCard({ account, running, onRun }) {
-  const mode = MODE_VIEW[account.mode] || MODE_VIEW.observe;
+function AccountCard({ account, running, onRun, onMode, savingMode }) {
+  const selectId = `github-mode-${account.id}`;
   return (
     <li className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-4">
       <div className="flex flex-wrap items-start gap-2">
@@ -33,10 +44,22 @@ function AccountCard({ account, running, onRun }) {
           <h3 className="truncate font-semibold text-white">{account.label}</h3>
           <p className="truncate font-mono text-xs text-gray-400">{account.host}</p>
         </div>
-        <Pill tone="muted">{mode.label}</Pill>
         {!account.enabled && <Pill tone="warning">Off</Pill>}
       </div>
-      <p className="text-xs text-gray-400">{mode.hint}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor={selectId} className="text-xs text-gray-400">Mode</label>
+        <select
+          id={selectId}
+          value={account.mode}
+          onChange={(event) => onMode(account.id, event.target.value)}
+          disabled={savingMode}
+          className="rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-white disabled:opacity-50"
+        >
+          {MODE_OPTIONS.map((mode) => <option key={mode} value={mode}>{MODE_LABELS[mode]}</option>)}
+          {!MODE_OPTIONS.includes(account.mode) && <option value={account.mode}>{MODE_LABELS[account.mode] || account.mode}</option>}
+        </select>
+      </div>
+      <p className="text-xs text-gray-400">{modeHint(account)}</p>
       <p className="text-xs text-gray-300">
         {account.lastSyncAt ? `Checked ${timeAgo(account.lastSyncAt)}` : 'Not checked yet'}
         {' · '}{account.needsYou} open{account.suspect ? ` · ${account.suspect} suspect` : ''}{account.pending ? ` · ${account.pending} waiting for triage` : ''}
@@ -54,20 +77,81 @@ function AccountCard({ account, running, onRun }) {
   );
 }
 
+function ActivityList({ actions, onUndo, undoingId }) {
+  if (!actions.length) return <p className="text-xs text-gray-500">Assist has not acted on anything yet.</p>;
+  return (
+    <ul className="divide-y divide-port-border">
+      {actions.map((action) => (
+        <li key={action.id} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-2">
+          <div className="min-w-0 flex-1">
+            <Link to={`/devtools/github/inbox/${encodeURIComponent(action.accountId)}/${encodeURIComponent(action.threadId)}`} className="block truncate text-sm text-white">
+              {action.title}
+            </Link>
+            <p className="truncate text-xs text-gray-400">
+              {ACTION_LABELS[action.action] || action.action} · {action.repoFullName} · {timeAgo(action.at)}
+            </p>
+          </div>
+          {action.undoable && (
+            <button
+              type="button"
+              onClick={() => onUndo(action.id)}
+              disabled={undoingId === action.id}
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 disabled:opacity-50"
+            >
+              <Undo2 size={12} aria-hidden="true" /> Undo
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function RuleList({ rules, onDelete }) {
+  if (!rules.length) return <p className="text-xs text-gray-500">None yet. When you handle a thread differently than suggested, Assist remembers it for that repo and person.</p>;
+  return (
+    <ul className="divide-y divide-port-border">
+      {rules.map((rule) => (
+        <li key={rule.id} className="flex min-w-0 items-center gap-3 py-2">
+          <p className="min-w-0 flex-1 break-words text-xs text-gray-300">
+            <span className="font-mono">{rule.repoFullName}</span> · {rule.reason}{rule.actor ? <> · <span className="font-mono">@{rule.actor}</span></> : null}
+            {' → '}<span className="text-white">{LEARNED_DECISION_LABELS[rule.decision] || rule.decision}</span>
+            {rule.hits > 1 ? ` (${rule.hits}×)` : ''}
+          </p>
+          <button type="button" onClick={() => onDelete(rule.id)} className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-gray-400 hover:text-white" aria-label={`Forget rule for ${rule.repoFullName}`}>
+            <X size={14} aria-hidden="true" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default function GitHubAutomationsTab() {
   const [overview, setOverview] = useState(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [runningId, setRunningId] = useState(null);
   const [savingCadence, setSavingCadence] = useState(false);
 
+  const [actions, setActions] = useState([]);
+  const [rules, setRules] = useState([]);
+  const [savingModeId, setSavingModeId] = useState(null);
+  const [undoingId, setUndoingId] = useState(null);
+
   const load = useCallback(async () => {
-    const result = await getGitHubAutomations({ silent: true }).catch(() => null);
+    const [result, activity, learned] = await Promise.all([
+      getGitHubAutomations({ silent: true }).catch(() => null),
+      getGitHubAutomationActivity({ silent: true }).catch(() => null),
+      getGitHubLearnedRules({ silent: true }).catch(() => null),
+    ]);
     if (!result) {
       setLoadFailed(true);
       return;
     }
     setLoadFailed(false);
     setOverview(result);
+    if (activity) setActions(activity.actions);
+    if (learned) setRules(learned.rules);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -86,6 +170,26 @@ export default function GitHubAutomationsTab() {
     await syncGitHubNotifications(accountId, { silent: true }).catch(() => null);
     setRunningId(null);
     await load();
+  };
+
+  const changeMode = async (accountId, mode) => {
+    setSavingModeId(accountId);
+    const updated = await updateGitHubAccount(accountId, { mode }).catch(() => null);
+    setSavingModeId(null);
+    if (!updated) return;
+    setOverview((prev) => ({ ...prev, accounts: prev.accounts.map((account) => (account.id === accountId ? { ...account, mode: updated.mode } : account)) }));
+  };
+
+  const undo = async (id) => {
+    setUndoingId(id);
+    const undone = await undoGitHubAutomationAction(id).catch(() => null);
+    setUndoingId(null);
+    if (undone) await load();
+  };
+
+  const forgetRule = async (id) => {
+    const removed = await deleteGitHubLearnedRule(id).catch(() => null);
+    if (removed) setRules((prev) => prev.filter((rule) => rule.id !== id));
   };
 
   const toggleCadence = async () => {
@@ -118,7 +222,7 @@ export default function GitHubAutomationsTab() {
           </button>
         </div>
         <p className="text-xs text-gray-500">
-          Each check reads notification details only and applies fixed rules; no AI is used.
+          Each check applies fixed rules first. Only accounts in Assist use AI, and only for notifications no rule decided.
           {overview.lastSummary ? ` Last run: ${overview.lastSummary}.` : ''}
         </p>
       </section>
@@ -130,10 +234,20 @@ export default function GitHubAutomationsTab() {
       ) : (
         <ul className="grid grid-cols-1 gap-3 @3xl/page:grid-cols-2">
           {overview.accounts.map((account) => (
-            <AccountCard key={account.id} account={account} running={runningId === account.id} onRun={runNow} />
+            <AccountCard key={account.id} account={account} running={runningId === account.id} onRun={runNow} onMode={changeMode} savingMode={savingModeId === account.id} />
           ))}
         </ul>
       )}
+
+      <section className="space-y-2 rounded-lg border border-port-border bg-port-card p-4" aria-label="Recent Assist actions">
+        <h2 className="font-semibold text-white">Recent actions</h2>
+        <ActivityList actions={actions} onUndo={undo} undoingId={undoingId} />
+      </section>
+
+      <section className="space-y-2 rounded-lg border border-port-border bg-port-card p-4" aria-label="Learned rules">
+        <h2 className="font-semibold text-white">Learned rules</h2>
+        <RuleList rules={rules} onDelete={forgetRule} />
+      </section>
     </div>
   );
 }

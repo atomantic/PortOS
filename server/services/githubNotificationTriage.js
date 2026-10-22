@@ -12,7 +12,7 @@
  */
 import { query, withTransaction } from '../lib/db.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
-import { computeThreadTrust, decideThread, parseCiBranch, spamSignals } from '../lib/githubNotificationTriage.js';
+import { applyLearnedRule, computeThreadTrust, decideThread, parseCiBranch, spamSignals } from '../lib/githubNotificationTriage.js';
 import { parseGitRemoteUrl, readOriginRemoteUrl } from '../lib/gitRemote.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -79,8 +79,15 @@ async function ownLoginsFor(account, reader) {
   return logins;
 }
 
+const learnedRuleKey = (repo, reason, actor) => `${repo.toLowerCase()}#${reason}#${(actor || '').toLowerCase()}`;
+
+async function loadLearnedRules(accountId) {
+  const { rows } = await query('SELECT repo_full_name, reason, actor, decision, hits FROM github_notification_rules WHERE account_id = $1', [accountId]);
+  return new Map(rows.map((rule) => [learnedRuleKey(rule.repo_full_name, rule.reason, rule.actor), { decision: rule.decision, hits: rule.hits }]));
+}
+
 async function triageThread(row, ctx) {
-  const { account, reader, ownLogins, managedKeys, now } = ctx;
+  const { account, reader, ownLogins, managedKeys, learnedRules, now } = ctx;
   const repo = REPO_RE.test(row.repo_full_name) ? row.repo_full_name : null;
   const owner = row.repo_owner.toLowerCase();
   const repoManaged = repo ? managedKeys.has(`${account.host}/${repo}`.toLowerCase()) : false;
@@ -137,7 +144,7 @@ async function triageThread(row, ctx) {
   const isCi = row.reason === 'ci_activity' || row.subject_type === 'CheckSuite';
   const ciBranch = isCi ? parseCiBranch(row.subject_title) : null;
   const defaultBranch = isCi && ciBranch && repo ? await reader.defaultBranch(repo) : null;
-  const { decision, rule } = decideThread({
+  const tabled = decideThread({
     reason: row.reason,
     subjectType: row.subject_type,
     subjectState: subject?.state || null,
@@ -149,6 +156,7 @@ async function triageThread(row, ctx) {
     ciBranch,
     defaultBranch,
   });
+  const { decision, rule } = applyLearnedRule(tabled, learnedRules.get(learnedRuleKey(row.repo_full_name, row.reason, actorLogin)));
   return {
     decision,
     trust,
@@ -203,7 +211,9 @@ export async function triageAccountNotifications(account, env, { now = Date.now(
   );
   if (!rows.length) return { triaged: 0, decisions: {} };
   const reader = createReader(account, env);
-  const ctx = { account, reader, ownLogins: await ownLoginsFor(account, reader), managedKeys: await managedRepoKeys(), now };
+  const ctx = {
+    account, reader, ownLogins: await ownLoginsFor(account, reader), managedKeys: await managedRepoKeys(), learnedRules: await loadLearnedRules(account.id), now,
+  };
   const results = [];
   for (const row of rows) results.push({ row, result: await triageThread(row, ctx) });
 

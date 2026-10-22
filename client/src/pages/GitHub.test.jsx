@@ -23,6 +23,11 @@ const mock = vi.hoisted(() => ({
   getGitHubNotification: vi.fn(),
   getGitHubAutomations: vi.fn(),
   setGitHubNotificationCadence: vi.fn(),
+  getGitHubAutomationActivity: vi.fn(),
+  undoGitHubAutomationAction: vi.fn(),
+  getGitHubLearnedRules: vi.fn(),
+  deleteGitHubLearnedRule: vi.fn(),
+  getProviders: vi.fn(),
 }));
 
 vi.mock('../services/api', () => mock);
@@ -293,6 +298,24 @@ describe('GitHub accounts tab', () => {
     vi.clearAllMocks();
     mock.getGitHubAccounts.mockResolvedValue([IMPLICIT]);
     mock.getGitHubAccountStatus.mockResolvedValue({ id: 'github-com', host: 'github.com', status: 'ok', login: 'octocat', remedy: null, command: null });
+    mock.getProviders.mockResolvedValue({ providers: [
+      { id: 'local-llm', name: 'Local LLM', type: 'api' },
+      { id: 'cloud-api', name: 'Cloud API', type: 'api' },
+      { id: 'cli-agent', name: 'CLI agent', type: 'cli' },
+    ] });
+  });
+
+  it('lets a Private account allow a cloud provider for AI sorting, local only by default', async () => {
+    mock.updateGitHubAccount.mockImplementation(async (id, body) => ({ ...IMPLICIT, ...body, id }));
+    renderAccounts();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.queryByText(/AI providers allowed/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Trust'), { target: { value: 'private' } });
+    expect(await screen.findByLabelText('Cloud API')).toBeTruthy();
+    expect(screen.queryByLabelText('CLI agent')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Cloud API'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', expect.objectContaining({ trust: 'private', allowedProviders: ['cloud-api'] })));
   });
 
   it('lists each account with its trust level and live sign-in state', async () => {
@@ -319,7 +342,7 @@ describe('GitHub accounts tab', () => {
     expect(screen.getByLabelText('Trust').value).toBe('private');
     fireEvent.click(screen.getAllByRole('button', { name: 'Add account' }).at(-1));
 
-    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'private' });
+    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'private', allowedProviders: null });
     const signIn = await screen.findByRole('link', { name: 'Sign in on ghe.example.com' });
     expect(decodeURIComponent(signIn.getAttribute('href'))).toBe('/shell?cmd=gh auth login --hostname ghe.example.com --web --clipboard');
   });
@@ -441,6 +464,34 @@ describe('GitHub automations tab', () => {
     vi.clearAllMocks();
     mock.getGitHubAutomations.mockResolvedValue(OVERVIEW);
     mock.syncGitHubNotifications.mockResolvedValue({ results: [] });
+    mock.getGitHubAutomationActivity.mockResolvedValue({ actions: [] });
+    mock.getGitHubLearnedRules.mockResolvedValue({ rules: [] });
+  });
+
+  it('switches an account to Assist, undoes an action and forgets a learned rule', async () => {
+    mock.updateGitHubAccount.mockResolvedValue({ id: 'github-com', mode: 'assist' });
+    mock.getGitHubAutomationActivity.mockResolvedValue({ actions: [
+      { id: '41', accountId: 'github-com', accountLabel: 'github.com', threadId: '9', action: 'done', title: 'CI failed on feature', repoFullName: 'octocat/hello', at: '2026-10-22T00:00:00Z', undoable: true },
+      { id: '42', accountId: 'github-com', accountLabel: 'github.com', threadId: '10', action: 'read', title: 'Merged PR', repoFullName: 'octocat/hello', at: '2026-10-22T00:00:00Z', undoable: false },
+    ] });
+    mock.getGitHubLearnedRules.mockResolvedValue({ rules: [
+      { id: '7', accountId: 'github-com', repoFullName: 'octocat/hello', reason: 'mention', actor: 'alice', decision: 'suggest-done', hits: 2 },
+    ] });
+    mock.undoGitHubAutomationAction.mockResolvedValue({ threadId: '9', state: 'open' });
+    mock.deleteGitHubLearnedRule.mockResolvedValue({ ok: true });
+    renderTab('automations');
+
+    fireEvent.change(await screen.findByLabelText('Mode'), { target: { value: 'assist' } });
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { mode: 'assist' }));
+    expect(await screen.findByText(/Never acts on outside or suspect threads/)).toBeTruthy();
+
+    expect(screen.getAllByRole('button', { name: /Undo/ })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: /Undo/ }));
+    await waitFor(() => expect(mock.undoGitHubAutomationAction).toHaveBeenCalledWith('41'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Forget rule for octocat/hello' }));
+    await waitFor(() => expect(screen.queryByText('octocat/hello', { selector: 'span' })).toBeNull());
+    expect(mock.deleteGitHubLearnedRule).toHaveBeenCalledWith('7');
   });
 
   it('turns on the weekday check in one tap and runs one account now', async () => {

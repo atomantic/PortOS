@@ -50,3 +50,9 @@ export const getGitHubNotification = (accountId, threadId, options = {}) =>
 export const getGitHubAutomations = (options = {}) => request('/github/automations', options);
 export const setGitHubNotificationCadence = (cadence, options = {}) =>
   request('/github/automations/schedule', { method: 'PUT', body: JSON.stringify({ cadence }), ...options });
+export const getGitHubAutomationActivity = (options = {}) => request('/github/automations/activity', options);
+export const undoGitHubAutomationAction = (id, options = {}) =>
+  request(`/github/automations/activity/${encodeURIComponent(id)}/undo`, { method: 'POST', ...options });
+export const getGitHubLearnedRules = (options = {}) => request('/github/automations/rules', options);
+export const deleteGitHubLearnedRule = (id, options = {}) =>
+  request(`/github/automations/rules/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });

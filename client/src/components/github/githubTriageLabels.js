@@ -9,6 +9,8 @@ export const DECISION_VIEW = {
   'suggest-mark-read': { tone: 'muted', label: 'Suggest mark read' },
   'handled-by-pr-workflow': { tone: 'success', label: 'PR workflow has it' },
   duplicate: { tone: 'muted', label: 'Duplicate' },
+  'suggest-done': { tone: 'muted', label: 'Suggest done' },
+  'suggest-mute': { tone: 'muted', label: 'Suggest mute' },
 };
 
 export const TRUST_VIEW = {
@@ -31,6 +33,29 @@ export const RULE_LABELS = {
   'review-elsewhere': 'Review requested on a repo you do not own',
   'mention-elsewhere': 'Mentioned in a repo you do not own',
   default: 'No rule applied, so it waits for you',
+  learned: 'You handled threads like this the same way before',
+  'ai-surface': 'Assist read it and thinks you should see it',
+  'ai-done': 'Assist read it and found nothing for you to do',
+  'ai-suggest-mute': 'Assist read it and thinks the thread is noise',
+};
+
+// Why Assist did not sort a thread, by the code the screening path returns.
+export const AI_SKIP_LABELS = {
+  'github-notification-provider-not-allowed': 'No AI provider this account allows is available',
+  'untrusted-content-blocked': 'The abuse guard flagged its text',
+  'untrusted-content-too-large': 'Its text is over the screening limit',
+};
+
+export const ACTION_LABELS = {
+  done: 'Marked done',
+  read: 'Marked read',
+  mute: 'Muted',
+};
+
+export const LEARNED_DECISION_LABELS = {
+  surface: 'Show me',
+  'suggest-done': 'Mark done',
+  'suggest-mute': 'Mute',
 };
 
 export const SIGNAL_LABELS = {

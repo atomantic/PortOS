@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { computeThreadTrust, decideThread, parseCiBranch, spamSignals, MASS_MENTION_THRESHOLD } from './githubNotificationTriage.js';
+import {
+  applyLearnedRule, assistAction, computeThreadTrust, decideThread, decisionFromVerdict, parseCiBranch, selectNotificationProvider, spamSignals,
+  MASS_MENTION_THRESHOLD,
+} from './githubNotificationTriage.js';
 
 const NOW = Date.parse('2026-10-22T00:00:00Z');
 const daysAgo = (days) => new Date(NOW - days * 24 * 60 * 60 * 1000).toISOString();
@@ -78,5 +81,49 @@ describe('parseCiBranch', () => {
     expect(parseCiBranch('CI workflow run failed for main branch')).toBe('main');
     expect(parseCiBranch('Deploy workflow run failed for release/1.2 branch')).toBe('release/1.2');
     expect(parseCiBranch('Something else')).toBeNull();
+  });
+});
+
+describe('Assist inputs', () => {
+  it('maps only enum verdicts to decisions', () => {
+    expect(decisionFromVerdict('done')).toEqual({ decision: 'suggest-done', rule: 'ai-done' });
+    expect(decisionFromVerdict('approve-and-merge')).toBeNull();
+  });
+
+  it('never lets a learned rule override a spam signal, and quiets only after two corrections', () => {
+    const tabled = { decision: 'needs-you', rule: 'default' };
+    expect(applyLearnedRule({ decision: 'suspect', rule: 'spam-signal' }, { decision: 'surface', hits: 5 }).decision).toBe('suspect');
+    expect(applyLearnedRule(tabled, { decision: 'suggest-done', hits: 1 })).toBe(tabled);
+    expect(applyLearnedRule(tabled, { decision: 'suggest-done', hits: 2 })).toEqual({ decision: 'suggest-done', rule: 'learned' });
+    expect(applyLearnedRule(tabled, { decision: 'surface', hits: 1 })).toEqual({ decision: 'surface', rule: 'learned' });
+  });
+
+  it('acts automatically only on non-outside, non-suspect threads', () => {
+    expect(assistAction({ decision: 'handled-by-pr-workflow', trust: 'unknown' })).toBe('done');
+    expect(assistAction({ decision: 'suggest-mark-read', trust: 'yours', unread: false })).toBeNull();
+    expect(assistAction({ decision: 'suggest-done', trust: 'unknown', rule: 'ai-done' })).toBeNull();
+    expect(assistAction({ decision: 'suggest-mute', trust: 'trusted' })).toBe('mute');
+    for (const thread of [{ trust: 'outside' }, { trust: 'trusted', suspect: true }, { trust: 'trusted', state: 'muted' }]) {
+      expect(assistAction({ decision: 'suggest-done', rule: 'learned', ...thread })).toBeNull();
+    }
+  });
+});
+
+describe('selectNotificationProvider', () => {
+  const local = { id: 'local', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'small' };
+  const cloud = { id: 'cloud', type: 'api', endpoint: 'https://api.example.com/v1', defaultModel: 'large' };
+  const providers = [cloud, local];
+
+  it('leaves a Public account to the source policy', () => {
+    expect(selectNotificationProvider({ account: { trust: 'public' }, providers })).toEqual({ provider: null, model: null });
+  });
+
+  it('keeps Enterprise content on local providers unless the account allows others', () => {
+    expect(selectNotificationProvider({ account: { trust: 'private', allowedProviders: null }, providers })).toEqual({ provider: local, model: 'small' });
+    expect(selectNotificationProvider({ account: { trust: 'private', allowedProviders: null }, providers, policy: { providerId: 'cloud' } }))
+      .toEqual({ code: 'github-notification-provider-not-allowed' });
+    expect(selectNotificationProvider({ account: { trust: 'private', allowedProviders: null }, providers: [cloud] }))
+      .toEqual({ code: 'github-notification-provider-not-allowed' });
+    expect(selectNotificationProvider({ account: { trust: 'private', allowedProviders: ['cloud'] }, providers })).toEqual({ provider: cloud, model: 'large' });
   });
 });
