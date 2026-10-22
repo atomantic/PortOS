@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import { applyRunnerSelection, vitestCaptureProjects, vitestCiPool, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
+import { VITEST_WATCH_OPTIONS } from '../scripts/lib/vitestWatch.js';
 import { SERVER_TEST_EXCLUDE, SERVER_TEST_INCLUDE, browserOwnerExcludes } from '../scripts/lib/workspaceTests.js';
 
 // `npm run test:fast` is the Windows-safe way to set the flag (a
@@ -44,6 +45,7 @@ process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 const runnerSelection = vitestRunnerSelection();
 
 const config = defineConfig({
+  server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
   test: {

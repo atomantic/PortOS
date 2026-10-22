@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
+import { VITEST_WATCH_OPTIONS } from '../scripts/lib/vitestWatch.js';
 import { CLIENT_TEST_EXCLUDE, CLIENT_TEST_INCLUDE } from '../scripts/lib/workspaceTests.js';
 
 import { applyRunnerSelection, vitestCiPool, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
@@ -10,6 +11,7 @@ import { TEST_TIMEOUT_MS } from './src/test/timeouts.js';
 const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 
 const config = defineConfig({
+  server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
   plugins: [react()],
