@@ -76,3 +76,15 @@ export const importGmailMbox = ({ path, preview = false, yourEmail, ...options }
     }),
     ...options,
   });
+
+// Per-source event counts + date range, and user-driven erasure of one source.
+export const getTimelineSources = (options = {}) =>
+  request('/timeline/sources', { silent: options.silent });
+
+export const eraseTimelineSource = (source, { from, to, kind } = {}) => {
+  const params = new URLSearchParams({ source });
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (kind) params.set('kind', kind);
+  return request(`/timeline/events?${params}`, { method: 'DELETE' });
+};

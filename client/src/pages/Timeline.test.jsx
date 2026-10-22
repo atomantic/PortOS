@@ -10,6 +10,8 @@ vi.mock('../services/api', () => ({
     counts: { total: 0, bySource: {}, byKind: {} },
     histogram: Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0 })),
   })),
+  getTimelineSources: vi.fn(() => Promise.resolve({ sources: [] })),
+  eraseTimelineSource: vi.fn(),
   importSpotifyHistory: vi.fn(),
   importTakeoutLocationHistory: vi.fn(),
   importDiscordHistory: vi.fn(),

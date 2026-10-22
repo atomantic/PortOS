@@ -535,6 +535,47 @@ export async function deleteEvents({ ids, source, chatGuid, handle, accountId } 
 }
 
 /**
+ * User-driven erasure of one source's events (#12987), optionally limited to a
+ * `kind` and a `from` (inclusive) / `to` (exclusive) range. `source` is
+ * required so a single call can never wipe the whole table. Importers are
+ * idempotent, so re-importing the same export restores erased rows.
+ */
+export async function eraseEvents({ source, kind, from, to } = {}) {
+  if (!source) return { deleted: 0 };
+  await ensureReady();
+  const params = [String(source)];
+  const clauses = ['source = $1'];
+  if (kind) { params.push(String(kind)); clauses.push(`kind = ${params.length}`); }
+  if (from) { params.push(new Date(from).toISOString()); clauses.push(`happened_at >= ${params.length}`); }
+  if (to) { params.push(new Date(to).toISOString()); clauses.push(`happened_at < ${params.length}`); }
+  const result = await query(
+    `DELETE FROM human_activity_events WHERE ${clauses.join(' AND ')}`,
+    params,
+  );
+  const deleted = result.rowCount || 0;
+  console.log(`🗓️  Erased ${deleted} activity event(s) (source=${source})`);
+  return { deleted };
+}
+
+/** Per-source event counts and date range, for the "Manage imported data" panel. */
+export async function listSourceCounts() {
+  await ensureReady();
+  const result = await query(
+    `SELECT source, COUNT(*)::int AS event_count, MIN(happened_at) AS earliest_at, MAX(happened_at) AS latest_at
+     FROM human_activity_events
+     GROUP BY source
+     ORDER BY source`,
+  );
+  const iso = (v) => (v instanceof Date ? v.toISOString() : (v || null));
+  return result.rows.map((row) => ({
+    source: row.source,
+    eventCount: Number(row.event_count) || 0,
+    earliestAt: iso(row.earliest_at),
+    latestAt: iso(row.latest_at),
+  }));
+}
+
+/**
  * Aggregate conversations for a single source (iMessage, Signal, …) grouped by
  * `metadata.chatGuid`. Newest activity first. Optional free-text `q` filters
  * title/handle/summary. Cap defaults to 500 conversations.

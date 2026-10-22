@@ -237,7 +237,7 @@ export default function Timeline() {
           own) keeps the panels mounted while collapsed — a Tailwind `hidden`
           class on the grid itself would fight the grid display utility. */}
       <div id="timeline-import-panels" ref={importsRef} hidden={!showImports}>
-        <TimelineImportPanels onImported={() => setReloadKey((k) => k + 1)} />
+        <TimelineImportPanels reloadKey={reloadKey} onImported={() => setReloadKey((k) => k + 1)} />
       </div>
 
       <Histogram histogram={histogram} />

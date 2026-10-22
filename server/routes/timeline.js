@@ -103,6 +103,20 @@ const eventsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(2000).optional(),
 });
 
+// Sources the Timeline store can hold; erasure is limited to these so a typo
+// 400s instead of reporting a successful zero-row delete.
+export const ERASABLE_SOURCES = [
+  'browser', 'calendar', 'discord', 'gmail', 'google-calendar', 'imessage',
+  'location', 'outlook', 'outlook-calendar', 'signal', 'spotify', 'whatsapp', 'youtube',
+];
+
+const eraseQuerySchema = z.object({
+  source: z.enum(ERASABLE_SOURCES),
+  kind: z.string().max(64).optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+});
+
 // Day view — all activity on a local calendar day plus an hourly histogram and
 // source/kind tallies. `date` (YYYY-MM-DD) defaults to today in the user's tz;
 // the URL is the source of truth for the selected day on the /timeline page.
@@ -117,6 +131,18 @@ router.get('/events', asyncHandler(async (req, res) => {
   const filters = validateRequest(eventsQuerySchema, req.query);
   const events = await humanActivity.listEvents(filters);
   res.json({ events });
+}));
+
+// Per-source counts and date range — what "Manage imported data" shows before a delete.
+router.get('/sources', asyncHandler(async (req, res) => {
+  res.json({ sources: await humanActivity.listSourceCounts() });
+}));
+
+// Erase one source's events (optionally a kind / from–to range). `source` is
+// required; there is no way to wipe every source in one call.
+router.delete('/events', asyncHandler(async (req, res) => {
+  const filters = validateRequest(eraseQuerySchema, req.query);
+  res.json(await humanActivity.eraseEvents(filters));
 }));
 
 // Shared handler for the bulk-backfill importers (#2160). Each accepts a ZIP or
