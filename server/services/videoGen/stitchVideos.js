@@ -107,7 +107,7 @@ export async function stitchVideos(videoIds, opts = {}) {
 
   const history = await loadHistory();
   const videos = videoIds.map((vid) => history.find((h) => h.id === vid)).filter(Boolean);
-  if (videos.length < 2) throw new ServerError('Some videos not found', { status: 400, code: 'VALIDATION_ERROR' });
+  if (videos.length !== videoIds.length) throw new ServerError('Some videos not found', { status: 400, code: 'VALIDATION_ERROR' });
 
   // Validate every history-supplied filename through safeUnder before
   // letting it reach ffmpeg's concat manifest. Tampered history entries
