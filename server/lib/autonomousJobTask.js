@@ -58,3 +58,19 @@ export function generatedJobTaskFields(generated) {
     effort: meta.effort,
   };
 }
+
+/**
+ * A scheduled fire hands its generated task straight to `task:ready` without
+ * writing it to the task store (id `<jobId>-<base36 ts>`), so the status writes
+ * at spawn and finalization legitimately find no row. Manual/quota runs queue
+ * through `addTask` and get a store-minted id, so a missing one IS a deletion.
+ */
+export function isEphemeralJobTask(task) {
+  const jobId = task?.metadata?.jobId;
+  return task?.metadata?.autonomousJob === true && !!jobId && typeof task.id === 'string' && task.id.startsWith(`${jobId}-`);
+}
+
+/** True when an `updateTask` error is the expected miss for an unpersisted scheduled job task. */
+export function isExpectedUnpersistedMiss(task, error) {
+  return error === 'Task not found' && isEphemeralJobTask(task);
+}

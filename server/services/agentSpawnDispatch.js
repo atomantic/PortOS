@@ -2,6 +2,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { getConfig, updateTask } from './cos.js';
+import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
 import { ensureDir, PATHS, writeFileGuarded } from '../lib/fileUtils.js';
@@ -267,7 +268,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
         return null;
       });
-    if (updateResult?.error) {
+    if (updateResult?.error && !isExpectedUnpersistedMiss(task, updateResult.error)) {
       emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
     }
     if (prep.cleanupReviewPinConsumed && (updateResult?.error || updateResult?.statusChanged)) {
