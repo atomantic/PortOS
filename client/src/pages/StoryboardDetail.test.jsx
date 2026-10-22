@@ -14,6 +14,11 @@ const api = vi.hoisted(() => ({
   createBlankSketch: vi.fn(),
   runStoryboardPanelNode: vi.fn(),
   updateStoryboardRecipe: vi.fn(),
+  getStoryboardMakeEmpty: vi.fn(),
+  startStoryboardMakeEmpty: vi.fn(),
+  listStoryboardRecipes: vi.fn(),
+  saveStoryboardRecipe: vi.fn(),
+  deleteStoryboardRecipe: vi.fn(),
 }));
 vi.mock('../services/api', () => {
   const rest = ['deleteStoryboardBeat', 'deleteStoryboardPanel', 'moveStoryboardBeat', 'moveStoryboardPanel',
@@ -21,7 +26,8 @@ vi.mock('../services/api', () => {
     'updateStoryboardPanelNode', 'getStoryboardPanelMake'];
   return { ...api, ...Object.fromEntries(rest.map((name) => [name, vi.fn(() => Promise.resolve([]))])) };
 });
-vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
+const socketMock = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn() }));
+vi.mock('../services/socket', () => ({ default: socketMock }));
 vi.mock('../components/imageGen/GalleryImagePicker', () => ({ default: () => null }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
 vi.mock('../components/musicVideo/MusicVideoLlmPicker', () => ({ default: () => null }));
@@ -58,6 +64,7 @@ const renderAt = (path) => render(
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
   api.listMoodBoardNames.mockResolvedValue([]);
+  api.getStoryboardMakeEmpty.mockResolvedValue({ batch: null, panelCount: 0, steps: [] });
 });
 
 describe('StoryboardDetail', () => {
@@ -199,5 +206,59 @@ describe('StoryboardDetail', () => {
       { from: 'node-a', to: 'node-b', toPort: 'prompt' },
       { from: 'node-a', to: 'node-c', toPort: 'prompt' },
     ]);
+  });
+
+  it('names the models and panel count before making empty panels, then shows progress', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    api.getStoryboardMakeEmpty.mockResolvedValue({
+      batch: null,
+      panelCount: 2,
+      steps: [
+        { nodeId: 'node-writer', title: 'Prompt writer', type: 'llm', model: 'Example · example-model', frames: 0 },
+        { nodeId: 'node-image', title: 'Image', type: 'image', model: 'Default image model', frames: 4 },
+      ],
+    });
+    api.startStoryboardMakeEmpty.mockResolvedValue({ batch: { storyboardId: 'sb-1', status: 'running', total: 2, done: 0, failed: 0 } });
+    renderAt('/storyboards/sb-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Make empty panels' }));
+    const confirm = await screen.findByLabelText('Make empty panels');
+    expect(confirm.textContent).toContain('Make 2 empty panels? Prompt writer runs on Example · example-model; Image makes 4 frames each with Default image model.');
+    expect(api.startStoryboardMakeEmpty).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make' }));
+    await waitFor(() => expect(api.startStoryboardMakeEmpty).toHaveBeenCalledWith('sb-1'));
+    expect(await screen.findByText('0 of 2')).toBeInTheDocument();
+
+    const onBatch = socketMock.on.mock.calls.findLast(([event]) => event === 'storyboard:make-batch')[1];
+    act(() => onBatch({ storyboardId: 'sb-1', status: 'running', total: 2, done: 1, failed: 0 }));
+    expect(screen.getByText('1 of 2')).toBeInTheDocument();
+    act(() => onBatch({ storyboardId: 'sb-1', status: 'done', total: 2, done: 2, failed: 0 }));
+    expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+  });
+
+  it('saves the recipe to the library and loads a saved one onto the board as a copy', async () => {
+    api.getStoryboard.mockResolvedValue(board());
+    const savedRecipe = { nodes: [{ id: 'node-a', type: 'text', title: 'Words', settings: { source: 'panel' }, x: 0, y: 0 }], edges: [] };
+    api.saveStoryboardRecipe.mockImplementation(async (name, recipe) => ({ id: 'sbr-1', name, recipe, createdAt: '', updatedAt: '' }));
+    api.listStoryboardRecipes.mockResolvedValue([{ id: 'sbr-2', name: 'Words only', recipe: savedRecipe, createdAt: '', updatedAt: '' }]);
+    api.updateStoryboardRecipe.mockImplementation(async (_id, recipe) => board({ recipe, updatedAt: '2026-10-22T00:00:03.000Z' }));
+    renderAt('/storyboards/sb-1/panel/panel-1?panelTab=make');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save as…' }));
+    fireEvent.change(screen.getByLabelText('Recipe name'), { target: { value: 'Pencil frames' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveStoryboardRecipe).toHaveBeenCalled());
+    const [name, sent] = api.saveStoryboardRecipe.mock.calls[0];
+    expect(name).toBe('Pencil frames');
+    expect(sent.nodes.map((n) => n.id)).toEqual(['node-text', 'node-system', 'node-writer', 'node-refs', 'node-image', 'node-panel']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load…' }));
+    expect(await screen.findByLabelText('Saved recipe')).toHaveValue('sbr-2');
+    fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+    expect(api.updateStoryboardRecipe).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Load' }).at(-1));
+    await waitFor(() => expect(api.updateStoryboardRecipe).toHaveBeenCalledWith('sb-1', savedRecipe));
+    expect(await screen.findByRole('region', { name: 'Words node' })).toBeInTheDocument();
   });
 });

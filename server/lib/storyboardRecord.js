@@ -23,10 +23,10 @@ import { isNonBlankStr, trimTo } from './textUtils.js';
 import { localImageFilename } from './localImageFilename.js';
 import { sanitizeSoftDeleteFields } from './syncWire.js';
 import {
-  isValidStoryboardId, newStoryboardEntityId, STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS,
+  isValidStoryboardId, isValidStoryboardRecipeId, newStoryboardEntityId, STORYBOARD_ART_STYLES, STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS,
   STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_TAKE_SOURCES,
 } from './storyboardVocabulary.js';
-import { sanitizePanelMake, sanitizeRecipe } from './storyboardRecipe.js';
+import { RECIPE_LIMITS, sanitizePanelMake, sanitizeRecipe } from './storyboardRecipe.js';
 
 const SKETCH_KEY_PATTERN = /^sketch:[A-Za-z0-9-]{1,80}$/;
 const ENTITY_ID_PATTERN = /^[a-z]+-[A-Za-z0-9-]{1,80}$/;
@@ -160,6 +160,25 @@ export function sanitizeStoryboard(raw) {
     moodBoardId: trimTo(raw.moodBoardId, STORYBOARD_LIMITS.refId) || null,
     recipe: sanitizeRecipe(raw.recipe),
     beats,
+    createdAt,
+    updatedAt: isoOr(raw.updatedAt, createdAt),
+    ...sanitizeSoftDeleteFields(raw),
+  };
+}
+
+/**
+ * A saved recipe in the Make tab's library: a named copy of a board's node
+ * graph that any board can load. Per-panel run state never travels with it.
+ */
+export function sanitizeSavedRecipe(raw) {
+  if (!raw || typeof raw !== 'object' || !isValidStoryboardRecipeId(raw.id)) return null;
+  const recipe = sanitizeRecipe(raw.recipe);
+  if (!recipe) return null;
+  const createdAt = isoOr(raw.createdAt, new Date().toISOString());
+  return {
+    id: raw.id,
+    name: trimTo(raw.name, RECIPE_LIMITS.title) || 'Untitled recipe',
+    recipe,
     createdAt,
     updatedAt: isoOr(raw.updatedAt, createdAt),
     ...sanitizeSoftDeleteFields(raw),

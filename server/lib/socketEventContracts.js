@@ -485,6 +485,23 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   },
+  'storyboard:make-batch': {
+    direction: 'server-to-client',
+    summary: 'Make empty panels progress on a storyboard: panels finished of the total, and when the batch is done.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        storyboardId: { type: 'string' },
+        status: { type: 'string', enum: ['running', 'done'] },
+        total: { type: 'number' },
+        done: { type: 'number' },
+        failed: { type: 'number' },
+        startedAt: { type: 'string' },
+      },
+      required: ['storyboardId', 'status', 'total', 'done', 'failed'],
+      additionalProperties: false,
+    },
+  },
   'mood-board:item-render': {
     direction: 'server-to-client',
     summary: 'A mood board text note render was queued, finished (the note is now an image item) or failed; reload the board.',

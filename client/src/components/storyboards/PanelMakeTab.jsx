@@ -16,6 +16,7 @@ import TabPills from '../ui/TabPills';
 import useUrlParams from '../../hooks/useUrlParams';
 import CommitField from './CommitField';
 import RecipeCanvas from './RecipeCanvas';
+import RecipeLibrary from './RecipeLibrary';
 import RecipeNodeCard, { NODE_ICONS } from './RecipeNodeCard';
 import { takeSrc } from './storyboardArt';
 
@@ -369,6 +370,7 @@ export default function PanelMakeTab({ board, found, sketchNonce, handlers }) {
           question="Restore the default recipe? This board's node edits and wiring are replaced."
           onConfirm={() => { setConfirmReset(false); saveRecipe(null); }} onCancel={() => setConfirmReset(false)} />
       )}
+      <RecipeLibrary recipe={recipe} onLoad={saveRecipe} />
       <p className="text-[11px] text-gray-500">The recipe is shared by every panel on this board. Each node runs only when you tap it.</p>
       <div className="hidden lg:block">
         <TabPills tabs={VIEW_TABS} activeTab={canvas ? 'canvas' : 'chain'} variant="pills" size="sm" ariaLabel="Recipe view"

@@ -20,7 +20,8 @@ import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import {
-  effectiveRecipe, nodeInputValue, panelNodeState, RECIPE_LIMITS, sanitizeRecipe, STORYBOARD_RENDER_SIZES, upstreamNode,
+  effectiveRecipe, nodeInputValue, panelNodeState, RECIPE_LIMITS, recipeRunOrder, sanitizeRecipe, STORYBOARD_RENDER_SIZES,
+  upstreamNode,
 } from '../../lib/storyboardRecipe.js';
 import { newStoryboardEntityId, STORYBOARD_LIMITS } from '../../lib/storyboardVocabulary.js';
 import { getStoryboard, mutateStoryboard } from './index.js';
@@ -41,6 +42,9 @@ const deps = {
   emit: (payload) => import('../socket.js')
     .then(({ getIo }) => getIo()?.emit('storyboard:make', payload))
     .catch((err) => console.error(`❌ storyboard:make emit failed: ${err.message}`)),
+  emitBatch: (payload) => import('../socket.js')
+    .then(({ getIo }) => getIo()?.emit('storyboard:make-batch', payload))
+    .catch((err) => console.error(`❌ storyboard:make-batch emit failed: ${err.message}`)),
 };
 export const __setDepsForTests = (overrides) => Object.assign(deps, overrides);
 
@@ -281,4 +285,97 @@ export async function failPanelFrame({ storyboardId, panelId, nodeId, runId, job
       if (err?.code !== 'NOT_FOUND') throw err;
     });
   announce(storyboardId, panelId, nodeId, 'failed', reason);
+}
+
+// Make empty panels: one batch per board at a time, in memory only (a restart
+// ends it; nothing resumes on its own at boot).
+const batches = new Map();
+const RUNNABLE_TYPES = new Set(['llm', 'image']);
+const IN_FLIGHT = new Set(['running', 'queued']);
+
+const runnableSteps = (board) => recipeRunOrder(effectiveRecipe(board)).filter((node) => RUNNABLE_TYPES.has(node.type));
+// A panel with no art and no frames on the way.
+const isEmptyPanel = (panel, steps) => !panel.takes.length && !steps.some((node) => IN_FLIGHT.has(panelNodeState(panel, node.id).status));
+const emptyPanelIds = (board, steps) => board.beats.flatMap((beat) => beat.panels).filter((panel) => isEmptyPanel(panel, steps)).map((p) => p.id);
+const batchView = (storyboardId, batch) => (batch ? { storyboardId, ...batch } : null);
+
+async function stepLabel(node) {
+  if (node.type === 'image') {
+    return { nodeId: node.id, title: node.title, type: node.type, model: node.settings.imageModelId || 'Default image model', frames: node.settings.count };
+  }
+  const { provider, selectedModel } = await deps.resolveProvider({ providerId: node.settings.providerId || null, model: node.settings.model || null })
+    .catch(() => ({ provider: null }));
+  const model = provider ? [provider.name || provider.id, selectedModel].filter(Boolean).join(' · ') : 'No AI provider set up';
+  return { nodeId: node.id, title: node.title, type: node.type, model, frames: 0 };
+}
+
+/**
+ * What "Make empty panels" would do, for the confirm that names it: how many
+ * panels have no art, and each node it runs with the model it uses.
+ */
+export async function getMakeEmptyPlan(storyboardId) {
+  const board = await getStoryboard(storyboardId);
+  const steps = runnableSteps(board);
+  return {
+    batch: batchView(storyboardId, batches.get(storyboardId)),
+    panelCount: emptyPanelIds(board, steps).length,
+    steps: await Promise.all(steps.map(stepLabel)),
+  };
+}
+
+/**
+ * Run the recipe on every panel with no art, one panel after another. A
+ * prompt already written for a panel is kept (it may be the user's edit); an
+ * LLM failure skips that panel's image so no frame is made from no prompt.
+ * Answers at once; `storyboard:make-batch` reports progress.
+ */
+export async function startMakeEmpty(storyboardId) {
+  if (batches.has(storyboardId)) throw refuse('This board is already making its empty panels.', 'STORYBOARD_BATCH_RUNNING', 409);
+  const board = await getStoryboard(storyboardId);
+  const steps = runnableSteps(board);
+  if (!steps.some((node) => node.type === 'image')) throw refuse('The recipe has no Image node, so there is nothing to make.');
+  const panelIds = emptyPanelIds(board, steps);
+  if (!panelIds.length) throw refuse('Every panel already has art.');
+  const batch = { status: 'running', total: panelIds.length, done: 0, failed: 0, startedAt: new Date().toISOString() };
+  batches.set(storyboardId, batch);
+  deps.emitBatch(batchView(storyboardId, batch));
+  console.log(`🎬 Storyboard ${storyboardId.slice(0, 11)} making ${panelIds.length} empty panel(s)`);
+  runBatch(storyboardId, panelIds, batch)
+    .catch((err) => console.error(`❌ Storyboard ${storyboardId.slice(0, 11)} empty-panel batch stopped: ${err.message}`))
+    .finally(() => {
+      batches.delete(storyboardId);
+      deps.emitBatch(batchView(storyboardId, { ...batch, status: 'done' }));
+    });
+  return { batch: batchView(storyboardId, batch) };
+}
+
+async function runBatch(storyboardId, panelIds, batch) {
+  for (const panelId of panelIds) {
+    const ok = await makePanel(storyboardId, panelId);
+    batch.done += 1;
+    if (!ok) batch.failed += 1;
+    deps.emitBatch(batchView(storyboardId, batch));
+  }
+}
+
+/** One panel's run; false when it was skipped or a node failed. A deleted board ends the batch. */
+async function makePanel(storyboardId, panelId) {
+  const board = await getStoryboard(storyboardId);
+  const steps = runnableSteps(board);
+  const panel = board.beats.flatMap((beat) => beat.panels).find((p) => p.id === panelId);
+  // Removed, or given art since the batch started.
+  if (!panel || !isEmptyPanel(panel, steps)) return false;
+  for (const node of steps) {
+    if (node.type === 'llm' && panelNodeState(panel, node.id).text.trim()) continue;
+    try {
+      const next = await runPanelNode(storyboardId, panelId, node.id);
+      const state = panelNodeState(locate(next, panelId).panel, node.id);
+      if (state.status === 'failed') return false;
+    } catch (err) {
+      if (err?.code === 'NOT_FOUND' && err.message.startsWith('Storyboard')) throw err;
+      console.log(`🚫 Storyboard ${storyboardId.slice(0, 11)} panel ${panelId.slice(0, 12)} ${node.title} skipped: ${err.message}`);
+      return false;
+    }
+  }
+  return true;
 }

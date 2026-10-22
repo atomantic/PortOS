@@ -87,7 +87,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMeatspace.js` | MeatSpace health, genome, POST, memory-practice, and atomic POST training-run APIs. |
 | `apiMortalLoom.js` | Mortality tracking. |
 | `apiMoodBoard.js` | Mood boards (inspiration canvas + items), `listMoodBoardNames()` for pickers, `composeMoodBoardPrompt()` which stores the board's composite style prompt. |
-| `apiStoryboards.js` | Storyboards (Create › Storyboards): board/beat/panel CRUD and moves, panel art takes (add, select, remove), the panel maker (board recipe, per-panel node values, node runs); every write returns the whole board. |
+| `apiStoryboards.js` | Storyboards (Create › Storyboards): board/beat/panel CRUD and moves, panel art takes (add, select, remove), the panel maker (board recipe, per-panel node values, node runs, Make empty panels) and the saved recipe library; every board write returns the whole board. |
 | `apiTribe.js` | Tribe people (relationship rings + contacts), plus `getTribeDuplicateIdentifiers()` (`GET /tribe/duplicate-identifiers`): a non-blocking report of emails/phones shared by more than one person. |
 | `apiTimeline.js` | Human-activity timeline: `/timeline/day`. |
 | `apiCalendar.js` | Calendar events. |

@@ -25,6 +25,7 @@ import { formatTimecode } from '../utils/formatters';
 import { STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS } from '../../../server/lib/storyboardVocabulary.js';
 import BeatSection from '../components/storyboards/BeatSection';
 import CommitField from '../components/storyboards/CommitField';
+import MakeEmptyPanels from '../components/storyboards/MakeEmptyPanels';
 import PanelCard from '../components/storyboards/PanelCard';
 import PanelDrawer from '../components/storyboards/PanelDrawer';
 import { beatSeconds, findPanel } from '../components/storyboards/storyboardArt';
@@ -225,6 +226,7 @@ export default function StoryboardDetail() {
             {missingMoodBoard ? <option value={board.moodBoardId}>Missing mood board</option> : null}
             {moodBoards.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
+          {board.beats.some((beat) => beat.panels.length) && <MakeEmptyPanels boardId={id} />}
         </div>
       </header>
 

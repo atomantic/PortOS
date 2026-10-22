@@ -88,11 +88,17 @@ const recipeEdge = z.object({
   toPort: z.enum(Object.keys(RECIPE_PORT_LABELS)),
 }).strict();
 
-export const storyboardRecipeSchema = z.object({
-  recipe: z.object({
-    nodes: z.array(recipeNode).max(R.nodes),
-    edges: z.array(recipeEdge).max(R.nodes * 3),
-  }).strict().nullable(),
+const recipeGraph = z.object({
+  nodes: z.array(recipeNode).max(R.nodes),
+  edges: z.array(recipeEdge).max(R.nodes * 3),
+}).strict();
+
+export const storyboardRecipeSchema = z.object({ recipe: recipeGraph.nullable() }).strict();
+
+// A library entry: a named copy of a board's graph.
+export const storyboardSavedRecipeSchema = z.object({
+  name: z.string().trim().min(1).max(R.title),
+  recipe: recipeGraph.extend({ nodes: z.array(recipeNode).min(1).max(R.nodes) }),
 }).strict();
 
 export const storyboardPanelNodeUpdateSchema = z.object({
