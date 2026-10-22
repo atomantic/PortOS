@@ -233,16 +233,15 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/cos/tasks/user - Get user tasks
+// GET /api/cos/tasks/user and /internal - one source's bounded view: open tasks
+// whole, completed history reduced to the first page + `completedCount`
+// (page on with `/tasks?view=completed`); the raw store is `/tasks?view=full` (#12997).
 router.get('/tasks/user', asyncHandler(async (req, res) => {
-  const tasks = await cos.getUserTasks();
-  res.json(tasks);
+  res.json((await cos.getTaskView({ kind: 'bare' })).user);
 }));
 
-// GET /api/cos/tasks/internal - Get CoS internal tasks
 router.get('/tasks/internal', asyncHandler(async (req, res) => {
-  const tasks = await cos.getCosTasks();
-  res.json(tasks);
+  res.json((await cos.getTaskView({ kind: 'bare' })).cos);
 }));
 
 // GET /api/cos/tasks/:id - One task with the queue it lives in. The Chief of

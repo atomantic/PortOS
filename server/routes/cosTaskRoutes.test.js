@@ -160,7 +160,7 @@ describe('GET /api/cos/tasks/:id', () => {
 
   it('is a 404 for an unknown id and never shadows the literal list routes', async () => {
     cos.findTaskWithSource.mockResolvedValue(null);
-    cos.getUserTasks.mockResolvedValue({ tasks: [] });
+    cos.getTaskView.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
 
     const missing = await request(buildApp()).get('/api/cos/tasks/no-such-task');
     expect(missing.status).toBe(404);
@@ -653,6 +653,16 @@ describe('GET /api/cos/tasks — bounded view routing (#9677)', () => {
     expect(cos.getAllTasks).not.toHaveBeenCalled();
     expect(res.body.user).toMatchObject({ completedCount: 40, completedNextCursor: 'user/09' });
     expect(res.body.user.grouped.in_progress.map(t => t.id)).toEqual(['user/1']);
+  });
+
+  it.each([['user', 'user'], ['internal', 'cos']])('/tasks/%s serves that source from the bounded reader (#12997)', async (route, key) => {
+    cos.getTaskView.mockResolvedValue({ user: { ...open(), completedCount: 40 }, cos: { ...empty, type: 'internal', completedCount: 3 } });
+    const res = await request(buildApp()).get(`/api/cos/tasks/${route}`);
+    expect(cos.getTaskView).toHaveBeenCalledWith({ kind: 'bare' });
+    expect(cos.getUserTasks).not.toHaveBeenCalled();
+    expect(cos.getCosTasks).not.toHaveBeenCalled();
+    expect(res.body.completedCount).toBe(key === 'user' ? 40 : 3);
+    expect(res.body.user).toBeUndefined();
   });
 
   it('queue view summarizes the derived lists and forwards the selected id', async () => {
