@@ -165,9 +165,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
 
   // v6: 'Required' coverage sections made a single-process app pad its report
   // with 'checked, not applicable' lines (#12078).
-  it('performance v6 scopes platform-specific coverage to what the app has', () => {
+  it('performance v7 scopes platform-specific coverage to what the app has', () => {
     const perf = DEFAULT_TASK_PROMPTS.performance;
-    expect(PROMPT_VERSIONS.performance).toBe(6);
+    expect(PROMPT_VERSIONS.performance).toBe(7);
     expect(perf).not.toMatch(/^## Required/m);
     expect(perf.match(/^## Where present:/gm)).toHaveLength(2);
     expect(perf.match(/skip the rest silently/g)).toHaveLength(2);

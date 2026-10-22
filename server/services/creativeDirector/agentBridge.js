@@ -16,7 +16,8 @@
 
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'node:url';
-import { addTask, reviveBlockedTask, cosEvents } from '../cos.js';
+import { addTask, reviveBlockedTask } from '../cosTaskStore.js';
+import { cosEvents } from '../cosEvents.js';
 import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../creativeDirectorPrompts.js';
 import { getToolSpecs } from '../creative/toolRegistry.js';
 import { getSettings } from '../settings.js';

@@ -25,7 +25,7 @@ export const createWritersRoomWork = (data, options = {}) => request('/writers-r
   body: JSON.stringify(data),
   ...options,
 });
-export const getWritersRoomWork = (id) => request(`/writers-room/works/${enc(id)}`);
+export const getWritersRoomWork = (id, options = {}) => request(`/writers-room/works/${enc(id)}`, options);
 export const updateWritersRoomWork = (id, patch, options = {}) => request(`/writers-room/works/${enc(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),

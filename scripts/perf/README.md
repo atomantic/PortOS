@@ -161,6 +161,26 @@ Run deterministic accounting and regression-gate tests from `server/`:
 npm test -- ../scripts/perf/collectionTraffic.test.js
 ~~~
 
+### Route mode (`--route`)
+
+When the live UI is password-protected the scheduled performance lane's browser
+gets 401s, so UI request counts and idle bytes cannot be measured there. Run the
+same CDP accounting against the passwordless synthetic fixture for any route:
+
+~~~sh
+npm run build
+PGDATABASE=portos_test node scripts/perf/browserCollectionAudit.mjs --route=/ --sibling=/messages/contacts
+~~~
+
+`--route` (absolute path) is cold-loaded, then `--sibling` is loaded (default
+`/messages/contacts`), then a 60 s idle window runs (`--idle-ms=1000..300000` for
+quick checks). An optional positional output file works as before. The JSON report
+holds, per phase (`cold`, `sibling`, `idle`), requests, encoded/decoded bytes and
+WebSocket frames/payload bytes per endpoint pattern, plus `idleBytesPerMinute`.
+Numeric and long-hex path segments collapse to `:id`; query strings, hosts, tokens
+and bodies are never retained. Fixture-unavailable APIs (503) are counted under
+`unavailable`; this is shell/dashboard traffic shape, not production endpoint timing.
+
 ### Findings
 
 The initial synthetic run identified media contract failures tracked in #8292:

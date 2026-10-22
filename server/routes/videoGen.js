@@ -7,6 +7,7 @@
  */
 
 import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
+import { historyListQuerySchema, isHistoryListQuery, listVideoHistoryQuery } from '../services/videoGen/historyList.js';
 import { Router } from 'express';
 import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
 import { basename } from 'path';
@@ -1214,8 +1215,11 @@ const updatePromptSchema = z.object({ prompt: z.string().max(8000) });
 // request into a silent unhide.
 const visibilitySchema = z.object({ hidden: z.boolean() });
 
-router.get('/history', asyncHandler(async (_req, res) => {
-  res.json(await withMediaFileSizes(await loadHistory(), 'video'));
+router.get('/history', asyncHandler(async (req, res) => {
+  // No query keeps the legacy full array; see historyList.js for the opt-in form.
+  if (!isHistoryListQuery(req.query)) return res.json(await withMediaFileSizes(await loadHistory(), 'video'));
+  const options = validateRequest(historyListQuerySchema, req.query);
+  res.json(await listVideoHistoryQuery(options, await loadHistory()));
 }));
 
 // One history entry by id (#4165) — see videoHistoryRead.js.

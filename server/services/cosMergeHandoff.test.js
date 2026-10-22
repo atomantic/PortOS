@@ -17,8 +17,10 @@ vi.mock('./cosState.js', async () => {
     readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.state) }),
   };
 });
-vi.mock('./cos.js', () => ({ addTask: vi.fn(async () => ({ id: 'cleanup-recovery' })) }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async (id) => f.tasks[id] ?? null }));
+vi.mock('./cosTaskStore.js', () => ({
+  addTask: vi.fn(async () => ({ id: 'cleanup-recovery' })),
+  getTaskById: async (id) => f.tasks[id] ?? null,
+}));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: async (path) => ({ host: 'github.com', fullName: f.foreign.has(path) ? 'example/other' : 'example/repo' }),
 }));
@@ -63,7 +65,7 @@ vi.mock('./heldCheckoutRecovery.js', () => ({ retirePendingMergeCheckout: (...ar
 import { handoffPendingMerge, hasQueuedMergeHandoff } from './cosMergeHandoff.js';
 import { processPendingMergePrs, readPendingMergePrs, nudgeLocalPendingMergePrs } from './prWatcher.js';
 import { claimMergeAdmission } from './cosMergeAdmission.js';
-import { addTask } from './cos.js';
+import { addTask } from './cosTaskStore.js';
 
 const HEAD = 'a'.repeat(40);
 const PR_URL = 'https://github.com/example/repo/pull/7';

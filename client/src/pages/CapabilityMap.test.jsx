@@ -3,10 +3,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { awaitEnabled } from '../test/enabledBarrier.js';
 
+const fixture = vi.hoisted(() => ({ override: null }));
+
 vi.mock('../hooks/useSocketResource', () => ({
   useSocketResource: () => ({
     loading: false,
-    data: {
+    data: fixture.override ?? {
       networkSetupPreference: 'tailscale',
       setup: { total: 1, ready: 0, remaining: 1, complete: false },
       summary: { ok: 0, warn: 2, error: 0, unconfigured: 1, total: 3, overall: 'warn' },
@@ -83,4 +85,41 @@ it('saves Tailcat and not-desired choices and retains the saved choice on failur
   fireEvent.change(select, { target: { value: 'tailscale' } });
   await awaitEnabled(select);
   expect(select).toHaveValue('none');
+});
+
+
+describe('CapabilityMap with setup complete', () => {
+  const completeData = {
+    networkSetupPreference: 'tailcat',
+    setup: { total: 1, ready: 1, remaining: 0, complete: true },
+    summary: { ok: 2, warn: 1, error: 1, unconfigured: 1, total: 5, overall: 'error' },
+    optionalSummary: { ok: 1, warn: 1, error: 1, unconfigured: 1, total: 4, overall: 'error' },
+    capabilities: [
+      { id: 'providers', label: 'AI Providers', settingsPath: '/ai', status: 'ok', summary: 'ready', setupRequired: true },
+      { id: 'drive', label: 'Drive', settingsPath: '/drive', status: 'ok', summary: 'fine' },
+      { id: 'calendar', label: 'Calendar', settingsPath: '/calendar', status: 'unconfigured', summary: 'No accounts' },
+      { id: 'messages', label: 'Messages', settingsPath: '/messages', status: 'warn', summary: 'degraded' },
+      { id: 'apps', label: 'Apps', settingsPath: '/apps', status: 'error', summary: 'broken' },
+    ],
+  };
+
+  it('orders problems first, drops first-time copy, and keeps setup options behind a disclosure', () => {
+    fixture.override = completeData;
+    try {
+      render(<MemoryRouter><CapabilityMap /></MemoryRouter>);
+      const labels = ['Apps', 'Messages', 'Calendar', 'Drive'].map((l) => screen.getByText(l));
+      for (let i = 0; i < labels.length - 1; i += 1) {
+        expect(labels[i].compareDocumentPosition(labels[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+      expect(screen.queryByText(/Enable at least one runnable AI provider/)).not.toBeInTheDocument();
+      expect(screen.getAllByText('Setup options')).toHaveLength(2);
+      expect(screen.getAllByText('Setup options')[0].closest('details')).not.toHaveAttribute('open');
+      expect(screen.getByLabelText('Networking preference').closest('details')).not.toHaveAttribute('open');
+      expect(screen.getByRole('button', { name: '1 error · 1 degraded · 1 not set up' })).toBeInTheDocument();
+      fireEvent.click(screen.getAllByText('Setup options')[1]);
+      expect(screen.getByLabelText('Networking preference').closest('details')).toHaveAttribute('open');
+    } finally {
+      fixture.override = null;
+    }
+  });
 });

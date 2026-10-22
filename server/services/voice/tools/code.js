@@ -77,7 +77,8 @@ export const CODE_TOOLS = [
       // Dynamic import: cos.js is a large module with its own import graph;
       // importing it lazily keeps tools.js load-time light and dodges any
       // cos → voice cycle.
-      const { addTask, reviveBlockedTask, isRunning } = await import('../../cos.js');
+      const { addTask, reviveBlockedTask } = await import('../../cosTaskStore.js');
+      const { isRunning } = await import('../../cos.js');
       const provider = typeof codeAgent.provider === 'string' ? codeAgent.provider.trim() : '';
       const model = typeof codeAgent.model === 'string' ? codeAgent.model.trim() : '';
 
@@ -190,7 +191,7 @@ export const CODE_TOOLS = [
     },
     execute: async () => {
       const { loadState } = await import('../../cosState.js');
-      const { getAllTasks } = await import('../../cos.js');
+      const { getAllTasks } = await import('../../cosTaskStore.js');
       const { isTruthyMeta } = await import('../../agentState.js');
 
       const state = await loadState();

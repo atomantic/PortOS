@@ -63,6 +63,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
+  getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./agentRunTracking.js', () => ({
   createAgentRun: vi.fn().mockResolvedValue(undefined),
@@ -78,11 +79,13 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosState.js', async importOriginal => ({
+  ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({}),
+}));
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   getTaskById: vi.fn().mockResolvedValue(null),
-  getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentCliSpawning.js', () => ({
@@ -156,7 +159,8 @@ import { registerAgent } from './cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { buildCliSpawnConfig, isTuiProvider } from './agentCliSpawning.js';
 import { spawnAgentViaRunner } from './cosRunnerClient.js';
-import { getConfig, updateTask } from './cos.js';
+import { getConfig } from './cosState.js';
+import { updateTask } from './cosTaskStore.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { acquire, release } from './executionLanes.js';

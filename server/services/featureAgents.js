@@ -308,7 +308,8 @@ export async function triggerFeatureAgent(id) {
   }
 
   const task = generateTaskFromFeatureAgent(agent);
-  const { addTask, forceSpawnTask } = await import('./cos.js');
+  const { addTask } = await import('./cosTaskStore.js');
+  const { forceSpawnTask } = await import('./cos.js');
   const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
   if (!persisted?.id) {
     return { triggered: false, reason: 'Feature agent run was not queued', agent };

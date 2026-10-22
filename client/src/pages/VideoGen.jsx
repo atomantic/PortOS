@@ -89,7 +89,7 @@ import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
   getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen, previewVideoPrompt,
-  listVideoHistory, deleteVideoHistoryItem, setVideoHidden,
+  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, setVideoHidden,
   patchSettingsSlice,
   getActiveVideoJob,
   getSettings,
@@ -132,6 +132,9 @@ const MODES = [
 
 // Stable fetcher for useListResource — the hook re-runs on identity change.
 const loadLoraLibrary = () => listLorasFull({ silent: true });
+
+// The gallery shows the newest records; older ones are reached by id (Remix) or Media History.
+const HISTORY_PAGE_LIMIT = 200;
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -411,7 +414,7 @@ export default function VideoGen() {
   // gallery simply staying empty), so the shared toast would double it.
   const refreshHistory = useCallback(() => {
     historyInFlightRef.current += 1;
-    return listVideoHistory({ silent: true })
+    return listVideoHistory({ silent: true, query: { limit: HISTORY_PAGE_LIMIT } })
       .then((items) => {
         setHistory(Array.isArray(items) ? items : []);
         setHistoryLoad('loaded');
@@ -547,6 +550,26 @@ export default function VideoGen() {
       return next;
     }, { replace: true });
   }, [setSearchParams]);
+  // The page loads only the newest HISTORY_PAGE_LIMIT records, so an older clip
+  // is hydrated by id before it is called missing. The handoff id is already
+  // marked settled, so a history refresh mid-flight cannot start a second lookup;
+  // a handoff that changed or cleared meanwhile resets that ref, which makes the
+  // answer stale.
+  const hydrateOlderRemix = useCallback((id) => {
+    const current = () => settledRemixHandoffRef.current === id;
+    getVideoHistoryItem(id, { silent: true })
+      .then((older) => {
+        if (!current()) return;
+        applyRemix(older);
+        setRemixHandoffProblem(null);
+        consumeRemixHandoff();
+      })
+      .catch((err) => {
+        if (!current()) return;
+        // Only a 404 means the clip is gone; any other failure keeps the param so Retry resolves it.
+        if (err?.status === 404) { setRemixHandoffProblem('missing'); consumeRemixHandoff(); } else setRemixHandoffProblem('error');
+      });
+  }, [applyRemix, consumeRemixHandoff]);
   useEffect(() => {
     // No handoff in the URL — including right after this one consumed its own.
     // Clearing the settled id here is what lets the NEXT handoff through, even
@@ -573,11 +596,11 @@ export default function VideoGen() {
     if (record) {
       applyRemix(record);
       setRemixHandoffProblem(null);
-    } else {
-      setRemixHandoffProblem('missing');
+      consumeRemixHandoff();
+      return;
     }
-    consumeRemixHandoff();
-  }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
+    hydrateOlderRemix(remixHandoffId);
+  }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff, hydrateOlderRemix]);
   // Back to 'loading' first, so a retry that fails again still moves the state
   // ('loading' → 'error') and re-runs the effect above.
   const retryRemixHandoff = useCallback(() => {

@@ -94,12 +94,24 @@ export const vfrSyncArgs = async (bin) => {
  * - `returnStderr`: when true a successful result also carries the captured
  *   stderr tail as `stderr` (loudness measurement reads its JSON from there).
  *
+ * - `timeoutMs`: optional wall-clock ceiling for a stalled ffmpeg (unreadable
+ *   input, evicted cloud file, dead network mount). On expiry the child gets
+ *   SIGTERM, then SIGKILL after `FFMPEG_KILL_GRACE_MS`, and the result is
+ *   `{ ok: false, reason: 'timed out after <n>s' }`. No default: long encodes
+ *   rely on their caller `signal` instead. The `signal` abort path escalates
+ *   to SIGKILL the same way.
+ *
  * Returns `{ ok: true }` on exit code 0, otherwise `{ ok: false, reason }`
  * where `reason` is a short human-readable string suitable for logging or
  * surfacing in a UI error. Spawn errors are translated into `reason: 'spawn
  * failed: …'` so callers don't need a separate `.on('error', …)` handler.
  */
-export function runFfmpegProcess({ bin, args, signal, stderrTailBytes = 2000, returnStderr = false } = {}) {
+export const FFMPEG_KILL_GRACE_MS = 5000;
+// Ceilings for bounded work: one frame/poster, and a single full-file pass.
+export const FFMPEG_FRAME_TIMEOUT_MS = 2 * 60 * 1000;
+export const FFMPEG_SCAN_TIMEOUT_MS = 15 * 60 * 1000;
+
+export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false } = {}) {
   if (!bin || typeof bin !== 'string') {
     return Promise.resolve({ ok: false, reason: 'invalid ffmpeg binary' });
   }
@@ -122,20 +134,47 @@ export function runFfmpegProcess({ bin, args, signal, stderrTailBytes = 2000, re
     // removeEventListener on normal completion so a signal reused across many
     // ffmpeg calls (one per render queue) doesn't accumulate dozens of unfired
     // listeners — the leak the audioMux audit flagged.
+    let closed = false;
+    let timedOut = false;
+    let timeoutTimer = null;
+    let killTimer = null;
+    // SIGTERM first; a child wedged in uninterruptible IO may ignore it, so
+    // follow with SIGKILL unless it has closed by then.
+    const terminate = () => {
+      proc.kill('SIGTERM');
+      if (killTimer) return;
+      killTimer = setTimeout(() => { if (!closed) proc.kill('SIGKILL'); }, FFMPEG_KILL_GRACE_MS);
+      killTimer.unref?.();
+    };
+    const clearTimers = () => {
+      closed = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+    };
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
+      timeoutTimer.unref?.();
+    }
     let onAbort = null;
     if (signal) {
-      onAbort = () => proc.kill('SIGTERM');
+      onAbort = terminate;
       signal.addEventListener('abort', onAbort, { once: true });
     }
     const cleanupSignal = () => {
       if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     };
     proc.on('error', (err) => {
+      clearTimers();
       cleanupSignal();
       resolve({ ok: false, reason: `spawn failed: ${err.message}` });
     });
     proc.on('close', (code, sig) => {
+      clearTimers();
       cleanupSignal();
+      if (timedOut) {
+        resolve({ ok: false, reason: `timed out after ${Math.round(timeoutMs / 1000)}s` });
+        return;
+      }
       if (sig === 'SIGTERM' || sig === 'SIGKILL') {
         resolve({ ok: false, reason: `cancelled (${sig})` });
         return;
@@ -251,6 +290,7 @@ export const generateThumbnail = async (videoPath, jobId, { atSec } = {}) => {
     bin: ffmpeg,
     args: ['-ss', seekSec.toFixed(Number.isFinite(atSec) ? 6 : 2), '-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath],
     stderrTailBytes: 0,
+    timeoutMs: FFMPEG_FRAME_TIMEOUT_MS,
   });
   if (!result.ok && result.reason?.startsWith('spawn failed: ')) {
     console.log(`⚠️ ffmpeg thumbnail failed to spawn: ${result.reason.slice('spawn failed: '.length)}`);
@@ -361,6 +401,7 @@ export const videoFrameHashes = async (videoPath) => {
     const run = await runFfmpegProcess({
       bin: ffmpeg,
       args: ['-v', 'error', '-xerror', '-i', videoPath, '-map', '0:v:0', '-f', 'framemd5', '-y', hashPath],
+      timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
     });
     if (!run.ok) return null;
     const rows = (await readFile(hashPath, 'utf8')).split(/\r?\n/).filter((line) => line && !line.startsWith('#'));
@@ -509,6 +550,7 @@ export const extractEvaluationFrames = async (videoPath, jobId, count = 5) => {
     bin: ffmpeg,
     args: ['-i', videoPath, '-vf', `select='${selectExpr}'`, ...await vfrSyncArgs(ffmpeg), '-q:v', '5', '-y', outPattern],
     stderrTailBytes: 0,
+    timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
   });
   if (!result.ok && result.reason?.startsWith('spawn failed: ')) {
     console.log(`⚠️ ffmpeg multi-frame extract failed to spawn: ${result.reason.slice('spawn failed: '.length)}`);

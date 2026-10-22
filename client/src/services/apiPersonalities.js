@@ -1,9 +1,9 @@
 import { request } from './apiCore.js';
 
 // Agent Personalities
-export const getAgentPersonalities = (userId = null) => {
+export const getAgentPersonalities = (userId = null, options = {}) => {
   const params = userId ? `?userId=${encodeURIComponent(userId)}` : '';
-  return request(`/agents/personalities${params}`);
+  return request(`/agents/personalities${params}`, options);
 };
 export const getAgentPersonality = (id) => request(`/agents/personalities/${id}`);
 export const createAgentPersonality = (data) => request('/agents/personalities', {

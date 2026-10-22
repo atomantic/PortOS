@@ -29,7 +29,7 @@ vi.mock('../services/brain.js', () => ({
   captureThought: vi.fn(),
 }));
 
-vi.mock('../services/cos.js', () => ({
+vi.mock('../services/cosTaskStore.js', () => ({
   addTask: vi.fn(),
 }));
 
@@ -40,7 +40,7 @@ vi.mock('../services/identity.js', () => ({
 const convs = await import('../services/askConversations.js');
 const svc = await import('../services/askService.js');
 const brainService = await import('../services/brain.js');
-const cosService = await import('../services/cos.js');
+const { addTask } = await import('../services/cosTaskStore.js');
 const identityService = await import('../services/identity.js');
 const { default: routes } = await import('./ask.js');
 
@@ -149,7 +149,7 @@ describe('POST /api/ask/:id/turns/:turnId/promote', () => {
   it('promotes an assistant turn to a CoS task with priority and source context', async () => {
     convs.getConversation.mockResolvedValue(fullConv);
     convs.setPromoted.mockResolvedValue({ ...fullConv, promoted: true });
-    cosService.addTask.mockResolvedValue({ id: 'task-1', status: 'pending' });
+    addTask.mockResolvedValue({ id: 'task-1', status: 'pending' });
 
     const res = await request(makeApp())
       .post(`/api/ask/${convId}/turns/a1/promote`)
@@ -158,7 +158,7 @@ describe('POST /api/ask/:id/turns/:turnId/promote', () => {
     expect(res.status).toBe(200);
     expect(res.body.target).toBe('task');
     expect(res.body.ref).toEqual({ type: 'task', id: 'task-1' });
-    expect(cosService.addTask).toHaveBeenCalledWith(
+    expect(addTask).toHaveBeenCalledWith(
       expect.objectContaining({
         description: 'Block 30 minutes for deep work after lunch.',
         priority: 'HIGH',
@@ -175,21 +175,21 @@ describe('POST /api/ask/:id/turns/:turnId/promote', () => {
       turns: [{ id: 'a1', role: 'assistant', content: longContent }],
     });
     convs.setPromoted.mockResolvedValue({ ...fullConv, promoted: true });
-    cosService.addTask.mockResolvedValue({ id: 'task-2' });
+    addTask.mockResolvedValue({ id: 'task-2' });
 
     const res = await request(makeApp())
       .post(`/api/ask/${convId}/turns/a1/promote`)
       .send({ target: 'task' });
 
     expect(res.status).toBe(200);
-    const description = cosService.addTask.mock.calls[0][0].description;
+    const description = addTask.mock.calls[0][0].description;
     expect(description.length).toBeLessThanOrEqual(280);
     expect(description.endsWith('…')).toBe(true);
   });
 
   it('returns 409 when the promoted task is a duplicate', async () => {
     convs.getConversation.mockResolvedValue(fullConv);
-    cosService.addTask.mockResolvedValue({ id: 'task-existing', duplicate: true, status: 'pending' });
+    addTask.mockResolvedValue({ id: 'task-existing', duplicate: true, status: 'pending' });
 
     const res = await request(makeApp())
       .post(`/api/ask/${convId}/turns/a1/promote`)

@@ -343,6 +343,23 @@ describe('classifyBranch', () => {
   });
 });
 
+describe('classifyBranches rule ids and wipParkCause', () => {
+  const base = { hasUpstream: true, isMerged: false, worktreeDirty: false, openPr: null };
+  it('names the matched rule next to the unchanged state', () => {
+    const rule = (over) => { const { state, rule: id } = classifyBranches([{ ...base, ...over }])[0]; return [state, id]; };
+    expect(rule({ openPr: { isDraft: true }, completionPolicyReason: 'pr-completion-review-required' })).toEqual(['WIP', 'draft']);
+    expect(rule({ completionPolicyReason: 'pr-completion-review-required', isMerged: true })).toEqual(['WIP', 'completion-policy']);
+    expect(rule({ prStateUnavailable: true, hasUpstream: false })).toEqual(['WIP', 'pr-state-unavailable']);
+    expect(rule({ hasUpstream: false })).toEqual(['WIP', 'bare-pointer']);
+    expect(rule({ isMerged: true })).toEqual(['MERGED', 'merged']);
+  });
+  it('parks a policy hold with a live owner as WIP under the live-owner cause', () => {
+    const entry = classifyBranches([{ ...base, completionPolicyReason: 'pr-completion-review-required', liveOwnerReason: 'active-agent' }])[0];
+    expect(entry).toMatchObject({ state: 'WIP', rule: 'completion-policy' });
+    expect(describeIdleReconcilePark([], [], { wip: [entry] }).skipCauses).toEqual({ 'active-agent': 1 });
+  });
+});
+
 describe('classifyBranches', () => {
   it('annotates each input with its state', () => {
     const out = classifyBranches([

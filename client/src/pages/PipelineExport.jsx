@@ -97,6 +97,7 @@ export default function PipelineExport() {
   const fetchSeriesAssets = useCallback(async () => {
     const [collections, videos] = await Promise.all([
       listMediaCollections({ silent: true }),
+      // Full (non-compact) read: compact rows drop the stamped `provenance` the rollup needs.
       listVideoHistory({ silent: true }),
     ]);
     const list = Array.isArray(collections) ? collections : [];

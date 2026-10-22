@@ -256,16 +256,27 @@ export const liveHomingTargetSql = (r) => `(
     OR (${r}.ref_kind = 'series'            AND EXISTS (SELECT 1 FROM pipeline_series s            WHERE s.id = ${r}.ref_id AND s.deleted = false))
     OR (${r}.ref_kind = 'creative-director' AND EXISTS (SELECT 1 FROM creative_director_projects p WHERE p.id = ${r}.ref_id AND p.deleted = false)))`;
 
-// SQL predicate matching ingredients that have at least one LIVE homing ref
-// (target row still resolves).
-export const HAS_LIVE_HOMING_REF = `EXISTS (
-    SELECT 1 FROM catalog_identity_read_refs r
-     WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
-       AND ${liveHomingTargetSql('r')})`;
+// The identity read views are built from CTEs, UNION ALL and plan JSON, so a
+// predicate correlated on `catalog_canonical_ingredient_id(r.ingredient_id) =
+// catalog_ingredients.id` cannot use an index and re-evaluates the whole view
+// once per outer row (#12989: 35 s for the Orphaned album). A statement that
+// filters on refs adds this CTE so the view is evaluated once.
+export const CANONICAL_REFS_CTE = `canonical_refs AS MATERIALIZED (
+    SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, ref_kind, ref_id
+      FROM catalog_identity_read_refs WHERE deleted = false)`;
+
+// `<expr> IN (<uncorrelated subquery>)` evaluated as ONE hashed subplan. A bare
+// top-level IN is pulled up into a semi-join, and the read views' tiny row
+// estimates make the planner pick a nested loop that rescans the subquery once
+// per outer row — quadratic again (#12989). Wrapping it in IS TRUE keeps it
+// a hashed subplan with the old EXISTS semantics: a NULL from IN (a NULL in the
+// set) reads as false, so NOT (inSet(…)) also matches the old NOT EXISTS.
+export const inSet = (expr, subquery) => `(${expr} IN (${subquery})) IS TRUE`;
+
+// Predicates over CANONICAL_REFS_CTE (the statement must include it).
+// HAS_LIVE_HOMING_REF: at least one homing ref whose target still resolves.
+export const HAS_LIVE_HOMING_REF = inSet('id', `SELECT r.cid FROM canonical_refs r WHERE ${liveHomingTargetSql('r')}`);
 
 // At least one homing ref row exists (live OR dangling) — distinguishes
 // "orphaned" (has a ref, none resolve) from "unlinked" (no ref at all).
-export const HAS_ANY_HOMING_REF = `EXISTS (
-    SELECT 1 FROM catalog_identity_read_refs r
-     WHERE catalog_canonical_ingredient_id(r.ingredient_id) = catalog_ingredients.id AND r.deleted = false
-       AND r.ref_kind IN (${HOMING_REF_KINDS_SQL}))`;
+export const HAS_ANY_HOMING_REF = inSet('id', `SELECT r.cid FROM canonical_refs r WHERE r.ref_kind IN (${HOMING_REF_KINDS_SQL})`);

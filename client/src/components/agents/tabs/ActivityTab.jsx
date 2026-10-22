@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 import { ACTION_TYPES } from '../constants';
 import { formatDateTime } from '../../../utils/formatters';
 
@@ -11,19 +12,28 @@ export default function ActivityTab({ agentId }) {
   const [loading, setLoading] = useState(true);
   const [actionFilter, setActionFilter] = useState('');
   const [hasMore, setHasMore] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const activitiesData = await api.getAgentActivityTimeline(
-      PAGE_SIZE, [agentId], null, actionFilter || null
-    );
-    setActivities(activitiesData);
-    setHasMore(activitiesData.length >= PAGE_SIZE);
-    setLoading(false);
+    setLoadError(false);
+    await api.getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
+      .then((activitiesData) => {
+        setActivities(activitiesData);
+        setHasMore(activitiesData.length >= PAGE_SIZE);
+      })
+      .catch(() => setLoadError(true))
+      .finally(() => setLoading(false));
   }, [agentId, actionFilter]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Spinner only on a retry; background refreshes keep the current view mounted.
+  const retry = () => {
+    setLoading(true);
+    fetchData();
+  };
 
   const loadMore = async () => {
     if (activities.length === 0) return;
@@ -60,6 +70,14 @@ export default function ActivityTab({ agentId }) {
 
   if (loading) {
     return <div className="p-4"><BrailleSpinner text="Loading activity" /></div>;
+  }
+
+  if (loadError) {
+    return (
+      <div className="p-4">
+        <ListLoadError what="activity log" onRetry={retry} />
+      </div>
+    );
   }
 
   return (

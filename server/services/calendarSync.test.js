@@ -195,6 +195,25 @@ describe('Outlook batch identity reconciliation (#8635)', () => {
   });
 });
 
+describe('Outlook windowed prune (#12961)', () => {
+  it('prunes only in-window events missing from the batch', async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const at = d => new Date(Date.now() + d * day).toISOString();
+    getAccount.mockResolvedValue({ id: ACCOUNT_ID, name: 'Example Account', enabled: true, type: 'outlook-calendar' });
+    const old = { id: 'old', externalId: 'old', startTime: at(-20), endTime: at(-20) };
+    const far = { id: 'far', externalId: 'far', startTime: at(200), endTime: at(200) };
+    const gone = { id: 'gone', externalId: 'gone', startTime: at(2), endTime: at(2) };
+    const kept = { id: 'kept', externalId: 'kept', startTime: at(3), endTime: at(3) };
+    readJSONFile.mockResolvedValue({ events: [old, far, gone, kept] });
+    syncOutlookCalendarApi.mockResolvedValue({
+      status: 'success', events: [kept],
+      dateRange: { pastDate: new Date(Date.now() - 7 * day), futureDate: new Date(Date.now() + 90 * day) },
+    });
+    expect(await syncAccount(ACCOUNT_ID)).toMatchObject({ pruned: 1 });
+    expect(atomicWrite.mock.calls.at(-1)[1].events.map(e => e.id).sort()).toEqual(['far', 'kept', 'old']);
+  });
+});
+
 // Real file I/O is essential: cloning a mock's ENOENT fallback hides the bug.
 afterAll(cleanupTempDataRoots);
 

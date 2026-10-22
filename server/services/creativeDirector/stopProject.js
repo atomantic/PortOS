@@ -138,7 +138,7 @@ export async function retireRuns(projectId, { runs = [], reason = 'Stopped', tas
   // taskType MUST be 'internal' and status MUST be a value generateTasksMarkdown
   // supports — see the long-form rationale in recovery.js#recoverInFlightProjects,
   // which retires the same task rows.
-  const { updateTask } = await loadOrEmpty(() => import('../cos.js'), 'cos', projectId);
+  const { updateTask } = await loadOrEmpty(() => import('../cosTaskStore.js'), 'cos', projectId);
   if (updateTask) {
     for (const taskId of taskIds) {
       tasks += await tally(updateTask(taskId, {

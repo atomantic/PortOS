@@ -27,18 +27,19 @@ vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn(async () => ({ host
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: vi.fn(async () => ({})) }));
 vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: vi.fn(async () => ({ prHead: '1'.repeat(40), defaultHead: '2'.repeat(40) })) }));
 vi.mock('./completedCheckoutEvidence.js', () => ({ readCompletedCheckoutIdentity: vi.fn() }));
+vi.mock('./cos.js', () => ({}));
 vi.mock('./cosAgentLifecycle.js', () => ({ reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]) }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn().mockResolvedValue(null) }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({
   retireInventoriedCheckout: vi.fn(async () => ({ ok: true, archiveDir: '/private/archive', branchDeleted: true })),
   prepareInventoriedCheckoutRetirement: vi.fn().mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64) } }),
 }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-recovery-1' }),
   getAllTasks: vi.fn().mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } }),
+  getTaskById: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn().mockReturnValue([]) }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn().mockResolvedValue([]) }));
@@ -80,7 +81,7 @@ import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { getTaskById } from './cosTaskStore.js';
 import { recordBranchReconcileOutcome } from './taskSchedule.js';
 import { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
-import { addTask, getAllTasks } from './cos.js';
+import { addTask, getAllTasks } from './cosTaskStore.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import { listWorktrees } from './worktreeManager.js';
 import { listRemoteHeads, cleanupMerged } from './branchReconcile.js';

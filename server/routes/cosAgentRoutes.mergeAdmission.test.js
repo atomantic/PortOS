@@ -6,7 +6,11 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 const claimMergeAdmission = vi.hoisted(() => vi.fn(async ({ outcome }) => ({ admitted: false, released: true, outcome })));
 const handoffPendingMerge = vi.hoisted(() => vi.fn(async () => ({ queued: false, reason: 'handoff-owner-unverified', retryable: false })));
 vi.mock('../services/cosMergeHandoff.js', () => ({ handoffPendingMerge }));
-vi.mock('../services/cos.js', () => ({}));
+vi.mock('../services/cosAgentArchive.js', () => ({}));
+vi.mock('../services/cosAgentFeedback.js', () => ({}));
+vi.mock('../services/cosAgentIndex.js', () => ({}));
+vi.mock('../services/cosAgentLifecycle.js', () => ({}));
+vi.mock('../services/cosHealthMonitor.js', () => ({}));
 vi.mock('../services/agentOrchestrator.js', () => ({}));
 vi.mock('../services/cosMergeAdmission.js', async (importOriginal) => ({
   MERGE_ADMISSION_OUTCOMES: (await importOriginal()).MERGE_ADMISSION_OUTCOMES,

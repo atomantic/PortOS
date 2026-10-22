@@ -532,7 +532,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const unresolved = unresolvedRetirements(previousOutcome);
   const absentObligations = unresolved.filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   let retirementReviews = { candidates: [], held: [] };
-  if (actions.cleanupMerged !== false && result.wip?.some(branch => branch.completionPolicyReason === 'pr-completion-review-required')) {
+  if (actions.cleanupMerged !== false && result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')) {
     const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
       wip: result.wip, worktreeInventory: result.worktreeInventory,
       detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
@@ -557,7 +557,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const { inspectOpenDeliveryRepair } = await import('./repoCleanupObservation.js');
   const { inspectOrQueueCompletedReview } = await import('./repoCleanupRecovery.js');
   const reviewHeldOpen = (result.wip || []).filter(branch => branch.openPr && !branch.openPr.isDraft
-    && branch.completionPolicyReason === 'pr-completion-review-required' && !branch.liveOwnerReason
+    && branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required' && !branch.liveOwnerReason
     && !branch.worktreeDirty && !branch.worktreeStatusUnavailable);
   for (const branch of [...result.inFlight, ...reviewHeldOpen]) {
     if (branch.state !== 'IN_REVIEW' && !reviewHeldOpen.includes(branch)) { cognitiveInFlight.push(branch); continue; }

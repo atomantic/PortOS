@@ -56,15 +56,9 @@ export const localBackendForProvider = (provider) => {
   return null;
 };
 
-// The whole loopback block (`127.0.0.0/8`), not just `127.0.0.1` — a daemon on a
-// loopback alias (`127.0.0.2`) is as local as one on `.1`, and the server's
-// `isLocalInstanceHost` already accepts the full block. While they disagreed, a
-// provider on `http://127.0.0.2:11434` was badged NEEDS SETUP for an API key a
-// loopback endpoint never needs.
-const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0|\[?::1\]?|\[?::\]?)(:|\/|$)/i;
-
-export const isLocalEndpoint = (endpoint) =>
-  typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
+// One shared predicate (full `127.0.0.0/8`, `::`, `0.0.0.0`) so client and server
+// cannot disagree on a loopback alias like `http://127.0.0.2:11434`.
+export const isLocalEndpoint = isLoopbackEndpoint;
 
 // THE private-network classification (RFC1918 LAN ranges, link-local, the
 // Tailscale CGNAT range, `.local`/`.ts.net`/`.internal` names, single-label
@@ -72,7 +66,7 @@ export const isLocalEndpoint = (endpoint) =>
 // so the two documented edge cases (`http://127.1`, a bracketless IPv6
 // literal) can't disagree between client and server again. (Imported, not
 // re-exported directly, because isFleetProvider below reads it too.)
-import { isPrivateNetworkEndpoint } from '../../../server/lib/localEndpoint.js';
+import { isLoopbackEndpoint, isPrivateNetworkEndpoint } from '../../../server/lib/localEndpoint.js';
 export { isPrivateNetworkEndpoint };
 
 /**

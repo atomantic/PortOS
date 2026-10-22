@@ -124,9 +124,9 @@
  * unchanged, and the two test files that only ever exercised one of them are
  * renamed to sit beside it (`cosAgentLifecycle.test.js`, `cosAgentIndex.merge.test.js`).
  *
- * Remaining: `cos.js`'s agent re-export block (`export { … } from` the four
- * modules above, ~20 names) is the last partial view of the cluster. It is a
- * wide surface with many `vi.mock`ed importers and wants its own PR.
+ * `cos.js`'s agent re-export block was the last partial view of the cluster and is
+ * gone (#12988): `cos.js` declares only the daemon, and callers import each
+ * function from the module that declares it.
  */
 
 // Process/runner layer — owns the live agent maps and the OS-level signals.

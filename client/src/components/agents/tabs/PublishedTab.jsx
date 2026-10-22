@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailedState from '../../ui/LoadFailedState';
+import ListLoadError from '../../ui/ListLoadError';
 import { FormField } from '../../ui/FormField';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
+import useLatestRequest from '../../../hooks/useLatestRequest.js';
 
 export default function PublishedTab({ agentId }) {
   const [accounts, setAccounts] = useState([]);
@@ -13,16 +15,23 @@ export default function PublishedTab({ agentId }) {
   const [publishedError, setPublishedError] = useState(false);
   const [publishedDays, setPublishedDays] = useState(7);
   const [loading, setLoading] = useState(true);
+  const beginPublishedLoad = useLatestRequest();
+  const [accountsError, setAccountsError] = useState(false);
 
   const fetchAccounts = useCallback(async () => {
-    const data = await api.getPlatformAccounts(agentId);
-    const active = data.filter(a => a.status === 'active');
-    setAccounts(active);
-    // Auto-select first account
-    if (active.length > 0) {
-      setSelectedAccountId(prev => prev || active[0].id);
-    }
-    setLoading(false);
+    setLoading(true);
+    setAccountsError(false);
+    await api.getPlatformAccounts(agentId, null, { silent: true })
+      .then((data) => {
+        const active = data.filter(a => a.status === 'active');
+        setAccounts(active);
+        // Auto-select first account
+        if (active.length > 0) {
+          setSelectedAccountId(prev => prev || active[0].id);
+        }
+      })
+      .catch(() => setAccountsError(true))
+      .finally(() => setLoading(false));
   }, [agentId]);
 
   useEffect(() => {
@@ -30,21 +39,24 @@ export default function PublishedTab({ agentId }) {
   }, [fetchAccounts]);
 
   const loadPublished = useCallback(async () => {
+    const isCurrent = beginPublishedLoad();
     if (!agentId || !selectedAccountId) {
       setPublished({ posts: [], comments: [] });
+      setPublishedLoading(false);
       return;
     }
     setPublishedLoading(true);
     setPublishedError(false);
     try {
       const data = await api.getAgentPublished({ agentId, accountId: selectedAccountId, days: publishedDays }, { silent: true });
+      if (!isCurrent()) return;
       setPublished(data);
     } catch {
+      if (!isCurrent()) return;
       setPublishedError(true);
-    } finally {
-      setPublishedLoading(false);
     }
-  }, [agentId, selectedAccountId, publishedDays]);
+    setPublishedLoading(false);
+  }, [agentId, selectedAccountId, publishedDays, beginPublishedLoad]);
 
   useEffect(() => {
     loadPublished();
@@ -52,6 +64,14 @@ export default function PublishedTab({ agentId }) {
 
   if (loading) {
     return <div className="p-4"><BrailleSpinner text="Loading" /></div>;
+  }
+
+  if (accountsError) {
+    return (
+      <div className="p-4">
+        <ListLoadError what="platform accounts" onRetry={fetchAccounts} />
+      </div>
+    );
   }
 
   return (

@@ -20,7 +20,7 @@ import { tmpdir } from 'os';
 import {
   ensureDir, atomicWrite, pathExists, sha256File, readJSONFile, rmGuarded, writeFileGuarded,
 } from '../../lib/fileUtils.js';
-import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { FFMPEG_SCAN_TIMEOUT_MS, findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { decodeRgbaFrame, encodePng } from '../../lib/imageRgba.js';
 import { resolveSpriteAssetPath, spriteDir, toRecordRelativeAssetPath } from './paths.js';
@@ -63,6 +63,7 @@ async function encodeTrimGif(frames, fps, destAbs) {
       '-loop', '0',
       destAbs,
     ],
+    timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
   });
   await rmGuarded(scratch, { recursive: true, force: true }).catch(() => {});
   if (!result.ok) throw new ServerError(`GIF encode failed: ${result.reason}`, { status: 500, code: 'GIF_ENCODE_FAILED' });

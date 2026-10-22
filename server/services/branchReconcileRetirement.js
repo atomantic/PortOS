@@ -18,7 +18,7 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
   const readPr = deps.readPr || mergedPrUrl;
   const prepare = deps.prepare || (await import('./heldCheckoutRecovery.js')).prepareInventoriedCheckoutRetirement;
   for (const branch of result.wip || []) {
-    if (branch.completionPolicyReason !== 'pr-completion-review-required'
+    if (branch.rule !== 'completion-policy' || branch.completionPolicyReason !== 'pr-completion-review-required'
       || branch.liveOwnerReason || branch.worktreeDirty || branch.worktreeStatusUnavailable) continue;
     if (branch.openPr && !staleBehindOpenPr(branch)) continue;
     const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);

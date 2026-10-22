@@ -9,7 +9,7 @@ const identityService = { addProgressEntry: vi.fn() };
 
 vi.mock('./askConversations.js', () => convs);
 vi.mock('./brain.js', () => brainService);
-vi.mock('./cos.js', () => cosService);
+vi.mock('./cosTaskStore.js', () => cosService);
 vi.mock('./identity.js', () => identityService);
 
 const { latestAssistantTurn, promoteLatestAssistantTurn, promoteTurnById } = await import('./askPromote.js');

@@ -33,7 +33,7 @@ export function buildCreativeDirectorRenderFailureTask({ projectId, sceneId = nu
 
 export async function queueCreativeDirectorRenderFailureTask({ projectId, sceneId = null, jobId, error }) {
   const task = buildCreativeDirectorRenderFailureTask({ projectId, sceneId, jobId, error });
-  const { addTask } = await import('../cos.js');
+  const { addTask } = await import('../cosTaskStore.js');
   const queued = await addTask(task, 'internal');
   if (queued?.duplicate) {
     console.log(`⚠️ CD render repair already queued for ${projectId}/${sceneId || 'project'} as ${queued.id}`);

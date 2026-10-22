@@ -27,6 +27,8 @@ vi.mock('./fileUtils.js', async (importOriginal) => {
 });
 
 const cj = await import('./conflictJournal.js');
+const { sanitizeRecordForWire } = await import('./syncWire.js');
+const { sanitizeStoryboard } = await import('./storyboardRecord.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -706,5 +708,29 @@ describe('conflictJournal — unreadable base-hash store fails closed (#7260)', 
     });
     expect(await pendingEntries()).toHaveLength(0);
     errSpy.mockRestore();
+  });
+});
+
+describe('conflictJournal — RESTORABLE_FIELDS parity with the wire shape', () => {
+  // Every top-level wire key must be classified: restorable (the Conflicts diff
+  // shows it and a restore writes it back) or structural (listed here with a
+  // reason). A new wire field fails this until someone decides which it is.
+  const storyboardWire = () => sanitizeRecordForWire('storyboard', sanitizeStoryboard({ id: 'sb-1', name: 'Board' }));
+  const deckWire = () => sanitizeRecordForWire('deck', {
+    id: 'd-1', name: 'Deck', kind: 'tarot', universeId: null, description: '', styleNotes: '', influences: [],
+    layoutPrompt: '', cardOrientation: 'portrait', cardOrientationPrompt: null, samples: [],
+    imageMode: null, imageModelId: null, cardSize: { width: 1, height: 1 }, promptLlm: null,
+    completion: {}, cards: [], createdAt: '2026-05-01T00:00:00Z', updatedAt: '2026-05-01T00:00:00Z',
+    deleted: false, deletedAt: null,
+  });
+  const COMMON = ['id', 'createdAt', 'updatedAt', 'deleted', 'deletedAt'];
+  const STRUCTURAL_FIELDS = {
+    storyboard: [...COMMON, 'plotLlm'], // plotLlm: per-user provider pick
+    deck: [...COMMON, 'kind', 'cards'], // kind mints the roster; cards restore with the deck row
+  };
+
+  it.each([['storyboard', storyboardWire], ['deck', deckWire]])('classifies every %s wire key', (kind, wire) => {
+    const classified = new Set([...cj.RESTORABLE_FIELDS[kind], ...STRUCTURAL_FIELDS[kind]]);
+    expect(Object.keys(wire()).filter((key) => !classified.has(key))).toEqual([]);
   });
 });

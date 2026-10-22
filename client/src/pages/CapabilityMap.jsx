@@ -27,11 +27,17 @@ const OVERALL_LABEL = {
   unconfigured: 'Setup incomplete',
 };
 
-function CapabilityRow({ cap }) {
+// Problems lead the list; Array.prototype.sort is stable so server order breaks ties.
+const SEVERITY_ORDER = { error: 0, warn: 1, unconfigured: 2, ok: 3 };
+const severityRank = (cap) => SEVERITY_ORDER[cap.status] ?? SEVERITY_ORDER.unconfigured;
+const NETWORK_PREFERENCE_LABEL = { tailscale: 'Tailscale', tailcat: 'Tailcat', none: 'Not desired' };
+
+function CapabilityRow({ cap, id }) {
   const style = STATUS_STYLE[cap.status] || STATUS_STYLE.unconfigured;
   const Icon = style.icon;
   return (
     <Link
+      id={id}
       to={cap.settingsPath}
       className={`flex items-center gap-3 px-4 py-3 rounded-lg border ${style.border} ${style.bg} hover:border-port-accent/60 transition-colors group`}
     >
@@ -88,9 +94,64 @@ export default function CapabilityMap() {
   const optionalSummary = data.optionalSummary || summary;
   const setup = data.setup || { total: 0, ready: 0, remaining: 0, complete: false };
   const providerCapability = caps.find((cap) => cap.id === 'providers');
-  const optionalCapabilities = caps.filter((cap) => cap.setupRequired !== true && cap.id !== 'network');
+  const optionalCapabilities = caps
+    .filter((cap) => cap.setupRequired !== true && cap.id !== 'network')
+    .sort((a, b) => severityRank(a) - severityRank(b));
   const overallStyle = STATUS_STYLE[optionalSummary.overall] || STATUS_STYLE.unconfigured;
   const OverallIcon = overallStyle.icon;
+  const compact = setup.complete === true;
+  const firstAffected = optionalCapabilities.find((cap) => cap.status !== 'ok');
+  const problemCounts = [
+    [optionalSummary.error, 'error'],
+    [optionalSummary.warn, 'degraded'],
+    [optionalSummary.unconfigured, 'not set up'],
+  ].filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`);
+  const jumpToFirstAffected = () => {
+    const el = document.getElementById(`capability-${firstAffected.id}`);
+    el?.scrollIntoView?.({ block: 'center' });
+    el?.focus?.();
+  };
+  const providerOptions = (
+    <>
+      <p className="text-xs text-gray-500">
+        Enable one option you intend to use: an authenticated subscription CLI, a paid API key, or a local runtime with a downloaded model. PortOS never enables a paid provider or starts model work without your action.
+      </p>
+      <div className="grid gap-2 text-xs text-gray-400 sm:grid-cols-3">
+        <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Subscription CLI</strong><br />Claude Code, Codex, or Antigravity after local sign-in.</div>
+        <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">API provider</strong><br />Add a key only for the paid service you chose.</div>
+        <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Local/private</strong><br />Ollama or LM Studio with a runnable model.</div>
+      </div>
+    </>
+  );
+  const networkOptions = (
+    <>
+      <p className="text-xs text-gray-500">
+        Choose Tailscale for private device access, Tailcat to bridge instances, or mark networking as not desired. This preference does not start or stop connections.
+      </p>
+      <label htmlFor="network-setup-preference" className="block text-sm text-gray-300">Networking preference</label>
+      <select id="network-setup-preference" value={preference} disabled={saving}
+        onChange={(event) => savePreference(event.target.value)}
+        className="w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm text-white">
+        <option value="" disabled>Choose an option (optional)</option>
+        <option value="tailscale">Tailscale — private device access</option>
+        <option value="tailcat">Tailcat — bridge instances</option>
+        <option value="none">Not desired</option>
+      </select>
+      {saving && <p role="status" className="text-xs text-gray-400">Saving preference…</p>}
+      {preference === 'tailscale' && <NetworkSetupGuide networkExposure={data.network} />}
+      {preference === 'tailcat' && <p className="text-sm text-gray-400">
+        Open Instances, choose Tailcat when adding a peer, and dial its address or let it dial yours. Tailscale and its HTTPS certificates are not required.
+        {' '}<Link to="/instances" className="text-port-accent underline">Configure Tailcat bridge</Link>
+      </p>}
+      {preference === 'none' && <p className="text-sm text-gray-400">Networking marked as not desired. You can change this preference at any time.</p>}
+    </>
+  );
+  const disclosure = (children) => (
+    <details className="group rounded-lg border border-port-border bg-port-bg/40 px-3 py-2">
+      <summary className="cursor-pointer text-sm text-gray-300">Setup options</summary>
+      <div className="mt-3 space-y-3">{children}</div>
+    </details>
+  );
 
   return (
     <div className="space-y-4">
@@ -108,48 +169,24 @@ export default function CapabilityMap() {
         </div>
       </div>
 
-      <p className="text-sm text-gray-500">
-        Enable at least one runnable AI provider. Networking and other integrations are optional; you can configure them whenever they are useful.
-      </p>
+      {!compact && (
+        <p className="text-sm text-gray-500">
+          Enable at least one runnable AI provider. Networking and other integrations are optional; you can configure them whenever they are useful.
+        </p>
+      )}
 
       <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
-        <div>
-          <h3 className="font-semibold text-white">AI provider</h3>
-          <p className="mt-1 text-xs text-gray-500">
-            Enable one option you intend to use: an authenticated subscription CLI, a paid API key, or a local runtime with a downloaded model. PortOS never enables a paid provider or starts model work without your action.
-          </p>
-        </div>
+        <h3 className="font-semibold text-white">AI provider</h3>
         {providerCapability && <CapabilityRow cap={providerCapability} />}
-        <div className="grid gap-2 text-xs text-gray-400 sm:grid-cols-3">
-          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Subscription CLI</strong><br />Claude Code, Codex, or Antigravity after local sign-in.</div>
-          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">API provider</strong><br />Add a key only for the paid service you chose.</div>
-          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Local/private</strong><br />Ollama or LM Studio with a runnable model.</div>
-        </div>
+        {compact ? disclosure(providerOptions) : providerOptions}
       </section>
 
       <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
-        <div>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="font-semibold text-white">Optional networking</h3>
-          <p className="mt-1 text-xs text-gray-500">
-            Choose Tailscale for private device access, Tailcat to bridge instances, or mark networking as not desired. This preference does not start or stop connections.
-          </p>
+          {compact && <span className="text-sm text-gray-400">{NETWORK_PREFERENCE_LABEL[preference] || 'No preference set'}</span>}
         </div>
-        <label htmlFor="network-setup-preference" className="block text-sm text-gray-300">Networking preference</label>
-        <select id="network-setup-preference" value={preference} disabled={saving}
-          onChange={(event) => savePreference(event.target.value)}
-          className="w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm text-white">
-          <option value="" disabled>Choose an option (optional)</option>
-          <option value="tailscale">Tailscale — private device access</option>
-          <option value="tailcat">Tailcat — bridge instances</option>
-          <option value="none">Not desired</option>
-        </select>
-        {saving && <p role="status" className="text-xs text-gray-400">Saving preference…</p>}
-        {preference === 'tailscale' && <NetworkSetupGuide networkExposure={data.network} />}
-        {preference === 'tailcat' && <p className="text-sm text-gray-400">
-          Open Instances, choose Tailcat when adding a peer, and dial its address or let it dial yours. Tailscale and its HTTPS certificates are not required.
-          {' '}<Link to="/instances" className="text-port-accent underline">Configure Tailcat bridge</Link>
-        </p>}
-        {preference === 'none' && <p className="text-sm text-gray-400">Networking marked as not desired. You can change this preference at any time.</p>}
+        {compact ? disclosure(networkOptions) : networkOptions}
       </section>
 
       <section className="space-y-3">
@@ -158,22 +195,23 @@ export default function CapabilityMap() {
             <h3 className="font-semibold text-white">Optional capabilities</h3>
             <p className="mt-1 text-xs text-gray-500">Configure these when they are useful; they do not block initial setup.</p>
           </div>
-          <div className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 ${overallStyle.border} ${overallStyle.color} ${overallStyle.bg}`}>
-            <OverallIcon size={15} />
-            <span className="text-xs font-semibold">{OVERALL_LABEL[optionalSummary.overall] || 'Status'}</span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-4 text-xs text-gray-400">
-          <span className="flex items-center gap-1"><CheckCircle size={12} className="text-port-success" /> {optionalSummary.ok} ready</span>
-          <span className="flex items-center gap-1"><AlertTriangle size={12} className="text-port-warning" /> {optionalSummary.warn} degraded</span>
-          <span className="flex items-center gap-1"><XCircle size={12} className="text-port-error" /> {optionalSummary.error} error</span>
-          <span className="flex items-center gap-1"><Circle size={12} className="text-gray-500" /> {optionalSummary.unconfigured} not set up</span>
+          {firstAffected ? (
+            <button type="button" onClick={jumpToFirstAffected}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold ${overallStyle.border} ${overallStyle.color} ${overallStyle.bg}`}>
+              <OverallIcon size={15} />
+              <span>{problemCounts.join(' · ')}</span>
+            </button>
+          ) : (
+            <div className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 ${overallStyle.border} ${overallStyle.color} ${overallStyle.bg}`}>
+              <OverallIcon size={15} />
+              <span className="text-xs font-semibold">{OVERALL_LABEL[optionalSummary.overall] || 'Status'}</span>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
           {optionalCapabilities.map((cap) => (
-            <CapabilityRow key={cap.id} cap={cap} />
+            <CapabilityRow key={cap.id} cap={cap} id={`capability-${cap.id}`} />
           ))}
         </div>
       </section>

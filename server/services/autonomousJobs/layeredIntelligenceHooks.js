@@ -533,7 +533,7 @@ export function isTaskOutputPayload(payload) {
 }
 
 async function defaultEnqueueHandoff(taskData) {
-  const { addTask } = await import('../cos.js')
+  const { addTask } = await import('../cosTaskStore.js')
   return addTask(taskData, 'internal')
 }
 

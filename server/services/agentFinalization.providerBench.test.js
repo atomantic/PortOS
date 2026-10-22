@@ -45,7 +45,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn(async () => null),
   completeAgent: vi.fn(async () => null),
 }));
-vi.mock('./cos.js', () => ({ updateTask: vi.fn(async () => ({})) }));
+vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})) }));
 
 const getActiveProviderMock = vi.fn(async () => null);
 vi.mock('./providers.js', () => ({ getActiveProvider: (...a) => getActiveProviderMock(...a) }));

@@ -103,10 +103,11 @@ router.post('/:id/launch-videos/publish', loadApp, asyncHandler(async (req, res)
   if (dirname(source) !== root || !(await stat(source).catch(missingVideoSource)).isFile()) {
     throw new ServerError('Launch video source is invalid', { status: 400 });
   }
-  const cos = await import('../../services/cos.js');
-  if (!cos.isRunning()) throw new ServerError('Start CoS before publishing a launch video', { status: 409 });
+  const { isRunning } = await import('../../services/cos.js');
+  const { addTask } = await import('../../services/cosTaskStore.js');
+  if (!isRunning()) throw new ServerError('Start CoS before publishing a launch video', { status: 409 });
   const { getInstanceId } = await import('../../services/instanceIdentity.js');
-  const task = await cos.addTask({
+  const task = await addTask({
     description: 'Publish launch video to README', app: app.id, priority: 'MEDIUM',
     targetInstanceId: await getInstanceId(), useWorktree: true, openPR: true,
     prCompletion: 'review-then-merge', provider, model, effort,
@@ -128,8 +129,9 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(app.id) || !app.repoPath || !await pathExists(app.repoPath)) {
     throw new ServerError('App repository is unavailable', { status: 400 });
   }
-  const cos = await import('../../services/cos.js');
-  if (!cos.isRunning()) throw new ServerError('Start CoS before making a launch video', { status: 409 });
+  const { isRunning } = await import('../../services/cos.js');
+  const { addTask } = await import('../../services/cosTaskStore.js');
+  if (!isRunning()) throw new ServerError('Start CoS before making a launch video', { status: 409 });
   if (options.generateMusic && options.musicTrack) throw new ServerError('Choose generated music or a library track, not both', { status: 400 });
   if (options.motionSkills) {
     // The prompt names only skills that are actually installed for the agent.
@@ -257,7 +259,7 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
     // Motion, camera, sound and native moves only: the app's own palette and fonts stay authoritative (#10254).
     // A revision keeps its source take's look, so it takes no new grammar.
     const grammarPrompt = styleGrammarId && !sourceVideoId ? `\n${renderFilmStyleGrammarPrompt(styleGrammarId, { parts: LAUNCH_VIDEO_GRAMMAR_PARTS })}\nTreat this film style grammar as the medium's motion, camera and sound rulebook; motionStyle still picks the film's structure, and the app's palette and fonts win over any colour or type it implies.` : '';
-    return cos.addTask({
+    return addTask({
       description: 'Make launch video', app: app.id, priority: 'MEDIUM', targetInstanceId,
       useWorktree: false, openPR: false, noCodeOutput: true,
       provider, model, effort,

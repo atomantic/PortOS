@@ -16,7 +16,8 @@ vi.mock('./store.js', () => ({
   cosEvents: { on: vi.fn() },
   emitLog: vi.fn(),
 }));
-vi.mock('../cos.js', () => ({ getAgents: vi.fn(async () => agentsStore.list) }));
+vi.mock('../cos.js', () => ({}));
+vi.mock('../cosAgentLifecycle.js', () => ({ getAgents: vi.fn(async () => agentsStore.list) }));
 vi.mock('../agentChurn.js', () => ({
   observeAgentChurn: vi.fn(async () => ({ flagged: false })),
 }));

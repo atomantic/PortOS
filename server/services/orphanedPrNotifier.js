@@ -34,7 +34,7 @@ async function handBackBlockedRemediation(task) {
   if (task.metadata.blockedCategory === 'pr-head-moved') return false;
   return queueHandback(task.id, async () => {
     const [{ getTaskById, updateTask }, { getAppById }, { handBackPrRemediation }] = await Promise.all([
-      import('./cos.js'), import('./apps.js'), import('./prRemediationFollowUp.js'),
+      import('./cosTaskStore.js'), import('./apps.js'), import('./prRemediationFollowUp.js'),
     ]);
     // Re-read inside the queue: overlapping block events may hold older snapshots.
     const current = await getTaskById(task.id);

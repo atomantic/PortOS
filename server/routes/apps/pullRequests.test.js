@@ -13,7 +13,8 @@ vi.mock('../../services/appPullRequestMerge.js', async (importOriginal) => ({
   ...(await importOriginal()),
   mergeAppPullRequest: vi.fn(),
 }));
-vi.mock('../../services/cos.js', () => ({
+vi.mock('../../services/cos.js', () => ({}));
+vi.mock('../../services/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(),
 }));
 vi.mock('../../services/codeReview.js', () => ({
@@ -39,7 +40,7 @@ vi.mock('../../services/taskSchedule.js', () => ({
 import * as appsService from '../../services/apps.js';
 import { listAppPullRequests } from '../../services/appPullRequests.js';
 import { mergeAppPullRequest } from '../../services/appPullRequestMerge.js';
-import { getAllTasks } from '../../services/cos.js';
+import { getAllTasks } from '../../services/cosTaskStore.js';
 import { resolveReviewLoopOptions } from '../../services/codeReview.js';
 import { spawnReviewLoopFollowUp } from '../../services/agentWorktreeCleanup.js';
 import { listExternalOpenPullRequests, resolvePrReviewerTargetScope } from '../../services/prReviewerSecurity.js';

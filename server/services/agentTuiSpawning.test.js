@@ -40,7 +40,7 @@ vi.mock('./providerStatus.js', () => ({
   markProviderRateLimited: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined)
 }));
 

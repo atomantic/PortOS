@@ -63,6 +63,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
+  getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./agentRunTracking.js', () => ({
   createAgentRun: vi.fn().mockResolvedValue(undefined),
@@ -78,11 +79,13 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosState.js', async importOriginal => ({
+  ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({}),
+}));
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   getTaskById: vi.fn().mockResolvedValue(null),
-  getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentCliSpawning.js', () => ({
@@ -158,7 +161,7 @@ import { registerAgent } from './cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { buildCliSpawnConfig, isTuiProvider, spawnDirectly } from './agentCliSpawning.js';
 import { spawnAgentViaRunner } from './cosRunnerClient.js';
-import { updateTask } from './cos.js';
+import { updateTask } from './cosTaskStore.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
 
 // The provider every install actually runs its CoS agents on, and the one named
@@ -222,7 +225,7 @@ afterAll(() => rmSync(TEMP_ROOT, { recursive: true, force: true }));
 
 describe('spawn setup failure after the worktree exists', () => {
   it('blocks private setup errors and releases the lane without publishing source details', async () => {
-    const { getConfig } = await import('./cos.js');
+    const { getConfig } = await import('./cosState.js');
     const { release } = await import('./executionLanes.js');
     const { emitLog } = await import('./cosEvents.js');
     const { registerAgent } = await import('./cosAgentLifecycle.js');

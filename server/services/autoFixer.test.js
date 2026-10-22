@@ -10,11 +10,13 @@ import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 // branches, and `getAllTasks` feeds the shared investigation-approval policy
 // (reached via agentErrorAnalysis) an empty backlog — no prior investigation and
 // no storm, i.e. the ordinary unattended case.
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
-  isRunning: vi.fn().mockReturnValue(true),
   updateTask: vi.fn().mockResolvedValue(true),
   getAllTasks: vi.fn().mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } }),
+}));
+vi.mock('./cos.js', () => ({
+  isRunning: vi.fn().mockReturnValue(true),
 }));
 
 // installState reaches out to git/fs; stub it so the stale-deployed-build
@@ -26,7 +28,8 @@ vi.mock('./installState.js', () => ({
 
 const installState = await import('./installState.js');
 
-const cos = await import('./cos.js');
+const { addTask, getAllTasks } = await import('./cosTaskStore.js');
+const { isRunning } = await import('./cos.js');
 const {
   noteFallbackHandled,
   initAutoFixer,
@@ -44,7 +47,7 @@ initAutoFixer();
 
 // Tasks handed to the durable store (addTask's first argument).
 function filedTasks() {
-  return cos.addTask.mock.calls.map(([task]) => task);
+  return addTask.mock.calls.map(([task]) => task);
 }
 
 function emitProviderFailure({ provider = 'Primary CLI', model = 'm-1', runId = 'run-1' } = {}) {
@@ -67,8 +70,8 @@ function emitProviderFailure({ provider = 'Primary CLI', model = 'm-1', runId = 
 describe('autoFixer — defer + noteFallbackHandled', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    cos.addTask.mockClear();
-    cos.isRunning.mockReturnValue(true);
+    addTask.mockClear();
+    isRunning.mockReturnValue(true);
     _resetAutoFixerForTests();
   });
 
@@ -84,12 +87,12 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     // Task is NOT created right away — it's deferred.
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
 
     // After the defer window elapses, the task is created.
     await vi.advanceTimersByTimeAsync(5500);
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
-    expect(cos.addTask.mock.calls[0][0]).toMatchObject({
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask.mock.calls[0][0]).toMatchObject({
       description: 'Investigate AI provider failure: Primary CLI (m-1)',
     });
   });
@@ -144,7 +147,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
         context: expect.objectContaining({ timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000 }),
       }));
       await vi.advanceTimersByTimeAsync(6000);
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     } finally { errorEvents.off('error', observed); }
   });
 
@@ -155,10 +158,10 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     errorEvents.emit('error', budget);
     await escalateProviderFailure(budget);
     await vi.advanceTimersByTimeAsync(6000);
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
     emitProviderFailure({ provider: 'Example API', model: 'm-1', runId: 'fault-run' });
     await vi.advanceTimersByTimeAsync(6000);
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 
   it('never creates an investigation task for a content/safety refusal', async () => {
@@ -178,7 +181,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
       },
     });
     await vi.advanceTimersByTimeAsync(6000);
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('suppresses the task for a SLOW fallback that finishes after the defer window', async () => {
@@ -194,12 +197,12 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
 
     // The backstop window elapses with the fallback still running — no task.
     await vi.advanceTimersByTimeAsync(6000);
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
 
     // Fallback finally succeeds ~25s later — still no task.
     noteFallbackHandled({ provider: 'Ollama', model: 'command-r' });
     await vi.advanceTimersByTimeAsync(25000);
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('suppresses the task even when noteFallbackStarted races ahead of the error event', async () => {
@@ -209,7 +212,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     noteFallbackStarted({ provider: 'Ollama', model: 'command-r' });
     emitProviderFailure({ provider: 'Ollama', model: 'command-r' });
     await vi.advanceTimersByTimeAsync(6000);
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('noteFallbackFailed releases suppression so a later identical failure can raise a task', async () => {
@@ -220,7 +223,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     // A fresh failure with no fallback in flight now schedules + fires a task.
     emitProviderFailure({ provider: 'Ollama', model: 'command-r' });
     await vi.advanceTimersByTimeAsync(6000);
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 
   it('cancels the deferred task when noteFallbackHandled fires within the window', async () => {
@@ -233,7 +236,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
 
     // Advancing past the defer window must NOT trigger task creation.
     await vi.advanceTimersByTimeAsync(10000);
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('returns false when noteFallbackHandled has no matching deferred task', async () => {
@@ -251,7 +254,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     expect(noteFallbackHandled({ provider: 'Other CLI', model: 'm-1' })).toBe(false);
 
     await vi.advanceTimersByTimeAsync(5500);
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 
   it('allows a future failure of the same provider to raise a new task after suppression (no 60s dedupe lockout)', async () => {
@@ -259,30 +262,30 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     await vi.advanceTimersByTimeAsync(0);
     noteFallbackHandled({ provider: 'Primary CLI', model: 'm-1' });
     await vi.advanceTimersByTimeAsync(10000);
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
 
     // Same provider fails again later — must NOT be suppressed by the
     // dedupe map (which would otherwise hold the key for 60s).
     emitProviderFailure({ provider: 'Primary CLI', model: 'm-1', runId: 'r-2' });
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(5500);
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 
   it('files a durable investigation task when CoS is not running', async () => {
-    cos.isRunning.mockReturnValue(false);
+    isRunning.mockReturnValue(false);
 
     emitProviderFailure({ provider: 'Primary CLI', model: 'm-1' });
     await vi.advanceTimersByTimeAsync(5500);
 
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
     expect(filedTasks()[0].description).toContain('Investigate AI provider failure: Primary CLI (m-1)');
     expect(filedTasks()[0].isInvestigation).toBe(true);
 
     // A repeat inside the dedupe window files nothing new.
     emitProviderFailure({ provider: 'Primary CLI', model: 'm-1', runId: 'run-2' });
     await vi.advanceTimersByTimeAsync(5500);
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 
   // The body built by buildAIProviderErrorContext has always fallen back to
@@ -290,7 +293,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
   // no attribution filed a task literally called
   // "Investigate AI provider failure: undefined (undefined)".
   it('never titles a task with a literal undefined provider or model', async () => {
-    cos.isRunning.mockReturnValue(false);
+    isRunning.mockReturnValue(false);
 
     // Emitted raw, not through emitProviderFailure — that helper defaults
     // provider/model, which is exactly the attribution this case lacks.
@@ -313,7 +316,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     // Simulate addTask rejecting (e.g. PLAN.md write error). Without the
     // dedupe-clear in the catch arm, the next identical failure would be
     // suppressed for 60s even though no investigation task ever landed.
-    cos.addTask.mockRejectedValueOnce(new Error('plan write failed'));
+    addTask.mockRejectedValueOnce(new Error('plan write failed'));
 
     emitProviderFailure({ provider: 'Primary CLI', model: 'm-1', runId: 'r-1' });
     await vi.advanceTimersByTimeAsync(0);
@@ -322,13 +325,13 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     // First attempt: addTask threw, so no task was created.
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
 
     // Second identical failure within the 60s dedupe window must NOT be
     // suppressed — the stale dedupe entry should have been cleared.
     emitProviderFailure({ provider: 'Primary CLI', model: 'm-1', runId: 'r-2' });
     await vi.advanceTimersByTimeAsync(5500);
-    expect(cos.addTask).toHaveBeenCalledTimes(2);
+    expect(addTask).toHaveBeenCalledTimes(2);
   });
 
   it('does NOT collide on hyphenated provider/model pairs (uses an unambiguous separator)', async () => {
@@ -340,7 +343,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     await vi.advanceTimersByTimeAsync(5500);
 
     // Both distinct failures must schedule their own investigation task.
-    expect(cos.addTask).toHaveBeenCalledTimes(2);
+    expect(addTask).toHaveBeenCalledTimes(2);
   });
 
   it('dedupes within the defer window — a second identical failure does not double-schedule', async () => {
@@ -351,7 +354,7 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
 
     // Only the first failure schedules a task; the second is dropped by
     // either isDuplicateError or the deferredTasks.has guard.
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -369,8 +372,8 @@ function emitCriticalError(overrides = {}) {
 describe('autoFixer — generic critical-error auto-fix path', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    cos.addTask.mockClear();
-    cos.isRunning.mockReturnValue(true);
+    addTask.mockClear();
+    isRunning.mockReturnValue(true);
     _resetAutoFixerForTests();
   });
 
@@ -383,8 +386,8 @@ describe('autoFixer — generic critical-error auto-fix path', () => {
     emitCriticalError({ message: 'Cannot read properties of undefined', stack: 'Error: boom\n    at foo (file.js:1:1)' });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
-    expect(cos.addTask.mock.calls[0][0]).toMatchObject({
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask.mock.calls[0][0]).toMatchObject({
       description: 'Fix critical error: Cannot read properties of undefined',
       approvalRequired: false,
       approvalReason: null,
@@ -395,15 +398,15 @@ describe('autoFixer — generic critical-error auto-fix path', () => {
     emitCriticalError({ code: 'SOME_ERROR', message: 'recoverable-ish failure', severity: 'error' });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
-    expect(cos.addTask.mock.calls[0][0]).toMatchObject({ approvalRequired: false });
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask.mock.calls[0][0]).toMatchObject({ approvalRequired: false });
   });
 
   it('stamps the fingerprint the loop policy reads, so a repeat of the same cause is recognizable', async () => {
     emitCriticalError({ code: 'SOME_ERROR', message: 'first time', severity: 'error' });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(cos.addTask.mock.calls[0][0]).toMatchObject({
+    expect(addTask.mock.calls[0][0]).toMatchObject({
       isInvestigation: true,
       investigationFingerprint: 'unknown:critical-error:SOME_ERROR',
     });
@@ -413,7 +416,7 @@ describe('autoFixer — generic critical-error auto-fix path', () => {
     // A prior investigation carrying the fingerprint the production path above
     // actually writes, settled an hour ago — the fix did not hold, so another
     // unattended agent would just repeat it.
-    cos.getAllTasks.mockResolvedValueOnce({
+    getAllTasks.mockResolvedValueOnce({
       user: { tasks: [] },
       cos: {
         tasks: [{
@@ -431,27 +434,27 @@ describe('autoFixer — generic critical-error auto-fix path', () => {
     emitCriticalError({ code: 'SOME_ERROR', message: 'the same failure, again', severity: 'error' });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
-    expect(cos.addTask.mock.calls[0][0]).toMatchObject({
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask.mock.calls[0][0]).toMatchObject({
       approvalRequired: true,
       approvalReason: 'investigation-loop:repeat-fingerprint',
     });
-    expect(cos.addTask.mock.calls[0][0].description).toContain('Why this is held for you');
+    expect(addTask.mock.calls[0][0].description).toContain('Why this is held for you');
   });
 
   it('does not fire for a non-critical error that is not marked auto-fixable', async () => {
     emitCriticalError({ code: 'VALIDATION_ERROR', message: 'bad input', severity: 'error', canAutoFix: false });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('does not fire when CoS is not running', async () => {
-    cos.isRunning.mockReturnValue(false);
+    isRunning.mockReturnValue(false);
     emitCriticalError();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('dedupes identical critical errors within the window', async () => {
@@ -459,15 +462,15 @@ describe('autoFixer — generic critical-error auto-fix path', () => {
     emitCriticalError();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('autoFixer — circuit breaker (guardrail #3)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    cos.addTask.mockClear();
-    cos.isRunning.mockReturnValue(true);
+    addTask.mockClear();
+    isRunning.mockReturnValue(true);
     _resetAutoFixerForTests();
   });
 
@@ -487,12 +490,12 @@ describe('autoFixer — circuit breaker (guardrail #3)', () => {
       await vi.advanceTimersByTimeAsync(5500); // let the deferred task fire
       await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS - 5500); // clear the dedupe window
     }
-    expect(cos.addTask).toHaveBeenCalledTimes(3);
+    expect(addTask).toHaveBeenCalledTimes(3);
 
     // 4th failure within the same hour trips the circuit — no task scheduled.
     emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: 'r-4' });
     await vi.advanceTimersByTimeAsync(6000);
-    expect(cos.addTask).toHaveBeenCalledTimes(3);
+    expect(addTask).toHaveBeenCalledTimes(3);
   });
 
   it('AI-provider path: the circuit auto-closes once failures age out of the 1h window', async () => {
@@ -502,7 +505,7 @@ describe('autoFixer — circuit breaker (guardrail #3)', () => {
       await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS - 5500);
     }
     // 3 tasks (4th suppressed by the open circuit).
-    expect(cos.addTask).toHaveBeenCalledTimes(3);
+    expect(addTask).toHaveBeenCalledTimes(3);
 
     // Let the whole failure burst age past the rolling 1h window.
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 1000);
@@ -510,7 +513,7 @@ describe('autoFixer — circuit breaker (guardrail #3)', () => {
     // A fresh failure now raises a task again — the circuit auto-closed.
     emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: 'r-late' });
     await vi.advanceTimersByTimeAsync(5500);
-    expect(cos.addTask).toHaveBeenCalledTimes(4);
+    expect(addTask).toHaveBeenCalledTimes(4);
   });
 
   it('AI-provider path: the circuit is per-resource — a different provider is unaffected', async () => {
@@ -519,12 +522,12 @@ describe('autoFixer — circuit breaker (guardrail #3)', () => {
       await vi.advanceTimersByTimeAsync(5500);
       await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS - 5500);
     }
-    expect(cos.addTask).toHaveBeenCalledTimes(3); // Ollama circuit open
+    expect(addTask).toHaveBeenCalledTimes(3); // Ollama circuit open
 
     // A distinct provider/model still gets its investigation task.
     emitProviderFailure({ provider: 'LM Studio', model: 'qwen', runId: 'b-0' });
     await vi.advanceTimersByTimeAsync(5500);
-    expect(cos.addTask).toHaveBeenCalledTimes(4);
+    expect(addTask).toHaveBeenCalledTimes(4);
   });
 
   it('AI-provider path: fallback-recovered failures do NOT count toward the circuit', async () => {
@@ -540,13 +543,13 @@ describe('autoFixer — circuit breaker (guardrail #3)', () => {
       noteFallbackHandled({ provider: 'Ollama', model: 'command-r' }); // success — clears dedupe/in-flight
       await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS);
     }
-    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
 
     // A genuine unrecovered failure now STILL raises a task — the circuit never
     // opened because recovered failures were never counted.
     emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: 'real' });
     await vi.advanceTimersByTimeAsync(5500);
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 
   it('generic critical-error path: suppresses the fix task once the same error fires >3 times within the hour', async () => {
@@ -555,11 +558,11 @@ describe('autoFixer — circuit breaker (guardrail #3)', () => {
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS);
     }
-    expect(cos.addTask).toHaveBeenCalledTimes(3);
+    expect(addTask).toHaveBeenCalledTimes(3);
 
     emitCriticalError({ message: 'recurring boom' });
     await vi.advanceTimersByTimeAsync(0);
-    expect(cos.addTask).toHaveBeenCalledTimes(3); // circuit open — suppressed
+    expect(addTask).toHaveBeenCalledTimes(3); // circuit open — suppressed
   });
 });
 
@@ -651,8 +654,8 @@ describe('autoFixer — structured per-attempt diagnostics (issue #2328)', () =>
 describe('autoFixer — diagnostics ride on the created task record (issue #2328)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    cos.addTask.mockClear();
-    cos.isRunning.mockReturnValue(true);
+    addTask.mockClear();
+    isRunning.mockReturnValue(true);
     _resetAutoFixerForTests();
   });
 
@@ -677,8 +680,8 @@ describe('autoFixer — diagnostics ride on the created task record (issue #2328
     });
     await vi.advanceTimersByTimeAsync(5500);
 
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
-    const taskArg = cos.addTask.mock.calls[0][0];
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const taskArg = addTask.mock.calls[0][0];
     expect(taskArg.diagnostics).toMatchObject({
       triggerEvent: 'AI_PROVIDER_EXECUTION_FAILED',
       target: 'Claude Code CLI (claude-opus-4-8)',
@@ -706,7 +709,7 @@ describe('autoFixer — diagnostics ride on the created task record (issue #2328
   });
 
   it('attaches diagnostics to the filed task when CoS is not running', async () => {
-    cos.isRunning.mockReturnValue(false);
+    isRunning.mockReturnValue(false);
     emitProviderFailure({ provider: 'LM Studio', model: 'qwen', runId: 'p-1' });
     await vi.advanceTimersByTimeAsync(5500);
 
@@ -723,8 +726,8 @@ describe('autoFixer — diagnostics ride on the created task record (issue #2328
     emitCriticalError({ code: 'UNCAUGHT_EXCEPTION', message: 'Cannot read properties of undefined' });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
-    expect(cos.addTask.mock.calls[0][0].diagnostics).toMatchObject({
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask.mock.calls[0][0].diagnostics).toMatchObject({
       triggerEvent: 'UNCAUGHT_EXCEPTION',
       target: 'UNCAUGHT_EXCEPTION',
       tier: FIX_TIERS.ESCALATE,
@@ -734,8 +737,8 @@ describe('autoFixer — diagnostics ride on the created task record (issue #2328
 
 describe('autoFixer — escalateProviderFailure (explicit Tier-4, issue #2342)', () => {
   beforeEach(() => {
-    cos.addTask.mockClear();
-    cos.isRunning.mockReturnValue(true);
+    addTask.mockClear();
+    isRunning.mockReturnValue(true);
     _resetAutoFixerForTests();
   });
   afterEach(() => {
@@ -754,12 +757,12 @@ describe('autoFixer — escalateProviderFailure (explicit Tier-4, issue #2342)',
 
   it('creates an investigation task immediately (no defer window)', async () => {
     const task = await escalateProviderFailure(providerError());
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
-    expect(cos.addTask.mock.calls[0][0]).toMatchObject({
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask.mock.calls[0][0]).toMatchObject({
       description: 'Investigate AI provider failure: Primary API (primary-model)',
     });
     // Diagnostics still ride on the escalated task (tier-classified from category).
-    expect(cos.addTask.mock.calls[0][0].diagnostics).toMatchObject({
+    expect(addTask.mock.calls[0][0].diagnostics).toMatchObject({
       category: 'model-not-found',
       tier: FIX_TIERS.CONFIG_ENV,
     });
@@ -774,7 +777,7 @@ describe('autoFixer — escalateProviderFailure (explicit Tier-4, issue #2342)',
     ]);
     // Only the first escalation creates a task; the rest are deduped within the
     // window (returns null).
-    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 
@@ -787,11 +790,11 @@ describe('autoFixer — escalateProviderFailure (explicit Tier-4, issue #2342)',
         await escalateProviderFailure(providerError('Ollama', 'command-r'));
         await vi.advanceTimersByTimeAsync(61000);
       }
-      expect(cos.addTask).toHaveBeenCalledTimes(3);
+      expect(addTask).toHaveBeenCalledTimes(3);
       // 4th distinct escalation (still within the 1h circuit window) trips it.
       const suppressed = await escalateProviderFailure(providerError('Ollama', 'command-r'));
       expect(suppressed).toBeNull();
-      expect(cos.addTask).toHaveBeenCalledTimes(3);
+      expect(addTask).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
@@ -800,13 +803,13 @@ describe('autoFixer — escalateProviderFailure (explicit Tier-4, issue #2342)',
 
 describe('autoFixer — escalateProviderFailure dedupe clears on task-creation failure (#2342)', () => {
   beforeEach(() => {
-    cos.addTask.mockReset();
-    cos.isRunning.mockReturnValue(true);
+    addTask.mockReset();
+    isRunning.mockReturnValue(true);
     _resetAutoFixerForTests();
   });
   afterEach(() => {
-    cos.addTask.mockReset();
-    cos.addTask.mockResolvedValue({ id: 'task-1' });
+    addTask.mockReset();
+    addTask.mockResolvedValue({ id: 'task-1' });
     _resetAutoFixerForTests();
   });
 
@@ -818,16 +821,16 @@ describe('autoFixer — escalateProviderFailure dedupe clears on task-creation f
       context: { provider: 'Ollama', providerId: 'ollama', model: 'command-r', errorDetails: 'model gone', errorAnalysis: { category: 'model-not-found' } },
     };
     // First escalation: addTask rejects → dedupe marker must be cleared.
-    cos.addTask.mockRejectedValueOnce(new Error('plan write failed'));
+    addTask.mockRejectedValueOnce(new Error('plan write failed'));
     const first = await (await import('./autoFixer.js')).escalateProviderFailure(err);
     expect(first).toBeNull();
 
     // Second identical escalation within the window must NOT be deduped — it
     // creates the task the failed first attempt never did.
-    cos.addTask.mockResolvedValueOnce({ id: 'task-ok' });
+    addTask.mockResolvedValueOnce({ id: 'task-ok' });
     const second = await (await import('./autoFixer.js')).escalateProviderFailure(err);
     expect(second).toBeTruthy();
-    expect(cos.addTask).toHaveBeenCalledTimes(2);
+    expect(addTask).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -839,8 +842,8 @@ describe('autoFixer — escalateProviderFailure dedupe clears on task-creation f
 describe('autoFixer — stale deployed build in the investigation body', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    cos.addTask.mockClear();
-    cos.isRunning.mockReturnValue(false);
+    addTask.mockClear();
+    isRunning.mockReturnValue(false);
     installState.getBootCommit.mockReturnValue(null);
     installState.getInstallState.mockClear();
     installState.getInstallState.mockResolvedValue(null);

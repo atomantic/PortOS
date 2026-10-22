@@ -34,14 +34,13 @@ vi.mock('./cosAgentLifecycle.js', async importOriginal => ({
     Object.assign(fixture.records.get(id), { status: 'completed', result });
   }),
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   getAllTasks: vi.fn(async () => ({ user: { grouped: {} }, cos: { grouped: { active: fixture.tasks } } })),
-  getAgent: vi.fn(async id => fixture.records.get(id)),
-  getAgentRecord: vi.fn(async id => fixture.records.get(id)),
   getTaskById: vi.fn(async id => fixture.tasks.find(t => t.id === id)),
   updateTask: vi.fn(async (id, update) => Object.assign(fixture.tasks.find(t => t.id === id), update)),
-  addTask: vi.fn(), reviveBlockedTask: vi.fn(), checkStagePrecondition: vi.fn(),
+  addTask: vi.fn(), reviveBlockedTask: vi.fn(),
 }));
+vi.mock('./cosTaskGenerator.js', () => ({ checkStagePrecondition: vi.fn() }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(async id => {
     fixture.trace.push('cleanup');

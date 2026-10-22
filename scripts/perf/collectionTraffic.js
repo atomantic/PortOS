@@ -6,8 +6,9 @@ export function endpointFor(rawUrl) {
   if (pathname.startsWith('/data/')) return '/data/:asset';
   if (/^\/api\/video-gen\/history\/[^/]+$/.test(pathname)) return '/api/video-gen/history/:record';
   if (/^\/api\/messages\/[^/]+\/[^/]+$/.test(pathname)) return '/api/messages/:account/:message';
-  // Collection endpoints and bootstrap paths contain no record identifiers.
-  return pathname.replace(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, ':account')
+  // Collection endpoints and bootstrap paths contain no record identifiers;
+  // arbitrary --route traffic may, so opaque numeric/hex segments collapse too.
+  return pathname.replace(/\/(?:\d+|[a-f0-9]{16,})(?=\/|$)/gi, '/:id').replace(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, ':account')
     .replace(/synthetic-[^/]+/g, ':record');
 }
 
@@ -125,4 +126,37 @@ export function trafficFailures(phases) {
     }
   }
   return failures;
+}
+
+/** Idle HTTP/socket bytes scaled to one minute from the measured window. */
+export function idleBytesPerMinute(idle, idleMs) {
+  const entries = Object.values(idle || {});
+  const total = key => entries.reduce((sum, value) => sum + value[key], 0);
+  const scale = bytes => Math.round(bytes * 60000 / idleMs);
+  return { encoded: scale(total('encodedBytes')), decoded: scale(total('decodedBytes')),
+    socketPayload: scale(total('socketSentBytes') + total('socketReceivedBytes')) };
+}
+
+/**
+ * CLI: [output] [--route=/path] [--sibling=/path] [--idle-ms=N]. Routes must be
+ * same-origin absolute paths so the audit can never reach another host.
+ */
+export function parseAuditArgs(argv) {
+  const out = { output: undefined, route: null, sibling: '/messages/contacts', idleMs: 60000 };
+  const path = (name, value) => {
+    if (!/^\/(?!\/)[^\s\\]*$/.test(value || '')) throw new Error('--' + name + ' must be an absolute path such as /');
+    return value;
+  };
+  for (const arg of argv) {
+    const [flag, ...rest] = arg.split('=');
+    const value = rest.join('=');
+    if (flag === '--route') out.route = path('route', value);
+    else if (flag === '--sibling') out.sibling = path('sibling', value);
+    else if (flag === '--idle-ms') {
+      out.idleMs = Number(value);
+      if (!Number.isInteger(out.idleMs) || out.idleMs < 1000 || out.idleMs > 300000) throw new Error('--idle-ms must be 1000-300000');
+    } else if (!arg.startsWith('--') && out.output === undefined) out.output = arg;
+    else throw new Error('Unknown argument: ' + flag);
+  }
+  return out;
 }

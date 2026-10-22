@@ -64,9 +64,9 @@ vi.mock('./cosState.js', async () => ({
 
 vi.mock('./cos.js', () => ({
   isRunning: vi.fn(() => false),
+}));
+vi.mock('./cosAgentLifecycle.js', () => ({
   getAgentRecord: vi.fn(),
-  getTaskById: (...args) => getTaskById(...args),
-  updateTask: (...args) => updateTask(...args),
 }));
 
 vi.mock('./cosEvents.js', () => ({

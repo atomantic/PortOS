@@ -43,7 +43,7 @@ vi.mock('../lib/execGit.js', () => ({
 
 // Stubs for CoS task queuing — used by triggerReferenceAnalysis.
 const addTaskMock = vi.fn(async (task) => task);
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   addTask: (...args) => addTaskMock(...args),
 }));
 const getTaskPromptMock = vi.fn(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewers}\n{referenceData}\n{planConstraint}\nTRACKER: {trackerInstructions}');

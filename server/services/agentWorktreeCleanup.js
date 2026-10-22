@@ -16,7 +16,9 @@ import { existsSync } from 'fs';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
-import { addTask, forceSpawnTask, getAgents, updateTask } from './cos.js';
+import { addTask, updateTask } from './cosTaskStore.js';
+import { forceSpawnTask } from './cos.js';
+import { getAgents } from './cosAgentLifecycle.js';
 import * as git from './git.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
@@ -130,7 +132,7 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
   const { verifyAgentRepoState } = await import('./agentRepoStateVerification.js');
   // `getAgentRecord`, not `getAgent` — the audit reads three worktree metadata
   // fields and has no use for the run's whole output.txt.
-  const { getAgentRecord } = await import('./cos.js');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgentRecord(agentId).catch(() => null);
   if (publicationHolds.has(agentId) || ['running', 'blocked'].includes(agentState?.metadata?.publicationValidation?.status)) return;
   await verifyAgentRepoState({
@@ -150,7 +152,7 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
  */
 async function auditMergeGate(agentId, originalTask) {
   const { auditClaimMergeGate } = await import('./mergeGateAudit.js');
-  const { getAgentRecord } = await import('./cos.js');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgentRecord(agentId).catch(() => null);
   if (!agentState) return;
   await auditClaimMergeGate({ agentId, task: originalTask, agentState });
@@ -191,7 +193,7 @@ export function resolveWorktreeDisposition({ isWorktree, success, prCreation, di
 }
 
 async function worktreeCleanupContext(agentId, options) {
-  const { getAgent } = await import('./cos.js');
+  const { getAgent } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgent(agentId).catch(() => null);
   const metadata = agentState?.metadata;
   if (!metadata?.isWorktree || metadata.isPersistentWorktree) return { isWorktree: false };
@@ -317,7 +319,7 @@ async function openWorktreePullRequest(context) {
   emitLog('info', `🌳 Opening PR for worktree agent ${agentId} branch ${worktreeBranch}`, { agentId, branchName: worktreeBranch });
 
   if (context.originalTask?.metadata?.app === PORTOS_APP_ID) {
-    const { updateAgent } = await import('./cos.js');
+    const { updateAgent } = await import('./cosAgentLifecycle.js');
     try {
       publicationHolds.set(agentId, { status: 'running' });
       await updateAgent(agentId, { metadata: { publicationValidation: { status: 'running', startedAt: new Date().toISOString() } } });
@@ -979,7 +981,8 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   if (!agentId || !task?.id) return {};
   if (success && !isLegacyDeepAudit(task.metadata)) return {};
 
-  const { getTaskById, getAgentRecord } = await import('./cos.js');
+  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const persisted = await getTaskById(task.id).catch(err => {
     emitLog('warn', `Skipping resume pointer for task ${task.id} — status unreadable: ${err.message}`, { taskId: task.id, agentId });
     return null;
@@ -1358,7 +1361,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
 }
 
 async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null) {
-  const { getTaskById } = await import('./cos.js');
+  const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(taskId);
   if (!task || task.taskType !== 'internal' || !isTruthyMeta(task.metadata?.reviewLoopFollowUp)
     || task.metadata.reviewLoopPRUrl !== prUrl || task.metadata.reviewLoopPRBranch !== prBranch) {
