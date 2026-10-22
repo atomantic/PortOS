@@ -647,6 +647,59 @@ describe('merge-only PR watcher', () => {
     }));
     expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
   });
+
+  describe('a bound handoff receipt', () => {
+    const boundHandoff = {
+      headSha: 'a'.repeat(40), repository: 'github.com/o/r', agentId: 'agent-88', taskId: 'task-88',
+      receiptId: 'receipt-88', prCompletion: 'merge-on-green',
+    };
+
+    it('stays queued in attention, notified once, when its PR stays unreadable past the budget', async () => {
+      const app = pendingApp([pendingMerge({ ticks: MAX_PENDING_MERGE_TICKS - 1, handoff: boundHandoff })]);
+      mockApps.set(app.id, app);
+      execGhMock.mockRejectedValue(new Error('could not resolve to a PullRequest'));
+
+      expect(await processPendingMergePrs(app)).toMatchObject({ ok: true, checked: 0, errors: 1, timedOut: 1 });
+      expect(readPendingMergePrs(mockApps.get(app.id))).toEqual([
+        expect.objectContaining({ ticks: MAX_PENDING_MERGE_TICKS, attention: 'forge-unreadable' }),
+      ]);
+      expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+        description: expect.stringContaining('PortOS retains its pending-merge receipt'),
+      }));
+
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ ticks: MAX_PENDING_MERGE_TICKS, attention: 'forge-unreadable' });
+    });
+
+    it('is held for its owner, not escalated, when the owning task is no longer running', async () => {
+      const app = pendingApp([pendingMerge({ handoff: boundHandoff })]);
+      mockApps.set(app.id, app);
+      tasksById.set('task-88', { id: 'task-88', status: 'failed', metadata: { prCompletion: 'merge-on-green' } });
+      execGhMock.mockResolvedValue(JSON.stringify({ state: 'OPEN', mergeStateStatus: 'DIRTY', headRefOid: 'a'.repeat(40) }));
+
+      expect(await processPendingMergePrs(app)).toMatchObject({ ok: true, checked: 1, escalated: 0, waiting: 1 });
+      expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ recoveryBlocked: 'The coordinating task is failed', ticks: 0 });
+      expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+        description: 'PR #88 remains owned by task task-88: The coordinating task is failed.',
+      }));
+    });
+
+    it('is held for its owner, not merged, when the owning task stops inside merge admission', async () => {
+      const app = pendingApp([pendingMerge({ handoff: boundHandoff })]);
+      mockApps.set(app.id, app);
+      tasksById.set('task-88', { id: 'task-88', status: 'failed', metadata: { prCompletion: 'merge-on-green' } });
+      installPendingEvidence();
+
+      expect(await processPendingMergePrs(app)).toMatchObject({ ok: true, checked: 1, merged: 0, waiting: 1 });
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ recoveryBlocked: 'The coordinating task is failed', ticks: 0 });
+      expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+        description: 'PR #88 remains owned by task task-88: The coordinating task is failed.',
+      }));
+    });
+  });
 });
 
 describe('sweepPendingMergePrs', () => {
