@@ -359,7 +359,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const recent = new Date(Date.now() - 86_400_000).toISOString();
     const watched = (id) => thread(id, { owner: 'acme', repo: 'noisy', reason: 'subscribed', updatedAt: recent });
     const ci = (id) => thread(id, { owner: 'acme', repo: 'core', reason: 'ci_activity', type: 'CheckSuite', url: null, updatedAt: recent, title: 'CI workflow run failed for feature branch' });
-    const actions = mockGh(() => listing(['1001', '1002', '1003', '1004', '1005'].map(watched).concat([ci('1011'), ci('1012')])), {
+    let actions = mockGh(() => listing(['1001', '1002', '1003', '1004', '1005'].map(watched).concat([ci('1011'), ci('1012')])), {
       'user/subscriptions?per_page=100': 'acme/noisy\nacme/core\n',
     });
     await syncAccountNotifications(account.id);
@@ -381,6 +381,15 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       ['PUT', 'notifications/threads/1012/subscription'],
     ]);
     await expect(applyAuditSuggestion(account.id, 'unwatch:acme/noisy')).rejects.toMatchObject({ status: 409 });
+    await expect(applyAuditSuggestion(account.id, 'mute-handled:acme/core')).rejects.toMatchObject({ status: 409 });
+    // Audit mutes are not the operator acting, and a later handled thread in
+    // the same repo gets a fresh, unapplied mute card.
+    actions = mockGh(() => listing([ci('1013')]), { 'user/subscriptions?per_page=100': 'acme/core\n' });
+    await syncAccountNotifications(account.id);
+    await query("UPDATE github_notifications SET decision = 'handled-by-pr-workflow' WHERE account_id = $1 AND thread_id = '1013'", [account.id]);
+    const rerun = await runAccountAudit(account.id);
+    expect(rerun.summary.acted).toBe(0);
+    expect(rerun.suggestions.find((entry) => entry.id === 'mute-handled:acme/core')).toMatchObject({ threadIds: ['1013'], applied: false });
     // A bulk audit mute teaches no learned rule.
     expect((await listLearnedRules()).filter((rule) => rule.accountId === account.id)).toEqual([]);
 

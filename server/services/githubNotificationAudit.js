@@ -28,11 +28,14 @@ async function accountEnv(account) {
   return env;
 }
 
+// Audit mutes and their undo are logged as operator events tagged `via`; they
+// are not the operator acting on a thread, so they never count as acted.
 const OUTCOMES_SQL = `
   WITH recent AS (
     SELECT n.thread_id, n.repo_full_name, n.reason, n.decision, n.state,
       EXISTS (SELECT 1 FROM github_notification_events e
-              WHERE e.account_id = n.account_id AND e.thread_id = n.thread_id AND e.actor = 'operator') AS operator_acted,
+              WHERE e.account_id = n.account_id AND e.thread_id = n.thread_id AND e.actor = 'operator'
+                AND COALESCE(e.detail->>'via', '') NOT IN ('audit', 'audit-undo')) AS operator_acted,
       EXISTS (SELECT 1 FROM github_notification_events e
               WHERE e.account_id = n.account_id AND e.thread_id = n.thread_id AND e.actor = 'automation' AND e.kind <> 'triaged') AS automation_acted
     FROM github_notifications n
@@ -57,9 +60,11 @@ async function listWatchedRepos(account, env) {
   return out === null ? null : out.split('\n').map((line) => line.trim()).filter((line) => REPO_RE.test(line));
 }
 
+// Only an unwatch stays applied across audits; a later audit's mute-handled
+// card lists threads that are still open, so it is always new work.
 async function openChanges(accountId) {
   const { rows } = await query(
-    'SELECT kind, repo_full_name FROM github_notification_audit_changes WHERE account_id = $1 AND undone_at IS NULL',
+    "SELECT kind, repo_full_name FROM github_notification_audit_changes WHERE account_id = $1 AND kind = 'unwatch' AND undone_at IS NULL",
     [accountId],
   );
   return new Set(rows.map((row) => `${row.kind}:${row.repo_full_name}`));
@@ -67,7 +72,7 @@ async function openChanges(accountId) {
 
 const withApplied = (audit, applied) => ({
   ...audit,
-  suggestions: audit.suggestions.map((suggestion) => ({ ...suggestion, applied: applied.has(suggestion.id) })),
+  suggestions: audit.suggestions.map((suggestion) => ({ ...suggestion, applied: Boolean(suggestion.applied) || applied.has(suggestion.id) })),
 });
 
 export async function runAccountAudit(accountId) {
@@ -102,7 +107,7 @@ export async function applyAuditSuggestion(accountId, suggestionId) {
   const account = await getAccount(accountId);
   const suggestion = lastAudits.get(account.id)?.suggestions.find((entry) => entry.id === suggestionId && entry.apply);
   if (!suggestion) throw new ServerError('Run the audit again; that suggestion is not in the latest one', { status: 409, code: 'GITHUB_AUDIT_STALE' });
-  if ((await openChanges(account.id)).has(suggestion.id)) throw new ServerError('Already applied', { status: 409, code: 'GITHUB_AUDIT_APPLIED' });
+  if (suggestion.applied || (await openChanges(account.id)).has(suggestion.id)) throw new ServerError('Already applied', { status: 409, code: 'GITHUB_AUDIT_APPLIED' });
   let detail = {};
   if (suggestion.kind === 'unwatch') {
     const env = await accountEnv(account);
@@ -121,6 +126,7 @@ export async function applyAuditSuggestion(accountId, suggestionId) {
     }
     detail = { threadIds: muted };
   }
+  suggestion.applied = true;
   const { rows } = await query(
     'INSERT INTO github_notification_audit_changes (account_id, kind, repo_full_name, detail) VALUES ($1, $2, $3, $4::jsonb) RETURNING id',
     [account.id, suggestion.kind, suggestion.repo, toPgJson(detail)],
