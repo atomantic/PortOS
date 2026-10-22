@@ -37,6 +37,7 @@ const runFfmpegProcess = vi.fn(async ({ args }) => {
   return { ok: true };
 });
 vi.mock('../../lib/ffmpeg.js', () => ({
+  FFMPEG_SCAN_TIMEOUT_MS: 900000,
   findFfmpeg: async () => '/fake/ffmpeg',
   runFfmpegProcess: (...args) => runFfmpegProcess(...args),
 }));
