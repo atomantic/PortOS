@@ -15,7 +15,7 @@ import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
 import { getDueTasks, recordExecution } from './taskSchedule.js';
 import { loadAppActivity } from './appActivity.js';
 import { getActiveApps } from './apps.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents, emitLog } from './cosEvents.js';
 
 const state = { config: { improvementEnabled: true, appReviewCooldownMs: 60_000 } };
 const dueCron = taskType => ({ taskType, reason: 'cron-due', interval: { type: 'cron' } });
@@ -67,6 +67,11 @@ describe('scheduled managed-app queue admission', () => {
     await run([queuedTask('do-release', status)]);
     expect(prepareTask.mock.calls.map(([type]) => type)).toEqual(['pr-watcher']);
     expect(recordExecution).toHaveBeenCalledExactlyOnceWith('task:pr-watcher', 'example-app');
+    if (status === 'blocked') {
+      // A blocked task holding its slot is the dedupe working: info, never warn.
+      expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('Skipping do-release for Example App: blocked task'), expect.any(Object));
+      expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('Skipping do-release'), expect.anything());
+    }
   });
 
   it('does not consume cadence for generator declines or disk-level duplicate races', async () => {

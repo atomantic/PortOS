@@ -348,7 +348,8 @@ async function resolveOrdinaryProviderAndModel(task) {
   if (isUserPin && providerSwapped && !(provider.models || []).includes(selectedModel)) {
     // Handled here rather than left to the list check below, which can't fire at
     // all for a fallback provider that enumerates no `models`.
-    emitLog('warn', `Dropping model "${selectedModel}" pinned for provider "${pinnedProviderId}" — running on fallback "${provider.id}" with its default model`, {
+    // The same handled fallback as the sidelined-provider notice above: not a fault.
+    emitLog('info', `Dropping model "${selectedModel}" pinned for provider "${pinnedProviderId}" — running on fallback "${provider.id}" with its default model`, {
       taskId: task.id,
       requestedModel: selectedModel,
       pinnedProviderId,

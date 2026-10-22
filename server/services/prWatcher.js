@@ -906,7 +906,7 @@ async function queuedReceiptIds(appId) {
 async function armHandoffFollowUp(appId, receiptId) {
   if (!receiptId || !(await queuedReceiptIds(appId)).has(receiptId)) return;
   if (!handoffFollowUpGate) {
-    console.warn(`⏸️ Handoff follow-up for app ${appId} not armed: CoS daemon is stopped; the timer sweep owns the entry`);
+    console.log(`⏸️ Handoff follow-up for app ${appId} not armed: CoS daemon is stopped; the timer sweep owns the entry`);
     return;
   }
   const deadline = Date.now() + HANDOFF_FOLLOW_UP_CAP_MS;
@@ -932,7 +932,7 @@ function scheduleHandoffFollowUp(appId, poller) {
       // Still bounded when every poll throws: the latest receipt's cap ends it.
       if (Date.now() >= Math.max(...poller.receipts.values())) {
         handoffFollowUps.delete(appId);
-        console.warn(`⏸️ Handoff follow-up for app ${appId} reached its cap; the timer sweep owns its entries`);
+        console.log(`⏸️ Handoff follow-up for app ${appId} reached its cap; the timer sweep owns its entries`);
       } else {
         scheduleHandoffFollowUp(appId, poller);
       }
@@ -947,11 +947,11 @@ async function pollHandoffFollowUp(appId, poller) {
   if (handoffFollowUps.get(appId) !== poller) return;
   if (blocked === 'daemon-stopped') {
     handoffFollowUps.delete(appId);
-    console.warn(`⏸️ Handoff follow-up for app ${appId} stopped: CoS daemon is stopped`);
+    console.log(`⏸️ Handoff follow-up for app ${appId} stopped: CoS daemon is stopped`);
     return;
   }
   if (blocked) {
-    console.warn(`⏸️ Handoff follow-up poll for app ${appId} skipped: ${blocked}`);
+    console.log(`⏸️ Handoff follow-up poll for app ${appId} skipped: ${blocked}`);
   } else {
     const result = await _sweepPendingMergeApp(appId);
     // null: receiptSweep already logged the thrown failure.
@@ -971,7 +971,7 @@ async function pollHandoffFollowUp(appId, poller) {
   if (poller.receipts.size === 0) {
     handoffFollowUps.delete(appId);
     if (expired) {
-      console.warn(`⏸️ Handoff follow-up for app ${appId} reached its ${HANDOFF_FOLLOW_UP_CAP_MS / 60000}-minute cap; the timer sweep owns ${expired} entr${expired === 1 ? 'y' : 'ies'}`);
+      console.log(`⏸️ Handoff follow-up for app ${appId} reached its ${HANDOFF_FOLLOW_UP_CAP_MS / 60000}-minute cap; the timer sweep owns ${expired} entr${expired === 1 ? 'y' : 'ies'}`);
     } else {
       console.log(`✅ Handoff follow-up for app ${appId} done: every handed-off entry settled`);
     }

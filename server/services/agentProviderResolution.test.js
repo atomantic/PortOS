@@ -378,6 +378,9 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.ok).toBe(true);
     expect(r.provider).toBe(fallback);
     expect(r.selectedModel).toBe('claude-sonnet-5'); // NOT the antigravity pin
+    // Dropping the pin is part of the handled fallback, not a fault: info, never warn.
+    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('Dropping model "gemini-3.6-flash"'), expect.any(Object));
+    expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('Dropping model'), expect.anything());
   });
 
   it('drops a swap-invalidated pin even when the fallback provider enumerates no models', async () => {

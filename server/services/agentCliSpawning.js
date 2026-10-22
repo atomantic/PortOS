@@ -784,7 +784,7 @@ export async function spawnDirectly({
 
     if (finalizeOutcome.outcome === 'abandoned') {
       outputBatcher.push('🛑 PortOS restarted while this agent was running — the run was interrupted, not completed. Its worktree is preserved and the task will resume.');
-      emitLog('warn', `Agent ${agentId} interrupted by a PortOS host restart — preserved for resume`, { agentId, phase: 'interrupted' });
+      emitLog('info', `Agent ${agentId} interrupted by a PortOS host restart — preserved for resume`, { agentId, phase: 'interrupted' });
       await Promise.all([
         outputBatcher.flush().catch(() => {}),
         updateAgent(agentId, { metadata: { phase: 'interrupted', interruptedBy: HOST_SHUTDOWN_REASON } })

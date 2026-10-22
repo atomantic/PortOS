@@ -1267,7 +1267,7 @@ export function createTuiSessionController({
     stopRunMachinery();
 
     appendLine(LIFECYCLE_LINES.hostRestarted());
-    emitLog('warn', `TUI agent ${agentId} interrupted by a PortOS host restart — preserved for resume`, { agentId, phase: 'interrupted' });
+    emitLog('info', `TUI agent ${agentId} interrupted by a PortOS host restart — preserved for resume`, { agentId, phase: 'interrupted' });
     // Concurrent, not sequential: nothing awaits this function (it runs off the
     // PTY-exit handler, racing the shutdown handler's own process.exit), so the
     // shorter the critical path the more of the transcript actually lands. The

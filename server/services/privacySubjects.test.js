@@ -203,11 +203,16 @@ describe('consent gate — purpose-scoped (#8332)', () => {
 
   it('a pii_vault-only subject is refused BOTH broker purposes', async () => {
     useConsentRows([{ subjectId: 's2', scope: 'pii_vault' }]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await expect(assertSubjectConsent('s2', { scope: 'pii_vault' })).resolves.toMatchObject({ id: 's2' });
     for (const scope of ['broker_scan', 'broker_optout']) {
       await expect(assertSubjectConsent('s2', { scope, action: 'x' }))
         .rejects.toMatchObject({ status: 403, code: 'SUBJECT_CONSENT_REQUIRED' });
     }
+    // The guard refusing is its designed outcome (the 403 is the answer): stdout, not stderr.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Refused x for privacy subject s2: no active broker_scan consent'));
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('broker_scan unlocks the scan without unlocking submissions', async () => {

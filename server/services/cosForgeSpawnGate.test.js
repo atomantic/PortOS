@@ -233,16 +233,18 @@ describe('forgeSpawnHoldReason', () => {
   });
 
   describe('logging', () => {
-    it('warns once per outage naming the host, not once per held task', async () => {
+    it('reports the hold once per outage naming the host, not once per held task', async () => {
       probe('unreachable', 'error connecting to forge.example.com');
 
       await forgeSpawnHoldReason(prTask());
       await forgeSpawnHoldReason({ id: 'task-2', metadata: { openPR: true } });
       await forgeSpawnHoldReason({ id: 'task-3', metadata: { openPR: true } });
 
-      const warnings = emitLog.mock.calls.filter(([level]) => level === 'warn');
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0][1]).toContain('forge.example.com is unreachable');
+      const holds = emitLog.mock.calls.filter(([level]) => level === 'info');
+      expect(holds).toHaveLength(1);
+      expect(holds[0][1]).toContain('forge.example.com is unreachable');
+      // Holding is the designed handling, so stderr stays quiet until the outage outlasts the hour.
+      expect(emitLog.mock.calls.filter(([level]) => level === 'warn')).toHaveLength(0);
     });
 
     it('warns once when it gives up on a host, so the expiry is not silent', async () => {

@@ -170,6 +170,7 @@ describe('startBackupScheduler', () => {
 
   it('reports a backup refused by the already-running latch as a skipped slot, not a success (#12023)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const settings = { backup: { enabled: true, destPath: '/example-backups' } };
       getSettings.mockResolvedValueOnce(settings);
@@ -179,17 +180,22 @@ describe('startBackupScheduler', () => {
       runBackup.mockResolvedValueOnce({ skipped: true });
 
       await expect(handler()).resolves.toEqual({ skipped: true, reason: 'already running' });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('already running'));
+      // The latch refusing a duplicate run is a deliberate skip: stdout, not stderr.
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('already running'));
+      expect(warn).not.toHaveBeenCalled();
 
       getSettings.mockResolvedValueOnce(settings);
       runBackup.mockResolvedValueOnce({ success: true });
       await expect(handler()).resolves.toBeUndefined();
     } finally {
       warn.mockRestore();
+      log.mockRestore();
     }
   });
 
   it('handler skips the run if backup was disabled since registration', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     getSettings.mockResolvedValueOnce({
       backup: { enabled: true, destPath: '/dest', excludePaths: [], disabledDefaultExcludes: [] }
     });
@@ -204,9 +210,14 @@ describe('startBackupScheduler', () => {
     await handler();
 
     expect(runBackup).not.toHaveBeenCalled();
+    // The settings guard declining a stale cron slot is a deliberate skip: stdout, not stderr.
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('disabled since registration — skipping run'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('skipping run'));
   });
 
   it('handler skips the run if destPath has been cleared since registration', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     getSettings.mockResolvedValueOnce({
       backup: { enabled: true, destPath: '/dest', excludePaths: [], disabledDefaultExcludes: [] }
     });
@@ -219,6 +230,8 @@ describe('startBackupScheduler', () => {
     await handler();
 
     expect(runBackup).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('destPath cleared since registration — skipping run'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('skipping run'));
   });
 });
 

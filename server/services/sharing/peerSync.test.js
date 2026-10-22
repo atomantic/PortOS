@@ -2480,13 +2480,25 @@ describe('peerSync', () => {
     });
 
     it('handles a network-level failure without throwing (returns pushed:false)', async () => {
-      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
-      vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
-      const result = await pushRecordToPeer({
-        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
-      });
-      expect(result.pushed).toBe(false);
-      expect(result.reason).toBe('network');
+      // The once-per-cause ledger would swallow the line if an earlier test already logged this cause.
+      __resetPushFailureLogForTests();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
+        const result = await pushRecordToPeer({
+          id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        });
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('network');
+        // An asleep or offline peer is routine: stdout, not stderr.
+        expect(logSpy.mock.calls.some(([line]) => /peerSync: push universe\/u1 .* unreachable/.test(line))).toBe(true);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
     });
 
     it('logs a rejected push once per peer and cause, then logs recovery', async () => {
@@ -5129,7 +5141,14 @@ describe('peerSync', () => {
         const sub = await subscribePeer({
           peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
         }, { adoptedFromReverse: true });
+        const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const result = await pushRecordToPeer(sub);
+        // A peer that is merely behind is handled by the persisted block: stdout, not stderr.
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("doesn't recognize the 'universe' record kind"));
+        expect(warnSpy).not.toHaveBeenCalled();
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
         expect(result.pushed).toBe(false);
         expect(result.reason).toBe('peer-schema-behind');
         expect(result.blockedBySchema).toBe(true);

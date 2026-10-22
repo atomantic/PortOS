@@ -295,7 +295,7 @@ export async function assertSubjectConsent(subjectId, { scope, action = 'this ac
   assertKnownScope(scope);
   const subject = await assertSubject(subjectId);
   if (await hasActiveConsent(subject.id, scope)) return subject;
-  console.warn(`⛔ Refused ${action} for privacy subject ${subject.id}: no active ${scope} consent`);
+  console.log(`🚫 Refused ${action} for privacy subject ${subject.id}: no active ${scope} consent`);
   throw new ServerError(
     `Privacy subject ${subject.id} has no active ${scope} consent — ${action} refused`,
     { status: 403, code: 'SUBJECT_CONSENT_REQUIRED', context: { scope } },

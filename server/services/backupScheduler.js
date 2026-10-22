@@ -69,11 +69,11 @@ async function runScheduledBackup(logReason) {
   if (corrupt) throw new Error('Backup settings unreadable — scheduled run was not started');
   const effective = resolveBackupConfig(fresh.backup);
   if (!effective.enabled) {
-    console.warn('💾 Backup scheduler: disabled since registration — skipping run');
+    console.log('💾 Backup scheduler: disabled since registration — skipping run');
     return { skipped: true, reason: 'disabled since registration' };
   }
   if (!effective.destPath) {
-    console.warn('💾 Backup scheduler: destPath cleared since registration — skipping run');
+    console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
     return { skipped: true, reason: 'destination cleared since registration' };
   }
   const excludePaths = fresh.backup?.excludePaths || [];
@@ -81,7 +81,7 @@ async function runScheduledBackup(logReason) {
   console.log(`💾 Backup scheduler: running ${logReason} backup`);
   const result = await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes, retentionCount: effective.retentionCount });
   if (result?.skipped) {
-    console.warn(`⚠️ Backup scheduler: ${logReason} backup skipped — a backup is already running`);
+    console.log(`⏭️ Backup scheduler: ${logReason} backup skipped — a backup is already running`);
     return { skipped: true, reason: 'already running' };
   }
 }

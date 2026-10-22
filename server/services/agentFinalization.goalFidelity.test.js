@@ -357,7 +357,8 @@ describe('finalizeAgent — goal-fidelity gate', () => {
         30_000, { cwd: '/example/worktree', env: { GH_TOKEN: 'synthetic-token' } },
       ]));
       expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
-      expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('not judgeable from a diff'), expect.any(Object));
+      expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('not judgeable from a diff'), expect.any(Object));
+      expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('not judgeable from a diff'), expect.anything());
       expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
       expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
       expect(updateTaskMock).toHaveBeenCalledWith(task.id, { status: 'completed' }, 'internal');
@@ -498,6 +499,9 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
       expect(runWindowDiffMock).not.toHaveBeenCalled();
       if (reason === 'credentials unavailable') expect(execGh).not.toHaveBeenCalled();
+      // A claim flow is not a code objective: the designed skip belongs on stdout, not stderr.
+      expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('Goal-fidelity review skipped'), expect.any(Object));
+      expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('returned no verdict'), expect.anything());
     }
   );
 
@@ -603,6 +607,15 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(result.goalFidelity).toBeUndefined();
       expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
     }
+  });
+
+  it('warns when the reviewer itself fails to answer, unlike a deliberate decline', async () => {
+    runLocalGoalFidelityReviewMock.mockResolvedValue({ ok: false, error: 'ollama is not reachable' });
+
+    await finalize();
+
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('returned no verdict'), expect.any(Object));
+    expect(emitLog).not.toHaveBeenCalledWith('info', expect.stringContaining('Goal-fidelity review skipped'), expect.anything());
   });
 
 // The follow-up is what carries a finding past this run's record — but the

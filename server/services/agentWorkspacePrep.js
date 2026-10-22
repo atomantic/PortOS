@@ -328,7 +328,13 @@ async function prepareRequestedWorktree({
       return null;
     });
   }
-  if (worktreeError) {
+  // A branch still checked out in another worktree is a transient the timed
+  // `worktree-busy` pause below retries (and reports at info). Only a failure
+  // nothing retries is a fault worth stderr.
+  const retriesBusyBranch = Boolean(worktreeError) && !allowSharedWorkspaceFallback
+    && worktreeError.code !== PINNED_HEAD_MOVED
+    && isBranchCheckedOutElsewhereError(worktreeError.message) && attempt <= WORKTREE_BUSY_MAX_ATTEMPTS;
+  if (worktreeError && !retriesBusyBranch) {
     emitLog('warn', `🌳 Worktree creation failed for task ${task.id}: ${worktreeError.message}`, { taskId: task.id });
   }
 
@@ -362,7 +368,7 @@ async function prepareRequestedWorktree({
     return { outcome: 'ready', workspacePath, worktreeInfo: null };
   }
 
-  if (isBranchCheckedOutElsewhereError(worktreeError?.message) && attempt <= WORKTREE_BUSY_MAX_ATTEMPTS) {
+  if (retriesBusyBranch) {
     // The branch is checked out in ANOTHER worktree. Routinely that other
     // worktree is the previous agent's, still being torn down by the very
     // cleanup that spawned this task, so waiting it out lands the pull

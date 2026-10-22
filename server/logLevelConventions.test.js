@@ -413,10 +413,10 @@ describe('the failure-log recognizer', () => {
     expect(findMislabeledEmitLogs(`emitLog('info', 'started', {}, '${NO_ENTRY}');`)).toEqual([]);
   });
 
-  it('would flag a restored quiet emitLog in cosTaskGenerator.js', () => {
-    const src = readFileSync(join(SERVER_ROOT, 'services/cosTaskGenerator.js'), 'utf8');
+  it('would flag a restored quiet emitLog in agentCompletionCleanup.js', () => {
+    const src = readFileSync(join(SERVER_ROOT, 'services/agentCompletionCleanup.js'), 'utf8');
     expect(findMislabeledEmitLogs(src)).toEqual([]);
-    const quiet = "emitLog('warn', `" + NO_ENTRY + ' Skipping install-wide';
+    const quiet = "emitLog('warn', `" + NO_ENTRY + ' Pipeline';
     const regressed = src.replace(quiet, quiet.replace("'warn'", "'info'"));
     expect(regressed).not.toBe(src);
     expect(findMislabeledEmitLogs(regressed)).toHaveLength(1);

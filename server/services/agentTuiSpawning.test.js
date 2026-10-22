@@ -284,6 +284,7 @@ import {
 // Real module, not a mock: the flag is a plain process-local boolean, so driving
 // it directly exercises the same code path production does.
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
+import { emitLog } from './cosEvents.js';
 
 describe('agent TUI spawning', () => {
   // `buildTuiSpawnConfig` → `appendModelArgs` → the REAL `resolveInjectedTuiModel`,
@@ -3940,6 +3941,9 @@ describe('spawnTuiAgent runtime', () => {
       )).toBe(true);
       expect(agentLifecycle.releaseAgentLane).not.toHaveBeenCalled();
       expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+      // A restart the operator caused, preserved for resume, is the normal path: info, never warn.
+      expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('interrupted by a PortOS host restart'), expect.any(Object));
+      expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('interrupted by a PortOS host restart'), expect.anything());
     });
   });
 });
