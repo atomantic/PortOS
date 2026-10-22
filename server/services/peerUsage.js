@@ -33,6 +33,7 @@ import { compareNewerWins, parseTsMs } from '../lib/lwwTimestamp.js';
 import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } from '../lib/tombstones.js';
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
+import { isFreeProvider } from '../lib/modelPricing.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { buildUsageDigest, buildUsageReport, getUsage, USAGE_FILE } from './usage.js';
 import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
@@ -479,6 +480,70 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
 
   const included = rows.filter((r) => r.usesSubscriptions);
   return { instances: rows, totals: sumFleetTotals(included) };
+}
+
+// Peer digests keep day precision for 120 days (DIGEST_DAILY_RETENTION_DAYS in
+// usage.js), so 90 points of a 30-day window (119 days of input) is the longest
+// series every instance can supply at full resolution.
+export const ROLLING_COST_WINDOW_DAYS = 30;
+export const ROLLING_COST_POINTS = 90;
+
+const utcDay = (date) => date.toISOString().slice(0, 10);
+
+/** Each UTC day from `days - 1` days before `now` through `now`, oldest first. */
+function trailingDays(now, days) {
+  const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Array.from({ length: days }, (_, i) => utcDay(new Date(end - (days - 1 - i) * 86_400_000)));
+}
+
+/**
+ * Estimated API cost per day, each day priced on its own through the same
+ * `buildUsageReport` as the cost report so the series and the headline agree.
+ */
+function dailyCosts(dailyActivity, dayList, providers) {
+  return dayList.map((day) => {
+    const bucket = dailyActivity?.[day];
+    return bucket ? buildUsageReport({ [day]: bucket }, { from: day, to: day, providers }).totals.estimatedCost : 0;
+  });
+}
+
+let rollingMemo = null;
+
+/**
+ * Rolling 30-day estimated API cost summed across EVERY known instance, one
+ * point per UTC day for the last 90 days. API-billed instances count here: this
+ * is total spend at API rates, not the subscription-covered subset the Across
+ * Instances total reports. Peers are as fresh as their last sync.
+ */
+export async function getFleetRollingCost({ providers = [], now = new Date() } = {}) {
+  const { self, peers } = await entriesWithSelf();
+  const local = getUsage();
+  // This machine always reads its live maps; with no minted identity yet it
+  // still has its own history to chart.
+  const sources = [
+    { id: self?.instanceId ?? 'local', stamp: local?.lastUpdated, daily: local?.dailyActivity },
+    ...peers.map((e) => ({ id: e.instanceId, stamp: e.capturedAt, daily: e.usage.dailyActivity })),
+  ];
+
+  const span = trailingDays(now, ROLLING_COST_POINTS + ROLLING_COST_WINDOW_DAYS - 1);
+  const key = JSON.stringify([span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p)])]);
+  if (rollingMemo?.key === key) return rollingMemo.value;
+
+  const perDay = new Array(span.length).fill(0);
+  for (const source of sources) {
+    dailyCosts(source.daily, span, providers).forEach((cost, i) => { perDay[i] += cost; });
+  }
+  let running = perDay.slice(0, ROLLING_COST_WINDOW_DAYS - 1).reduce((a, b) => a + b, 0);
+  const points = [];
+  for (let i = ROLLING_COST_WINDOW_DAYS - 1; i < span.length; i++) {
+    running += perDay[i];
+    // Clamp: the add/subtract walk can leave float dust just below zero.
+    points.push({ date: span[i], cost: Math.max(0, roundCents(running)) });
+    running -= perDay[i - ROLLING_COST_WINDOW_DAYS + 1];
+  }
+  const value = { windowDays: ROLLING_COST_WINDOW_DAYS, instanceCount: sources.length, points };
+  rollingMemo = { key, value };
+  return value;
 }
 
 /**

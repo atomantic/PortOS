@@ -8,7 +8,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
-import { getFleetUsage, getFleetClaudeCodeModels } from '../services/peerUsage.js';
+import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
@@ -40,7 +40,9 @@ router.get('/', asyncHandler(async (req, res) => {
   //   same window by the same report builder. Empty on a single-machine install
   //   (or before a peer's first usage sync) — the UI hides that section rather
   //   than showing a one-row "fleet".
-  const [subscriptionSavings, fleet] = await Promise.all([
+  // - rollingCost: the trailing-30-day API estimate across every instance,
+  //   independent of the window (memoized, so a range change re-sends it free).
+  const [subscriptionSavings, fleet, rollingCost] = await Promise.all([
     getSubscriptionSavings({
       report: summary.report,
       providers,
@@ -52,8 +54,9 @@ router.get('/', asyncHandler(async (req, res) => {
     }),
     getApiBilledInstanceIds().then((apiBilledInstanceIds) =>
       getFleetUsage({ from, to, providers, apiBilledInstanceIds })),
+    getFleetRollingCost({ providers }),
   ]);
-  res.json({ ...summary, subscriptionSavings, fleet });
+  res.json({ ...summary, subscriptionSavings, fleet, rollingCost });
 }));
 
 // GET /api/usage/subscriptions - The Subscriptions page's own model: one row
