@@ -1,5 +1,6 @@
 // Editorial checks — scene group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   EDITORIAL_PROMPT_OVERHEAD_TOKENS,
   ENDINGS_CLIFFHANGER_STAGE,
@@ -121,7 +122,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // The scene map is fixed per-call overhead (re-sent on each chunk). It's
       // context only — the check degrades gracefully to a whole-issue scan when
@@ -164,7 +165,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // The scene map is fixed per-call overhead (re-sent on each chunk). Each
       // scene's recorded `setting` is a strong white-room signal (blank ⇒ likely
@@ -207,7 +208,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // The scene map is fixed per-call overhead (re-sent on each chunk). Here it
       // separates legitimate BETWEEN-scene compression from a dramatizable beat
@@ -251,7 +252,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // The scene map is fixed per-call overhead (re-sent on each chunk). It's
       // context only — the check degrades gracefully to a whole-issue scan when
@@ -294,7 +295,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // All three blocks are fixed per-call overhead (re-sent on each chunk) and
       // pure context: the scene map lets the model attribute pacing/stakes findings
@@ -367,7 +368,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
       // context: the scene map lets the model attribute escalation findings to a
@@ -448,7 +449,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // The scene map is fixed per-call overhead (re-sent on each chunk) and pure
       // context: it records each scene's events so the model can weigh an event's
@@ -527,7 +528,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Localized to chapter/scene openings (one finding per opener), so this stays
     // a plain per-chunk run with no cross-chunk digest — mirrors prose.info-dumping.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
@@ -568,7 +569,7 @@ export const sceneChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Authored cliffhangers are fixed per-call overhead (re-sent on each chunk).
       const authoredCliffhangers = authoredCliffhangerSummary(ctx.series?.arc?.readerMap);

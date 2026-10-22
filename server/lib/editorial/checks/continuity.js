@@ -1,5 +1,6 @@
 // Editorial checks — continuity group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   CHEKHOV_STAGE,
   OBJECT_BACKSTORY_STAGE,
@@ -60,7 +61,7 @@ export const continuityChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // All four blocks are fixed per-call overhead (re-sent on each chunk) and
       // pure context: the continuity-bible ledger is the authoritative fact set
@@ -236,7 +237,7 @@ export const continuityChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const objects = describeObjectAttachments(ctx);
       return runManuscriptLlmCheck(ctx, {
@@ -339,7 +340,7 @@ export const continuityChecks = [
         help: 'Cap findings so a large object roster can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // The per-object weight summary (prose significance + every attachment's
       // emotion / per-bond significance / origin lineage / role) is fixed per-call
@@ -439,7 +440,7 @@ export const continuityChecks = [
         help: 'Flag a payoff this many issues (or more) after its setup as "distant" — the reader may have forgotten the plant. Set to 0 to disable the distant check.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Authored hooks/payoffs + the foreshadowing ledger (#2172) are fixed
       // per-call overhead (re-sent on each chunk). The ledger is folded into the
@@ -521,7 +522,7 @@ export const continuityChecks = [
     // Skip the LLM call entirely when the series authored no reveal-gated canon
     // (no revealIssue / spoiler on any entry) AND when there's no manuscript to
     // scan — there is nothing a premature reveal could be measured against.
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0 && canonHasRevealGated(ctx.canon),
+    gate: (ctx) => hasManuscript(ctx) && canonHasRevealGated(ctx.canon),
     run: (ctx) => {
       // The reveal-gated canon block is fixed per-call overhead (re-sent on each
       // chunk) and pure context: it names each withheld fact, WHEN it's due, the
