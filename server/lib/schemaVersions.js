@@ -250,6 +250,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // silently strip a user's face-orientation choice, so only the decks
   // category pauses until that peer upgrades.
   decks: 2,
+  // v1 = storyboards (PostgreSQL `storyboards`) federated via the per-record
+  // peer-sync push pipeline (record kind `storyboard`, sync category
+  // `storyboards`). A brand-NEW synced record type, so it gets its own
+  // per-category gate: a v1 sender pushing to a ≤v0 (pre-feature) receiver is
+  // sender-ahead on `storyboards` and gets a 409 — only this category pauses.
+  // The FIRST incompatible board/beat/panel/take shape change MUST bump this to
+  // 2 (a v1 peer would round-trip the new shape through an unaware sanitizer
+  // and LWW the strip back onto the newer peer).
+  storyboards: 1,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it
@@ -1033,6 +1042,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   commissionFeedback: Object.freeze(['commissionFeedback']),
   creativeCommission: Object.freeze(['creativeCommissions']),
   deck: Object.freeze(['decks']),
+  storyboard: Object.freeze(['storyboards']),
 });
 
 /**

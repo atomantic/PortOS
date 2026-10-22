@@ -332,6 +332,7 @@ const DEFAULT_SYNC_CATEGORIES = {
   commissionFeedback: false,
   creativeCommissions: false,
   decks: false,
+  storyboards: false,
   catalog: false
 };
 
@@ -463,6 +464,7 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['commissionFeedback', 'commissionFeedback'],
   ['creativeCommissions', 'creativeCommission'],
   ['decks', 'deck'],
+  ['storyboards', 'storyboard'],
 ]);
 
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth, transport, protocol = 'http' }) {

@@ -408,6 +408,25 @@ export function sanitizeRecordForWire(kind, record) {
         .sort((a, b) => a.key.localeCompare(b.key));
       return { ...rest, cards: wireCards, ...soft };
     }
+    case 'storyboard': {
+      // A storyboard federates as ONE whole-record LWW unit. The only wire-local
+      // field is in-flight panel-maker state: a queued/running node carries a
+      // media jobId that means nothing on another machine and would read as a
+      // run that never finishes there, so it ships as idle with no job ids.
+      // Everything authored (recipe, beats, panels, takes — a `sketch:` take as
+      // its key only) travels as written.
+      const { deleted: _d, deletedAt: _da, beats, ...rest } = record;
+      const settled = (state) => (state?.status === 'running' || state?.status === 'queued'
+        ? { ...state, status: 'idle', jobIds: [], failedJobIds: [] }
+        : state);
+      const wireBeats = (Array.isArray(beats) ? beats : []).map((beat) => ({
+        ...beat,
+        panels: (Array.isArray(beat?.panels) ? beat.panels : []).map((panel) => (panel?.make?.nodes
+          ? { ...panel, make: { ...panel.make, nodes: Object.fromEntries(Object.entries(panel.make.nodes).map(([nodeId, state]) => [nodeId, settled(state)])) } }
+          : panel)),
+      }));
+      return { ...rest, beats: wireBeats, ...sanitizeSoftDeleteFields(record) };
+    }
     case 'musicVideoProject': {
       // Music Video projects are whole-record LWW, but their image render pin
       // and video backend are install-capability choices: a peer may not have

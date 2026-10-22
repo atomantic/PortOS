@@ -128,7 +128,7 @@ export async function assistAccountNotifications(account, env, { act }) {
   if (!ASSIST_MODES.has(account.mode)) return { sorted: 0, acted: 0 };
   const sorted = await sortUndecided(account, env);
   const { rows } = await query(
-    `SELECT thread_id, decision, trust, suspect, unread, state, evidence->>'rule' AS rule FROM github_notifications
+    `SELECT thread_id, decision, trust, suspect, state, evidence->>'rule' AS rule FROM github_notifications
      WHERE account_id = $1 AND state = 'open' AND NOT suspect AND decision = ANY($2::text[]) AND NOT (evidence ? 'assisted')
      ORDER BY gh_updated_at DESC LIMIT ${MAX_ACTIONS_PER_RUN}`,
     [account.id, ACTIONABLE_DECISIONS],

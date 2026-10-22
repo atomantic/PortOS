@@ -23,7 +23,7 @@ import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccou
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
-import { learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
+import { agentHandoff, HANDLED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -123,11 +123,11 @@ async function recordSyncError(accountId, message) {
 async function runAutomation(account, env) {
   const autopilot = account.mode === 'autopilot'
     ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account)
-    : { handedOff: 0 };
+    : { handedOff: 0, agentRuns: 0 };
   const assist = await assistAccountNotifications(account, env, {
     act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail }),
   });
-  return { ...assist, handedOff: autopilot.handedOff };
+  return { ...assist, handedOff: autopilot.handedOff, agentRuns: autopilot.agentRuns };
 }
 
 async function syncAccountNow(account) {
@@ -204,14 +204,23 @@ export async function syncAllNotifications() {
   return results;
 }
 
+// A thread with nothing left for you (something else has it, or it is closed
+// or merged) is Handled while it is still open on GitHub.
+const HANDLED_SQL = `decision IN (${HANDLED_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
 const VIEW_FILTERS = {
-  'needs-you': "state = 'open' AND NOT suspect",
+  'needs-you': `state = 'open' AND NOT suspect AND (decision IS NULL OR NOT ${HANDLED_SQL})`,
   suspect: "state = 'open' AND suspect",
-  handled: "state <> 'open'",
+  handled: `(state <> 'open' OR (NOT suspect AND ${HANDLED_SQL}))`,
   all: 'TRUE',
 };
 
 const toIso = (value) => (value instanceof Date ? value.toISOString() : value);
+
+// The lane Resolve with agent would use, and why it cannot when refused.
+const agentView = (account, row) => {
+  const plan = account ? agentHandoff({ account, row }) : null;
+  return plan ? { lane: plan.lane, refused: plan.refused || null } : null;
+};
 
 const toApi = (row, accountsById) => {
   const account = accountsById.get(row.account_id);
@@ -233,6 +242,7 @@ const toApi = (row, accountsById) => {
     suspect: row.suspect === true,
     rule: row.evidence?.rule || null,
     signals: Array.isArray(row.evidence?.signals) ? row.evidence.signals : [],
+    agent: agentView(account, row),
     updatedAt: toIso(row.gh_updated_at),
   };
 };
@@ -448,7 +458,8 @@ export function describeScheduledCheck(results) {
   const parts = [`checked ${checked.length} of ${results.length} account(s)`, `${fetched} new or updated`, `${triaged} triaged`];
   const handedOff = checked.reduce((sum, result) => sum + (result.assist?.handedOff || 0), 0);
   if (acted) parts.push(`${acted} handled`);
-  if (handedOff) parts.push(`${handedOff} handed off`);
+  const agentRuns = checked.reduce((sum, result) => sum + (result.assist?.agentRuns || 0), 0);
+  if (handedOff) parts.push(`${handedOff} handed off in ${agentRuns} agent run(s)`);
   if (failed) parts.push(`${failed} failed`);
   return parts.join(', ');
 }
@@ -510,4 +521,14 @@ export async function setNotificationCadence(cadence) {
     ? { type: 'cron', cronExpression: cron, enabled: true }
     : { type: 'on-demand', cronExpression: null, enabled: true });
   return getAutomationsOverview();
+}
+
+/** Resolve with agent: hand one thread to its lane now, then return it. */
+export async function resolveWithAgent(accountId, threadId) {
+  const account = await getAccount(accountId);
+  const { handOffThread } = await import('./githubNotificationAutopilot.js');
+  await handOffThread(account, threadId);
+  const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
+  githubNotificationEvents.emit('changed', { accountId: account.id });
+  return toApi(row, new Map([[account.id, account]]));
 }

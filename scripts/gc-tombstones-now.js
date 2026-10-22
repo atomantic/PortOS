@@ -51,6 +51,7 @@ const KIND_PLURAL = {
   commissionFeedback: 'commission feedback',
   creativeCommission: 'commissions',
   deck: 'decks',
+  storyboard: 'storyboards',
 };
 const KIND_SINGULAR = { universe: 'universe', series: 'series', issue: 'issue', mediaCollection: 'media collection' };
 const labelKinds = (kinds) => [...new Set(kinds.map((k) => KIND_PLURAL[k] ?? k))].join(', ');
