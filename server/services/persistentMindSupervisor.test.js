@@ -837,27 +837,6 @@ describe('persistent mind supervisor', () => {
     expect(mock.recordUsage).toHaveBeenCalledWith('cos', expect.objectContaining({ actions: 1 }));
   });
 
-  it('does not run a turn canceled while context preparation is pending', async () => {
-    const contextReady = deferred();
-    mock.prepareContext.mockImplementationOnce(() => contextReady.promise);
-    const run = vi.fn(async () => ({}));
-    await supervisor.registerPersistentMindTurnAdapter({
-      prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
-      run,
-    });
-    await supervisor.setPersistentMindEnabled(true);
-    await supervisor.startPersistentMind();
-    const drain = supervisor.drainPersistentMind();
-    await vi.waitFor(() => expect(mock.prepareContext).toHaveBeenCalled());
-
-    await supervisor.pausePersistentMind();
-    contextReady.resolve({ text: 'bounded context', chars: 15, summaryState: 'ready' });
-    await drain;
-
-    expect(run).not.toHaveBeenCalled();
-    expect(mock.root.persistentMind.status).toBe('paused');
-  });
-
   it('does not schedule or run a wake while the CoS lifecycle gate is closed', async () => {
     const run = vi.fn();
     await supervisor.registerPersistentMindTurnAdapter({
@@ -923,6 +902,88 @@ describe('persistent mind supervisor', () => {
     expect(mock.acquireSlot).not.toHaveBeenCalled();
     expect(mock.root.persistentMind.status).toBe('paused');
     expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['message-1']);
+  });
+
+  // Each row pauses the turn while one awaited admission/run step is pending
+  // and names the step that must never start afterwards, so dropping the
+  // liveness re-check after that await fails exactly its own row.
+  it.each([
+    // A refusal decided after the pause would otherwise park over it.
+    ['provider preparation', async (gate, prepare) => {
+      prepare.mockImplementationOnce(() => gate.promise.then(() => ({ ok: false, error: 'Provider went offline' })));
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Cancel during preparation.' });
+      return { reached: prepare };
+    }],
+    ['the image capability check', async (gate) => {
+      const { resolvePersistentMindImageCapability } = await import('./persistentMindImageCapability.js');
+      resolvePersistentMindImageCapability.mockImplementationOnce(() => gate.promise.then(() => mock.imageCapability));
+      mock.root.persistentMind.queuedMessages = [{
+        id: 'message-image', text: '', createdAt: new Date().toISOString(),
+        images: [{ attachmentId: 'attachment-1', filename: 'mind-example.png', originalName: 'example.png', mimeType: 'image/png', size: 10, uploadedAt: new Date().toISOString() }],
+      }];
+      return { reached: resolvePersistentMindImageCapability, skipped: mock.acquireSlot };
+    }],
+    ['the local endpoint slot', async (gate) => {
+      mock.acquireSlot.mockImplementationOnce(() => gate.promise.then(() => ({ ok: true, release: vi.fn() })));
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Cancel during slot wait.' });
+      return { reached: mock.acquireSlot, skipped: mock.prepareContext };
+    }],
+    ['the temporary preset re-check', async (gate) => {
+      withDeepPreset();
+      const { resolvePersistentMindThinkingSession } = await import('./persistentMindProfile.js');
+      const resolveSession = resolvePersistentMindThinkingSession.getMockImplementation();
+      const recheck = vi.fn(() => gate.promise.then(() => mock.thinkingSession));
+      resolvePersistentMindThinkingSession.mockImplementation((input) => (
+        mock.acquireSlot.mock.calls.length > 0 ? recheck(input) : resolveSession(input)
+      ));
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Cancel during re-check.', thinkingPresetId: 'deep' });
+      return {
+        reached: recheck,
+        skipped: mock.prepareContext,
+        restore: () => resolvePersistentMindThinkingSession.mockImplementation(resolveSession),
+      };
+    }],
+    ['context preparation', async (gate) => {
+      mock.prepareContext.mockImplementationOnce(() => gate.promise.then(() => ({ text: 'bounded context', chars: 15, summaryState: 'ready' })));
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Cancel during context.' });
+      return { reached: mock.prepareContext };
+    }],
+    ['the model request event', async (gate) => {
+      const append = mock.appendMindEvent.getMockImplementation();
+      mock.appendMindEvent.mockImplementation((event) => (
+        event.kind === 'mind.model.request' ? gate.promise.then(() => append(event)) : append(event)
+      ));
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Cancel before inference.' });
+      return { reached: mock.appendMindEvent, requestEvents: 1, restore: () => mock.appendMindEvent.mockImplementation(append) };
+    }],
+  ])('never reaches the provider when cancellation lands during %s', async (_step, arrange) => {
+    const gate = deferred();
+    const run = vi.fn(async () => ({}));
+    const prepare = vi.fn(async ({ profile }) => ({ ok: true, provider: profile.provider }));
+    await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
+    await supervisor.setPersistentMindEnabled(true);
+    await supervisor.startPersistentMind();
+    const { reached, skipped = null, requestEvents = 0, restore = () => {} } = await arrange(gate, prepare);
+    try {
+      const drain = supervisor.drainPersistentMind();
+      await vi.waitFor(() => expect(reached).toHaveBeenCalled());
+      if (requestEvents) {
+        await vi.waitFor(() => expect(mock.appendMindEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mind.model.request' })));
+      }
+      await supervisor.pausePersistentMind();
+      gate.resolve();
+      await drain;
+    } finally {
+      restore();
+    }
+
+    const kinds = mock.appendMindEvent.mock.calls.map(([event]) => event.kind);
+    expect(run).not.toHaveBeenCalled();
+    if (skipped) expect(skipped).not.toHaveBeenCalled();
+    expect(kinds.filter((kind) => kind === 'mind.model.request')).toHaveLength(requestEvents);
+    expect(kinds).not.toContain('mind.turn.completed');
+    expect(kinds).not.toContain('mind.failed');
+    expect(mock.root.persistentMind).toMatchObject({ status: 'paused', activeTurn: null, lastCompletedTurnId: null });
   });
 
   it('watchdog interruption aborts and requeues a stale turn without starting a second copy', async () => {
