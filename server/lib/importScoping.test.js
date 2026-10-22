@@ -46,6 +46,10 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/cosLocalEndpointSlots.js', 'services/promptRunner.js',
+    'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
+  ['services/cos.js', 'services/promptRunner.js',
+    'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
   ['services/imageGen/prepareParams.js', 'services/imageGen/index.js',
     'reads cleaner request policy without loading execution backends'],
   ['services/codeReview.js', 'lib/validation.js',
