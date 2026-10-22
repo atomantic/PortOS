@@ -81,6 +81,9 @@ function checkout(host, name, workspace, configName, dependencies) {
   if (configAt === -1) args.push('--config', join(root, configName));
   else args[configAt + 1] = join(root, configName);
   args.push('--root', root, '--maxWorkers', '1');
+  // This proof exercises cache publication, not DOM behavior. Three client
+  // launches otherwise pay for happy-dom against one 15s enclosing budget.
+  if (workspace === 'client') args.push('--environment', 'node');
   // Test roots and the caller's cwd differ from the config's parent directory.
   const cwd = join(parent, 'caller');
   mkdirSync(cwd);
