@@ -170,9 +170,8 @@ describe('the floating-async recognizer', () => {
   });
 
   it('resolves an async export imported from a relative module', () => {
-    const src = "import { announce as a, plain } from './services/instances.js';\na();\nplain();";
-    // `announceSelf` is module-private, so use a known async export instead.
-    expect(findFloatingAsyncCalls(src, SERVER_ROOT)).toEqual([]);
+    // A sync export imported by name must not be flagged.
+    expect(findFloatingAsyncCalls("import { getAllowedCommands as sync } from './services/commands.js';\nsync();", SERVER_ROOT)).toEqual([]);
     expect(findFloatingAsyncCalls("import { logAction as log } from './services/history.js';\nlog();", SERVER_ROOT))
       .toEqual(['line 2: log()']);
   });

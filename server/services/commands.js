@@ -13,9 +13,6 @@ export const STOP_GRACE_MS = 5000;
 // child that ignores SIGTERM is still running and still ours to escalate.
 const activeCommands = new Map();
 
-// Stop an active entry: SIGTERM now, SIGKILL after STOP_GRACE_MS if the child
-// is still alive. Idempotent — a second request during the grace window is
-// absorbed rather than re-signalling or reporting the command as gone.
 // History is best-effort bookkeeping beside the command result: a failed history
 // write must not become an unowned rejection from a spawn listener (#12978).
 async function logHistory(...args) {
@@ -26,6 +23,9 @@ async function logHistory(...args) {
   }
 }
 
+// Stop an active entry: SIGTERM now, SIGKILL after STOP_GRACE_MS if the child
+// is still alive. Idempotent — a second request during the grace window is
+// absorbed rather than re-signalling or reporting the command as gone.
 function stopEntry(entry) {
   if (entry.stopping) return;
   entry.stopping = true;
