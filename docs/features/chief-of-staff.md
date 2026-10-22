@@ -167,7 +167,13 @@ filesystem incarnation is required, or for a manual session the forge's merged
 PR at the exact head. A merged manual claim with no PR at its exact head (a
 reused branch, or a checkout left behind while the branch shipped from
 elsewhere) retires once a GitHub read finds no open PR for the branch and the
-checkout's directory, index and HEAD log have been untouched for an hour. Older records cannot release a reused claim. Initialized submodules currently retain
+checkout's directory, index and HEAD log have been untouched for an hour. A
+merged checkout under a review obligation whose open PR head has moved past it
+(the delivery continues from another checkout) is archived and retired after
+the same hour idle; an open PR at the checkout's own tip stays a live delivery.
+After a claim checkout retires, its issue markers are never written; a GitHub
+read showing the issue closed, or open with no `in-progress` label and no
+assignee, settles the reservation report, and any other answer keeps it held. Older records cannot release a reused claim. Initialized submodules currently retain
 the checkout because their complete content is not supported by the archive.
 A held merged receipt names a recovery task when policy and source ownership
 permit it; intentional human handoffs stay with their existing owner. The recovery

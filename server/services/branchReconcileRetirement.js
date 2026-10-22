@@ -19,9 +19,12 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
   const prepare = deps.prepare || (await import('./heldCheckoutRecovery.js')).prepareInventoriedCheckoutRetirement;
   for (const branch of result.wip || []) {
     if (branch.completionPolicyReason !== 'pr-completion-review-required'
-      || branch.openPr || branch.liveOwnerReason || branch.worktreeDirty || branch.worktreeStatusUnavailable) continue;
+      || branch.liveOwnerReason || branch.worktreeDirty || branch.worktreeStatusUnavailable) continue;
+    if (branch.openPr && !staleBehindOpenPr(branch)) continue;
     const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
     if (!tree || tree.managed !== true || tree.locked !== false || tree.head !== branch.tip) continue;
+    // The open PR ships from another checkout; this one has idled behind it.
+    if (branch.openPr && !(await isIdleCheckout(tree.path, deps))) continue;
     const release = { branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: tree.lockReason ?? null };
     // Every commit is already on the default branch, so no PR identity or owner
     // history is needed to prove nothing is lost: archive and retire it. The
@@ -67,6 +70,22 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
     }
   }
   return { candidates, held, retired };
+}
+
+/** A merged local copy whose open PR head moved on was left behind by the
+ * delivery: everything it holds is on the default branch, and the PR's head is
+ * not this checkout's. An open PR at this tip is the live delivery itself.
+ */
+function staleBehindOpenPr(branch) {
+  const prHead = branch.openPr?.headRefOid;
+  return branch.isMerged === true && !branch.openPr.isDraft
+    && typeof prHead === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(prHead) && prHead !== branch.tip;
+}
+
+async function isIdleCheckout(path, deps) {
+  const { checkoutIdleMs, SHIPPED_CLAIM_IDLE_MS } = await import('./branchReconcile.js');
+  const idle = await (deps.checkoutIdleMs || checkoutIdleMs)(path).catch(() => null);
+  return Number.isFinite(idle) && idle >= SHIPPED_CLAIM_IDLE_MS;
 }
 
 /** Re-read daemon authority at each automatic mutation boundary. Manual API

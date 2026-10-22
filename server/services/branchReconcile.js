@@ -33,7 +33,7 @@ import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js'
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { issueNumberFromRef } from './issueReconcile.js';
-import { forgeDispatchLabels } from '../lib/dispatchLabels.js';
+import { forgeDispatchLabels, IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -298,7 +298,7 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
   const raw = await execGh([
     'pr', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
-    '--json', 'number,headRefName,mergeable,isDraft,url'
+    '--json', 'number,headRefName,headRefOid,mergeable,isDraft,url'
   ], undefined, { cwd, env, backoffKey: repoSpec }).catch((err) => {
     if (isForgeNoAccessError(err)) {
       // Permanent until credentials change — one actionable line naming the
@@ -322,7 +322,8 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
         number: pr.number,
         mergeable: pr.mergeable || 'UNKNOWN',
         isDraft: pr.isDraft === true,
-        url: pr.url || ''
+        url: pr.url || '',
+        headRefOid: typeof pr.headRefOid === 'string' ? pr.headRefOid : null
       });
     }
   }
@@ -1099,15 +1100,33 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
 // A local checkout can be retired without owning the global issue reservation.
 // Peer installs share a forge login, and a peer may reserve before its first
 // commit/push. Neither that login nor an absent remote branch proves release
-// authority. Leave issue markers untouched and report their unverified state.
-async function retainedClaimMarkers(repoPath, branch, { origin } = {}) {
+// authority, so markers are never written here. A read that shows no
+// reservation to own (a closed issue, or an open one with no claim label and
+// no assignee) settles the report; anything else stays a visible hold.
+async function retainedClaimMarkers(repoPath, branch, { origin, forgeExec = null } = {}) {
   const issue = /^claim\/issue-([1-9]\d*)$/.exec(branch)?.[1];
   if (!issue) return null;
   const target = origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : origin;
   if (target && !githubRepoSpec(target)) return null;
+  if (await claimIssueUnreserved(target, issue, forgeExec)) {
+    console.log(`⏭️ branch-reconcile: issue #${issue} has no reservation left; markers untouched`);
+    return null;
+  }
   const hold = { branch, issue: Number(issue), reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' };
   console.log(`🔒 branch-reconcile: issue #${issue} markers untouched; reservation owner/state unverified`);
   return hold;
+}
+
+/** True only on a parsed forge answer; an unreadable issue keeps the hold. */
+async function claimIssueUnreserved(target, issue, forgeExec) {
+  const repoSpec = githubRepoSpec(target);
+  if (!repoSpec || !forgeExec) return false;
+  const raw = await execGh(['issue', 'view', issue, '--repo', repoSpec, '--json', 'state,labels,assignees'],
+    undefined, { cwd: forgeExec.cwd, env: forgeExec.env }).catch(() => null);
+  const view = safeJSONParse(raw, null);
+  if (!view || !Array.isArray(view.labels) || !Array.isArray(view.assignees)) return false;
+  if (view.state === 'CLOSED') return true;
+  return view.state === 'OPEN' && view.assignees.length === 0 && !view.labels.some(label => label?.name === IN_PROGRESS_LABEL);
 }
 
 /**
@@ -1158,7 +1177,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       skipped.push({ branch: b.branch, ...(b.worktreePath && { path: b.worktreePath }), ...failure });
       continue;
     }
-    const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin });
+    const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin, forgeExec });
     if (markerHold) claimMarkersHeld.push(markerHold);
     cleaned.push(b.branch);
   }
@@ -1462,7 +1481,7 @@ async function manualClaimShippedHold(repoPath, b, head, forgeAccount) {
 }
 
 /** Time since the checkout last changed: its directory, index or HEAD log. Null when unreadable. */
-async function checkoutIdleMs(worktreePath) {
+export async function checkoutIdleMs(worktreePath) {
   const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], worktreePath).catch(() => null))?.stdout?.trim();
   if (!gitDir) return null;
   const stamps = await Promise.all([worktreePath, join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]
@@ -1759,22 +1778,27 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     ? await resolveForgeExecOptions(repoPath, { forgeAccount })
     : null;
   // The early reaper may have deleted the branch before gather can see it.
-  // Report their global reservation separately, including during forge outages.
-  const claimMarkersHeld = [];
-  for (const entry of worktreeCleanup.reaped || []) {
-    if (!entry?.branchDeleted) continue;
-    const markerHold = await retainedClaimMarkers(repoPath, entry.branch, { origin });
-    if (markerHold) claimMarkersHeld.push(markerHold);
-  }
+  // Report their global reservation separately, including during forge outages
+  // (no issue read then, so each stays held).
+  const readEarlyMarkerHolds = async (markerForge) => {
+    const holds = [];
+    for (const entry of worktreeCleanup.reaped || []) {
+      if (!entry?.branchDeleted) continue;
+      const markerHold = await retainedClaimMarkers(repoPath, entry.branch, { origin, forgeExec: markerForge });
+      if (markerHold) holds.push(markerHold);
+    }
+    return holds;
+  };
   if (forgeExec) {
     const forge = await ensureForgeReachable('branch-reconcile', {
       hostname: githubApiHost(origin.host),
       ...(forgeExec?.customEnv ? { env: forgeExec.customEnv } : {}),
     });
     if (!forge.ok) {
-      return { defaultBranch: null, cleaned: cleanedWorktrees, inFlight: [], wip: [], skipped: [], claimMarkersHeld, forgeUnavailable: true, forgeStatus: forge.status };
+      return { defaultBranch: null, cleaned: cleanedWorktrees, inFlight: [], wip: [], skipped: [], claimMarkersHeld: await readEarlyMarkerHolds(null), forgeUnavailable: true, forgeStatus: forge.status };
     }
   }
+  const claimMarkersHeld = await readEarlyMarkerHolds(forgeExec);
 
   const defaultBranch = await getDefaultBranch(repoPath).catch(() => 'main') || 'main';
   // The gather needs origin's branch list to tell a shipped claim from a live
