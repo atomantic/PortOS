@@ -23,7 +23,7 @@ const TRUST_OPTIONS = [
   { value: 'public', label: 'Public', hint: 'Anyone can mention you; outside content is always screened' },
   { value: 'private', label: 'Private', hint: 'Enterprise: org members trusted; content stays on allowed AI providers' },
 ];
-const MODE_LABELS = { observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
+const MODE_LABELS = { disabled: 'Disabled', observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
 const STATUS_VIEW = {
   ok: { tone: 'success', label: 'Signed in' },
   'wrong-account': { tone: 'warning', label: 'Other login active' },

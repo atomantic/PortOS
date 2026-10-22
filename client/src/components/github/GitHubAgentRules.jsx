@@ -134,7 +134,7 @@ export default function GitHubAgentRules({ account, onSave, saving }) {
         )}
       </div>
       {account.mode !== 'autopilot' && rules.length > 0 && (
-        <p className="text-xs text-port-warning">Autopilot follows these rules. This account is in {account.mode === 'assist' ? 'Assist' : 'Observe'}, so nothing starts on its own yet.</p>
+        <p className="text-xs text-port-warning">Autopilot follows these rules. This account is in {{ assist: 'Assist', disabled: 'Disabled' }[account.mode] || 'Observe'}, so nothing starts on its own yet.</p>
       )}
       {rules.length === 0 && !editing && (
         <p className="text-xs text-gray-500">No rules: security alerts and outside issues and pull requests in your apps go to their usual agents, and other review requests wait for you.</p>

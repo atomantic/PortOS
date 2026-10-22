@@ -950,7 +950,7 @@ export const GITHUB_ACCOUNT_HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z
 // github.com logins are [A-Za-z0-9-]; Enterprise Managed Users add `_shortcode`.
 export const GITHUB_ACCOUNT_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
-export const GITHUB_ACCOUNT_MODES = Object.freeze(['observe', 'assist', 'autopilot']);
+export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assist', 'autopilot']);
 
 // Per-repo agent rules for the GitHub inbox: which kind of notification starts
 // a CoS agent, in one repo (`owner/repo`) or every repo (`*`), and on which

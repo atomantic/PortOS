@@ -45,7 +45,7 @@ const { addTask } = await import('./cosTaskStore.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const {
-  syncAccountNotifications, listNotifications, applyNotificationAction, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
+  syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
@@ -766,5 +766,16 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(second.find((result) => result.accountId === account.id)).toMatchObject({ skipped: 'poll-interval' });
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+
+  it('never fetches or processes a disabled account, scheduled or manual', async () => {
+    mockGh(() => listing([thread('811')]));
+    await updateAccount(account.id, { mode: 'disabled' });
+    expect(await syncAccountNotifications(account.id)).toMatchObject({ skipped: 'disabled' });
+    const scheduled = await runScheduledNotificationCheck();
+    expect(scheduled.find((result) => result.accountId === account.id)).toBeUndefined();
+    expect((await syncAllNotifications()).find((result) => result.accountId === account.id)).toBeUndefined();
+    const { rows } = await query('SELECT 1 FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, '811']);
+    expect(rows).toHaveLength(0);
   });
 });

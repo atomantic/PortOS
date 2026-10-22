@@ -184,7 +184,7 @@ export async function undoAuditChange(id) {
  * takes a tap on the Audit tab. A report with no suggestions sends nothing.
  */
 export async function sendDueAuditReports({ now = Date.now() } = {}) {
-  const accounts = (await listAccounts()).filter((account) => account.enabled && account.auditReport === true);
+  const accounts = (await listAccounts()).filter((account) => account.enabled && account.mode !== 'disabled' && account.auditReport === true);
   if (!accounts.length) return [];
   const { rows } = await query(
     'SELECT account_id, last_sent_at FROM github_notification_audit_reports WHERE account_id = ANY($1::text[])',

@@ -253,8 +253,12 @@ async function syncAccountNow(account, automate) {
  * Fetch one account's GitHub inbox (read and unread), coalescing concurrent requests.
  * `automate: false` (a caller without host control) skips Assist/Autopilot.
  */
+// A 'disabled' account stays configured but this instance never fetches or processes its notifications.
+const isActive = (account) => account.enabled && account.mode !== 'disabled';
+
 export async function syncAccountNotifications(accountId, { automate = true } = {}) {
   const account = await getAccount(accountId);
+  if (account.mode === 'disabled') return { accountId: account.id, changed: false, skipped: 'disabled' };
   return syncFlightFor(account.id).run(automate, () => syncAccountNow(account, automate).catch(async (error) => {
     await recordSyncError(account.id, error.message).catch(() => {});
     throw error;
@@ -263,7 +267,7 @@ export async function syncAccountNotifications(accountId, { automate = true } = 
 
 /** Sync every enabled account; one account's failure never hides another's result. */
 export async function syncAllNotifications(options = {}) {
-  const accounts = (await listAccounts()).filter((account) => account.enabled);
+  const accounts = (await listAccounts()).filter(isActive);
   const results = [];
   for (const account of accounts) {
     results.push(await syncAccountNotifications(account.id, options)
@@ -501,7 +505,7 @@ let lastScheduledSummary = null;
  * only; an Assist account also sorts and acts (githubNotificationAssist.js).
  */
 export async function runScheduledNotificationCheck({ now = Date.now() } = {}) {
-  const accounts = (await listAccounts()).filter((account) => account.enabled);
+  const accounts = (await listAccounts()).filter(isActive);
   const cursors = new Map((await query(
     'SELECT account_id, last_sync_at, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])',
     [accounts.map((account) => account.id)],
