@@ -867,7 +867,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
           if (!lsof.available) return cb(Object.assign(new Error('spawn lsof ENOENT'), { code: 'ENOENT' }))
           const [canary, ...staged] = args.slice(args.indexOf('--') + 1)
           const lines = [`p${process.pid}`, `n${canary}`, ...lsof.holders.flatMap((pid) => [`p${pid}`, `n${staged[0]}`])]
-          return cb(Object.assign(new Error('lsof exit 1'), { stdout: `${lines.join('\n')}\n` }))
+          return cb(Object.assign(new Error('lsof exit 1'), { code: 1, stdout: `${lines.join('\n')}\n` }))
         }
         return cb(new Error(`unexpected exec: ${cmd} ${args.join(' ')}`))
       }

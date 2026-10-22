@@ -37,9 +37,11 @@ export async function findOpenFileHolders(files, { canary, platform = process.pl
   const handle = await open(canary, 'r').catch(() => null);
   if (!handle) return { known: false, reason: 'canary file unreadable' };
   // lsof exits 1 when any named file is not open (the expected case for most
-  // of them) while still printing what it found; judge the listing by content.
+  // of them) while still printing what it found. Any other failure — a
+  // timeout, a signal, a maxBuffer overflow — can leave a listing truncated
+  // after this PID but before a holder's, so it is never trusted.
   const out = await run('lsof', ['-F', 'pn', '--', canary, ...files], { timeout: LSOF_TIMEOUT_MS, maxBuffer: LSOF_MAX_BUFFER })
-    .then((r) => r.stdout, (err) => err?.stdout ?? null)
+    .then((r) => r.stdout, (err) => (err?.code === 1 && !err.killed && !err.signal ? err.stdout ?? null : null))
     .finally(() => handle.close().catch(() => {}));
   const pids = out == null ? [] : parseLsofPids(out);
   if (!pids.includes(selfPid)) return { known: false, reason: 'lsof unavailable or listing incomplete' };
