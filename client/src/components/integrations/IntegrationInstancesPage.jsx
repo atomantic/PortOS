@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
 import PageSkeleton from '../ui/PageSkeleton';
+import PageHeader from '../PageHeader';
 import Modal from '../ui/Modal';
 import api from '../../services/api';
 import { invalidateInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
@@ -9,7 +10,7 @@ import { invalidateInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 const inputClass = 'w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white';
 
 export default function IntegrationInstancesPage({
-  title, heading, apiBase, feature, fields, initialForm, summarize, testSuccessDetail,
+  title, icon, apiBase, feature, fields, initialForm, summarize, testSuccessDetail,
   helpSteps, headerActions, emptyDescription, deleteDescription, skeletonWidth
 }) {
   const [instances, setInstances] = useState({});
@@ -135,14 +136,16 @@ export default function IntegrationInstancesPage({
   if (loading) return <PageSkeleton label={`Loading ${title}`} padded titleWidthClass={skeletonWidth} cards={2} />;
 
   return (
-    <div className="@container/page min-w-0 p-4 sm:p-6">
-      <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
-        {heading}
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={icon}
+        title={title}
+        actions={<>
           {headerActions}
-          {!editingInstance && <button onClick={handleCreate} className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded">+ Add {title} Instance</button>}
-        </div>
-      </div>
+          {!editingInstance && <button onClick={handleCreate} className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded">+ Add {title} Instance</button>}
+        </>}
+      />
+      <div className="@container/page min-w-0 flex-1 min-h-0 overflow-auto p-4 md:p-6">
 
       <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} size="sm" backdropClassName="bg-black/50" ariaLabelledBy={`${feature}-delete-title`}>
         <div className="bg-gray-800 rounded-lg p-4 sm:p-6">
@@ -213,6 +216,7 @@ export default function IntegrationInstancesPage({
           <h2 className="text-base sm:text-lg font-bold text-white mb-3 sm:mb-4">Usage</h2>
           <div className="space-y-2 text-xs sm:text-sm text-gray-300">{helpSteps}</div>
         </div>
+      </div>
       </div>
     </div>
   );

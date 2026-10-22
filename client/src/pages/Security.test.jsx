@@ -78,6 +78,13 @@ describe('Security monitor iOS audio session', () => {
     vi.unstubAllGlobals();
   });
 
+  it('renders its title and settings control in the shared page header', async () => {
+    render(<Security />);
+    await act(async () => {});
+    expect(screen.getByRole('heading', { level: 1, name: 'Security Camera' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+  });
+
   it('claims playback once the monitor graph is live', async () => {
     await startMonitor();
     expect(sessionType()).toBe('playback');

@@ -566,7 +566,7 @@ describe('Layout — Game workspace scroll mode', () => {
 // tables it nested that scroller inside `<main>`'s own `overflow-auto p-4
 // md:p-6` — two scrollbars, doubled padding (#4145).
 describe('Layout — Data Manager scroll mode', () => {
-  it('gives /data the bare full-width main, and leaves /devtools/datadog padded', async () => {
+  it('gives /data the bare full-width main, and keeps the /datadog redirect route padded', async () => {
     const dataManager = await renderLayout('/data');
     const dataMain = dataManager.container.querySelector('#main-content');
     expect(dataMain?.className).toContain('overflow-clip-safe');
@@ -574,7 +574,7 @@ describe('Layout — Data Manager scroll mode', () => {
     expect(dataMain?.className).not.toContain('p-4');
     dataManager.unmount();
 
-    const dataDog = await renderLayout('/devtools/datadog');
+    const dataDog = await renderLayout('/datadog');
     const dataDogMain = dataDog.container.querySelector('#main-content');
     expect(dataDogMain?.className).toContain('overflow-auto');
     expect(dataDogMain?.className).toContain('p-4');
@@ -684,7 +684,7 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/apps/create', false], ['/apps/create/', false], ['/apps/a1', true], ['/apps/a1/tab', true],
     // Data Manager owns its own bar+scroll shell, and is registered EXACT so
     // it can't leak onto the DataDog routes that share the `/data` prefix.
-    ['/data', true], ['/datadog', false], ['/devtools/datadog', false],
+    ['/data', true], ['/datadog', false], ['/devtools/datadog', true],
     // Models owns the same header/tabs/scroll shell as Settings — registered as
     // a whole-section prefix, so the bare path and every tab classify alike.
     ['/models', true], ['/models/performance', true], ['/models/llms', true],

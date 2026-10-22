@@ -1,4 +1,5 @@
 import { Link } from 'react-router';
+import { Ticket } from 'lucide-react';
 import IntegrationInstancesPage from '../components/integrations/IntegrationInstancesPage';
 
 // PAT lifetimes vary by Jira edition and token settings. Test is the reliable signal.
@@ -17,7 +18,7 @@ const initialForm = { id: '', name: '', baseUrl: '', email: '', apiToken: '' };
 export default function Jira() {
   return <IntegrationInstancesPage
     title="JIRA" apiBase="/jira" feature="jira" fields={fields} initialForm={initialForm}
-    heading={<h1 className="text-xl sm:text-2xl font-bold text-white">JIRA Integration</h1>}
+    icon={Ticket}
     skeletonWidth="w-52" emptyDescription="Add a JIRA instance to enable ticket creation for your apps."
     deleteDescription="This will not affect existing tickets."
     headerActions={<Link to="/devtools/jira/reports" className="px-4 py-2 border border-port-border hover:border-port-accent text-gray-300 hover:text-white rounded text-sm">Status Reports</Link>}

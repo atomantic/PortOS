@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, Fragment } from 'react';
+import PageHeader from '../components/PageHeader';
 import { RefreshCw, Activity, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import * as api from '../services/api';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -56,13 +57,11 @@ export function AgentsPage() {
   }
 
   return (
-    <div className="space-y-4 lg:space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2 sm:gap-3">
-          <Activity size={24} className="sm:w-7 sm:h-7 text-port-accent-2" />
-          <h1 className="text-lg sm:text-2xl font-bold text-white font-mono">AI Agent Processes</h1>
-        </div>
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={Cpu}
+        title="AI Agents"
+        actions={<>
         <button
           onClick={refetch}
           className="flex items-center justify-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 bg-port-card border border-port-border hover:border-gray-500 text-white text-sm rounded-lg transition-colors"
@@ -70,7 +69,10 @@ export function AgentsPage() {
           <RefreshCw size={14} className="sm:w-4 sm:h-4" />
           <span className="sm:inline">Refresh</span>
         </button>
-      </div>
+        </>}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+      <div className="space-y-4 lg:space-y-6">
 
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
@@ -359,6 +361,8 @@ export function AgentsPage() {
           </tbody>
         </table>
         </div>
+      </div>
+    </div>
       </div>
     </div>
   );

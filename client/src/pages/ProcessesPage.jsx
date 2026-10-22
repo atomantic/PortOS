@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
-import { Save } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
+import { Activity, Save } from 'lucide-react';
 import ProcessesTab from '../components/apps/tabs/ProcessesTab';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
@@ -45,9 +46,11 @@ export function ProcessesPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <h1 className="text-2xl font-bold text-white">PM2 Processes</h1>
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={Activity}
+        title="Processes"
+        actions={<>
         <button
           onClick={handlePm2Save}
           disabled={saving}
@@ -57,7 +60,10 @@ export function ProcessesPage() {
           <span className="hidden sm:inline">{saving ? 'Saving...' : 'PM2 Save'}</span>
           <span className="sm:hidden">{saving ? '...' : 'Save'}</span>
         </button>
-      </div>
+        </>}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+      <div className="space-y-6">
 
       {appsState === 'error' && (
         <ListLoadError what="managed apps" error={appsError} onRetry={retryApps} />
@@ -67,6 +73,8 @@ export function ProcessesPage() {
       )}
 
       <ProcessesTab filterFn={isPortOSManaged} />
+    </div>
+      </div>
     </div>
   );
 }
