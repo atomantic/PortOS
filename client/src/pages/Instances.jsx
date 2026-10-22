@@ -584,13 +584,14 @@ const SYNC_CATEGORY_META = [
   { key: 'creativeCommissions', label: 'Commissions', icon: Target, description: 'Creative Commission briefs (name + intent + genre + generation settings) — the schedule + run history stay machine-local (PostgreSQL)' },
   { key: 'commissionFeedback', label: 'Commission Feedback', icon: Target, description: 'Creative Commission taste reactions that steer the next run — the schedule stays machine-local (PostgreSQL)' },
   { key: 'decks', label: 'Decks', icon: Spade, description: 'Card decks: style guide, samples, per-card prompts + rendered card art — the image/LLM pins stay machine-local (PostgreSQL)' },
+  { key: 'storyboards', label: 'Storyboards', icon: Clapperboard, description: 'Storyboards: beats, panels, panel-maker recipes and gallery-image art — sketch drawings and in-flight renders stay machine-local (PostgreSQL)' },
   { key: 'catalog', label: 'Catalog', icon: Library, description: 'Creative ingredients catalog: orphan ingredients + ref links (PostgreSQL)' }
 ];
 
 // Snapshot categories — exclude the per-record / delta-based categories that
 // have no 60s snapshot checksum: brain + memory (delta), catalog, and creative
 // record kinds handled by the per-record peer-push pipeline.
-const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'fableLoom', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions', 'decks']);
+const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'fableLoom', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions', 'decks', 'storyboards']);
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
 
 // Video-history rows have no toggle of their own: they are the metadata half of

@@ -42,6 +42,7 @@ const TOMBSTONE_KIND_PLURAL = {
   commissionFeedback: 'commission feedback',
   creativeCommission: 'commissions',
   deck: 'decks',
+  storyboard: 'storyboards',
 };
 
 function kindList(kinds) {

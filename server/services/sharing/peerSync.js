@@ -45,6 +45,7 @@ import { listLooms } from '../fableLoom/index.js';
 import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
 import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
 import { listDecksForSync } from '../decks.js';
+import { listStoryboardsForSync } from '../storyboards/index.js';
 import { listCommissionsForSync } from '../creativeCommissions/store.js';
 import { initCursor } from './peerTombstoneCursors.js';
 import {
@@ -232,6 +233,8 @@ const RECORD_KIND_LISTERS = {
   // clock the wire LWW does, so a deck edited since its last confirmed push
   // reads as stale rather than fully mirrored.
   deck: () => listDecksForSync(),
+  // Live boards as { id, updatedAt } — coverage keys on the wire LWW clock.
+  storyboard: () => listStoryboardsForSync(),
 };
 
 /**

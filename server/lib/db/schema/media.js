@@ -127,7 +127,7 @@ export const mediaDdl = [
     // Storyboards (Create › Storyboards): one row per board, beats → panels →
     // art takes inline in `data` JSONB (a board is read and written whole).
     // name/universe_id/updated_at mirror for the list sort and universe filter;
-    // the tombstone pair keeps a later peer-sync category additive. Panel art
+    // the tombstone pair carries peer-sync deletes (record kind `storyboard`). Panel art
     // bytes stay in data/images and data/media-sketches. Mirrors init-db.sql.
     `CREATE TABLE IF NOT EXISTS storyboards (
       id TEXT PRIMARY KEY,

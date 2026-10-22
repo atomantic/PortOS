@@ -6,8 +6,8 @@
  * racing a panel add merge against the freshest record and a malformed
  * mutation never persists. A tombstoned board reads as missing.
  *
- * Not federated yet: the tombstone pair and `updatedAt` stamping keep adding
- * a peer-sync category later additive (same posture as sprite records).
+ * Federated as record kind `storyboard` (sync.js): every write emits a record
+ * event so subscribed peers get the new revision, and a delete is a tombstone.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
@@ -15,7 +15,11 @@ import { sanitizeStoryboard, sanitizeTake, summarizeStoryboard } from '../../lib
 import {
   isValidStoryboardId, newStoryboardEntityId, newStoryboardId, STORYBOARD_LIMITS,
 } from '../../lib/storyboardVocabulary.js';
+import { autoSubscribeRecordToAllPeers, emitRecordDeleted, emitRecordUpdated } from '../sharing/recordEvents.js';
 import { listRaw, queueStoryboardWrite, readRaw, writeRaw } from './store.js';
+import { STORYBOARD_KIND } from './sync.js';
+
+export * from './sync.js';
 
 const notFound = (what = 'Storyboard') => new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });
 const tooMany = (message) => new ServerError(message, { status: 409, code: 'STORYBOARD_LIMIT' });
@@ -56,6 +60,8 @@ export async function createStoryboard(input = {}) {
   const now = new Date().toISOString();
   const board = sanitizeStoryboard({ ...pickFields(input, BOARD_FIELDS), id: newStoryboardId(), beats: [], createdAt: now, updatedAt: now });
   await writeRaw(board.id, board);
+  emitRecordUpdated(STORYBOARD_KIND, board.id);
+  autoSubscribeRecordToAllPeers(STORYBOARD_KIND, board.id).catch(() => {});
   console.log(`🎬 Created storyboard ${board.id}`);
   return board;
 }
@@ -67,7 +73,7 @@ export async function createStoryboard(input = {}) {
  */
 export async function mutateStoryboard(id, mutate) {
   if (!isValidStoryboardId(id)) throw notFound();
-  return queueStoryboardWrite(id, async () => {
+  const outcome = await queueStoryboardWrite(id, async () => {
     const current = await readLive(id);
     if (!current) throw notFound();
     const draft = structuredClone(current);
@@ -76,6 +82,8 @@ export async function mutateStoryboard(id, mutate) {
     await writeRaw(id, next);
     return { board: next, result };
   });
+  (outcome.board.deleted ? emitRecordDeleted : emitRecordUpdated)(STORYBOARD_KIND, id);
+  return outcome;
 }
 
 export async function updateStoryboard(id, patch) {
