@@ -182,7 +182,7 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
                       onChange(pruneRemoved(next));
                     }}>Remove tier</button>
                 </div>
-                <ReviewerPicker {...pickerProps} reviewers={group.reviewers} onChange={value => updateTier(group, value)} disabled={disabled} showUsernames={false} showRunFlags={false} showIntro={false}
+                <ReviewerPicker {...pickerProps} reviewers={group.reviewers} onChange={value => updateTier(group, value)} disabled={disabled} showUsernames={false} showRunFlags={false}
                   renderReviewer={(token, row) => <DraggableReviewItem key={token} id={memberId(group.id, token)}
                     data={{ kind: 'member', groupId: group.id, token, label: `${token} in ${name}` }} disabled={disabled} handles={handles}>
                     {memberHandle => {
@@ -222,7 +222,7 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
         <p className="text-xs text-gray-500">Empty tiers are drafts and are dropped when you save.</p>
       </div>
       <p role="status" className="text-xs text-gray-400">{announcement}</p>
-      <ReviewerPicker {...pickerProps} reviewers={allReviewers} onChange={onChange} disabled={disabled} showReviewers={false} showIntro={false} />
+      <ReviewerPicker {...pickerProps} reviewers={allReviewers} onChange={onChange} disabled={disabled} showReviewers={false} />
     </div>
   );
 }

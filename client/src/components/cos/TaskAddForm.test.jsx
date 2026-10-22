@@ -249,7 +249,7 @@ describe('TaskAddForm responsive layout', () => {
       />
     );
 
-    await waitFor(() => expect(screen.getByText('Reviewers (in order):')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Add local / CLI')).toBeInTheDocument());
 
     const options = screen.getByRole('form', { name: 'Add new task' }).querySelector('div.grid');
     expect(options).toHaveClass('grid-cols-1');
@@ -373,7 +373,7 @@ describe('TaskAddForm responsive layout', () => {
       api.addCosTask.mockResolvedValue({ success: true });
       render(<TaskAddForm providers={[]} apps={[app]} defaultApp="example-app" onTaskAdded={vi.fn()} />);
 
-      await waitFor(() => expect(screen.getByText('Reviewers (in order):')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Add local / CLI')).toBeInTheDocument());
       await user.type(screen.getByPlaceholderText('Task description *'), 'Fix the bug');
       await user.click(screen.getByRole('button', { name: /^Add$/ }));
 
@@ -391,7 +391,7 @@ describe('TaskAddForm responsive layout', () => {
       api.addCosTask.mockResolvedValue({ success: true });
       render(<TaskAddForm providers={[]} apps={[app]} defaultApp="example-app" onTaskAdded={vi.fn()} />);
 
-      await waitFor(() => expect(screen.getByText('Reviewers (in order):')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Add local / CLI')).toBeInTheDocument());
       const stopModeSelect = await screen.findByLabelText('Stop mode:');
       await user.selectOptions(stopModeSelect, 'on-clean');
 

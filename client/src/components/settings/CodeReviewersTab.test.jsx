@@ -51,10 +51,9 @@ describe('CodeReviewersTab', () => {
     api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['copilot'], codexModel: 'legacy-model', claudeEffort: 'medium' });
     api.updateSettings.mockResolvedValue({});
     const view = renderTab(<CodeReviewersTab />);
-    const provider = await screen.findByLabelText('Provider');
+    const provider = await screen.findByLabelText('Add AI provider');
     expect(screen.queryByRole('option', { name: 'Disabled API' })).not.toBeInTheDocument();
     fireEvent.change(provider, { target: { value: 'example-gpu' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add provider reviewer' }));
     fireEvent.change(screen.getByLabelText('Model for Example GPU'), { target: { value: 'coder-b' } });
     fireEvent.change(screen.getByLabelText('Reasoning effort for Example GPU'), { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
@@ -105,11 +104,9 @@ describe('CodeReviewersTab', () => {
     expect(api.updateSettings).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Fallback reviewer groups')).not.toBeInTheDocument();
     const fallback = screen.getByRole('region', { name: 'Fallback 1' });
-    fireEvent.change(within(fallback).getByLabelText('Provider'), { target: { value: 'example-gpu' } });
-    fireEvent.click(within(fallback).getByText('Add provider reviewer'));
+    fireEvent.change(within(fallback).getByLabelText('Add AI provider'), { target: { value: 'example-gpu' } });
     expect(screen.getAllByLabelText('Model for Example GPU')).toHaveLength(2);
-    fireEvent.change(within(fallback).getByLabelText('Provider'), { target: { value: 'example-gpu' } });
-    expect(within(fallback).getByText('Add provider reviewer')).toBeDisabled();
+    expect(within(within(fallback).getByLabelText('Add AI provider')).queryByRole('option', { name: 'Example GPU' })).not.toBeInTheDocument();
     fireEvent.change(within(fallback).getByLabelText('Reasoning effort for Example GPU'), { target: { value: 'low' } });
     expect(within(primary).getByLabelText('Reasoning effort for Example GPU')).toHaveValue('low');
     fireEvent.click(within(primary).getByLabelText('Remove Example GPU'));

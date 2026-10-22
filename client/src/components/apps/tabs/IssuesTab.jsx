@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useId, useRef } from 'react'
 import { Link } from 'react-router';
 import {
   AlertTriangle, Bot, ChevronDown, ChevronRight, CircleDot, ClipboardCheck,
-  ExternalLink, GitPullRequest, MessageSquare, RefreshCw, Rocket, Search, Tag, User
+  ExternalLink, MessageSquare, RefreshCw, Rocket, Search, Tag, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
@@ -41,6 +41,7 @@ function ClaimReviewOverride({ defaults, overrides, onChange, modelOptions }) {
 }
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
+const RUN_FIELD_LABEL = 'block text-[10px] uppercase tracking-wide text-gray-500';
 
 const RUN_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3 };
 // Compact, content-width row buttons (right-aligned, wrap on narrow rows); touch
@@ -304,9 +305,12 @@ export default function IssuesTab({ appId, appName }) {
   }, [claimReviewers?.prCompletion, prCompletionTouched]);
   const [reviewOverrides, setReviewOverrides] = useState({});
   const reviewerModelOptions = useReviewerModelOptions();
+  // A claim needs someone it can wait on: a non-Copilot AI reviewer or a
+  // GitHub/GitLab user. Copilot alone has no CLI for the claim agent to run.
   const invalidReviewOverride = prCompletion === 'review-then-merge'
     && Array.isArray(reviewOverrides.reviewers)
-    && !reviewOverrides.reviewers.some(reviewer => reviewer !== 'copilot');
+    && !reviewOverrides.reviewers.some(reviewer => reviewer !== 'copilot')
+    && !(reviewOverrides.usernames ?? claimReviewers?.usernames ?? []).length;
   const [showReviewOverride, setShowReviewOverride] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const runSettingsId = useId();
@@ -557,14 +561,12 @@ export default function IssuesTab({ appId, appName }) {
       : claimReviewers.csv;
   const pickedProvider = picker.providers?.find(p => p.id === picker.selectedProviderId);
   const runSettingsSummary = [
-    `Run with: ${[
-      pickedProvider?.name || picker.selectedProviderId || 'Auto (default)',
-      picker.selectedModel || pickedProvider?.defaultModel || 'default model',
-      picker.effort || pickedProvider?.effort || 'default effort',
-    ].join(' · ')}`,
-    `After PR: ${prCompletionOption(prCompletion)?.label ?? prCompletion}`,
-    reviewerCsv ? `Reviewers: ${reviewerCsv}` : null,
-    overrideContext.trim() ? 'extra context set' : null,
+    pickedProvider?.name || picker.selectedProviderId || 'Auto',
+    picker.selectedModel || pickedProvider?.defaultModel || null,
+    picker.effort || pickedProvider?.effort || null,
+    prCompletionOption(prCompletion)?.label ?? prCompletion,
+    reviewerCsv,
+    overrideContext.trim() ? '+ context' : null,
   ].filter(Boolean).join(' · ');
 
   return (
@@ -716,101 +718,72 @@ export default function IssuesTab({ appId, appName }) {
         </div>
         {settingsOpen && (
         <div id={runSettingsId} className="space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-            <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
-              <Bot size={14} /> Run with
-            </span>
-            <div className="flex-1">
-              <ProviderModelSelector
-                {...picker.selectorProps}
-                compact
-              />
-            </div>
+          <div className="space-y-1">
+            <span className={RUN_FIELD_LABEL}>Agent</span>
+            <ProviderModelSelector
+              {...picker.selectorProps}
+              compact
+            />
           </div>
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-            <label htmlFor={prCompletionId} className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
-              <GitPullRequest size={14} /> After opening PR
-            </label>
-            <div className="flex-1 flex flex-wrap items-center gap-2">
-              <select
-                id={prCompletionId}
-                aria-label="After opening PR"
-                value={prCompletion}
-                onChange={e => { setPrCompletion(e.target.value); setPrCompletionTouched(true); }}
-                className="px-2.5 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
-              >
-                {PR_COMPLETION_OPTIONS.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-              <span className="text-xs text-gray-500">
-                {prCompletionOption(prCompletion)?.description}
-              </span>
-            </div>
+          <div className="space-y-1">
+            <label htmlFor={prCompletionId} className={RUN_FIELD_LABEL}>After PR</label>
+            <select
+              id={prCompletionId}
+              value={prCompletion}
+              title={prCompletionOption(prCompletion)?.description}
+              onChange={e => { setPrCompletion(e.target.value); setPrCompletionTouched(true); }}
+              className="w-full sm:w-auto min-h-9 px-2.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
+            >
+              {PR_COMPLETION_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
-          {claimReviewers && prCompletion === 'review-then-merge' && !invalidReviewOverride && (
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-              <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
-                <ClipboardCheck size={14} /> Reviewed by
-              </span>
-              <p className="flex-1 text-xs text-gray-400">
-                {Object.keys(reviewOverrides).length ? (
-                  <>
-                    <code className="text-gray-300">{[
-                      ...(reviewOverrides.reviewers ?? claimReviewers.reviewers),
-                      ...(reviewOverrides.usernames ?? claimReviewers.usernames ?? []).map(username => `@${username}`),
-                    ].join(', ')}</code>
-                    {' — run override; expand below for model, effort, and round limits.'}
-                  </>
-                ) : (
-                  <>
-                    <code className="text-gray-300">{claimReviewers.csv}</code>
-                    <ClaimReviewerSource source={claimReviewers.source} />
-                  </>
-                )}
-              </p>
-            </div>
-          )}
           {claimReviewers && prCompletion === 'review-then-merge' && (
-            <div className="space-y-2">
-              <button
-                type="button"
-                aria-expanded={showReviewOverride}
-                onClick={() => setShowReviewOverride(value => !value)}
-                className="text-sm text-port-accent hover:underline"
-              >
-                Code-review override{Object.keys(reviewOverrides).length > 0 ? ' (active)' : ''}
-              </button>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className={RUN_FIELD_LABEL}>Reviewers</span>
+                <span className="flex-1" />
+                {Object.keys(reviewOverrides).length > 0 && (
+                  <button type="button" aria-label="Use configured reviewers" onClick={() => setReviewOverrides({})} className="text-xs text-port-accent hover:underline min-h-7">
+                    Reset
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-expanded={showReviewOverride}
+                  aria-label={showReviewOverride ? 'Done editing reviewers' : 'Edit reviewers'}
+                  onClick={() => setShowReviewOverride(value => !value)}
+                  className="text-xs text-port-accent hover:underline min-h-7"
+                >
+                  {showReviewOverride ? 'Done' : 'Edit'}
+                </button>
+              </div>
+              {!showReviewOverride && (
+                <p className="text-xs text-gray-300 break-words">
+                  {reviewerCsv ? <span>{reviewerCsv}</span> : <span className="text-gray-500">None</span>}
+                  {!Object.keys(reviewOverrides).length && <ClaimReviewerSource source={claimReviewers.source} />}
+                </p>
+              )}
               {invalidReviewOverride && (
-                <p className="text-xs text-port-warning" role="alert">Claims require at least one non-Copilot reviewer. Add one or use configured reviewers.</p>
+                <p className="text-xs text-port-warning" role="alert">Add an AI reviewer or a GitHub/GitLab user.</p>
               )}
               {showReviewOverride && (
-                <>
-                  <ClaimReviewOverride defaults={claimReviewers} overrides={reviewOverrides} onChange={setReviewOverrides} modelOptions={reviewerModelOptions} />
-                  <p className="text-xs text-gray-500">Applies to Claims launched below. Replan only reviews the issue plan.</p>
-                  <button type="button" onClick={() => setReviewOverrides({})} className="text-xs text-port-accent hover:underline">
-                    Use configured reviewers
-                  </button>
-                </>
+                <ClaimReviewOverride defaults={claimReviewers} overrides={reviewOverrides} onChange={setReviewOverrides} modelOptions={reviewerModelOptions} />
               )}
             </div>
           )}
           <div className="space-y-1">
-            <label htmlFor={overrideContextId} className="block text-xs text-gray-400">
-              Extra context <span className="text-gray-600">(optional)</span>
-            </label>
+            <label htmlFor={overrideContextId} className={RUN_FIELD_LABEL}>Extra context</label>
             <textarea
               id={overrideContextId}
               value={overrideContext}
               onChange={e => setOverrideContext(e.target.value)}
               maxLength={4000}
               rows={2}
-              placeholder="Add guidance for the run you launch below, such as a preferred implementation focus…"
+              placeholder="Optional guidance for Claim and Replan"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm placeholder:text-gray-600 focus:border-port-accent focus:outline-hidden resize-y"
             />
-            <p className="text-xs text-gray-600">
-              Applies to every Claim and Replan you launch below — appended to that run&apos;s instructions; blank leaves its prompt unchanged.
-            </p>
           </div>
         </div>
         )}
