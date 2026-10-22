@@ -48,6 +48,7 @@ init-db.sql, each with a one-line reason.
 | `stackerNews.js` | `stackerNewsDdl` | Stacker News accounts, territories, untrusted-content analyses, and review-gated actions |
 | `x.js` | `xDdl` | X account diagnostics, public post metrics, and review-gated drafts |
 | `beeper.js` | `beeperDdl` | Beeper conversation mirror — accounts, the vault-encrypted access credential, conversations, messages, participants, attachment metadata, sync cursors, and the outbound send outbox (machine-local, never federated) |
+| `githubNotifications.js` | `githubNotificationsDdl` | GitHub notifications inbox — per-account notification threads (metadata only) and the fetch cursor (machine-local, never federated) |
 | `audit.js` | `auditDdl`, `auditedTables`, `buildAuditTriggers()` | `record_audit` table/function + per-table audit triggers |
 | `syncFeed.js` | `syncFeedDdl`, `syncFeedTables`, `buildSyncFeedTriggers()` | Commit-ordered federation change feed (`sync_feed`) + deferred capture triggers on memories and the catalog tables (#8315) |
 
@@ -56,7 +57,7 @@ init-db.sql, each with a one-line reason.
 - `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTasks` → `cosAgents` → `aiGraph` → `peerExecution`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
   `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
-  `beeper` → `audit` DDL → audit triggers → `syncFeed` DDL → sync-feed triggers).
+  `beeper` → `githubNotifications` → `audit` DDL → audit triggers → `syncFeed` DDL → sync-feed triggers).
 
 `ensureSchemaImpl()` calls these two builders and runs each list through
 `pool.query` in order.

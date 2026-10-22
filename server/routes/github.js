@@ -1,8 +1,10 @@
 import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema } from '../lib/validation.js';
+import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
+  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
+import * as githubNotifications from '../services/githubNotifications.js';
 
 const router = express.Router();
 
@@ -122,6 +124,36 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
  */
 router.get('/accounts/:id/status', asyncHandler(async (req, res) => {
   res.json(await githubAccounts.getAccountStatus(req.params.id));
+}));
+
+/**
+ * GET /api/github/notifications — stored inbox rows for one or every account
+ */
+router.get('/notifications', asyncHandler(async (req, res) => {
+  const { accountId, view } = validateRequest(githubNotificationsQuerySchema, req.query);
+  res.json(await githubNotifications.listNotifications({ accountId, view }));
+}));
+
+/**
+ * POST /api/github/notifications/sync — fetch unread notifications from GitHub
+ */
+router.post('/notifications/sync', asyncHandler(async (req, res) => {
+  const { accountId } = validateRequest(githubNotificationsSyncSchema, req.body ?? {});
+  const results = accountId
+    ? [{ ...(await githubNotifications.syncAccountNotifications(accountId)), ok: true }]
+    : await githubNotifications.syncAllNotifications();
+  res.json({ results });
+}));
+
+/**
+ * POST /api/github/notifications/:accountId/:threadId — read / done / reopen / mute / unsubscribe / resubscribe
+ */
+router.post('/notifications/:accountId/:threadId', asyncHandler(async (req, res) => {
+  const { action } = validateRequest(githubNotificationActionSchema, req.body ?? {});
+  if (!GITHUB_NOTIFICATION_THREAD_ID_RE.test(req.params.threadId)) {
+    throw new ServerError('Invalid notification thread id', { status: 400 });
+  }
+  res.json(await githubNotifications.applyNotificationAction(req.params.accountId, req.params.threadId, action));
 }));
 
 export default router;

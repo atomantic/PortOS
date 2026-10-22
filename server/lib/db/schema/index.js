@@ -40,6 +40,7 @@ import { xDdl } from './x.js';
 import { mindToolRecipesDdl } from './mindToolRecipes.js';
 import { decksDdl } from './decks.js';
 import { beeperDdl } from './beeper.js';
+import { githubNotificationsDdl } from './githubNotifications.js';
 import { auditDdl, auditedTables, buildAuditTriggers } from './audit.js';
 import { syncFeedDdl, syncFeedTables, buildSyncFeedTriggers } from './syncFeed.js';
 
@@ -72,6 +73,7 @@ export {
   stackerNewsDdl,
   xDdl,
   beeperDdl,
+  githubNotificationsDdl,
   mindToolRecipesDdl,
   decksDdl,
   auditDdl,
@@ -126,6 +128,7 @@ export function buildCatalogDdl() {
     ...stackerNewsDdl,
     ...xDdl,
     ...beeperDdl,
+    ...githubNotificationsDdl,
     ...mindToolRecipesDdl,
     ...decksDdl,
     ...auditDdl,

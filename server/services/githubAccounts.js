@@ -109,7 +109,7 @@ export async function listAccounts() {
   return currentAccounts(await loadStore());
 }
 
-async function getAccount(id) {
+export async function getAccount(id) {
   const account = (await listAccounts()).find((entry) => entry.id === id);
   if (!account) throw notFound(id);
   return account;
@@ -185,7 +185,7 @@ const TOKEN_LOOKUP_FAULTS = new Set(['not-installed', 'unreachable']);
  * host works without `gh auth switch`; an account with no login uses whichever
  * login is active on that host.
  */
-async function resolveGitHubAccountEnv(account, { baseEnv = process.env } = {}) {
+export async function resolveGitHubAccountEnv(account, { baseEnv = process.env } = {}) {
   const env = { ...baseEnv, GH_HOST: account.host };
   if (!account.login) return { env };
   const lookup = await execGh(

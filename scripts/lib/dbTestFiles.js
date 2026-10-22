@@ -55,6 +55,7 @@ export const DB_TEST_INCLUDE = [
   'services/tribe.db.test.js',
   'services/tribePurge.db.test.js',
   'services/beeperSync.db.test.js',
+  'services/githubNotifications.db.test.js',
   'services/creativeDirector/projectsDB.test.js',
   'services/musicVideo/projectsDB.test.js',
   'routes/catalog.test.js',

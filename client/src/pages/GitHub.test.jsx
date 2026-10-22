@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 const mock = vi.hoisted(() => ({
@@ -17,11 +17,23 @@ const mock = vi.hoisted(() => ({
   updateGitHubAccount: vi.fn(),
   deleteGitHubAccount: vi.fn(),
   getGitHubAccountStatus: vi.fn(),
+  getGitHubNotifications: vi.fn(),
+  syncGitHubNotifications: vi.fn(),
+  applyGitHubNotificationAction: vi.fn(),
 }));
 
 vi.mock('../services/api', () => mock);
 
 import GitHub from './GitHub';
+
+const renderTab = (tab) => render(
+  <MemoryRouter initialEntries={[`/devtools/github/${tab}`]}>
+    <Routes>
+      <Route path="/devtools/github" element={<GitHub />} />
+      <Route path="/devtools/github/:tab" element={<GitHub />} />
+    </Routes>
+  </MemoryRouter>,
+);
 
 describe('GitHub account setup', () => {
   beforeEach(() => {
@@ -40,11 +52,7 @@ describe('GitHub account setup', () => {
 
   it('distinguishes a failed repository read from a successful empty response', async () => {
     mock.getGitHubRepos.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({});
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByText('Could not load GitHub repositories.')).toBeInTheDocument();
     expect(screen.queryByText('No repos loaded yet.')).not.toBeInTheDocument();
@@ -54,11 +62,7 @@ describe('GitHub account setup', () => {
   });
 
   it('offers an in-app GitHub login flow and prevents an anonymous repo sync', async () => {
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     const signIn = await screen.findByRole('link', { name: 'Sign in with GitHub' });
     expect(decodeURIComponent(signIn.getAttribute('href'))).toContain('/shell?cmd=gh auth login');
@@ -76,11 +80,7 @@ describe('GitHub account setup', () => {
       lastRepoSync: null,
     });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByText(/cached from @legacy-owner/i)).toHaveTextContent(
       'Sign in and sync to replace them',
@@ -98,11 +98,7 @@ describe('GitHub account setup', () => {
       lastRepoSync: null,
     });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByLabelText('GitHub account @example-user')).toBeTruthy();
     expect(screen.queryByText('GitHub connected')).toBeNull();
@@ -123,11 +119,7 @@ describe('GitHub account setup', () => {
       lastRepoSync: null,
     });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByText(/environment credentials override stored gh accounts/i)).toBeTruthy();
     expect(screen.queryByRole('link', { name: /GitHub account/ })).toBeNull();
@@ -145,11 +137,7 @@ describe('GitHub account setup', () => {
       lastRepoSync: null,
     });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByText('GitHub environment credential rejected')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Sign in with GitHub' })).toBeNull();
@@ -159,11 +147,7 @@ describe('GitHub account setup', () => {
   it('distinguishes an unavailable status check from signed out and disables sync', async () => {
     mock.getGitHubStatus.mockRejectedValue(new Error('status unavailable'));
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByText('GitHub status unavailable')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Sign in with GitHub' })).toBeNull();
@@ -182,11 +166,7 @@ describe('GitHub account setup', () => {
         lastRepoSync: null,
       });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('@example-user')).toBeTruthy();
@@ -208,11 +188,7 @@ describe('GitHub account setup', () => {
       truncated: true,
     });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sync Repos' }));
     expect(await screen.findByText(/200-repository limit/i)).toBeTruthy();
@@ -229,11 +205,7 @@ describe('GitHub account setup', () => {
       lastRepoSync: null,
     });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByText('GitHub status unavailable')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Sign in with GitHub' })).toBeNull();
@@ -251,11 +223,7 @@ describe('GitHub account setup', () => {
       lastRepoSync: null,
     });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByText('GitHub CLI required')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Sign in with GitHub' })).toBeNull();
@@ -286,11 +254,7 @@ describe('GitHub account setup', () => {
       lastRepoSync: null,
     });
 
-    render(
-      <MemoryRouter initialEntries={['/devtools/github']}>
-        <GitHub />
-      </MemoryRouter>,
-    );
+    renderTab('repos');
 
     expect(await screen.findByText(/cached from @legacy-owner/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
@@ -300,13 +264,7 @@ describe('GitHub account setup', () => {
   });
 });
 
-const renderAccounts = () => render(
-  <MemoryRouter initialEntries={['/devtools/github/accounts']}>
-    <Routes>
-      <Route path="/devtools/github/:tab" element={<GitHub />} />
-    </Routes>
-  </MemoryRouter>,
-);
+const renderAccounts = () => renderTab('accounts');
 
 const IMPLICIT = {
   id: 'github-com', label: 'github.com', host: 'github.com', login: null,
@@ -357,5 +315,62 @@ describe('GitHub accounts tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     expect(mock.deleteGitHubAccount).toHaveBeenCalledWith('github-com');
     expect(await screen.findByText('No GitHub accounts yet.')).toBeTruthy();
+  });
+});
+
+const NOTIFICATION = {
+  accountId: 'github-com', threadId: '101', repoFullName: 'octocat/hello', repoPrivate: false, yourRepo: true,
+  reason: 'review_requested', subjectType: 'PullRequest', title: 'Example change', htmlUrl: 'https://github.com/octocat/hello/pull/7',
+  unread: true, state: 'open', updatedAt: '2026-10-01T10:00:00.000Z',
+};
+
+describe('GitHub inbox tab', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock.getGitHubAccounts.mockResolvedValue([IMPLICIT]);
+    mock.syncGitHubNotifications.mockResolvedValue({ results: [] });
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [NOTIFICATION], sync: {} });
+  });
+
+  it('opens by default, syncs on arrival, and links only to the stored GitHub page', async () => {
+    renderTab('');
+    expect(await screen.findByText('Example change')).toBeTruthy();
+    expect(screen.getByText('Review requested')).toBeTruthy();
+    expect(screen.getByText('Your repo')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open' }).getAttribute('href')).toBe(NOTIFICATION.htmlUrl);
+    expect(mock.syncGitHubNotifications).toHaveBeenCalledWith(null, { silent: true });
+    expect(mock.getGitHubRepos).not.toHaveBeenCalled();
+  });
+
+  it('marks a thread done and takes it out of Needs you', async () => {
+    mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, state: 'done', unread: false });
+    renderTab('inbox');
+    fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'done');
+    expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+  });
+
+  it('undoes Done locally and a mute by re-subscribing', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, state: 'done' }, { ...NOTIFICATION, threadId: '102', title: 'Muted change', state: 'muted' }],
+      sync: {},
+    });
+    mock.applyGitHubNotificationAction.mockImplementation(async (_account, threadId) => ({ ...NOTIFICATION, threadId, state: 'open' }));
+    renderTab('inbox');
+    fireEvent.click(await screen.findByRole('button', { name: 'Handled' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to inbox' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unmute' }));
+    await waitFor(() => expect(mock.applyGitHubNotificationAction).toHaveBeenCalledTimes(2));
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'reopen');
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '102', 'resubscribe');
+    await act(async () => {});
+  });
+
+  it('shows a failed sync for the account instead of an empty inbox', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [], sync: { 'github-com': { lastSyncAt: null, lastError: 'gh cannot act as github.com (not-authenticated).' } },
+    });
+    renderTab('inbox');
+    expect((await screen.findByRole('alert')).textContent).toContain('not-authenticated');
   });
 });
