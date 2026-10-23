@@ -220,6 +220,8 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     for (let i = 0; i < 70; i++) expect(await generate()).toBeNull();
     expect(recordPerpetualDispatch).not.toHaveBeenCalled();
     const parkedMessage = emitLog.mock.calls.findLast(([, message]) => message.includes('branch-reconcile parked'))?.[1];
+    expect(parkedMessage).toContain('no coordinator task eligible; unresolved holds retained');
+    expect(parkedMessage).not.toContain('nothing actionable');
     expect(parkedMessage).toContain('delivery branch(es) awaiting completion (delivery-ci-or-review-pending)');
     expect(parkedMessage).not.toContain('skipped by disabled action toggles');
     expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: expect.arrayContaining([
