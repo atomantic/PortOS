@@ -99,6 +99,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
             steps: op.steps?.length ? op.steps : (current?.steps || []),
             error: null,
             errorCode: null,
+            errorContext: null,
             completed: false
           };
         }
@@ -134,7 +135,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
         socket.emit('app:operations:list');
         return;
       }
-      patch(data, current => ({ ...current, error: data?.message || 'Operation failed', errorCode: data?.code || null }));
+      patch(data, current => ({ ...current, error: data?.message || 'Operation failed', errorCode: data?.code || null, errorContext: data?.code === 'FORGE_TOKEN_SCOPE_MISSING' ? data.context ?? null : null }));
     };
 
     const onDone = (data) => {
@@ -195,7 +196,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
   const start = useCallback((type, appId, appName, options = {}) => {
     clearTimeout(clearTimersRef.current[appId]);
     delete clearTimersRef.current[appId];
-    setOperations(prev => ({ ...prev, [appId]: { appId, appName, type, steps: [], error: null, errorCode: null, completed: false } }));
+    setOperations(prev => ({ ...prev, [appId]: { appId, appName, type, steps: [], error: null, errorCode: null, errorContext: null, completed: false } }));
     // Record the running server's version and uptime while it can still answer —
     // the restart watch compares against them. Deliberately NOT awaited: nothing
     // reads the baseline for at least a second, and blocking the dispatch on a
@@ -223,6 +224,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
     steps: primary?.steps || [],
     error: primary?.error ?? null,
     errorCode: primary?.errorCode ?? null,
+    errorContext: primary?.errorContext ?? null,
     completed: primary?.completed ?? false,
     operatingAppId: primary?.appId ?? null,
     operatingAppName: primary?.appName ?? null,

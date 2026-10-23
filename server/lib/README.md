@@ -21,6 +21,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 ## Validation (Zod schemas + request validators)
 
+| `appOperationErrorContext.js` | `appOperationErrorContext` projects bounded forge scope repair fields for failed update events and history; all other error context is withheld. |
+
 `managedVisitorValidation.js` — strict scoped managed-visitor credentials, admissions, observations and bounded action schemas.
 
 | Module | Purpose |
