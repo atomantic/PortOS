@@ -71,7 +71,7 @@ describe('migration 438 — legacy bare-array health files', () => {
   it('refuses malformed JSON, non-object rows and ambiguous markers without overwriting', async () => {
     put('eyes.json', '[{"id":"e1"');
     put('epigenetic-tests.json', [{ id: 'p1' }, 'stray']);
-    put('blood-tests.json', [{ id: 'b1', markers: { id: 'clash' } }]);
+    put('blood-tests.json', [{ id: 'b1', lab: 'Acme', markers: { lab: 'clash' } }]);
     put('health-metrics.json', '"just a string"');
     const before = ['eyes.json', 'epigenetic-tests.json', 'blood-tests.json', 'health-metrics.json']
       .map((name) => [name, readFileSync(p(name), 'utf-8')]);
@@ -81,6 +81,9 @@ describe('migration 438 — legacy bare-array health files', () => {
     for (const [name, text] of before) expect(readFileSync(p(name), 'utf-8')).toBe(text);
     expect(existsSync(p('eyes.json.pre-438.json'))).toBe(false);
     expect(existsSync(p('blood-tests.json.pre-438.json'))).toBe(false);
+    put('blood-tests.json', [{ id: 'b2', markers: { id: 'clash' } }]);
+    await migration.up({ rootDir });
+    expect(read('blood-tests.json')).toEqual([{ id: 'b2', markers: { id: 'clash' } }]);
   });
 
   it('is safe to repeat and resumes after an interruption that left only the backup', async () => {

@@ -32,9 +32,9 @@
  * This is a frozen transform: it does not import the live services. The repair
  * is derived from the install's own rows, so it ships no `data.reference` seed.
  */
-import { copyFile, readFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { writeJsonAtomic } from './_lib.js';
+import { writeJsonAtomic, writeTextAtomic } from './_lib.js';
 
 const TARGETS = [
   { file: 'blood-tests.json', key: 'tests', extra: () => ({ referenceRanges: {} }), flattenMarkers: true },
@@ -44,7 +44,8 @@ const TARGETS = [
 ];
 
 const BACKUP_SUFFIX = '.pre-438.json';
-// A marker named like a row field would silently overwrite or be overwritten.
+// A marker named like a row field would silently overwrite or be overwritten;
+// the reserved names are refused even when this particular row lacks them.
 const RESERVED_ROW_KEYS = ['id', 'date', 'createdAt', 'updatedAt', 'aliasIds', 'markers'];
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -56,7 +57,8 @@ function flattenBloodRow(row) {
     return rest;
   }
   const { markers, ...rest } = row;
-  if (!isObject(markers) || RESERVED_ROW_KEYS.some((key) => Object.hasOwn(markers, key))) return null;
+  if (!isObject(markers) || RESERVED_ROW_KEYS.some((key) => Object.hasOwn(markers, key))
+    || Object.keys(markers).some((key) => Object.hasOwn(rest, key))) return null;
   return { ...markers, ...rest };
 }
 
@@ -92,7 +94,7 @@ async function repairFile(dir, { file, key, extra, flattenMarkers }) {
   const backupPath = `${path}${BACKUP_SUFFIX}`;
   const existingBackup = await readBytes(backupPath);
   if (existingBackup === null) {
-    await copyFile(path, backupPath);
+    await writeTextAtomic(backupPath, bytes); // temp + rename: a torn backup would wedge every retry
   } else if (!existingBackup.equals(bytes)) {
     console.log(`⏭️ ${file}: a different ${file}${BACKUP_SUFFIX} already exists; left untouched`);
     return;
