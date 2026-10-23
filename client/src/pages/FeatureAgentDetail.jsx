@@ -1,3 +1,4 @@
+import TabPills from '../components/ui/TabPills';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import useMounted from '../hooks/useMounted';
 import { useParams, useNavigate, Link } from 'react-router';
@@ -99,15 +100,12 @@ export default function FeatureAgentDetail() {
         label="Loading agent"
         fullHeight
         padded
-        // Hand-rolled header block (not PageHeader) with the tab row inside it.
-        barClassName="px-6 pt-6 pb-4"
         bodyClassName="p-6"
         titleWidthClass="w-56"
         showSubtitle
         subtitleOnMobile
         showAction={false}
         tabs={isCreate ? 0 : TABS.length}
-        tabsInBar
         cards={3}
         sidebar={false}
       />
@@ -126,8 +124,8 @@ export default function FeatureAgentDetail() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 px-6 pt-6 pb-4 border-b border-port-border">
-        <div className="flex items-center gap-3 mb-3">
+      <div className="shrink-0 px-3 py-2 sm:px-4 sm:py-3 border-b border-port-border">
+        <div className="flex items-center gap-3">
           <Link to="/feature-agents" className="p-1.5 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg transition-colors">
             <ArrowLeft size={18} />
           </Link>
@@ -141,26 +139,11 @@ export default function FeatureAgentDetail() {
             )}
           </div>
         </div>
-
-        {!isCreate && (
-          <div className="flex gap-1 overflow-x-auto">
-            {TABS.map(({ id: tabId, label, icon: Icon }) => (
-              <button
-                key={tabId}
-                onClick={() => navigate(`/feature-agents/${id}/${tabId}`)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-                  activeTab === tabId
-                    ? 'bg-port-accent/10 text-port-accent'
-                    : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-                }`}
-              >
-                <Icon size={16} />
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
+      {!isCreate && (
+        <TabPills tabs={TABS} activeTab={activeTab} onChange={(tab) => navigate(`/feature-agents/${id}/${tab}`)}
+          ariaLabel="Feature agent sections" mobileCompact className="shrink-0 min-w-0" />
+      )}
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">

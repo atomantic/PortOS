@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Layers, Code, Server, Globe, Smartphone, MonitorSmartphone, Plus } from 'lucide-react';
@@ -17,7 +19,7 @@ const ICONS = {
   'monitor-smartphone': MonitorSmartphone
 };
 
-export default function Templates() {
+function TemplatesContent() {
   const navigate = useNavigate();
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [createMode, setCreateMode] = useState(false);
@@ -81,10 +83,7 @@ export default function Templates() {
   return (
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-white">App Templates</h1>
-          <p className="text-gray-500 text-sm sm:text-base">Create new apps from pre-configured templates</p>
-        </div>
+        <p className="text-gray-500 text-sm sm:text-base">Create new apps from pre-configured templates</p>
         <button
           onClick={() => navigate('/apps/create')}
           className="px-4 py-2 text-gray-400 hover:text-white text-sm sm:text-base self-start sm:self-auto"
@@ -236,5 +235,13 @@ export default function Templates() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function Templates() {
+  return (
+    <PageLayout header={<PageHeader icon={Layers} title="App Templates" />}>
+      <TemplatesContent />
+    </PageLayout>
   );
 }

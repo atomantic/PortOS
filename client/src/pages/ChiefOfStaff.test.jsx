@@ -216,6 +216,7 @@ describe('ChiefOfStaff loading skeleton', () => {
     expect(busy).toHaveAttribute('aria-label', 'Loading Chief of Staff');
     expect(busy.className).toContain('cos-wide:grid-cols-[320px_1fr]');
     expect(busy.className).toContain('h-full');
+    expect(busy.lastElementChild).toHaveClass('p-3', 'lg:p-4');
     // The old spinner shell — a fixed 16rem box centering its child.
     expect(container.querySelector('.h-64')).toBeNull();
   });
@@ -1255,7 +1256,7 @@ describe('CoS agent panel layout sizing', () => {
     // must retain cos-wide:w-full and min-w-0 when hasCanvasAvatar is false,
     // preventing child content like EventLog or StatCards from expanding
     // beyond the 320px rail.
-    const title = screen.getByRole('heading', { level: 1, name: 'Chief of Staff' });
+    const title = screen.getByRole('heading', { level: 2, name: 'Chief of Staff' });
     const innerContainer = title.parentElement;
     expect(innerContainer?.className).toContain('cos-wide:w-full');
     expect(innerContainer?.className).toContain('min-w-0');

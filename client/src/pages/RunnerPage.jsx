@@ -1,3 +1,4 @@
+import PageLayout from '../components/PageLayout';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { Clock, Image, X, Info, Code2 } from 'lucide-react';
@@ -273,12 +274,12 @@ ${prompt.trim()}`;
   const currentProvider = providers.find(p => p.id === selectedProvider);
 
   return (
-    <div className="space-y-6">
-      <PageHeader
+    <PageLayout header={<PageHeader
         icon={Code2}
         title="Code Runner"
         subtitle="Execute AI assistant tasks and shell commands across workspaces"
-      />
+      />}>
+      <div className="space-y-6">
 
       {/* Continuation Context Banner */}
       {continueContext && (
@@ -543,7 +544,8 @@ ${prompt.trim()}`;
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </PageLayout>
   );
 }
 

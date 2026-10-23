@@ -53,7 +53,7 @@ describe('CapabilityMap setup walkthrough', () => {
     render(<MemoryRouter><CapabilityMap /></MemoryRouter>);
 
     expect(screen.getByRole('heading', { name: 'Setup & Capabilities' })).toBeInTheDocument();
-    expect(screen.getByText('1 essential step remaining')).toBeInTheDocument();
+    expect(screen.getByText('1 essential step remaining').parentElement.parentElement).toHaveClass('justify-end');
     expect(screen.getByRole('heading', { name: 'Optional networking' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Tailscale DNS admin' })).toHaveAttribute(
       'href',

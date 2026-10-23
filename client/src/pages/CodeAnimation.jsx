@@ -1,3 +1,4 @@
+import PageLayout from '../components/PageLayout';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, FileCode2, GitFork, Film, Globe, Images, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -891,26 +892,26 @@ export default function CodeAnimation() {
   const mode = pathname.startsWith('/code-animation/production')
     ? 'production'
     : pathname === '/code-animation/gallery' || pathname.startsWith('/code-animation/gallery/') ? 'gallery' : 'fast';
-  return <div className="flex h-full min-h-0 flex-col">
-      <PageHeader
+  return (
+    <PageLayout
+      header={<PageHeader
         icon={FileCode2}
         title="Code Animation"
         subtitle="Prompt an LLM to code an animated film, with no assets, in a universe's style, then preview it and record it to video."
-      />
-
-    <RouteTabsHeader
-      ariaLabel="Animation mode"
-      activeTab={mode}
-      tabs={[
-        { id: 'fast', label: 'Fast HTML', to: '/code-animation', icon: FileCode2 },
-        { id: 'gallery', label: 'Gallery', to: '/code-animation/gallery', icon: Images },
-        { id: 'production', label: 'Production', to: '/code-animation/production', icon: Film },
-      ]}
-    />
-    <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+      />}
+      navigation={<RouteTabsHeader
+        ariaLabel="Animation mode"
+        activeTab={mode}
+        tabs={[
+          { id: 'fast', label: 'Fast HTML', to: '/code-animation', icon: FileCode2 },
+          { id: 'gallery', label: 'Gallery', to: '/code-animation/gallery', icon: Images },
+          { id: 'production', label: 'Production', to: '/code-animation/production', icon: Film },
+        ]}
+      />}
+    >
       <div className="mx-auto max-w-7xl">
         {mode === 'production' ? <ProductionProjects /> : mode === 'gallery' ? <CodeAnimationGallery /> : pathname === '/code-animation' && !new URLSearchParams(search).get('job') ? <NewCodeAnimation /> : <FastCodeAnimation />}
       </div>
-    </div>
-  </div>;
+    </PageLayout>
+  );
 }

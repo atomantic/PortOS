@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Network, Plus, Trash2, RefreshCw, Edit3, Check, X,
@@ -1561,10 +1563,6 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   );
 }
 
-export default function Instances() {
-  return <TailcatServeProvider><InstancesContent /></TailcatServeProvider>;
-}
-
 function InstancesContent() {
   const peerAddressRef = useRef(null);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1673,12 +1671,6 @@ function InstancesContent() {
       renderPanel={(forwardsPanel, orphanCount) => (
         <UnattendedRenderRouting peers={peers} renderPanel={(routingPanel, routeAttention) => (
           <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <Network size={24} className="text-port-accent" />
-              <h1 className="text-2xl font-bold text-white">Instances</h1>
-              <span className="text-sm text-gray-500">PortOS Federation</span>
-            </div>
-
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => openDrawer('add')}
                 className="min-h-[44px] inline-flex items-center gap-1 rounded-lg bg-port-accent px-3 text-sm text-white">
@@ -1788,5 +1780,13 @@ function InstancesContent() {
           </div>
         )} />
       )} />
+  );
+}
+
+export default function Instances() {
+  return (
+    <PageLayout header={<PageHeader icon={Network} title="Instances" subtitle="PortOS Federation" />}>
+      <TailcatServeProvider><InstancesContent /></TailcatServeProvider>
+    </PageLayout>
   );
 }
