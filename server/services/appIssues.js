@@ -23,6 +23,7 @@
  * without guessing, since the classifier is the only thing that knows.
  */
 
+import { collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers, githubClaimPrArgs, githubPrRowsFromPages } from '../lib/issueClaimEvidence.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -298,7 +299,7 @@ export async function listAppIssues(app) {
   };
 }
 
-/** Release contributor invitations before a manual targeted claim can be queued. */
+/** Verify a fresh targeted claim, then retire contributor invitations before queueing. */
 export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   const { tracker: resolvedTracker, target } = await resolveAppForgeTarget(app);
   if (!target || resolvedTracker !== tracker || target.forge !== tracker) {
@@ -311,16 +312,40 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
 
   const readLabels = async () => {
     const raw = tracker === 'github'
-      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', 'labels'], undefined, { cwd, env })
+      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', 'labels,assignees,state'], undefined, { cwd, env })
       : await execGlab(withGlabJson(['issue', 'view', issueNumber]), app.repoPath, undefined, { rejectOnError: true });
     const issue = safeJSONParse(raw, null);
     if (!Array.isArray(issue?.labels) || issue.labels.some(label => typeof label !== 'string' && typeof label?.name !== 'string')) {
       throw new ServerError('Could not read issue labels before claiming', { status: 502, code: 'CLAIM_LABELS_UNAVAILABLE' });
     }
-    return issue.labels.map(label => typeof label === 'string' ? label : label.name)
-      .filter(name => CONTRIBUTOR_LABELS.includes(name.toLowerCase()));
+    const names = issue.labels.map(label => typeof label === 'string' ? label : label.name);
+    if (!Array.isArray(issue.assignees) || typeof issue.state !== 'string') {
+      throw new ServerError('Could not read issue claim state', { status: 502, code: 'CLAIM_STATE_UNAVAILABLE' });
+    }
+    if (issue.assignees.length || names.some(name => name.toLowerCase() === 'in-progress')
+      || !['open', 'opened'].includes(issue.state.toLowerCase())) {
+      throw new ServerError('Issue is already claimed or closed', { status: 409, code: 'ISSUE_IN_FLIGHT' });
+    }
+    return names.filter(name => CONTRIBUTOR_LABELS.includes(name.toLowerCase()));
   };
   const labels = await readLabels();
+  const rawChanges = tracker === 'github'
+    ? await execGh([...githubClaimPrArgs(target.fullName), '--hostname', target.apiHost], undefined, { cwd, env })
+    : await execGlab(withGlabJson(['mr', 'list', '--per-page', '100']), app.repoPath, undefined, { rejectOnError: true });
+  const changes = safeJSONParse(rawChanges, null);
+  const changeNumbers = tracker === 'github'
+    ? await collectGithubPrIssueNumbers(githubPrRowsFromPages(changes), async number => {
+      const raw = await execGh(['api', '--hostname', target.apiHost, '--paginate', '--slurp',
+        `repos/${target.fullName}/pulls/${number}/commits?per_page=100`], undefined, { cwd, env }).catch(() => null);
+      return safeJSONParse(raw, null);
+    })
+    : collectGitlabMrIssueNumbers(changes);
+  if (!changeNumbers) {
+    throw new ServerError('Could not read complete open PR/MR claim evidence', { status: 502, code: 'CLAIM_PRS_UNAVAILABLE' });
+  }
+  if (changeNumbers.has(Number(issueNumber))) {
+    throw new ServerError('An open PR/MR already covers this issue', { status: 409, code: 'ISSUE_IN_FLIGHT' });
+  }
   if (!labels.length) return;
   if (tracker === 'github') {
     await execGh(['issue', 'edit', issueNumber, '--repo', target.repoSpec,

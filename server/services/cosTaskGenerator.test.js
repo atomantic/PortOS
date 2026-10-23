@@ -670,7 +670,8 @@ describe('work-item target', () => {
     it('falls back to the fixed 3-label text when no excludeLabelsBlock is passed', () => {
       const block = buildTargetWorkItemBlock('claim-issue', '42');
       expect(block).toContain('already carries any of `in-progress`, `blocked`, `needs-input`');
-      expect(block).toContain('ignore its current assignee');
+      expect(block).toContain('An explicit selection does not override existing claim ownership');
+      expect(block).toContain('A continuation of this same run may resume its own recorded branch and PR');
       expect(block).toContain('does not override a contributor\'s clear claim comment');
       expect(block).toContain('set `CANDIDATE="42"`, and then run Phase 1 step 5\'s untrusted-comment check');
       expect(block).toContain('assign that contributor, verify the readback, and exit');
