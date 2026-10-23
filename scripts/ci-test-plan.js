@@ -1015,7 +1015,7 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
     ? (plan.full ? `full matrix: ${plan.reason}` : `${plan.browserFiles.length} cross-workspace browser suite(s) selected`)
     : 'skipped: no cross-workspace browser suite selected',
   db: plan.db ? (plan.full ? `full matrix: ${plan.reason}` : 'database-risk source changed') : 'skipped: no database-risk source changed',
-  lint: plan.lint.mode === 'skip' ? 'skipped: no changed client source needs linting' : plan.full ? `full matrix: ${plan.reason}` : 'changed client source',
+  lint: plan.lint.mode === 'skip' ? 'skipped: no changed source needs linting' : plan.full ? `full matrix: ${plan.reason}` : 'changed lintable source',
   build: plan.build ? (plan.full ? `full matrix: ${plan.reason}` : 'client-impacting source changed') : 'skipped: no client-impacting source changed',
   smoke: plan.smoke ? (plan.full ? `full matrix: ${plan.reason}` : 'server-impacting source changed') : 'skipped: no server-impacting source changed',
   // A full plan whose Windows job stayed at the contract baseline says so
@@ -1528,48 +1528,85 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
   return null;
 }
 
-// Start from every browser source, including lazy-loaded pages, then follow
-// relative static imports and re-exports across directory boundaries. Parsing
-// is shared with the structural graph guards, but unresolved edges must widen
-// CI instead of disappearing as they do in that helper's negative graph walk.
-function collectClientDependencies(trackedFiles, cwd) {
-  const known = new Set(trackedFiles);
-  const pending = trackedFiles.filter((path) => path.startsWith('client/src/')
-    && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
-  const seen = new Set();
+// A collection owns its snapshot: each source is read and each prerequisite
+// edge is resolved once, even when many browser suites reach the same module.
+// Never retain this across collections: local pregate must see the next edit.
+function createDependencySnapshot(files, cwd) {
+  const known = new Set(files);
+  const sources = new Map();
+  const staticEdges = new Map();
+  const testEdges = new Map();
   const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
-  try {
-    for (let index = 0; index < pending.length; index++) {
-      const file = pending[index];
-      if (seen.has(file)) continue;
-      seen.add(file);
-      if (!MODULE_SOURCE_RE.test(file)) continue;
-      for (const specifier of staticImportSpecifiersFromSource(readFileSync(join(cwd, file), 'utf8'))) {
-        if (!specifier.startsWith('.')) continue;
-        const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
-        // Keep every resolvable candidate when extensions collide rather than
-        // guessing a bundler-specific precedence and dropping a real consumer.
-        const dependencies = [path, ...extensions.map((extension) => `${path}${extension}`),
-          ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
-        if (dependencies.length === 0) return null;
-        pending.push(...dependencies);
+  const readText = (file) => {
+    if (!sources.has(file)) {
+      try {
+        sources.set(file, { text: readFileSync(join(cwd, file), 'utf8') });
+      } catch (error) {
+        sources.set(file, { error });
       }
     }
-  } catch {
-    return null;
-  }
-  return uniqueSorted([...seen].filter((path) => path.startsWith('server/lib/')));
+    const source = sources.get(file);
+    if (source.error) throw source.error;
+    return source.text;
+  };
+  const resolve = (file, specifiers) => {
+    const dependencies = [];
+    let inconclusive = false;
+    for (const specifier of specifiers) {
+      if (!specifier.startsWith('.')) continue;
+      const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
+      // Preserve all candidates when extensions collide, not a guessed bundler precedence.
+      const candidates = [path, ...extensions.map((extension) => `${path}${extension}`),
+        ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
+      if (candidates.length === 0) inconclusive = true;
+      dependencies.push(...candidates);
+    }
+    return { dependencies, inconclusive };
+  };
+  const staticDependencies = (file) => {
+    if (!staticEdges.has(file)) {
+      staticEdges.set(file, resolve(file, staticImportSpecifiersFromSource(readText(file))));
+    }
+    return staticEdges.get(file);
+  };
+  const testDependencies = (file) => {
+    if (!testEdges.has(file)) {
+      const deferred = [];
+      let computed = false;
+      // Nonliterals and extra matches in comments widen prerequisites safely.
+      for (const match of readText(file).matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
+        const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
+        if (!literal || literal[2].includes('${')) computed = true;
+        else deferred.push(literal[2]);
+      }
+      const statics = staticDependencies(file);
+      const dynamic = resolve(file, deferred);
+      testEdges.set(file, {
+        dependencies: [...statics.dependencies, ...dynamic.dependencies],
+        inconclusive: computed || statics.inconclusive || dynamic.inconclusive,
+      });
+    }
+    return testEdges.get(file);
+  };
+  return { readText, staticDependencies, testDependencies };
+}
+
+// Start from every browser source, including lazy-loaded pages, then follow
+// relative static imports and re-exports across directory boundaries. Unresolved
+// edges must widen CI rather than disappearing from a negative graph walk.
+function collectClientDependencies(files, snapshot) {
+  const entries = files.filter((path) => path.startsWith('client/src/')
+    && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
+  const closure = collectTestDependencies(entries, snapshot.staticDependencies);
+  return closure?.filter((path) => path.startsWith('server/lib/')) ?? null;
 }
 
 // Project DB and browser consumers without importing test code or Vitest (the
-// planner runs before npm installation). Include deferred literals; unreadable,
+// planner runs before npm installation). Deferred literals participate; unreadable,
 // unresolved and computed imports retain conservative prerequisite coverage.
-// Share parsed edges between suite walks so common dependencies are read once.
-function collectTestDependencies(entries, files, cwd, importCache) {
-  const known = new Set(files);
+function collectTestDependencies(entries, dependenciesFor) {
   const pending = [...entries];
   const seen = new Set();
-  const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
   let inconclusive = false;
   try {
     for (let index = 0; index < pending.length; index++) {
@@ -1577,29 +1614,9 @@ function collectTestDependencies(entries, files, cwd, importCache) {
       if (seen.has(file)) continue;
       seen.add(file);
       if (!MODULE_SOURCE_RE.test(file)) continue;
-      if (!importCache.has(file)) {
-        const source = readFileSync(join(cwd, file), 'utf8');
-        const specifiers = staticImportSpecifiersFromSource(source);
-        let computed = false;
-        // A nonliteral cannot prove absence of a dependency; extra matches in
-        // comments widen safely. Template literals resolve without interpolation.
-        for (const match of source.matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
-          const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
-          if (!literal || literal[2].includes('${')) computed = true;
-          else specifiers.push(literal[2]);
-        }
-        importCache.set(file, { specifiers, computed });
-      }
-      const { specifiers, computed } = importCache.get(file);
-      if (computed) inconclusive = true;
-      for (const specifier of specifiers) {
-        if (!specifier.startsWith('.')) continue;
-        const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
-        const dependencies = [path, ...extensions.map((extension) => `${path}${extension}`),
-          ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
-        if (dependencies.length === 0) inconclusive = true;
-        pending.push(...dependencies);
-      }
+      const edges = dependenciesFor(file);
+      if (edges.inconclusive) inconclusive = true;
+      pending.push(...edges.dependencies);
     }
   } catch {
     return null;
@@ -1667,21 +1684,21 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     return [path, sharedBasenames.has(basenameOf(path)) ? narrowSharedBasenameHits(path, hits, cwd) : hits];
   }));
 
+  const dependencyFiles = hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles;
+  const snapshot = createDependencySnapshot(dependencyFiles, cwd);
   const clientDependencies = collectedChangedFiles.some((path) => path.startsWith('server/lib/')
     && isExecutable(path) && !isTestFile(path))
-    ? collectClientDependencies(hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles, cwd)
+    ? collectClientDependencies(dependencyFiles, snapshot)
     : [];
 
   const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
     && MODULE_SOURCE_RE.test(path) && !isTestFile(path) && !isStructuralBarrel(path));
-  const dependencyFiles = hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles;
-  const importCache = new Map();
   const dbDependencies = hasRelatedServerSource
-    ? collectTestDependencies(resolveDbTestFiles(dependencyFiles), dependencyFiles, cwd, importCache)
+    ? collectTestDependencies(resolveDbTestFiles(dependencyFiles), snapshot.testDependencies)
     : [];
   const browserDependencies = hasRelatedServerSource
     ? Object.fromEntries(browserSuitesIn(presentFiles).map((suite) => [suite,
-      collectTestDependencies([suite], dependencyFiles, cwd, importCache)]))
+      collectTestDependencies([suite], snapshot.testDependencies)]))
     : {};
 
   // Each changed manifest at the diff base vs the tree under test (the working
@@ -1715,6 +1732,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
       serverReach = measureRepoImportReach({
         cwd,
         files: dependencyFiles,
+        readText: snapshot.readText,
         sources: collectedChangedFiles.filter((path) => isServerRunnerFile(path)
           && MODULE_SOURCE_RE.test(path) && !isTestFile(path)),
       });
