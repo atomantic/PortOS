@@ -23,7 +23,7 @@ export const summarizeMergeGuardOutput = text => redactPii(scrubSecretTokens(str
 
 // Capability, not upstream slug: forks inherit the guard, ordinary managed apps
 // and older PortOS checkouts without merged-tree support keep their behavior.
-export async function supportsPendingMergeGuard(repoPath) {
+async function supportsPendingMergeGuard(repoPath) {
   const source = await readOptional(resolve(repoPath, SCRIPT));
   return source !== null && source.includes("case '--guards-only':") && source.includes("case '--merged-with':");
 }
