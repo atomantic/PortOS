@@ -177,7 +177,7 @@ export function decisionFromVerdict(verdict) {
 const LEARNED_DECISIONS = Object.freeze(['surface', 'suggest-done', 'suggest-mute']);
 const PINNED_RULES = new Set(['spam-signal', 'security-alert', 'invitation-never-accepted', 'deployment-approval']);
 /** Triage rules no learned or automation rule may override. */
-export const PINNED_TRIAGE_RULES = Object.freeze(PINNED_RULES);
+export const PINNED_TRIAGE_RULES = Object.freeze([...PINNED_RULES]);
 const ACTION_LESSONS = Object.freeze({ done: 'suggest-done', unsubscribe: 'suggest-done', mute: 'suggest-mute', reopen: 'surface', resubscribe: 'surface' });
 
 /** The decision an operator action teaches, or null when it teaches nothing (a plain read). */
@@ -245,11 +245,12 @@ const RULE_KINDS = new Set(AGENT_RULE_KINDS);
 // `agent: true/false` reads as `agent` / `leave`.
 export const AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave']);
 // A security alert is never marked done or muted by a rule.
-export const AGENT_ONLY_RULE_KINDS = Object.freeze(new Set(['security-alert']));
+const AGENT_ONLY_RULE_KINDS = new Set(['security-alert']);
 // Kinds no specific lane owns: an `agent` rule on one sends it to the generic
 // lane on Autopilot. Review, issue and alert rules keep their meaning from
 // before #13192 (their own lanes), so they never start a generic run.
-export const GENERIC_RULE_KINDS = Object.freeze(new Set(['ci-activity', 'own-pr', 'mention', 'release', 'other']));
+export const GENERIC_RULE_KINDS = Object.freeze(['ci-activity', 'own-pr', 'mention', 'release', 'other']);
+const GENERIC_KIND_SET = new Set(GENERIC_RULE_KINDS);
 const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
 const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
@@ -282,7 +283,7 @@ export const KIND_SQL = `(CASE
     ELSE 'other' END)`;
 
 /** A stored rule's action: its `action`, else the legacy `agent` boolean, else null. */
-export function agentRuleAction(rule) {
+function agentRuleAction(rule) {
   if (AGENT_RULE_ACTIONS.includes(rule?.action)) return rule.action;
   if (typeof rule?.agent === 'boolean') return rule.agent ? 'agent' : 'leave';
   return null;
@@ -499,7 +500,7 @@ export function autopilotHandoff({ account, row }) {
   const plan = agentHandoff({ account, row });
   if (!plan || (plan.rule && plan.rule.action !== 'agent')) return null;
   if (plan.lane === GENERIC_AGENT_LANE) {
-    if (plan.rule?.action !== 'agent' || !GENERIC_RULE_KINDS.has(threadAgentKind(row))) return null;
+    if (plan.rule?.action !== 'agent' || !GENERIC_KIND_SET.has(threadAgentKind(row))) return null;
     return plan.refused === 'finished' || plan.refused === 'handed-off' ? null : plan;
   }
   if (plan.optIn && plan.rule?.action !== 'agent') return null;

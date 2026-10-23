@@ -144,7 +144,7 @@ export async function assistAccountNotifications(account, env, { act }) {
        AND (decision = ANY($2::text[])
          OR (reason <> 'security_alert' AND NOT (COALESCE(evidence->>'rule', '') = ANY($3::text[])) AND (${ruleSql})))
      ORDER BY gh_updated_at DESC LIMIT ${MAX_ACTIONS_PER_RUN}`,
-    [account.id, ACTIONABLE_DECISIONS, [...PINNED_TRIAGE_RULES], ...scopes.flatMap(({ all, except, only }) => [all, except, only])],
+    [account.id, ACTIONABLE_DECISIONS, PINNED_TRIAGE_RULES, ...scopes.flatMap(({ all, except, only }) => [all, except, only])],
   );
   let acted = 0;
   for (const row of rows) {

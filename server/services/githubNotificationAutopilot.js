@@ -59,9 +59,9 @@ function candidateFilter(rules, first = 2) {
     agentRuleScope(rules, 'issue-activity'),
     agentRuleScope(rules, 'security-alert'),
   ];
-  const generic = [...GENERIC_RULE_KINDS].map((kind) => agentRuleScope(rules, kind, { optIn: true }));
+  const generic = GENERIC_RULE_KINDS.map((kind) => agentRuleScope(rules, kind, { optIn: true }));
   const at = (index) => first + index * 3;
-  const genericSql = [...GENERIC_RULE_KINDS].map((kind, index) => `(${KIND_SQL} = '${kind}' AND ${inScope(at(scopes.length + index))})`).join(' OR ');
+  const genericSql = GENERIC_RULE_KINDS.map((kind, index) => `(${KIND_SQL} = '${kind}' AND ${inScope(at(scopes.length + index))})`).join(' OR ');
   const sql = `((${KIND_SQL} = 'review-request' AND ${NOT_FINISHED_SQL} AND ${PULL_URL_SQL} AND (
       (decision = 'suggest-untrusted-review' AND COALESCE(trust, '') NOT IN ('yours', 'trusted') AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(at(0))})
       OR (decision IN ('suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface') AND trust IN ('yours', 'trusted') AND ${inScope(at(1))})))

@@ -670,7 +670,7 @@ export async function getAutomationsOverview() {
        FROM github_notifications WHERE account_id = ANY($1::text[]) AND state = 'open' AND NOT suspect
          AND decision IS DISTINCT FROM 'handed-off'
        GROUP BY 1, 2, 3`,
-      [ids, [...PINNED_TRIAGE_RULES]],
+      [ids, PINNED_TRIAGE_RULES],
     ),
   ]);
   const openById = new Map();
