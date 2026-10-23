@@ -37,9 +37,10 @@ const errors = [];
 const setup = createOwnedFixtureSetup({ cleanup: async () => {
   // A failed browser close must not leave the HTTP listener open.
   const outcomes = await Promise.allSettled([fixture?.close(), server && new Promise((done, reject) => server.close(error => error ? reject(error) : done()))]);
+  // The generated workspace is independent of the owned browser profile.
+  outcomes.push(...await Promise.allSettled([dir && rm(dir, { recursive: true, force: true })]));
   const failures = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
   if (failures.length) throw new AggregateError(failures, 'Animatic fixture cleanup failed');
-  if (dir) await rm(dir, { recursive: true, force: true });
 } });
 afterAll(() => setup.close());
 
