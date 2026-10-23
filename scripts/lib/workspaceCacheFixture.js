@@ -56,9 +56,10 @@ function checkout(host, name, workspace, configName, dependencies) {
   // Copy the real config so import.meta.url names THIS checkout; its existing
   // helpers stay shared read-only, just like dependencies in an ordinary worktree.
   copyFileSync(join(REPO, workspace, configName), join(root, configName));
-  for (const file of ['lib/vitestTempRoot.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
+  for (const file of ['lib/vitestTempRoot.js', 'lib/testProcessAttribution.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
     link(join(REPO, 'scripts', file), join(parent, 'scripts', file));
   }
+  put(join(parent, 'scripts/vitestProcessEnvironment.js'), `export { default } from ${JSON.stringify(pathToFileURL(join(REPO, 'scripts/vitestProcessEnvironment.js')).href)};\n`);
   // The data exclusion belongs to the synthetic checkout, like its cache paths.
   copyFileSync(join(REPO, 'scripts/lib/vitestWatch.js'), join(parent, 'scripts/lib/vitestWatch.js'));
   if (workspace === 'server') {

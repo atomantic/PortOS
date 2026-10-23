@@ -10,7 +10,7 @@
  * to the conservative 6h age rule.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { processAncestors, probeTestPid, readTestProcesses, testProcessRoot, testProcessSettlement } from './testOwnedProcesses.js';
 import { processAttribution, processIdentity } from './testProcessAttribution.js';
@@ -19,9 +19,38 @@ import { killWithEscalation } from '../../server/lib/killWithEscalation.js';
 export const OWNER_FILE = '.owner.pid';
 export const PENDING_FILE = '.process-settlement-pending';
 
-function markPending(root) {
-  try { writeFileSync(join(root, PENDING_FILE), 'unverified\n'); } catch { /* preserve in this snapshot even if the stamp fails */ }
+// Private control metadata, like .owner.pid; never included in diagnostic reports.
+const pendingLimit = 4096;
+function readPending(root) {
+  try {
+    const path = join(root, PENDING_FILE);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > 1024 * 1024) return { incomplete: true, processes: [] };
+    const text = readFileSync(path, 'utf8');
+    if (!text.endsWith('\n')) return { incomplete: true, processes: [] };
+    const rows = text.trimEnd().split('\n');
+    if (rows.length > pendingLimit) return { incomplete: true, processes: [] };
+    const processes = rows.map(line => JSON.parse(line));
+    if (processes.some(item => item?.v !== 1 || !Number.isSafeInteger(item.pid) || item.pid <= 1
+      || typeof item.start !== 'string' || !item.start || item.start.length > 256)) return { incomplete: true, processes: [] };
+    return { incomplete: false, processes: processes.map(({ pid, start }) => ({ pid, start })) };
+  } catch (error) { return { incomplete: error.code !== 'ENOENT', processes: [] }; }
 }
+
+function markPending(root, record) {
+  const pending = readPending(root);
+  if (pending.incomplete || pending.processes.some(item => item.pid === record.pid && item.start === record.start)) return;
+  // One short append preserves other simultaneous sweepers' evidence. A partial
+  // write or a capped record stays unresolved rather than being overwritten.
+  try { appendFileSync(join(root, PENDING_FILE), `${JSON.stringify({ v: 1, pid: record.pid, start: record.start })}\n`); }
+  catch { /* preserve in this snapshot even if the stamp fails */ }
+}
+
+function pendingSettled(root, records, probePid) {
+  const pending = readPending(root);
+  return !pending.incomplete && pending.processes.every(record => testProcessSettlement(record, records, probePid) === 'terminated');
+}
+
 export const STALE_ROOT_AGE_MS = 6 * 60 * 60 * 1000;
 // `ps -o lstart=` has 1s resolution and the recorded start is derived from
 // process.uptime(), so allow slack before calling a pid "reused".
@@ -133,7 +162,7 @@ function ownedSnapshot(parent, prefix, read) {
     const root = testProcessRoot(record, parent, prefix);
     return root && !ancestors.has(record.pid) ? [{ pid: record.pid, start: record.start, root, kind: processKind(record), parent: ancestors.has(record.ppid) ? 'runner' : 'descendant', identity: processIdentity(record) }] : [];
   });
-  return { ancestors, owned };
+  return { ancestors, owned, records };
 }
 
 function stillOwned(record, snapshot, parent, prefix, read) {
@@ -207,7 +236,7 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
     const outcome = { kind: record.kind, parent: record.parent, ...attribution, signal,
       settlement: settlement === 'running' ? 'unconfirmed' : settlement };
     onOutcome(outcome);
-    if (settlement !== 'terminated') markPending(root);
+    if (settlement !== 'terminated') markPending(root, record);
     if (settlement === 'terminated') {
       killed++;
       onKilled({ kind: record.kind, parent: record.parent });
@@ -219,7 +248,7 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
 export function sweepOrphanedTestProcesses(tmpRoot, { prefix = 'pvt-', now = Date.now(), probe = isOwnerAlive,
   read = readTestProcesses, terminate = terminatePid } = {}) {
   const snapshot = ownedSnapshot(tmpRoot, prefix, read);
-  if (!snapshot) return { signaled: 0, inspected: false, preserved: new Set() };
+  if (!snapshot) return { signaled: 0, inspected: false, preserved: new Set(), records: null };
   const preserved = new Set();
   let signaled = 0;
   for (const record of snapshot.owned) {
@@ -229,24 +258,24 @@ export function sweepOrphanedTestProcesses(tmpRoot, { prefix = 'pvt-', now = Dat
     // Escalation is deferred; retain this root until a later snapshot proves
     // its children gone. Signal scheduling is not verified termination.
     preserved.add(record.root);
-    markPending(record.root);
+    markPending(record.root, record);
     try { terminate(record, { valid }); signaled++; } catch { /* settlement unknown */ }
   }
   if (signaled) console.warn(`🧹 Requested termination of ${signaled} interrupted-run test processes; settlement pending`);
-  return { signaled, inspected: true, preserved };
+  return { signaled, inspected: true, preserved, records: snapshot.records };
 }
 
 // Retain the established import boundary while callers adopt the broader name.
 export const killTestBrowsersUnder = killTestProcessesUnder;
 
-export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(), probe = isOwnerAlive, read = readTestProcesses, terminate = terminatePid } = {}) {
+export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(), probe = isOwnerAlive, probePid = probeTestPid, read = readTestProcesses, terminate = terminatePid } = {}) {
   // Require an exact directory-name prefix, never a path or an empty match.
   if (typeof prefix !== 'string' || !/^[a-zA-Z0-9-]+-$/.test(prefix)) {
     throw new Error('Owned temp prefix must be a nonempty name ending in a hyphen');
   }
   // Dead-owner evidence is sufficient to reclaim a root even if process
   // inspection failed. Unknown owners still require inspection before aging out.
-  const { inspected, preserved } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate });
+  const { inspected, preserved, records } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate });
   let names;
   try {
     names = readdirSync(tmpRoot);
@@ -256,7 +285,7 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
   for (const name of names) {
     if (!name.startsWith(prefix)) continue;
     const path = join(tmpRoot, name);
-    if (preserved.has(path) || (!inspected && existsSync(join(path, PENDING_FILE)))) continue;
+    if (preserved.has(path) || !pendingSettled(path, records, probePid)) continue;
     try {
       const stat = lstatSync(path);
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;

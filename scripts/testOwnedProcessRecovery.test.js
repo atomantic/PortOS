@@ -99,6 +99,27 @@ describe('test process ownership boundaries', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
+  it('retains pending identities through partial inventories until terminal evidence permits root removal', () => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-pending-'));
+    const root = join(host, 'pvt-owned'); mkdirSync(root);
+    writeFileSync(join(root, '.owner.pid'), '999999 0\n');
+    const ancestors = [{ pid: process.pid, ppid: process.ppid }, { pid: process.ppid, ppid: 1 }];
+    const child = { pid: 900001, ppid: 1, start: 'original', env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
+    const terminate = vi.fn();
+    const sweep = records => sweepStaleRunRoots(host, { read: () => [...ancestors, ...records], probe: () => false, probePid: () => true, terminate });
+    try {
+      sweep([child]);
+      expect(terminate).toHaveBeenCalledTimes(1);
+      sweep([{ pid: child.pid, ppid: 1, start: child.start }]);
+      expect(existsSync(root)).toBe(true);
+      sweep([]); // omitted rows plus a live PID remain unknown
+      expect(existsSync(root)).toBe(true);
+      sweep([{ pid: child.pid, ppid: 1, start: 'replacement' }]);
+      expect(existsSync(root)).toBe(false);
+      expect(terminate).toHaveBeenCalledTimes(1); // no signal to a replacement identity
+    } finally { rmSync(host, { recursive: true, force: true }); }
+  });
+
   it('refuses reused identities, caller ancestors and ownership changes before delayed escalation', () => {
     vi.useFakeTimers();
     const host = mkdtempSync(join(tmpdir(), 'recovery-race-'));
@@ -113,8 +134,10 @@ describe('test process ownership boundaries', () => {
     try {
       sweepStaleRunRoots(host, { read, probe: () => ownerAlive });
       expect(kill).toHaveBeenCalledExactlyOnceWith(target.pid, 'SIGTERM');
-      sweepStaleRunRoots(host, { read: () => null, probe: () => false });
+      sweepStaleRunRoots(host, { read: () => null, probe: () => false, probePid: () => true });
       expect(existsSync(root)).toBe(true); // unknown settlement cannot erase a prior pending stamp
+      sweepStaleRunRoots(host, { read: () => [...ancestors, { pid: target.pid, ppid: 1, start: target.start }], probe: () => false, probePid: () => true });
+      expect(existsSync(root)).toBe(true); // a partial inventory cannot erase the still-live identity
       target.start = 'reused';
       vi.advanceTimersByTime(2000);
       expect(kill).toHaveBeenCalledTimes(1);
