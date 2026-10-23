@@ -953,6 +953,7 @@ export * from './brainLinkLocalFields.js';
 
 export * from './branchRetirementArchive.js';
 export * from './reconcileRetirementEvidence.js';
+export * from './retirementCheckoutObservation.js';
 
 export * from './checkoutRetirementAdmission.js';
 export * from './moltworldExplore.js';
