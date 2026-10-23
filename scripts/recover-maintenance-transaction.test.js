@@ -114,4 +114,29 @@ describe('offline maintenance transaction recovery', () => {
     expect(createMaintenanceAdmission(data).status()).toMatchObject({ state: 'ready', hold: { owner: 'Transaction recovery' } });
     expect(fs.existsSync(join(directory, partial, 'receipt.json'))).toBe(true);
   });
+
+  it('refuses to release the original fence when interrupted pending evidence cannot be flushed', async () => {
+    const { data, directory, admission } = fixture();
+    interrupt(directory);
+    const descriptors = new Map();
+    const io = { ...fs,
+      openSync: (path, ...args) => {
+        const fd = fs.openSync(path, ...args);
+        descriptors.set(fd, path);
+        return fd;
+      },
+      closeSync: fd => { descriptors.delete(fd); fs.closeSync(fd); },
+      fsyncSync: fd => {
+        if (descriptors.get(fd) === join(directory, 'pending-fixture.json')) throw new Error('fixture evidence flush failed');
+        fs.fsyncSync(fd);
+      },
+    };
+    await expect(recoverMaintenanceTransaction(reason, { data, processes: stopped, io })).rejects.toThrow('fixture evidence flush failed');
+    expect(admission.status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction' });
+    expect(fs.readFileSync(join(directory, 'pending-fixture.json'))).toHaveLength(0);
+    expect(fs.readFileSync(join(directory, 'pending-other.json'), 'utf8')).toBe('{"partial":true}');
+    expect(descriptors.size).toBe(0);
+    await recoverMaintenanceTransaction(reason, { data, processes: stopped });
+    expect(createMaintenanceAdmission(data).status()).toMatchObject({ state: 'ready', hold: { owner: 'Transaction recovery' } });
+  });
 });

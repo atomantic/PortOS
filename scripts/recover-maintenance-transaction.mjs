@@ -72,7 +72,13 @@ export async function recoverMaintenanceTransaction(reason, { data = PATHS.data,
     pending, originalStateSha256: original ? createHash('sha256').update(original).digest('hex') : null,
     hold: state.hold };
   durableWrite(join(archiveDir, 'receipt.json'), `${JSON.stringify(receipt)}\n`);
-  for (const { name } of pending) io.renameSync(join(directory, name), join(archiveDir, name));
+  // Interrupted writes may never have flushed their data. A directory fsync
+  // preserves names, not those bytes; retain the original fence on flush failure.
+  for (const { name } of pending) {
+    const fd = io.openSync(join(directory, name), 'r');
+    try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
+    io.renameSync(join(directory, name), join(archiveDir, name));
+  }
   syncMaintenanceDirectory(archiveDir, io);
   // Publish and fsync a hold BEFORE moving the admission lock. A crash at any
   // step retains either the original fence or the deliberate recovery hold.
