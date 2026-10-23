@@ -465,7 +465,7 @@ describe('perpetualWork', () => {
       expect(out.skipCauses).toEqual({ 'excluded-label:in-flight': 1 });
     });
 
-    it('does not reclaim an issue assigned to the authenticated account', async () => {
+    it('preserves same-login assignment while querying the enterprise origin', async () => {
       spawn.mockImplementation((cmd, args = []) => {
         if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@ghe.example.com:acme/widget.git\n');
         if (cmd === 'gh' && args[0] === 'api' && args.includes('user')) return fakeChild('alice\n');
@@ -479,6 +479,8 @@ describe('perpetualWork', () => {
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
       expect(out).toMatchObject({ actionable: false, count: 0, skipCauses: { assigned: 1 } });
+      const query = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args.includes('graphql'));
+      expect(query[1]).toEqual(expect.arrayContaining(['--hostname', 'ghe.example.com']));
     });
 
     it('does not need an identity probe to park an assigned-only GitHub queue', async () => {

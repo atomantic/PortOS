@@ -169,7 +169,7 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.
   const prListCall = forge === 'gitlab'
     ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath, env)
-    : runCli('gh', githubClaimPrArgs(), repoPath, env);
+    : runCli('gh', await withGithubHost(githubClaimPrArgs(), repoPath), repoPath, env);
   const [branchRes, prRes] = await Promise.all([
     runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
     prListCall
