@@ -12,7 +12,7 @@ const execFileAsync = promisify(execFile);
 
 // Keep stage budgets below the existing 30s test deadline, including setup.
 // Diagnostics contain stage names/counts only, never SID or bin contents.
-async function stage(name, budgetMs, run) {
+async function stage(name, budgetMs, run, pending = new Map()) {
   const started = performance.now();
   const controller = new AbortController();
   let timer;
@@ -23,8 +23,11 @@ async function stage(name, budgetMs, run) {
       reject(new Error(`Native trash smoke stage=${name} deadline after ${budgetMs}ms`));
     }, budgetMs);
   });
+  const work = Promise.resolve().then(() => run(controller.signal));
+  pending.set(name, work);
+  work.then(() => pending.delete(name), () => pending.delete(name));
   try {
-    return await Promise.race([run(controller.signal), deadline]);
+    return await Promise.race([work, deadline]);
   } catch (error) {
     // Native/fs errors can embed private paths. Keep only their bounded code.
     const code = /^[A-Z_0-9]+$/.test(String(error.code)) ? error.code : 'FAILED';
@@ -32,6 +35,20 @@ async function stage(name, budgetMs, run) {
   } finally {
     clearTimeout(timer);
     console.log(`♻️ Native trash smoke stage=${name} finished elapsedMs=${Math.round(performance.now() - started)}`);
+  }
+}
+
+// Abort requests cancellation; it does not prove a filesystem operation or child
+// has stopped. Never delete a fixture while a timed-out stage can still mutate it.
+async function drainStages(pending, budgetMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.allSettled([...pending.values()]).then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), budgetMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -59,15 +76,44 @@ async function findInfoFile(binDir, before, file, signal, { list = readdir, read
 
 // These controls run on every platform; they do not access the real bin.
 describe('native trash smoke lifecycle controls', () => {
-  it('names a stalled stage, aborts owned work, and clears its watchdog', async () => {
+  it('drains a timed-out stage before fixture cleanup, including delayed abort acknowledgment', async () => {
     vi.useFakeTimers();
+    const pending = new Map();
+    let finish;
     let signal;
+    const removeFixture = vi.fn();
     try {
-      const pending = stage('bin-scan', 50, value => { signal = value; return new Promise(() => {}); });
-      const assertion = expect(pending).rejects.toThrow('stage=bin-scan deadline');
+      const result = stage('recycle', 50, value => {
+        signal = value;
+        return new Promise(resolve => { finish = resolve; });
+      }, pending);
+      const assertion = expect(result).rejects.toThrow('stage=recycle deadline');
       await vi.advanceTimersByTimeAsync(50);
       await assertion;
       expect(signal.aborted).toBe(true);
+      const cleanup = drainStages(pending, 100).then(drained => { if (drained) removeFixture(); });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(removeFixture).not.toHaveBeenCalled();
+      finish();
+      await cleanup;
+      expect(removeFixture).toHaveBeenCalledOnce();
+      expect(pending.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves the fixture when owned work never confirms settlement', async () => {
+    vi.useFakeTimers();
+    const pending = new Map([['setup', new Promise(() => {})]]);
+    const removeFixture = vi.fn();
+    try {
+      const cleanup = drainStages(pending, 50).then(drained => { if (drained) removeFixture(); return drained; });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await cleanup).toBe(false);
+      expect(removeFixture).not.toHaveBeenCalled();
+      expect(pending.has('setup')).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -92,8 +138,13 @@ describe.runIf(process.platform === 'win32' && process.env.PORTOS_NATIVE_TRASH_S
   let dir;
   let binDir;
   let infoFile;
+  const pending = new Map();
+  const runStage = (name, budgetMs, run) => stage(name, budgetMs, run, pending);
   afterEach(async () => {
-    await stage('cleanup', 3000, async () => {
+    if (!await drainStages(pending, 3000)) {
+      throw new Error(`Native trash smoke cleanup preserved fixture: unfinished stages=${[...pending.keys()].join(',')}`);
+    }
+    await runStage('cleanup', 3000, async () => {
       // Remove only the pair this test proved belongs to it.
       if (infoFile) {
         await unlink(infoFile).catch(() => {});
@@ -104,7 +155,7 @@ describe.runIf(process.platform === 'win32' && process.env.PORTOS_NATIVE_TRASH_S
   });
 
   it('recycles a temp file and leaves a $I record naming its original path', async () => {
-    const file = await stage('setup', 2000, async signal => {
+    const file = await runStage('setup', 2000, async signal => {
       // The shell records the long form; the runner's tmpdir is an 8.3 path.
       const root = await realpath(tmpdir());
       signal.throwIfAborted();
@@ -114,23 +165,23 @@ describe.runIf(process.platform === 'win32' && process.env.PORTOS_NATIVE_TRASH_S
       await writeFile(target, 'native trash smoke', { signal });
       return target;
     });
-    const sid = await stage('whoami', 3000, async signal => {
+    const sid = await runStage('whoami', 3000, async signal => {
       const { stdout } = await execFileAsync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', signal });
       const result = stdout.trim().split(',')[1]?.replaceAll('"', '');
       if (!/^S-\d+(?:-\d+)+$/.test(result)) throw new Error('Invalid SID');
       return result;
     });
     binDir = join(parse(file).root, '$Recycle.Bin', sid);
-    const before = await stage('bin-snapshot', 3000, async () => new Set(await readdir(binDir).catch(error => {
+    const before = await runStage('bin-snapshot', 3000, async () => new Set(await readdir(binDir).catch(error => {
       // The first recycle on a fresh volume creates its bin.
       if (error.code === 'ENOENT') return [];
       throw error;
     })));
-    await stage('recycle', 15000, signal => moveToNativeTrash([file], { signal }));
-    await stage('source-check', 1000, async () => {
+    await runStage('recycle', 15000, signal => moveToNativeTrash([file], { signal }));
+    await runStage('source-check', 1000, async () => {
       await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' });
     });
-    await stage('bin-scan', 3000, async signal => {
+    await runStage('bin-scan', 3000, async signal => {
       infoFile = await findInfoFile(binDir, before, file, signal);
     });
     expect(infoFile, 'a new $I record must name this run’s unique original path').toBeDefined();

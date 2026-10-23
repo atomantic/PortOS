@@ -173,10 +173,18 @@ function parseReport(text) {
 // another deletion strategy.
 async function runReportingScript(file, args, options, label) {
   let stdout;
+  let closed;
   try {
-    ({ stdout } = await execFileAsync(file, args, { ...options, timeout: NATIVE_TRASH_DEADLINE_MS }));
+    const execution = execFileAsync(file, args, { ...options, timeout: NATIVE_TRASH_DEADLINE_MS });
+    // AbortError may arrive before child close. Keep the operation pending until
+    // its owned process is terminal so callers can safely clean up source files.
+    if (execution.child) closed = new Promise(resolve => execution.child.once('close', resolve));
+    ({ stdout } = await execution);
   } catch (error) {
-    if (options.signal?.aborted) throw codedError(`${label} recycle aborted`, 'TRASH_ABORTED');
+    if (options.signal?.aborted) {
+      await closed;
+      throw codedError(`${label} recycle aborted`, 'TRASH_ABORTED');
+    }
     if (error.killed) throw codedError(`${label} recycle exceeded the ${NATIVE_TRASH_DEADLINE_MS}ms deadline`, 'TRASH_DEADLINE');
     throw Object.assign(codedError(`${label} recycle refused`, 'TRASH_REFUSED'), { exitCode: error.code, report: parseReport(error.stdout) });
   }

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { pinPlatform } from './testHelper.js';
 import { windowsPowerShell51Path } from './processEnv.js';
@@ -71,16 +72,27 @@ describe('Windows adapter', () => {
     expect(state.execFile).toHaveBeenCalledTimes(1);
   });
 
-  it('forwards cancellation to the owned child and reports an abort without retry', async () => {
+  it('keeps cancellation pending until the owned child closes, without retry', async () => {
     restore = pinPlatform('win32');
     const controller = new AbortController();
-    state.execFile.mockImplementation(async (...args) => {
+    const child = new EventEmitter();
+    state.execFile.mockImplementation((...args) => {
       expect(args[2].signal).toBe(controller.signal);
       controller.abort();
-      throw refusal({ name: 'AbortError', code: 'ABORT_ERR' });
+      return Object.assign(Promise.reject(refusal({ name: 'AbortError', code: 'ABORT_ERR' })), { child });
     });
-    await expect(moveToNativeTrash(PATHS, { signal: controller.signal })).rejects.toMatchObject({ code: 'TRASH_ABORTED' });
+    let settled = false;
+    const result = moveToNativeTrash(PATHS, { signal: controller.signal });
+    result.catch(() => { settled = true; });
+    const assertion = expect(result).rejects.toMatchObject({ code: 'TRASH_ABORTED' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    child.emit('close');
+    await assertion;
+    expect(settled).toBe(true);
     expect(state.execFile).toHaveBeenCalledTimes(1);
+    expect(child.listenerCount('close')).toBe(0);
   });
 
   it('rejects unparsable output as a failure', async () => {
