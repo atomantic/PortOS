@@ -45,8 +45,12 @@ export const applyGitHubNotificationAction = (accountId, threadId, action, optio
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}`, {
     method: 'POST', body: JSON.stringify({ action }), ...options,
   });
-export const resolveGitHubNotificationWithAgent = (accountId, threadId, options = {}) =>
-  request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/agent`, { method: 'POST', ...options });
+// `run` is this run's `{ provider, model, effort }` (null = Auto); omit it to
+// use the agent rule's pin or the account's agent defaults.
+export const resolveGitHubNotificationWithAgent = (accountId, threadId, run = null, options = {}) =>
+  request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/agent`, {
+    method: 'POST', body: JSON.stringify(run || {}), ...options,
+  });
 export const getGitHubDeploymentReview = (accountId, threadId, options = {}) =>
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/deployment`, options);
 export const reviewGitHubDeployment = (accountId, threadId, review, options = {}) =>

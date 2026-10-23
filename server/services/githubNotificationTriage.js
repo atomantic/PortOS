@@ -203,6 +203,9 @@ async function triageThread(row, ctx) {
       signals,
       actor: actorLogin,
       commenter: commenter && commenter !== actorLogin ? commenter : null,
+      // Always recorded (null: no other commenter) so the generic agent lane
+      // can tell a vouched thread from one triaged before it was kept (#13191).
+      commenterTrust,
       repoOwned,
       repoManaged,
       subjectState: subject ? (subject.merged === true ? 'merged' : subject.state || null) : null,

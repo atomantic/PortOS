@@ -470,24 +470,43 @@ describe('GitHub inbox tab', () => {
     await waitFor(() => expect(mock.clearFinishedGitHubNotifications).toHaveBeenCalledWith(null));
   });
 
-  it('resolves an actionable thread with an agent in one tap, and says why when it cannot', async () => {
+  it('offers Resolve with agent on every open row, runs it on the picked agent, and says why when it cannot', async () => {
+    mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
     mock.getGitHubNotifications.mockResolvedValue({
       notifications: [
-        { ...NOTIFICATION, agent: { lane: 'pr-reviewer', refused: null } },
-        { ...NOTIFICATION, threadId: '102', title: 'Alert elsewhere', reason: 'security_alert', agent: { lane: 'dependency-updates', refused: 'no-managed-app' } },
+        { ...NOTIFICATION, agent: { lane: 'notification-resolve', refused: null, pin: { provider: 'example-provider', model: 'example-model' } } },
+        { ...NOTIFICATION, threadId: '102', title: 'Alert elsewhere', reason: 'security_alert', agent: { lane: 'dependency-updates', refused: 'no-managed-app', pin: null } },
+        { ...NOTIFICATION, threadId: '103', title: 'Outside thread', agent: { lane: 'notification-resolve', refused: 'outside-content', pin: null } },
       ],
       sync: {},
     });
-    mock.resolveGitHubNotificationWithAgent.mockResolvedValue({ ...NOTIFICATION, decision: 'handed-off', agent: null });
+    mock.resolveGitHubNotificationWithAgent.mockResolvedValue({ ...NOTIFICATION, decision: 'handed-off', agent: { lane: 'notification-resolve', refused: 'handed-off', pin: null } });
     renderTab('inbox');
     expect(await screen.findByText('Add this repo as a PortOS app to resolve it with an agent')).toBeTruthy();
+    expect(screen.getByText(/Outside content goes only to the screened/)).toBeTruthy();
     const buttons = screen.getAllByRole('button', { name: 'Resolve with agent' });
-    expect(buttons).toHaveLength(1);
+    expect(buttons.map((button) => button.disabled)).toEqual([false, true, true]);
     fireEvent.click(buttons[0]);
-    expect(mock.resolveGitHubNotificationWithAgent).toHaveBeenCalledWith('github-com', '101');
+    // The picker starts from the rule pin or account defaults the server sent.
+    const start = await screen.findByRole('button', { name: 'Start agent' });
+    await waitFor(() => expect(start.disabled).toBe(false));
+    await waitFor(() => expect(screen.getByLabelText(/^Provider/).value).toBe('example-provider'));
+    fireEvent.click(start);
+    await waitFor(() => expect(mock.resolveGitHubNotificationWithAgent).toHaveBeenCalledWith('github-com', '101', { provider: 'example-provider', model: 'example-model', effort: null }));
     // A handed-off thread stays in the inbox, as it does on GitHub, with its pill.
     expect(await screen.findByText('Handed off')).toBeTruthy();
     expect(screen.getByText('Example change')).toBeTruthy();
+    expect(screen.getByText('An agent already has this thread')).toBeTruthy();
+  });
+
+  it('links an Agent failed pill to the run that failed', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, agent: { lane: 'notification-resolve', refused: null, pin: null }, agentFailed: { taskId: 'task-1', agentId: 'agent-7' } }],
+      sync: {},
+    });
+    renderTab('inbox');
+    expect((await screen.findByText('Agent failed')).closest('a').getAttribute('href')).toBe('/cos/agents/agent-7');
+    expect(screen.getByRole('button', { name: 'Resolve with agent' }).disabled).toBe(false);
   });
 
   it('undoes Done locally and a mute by re-subscribing', async () => {
@@ -647,6 +666,22 @@ describe('GitHub automations tab', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Stop allowing agents' }));
     await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('ghe', { allowAgents: false }));
     expect(await screen.findByRole('button', { name: 'Allow agents on this account' })).toBeTruthy();
+  });
+
+  it('sets an account\'s agent defaults for Resolve with agent, and clears them back to CoS defaults', async () => {
+    mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], agentDefaults: { provider: 'example-provider', effort: 'high' }, agentRules: [], repos: [] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ ...OVERVIEW.accounts[0], id, ...data }));
+    renderTab('automations');
+    expect(await screen.findByText(/^Example Provider · high effort/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/ }));
+    const save = await screen.findByRole('button', { name: 'Save defaults' });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    await waitFor(() => expect(screen.getByLabelText(/^Provider/).value).toBe('example-provider'));
+    fireEvent.change(screen.getByLabelText(/^Provider/), { target: { value: '' } });
+    fireEvent.click(save);
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentDefaults: null }));
+    expect(await screen.findByText(/^CoS defaults/)).toBeTruthy();
   });
 
   it('adds an agent rule for review requests in one repo and refuses a duplicate', async () => {

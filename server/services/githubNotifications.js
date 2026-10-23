@@ -24,7 +24,7 @@ import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccou
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
-import { agentHandoff, FINISHED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
+import { agentHandoff, agentRunPin, FINISHED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -310,10 +310,22 @@ const VIEW_FILTERS = {
 
 const toIso = (value) => (value instanceof Date ? value.toISOString() : value);
 
-// The lane Resolve with agent would use, and why it cannot when refused.
+// The lane Resolve with agent would use, why it cannot when refused, and the
+// provider/model/effort its picker starts from (the rule's pin, else the
+// account's agent defaults).
 const agentView = (account, row) => {
-  const plan = account ? agentHandoff({ account, row }) : null;
-  return plan ? { lane: plan.lane, refused: plan.refused || null, pin: plan.pin || null } : null;
+  if (!account || row.state !== 'open') return null;
+  if (row.suspect) return { lane: null, refused: 'suspect', pin: null };
+  const plan = agentHandoff({ account, row });
+  if (!plan) return null;
+  const pin = agentRunPin({ rulePin: plan.pin, defaults: account.agentDefaults });
+  return { lane: plan.lane, refused: plan.refused || null, pin: Object.keys(pin).length ? pin : null };
+};
+
+// A generic agent run that failed, for the inbox's Agent failed pill.
+const agentFailedView = (row) => {
+  const failed = row.state === 'open' ? row.evidence?.handoff?.failed : null;
+  return failed?.taskId ? { taskId: failed.taskId, agentId: failed.agentId || null, at: failed.at || null } : null;
 };
 
 // A deployment approval's thread has no subject url; triage found its run.
@@ -347,6 +359,7 @@ const toApi = (row, accountsById) => {
     rule: row.evidence?.rule || null,
     signals: Array.isArray(row.evidence?.signals) ? row.evidence.signals : [],
     agent: agentView(account, row),
+    agentFailed: agentFailedView(row),
     updatedAt: toIso(row.gh_updated_at),
   };
 };
@@ -669,6 +682,7 @@ export async function getAutomationsOverview() {
         suspect: counts?.suspect || 0,
         pending: counts?.pending || 0,
         allowAgents: account.allowAgents === true,
+        agentDefaults: account.agentDefaults || null,
         agentRules: Array.isArray(account.agentRules) ? account.agentRules : [],
         repos: reposById.get(account.id) || [],
       };
@@ -686,11 +700,15 @@ export async function setNotificationCadence(cadence) {
   return getAutomationsOverview();
 }
 
-/** Resolve with agent: hand one thread to its lane now, then return it. */
-export async function resolveWithAgent(accountId, threadId) {
+/**
+ * Resolve with agent: hand one thread to its lane now, then return it.
+ * `perRun` is the operator's provider/model/effort for this run, or undefined
+ * to use the agent rule's pin or the account's defaults.
+ */
+export async function resolveWithAgent(accountId, threadId, perRun) {
   const account = await getAccount(accountId);
   const { handOffThread } = await import('./githubNotificationAutopilot.js');
-  await handOffThread(account, threadId);
+  await handOffThread(account, threadId, perRun);
   const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
   githubNotificationEvents.emit('changed', { accountId: account.id });
   return toApi(row, new Map([[account.id, account]]));

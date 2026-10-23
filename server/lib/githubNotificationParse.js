@@ -74,7 +74,7 @@ const SUBJECT_PATHS = { issues: 'issues', pulls: 'pull', commits: 'commit', disc
  * when GitHub gave an API url we recognize, else the repository page. Any url
  * that would leave `host` is dropped rather than shown.
  */
-function notificationHtmlUrl({ subjectApiUrl, repoFullName }, host) {
+export function notificationHtmlUrl({ subjectApiUrl, repoFullName }, host) {
   const advisory = advisoryIdFromUrl(subjectApiUrl, host);
   if (advisory) return `https://${webHostFor(host)}/advisories/${advisory}`;
   const [owner, repo] = String(repoFullName || '').split('/');
