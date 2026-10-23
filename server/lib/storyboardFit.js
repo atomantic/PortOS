@@ -119,24 +119,32 @@ export function fitStoryboardToSong(board, song, { starts = {}, minShotSec = STO
   const sectionMarks = song.sections.map((section, index) => ({ at: section.startSec, kind: 'section', label: section.label, index }));
   const lyricMarks = song.lyricCues.map((cue) => ({ at: cue.startSec, kind: 'lyric', label: clip(cue.text, 80) }));
   const downbeatMarks = song.downbeats.map((at) => ({ at, kind: 'downbeat', label: null }));
-  // Every shot needs its minimum, so a beat's start leaves room for the beats before and after it.
+  // Reserve the requested minimum only when the song can hold it. Short songs
+  // still fit every panel; their short-shot warnings use the requested minimum.
   const shotCount = beats.map((beat) => Math.max(1, beat.panels.length));
-  const after = shotCount.map((_, i) => shotCount.slice(i).reduce((sum, n) => sum + n, 0) * minShotSec);
+  const totalShots = shotCount.reduce((sum, n) => sum + n, 0);
+  const availableShotSec = songEnd / totalShots;
+  // Keep enough ticks per shot that rounding cannot consume a tiny song.
+  const precision = 10 ** Math.max(2, Math.ceil(-Math.log10(availableShotSec)) + 1);
+  const roundTime = (t) => Math.round(t * precision) / precision;
+  const tick = 1 / precision;
+  const reservedMinSec = Math.floor(Math.min(minShotSec, availableShotSec) * precision) / precision;
+  const after = shotCount.map((_, i) => shotCount.slice(i).reduce((sum, n) => sum + n, 0) * reservedMinSec);
 
   const placed = [];
   beats.forEach((beat, i) => {
     const raw = mapped[i];
     const share = holds[i] * scale;
-    const low = i === 0 ? 0 : placed[i - 1].start + shotCount[i - 1] * minShotSec;
-    const high = Math.max(low, songEnd - after[i]);
-    const fits = (at) => at >= low - 0.001 && at <= high + 0.001;
+    const low = i === 0 ? 0 : roundTime(placed[i - 1].start + shotCount[i - 1] * reservedMinSec);
+    const high = Math.max(low, Math.floor((songEnd - after[i]) * precision) / precision);
+    const fits = (at) => at >= low && at <= high;
     const window = Math.max(1.5, Math.min(6, share * 0.35));
     const prevShare = i > 0 ? holds[i - 1] * scale : share;
     const options = i === 0 ? [] : [...sectionMarks, ...lyricMarks]
       .filter((mark) => mark.at > raw - prevShare && mark.at < raw + share && fits(mark.at))
       .sort((a, b) => Math.abs(a.at - raw) - Math.abs(b.at - raw)).slice(0, OPTIONS_MAX)
       .sort((a, b) => a.at - b.at)
-      .map(({ at, kind, label }) => ({ at: round(at), kind, label }));
+      .map(({ at, kind, label }) => ({ at: roundTime(at), kind, label }));
 
     let start;
     let snap;
@@ -157,7 +165,7 @@ export function fitStoryboardToSong(board, song, { starts = {}, minShotSec = STO
       start = found ? found.at : Math.min(Math.max(raw, low), high);
       snap = found ? found.kind : null;
     }
-    placed.push({ start: round(start), snap, options });
+    placed.push({ start: Math.min(high, Math.max(low, roundTime(start))), snap, options });
   });
 
   const cutGrid = song.beats.length ? song.beats : song.downbeats;
@@ -165,7 +173,7 @@ export function fitStoryboardToSong(board, song, { starts = {}, minShotSec = STO
   const shots = [];
   beats.forEach((beat, i) => {
     const start = placed[i].start;
-    const end = i + 1 < beats.length ? placed[i + 1].start : round(songEnd);
+    const end = i + 1 < beats.length ? placed[i + 1].start : songEnd;
     const sectionIndex = sectionAt(song.sections, start);
     const sectionLabel = sectionIndex === null ? null : song.sections[sectionIndex].label;
     const title = clip(beat.title || STORYBOARD_MUSICAL_ROLE_LABELS[beat.musicalRole] || `Beat ${i + 1}`, LABEL_MAX);
@@ -173,12 +181,17 @@ export function fitStoryboardToSong(board, song, { starts = {}, minShotSec = STO
     const weights = panels.map((panel) => holdSeconds(panel));
     const weightTotal = weights.reduce((sum, w) => sum + w, 0);
     const cuts = [start];
-    weights.slice(0, -1).reduce((acc, w) => {
+    weights.slice(0, -1).reduce((acc, w, p) => {
       const next = acc + w;
       const at = start + (end - start) * (next / weightTotal);
       const snapped = nearest(cutGrid.map((t) => ({ at: t })), at, CUT_SNAP_SEC)?.at;
       const floor = cuts.at(-1) + 0.5;
-      cuts.push(round(snapped !== undefined && snapped > floor && snapped < end - 0.5 ? snapped : at));
+      const cut = roundTime(snapped !== undefined && snapped > floor && snapped < end - 0.5 ? snapped : at);
+      // A snap may pass the next proportional cut; leave at least one tick
+      // for every remaining panel, including when its hold is very small.
+      const low = roundTime(cuts.at(-1) + tick);
+      const high = roundTime(end - (panels.length - p - 1) * tick);
+      cuts.push(Math.min(high, Math.max(low, cut)));
       return next;
     }, 0);
     cuts.push(end);

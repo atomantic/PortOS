@@ -82,7 +82,8 @@ export async function actOnNotificationPullRequest(account, threadId, options, {
         const { spawnPrDoReviewTask } = await import('./prDoReviewTask.js');
         const url = `https://${account.host}/${target.repo}/pull/${target.number}`;
         const githubAccount = await githubReviewAccountSelector(account, env);
-        const queued = await spawnPrDoReviewTask({ app, pullRequest: { ...pr, url }, repoFullName: target.repo, githubAccount, ...pin, immediate: !automatic });
+        const queued = await spawnPrDoReviewTask({ app, pullRequest: { ...pr, url }, repoFullName: target.repo, githubAccount, ...pin, immediate: !automatic,
+          notificationAccount: account, notificationOrigin: automatic ? ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION : ON_DEMAND_ORIGINS.USER });
         if (!queued.task) throw refuse('The review could not be queued');
         result = { taskId: queued.task.id, duplicate: queued.duplicate, started: queued.dispatch.started, queueReason: queued.dispatch.reason };
       } else {

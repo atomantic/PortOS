@@ -18,7 +18,7 @@
  */
 import { query } from '../lib/db.js';
 import { isQueuedContinuation, isTaskDeliveryComplete } from '../lib/agentOutcome.js';
-import { GENERIC_AGENT_LANE } from '../lib/githubNotificationTriage.js';
+import { GENERIC_AGENT_LANE, notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 import { notificationHtmlUrl, repoApiPath } from '../lib/githubNotificationParse.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { addTask } from './cosTaskStore.js';
@@ -144,6 +144,7 @@ export async function queueNotificationResolveTask({ account, row, origin = 'use
     worktreeChangesExpected: false,
     metadata: {
       externalRepositoryOutput,
+      githubNotificationAccount: notificationAgentAccountBinding(account, origin),
       githubNotificationResolve: {
         accountId: account.id, threadId: row.thread_id, host: account.host, repo, subjectType: row.subject_type, reason: row.reason, kind, origin,
       },

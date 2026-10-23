@@ -69,6 +69,26 @@ describe('fitStoryboardToSong', () => {
     expect(rev(panel('a1', 3))).not.toBe(rev(panel('a1', 3, 'Something else')));
   });
 
+  it.each([
+    { holds: [[3], [3], [3]], durationSec: 3 },
+    { holds: [[1], [1, 1], [1, 1, 1]], durationSec: 0.059 },
+    { holds: [[3], [], [1, 1]], durationSec: 1 },
+    { holds: [[40, 0.001, 40]], durationSec: 40, grid: [20.2] },
+  ])('keeps every cut positive and within a cramped song ($durationSec s)', ({ holds, durationSec, grid = [] }) => {
+    const cramped = { beats: holds.map((values, b) => beat(String(b), null, values.map((seconds, p) => panel(`${b}-${p}`, seconds)))) };
+    const fit = fitStoryboardToSong(cramped, storyboardFitSong({ audioAnalysis: { durationSec, sections: [], beats: grid, downbeats: [] } }));
+    expect(fit.shots).toHaveLength(holds.reduce((sum, values) => sum + Math.max(1, values.length), 0));
+    expect(fit.shots[0].startSec).toBe(0);
+    expect(fit.shots.at(-1).endSec).toBe(durationSec);
+    fit.shots.forEach((shot, i) => {
+      expect(shot.startSec).toBeGreaterThanOrEqual(0);
+      expect(shot.endSec).toBeGreaterThan(shot.startSec);
+      expect(shot.endSec).toBeLessThanOrEqual(durationSec);
+      if (i > 0) expect(shot.startSec).toBe(fit.shots[i - 1].endSec);
+    });
+    expect(fit.beats.reduce((sum, b) => sum + b.short, 0)).toBe(fit.shots.filter((s) => s.endSec - s.startSec < 2 - 0.001).length);
+  });
+
   it('reads a fitted shot\'s panel as current, changed or missing', () => {
     const shot = fitStoryboardToSong(board, song()).shots[1];
     expect(storyboardShotPanel(board, shot)).toMatchObject({ state: 'current', number: 2, beatIndex: 1 });

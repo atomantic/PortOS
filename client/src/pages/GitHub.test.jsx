@@ -743,6 +743,7 @@ describe('GitHub automations tab', () => {
   });
 
   it('configures Dependabot merges with the shared merge options and can apply the saved rule now', async () => {
+    mock.getProviders.mockReturnValue(new Promise(() => {}));
     mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], mode: 'autopilot',
       agentRules: [], repos: ['octocat/hello'], openByKind: [{ kind: 'dependabot-pr', repo: 'octocat/hello', total: 2, actionable: 2 }] }] });
     mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
@@ -757,6 +758,7 @@ describe('GitHub automations tab', () => {
     fireEvent.change(screen.getByLabelText('Merge method for automation'), { target: { value: 'squash' } });
     fireEvent.click(screen.getByLabelText('Delete branch'));
     fireEvent.click(screen.getByLabelText('Apply to these 2 now'));
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeEnabled();
     fireEvent.submit(form);
     await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentRules: [expect.objectContaining({
       kind: 'dependabot-pr', repo: 'octocat/hello', action: 'merge', mergeMethod: 'squash', deleteBranch: true,
@@ -934,6 +936,64 @@ describe('GitHub automations tab', () => {
       ],
     }));
     expect(await screen.findByText('octocat/hello', { selector: 'span' })).toBeTruthy();
+  });
+
+  it.each(['agent', 'do-review', 'untrusted-review'])('preserves a saved %s rule pin while its provider catalog is loading', async (action) => {
+    let resolveProviders;
+    mock.getProviders.mockReturnValue(new Promise((resolve) => { resolveProviders = resolve; }));
+    const rule = { id: 'rule-pinned', kind: 'review-request', repo: '*', action, provider: 'example-provider', model: 'example-model', effort: 'high' };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], agentRules: [rule], repos: [] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+    const edit = await screen.findByRole('button', { name: 'Edit Review requests rule for All repos' });
+    await act(async () => fireEvent.click(edit));
+    const form = screen.getByRole('form', { name: 'Edit automation rule' });
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
+    fireEvent.submit(form);
+    expect(mock.updateGitHubAccount).not.toHaveBeenCalled();
+
+    await act(async () => resolveProviders({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] }));
+    await waitFor(() => expect(screen.getByLabelText(/^Provider/)).toHaveValue('example-provider'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentRules: [rule] }));
+  });
+
+  it('keeps a failed review-rule edit open and applies cleared inherited overrides only after a successful save', async () => {
+    mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
+    const rule = { id: 'rule-review', kind: 'review-request', repo: '*', action: 'do-review', provider: 'example-provider', model: 'example-model', effort: 'high' };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], mode: 'autopilot', agentRules: [rule], repos: [],
+      openByKind: [{ kind: 'review-request', repo: 'octocat/hello', total: 1, actionable: 1 }] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data })).mockRejectedValueOnce(new Error('Rule save failed'));
+    renderTab('automations');
+    const edit = await screen.findByRole('button', { name: 'Edit Review requests rule for All repos' });
+    await act(async () => fireEvent.click(edit));
+    await waitFor(() => expect(screen.getByLabelText(/^Provider/)).toHaveValue('example-provider'));
+    fireEvent.change(screen.getByLabelText(/^Provider/), { target: { value: '' } });
+    fireEvent.click(screen.getByLabelText('Apply to this 1 now'));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save rule' })));
+    const clearedRule = { ...rule, provider: null, model: null, effort: null };
+    expect(mock.updateGitHubAccount).toHaveBeenLastCalledWith('github-com', { agentRules: [clearedRule] });
+    expect(screen.getByRole('form', { name: 'Edit automation rule' })).toBeTruthy();
+    expect(mock.syncGitHubNotifications).not.toHaveBeenCalled();
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save rule' })));
+    expect(mock.updateGitHubAccount).toHaveBeenLastCalledWith('github-com', { agentRules: [clearedRule] });
+    expect(screen.queryByRole('form', { name: 'Edit automation rule' })).toBeNull();
+    expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true });
+  });
+
+  it('allows non-agent rule edits while the provider catalog is loading', async () => {
+    mock.getProviders.mockReturnValue(new Promise(() => {}));
+    const rule = { id: 'rule-done', kind: 'ci-activity', repo: '*', action: 'done' };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], agentRules: [rule], repos: [] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit CI activity rule for All repos' }));
+    fireEvent.change(screen.getByLabelText('Then'), { target: { value: 'leave' } });
+    const save = screen.getByRole('button', { name: 'Save rule' });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentRules: [{ ...rule, action: 'leave' }] }));
   });
 });
 

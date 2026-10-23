@@ -64,6 +64,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
     refreshFlux2Status,
     needsFlux2Token,
   } = generation;
+  const resolvedRunwayModel = effectiveRunwayModel || settings.savedRunwayModel || RUNWAY_IMAGE_DEFAULT_MODEL;
 
   return (
     <div className="min-w-0 bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
@@ -84,7 +85,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
       >
         <button
           type="submit"
-          disabled={(isRunwayMode && !runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel)) || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || (derived.remoteTargetActive
+          disabled={(isRunwayMode && !runwayCatalog.imageModels.some((m) => m.id === resolvedRunwayModel)) || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || (derived.remoteTargetActive
             ? derived.remoteBlocked !== null
             : (derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt))}
           title={derived.unsupportedLocalInputs ? 'Remove unsupported LoRAs and input images in Options before rendering.' : loraTest.pending ? 'Preparing this LoRA test…' : loraTest.error || (remix.pending
@@ -243,7 +244,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             modelStatus={isLocalMode ? modelDownload.getStatus(fields.modelId) : null}
             onModelDownload={isLocalMode ? modelDownload.start : undefined}
             onModelDownloadCancel={modelDownload.cancel}
-            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isRunwayMode ? [...runwayCatalog.imageModels, ...(!runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel) ? [{ id: effectiveRunwayModel, label: `${effectiveRunwayModel} (unavailable)` }] : [])] : []}
+            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isRunwayMode ? [...runwayCatalog.imageModels, ...(effectiveRunwayModel && !runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel) ? [{ id: effectiveRunwayModel, label: `${effectiveRunwayModel} (unavailable)` }] : [])] : []}
             cloudModel={isRunwayMode ? effectiveRunwayModel : isFalMode ? effectiveFalModel : effectiveAgyModel}
             onCloudModelChange={isRunwayMode ? fields.setRunwayModel : isFalMode ? fields.setFalModel : fields.setAgyModel}
             cloudModelLabel={isRunwayMode ? 'Runway model' : isFalMode ? 'fal.ai model' : 'Agent model'}

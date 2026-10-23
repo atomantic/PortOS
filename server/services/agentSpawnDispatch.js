@@ -94,6 +94,22 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     validateModel: validatePublicReviewModel,
   });
   if (publicReviewBlock) return context.blockAndBail(publicReviewBlock);
+  // Inbox actions can target a different account and repository from this
+  // checkout. Bind their credential before any workspace work or registration.
+  const inboxAccountTask = task.metadata?.githubNotificationAccount || task.metadata?.githubNotificationResolve || task.metadata?.githubSecurityFix || task.metadata?.githubAccount;
+  if (publicReview && inboxAccountTask) return context.blockAndBail({
+    reason: 'An inbox account credential cannot be given to a public-content review stage.',
+    category: 'github-inbox-account-unavailable',
+  });
+  const notificationAuth = inboxAccountTask
+    ? await import('./githubNotificationAgentAuth.js')
+      .then(({ resolveNotificationAgentEnv }) => resolveNotificationAgentEnv(task))
+      .then(env => ({ env }), error => ({ error }))
+    : { env: null };
+  if (notificationAuth.error) return context.blockAndBail({
+    reason: notificationAuth.error.message,
+    category: 'github-inbox-account-unavailable',
+  });
   const dispatchUseRunner = (publicReview || hasCredentialBootstrap(provider)) ? false : useRunner;
   let publicReviewPromptData = null;
 
@@ -154,23 +170,18 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       : basePrompt;
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
     const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
-    const { provider: preparedProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
+    if (notificationAuth.env) {
+      // This copy exists only for this launch. The stored provider and agent/run
+      // registration retain the original provider, with no inbox token added.
+      // Every CLI/TUI/runner composer already carries provider.envVars and skips
+      // its checkout credential lookup when this explicit token is present.
+      requestedProvider.envVars = { ...requestedProvider.envVars, ...notificationAuth.env };
+    }
+    const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
       requestedProvider,
       selectedModel,
       requestedProvider.effort || null,
     );
-    let runProvider = preparedProvider;
-    if (task.metadata?.githubAccount && !publicReview) {
-      const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
-      const { composeProviderEnv } = await import('../lib/cliChildEnv.js');
-      const accountEnv = await resolveForgeTokenEnv(workspacePath, { githubAccount: task.metadata.githubAccount });
-      // The selected inbox account outranks cwd/provider defaults for this run.
-      // Persist/register the original provider below; credentials stay transient.
-      // Empty aliases also prevent the lower spawners from resolving cwd's
-      // github.com credential for a selected Enterprise account.
-      runProvider = { ...preparedProvider, envVars: composeProviderEnv({ provider: preparedProvider, model: selectedModel,
-        extra: { GH_TOKEN: '', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '', ...accountEnv } }) };
-    }
     const localEndpoint = localEndpointOfProvider(provider);
     const localPromptBudget = localEndpoint
       ? planLocalPromptBudget({

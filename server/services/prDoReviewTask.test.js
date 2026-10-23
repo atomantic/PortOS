@@ -89,6 +89,26 @@ describe('spawnPrDoReviewTask', () => {
     expect(forceSpawnTask).not.toHaveBeenCalled();
   });
 
+  it('keeps both the inbox policy binding and concrete viewer of an implicit account', async () => {
+    const notificationAccount = { id: 'account-example', host: 'github.com', login: null };
+    const githubAccount = { ...notificationAccount, login: 'selected-viewer' };
+    await queue({ githubAccount, notificationAccount, notificationOrigin: 'github-notification', immediate: false });
+    expect(queuedTask().metadata).toEqual({ targetPullRequest: 17, githubAccount,
+      githubNotificationAccount: { accountId: notificationAccount.id, host: notificationAccount.host, login: null, origin: 'github-notification' } });
+  });
+
+  it('retains account-scoped dedup across the released and newer saved binding forms', async () => {
+    const notificationAccount = { id: 'account-example', host: 'github.com', login: 'example-reviewer' };
+    const existing = { id: 'already-queued', duplicate: true, metadata: { githubNotificationAccount: {
+      accountId: notificationAccount.id, host: 'GITHUB.COM', login: 'EXAMPLE-REVIEWER', origin: 'user' } } };
+    addTask.mockResolvedValueOnce(existing);
+    expect(await queue({ githubAccount: notificationAccount })).toMatchObject({ duplicate: true });
+    addTask.mockResolvedValueOnce(existing);
+    await expect(queue({ notificationAccount: { ...notificationAccount, id: 'another-account' } }))
+      .rejects.toMatchObject({ code: 'GITHUB_REVIEW_ACCOUNT_CONFLICT' });
+    expect(forceSpawnTask).not.toHaveBeenCalled();
+  });
+
   it('starts the agent immediately, because the button is the approval', async () => {
     const result = await queue();
 
@@ -105,6 +125,14 @@ describe('spawnPrDoReviewTask', () => {
     expect(queuedTask().description).toBe('Review PR #17 for acme/widget');
     expect(forceSpawnTask).not.toHaveBeenCalled();
     expect(result).toMatchObject({ duplicate: false, dispatch: { started: false, reason: null } });
+  });
+
+  it('keeps an inbox review bound to the selected account even without a managed app', async () => {
+    await queue({ app: null, immediate: false, notificationAccount: { id: 'inbox-b', host: 'ghe.example.com', login: 'inbox-user' } });
+    expect(queuedTask().metadata).toEqual({
+      targetPullRequest: 17,
+      githubNotificationAccount: { accountId: 'inbox-b', host: 'ghe.example.com', login: 'inbox-user', origin: 'user' },
+    });
   });
 
   it('reports a refused dispatch as queued-not-started rather than as a running agent', async () => {

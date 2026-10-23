@@ -3464,7 +3464,7 @@ describe('stage checklist and project options', () => {
 
   it('lists open storyboard feedback on its own Feedback row, settled with buttons there, never under Lyrics', async () => {
     const note = { id: 'fb-a', stage: 'storyboard', target: 'Chorus', text: 'Put the lyrics on the wall, not the screen', decision: 'request-changes', basis: 'board' };
-    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Chorus', startSec: 0, endSec: 4 }],
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', order: 0, label: 'Chorus', startSec: 0, endSec: 4 }],
       productionReview: { draft: { storyboard: [] }, feedback: [note] },
       productionReadiness: { readyForProduction: false, basis: { storyboard: 'board' }, art: { approved: true, problems: [] },
         storyboard: { approved: false, problems: [`Resolve storyboard feedback for ${note.target}: ${note.text}`] }, proof: { approved: false, problems: [] } } };
@@ -3485,7 +3485,7 @@ describe('stage checklist and project options', () => {
 
   // Uniquely catches a lyric anchor problem the director cannot find or settle from the checklist.
   it('names each shot whose lyric anchors differ from the singing, opens it, and anchors them all in one tap', async () => {
-    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Singer', startSec: 4, endSec: 8 }],
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', order: 0, label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', order: 1, label: 'Singer', startSec: 4, endSec: 8 }],
       productionReview: { draft: { storyboard: [] } },
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
         storyboard: { approved: false, problems: ['Review lyric anchors for Singer.'],
@@ -3503,7 +3503,7 @@ describe('stage checklist and project options', () => {
 
   // Uniquely catches a row left from a cut shot holding the board with no way to clear it from the checklist.
   it('lists the storyboard rows left from deleted shots by time and action, and removes them in one tap', async () => {
-    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }],
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', order: 0, label: 'Drummer', startSec: 0, endSec: 4 }],
       productionReview: { draft: { storyboard: [] } },
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
         storyboard: { approved: false, problems: ['Remove 2 storyboard rows left from deleted shots.'],
@@ -3521,7 +3521,7 @@ describe('stage checklist and project options', () => {
 
   // Uniquely catches a coverage or details problem the director cannot trace to a shot.
   it('names the shots behind Shot coverage and Shot details, each opening its card', async () => {
-    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Singer', startSec: 4.5, endSec: 8 }],
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', order: 0, label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', order: 1, label: 'Singer', startSec: 4.5, endSec: 8 }],
       productionReview: { draft: { storyboard: [] } },
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
         storyboard: { approved: false, problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.', 'Complete timing, action, staging, camera and transition for Singer.'],
