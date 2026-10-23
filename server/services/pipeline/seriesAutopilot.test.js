@@ -5,6 +5,11 @@ import { SERIES_AUTOPILOT_DEFAULTS } from '../../lib/seriesAutopilotDefaults.js'
 // ---- File-backed store (like autoRunner.test.js) so the REAL series/issues
 // services run against an in-memory map instead of Postgres. ------------------
 const fileStore = new Map();
+const patchRunMetadata = vi.fn(async () => {});
+vi.mock('../runner.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  patchRunMetadata,
+}));
 vi.mock('../../lib/fileUtils.js', () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
   tryReadFile: vi.fn().mockResolvedValue(null),
@@ -2724,6 +2729,9 @@ describe('autopilot conductor', () => {
     const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
     expect(last?.pauseKind).toBe('inapplicable');
     expect(last?.discardedFindings).toEqual(blockers);
+    expect(patchRunMetadata).toHaveBeenCalledWith('structure-reverted', expect.objectContaining({
+      seriesId, autopilotSystem: 'series', pipelineRole: 'creative',
+    }));
     expect(recordModelOutcome).toHaveBeenCalledWith('structure-reverted', expect.objectContaining({
       role: 'creative', stage: 'foundationGate', outcome: 'rejected', target: 'structure',
     }));
