@@ -97,6 +97,7 @@ const ACTION_KINDS = Object.freeze({
   todo: 'review.todo',
   history: 'review.history',
   feedback: 'cos.feedback',
+  github: 'github.notification',
   product: 'product.recommendation',
 });
 
@@ -115,6 +116,7 @@ const OPERATION_LABELS = Object.freeze({
   todo: 'Complete',
   history: 'History',
   feedback: 'Rate',
+  github: 'Review',
 });
 
 const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
@@ -632,6 +634,31 @@ const PRODUCERS = [
     },
     map(item) {
       return item;
+    },
+  },
+  {
+    source: 'github',
+    label: 'GitHub alerts',
+    drillTo: '/devtools/github/inbox',
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const { listActionableNotifications } = await import('./githubNotifications.js');
+      return listActionableNotifications({ limit });
+    },
+    map(notification) {
+      const sourceRef = `${notification.accountId}/${notification.threadId}`;
+      return {
+        id: `github:${sourceRef}`,
+        sourceRef,
+        title: notification.title,
+        summary: notification.repoFullName || 'GitHub notification needs attention',
+        timestamp: notification.updatedAt,
+        severity: notification.suspect || notification.reason === 'security_alert' ? 'high' : 'normal',
+        drillTo: `/devtools/github/inbox/${encodeURIComponent(notification.accountId)}/${notification.threadId}`,
+        nextAction: 'Review GitHub notification',
+        // The shared card uses the source endpoints, preserving their authority checks.
+        operations: [],
+        githubNotification: notification,
+      };
     },
   },
   {
