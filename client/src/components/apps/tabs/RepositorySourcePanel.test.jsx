@@ -15,13 +15,14 @@ vi.mock('../../../services/apiLocalLlm', async (importOriginal) => ({
   getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
 }));
 vi.mock('../../../hooks/useForgeScopeRefresh', () => ({
-  default: () => ({ active: false, pending: false, device: null, start: vi.fn(), cancel: vi.fn() }),
+  default: vi.fn(() => ({ active: false, pending: false, device: null, start: vi.fn(), cancel: vi.fn() })),
 }));
 vi.mock('../../../hooks/useAppOperation', () => ({
   useAppOperation: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
+import useForgeScopeRefresh from '../../../hooks/useForgeScopeRefresh';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import RepositorySourcePanel from './RepositorySourcePanel';
 import { MemoryRouter } from 'react-router';
@@ -187,6 +188,46 @@ describe('managed app repository sources', () => {
 
     expect(await screen.findByText(/ghe\.example\.com token is missing the workflow scope/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Authorize workflow/ })).toBeInTheDocument();
+  });
+
+  it.each([
+    { credential: 'oauth', command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: true },
+    { credential: 'personal-access-token', command: null, refreshable: false },
+    { credential: 'oauth', command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: false },
+  ])('repairs a combined update scope refusal without automatically retrying ($credential, $refreshable)', async (guidance) => {
+    const status = canonicalStatus();
+    status.sources[0].origin = { ...status.sources[0].origin, isFork: true, isUpstream: false };
+    status.sources[0].forkVsUpstream = { available: true, ahead: 0, behind: 2, state: 'behind' };
+    status.sources[0].forkSyncable = true;
+    api.getAppRepositorySources.mockResolvedValue(status);
+    const startUpdate = vi.fn();
+    const operation = { steps: [], isOperating: false, operationType: 'update', startUpdate };
+    useAppOperation.mockImplementation(() => operation);
+    const view = render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync fork & update app' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync fork and update' }));
+    expect(screen.getByRole('button', { name: 'Reload to update again' })).toBeDisabled();
+
+    Object.assign(operation, { error: 'workflow scope missing', errorCode: 'FORGE_TOKEN_SCOPE_MISSING',
+      errorContext: { host: 'ghe.example.com', scopes: ['workflow'], ...guidance } });
+    view.rerender(<RepositorySourcePanel appId="app-example" appName="Example App" />);
+    expect(await screen.findByText(/ghe\.example\.com token is missing the workflow scope/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sync fork & update app' })).toBeEnabled();
+    if (guidance.refreshable) {
+      const authorize = screen.getByRole('button', { name: 'Authorize workflow' });
+      fireEvent.click(authorize);
+      expect(useForgeScopeRefresh.mock.results.at(-1).value.start).toHaveBeenCalledWith(['workflow']);
+      act(() => useForgeScopeRefresh.mock.calls.at(-1)[0].onRefreshed());
+      expect(screen.queryByRole('button', { name: 'Authorize workflow' })).not.toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole('button', { name: 'Authorize workflow' })).not.toBeInTheDocument();
+      expect(guidance.command ? screen.getByText(guidance.command) : screen.getByText(/personal access token, which can't be updated/)).toBeInTheDocument();
+    }
+    expect(startUpdate).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Sync fork & update app' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync fork and update' }));
+    expect(startUpdate).toHaveBeenLastCalledWith('app-example', 'Example App', { syncFork: true });
+    expect(startUpdate).toHaveBeenCalledTimes(2);
   });
 
   // Eidoverse's video checkout is cloned from `anima-research`'s fork of a third

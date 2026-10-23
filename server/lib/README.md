@@ -25,6 +25,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `appOperationErrorContext.js` | `appOperationErrorContext` projects bounded forge scope repair fields for failed update events and history; all other error context is withheld. |
 | `checkoutRetirementAdmission.js` | Durable common-repository publication/cut admission for explicit initialized-checkout quarantine; pending reservations survive restart and block managed checkout mutations until verified recovery. |
 | `branchRetirementArchive.js` | `preserveBranchRetirement` privately archives exact shared configuration, the branch reflog and a verified standalone recovery bundle. Retirement retains Git's receiver lease/holder guards, then removes only the unchanged branch configuration under native config/ref locks. Changed evidence, recreated refs, external configuration sources and uncertain deletion retain live settings and leave retirement unresolved. |
 | `reconcileRetirementEvidence.js` | Matches exact checkout retirement and recovered-preservation receipts and retains unresolved cleanup obligations. Server-created generation timestamps prevent an old archive receipt from completing a recreated checkout at the same branch, path and head; verified historical preservation does not assert branch deletion. |
