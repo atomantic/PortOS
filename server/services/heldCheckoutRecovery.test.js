@@ -62,7 +62,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async () => {
-    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -440,6 +440,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('retains vanished active claim provenance instead of reporting an unarchived checkout retired', async () => {
     const { path, release } = await heldCheckout('already-gone', { branch: 'claim/issue-42' });
+    await execGit(['branch', 'other', 'main'], repo);
     const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
     await writeFile(join(gitDir, 'portos-review-status'), 'private synthetic evidence');
     await recordBranchReconcileOutcome('app-1', {
@@ -481,8 +482,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const createdAt = pending.retirementObligations[0].createdAt;
     // A receipt for another head cannot explain the original disappearance.
     await recordHeldCheckoutRetirement('app-1', { ...release, head: 'f'.repeat(40), branchDeleted: true, archiveDir: '/example/other-archive' });
-    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
-    expect((await getBranchReconcileOutcome('app-1')).retirementObligations[0].createdAt).toBe(createdAt);
+    await recordBranchReconcileOutcome('app-1', { status: 'drained', remaining: [] });
+    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
+      retirementObligations: [{ ...release, reason: 'retirement-provenance-unverified', createdAt }],
+    });
     // Only the trusted service writer can supply recovered preservation evidence.
     await recordHeldCheckoutRetirement('app-1', { ...release, branchDeleted: true, archiveDir: '/example/recovered-original' });
     expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ retirementObligations: [], remaining: [] });

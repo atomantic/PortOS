@@ -3344,6 +3344,19 @@ describe('taskSchedule', () => {
         expect(reloaded.remaining).toEqual(outcome.retirementObligations);
       });
 
+      it('keeps the previous observation when a replacement sweep cannot read source presence', async () => {
+        let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand' } }, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const remaining = [{ branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40), reason: 'worktree-locked' }];
+        const previous = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining });
+        getAppById.mockResolvedValueOnce({ repoPath: '/example/repo' });
+        findGoneInventoryRows.mockRejectedValueOnce(new Error('checkout-presence-unavailable'));
+        await expect(recordBranchReconcileOutcome('app-1', { status: 'drained', remaining: [] }))
+          .rejects.toThrow('checkout-presence-unavailable');
+        expect(saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome).toEqual(previous);
+      });
+
       it('never loses exact retirement obligations across empty scans, restart reads or unrelated receipts', async () => {
         let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: true } }, executions: {}, templates: [] };
         readJSONFile.mockImplementation(async () => structuredClone(saved));

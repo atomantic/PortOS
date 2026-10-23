@@ -36,9 +36,14 @@ export async function findGoneInventoryRows(repoPath, rows, { includeObligations
     if (row?.reason === 'remote-branch-held') continue;
     if (!includeObligations && (isObligationRow(row) || row?.reason === 'claim-reservation-owner-unverified')) continue;
     if (typeof row?.path === 'string' && row.path) {
-      if (!registered.has(row.path) && await readCheckoutPathPresence(row.path) === false) gone.push(row);
+      if (registered.has(row.path)) continue;
+      const present = await readCheckoutPathPresence(row.path);
+      if (present === null) throw new Error('checkout-presence-unavailable');
+      if (present === false) gone.push(row);
     } else if (typeof row?.branch === 'string' && row.branch) {
-      if (await readLocalBranchPresence(repoPath, row.branch) === false) gone.push(row);
+      const present = await readLocalBranchPresence(repoPath, row.branch);
+      if (present === null) throw new Error('branch-presence-unavailable');
+      if (present === false) gone.push(row);
     }
   }
   return gone;

@@ -790,7 +790,7 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
       ...previous, status, reason, nextAction, updatedAt: now, retirementObligations,
       remaining: retained.length ? [...(current || []), ...retained] : current,
       observedAt: remaining === undefined ? record.branchReconcileOutcome?.observedAt ?? null : now,
-      ...(missing.length && missingPreservationStatus),
+      ...(retirementObligations.some(row => row.reason === 'retirement-provenance-unverified') && missingPreservationStatus),
     };
     return { result: record.branchReconcileOutcome, changed: true };
   });
