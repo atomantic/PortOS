@@ -284,6 +284,8 @@ export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
   /^scripts\/ps1-bom\.test\.js$/,
+  // Shell32 recycling and its opt-in real-bin smoke require an actual Windows runner.
+  /^server\/lib\/nativeTrash(?:\.(?:smoke\.)?test)?\.js$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
   // The cmd.exe wrap and npm-shim bypass every Windows CLI launch goes through.
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,

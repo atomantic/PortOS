@@ -1673,6 +1673,9 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'scripts/launch.cmd',
       'scripts/fix-windows-console.js',
       'scripts/ps1-bom.test.js',
+      'server/lib/nativeTrash.js',
+      'server/lib/nativeTrash.test.js',
+      'server/lib/nativeTrash.smoke.test.js',
       'server/lib/bufferedSpawn.js',
       'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/pathSafety.js',
@@ -1720,6 +1723,26 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it('routes native recycling source and both tests to real Windows coverage (#13251)', () => {
+      const source = 'server/lib/nativeTrash.js';
+      const tests = ['server/lib/nativeTrash.test.js', 'server/lib/nativeTrash.smoke.test.js'];
+      const unrelated = 'server/lib/nativeTrashXdg.test.js';
+      const trackedFiles = [...TRACKED, ...WINDOWS_CONTRACT_TESTS, source, ...tests, unrelated];
+      for (const changedFiles of [[source], ...tests.map(path => [path]), [source, ...tests]]) {
+        const selected = buildCiTestPlan(changedFiles, { trackedFiles, clientDependencies: [] });
+        expect(selected.full).toBe(false);
+        expect(selected.windows).toBe(true);
+        expect(selected.windowsMode).toBe(changedFiles.includes(source) ? 'related' : 'files');
+        expect(selected.windowsSources).toEqual(changedFiles.includes(source) ? [source] : []);
+        expect(selected.windowsFiles).toEqual([...new Set([
+          ...WINDOWS_CONTRACT_TESTS, ...changedFiles.filter(path => tests.includes(path)),
+        ])].sort());
+        expect(selected.windowsFiles).not.toContain(unrelated);
+      }
+      // The Linux XDG implementation does not broaden this Windows-only rule.
+      expect(buildCiTestPlan([unrelated], { trackedFiles }).windows).toBe(false);
     });
 
     it('selects the changed cancellation fixtures explicitly on Windows without widening unrelated tests (#11641)', () => {
