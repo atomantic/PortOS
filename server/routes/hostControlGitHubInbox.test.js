@@ -16,7 +16,8 @@ const auth = vi.hoisted(() => ({ enabled: false }));
 const accounts = vi.hoisted(() => ({
   listAccounts: vi.fn(async () => []),
   createAccount: vi.fn(async (body) => ({ id: 'acct-example', ...body })),
-  updateAccount: vi.fn(async (id, body) => ({ id, ...body })),
+  getAccount: vi.fn(async (id) => ({ id, trust: 'public', trustInstanceUsers: false })),
+  updateAccount: vi.fn(async (id, body) => ({ id, trust: 'public', trustInstanceUsers: false, ...body })),
   deleteAccount: vi.fn(async () => ({ deleted: true })),
   getAccountStatus: vi.fn(async () => ({ ok: true })),
 }));

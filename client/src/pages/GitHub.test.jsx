@@ -338,6 +338,8 @@ describe('GitHub accounts tab', () => {
     renderAccounts();
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     expect(screen.queryByLabelText(/Allow agents/)).toBeNull();
+    // github.com is never trusted wholesale.
+    expect(screen.queryByLabelText('Trust everyone on this instance')).toBeNull();
     fireEvent.change(screen.getByLabelText('Trust'), { target: { value: 'private' } });
     fireEvent.click(await screen.findByLabelText(/Allow agents/));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -366,9 +368,12 @@ describe('GitHub accounts tab', () => {
     fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'ghe.example.com' } });
     fireEvent.change(screen.getByLabelText('Login'), { target: { value: 'alice' } });
     expect(screen.getByLabelText('Trust').value).toBe('private');
+    // An Enterprise host can trust its whole instance, independent of where text goes.
+    fireEvent.change(screen.getByLabelText('Trust'), { target: { value: 'public' } });
+    fireEvent.click(screen.getByLabelText('Trust everyone on this instance'));
     fireEvent.click(screen.getAllByRole('button', { name: 'Add account' }).at(-1));
 
-    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'private', allowedProviders: null, allowAgents: false });
+    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'public', allowedProviders: null, allowAgents: false, trustInstanceUsers: true });
     const signIn = await screen.findByRole('link', { name: 'Sign in on ghe.example.com' });
     expect(decodeURIComponent(signIn.getAttribute('href'))).toBe('/shell?cmd=gh auth login --hostname ghe.example.com --web --clipboard');
   });

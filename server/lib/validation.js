@@ -1002,6 +1002,8 @@ export const githubAccountCreateSchema = z.object({
   // Private (Enterprise) accounts refuse every agent hand-off unless the operator
   // opts in: the lanes run on PortOS's own providers, which the allow-list cannot bind.
   allowAgents: z.boolean().optional(),
+  // Enterprise hosts only: every human on the instance counts as trusted (#13203).
+  trustInstanceUsers: z.boolean().optional(),
   agentRules: githubAgentRulesSchema.optional(),
   agentDefaults: githubAgentDefaultsSchema.nullable().optional(),
   enabled: z.boolean().optional(),

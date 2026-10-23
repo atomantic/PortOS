@@ -444,6 +444,15 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await expect(reviewDeployment(account.id, '2201', { state: 'rejected', environmentIds: [11] })).rejects.toMatchObject({ code: 'GITHUB_NOTIFICATION_NOT_DEPLOYMENT' });
   });
 
+  it('treats a Dependabot pull request on your repo as a trusted review, not an outside one', async () => {
+    const login = account.login;
+    mockGh(() => listing([thread('2301', { owner: login, reason: 'review_requested' })]), {
+      [`repos/${login}/hello/pulls/2301`]: { author: 'dependabot[bot]', authorType: 'Bot', association: 'NONE', state: 'open', merged: false },
+    });
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '2301')).toMatchObject({ trust: 'trusted', decision: 'suggest-review', suspect: false });
+  });
+
   it('sorts undecided threads only in Assist, acts only on trusted ones, and undoes into a learned rule', async () => {
     const login = account.login;
     const pr = (author, state = 'open', merged = false) => ({ author, association: 'NONE', state, merged });
@@ -805,6 +814,29 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(failed).toMatchObject({ state: 'open', decision: 'needs-you', agentFailed: { taskId: 'task-2' }, agent: { lane: 'notification-resolve', refused: null } });
     expect(failed.events.filter((event) => event.kind === 'agent-failed')).toHaveLength(1);
     expect(actions).not.toContainEqual(['DELETE', 'notifications/threads/1505']);
+  });
+
+  it('vouches for GitHub\'s own bots in a thread at the tap, but not a look-alike user', async () => {
+    let taskCount = 0;
+    vi.mocked(addTask).mockReset().mockImplementation(async (task) => ({ id: `task-bot-${++taskCount}`, description: task.description }));
+    const login = account.login;
+    const ownPr = (id) => ({ [`repos/${login}/tool/pulls/${id}`]: { author: login, association: 'OWNER', state: 'open', merged: false } });
+    mockGh(() => listing([
+      thread('1601', { owner: login, repo: 'tool', reason: 'author' }),
+      thread('1602', { owner: login, repo: 'tool', reason: 'author' }),
+    ]), {
+      ...ownPr('1601'), ...ownPr('1602'),
+      [`repos/${login}/tool/issues/1601/comments`]: 'dependabot[bot]\tBot\n',
+      [`repos/${login}/tool/pulls/1601/comments`]: '',
+      [`repos/${login}/tool/pulls/1601/reviews`]: '',
+      [`repos/${login}/tool/issues/1602/comments`]: 'dependabot[bot]\tUser\n',
+      [`repos/${login}/tool/pulls/1602/comments`]: '',
+      [`repos/${login}/tool/pulls/1602/reviews`]: '',
+    });
+    await syncAccountNotifications(account.id);
+    expect(await resolveWithAgent(account.id, '1601')).toMatchObject({ decision: 'handed-off' });
+    await expect(resolveWithAgent(account.id, '1602')).rejects.toMatchObject({ code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 
   it('gives a security alert outside your apps one security fix task per repo, and one for global advisories', async () => {

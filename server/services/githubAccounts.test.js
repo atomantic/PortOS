@@ -16,7 +16,13 @@ vi.mock('./github.js', async (importOriginal) => ({
   execGh: vi.fn(),
 }));
 
+vi.mock('./githubNotificationTriage.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  retriageOpenThreads: vi.fn(async () => 0),
+}));
+
 const { execGh } = await import('./github.js');
+const { retriageOpenThreads } = await import('./githubNotificationTriage.js');
 const { errorMiddleware } = await import('../lib/errorHandler.js');
 const { default: githubRoutes } = await import('../routes/github.js');
 
@@ -75,6 +81,20 @@ describe('GitHub accounts API', () => {
     expect(allowed.body.allowAgents).toBe(true);
     const bad = await request(app).put(`/api/github/accounts/${created.body.id}`).send({ allowAgents: 'yes' });
     expect(bad.status).toBe(400);
+  });
+
+  it('lets only an Enterprise account trust its whole instance, and re-decides its threads when trust changes', async () => {
+    const created = await request(app).post('/api/github/accounts').send({ host: 'github.example.com', trustInstanceUsers: true });
+    expect(created.status).toBe(201);
+    expect(created.body.trustInstanceUsers).toBe(true);
+    expect((await request(app).put('/api/github/accounts/github-com').send({ trustInstanceUsers: true })).status).toBe(400);
+    expect((await request(app).post('/api/github/accounts').send({ host: 'github.com', login: 'octocat', trustInstanceUsers: true })).status).toBe(400);
+
+    vi.mocked(retriageOpenThreads).mockClear();
+    await request(app).put(`/api/github/accounts/${created.body.id}`).send({ allowAgents: true });
+    expect(retriageOpenThreads).not.toHaveBeenCalled();
+    await request(app).put(`/api/github/accounts/${created.body.id}`).send({ trustInstanceUsers: false });
+    expect(retriageOpenThreads).toHaveBeenCalledWith(created.body.id);
   });
 
   it('rejects hosts and logins that are not plain identifiers', async () => {

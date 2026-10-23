@@ -28,25 +28,27 @@ const MAX_THREADS_PER_RUN = 60;
 // changed your own PRs and finished threads (now marked done, not just read);
 // version 3 leaves a bot's comment on your own PR to the PR workflow; version
 // 4 finishes a review request on a merged or closed PR; version 5 matches a
-// deployment approval to its waiting run. A thread handed off keeps its
-// hand-off; one whose hand-off was refused (a Private account without agents)
-// is re-decided like any other. One an Assist model sorted is not
+// deployment approval to its waiting run; version 6 trusts GitHub's own bots
+// and, where the account opts in, everyone on an Enterprise instance. A thread
+// handed off keeps its hand-off; one whose hand-off was refused (a Private
+// account without agents) is re-decided like any other. One an Assist model sorted is not
 // read again, except your own PR: the rule table decides those, so a verdict
 // from before the rule existed must not keep one in front of you.
 const REDECIDE_SQL = `(state = 'open' AND decision IS DISTINCT FROM 'handed-off'
   AND ((reason = 'author' AND subject_type = 'PullRequest' AND trust = 'yours')
     OR (decision = 'suggest-mark-read' AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')
     OR (reason = 'review_requested' AND evidence->>'subjectState' IN ('merged', 'closed'))
-    OR reason = 'approval_requested'))`;
+    OR reason = 'approval_requested'
+    OR trust = 'outside'))`;
 // A deployment waiting on you is re-checked every sync: approving or rejecting
 // it on GitHub does not touch the notification thread.
 const WAITING_DEPLOYMENT_SQL = "(state = 'open' AND evidence->>'rule' = 'deployment-approval')";
-const WAITING_RUNS_JQ = '[.workflow_runs[] | {id, name, displayTitle: .display_title, headBranch: .head_branch, event, actor: .actor.login, createdAt: .created_at, updatedAt: .updated_at}]';
+const WAITING_RUNS_JQ = '[.workflow_runs[] | {id, name, displayTitle: .display_title, headBranch: .head_branch, event, actor: .actor.login, actorType: .actor.type, createdAt: .created_at, updatedAt: .updated_at}]';
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
-const SUBJECT_JQ = '{author: .user.login, association: .author_association, state: .state, merged: (.merged // false)}';
-const COMMENT_JQ = '{author: .user.login, association: .author_association, mentions: ([(.body // "") | scan("@[A-Za-z0-9][A-Za-z0-9-]*")] | length)}';
+const SUBJECT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, state: .state, merged: (.merged // false)}';
+const COMMENT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, mentions: ([(.body // "") | scan("@[A-Za-z0-9][A-Za-z0-9-]*")] | length)}';
 
 const isBotLogin = (login) => /\[bot\]$/i.test(login);
 const loginOrNull = (value) => (typeof value === 'string' && LOGIN_RE.test(value) ? value : null);
@@ -112,11 +114,14 @@ async function loadLearnedRules(accountId) {
 }
 
 // One actor's trust on a thread's repo, from forge permissions only.
-async function rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwner }, login) {
+async function rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwner }, login, actorType = null) {
   const isOwn = ownLogins.some((own) => own.toLowerCase() === login.toLowerCase());
   const actorHasWriteAccess = Boolean(!isOwn && repoOwned && repo) && await (await reader.repoTrust(repo)).isTrusted(login);
   const actorIsOrgMember = Boolean(!isOwn && account.trust === 'private' && repo) && await reader.orgMember(repoOwner, login);
-  return computeThreadTrust({ actorLogin: login, ownLogins, repoOwned, actorHasWriteAccess, actorIsOrgMember, accountTrust: account.trust });
+  return computeThreadTrust({
+    actorLogin: login, actorType, ownLogins, repoOwned, actorHasWriteAccess, actorIsOrgMember,
+    accountTrust: account.trust, trustInstanceUsers: account.trustInstanceUsers === true,
+  });
 }
 
 const DISCUSSION_SUBJECT_RE = /^repos\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/(issues|pulls)\/(\d{1,9})$/;
@@ -138,21 +143,23 @@ export async function threadDiscussionVouched(account, env, row) {
   const [, kind, number] = match;
   const paths = [`repos/${repo}/issues/${number}/comments`];
   if (kind === 'pulls') paths.push(`repos/${repo}/pulls/${number}/comments`, `repos/${repo}/pulls/${number}/reviews`);
-  const logins = new Set();
+  // login → the forge's user.type (Bot/User), which GitHub-native bot trust needs.
+  const actors = new Map();
   for (const path of paths) {
-    const out = await execGh(['api', '--hostname', account.host, '--method', 'GET', path, '--paginate', '--jq', '.[].user.login'], GH_TIMEOUT_MS, { env })
+    const out = await execGh(['api', '--hostname', account.host, '--method', 'GET', path, '--paginate', '--jq', '.[] | "\\(.user.login)\\t\\(.user.type)"'], GH_TIMEOUT_MS, { env })
       .catch(() => null);
     if (out === null) return false;
     for (const line of out.split('\n').map((entry) => entry.trim()).filter(Boolean)) {
-      if (!loginOrNull(line)) return false;
-      logins.add(line);
+      const [login, type] = line.split('\t');
+      if (!loginOrNull(login)) return false;
+      actors.set(login, type === 'Bot' || type === 'User' ? type : null);
     }
   }
-  if (!logins.size) return true;
+  if (!actors.size) return true;
   const reader = createReader(account, env);
   const ctx = { account, reader, ownLogins: await ownLoginsFor(account, reader), repo, repoOwned: row.evidence?.repoOwned === true, repoOwner: row.repo_owner };
-  for (const login of logins) {
-    if (!VOUCHED_TRUST.has(await rateActor(ctx, login))) return false;
+  for (const [login, type] of actors) {
+    if (!VOUCHED_TRUST.has(await rateActor(ctx, login, type))) return false;
   }
   return true;
 }
@@ -177,7 +184,7 @@ async function triageThread(row, ctx) {
   // PR into the trusted lane.
   const actorLogin = subjectAuthor || loginOrNull(waitingRun?.actor) || commenter;
 
-  const trustOf = (login) => rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwner: row.repo_owner }, login);
+  const trustOf = (login, actorType = null) => rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwner: row.repo_owner }, login, actorType);
   // Any other thread from this repo counts as history, whatever its age: rows
   // from one sync share a created_at, so an age comparison would see none.
   let priorThreadsInRepo = null;
@@ -201,7 +208,8 @@ async function triageThread(row, ctx) {
     })
     : []);
 
-  const trust = actorLogin ? await trustOf(actorLogin) : computeThreadTrust({ actorLogin: null });
+  const actorType = subjectAuthor ? subject.authorType : (waitingRun?.actor && actorLogin === loginOrNull(waitingRun.actor) ? waitingRun.actorType : comment?.authorType);
+  const trust = actorLogin ? await trustOf(actorLogin, typeof actorType === 'string' ? actorType : null) : computeThreadTrust({ actorLogin: null });
   const signalSet = new Set(actorLogin
     ? await signalsFor(actorLogin, trust, subjectAuthor ? subject.association : comment?.association, subjectAuthor ? 0 : comment?.mentions ?? 0)
     : []);
@@ -212,7 +220,7 @@ async function triageThread(row, ctx) {
     // A bot (a CI or review app) commenting on your own PR in your repo was
     // installed there by you, so it is the PR workflow's business, not an
     // outside reply waiting on you. The repo's collaborator list never names it.
-    commenterTrust = isBotLogin(commenter) && repoOwned && trust === 'yours' ? 'unknown' : await trustOf(commenter);
+    commenterTrust = isBotLogin(commenter) && repoOwned && trust === 'yours' ? 'unknown' : await trustOf(commenter, typeof comment.authorType === 'string' ? comment.authorType : null);
     for (const signal of await signalsFor(commenter, commenterTrust, comment.association, comment.mentions ?? 0)) signalSet.add(signal);
   }
   const signals = [...signalSet];
@@ -280,6 +288,16 @@ async function foldCiDuplicates(client, accountId) {
       [accountId, row.thread_id, newest.get(key)],
     );
   }
+}
+
+/**
+ * Re-decide every open thread on the next check, after a change to who the
+ * account trusts; the trust a thread was triaged under is otherwise kept until
+ * new activity.
+ */
+export async function retriageOpenThreads(accountId) {
+  const { rowCount } = await query("UPDATE github_notifications SET triaged_for = NULL, updated_at = NOW() WHERE account_id = $1 AND state = 'open'", [accountId]);
+  return rowCount;
 }
 
 /**
