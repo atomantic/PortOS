@@ -30,10 +30,11 @@ const MAX_THREADS_PER_RUN = 60;
 // 4 finishes a review request on a merged or closed PR; version 5 matches a
 // deployment approval to its waiting run; version 6 trusts GitHub's own bots
 // and, where the account opts in, everyone on an Enterprise instance. A thread
-// already handed off keeps its hand-off. One an Assist model sorted is not
+// handed off keeps its hand-off; one whose hand-off was refused (a Private
+// account without agents) is re-decided like any other. One an Assist model sorted is not
 // read again, except your own PR: the rule table decides those, so a verdict
 // from before the rule existed must not keep one in front of you.
-const REDECIDE_SQL = `(state = 'open' AND NOT (evidence ? 'handoff')
+const REDECIDE_SQL = `(state = 'open' AND decision IS DISTINCT FROM 'handed-off'
   AND ((reason = 'author' AND subject_type = 'PullRequest' AND trust = 'yours')
     OR (decision = 'suggest-mark-read' AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')
     OR (reason = 'review_requested' AND evidence->>'subjectState' IN ('merged', 'closed'))

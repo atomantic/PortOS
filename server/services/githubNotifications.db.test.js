@@ -822,6 +822,16 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await syncAccountNotifications(account.id);
     expect((await getNotification(account.id, '1504')).evidence.handoff).toBeUndefined();
     expect(addTask).toHaveBeenCalledTimes(1);
+    // A refused hand-off recorded under older rules does not pin the thread:
+    // the version bump re-decides it as finished.
+    await query(
+      `UPDATE github_notifications SET state = 'open', decision = 'suggest-review',
+         evidence = evidence - 'assisted' || '{"rulesVersion":3,"handoff":{"lane":"do-review","skipped":"private-account"}}'::jsonb
+       WHERE account_id = $1 AND thread_id = '1504'`,
+      [account.id],
+    );
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '1504')).toMatchObject({ decision: 'suggest-mark-read', state: 'done' });
     // A malformed rule is refused at the boundary.
     expect(() => updateAccount(account.id, { agentRules: [{ id: 'x', kind: 'review-request', repo: 'not a repo', agent: true }] })).toThrow('Validation failed');
     await updateAccount(account.id, { agentRules: [] });
