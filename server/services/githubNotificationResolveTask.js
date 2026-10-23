@@ -128,6 +128,8 @@ export async function queueNotificationResolveTask({ account, row, origin = 'use
   const link = notificationHtmlUrl({ subjectApiUrl: row.subject_api_url, repoFullName: repo }, account.host);
   if (!link) return { error: 'No link for this notification' };
   const login = LOGIN_RE.test(account.login || '') ? account.login : null;
+  const kind = resolveKind(row);
+  const externalRepositoryOutput = ['own-pr', 'ci', 'issue'].includes(kind);
   const task = await addTask({
     description: buildResolvePrompt({
       host: account.host, login, repo, threadId: row.thread_id, row, link, apiPath: repoApiPath(row.subject_api_url, account.host),
@@ -138,12 +140,12 @@ export async function queueNotificationResolveTask({ account, row, origin = 'use
     // PortOS worktree, and a clean PortOS tree is success.
     useWorktree: false,
     openPR: false,
-    noCodeOutput: ['review', 'other'].includes(resolveKind(row)),
+    noCodeOutput: !externalRepositoryOutput,
     worktreeChangesExpected: false,
     metadata: {
-      externalRepositoryOutput: ['own-pr', 'ci', 'issue'].includes(resolveKind(row)),
+      externalRepositoryOutput,
       githubNotificationResolve: {
-        accountId: account.id, threadId: row.thread_id, host: account.host, repo, subjectType: row.subject_type, reason: row.reason, origin,
+        accountId: account.id, threadId: row.thread_id, host: account.host, repo, subjectType: row.subject_type, reason: row.reason, kind, origin,
       },
     },
   }, 'user');

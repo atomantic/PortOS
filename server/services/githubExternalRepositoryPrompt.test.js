@@ -92,6 +92,7 @@ for (const [path, render] of Object.entries(compose)) {
     it.each([
       ['review', { ...row, reason: 'review_requested', trust: 'trusted' }],
       ['release', { ...row, subject_type: 'Release', reason: 'subscribed' }],
+      ['unknown subject', { ...row, subject_type: 'UnknownSubject', reason: 'subscribed' }],
     ])('retains no-code restrictions for a notification %s', async (_name, notification) => {
       const prompt = await render(await queued(() => queueNotificationResolveTask({ account, row: notification })));
       expect(prompt).toContain('## Completion (No Code Output)');
@@ -116,6 +117,25 @@ for (const [path, render] of Object.entries(compose)) {
       expect(apiPrompt).toContain('## Completion (No Code Output)');
       expect(apiPrompt).not.toContain('## Simplify Step');
       expect(apiPrompt).not.toContain('## Completion (External Repository)');
+    });
+
+    it.each([
+      ['non-own PR', { ...row, reason: 'mention', trust: 'trusted' }, false],
+      ['CI', { ...row, reason: 'ci_activity', subject_type: 'CheckSuite', subject_api_url: null }, true],
+      ['issue', { ...row, subject_type: 'Issue', subject_api_url: `https://api.github.com/repos/${repo}/issues/7` }, true],
+    ])('keeps legacy %s delivery scoped when provenance lacks a resolved kind', async (_name, notification, external) => {
+      const task = await queued(() => queueNotificationResolveTask({ account, row: notification }));
+      delete task.metadata.externalRepositoryOutput;
+      delete task.metadata.githubNotificationResolve.kind;
+      task.metadata.githubNotificationResolve = JSON.stringify(task.metadata.githubNotificationResolve);
+      const prompt = await render(task);
+      if (external) {
+        assertExternalContract(prompt);
+        return;
+      }
+      expect(prompt).toContain('Change nothing on GitHub');
+      expect(prompt).toContain('## Completion (No Code Output)');
+      expect(prompt).not.toContain('## Completion (External Repository)');
     });
   });
 }

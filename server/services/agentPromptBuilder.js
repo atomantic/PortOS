@@ -672,10 +672,12 @@ function hasExternalRepositoryOutput(meta, worktreeInfo) {
   const security = record(meta?.githubSecurityFix);
   if (security?.host && (security.repo || security.advisories?.length)) return true;
   const notification = record(meta?.githubNotificationResolve);
+  // Legacy PR records omitted the trust that distinguished own-pr from other;
+  // only a persisted kind can authorize code delivery for those threads.
   return !!(notification?.host && notification.repo && (
-    notification.reason === 'ci_activity' || notification.subjectType === 'CheckSuite'
-    || notification.subjectType === 'Issue'
-    || (notification.subjectType === 'PullRequest' && notification.reason !== 'review_requested')
+    notification.kind != null
+      ? ['own-pr', 'ci', 'issue'].includes(notification.kind)
+      : notification.reason === 'ci_activity' || notification.subjectType === 'CheckSuite' || notification.subjectType === 'Issue'
   ));
 }
 
