@@ -183,6 +183,27 @@ describe('collection cover projection', () => {
   });
 });
 
+describe('collection cover probes', () => {
+  it('probes a poster-style video thumbnail by its real filename and leaves uppercase PNG covers unprobed', async () => {
+    vi.stubEnv('MEMORY_BACKEND', 'file');
+    const video = { id: 'vid', filename: 'vid.mp4', thumbnail: 'vid-poster-1234.jpg', createdAt: '2026-01-02' };
+    loadHistory.mockResolvedValue([video]);
+    const collections = [
+      { id: 'poster', items: [{ kind: 'video', ref: 'vid', addedAt: '2026-01-01' }] },
+      { id: 'upper', items: [{ kind: 'image', ref: 'NAME.PNG', addedAt: '2026-01-01' }] },
+    ];
+    listCollections.mockResolvedValue(collections);
+    getCollection.mockImplementation(async id => collections.find(c => c.id === id));
+    resolveMediaLocations.mockImplementation(async items => items.map(() => ({ location: 'local' })));
+    const byId = Object.fromEntries((await listGalleryCollectionSummaries(async () => [{ filename: 'NAME.PNG', createdAt: '2026-01-01' }])).map(s => [s.id, s.cover]));
+    expect(byId.poster).toBe('/data/video-thumbnails/vid-poster-1234.jpg');
+    expect(byId.upper).toBe('/data/images/NAME.PNG');
+    const probed = resolveMediaLocations.mock.calls.flatMap(([items]) => items);
+    expect(probed).toContainEqual(expect.objectContaining({ kind: 'video', ref: 'vid.mp4' }));
+    expect(probed.some(p => /NAME/i.test(p.ref))).toBe(false);
+  });
+});
+
 // The route test (routes/imageGen.clean.test.js) owns the both-directions
 // contract end to end against a real clean. What only lives here: the SQL the
 // indexed path emits, and the disk path the route test cannot reach because

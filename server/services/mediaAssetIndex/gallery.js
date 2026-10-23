@@ -121,7 +121,7 @@ export async function listGalleryFacets(diskReader) {
     categories: [...categories], kinds: [...kinds], collections: populated.filter(Boolean) };
 }
 
-const FLAT_PNG_COVER = /^\/data\/images\/([A-Za-z0-9][A-Za-z0-9._-]*)\.png$/i;
+const FLAT_PNG_COVER = /^\/data\/images\/([A-Za-z0-9][A-Za-z0-9._-]*)\.png$/;
 const VIDEO_THUMB_COVER = /^\/data\/video-thumbnails\/([A-Za-z0-9][A-Za-z0-9._-]*)\.[A-Za-z0-9]+$/;
 
 /**
@@ -130,13 +130,17 @@ const VIDEO_THUMB_COVER = /^\/data\/video-thumbnails\/([A-Za-z0-9][A-Za-z0-9._-]
  * asset is neither local nor peer-hosted becomes null so the card never issues
  * a request that is certain to fail. Other shapes pass through unchanged.
  */
-async function projectCovers(summaries) {
+async function projectCovers(summaries, videoSnapshot) {
+  // A thumbnail's stem is not always the video id (posters, stitched renders),
+  // so probe by the real video filename recorded beside the thumbnail.
+  const videoByThumb = new Map(videoSnapshot.filter(v => v.thumbnail && v.filename).map(v => [v.thumbnail, v.filename]));
   const { resolveMediaLocations } = await import('../peerHostedMedia.js');
   const probes = summaries.map(({ cover }) => {
     const png = FLAT_PNG_COVER.exec(cover || '');
     if (png) return { kind: 'image', ref: `${png[1]}.png`, url: `/data/image-thumbnails/${png[1]}.webp` };
     const thumb = VIDEO_THUMB_COVER.exec(cover || '');
-    if (thumb) return { kind: 'video', ref: thumb[1], url: cover };
+    const videoFilename = thumb && videoByThumb.get(cover.slice('/data/video-thumbnails/'.length));
+    if (videoFilename) return { kind: 'video', ref: videoFilename, url: cover };
     return null;
   });
   const located = await resolveMediaLocations(probes.filter(Boolean));
@@ -150,12 +154,12 @@ async function projectCovers(summaries) {
 
 /** Collection grid covers and counts, without downloading all image sidecars. */
 export async function listGalleryCollectionSummaries(diskReader) {
-  return projectCovers(await collectionSummaryRows(diskReader));
+  const videoSnapshot = await (await import('../videoGen/history.js')).loadCompactHistory();
+  return projectCovers(await collectionSummaryRows(diskReader, videoSnapshot), videoSnapshot);
 }
 
-async function collectionSummaryRows(diskReader) {
+async function collectionSummaryRows(diskReader, videoSnapshot) {
   const collections = await (await import('../mediaCollections.js')).listCollections();
-  const videoSnapshot = await (await import('../videoGen/history.js')).loadCompactHistory();
   if (!escapeHatch()) {
     const rows = await collectionCovers(collections.map(collection => ({
       id: collection.id, coverKey: collection.coverKey,
