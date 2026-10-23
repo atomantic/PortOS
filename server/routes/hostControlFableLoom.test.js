@@ -210,7 +210,7 @@ describe('FableLoom agent workflow authority (#10668)', () => {
       ['patch', node, { prose: 'Example prose' }, fableLoom.updateNode],
       ['post', `${episode}/outline/validate`, {}, fableLoom.validateEpisodeOutline],
       ['post', `${episode}/shots/cancel`, {}, shotRuns.cancelEpisodeShotRun],
-      ['get', `${episode}/shots/status`, {}, shotRuns.getEpisodeShotRun],
+      ['get', `${episode}/shots/status`, undefined, shotRuns.getEpisodeShotRun],
       ['post', `${episode}/production/plan`, {}, fableLoom.planEpisodeProduction],
       ['post', `${episode}/continuity/review`, {}, fableLoom.reviewEpisodeContinuity],
       ['post', `${episode}/production/batch/example-run/cancel`, {}, fableLoom.cancelEpisodeProductionBatch],

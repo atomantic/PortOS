@@ -130,7 +130,7 @@ describe('shot checkpoints and bounded inputs', () => {
     for (let i = 0; i < 20; i += 1) loom = await addNode(loom.id, ep, { title: `Scene ${i}`, playbackMode: 'cut', prose: `UNIQUE_${i}_` + 'A courier waits. '.repeat(65), isEnding: i === 19 });
     const nodes = loom.episodes[0].nodes;
     for (let i = 0; i < 19; i += 1) loom = await updateNode(loom.id, ep, nodes[i].id, { transitions: [{ targetNodeId: nodes[i + 1].id, intent: 'continue' }] });
-    const groups = nodes.map(node => ({ sceneId: node.id, shots: [shot(node.title)] }));
+    const groups = nodes.map(node => ({ sceneId: node.id, shots: Array.from({ length: 6 }, (_, index) => ({ ...shot(`${node.title} cut ${index}`), imagePrompt: 'The gate and lamp retain their established screen positions. '.repeat(20), videoPrompt: 'The courier waits in this same composition. '.repeat(25) })) }));
     mockPlan(groups);
     await expect(runEpisodeShotAutopilot(loom.id, ep)).resolves.toMatchObject({ validation: { stats: { ready: true } } });
     expect(runStagedLLM).toHaveBeenCalledTimes(41);
@@ -142,6 +142,10 @@ describe('shot checkpoints and bounded inputs', () => {
       expect(variables.source.length).toBeLessThan(9000);
     }
     expect(calls.at(-1)[1].source).not.toContain('UNIQUE_');
+    const consistency = JSON.parse(calls.at(-1)[1].shots);
+    expect(consistency[0].entryComposition.imagePrompt).toBe(groups[0].shots[0].imagePrompt);
+    expect(consistency[0].shots[0]).not.toHaveProperty('imagePrompt');
+    expect(calls.at(-1)[1].shots.length).toBeLessThan(JSON.stringify(groups).length / 2);
   });
   it('reports a durable interrupted run without calling a provider, then resumes explicitly', async () => {
     const { startEpisodeShotRun, getEpisodeShotRun } = await import('./shotRuns.js');

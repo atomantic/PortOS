@@ -179,10 +179,16 @@ export async function runEpisodeShotAutopilot(id, episodeId, {
   if (compiled.validation.issues.length) throw new ServerError(compiled.validation.issues.map((i) => i.message).join('\n'), { status: 422, code: 'SHOT_PLAN_INVALID' });
   // One whole-plan review, without the episode teleplay. It checks connections
   // between the scene plans already reviewed against their full dramatic source.
+  const consistencyPlan = compiled.groups.map(({ sceneId, shots }) => ({
+    sceneId,
+    shots: shots.map(({ title, action, dialogue, durationSeconds, protagonistPresence, visibleCharacterIds }) => ({ title, action, dialogue, durationSeconds, protagonistPresence, visibleCharacterIds })),
+    entryComposition: { framing: shots[0].framing, imagePrompt: shots[0].imagePrompt },
+    ...(shots.length > 1 ? { exitComposition: { framing: shots.at(-1).framing, imagePrompt: shots.at(-1).imagePrompt } } : {}),
+  }));
   const planHash = createHash('sha256').update(JSON.stringify(compiled.groups)).digest('hex');
   let review = checkpoint.consistency.findLast((entry) => entry.planHash === planHash)?.review;
   if (!review) {
-    const result = await execute('fableloom-review-shots', { source: JSON.stringify({ ...context, scope: 'Whole-plan consistency check. Each group already passed review against its full dramatic source; check the combined plan and graph without requesting the teleplay.', scenes: context.sceneDigest }), shots: JSON.stringify(compiled.groups) }, checkpoint.consistency.length + 1, null);
+    const result = await execute('fableloom-review-shots', { source: JSON.stringify({ ...context, scope: 'Whole-plan narrative and boundary-continuity check. Each full shot group already passed source, filmability and within-group visual review. Check the combined actions/dialogue and graph, with entry/exit compositions at group boundaries (a single-shot group exits in its entry composition). Do not request the teleplay or intermediate render prompts.', scenes: context.sceneDigest }), shots: JSON.stringify(consistencyPlan) }, checkpoint.consistency.length + 1, null);
     review = result.content;
     checkpoint.consistency.push({ planHash, review });
     await persist();
