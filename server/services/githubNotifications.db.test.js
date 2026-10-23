@@ -213,6 +213,31 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await ids()).toEqual(['151', '152']);
   });
 
+  it('moves a thread read on GitHub to Handled without a gh write, keeps a PortOS read in Needs you, and brings it back on new activity', async () => {
+    let inbox = [thread('161'), thread('162'), thread('163')];
+    const actions = mockGh((args) => githubListing(args, inbox));
+    await syncAccountNotifications(account.id);
+    const view = async (name) => (await listNotifications({ accountId: account.id, view: name })).notifications.map((row) => row.threadId).sort();
+    expect(await view('needs-you')).toEqual(['161', '162', '163']);
+
+    // 161 is Done on the website and 163 only read there (both stay in the
+    // all=true listing as read, whose cursor does not move); 162 is read
+    // through PortOS.
+    await applyNotificationAction(account.id, '162', 'read');
+    actions.length = 0;
+    inbox = [{ ...inbox[0], unread: false }, { ...inbox[1], unread: false }, { ...inbox[2], unread: false }];
+    await syncAccountNotifications(account.id);
+    expect(await view('needs-you')).toEqual(['162']);
+    expect(await view('handled')).toEqual(['161', '163']);
+    expect((await listNotifications({ accountId: account.id, view: 'handled' })).notifications[0]).toMatchObject({ readOnGithub: true, state: 'open' });
+    expect(actions).toEqual([]);
+
+    inbox = [thread('161', { updatedAt: '2026-10-02T10:00:00Z' })];
+    await syncAccountNotifications(account.id);
+    expect(await view('needs-you')).toContain('161');
+    expect(await view('handled')).not.toContain('161');
+  });
+
   it('treats a 304 as unchanged and keeps rows', async () => {
     mockGh((args) => githubListing(args, [thread('201')]));
     await syncAccountNotifications(account.id);

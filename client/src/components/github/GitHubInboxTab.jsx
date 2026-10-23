@@ -56,11 +56,12 @@ const MORE_ACTIONS = [
 
 // Whether a row still belongs in the view after an action moved it. Mirrors
 // VIEW_FILTERS in server/services/githubNotifications.js: the inbox holds every
-// open thread, as GitHub's does, whatever its decision.
+// open thread GitHub still has unread or PortOS has not seen read there,
+// whatever its decision.
 const VIEW_MATCHERS = {
-  'needs-you': (row) => row.state === 'open' && !row.suspect,
-  suspect: (row) => row.state === 'open' && row.suspect,
-  handled: (row) => row.state !== 'open',
+  'needs-you': (row) => row.state === 'open' && !row.readOnGithub && !row.suspect,
+  suspect: (row) => row.state === 'open' && !row.readOnGithub && row.suspect,
+  handled: (row) => row.state !== 'open' || row.readOnGithub,
   all: () => true,
 };
 const belongsInView = (row, view) => VIEW_MATCHERS[view](row);
@@ -179,6 +180,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction }) {
             {notification.yourRepo && <Pill tone="accent">Your repo</Pill>}
             {notification.repoPrivate && <Pill tone="muted">Private</Pill>}
             {trust && <Pill tone={trust.tone}>{trust.label}</Pill>}
+            {notification.readOnGithub && <Pill tone="muted">Read on GitHub</Pill>}
             {handled && <Pill tone="muted">{STATE_LABELS[notification.state] || notification.state}</Pill>}
           </div>
           {!handled && notification.agent?.refused && (

@@ -138,6 +138,12 @@ const UPSERT_SQL = `INSERT INTO github_notifications (
     html_url = EXCLUDED.html_url,
     latest_comment_api_url = EXCLUDED.latest_comment_api_url,
     unread = EXCLUDED.unread,
+    -- Read on GitHub while open and unread here (PortOS's own read clears
+    -- unread first, so never lands here). New activity or unread clears it.
+    read_on_github_at = CASE
+      WHEN EXCLUDED.unread OR EXCLUDED.gh_updated_at > github_notifications.gh_updated_at THEN NULL
+      WHEN github_notifications.unread AND github_notifications.state = 'open' THEN COALESCE(github_notifications.read_on_github_at, NOW())
+      ELSE github_notifications.read_on_github_at END,
     -- New activity brings back a thread marked done, and an unsubscribed one
     -- (GitHub re-subscribes on a fresh mention or review request). Muted stays.
     -- An unread thread is in GitHub's inbox (marking one done reads it), so it
@@ -179,12 +185,16 @@ const listedIds = (listing) => listing.threads.map((thread) => String(thread?.id
 
 // Only a complete listing says anything about the threads it does not name.
 async function reconcileListings(client, accountId, { inbox, unread }) {
+  let readOnGithub = 0;
   if (unread.complete) {
-    await client.query(
-      `UPDATE github_notifications SET unread = FALSE, updated_at = NOW()
+    // Reading a thread on GitHub does not move the `all=true` cursor, so a
+    // thread that turned read there is only seen here (#13171).
+    ({ rowCount: readOnGithub } = await client.query(
+      `UPDATE github_notifications SET unread = FALSE, updated_at = NOW(),
+         read_on_github_at = CASE WHEN state = 'open' THEN NOW() ELSE read_on_github_at END
        WHERE account_id = $1 AND unread AND NOT (thread_id = ANY($2::text[]))`,
       [accountId, listedIds(unread)],
-    );
+    ));
   }
   // GitHub's `all=true` listing still includes threads marked done (as
   // read), so only a thread missing from the whole listing is known gone.
@@ -197,6 +207,7 @@ async function reconcileListings(client, accountId, { inbox, unread }) {
       [accountId, listedIds(inbox)],
     );
   }
+  return readOnGithub;
 }
 
 async function syncAccountNow(account, automate) {
@@ -205,11 +216,18 @@ async function syncAccountNow(account, automate) {
   const listedAt = new Date();
   const inbox = await fetchListing(account, env, { all: true, ifModifiedSince: listingCursor(cursor?.last_modified) });
   if (inbox.notModified) {
-    await query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
+    // The cursor only moves on new activity, not on reads: re-read the small
+    // unread listing so a thread read on GitHub leaves Needs you.
+    const unread = await fetchListing(account, env, { all: false });
+    const readOnGithub = await withTransaction(async (client) => {
+      const count = await reconcileListings(client, account.id, { inbox, unread });
+      await client.query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
+      return count;
+    });
     // Threads past the last run's triage cap still need a decision.
     const triage = await triageAccountNotifications(account, env);
     const assist = await runAutomation(account, env, automate);
-    if (triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
+    if (readOnGithub || triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
     return { accountId: account.id, changed: false, fetched: 0, triage, assist };
   }
   // The `all=true` listing can run past MAX_PAGES and is a delta after the
@@ -282,9 +300,10 @@ export async function syncAllNotifications(options = {}) {
 // the inbox can clear in one tap.
 const FINISHED_SQL = `decision IN (${FINISHED_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
 const VIEW_FILTERS = {
-  'needs-you': "state = 'open' AND NOT suspect",
-  suspect: "state = 'open' AND suspect",
-  handled: "state <> 'open'",
+  // Read on the GitHub website without PortOS reading it: the operator handled it there (#13171).
+  'needs-you': "state = 'open' AND read_on_github_at IS NULL AND NOT suspect",
+  suspect: "state = 'open' AND read_on_github_at IS NULL AND suspect",
+  handled: "(state <> 'open' OR read_on_github_at IS NOT NULL)",
   all: 'TRUE',
 };
 
@@ -310,6 +329,7 @@ const toApi = (row, accountsById) => {
     title: row.subject_title,
     htmlUrl: row.html_url,
     unread: row.unread,
+    readOnGithub: Boolean(row.read_on_github_at) && row.state === 'open',
     state: row.state,
     decision: row.decision || null,
     trust: row.trust || null,
