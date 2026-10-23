@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -7,6 +7,7 @@ import express from 'express';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
+import { createTestPhaseDiagnostics } from '../../test/testPhaseDiagnostics.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { filmLookPreset } from '../../lib/filmLook.js';
@@ -97,24 +98,27 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await page.waitForFunction(() => typeof window.show === 'function');
   }, 30000);
 
+  let phase;
+  beforeEach(({ onTestFailed }) => { phase = createTestPhaseDiagnostics(onTestFailed); });
+
   const show = async (value, t) => {
-    await page.evaluate(({ value, t }) => { window.uploads = []; window.show(value, t); }, { value, t });
+    await phase('show-render', () => page.evaluate(({ value, t }) => { window.uploads = []; window.show(value, t); }, { value, t }));
     // Assigning currentTime is synchronous; its seeked handler can still leave Ending later.
-    await page.waitForFunction((t) => Math.abs(document.querySelector('audio')?.currentTime - t) < 0.00001 && !document.querySelector('audio').seeking, t);
-    await page.waitForFunction(() => [...document.querySelectorAll('figure img')].every((image) => image.complete && image.naturalWidth > 0));
+    await phase('show-song-seek', () => page.waitForFunction((t) => Math.abs(document.querySelector('audio')?.currentTime - t) < 0.00001 && !document.querySelector('audio').seeking, t));
+    await phase('show-images-ready', () => page.waitForFunction(() => [...document.querySelectorAll('figure img')].every((image) => image.complete && image.naturalWidth > 0)));
   };
   const capture = async (label = '') => {
-    await page.evaluate(() => { window.uploads = []; window.captureErrors = []; });
-    await page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')].every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime))));
-    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
-    await page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0);
-    expect(await page.evaluate(() => window.captureErrors), label).toEqual([]);
-    const saved = Buffer.from(await page.evaluate(() => window.uploads.at(-1)));
+    await phase('capture-reset', () => page.evaluate(() => { window.uploads = []; window.captureErrors = []; }));
+    await phase('capture-video-ready', () => page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')].every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime)))));
+    await phase('capture-click', () => page.getByRole('button', { name: 'Save frame', exact: true }).click());
+    await phase('capture-upload-or-error', () => page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0));
+    expect(await phase('capture-read-errors', () => page.evaluate(() => window.captureErrors)), label).toEqual([]);
+    const saved = Buffer.from(await phase('capture-read-upload', () => page.evaluate(() => window.uploads.at(-1))));
     const picture = page.getByLabel('Storyboard animatic', { exact: true }).locator(':scope > div').first();
     // Global notification chrome is outside the video frame being saved.
-    const displayed = await picture.screenshot({ style: '[data-toast-id]{visibility:hidden}' });
-    const a = await sharp(saved).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    const b = await sharp(displayed).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const displayed = await phase('capture-screenshot', () => picture.screenshot({ style: '[data-toast-id]{visibility:hidden}' }));
+    const a = await phase('capture-decode-saved', () => sharp(saved).ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
+    const b = await phase('capture-decode-displayed', () => sharp(displayed).ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
     expect([a.info.width, a.info.height]).toEqual([b.info.width, b.info.height]);
     let difference = 0, opaque = 0;
     for (let i = 0; i < a.data.length; i += 1) {
@@ -303,23 +307,23 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   it('freezes the displayed outro canvas and exact look before capture', async () => {
     await show(project([still], { statsOutro: { enabled: true, durationSec: 8 }, filmLook: filmLookPreset('polaroid') }), 1);
     const look = page.getByRole('button', { name: 'Film look', exact: true });
-    if (await look.getAttribute('aria-pressed') === 'false') await look.click();
+    await phase('outro-enable-look', async () => {
+      if (await look.getAttribute('aria-pressed') === 'false') await look.click();
+    });
     // The canvas mounts with provisional counts, so its presence/fonts do not
     // establish a capture basis. Wait for the tally, then let React paint it.
     const statsReady = page.waitForResponse('**/api/music-video/*/stats-outro');
-    await page.getByRole('button', { name: 'Ending', exact: true }).click();
-    await page.getByTestId('animatic-stats-outro').waitFor();
-    const statsResponse = await statsReady;
+    await phase('outro-activate', () => page.getByRole('button', { name: 'Ending', exact: true }).click());
+    await phase('outro-canvas-ready', () => page.getByTestId('animatic-stats-outro').waitFor());
+    const statsResponse = await phase('outro-stats-response', () => statsReady);
     expect(statsResponse.ok()).toBe(true);
-    expect(await statsResponse.finished()).toBeNull();
-    await page.evaluate(async () => {
-      await document.fonts.ready;
-      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
-    });
+    expect(await phase('outro-stats-finished', () => statsResponse.finished())).toBeNull();
+    await phase('outro-fonts-ready', () => page.evaluate(() => document.fonts.ready));
+    await phase('outro-paint-settled', () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))));
     const saved = await capture();
-    expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
-    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
-    await page.evaluate(() => { window.uploads = []; });
+    expect(await phase('outro-exact-look', () => page.locator('[data-film-look="exact"]').count())).toBe(1);
+    await phase('outro-repeat-paint', () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))));
+    await phase('outro-repeat-reset', () => page.evaluate(() => { window.uploads = []; }));
     expect(Buffer.compare(saved, await capture())).toBe(0);
   });
 
