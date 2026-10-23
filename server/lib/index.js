@@ -961,3 +961,4 @@ export * from './manuscriptLocate.js';
 export * from './runwayCatalogSnapshot.js';
 
 export * from './runwaySpecialVideoModels.js';
+export * from './issueClaimEvidence.js';
