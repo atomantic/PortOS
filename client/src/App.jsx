@@ -629,6 +629,7 @@ export default function App() {
           <Route path="objects/:id/:tab?" element={<CatalogIngredient />} />
           <Route path="code-animation" element={<CodeAnimation />} />
           <Route path="code-animation/gallery" element={<CodeAnimation />} />
+          <Route path="code-animation/drafts/:draftId" element={<CodeAnimation />} />
           <Route path="code-animation/:jobId" element={<CodeAnimation />} />
           <Route path="code-animation/production" element={<CodeAnimation />} />
           <Route path="code-animation/production/:projectId" element={<CodeAnimation />} />

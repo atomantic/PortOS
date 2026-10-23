@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Link, MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 const socketHarness = vi.hoisted(() => ({ handlers: new Map(), emit: vi.fn() }));
 
@@ -103,13 +103,19 @@ const BLUEPRINT = {
   nativeMoves: [{ name: 'Exploded assembly', how: 'Pull apart.', fitsContentLike: ['product anatomy', 'teardowns'] }],
 };
 
+function CurrentRoute() {
+  return <output data-testid="route">{useLocation().pathname}</output>;
+}
+
 const renderPage = async (initialEntry = '/code-animation', navLinks = []) => {
   const result = render(
     <MemoryRouter initialEntries={[initialEntry]}>
+      <CurrentRoute />
       {navLinks.map((to) => <Link key={to} to={to}>Open {to}</Link>)}
       <Routes>
         <Route path="/code-animation" element={<CodeAnimation />} />
         <Route path="/code-animation/gallery" element={<CodeAnimation />} />
+        <Route path="/code-animation/drafts/:draftId" element={<CodeAnimation />} />
         <Route path="/code-animation/:jobId" element={<CodeAnimation />} />
       </Routes>
     </MemoryRouter>,
@@ -166,6 +172,30 @@ describe('Code Animation page', () => {
   });
 
   afterEach(() => vi.useRealTimers());
+
+  it('creates distinct UUID draft routes and restores each brief independently', async () => {
+    const user = userEvent.setup();
+    const firstRender = await renderPage();
+    const firstRoute = screen.getByTestId('route').textContent;
+    expect(firstRoute).toMatch(/^\/code-animation\/drafts\/[0-9a-f-]{36}$/);
+    await user.type(screen.getByLabelText(/what happens/i), 'First project');
+    firstRender.unmount();
+
+    const secondRender = await renderPage();
+    expect(screen.getByTestId('route').textContent).not.toBe(firstRoute);
+    expect(screen.getByLabelText(/what happens/i)).toHaveValue('');
+    await user.type(screen.getByLabelText(/what happens/i), 'Second project');
+    secondRender.unmount();
+
+    await renderPage(firstRoute, ['/code-animation/drafts/11111111-1111-4111-8111-111111111111', firstRoute]);
+    expect(screen.getByLabelText(/what happens/i)).toHaveValue('First project');
+    await user.click(screen.getByRole('link', { name: 'Open /code-animation/drafts/11111111-1111-4111-8111-111111111111' }));
+    expect(screen.getByLabelText(/what happens/i)).toHaveValue('');
+    await user.click(screen.getByRole('link', { name: `Open ${firstRoute}` }));
+    expect(screen.getByLabelText(/what happens/i)).toHaveValue('First project');
+    expect(getCodeAnimationJob).not.toHaveBeenCalled();
+    expect(startCodeAnimationGeneration).not.toHaveBeenCalled();
+  });
 
   it('restores a routed job, updates its preview on its event, and never polls', async () => {
     getCodeAnimationJob.mockResolvedValue(runningJob);
