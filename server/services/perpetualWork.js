@@ -27,7 +27,7 @@ import { runCliBounded } from '../lib/runCliBounded.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
-import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, extractSlugFromRef } from '../lib/planIds.js';
+import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable } from '../lib/planIds.js';
 import { readOriginRemoteUrl } from '../lib/gitRemote.js';
 import { withGlabJson } from '../lib/glabArgs.js';
 import { githubApiHost, hostFromOriginUrl } from '../lib/workTracker.js';
@@ -108,7 +108,7 @@ function runCli(cmd, args, cwd, env) {
  * Extract a GitHub issue number from a git ref ONLY when it matches a documented
  * claim pattern (`claim/issue-<num>`, `cos/<task>/issue-<num>/<agent>`, or the
  * slashdo `/do:next` branch `next/issue-<num>`, #8161).
- * Reuses extractSlugFromRef so the ref-matching rules stay in one place.
+ * Shares claimIssueNumber with the manual claim gate and PR evidence parser.
  */
 export function issueNumberFromRef(ref) {
   return claimIssueNumber(ref);

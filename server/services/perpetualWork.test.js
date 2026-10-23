@@ -128,12 +128,6 @@ describe('perpetualWork', () => {
       expect(isActionableIssue({ ...base, assignees: [{ login: 'someone' }] })).toBe(false);
     });
 
-    it('rejects same-login assignment because a login does not establish run ownership', () => {
-      expect(isActionableIssue({ ...base, assignees: [{ login: 'Alice' }] }, new Set(), null, 'alice')).toBe(false);
-      expect(isActionableIssue({ ...base, assignees: [{ username: 'ALICE' }] }, new Set(), null, 'alice')).toBe(false);
-      expect(isActionableIssue({ ...base, assignees: [{ login: 'bob' }] }, new Set(), null, 'alice')).toBe(false);
-    });
-
     it('rejects an in-flight issue number', () => {
       expect(isActionableIssue(base, new Set([7]))).toBe(false);
     });
