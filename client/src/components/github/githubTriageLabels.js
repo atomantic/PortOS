@@ -14,6 +14,17 @@ export const DECISION_VIEW = {
   'handed-off': { tone: 'success', label: 'Handed off' },
 };
 
+// Triage suggestions that become actionable buttons instead of passive pills.
+// Purely informational decisions (surface, suspect, etc.) stay pills.
+export const DECISION_ACTIONS = {
+  'suggest-review': { label: 'Do:Review', action: 'agent', lane: 'do-review' },
+  'suggest-untrusted-review': { label: 'Untrusted:Review', action: 'agent', lane: 'pr-reviewer' },
+  'suggest-done': { label: 'Mark done', action: 'done' },
+  'suggest-mark-read': { label: 'Mark done', action: 'done' },
+  duplicate: { label: 'Mark done', action: 'done' },
+  'suggest-mute': { label: 'Mute', action: 'mute' },
+};
+
 export const TRUST_VIEW = {
   yours: { tone: 'success', label: 'You' },
   trusted: { tone: 'success', label: 'Trusted' },

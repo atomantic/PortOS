@@ -468,9 +468,9 @@ describe('GitHub inbox tab', () => {
     });
     mock.clearFinishedGitHubNotifications.mockResolvedValue({ cleared: 1, failed: 0 });
     renderTab('inbox');
-    // The inbox mirrors GitHub's, so a folded duplicate is listed with its pill.
+    // The inbox mirrors GitHub's, so a folded duplicate is listed with its actionable button.
     expect(await screen.findByText('Folded CI notice')).toBeTruthy();
-    expect(screen.getByText('Duplicate')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Mark done' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Mark 1 finished done' }));
     await waitFor(() => expect(mock.clearFinishedGitHubNotifications).toHaveBeenCalledWith(null));
   });
@@ -566,7 +566,7 @@ describe('GitHub inbox triage', () => {
       sync: {},
     });
     renderTab('inbox');
-    expect(await screen.findByText('Suggest Untrusted:Review')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Untrusted:Review' })).toBeTruthy();
     expect(screen.getByText('Outside')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /^Suspect/ }));
@@ -601,6 +601,82 @@ describe('GitHub inbox triage', () => {
     renderTab('inbox/github-com/101');
     expect((await screen.findByRole('link', { name: 'Acme App' })).getAttribute('href')).toBe('/apps/app-acme/pull-requests');
     expect(screen.getByText('Handed off to Untrusted:Review by Autopilot')).toBeTruthy();
+  });
+
+  it('turns suggest-done into a Mark done button that applies done and removes the row from Needs you', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, decision: 'suggest-done' }],
+      sync: {},
+    });
+    mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, decision: 'suggest-done', state: 'done' });
+    renderTab('inbox');
+    const markDone = await screen.findByRole('button', { name: 'Mark done' });
+    expect(markDone).toBeTruthy();
+    fireEvent.click(markDone);
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'done');
+    expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
+  });
+
+  it('turns suggest-untrusted-review into Untrusted:Review button calling resolve route, and disables it with reason when refused', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [
+        { ...NOTIFICATION, decision: 'suggest-untrusted-review', agent: { lane: 'pr-reviewer', refused: null, pin: null } },
+        { ...NOTIFICATION, threadId: '102', title: 'Refused PR', decision: 'suggest-untrusted-review', agent: { lane: 'pr-reviewer', refused: 'private-account', pin: null } },
+      ],
+      sync: {},
+    });
+    mock.resolveGitHubNotificationWithAgent.mockResolvedValue({ ...NOTIFICATION, decision: 'handed-off', agent: { lane: 'pr-reviewer', refused: 'handed-off', pin: null } });
+    renderTab('inbox');
+    expect(await screen.findByText('Allow agents on this Private account in Accounts to resolve it with an agent')).toBeTruthy();
+    const reviewButtons = screen.getAllByRole('button', { name: 'Untrusted:Review' });
+    expect(reviewButtons[0].disabled).toBe(false);
+    expect(reviewButtons[1].disabled).toBe(true);
+
+    fireEvent.click(reviewButtons[0]);
+    await waitFor(() => expect(mock.resolveGitHubNotificationWithAgent).toHaveBeenCalledWith('github-com', '101', undefined));
+  });
+
+  it('renders purely informational decisions (surface, surface-high) as non-interactive pills', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [
+        { ...NOTIFICATION, decision: 'surface' },
+        { ...NOTIFICATION, threadId: '102', title: 'High priority notice', decision: 'surface-high' },
+      ],
+      sync: {},
+    });
+    renderTab('inbox');
+    expect(await screen.findByText('Worth a look')).toBeTruthy();
+    expect(screen.getByText('High priority')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Worth a look' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'High priority' })).toBeNull();
+  });
+
+  it('turns suggest-mute into a Mute button that applies mute action', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, decision: 'suggest-mute' }],
+      sync: {},
+    });
+    mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, decision: 'suggest-mute', state: 'muted' });
+    renderTab('inbox');
+    const muteButton = await screen.findByRole('button', { name: 'Mute' });
+    expect(muteButton).toBeTruthy();
+    fireEvent.click(muteButton);
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'mute');
+    expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
+  });
+
+  it('turns suggest-review into Do:Review button that calls the resolve route', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, decision: 'suggest-review', agent: { lane: 'do-review', refused: null, pin: null } }],
+      sync: {},
+    });
+    mock.resolveGitHubNotificationWithAgent.mockResolvedValue({ ...NOTIFICATION, decision: 'handed-off', agent: { lane: 'do-review', refused: 'handed-off', pin: null } });
+    renderTab('inbox');
+    const doReview = await screen.findByRole('button', { name: 'Do:Review' });
+    expect(doReview).toBeTruthy();
+    expect(doReview.disabled).toBe(false);
+    fireEvent.click(doReview);
+    await waitFor(() => expect(mock.resolveGitHubNotificationWithAgent).toHaveBeenCalledWith('github-com', '101', undefined));
   });
 });
 

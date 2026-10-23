@@ -9,7 +9,7 @@ import OverflowMenu from '../ui/OverflowMenu';
 import GitHubThreadDrawer from './GitHubThreadDrawer';
 import GitHubDeploymentReview from './GitHubDeploymentReview';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
-import { AGENT_REFUSED_LABELS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
+import { AGENT_REFUSED_LABELS, DECISION_ACTIONS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
 import socket from '../../services/socket';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -161,12 +161,22 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
   const handled = notification.state !== 'open';
   const trust = TRUST_VIEW[notification.trust];
   const decision = DECISION_VIEW[notification.decision];
+  const suggestionAction = handled ? null : DECISION_ACTIONS[notification.decision];
+  const isAgentSuggestion = suggestionAction?.action === 'agent';
   const kind = kindOf(notification);
   // Every open row offers the button; a refused lane disables it with its reason.
   const agent = handled ? null : notification.agent;
   const canResolve = Boolean(agent) && !agent.refused;
   const startAgent = async (pin) => {
     if (await onAction(notification, 'agent', pin)) setPicking(false);
+  };
+  const handleSuggestion = async () => {
+    if (!suggestionAction) return;
+    if (isAgentSuggestion) {
+      await onAction(notification, 'agent');
+    } else {
+      await onAction(notification, suggestionAction.action);
+    }
   };
   const overflow = handled ? [] : MORE_ACTIONS.map(({ action, label, icon }) => ({
     id: action, label, icon, disabled: busy, onSelect: () => onAction(notification, action),
@@ -199,7 +209,31 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
             </p>
           )}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {decision && <Pill tone={decision.tone}>{decision.label}</Pill>}
+            {suggestionAction ? (
+              <button
+                type="button"
+                disabled={busy || (isAgentSuggestion && !canResolve)}
+                onClick={handleSuggestion}
+                aria-describedby={isAgentSuggestion && agent?.refused ? `agent-refused-${notification.accountId}-${notification.threadId}` : undefined}
+                title={isAgentSuggestion && agent?.refused ? (AGENT_REFUSED_LABELS[agent.refused] || agent.refused) : undefined}
+                className={`inline-flex min-h-[36px] items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-50 ${
+                  isAgentSuggestion && !canResolve
+                    ? 'border border-port-border text-gray-400'
+                    : decision?.tone === 'warning'
+                      ? 'border border-port-warning/40 bg-port-warning/10 text-port-warning hover:bg-port-warning/20'
+                      : decision?.tone === 'accent'
+                        ? 'bg-port-accent text-white hover:opacity-90'
+                        : 'border border-port-border text-gray-200 hover:border-gray-500'
+                }`}
+              >
+                {suggestionAction.action === 'done' && <Check size={13} aria-hidden="true" />}
+                {suggestionAction.action === 'agent' && <Bot size={13} aria-hidden="true" />}
+                {suggestionAction.action === 'mute' && <BellOff size={13} aria-hidden="true" />}
+                {suggestionAction.label}
+              </button>
+            ) : (
+              decision && <Pill tone={decision.tone}>{decision.label}</Pill>
+            )}
             {notification.yourRepo && <Pill tone="accent">Your repo</Pill>}
             {notification.repoPrivate && <Pill tone="muted">Private</Pill>}
             {trust && <Pill tone={trust.tone}>{trust.label}</Pill>}
