@@ -1309,6 +1309,36 @@ describe('CI test impact planner', () => {
     }
   });
 
+  it('escalates Windows only for the workflow and pipeline scripts the windows-server job runs', () => {
+    const windowsModeOf = (path) => buildCiTestPlan([path], { trackedFiles: TRACKED }).windowsMode;
+    // Defined by / executed on windows-latest.
+    for (const path of [
+      '.github/workflows/ci.yml',
+      'scripts/ci-base-sha.js',
+      'scripts/lib/githubOutput.js',
+      'scripts/run-ci-tests.js',
+      'scripts/run-ci-tests.test.js',
+    ]) expect(windowsModeOf(path), path).toBe('full');
+    // Still a full Linux plan, but nothing on windows-latest loads them: the
+    // baseline runs and the nightly / release PR keep the complete matrix.
+    for (const path of [
+      '.github/workflows/release.yml',
+      '.github/workflows/eidoverse-acceptance.yml',
+      'scripts/ci-test-plan.js',
+      'scripts/ci-test-plan.test.js',
+      'scripts/run-ci-lint.js',
+      'scripts/scan-diff-hidden-content.js',
+      'scripts/verify-ci-status.js',
+    ]) {
+      const plan = buildCiTestPlan([path], { trackedFiles: TRACKED });
+      expect(plan.full, path).toBe(true);
+      expect(plan.windowsMode, path).toBe('files');
+    }
+    // Any matching trigger still wins: ci.yml next to a Linux-only script escalates.
+    expect(windowsModeOf('.github/workflows/ci.yml')).toBe('full');
+    expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('full');
+  });
+
   it('routes worktree-manager source to a full plan instead of a broad nominal scoped plan (#9999)', () => {
     const plan = buildCiTestPlan(['server/services/worktreeManager.js'], { trackedFiles: TRACKED });
     expect(plan.full).toBe(true);
