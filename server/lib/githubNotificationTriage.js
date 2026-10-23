@@ -229,7 +229,9 @@ const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 
 // The notification kinds an agent rule can name (GITHUB_AGENT_RULE_KINDS in
 // lib/validation.js), and the kind of a thread, or null when no rule applies.
-const RULE_KINDS = new Set(['review-request', 'security-alert', 'issue-activity']);
+const RULE_KINDS = new Set(['review-request', 'security-alert', 'issue-activity', 'ci-activity']);
+// `ci-activity` rules name a GitHub action instead of starting an agent.
+export const CI_RULE_ACTIONS = Object.freeze(['done', 'mute', 'leave']);
 const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
 const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
@@ -250,7 +252,28 @@ function threadAgentKind(row) {
  */
 const validRules = (rules, kind) => (Array.isArray(rules) ? rules : []).filter((rule) => rule
   && RULE_KINDS.has(rule.kind) && rule.kind === kind
-  && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo) && typeof rule.agent === 'boolean');
+  && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo)
+  && (kind === 'ci-activity' ? CI_RULE_ACTIONS.includes(rule.action) : typeof rule.agent === 'boolean'));
+
+// Built-in rules shown under every account. A rule the operator saves for the
+// same kind and repo wins; with none, a CI notice is simply marked done.
+export const DEFAULT_AGENT_RULES = Object.freeze([
+  Object.freeze({ id: 'default-ci-activity', kind: 'ci-activity', repo: '*', action: 'done', builtin: true }),
+]);
+
+const isCiThread = (row) => row?.reason === 'ci_activity' || row?.subject_type === 'CheckSuite';
+
+/**
+ * What the account's rules do with a CI notification: `done`, `mute` or
+ * `leave`. The repo's own rule, else the `*` rule, else the built-in default.
+ * Suspect and closed-out threads are handled elsewhere, so this only reads
+ * the thread's kind and repo.
+ */
+export function ciActivityAction({ account, row }) {
+  if (!isCiThread(row)) return null;
+  const rules = [...(Array.isArray(account?.agentRules) ? account.agentRules : []), ...DEFAULT_AGENT_RULES];
+  return matchAgentRule(rules, 'ci-activity', row.repo_full_name)?.action || null;
+}
 
 function matchAgentRule(rules, kind, repo) {
   if (!kind) return null;
