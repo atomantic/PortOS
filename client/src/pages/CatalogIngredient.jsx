@@ -883,13 +883,10 @@ function IngredientEditor() {
           />
         )}
 
-        {activeTab === 'references' && record.type === 'character' && (
-          <CatalogReferenceLibrary ingredientId={record.id} media={media} forms={formsOf(record.payload)} readOnly={identityReadOnly} onChanged={refreshMedia} />
-        )}
-
         {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
           <MediaPanel
             readOnly={identityReadOnly}
+            referenceLibrary={record.type === 'character' ? { ingredientId: record.id, forms: formsOf(record.payload), guideMedia: media, onChanged: refreshMedia } : null}
             media={(tabs ? media.filter(isReferenceTabRow) : media).map(protectMedia)}
             canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
               !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}
@@ -1484,7 +1481,7 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
   );
 }
 
-function MediaPanel({ readOnly = false, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
+function MediaPanel({ readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
@@ -1500,6 +1497,7 @@ function MediaPanel({ readOnly = false, media, canonImageRefs = [], primaryImage
     seenImageKeys.add(m.mediaKey);
     return true;
   });
+  const tileMedia = referenceLibrary ? others.filter((m) => !['reference', 'video'].includes(m.kind)) : others;
   const canonImages = [...new Set(canonImageRefs.filter((ref) => typeof ref === 'string' && ref.trim()))];
 
   const doUpload = async (file) => {
@@ -1590,7 +1588,10 @@ function MediaPanel({ readOnly = false, media, canonImageRefs = [], primaryImage
           : 'Drag a gallery image or a file here to attach it (image, audio, or video).'}
       </div>}
 
-      {portrait && (
+      {referenceLibrary && <CatalogReferenceLibrary {...referenceLibrary} media={list} readOnly={readOnly}
+        missingMedia={missingMedia} onSetPortrait={onSetPortrait} onDetach={onDetach} />}
+
+      {!referenceLibrary && portrait && (
         <div className="mb-3">
           <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Portrait</div>
           <CatalogMediaTile m={portrait} missing={missingMedia.has(portrait.mediaKey)} isPortrait
@@ -1599,9 +1600,9 @@ function MediaPanel({ readOnly = false, media, canonImageRefs = [], primaryImage
         </div>
       )}
 
-      {others.length > 0 && (
+      {tileMedia.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
-          {others.map((m) => (
+          {tileMedia.map((m) => (
             <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia.has(m.mediaKey)}
               onSetPortrait={onSetPortrait} onDetach={onDetach} armedDetach={armedDetach}
               onArmDetach={setArmedDetach} />
@@ -1628,7 +1629,7 @@ function MediaPanel({ readOnly = false, media, canonImageRefs = [], primaryImage
         </div>
       )}
 
-      {list.length === 0 && canonImages.length === 0 && (
+      {!referenceLibrary && list.length === 0 && canonImages.length === 0 && (
         <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, an uploaded file, or a recorded voice memo.</p>
       )}
 
