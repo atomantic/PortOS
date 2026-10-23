@@ -14,6 +14,7 @@ import ProviderModelSelector from '../../ProviderModelSelector';
 import ReviewerPicker from '../../cos/ReviewerPicker';
 import { PR_REVIEW_MODES, PR_REVIEW_MODE_OPTIONS, DEFAULT_PR_REVIEW_MODE, prReviewModeOption, REVIEWER_LIST_OVERRIDE_KEYS } from '../../cos/constants';
 import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
+import ForgeScopeFix, { forgeScopeFailureFrom } from '../ForgeScopeFix';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
 import useRunWithPicker from '../../../hooks/useRunWithPicker';
@@ -344,6 +345,9 @@ export default function PullRequestsTab({ appId, appName }) {
   const [merging, setMerging] = useState(false);
   const [mergeMethod, setMergeMethod] = useState(DEFAULT_MERGE_METHOD);
   const [deleteBranchOnMerge, setDeleteBranchOnMerge] = useState(true);
+  // A merge the forge refused for a missing token scope: not a failure to toast
+  // away, but a credential the user can repair here and then retry.
+  const [scopeFailure, setScopeFailure] = useState(null);
 
   // Resolve & merge and Do:Review default to the active provider. Untrusted:Review
   // follows its own scheduled stages unless the user explicitly opts this pin in.
@@ -572,11 +576,14 @@ export default function PullRequestsTab({ appId, appName }) {
       method: mergeMethod,
       deleteBranch: deleteBranchOnMerge,
     }).catch(err => {
-      toast.error(err?.message || `Failed to merge #${number}`);
+      const scopeProblem = forgeScopeFailureFrom(err);
+      if (scopeProblem) setScopeFailure(scopeProblem);
+      else toast.error(err?.message || `Failed to merge #${number}`);
       return null;
     });
     setMerging(false);
     if (!result) return;
+    setScopeFailure(null);
 
     cancelMerge();
     // `deletedBranch` is the server's answer, not the request: it refuses to
@@ -735,6 +742,18 @@ export default function PullRequestsTab({ appId, appName }) {
           </div>
         )}
       </div>
+
+      {scopeFailure && (
+        <ForgeScopeFix
+          appId={appId}
+          failure={scopeFailure}
+          onDismiss={() => setScopeFailure(null)}
+          onRefreshed={() => {
+            setScopeFailure(null);
+            toast('Token updated — press Merge again to retry');
+          }}
+        />
+      )}
 
       {error && (
         <Banner tone="error" size="md" icon={AlertTriangle}>

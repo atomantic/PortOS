@@ -756,6 +756,27 @@ describe('app pull-request routes', () => {
     expect(response.body.error).toContain('Squash merges are not allowed');
   });
 
+  it('answers a missing token scope with a 403 carrying the host, scopes and the fix command', async () => {
+    mergeAppPullRequest.mockResolvedValue({
+      ok: false,
+      code: 'missing-scope',
+      error: 'GraphQL: refusing to allow an OAuth App to create or update workflow without `workflow` scope',
+      scopes: ['workflow'],
+      host: 'ghe.example.com',
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/merge').send({});
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('FORGE_TOKEN_SCOPE_MISSING');
+    expect(response.body.context).toEqual({
+      host: 'ghe.example.com',
+      scopes: ['workflow'],
+      command: 'gh auth refresh -h ghe.example.com -s workflow',
+      refreshable: true,
+    });
+  });
+
   it('rejects an unknown merge method before reaching the forge', async () => {
     const response = await request(app).post('/api/apps/app-001/pull-requests/17/merge')
       .send({ method: 'fast-forward' });

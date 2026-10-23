@@ -167,6 +167,22 @@ export const mergeAppPullRequest = (id, number, { method, deleteBranch } = {}, o
     silent: true,
     ...options,
   });
+// Repair a forge token's missing OAuth scope: start `gh auth refresh` for the
+// app's own forge host (the server derives it — never sent). Kickoff returns
+// `{ jobId }`; the device code and outcome stream over SSE (`useForgeScopeRefresh`).
+export const startAppForgeRefresh = (id, scopes, options = {}) =>
+  request(`/apps/${id}/forge-auth/refresh`, {
+    method: 'POST',
+    body: JSON.stringify({ scopes }),
+    ...options,
+  });
+export const appForgeRefreshEventsUrl = (id, jobId) =>
+  `/api/apps/${id}/forge-auth/refresh/${encodeURIComponent(jobId)}/events`;
+export const cancelAppForgeRefresh = (id, jobId, options = {}) =>
+  request(`/apps/${id}/forge-auth/refresh/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST',
+    ...options,
+  });
 // Effective Layered Intelligence config (self-improvement loop) for an app —
 // stored partial merged over the shipped defaults. Read-only; saved through
 // updateApp (the `layeredIntelligence` key routes to the merge helper server-

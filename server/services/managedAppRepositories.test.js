@@ -254,6 +254,21 @@ describe('managed app repository topology', () => {
     expect(result).toMatchObject({ fullName: 'example-owner/example-app', source: 'example-org/example-app' });
   });
 
+  it('reports a fork sync refused for a missing token scope as a credential fix, not a failed sync', async () => {
+    const refusal = 'GraphQL: refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope';
+    const topologyImpl = mock.execGh.getMockImplementation();
+    mock.execGh.mockImplementation(async (args, ...rest) => {
+      if (args[0] === 'repo' && args[1] === 'sync') throw Object.assign(new Error(refusal), { ghStderr: refusal });
+      return topologyImpl ? topologyImpl(args, ...rest) : '';
+    });
+
+    await expect(syncManagedAppFork(app)).rejects.toMatchObject({
+      status: 403,
+      code: 'FORGE_TOKEN_SCOPE_MISSING',
+      context: { host: 'github.com', scopes: ['workflow'], command: 'gh auth refresh -h github.com -s workflow' },
+    });
+  });
+
   it('uses an explicit upstream remote when forge metadata is unavailable', async () => {
     mock.execGh.mockResolvedValue(null);
     mock.readRemoteUrl.mockResolvedValue('git@github.com:example-org/example-app.git');

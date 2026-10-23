@@ -13,6 +13,7 @@
  *   taskTypes  — per-app task-type overrides, work-tracker, layered-intelligence
  *   issues     — open GitHub/GitLab issues for the Issues tab
  *   pullRequests — open GitHub/GitLab PRs/MRs and review-loop actions
+ *   forgeAuth  — repair a forge token's missing OAuth scope via `gh auth refresh`
  *   launch     — open-editor, open-claude, open-folder, open-xcode
  *   documents  — planning-doc read/list/commit
  *   agents     — recent CoS agent history
@@ -36,6 +37,7 @@ import iconRoutes from './icons.js';
 import taskTypeRoutes from './taskTypes.js';
 import issueRoutes from './issues.js';
 import pullRequestRoutes from './pullRequests.js';
+import forgeAuthRoutes from './forgeAuth.js';
 import launchRoutes from './launch.js';
 import launchVideoRoutes from './launchVideos.js';
 import documentRoutes from './documents.js';
@@ -54,6 +56,7 @@ router.use(iconRoutes);
 router.use(taskTypeRoutes);
 router.use(issueRoutes);
 router.use(pullRequestRoutes);
+router.use(forgeAuthRoutes);
 router.use(launchRoutes);
 router.use(launchVideoRoutes);
 router.use(documentRoutes);

@@ -14,6 +14,9 @@ vi.mock('../../../services/apiLocalLlm', async (importOriginal) => ({
   ...await importOriginal(),
   getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
 }));
+vi.mock('../../../hooks/useForgeScopeRefresh', () => ({
+  default: () => ({ active: false, pending: false, device: null, start: vi.fn(), cancel: vi.fn() }),
+}));
 vi.mock('../../../hooks/useAppOperation', () => ({
   useAppOperation: vi.fn(),
 }));
@@ -160,6 +163,30 @@ describe('managed app repository sources', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sync fork' }));
     await waitFor(() => expect(api.syncAppRepositoryFork).toHaveBeenCalledWith('app-example', { silent: true }));
     expect(useAppOperation.mock.results[0].value.startUpdate).not.toHaveBeenCalled();
+  });
+
+  it('offers the credential fix when the fork sync is refused for a missing token scope', async () => {
+    const status = canonicalStatus();
+    status.sources[0] = source({
+      id: 'primary',
+      label: 'Example App',
+      branch: 'main',
+      head: '1'.repeat(40),
+      origin: { fullName: 'example-owner/example-app', isUpstream: false, isFork: true },
+      forkVsUpstream: { available: true, ahead: 0, behind: 2, state: 'behind', error: null },
+    });
+    api.getAppRepositorySources.mockResolvedValue(status);
+    api.syncAppRepositoryFork.mockRejectedValue(Object.assign(new Error('refused without `workflow` scope'), {
+      code: 'FORGE_TOKEN_SCOPE_MISSING',
+      context: { host: 'ghe.example.com', scopes: ['workflow'], command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: true },
+    }));
+    render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
+
+    await screen.findByTestId('repository-source-primary');
+    fireEvent.click(screen.getByRole('button', { name: 'Sync fork' }));
+
+    expect(await screen.findByText(/ghe\.example\.com token is missing the workflow scope/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Authorize workflow/ })).toBeInTheDocument();
   });
 
   // Eidoverse's video checkout is cloned from `anima-research`'s fork of a third

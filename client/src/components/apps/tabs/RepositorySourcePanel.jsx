@@ -22,6 +22,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import AppOperationBanner from '../AppOperationBanner';
+import ForgeScopeFix, { forgeScopeFailureFrom } from '../ForgeScopeFix';
 import GitRecoveryAction from './GitRecoveryAction';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 
@@ -161,6 +162,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   const [syncingFork, setSyncingFork] = useState(false);
   const [updateRequested, setUpdateRequested] = useState(false);
   const [error, setError] = useState(null);
+  const [scopeFailure, setScopeFailure] = useState(null);
   const [updateIntent, setUpdateIntent] = useState(null);
   const lastRefreshKey = useRef(refreshKey);
 
@@ -244,10 +246,13 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   const handleSyncOnly = async () => {
     setSyncingFork(true);
     const result = await api.syncAppRepositoryFork(appId, { silent: true }).catch((reason) => {
-      toast.error(reason.message || 'Could not sync the app fork');
+      const scopeProblem = forgeScopeFailureFrom(reason);
+      if (scopeProblem) setScopeFailure(scopeProblem);
+      else toast.error(reason.message || 'Could not sync the app fork');
       return null;
     });
     if (result) {
+      setScopeFailure(null);
       toast.success(result.alreadyUpToDate ? 'Fork is already current' : 'Fork synced from upstream');
       await load();
     }
@@ -296,6 +301,20 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
           {refreshing ? 'Checking...' : 'Check sources'}
         </button>
       </div>
+
+      {scopeFailure && (
+        <div className="mt-4">
+          <ForgeScopeFix
+            appId={appId}
+            failure={scopeFailure}
+            onDismiss={() => setScopeFailure(null)}
+            onRefreshed={() => {
+              setScopeFailure(null);
+              toast('Token updated — sync the fork again');
+            }}
+          />
+        </div>
+      )}
 
       {(isOperating || restarting || operationError || operationCompleted) && (
         <div className="mt-4">
