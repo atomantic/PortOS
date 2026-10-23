@@ -231,4 +231,58 @@ describe('catalog sheet routes', () => {
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
   });
+
+  describe('alternate age/look sheets', () => {
+    const aged = {
+      ...character,
+      payload: {
+        ...character.payload, age: '34',
+        forms: [
+          { id: 'form-kid', label: 'Age 7', age: '7', description: 'gap-toothed, oversized yellow raincoat' },
+          { id: 'form-empty', label: 'Someday', age: '', description: '' },
+        ],
+      },
+    };
+
+    // Catches a form sheet overwriting the canonical universe pointer (delegated),
+    // landing under the canonical role, or still describing the adult.
+    it('renders a form through the catalog path with its age and look, tagged sheet:<variant>@<formId>', async () => {
+      mocks.getIngredient.mockResolvedValue(aged);
+      mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1' }]);
+      mocks.getUniverse.mockResolvedValue({
+        id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+        characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }],
+      });
+      const body = { variant: 'blueprint', formId: 'form-kid' };
+      const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+      expect(preview.status).toBe(200);
+      const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ role: 'sheet:blueprint@form-kid', delegatedTo: null });
+      const params = queuedParams();
+      expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'sheet:blueprint@form-kid' });
+      expect(params.prompt).toContain('oversized yellow raincoat');
+      expect(params.prompt).not.toContain('silver coat');
+      expect(preview.body.preview.sentPrompt).toBe(params.prompt);
+      expect(mocks.updateUniverse).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unknown form, an undescribed form and a form on a look', async () => {
+      mocks.getIngredient.mockResolvedValue(aged);
+      const post = (body) => request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+      expect((await post({ formId: 'form-nope' })).status).toBe(400);
+      expect((await post({ formId: 'form-empty' })).status).toBe(400);
+      expect((await post({ variant: 'look', wardrobeId: 'wd-x', formId: 'form-kid' })).status).toBe(400);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('swaps a place form into its era and description', async () => {
+      mocks.getIngredient.mockResolvedValue({ ...place, payload: { ...place.payload, era: '1985',
+        forms: [{ id: 'form-ruin', label: 'Ruined', age: '2040', description: 'collapsed piers, rusted cranes' }] } });
+      const res = await request(app).post('/api/catalog/ingredients/cat-plc-1/sheets').send({ formId: 'form-ruin' });
+      expect(res.status).toBe(200);
+      expect(queuedParams().prompt).toContain('collapsed piers, rusted cranes');
+      expect(queuedParams().catalogAttach.role).toBe('sheet:environment@form-ruin');
+    });
+  });
 });

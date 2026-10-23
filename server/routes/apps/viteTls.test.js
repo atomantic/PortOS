@@ -12,12 +12,15 @@ vi.mock('../../services/apps.js', () => ({
 }));
 
 vi.mock('../../services/cos.js', () => ({
-  isRunning: vi.fn().mockReturnValue(true),
+  isRunning: vi.fn().mockReturnValue(true)
+}));
+vi.mock('../../services/cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-vite-1' })
 }));
 
 import * as appsService from '../../services/apps.js';
-import * as cos from '../../services/cos.js';
+import { addTask } from '../../services/cosTaskStore.js';
+import { isRunning } from '../../services/cos.js';
 import { writeFileSync, readFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -31,8 +34,8 @@ describe('Apps Vite Dev-UI host guard', () => {
     app.use(express.json());
     app.use('/api/apps', viteTlsRoutes);
     vi.clearAllMocks();
-    cos.isRunning.mockReturnValue(true);
-    cos.addTask.mockResolvedValue({ id: 'task-vite-1' });
+    isRunning.mockReturnValue(true);
+    addTask.mockResolvedValue({ id: 'task-vite-1' });
     repoDir = join(tmpdir(), `vite-host-${Math.random().toString(36).slice(2)}`);
     mkdirSync(repoDir, { recursive: true });
   });
@@ -109,7 +112,7 @@ describe('Apps Vite Dev-UI host guard', () => {
 
     it('ai mode queues a CoS task targeting the app', async () => {
       appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
-      cos.isRunning.mockReturnValue(true);
+      isRunning.mockReturnValue(true);
 
       const response = await request(app)
         .post('/api/apps/app-001/fix-vite-hosts')
@@ -117,7 +120,7 @@ describe('Apps Vite Dev-UI host guard', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.taskId).toBe('task-vite-1');
-      expect(cos.addTask).toHaveBeenCalledWith(
+      expect(addTask).toHaveBeenCalledWith(
         expect.objectContaining({ app: 'app-001', approvalRequired: true }),
         'internal'
       );
@@ -126,7 +129,7 @@ describe('Apps Vite Dev-UI host guard', () => {
 
     it('ai mode returns 409 when CoS is not running', async () => {
       appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
-      cos.isRunning.mockReturnValue(false);
+      isRunning.mockReturnValue(false);
 
       const response = await request(app)
         .post('/api/apps/app-001/fix-vite-hosts')

@@ -189,9 +189,9 @@ export default function Wiki() {
       case 'browse':
         return <WikiBrowseTab key={selectedVaultId} vaultId={selectedVaultId} notes={wikiNotes} rawNotes={rawNotes} allNotes={notes} onRefresh={handleRefresh} />;
       case 'search':
-        return <WikiSearchTab vaultId={selectedVaultId} onRefresh={handleRefresh} />;
+        return <WikiSearchTab key={selectedVaultId} vaultId={selectedVaultId} onRefresh={handleRefresh} />;
       case 'graph':
-        return <WikiGraphTab vaultId={selectedVaultId} />;
+        return <WikiGraphTab key={selectedVaultId} vaultId={selectedVaultId} />;
       case 'log':
         return <WikiLogTab vaultId={selectedVaultId} allNotes={notes} />;
       default:

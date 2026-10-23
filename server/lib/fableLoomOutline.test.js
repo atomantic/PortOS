@@ -220,6 +220,36 @@ describe('FableLoom story beat outlines', () => {
     expect(series.stats).toMatchObject({ ready: false, readyEpisodeCount: 0 });
   });
 
+  it('ignores playbackMode on endings and names differing fields in the mismatch message', () => {
+    const storyOutline = sanitizeStoryOutline({
+      ...validOutline,
+      scenes: validOutline.scenes.map((scene) => {
+        if (!scene.isEnding) return scene;
+        const { playbackMode: _omitted, ...rest } = scene;
+        return rest;
+      }),
+    });
+    expect(storyOutline.scenes.find((scene) => scene.isEnding).playbackMode).toBe('decision');
+    const nodes = storyOutline.scenes.map((scene) => ({
+      id: scene.key,
+      title: scene.title,
+      playbackMode: scene.isEnding ? 'cut' : scene.playbackMode,
+      audienceConnection: scene.audienceConnection,
+      protagonistPresence: scene.protagonistPresence,
+      isEnding: scene.isEnding,
+      endingLabel: scene.endingLabel,
+      transitions: scene.transitions.map((item) => ({ targetNodeId: item.targetKey, intent: item.intent })),
+    }));
+    const episode = { id: 'ep-1', number: 1, startNodeId: storyOutline.startKey, storyOutline, nodes };
+    expect(analyzeStoryOutlineTeleplaySync(episode, storyOutline).stats.matches).toBe(true);
+
+    const other = nodes.find((node) => !node.isEnding);
+    other.audienceConnection = other.audienceConnection === 'connected' ? 'disconnected' : 'connected';
+    const sync = analyzeStoryOutlineTeleplaySync(episode, storyOutline);
+    expect(sync.issues[0].message).toContain('audienceConnection: outline=');
+    expect(sync.issues[0]).toMatchObject({ sceneKey: other.id, fields: [expect.objectContaining({ field: 'audienceConnection' })] });
+  });
+
   it('allows one structurally sound outline to replace its older teleplay explicitly', () => {
     const storyOutline = {
       ...sanitizeStoryOutline(validOutline),

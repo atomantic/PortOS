@@ -60,3 +60,15 @@ describe('extractCosTaskType', () => {
   });
 });
 // @vitest-environment node
+
+describe('extractCosTaskType retired task names', () => {
+  it('buckets a retired analysis name under its current name, matching the server history', () => {
+    expect(extractCosTaskType({ metadata: { analysisType: 'react-lifecycle' } })).toBe('self-improve:ui-lifecycle');
+  });
+
+  it('buckets a retired app-improvement name under its current name', () => {
+    expect(extractCosTaskType({
+      metadata: { taskApp: 'app-1', selfImprovementType: 'release-check' }
+    })).toBe('app-improve:do-release');
+  });
+});

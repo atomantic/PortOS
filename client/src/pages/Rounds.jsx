@@ -150,7 +150,7 @@ export default function Rounds() {
       ) : rounds.length === 0 ? (
         <p className="text-sm text-gray-500">No rounds yet — write your first above.</p>
       ) : (
-        <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
           {rounds.map((round) => {
             const shape = shapeLabel(round.rhythmShapeId);
             const layerCount = round.layers?.length || 0;
@@ -164,14 +164,14 @@ export default function Rounds() {
                     {round.learned
                       ? <CheckCircle2 size={16} className="text-port-success shrink-0" aria-label="Learned" />
                       : <Circle size={16} className="text-gray-600 shrink-0" aria-label="In progress" />}
-                    <span className="flex-1 min-w-0 text-white font-medium truncate" title={round.title}>{round.title}</span>
+                    <span className="flex-1 min-w-0 text-white font-medium line-clamp-2 break-words" title={round.title}>{round.title}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-1 pl-6">
                     {round.builtIn && (
                       <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide bg-port-accent/10 text-port-accent border border-port-accent/20">
                         Built-in
                       </span>
                     )}
-                  </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-1 pl-6">
                     {round.artist && <span className="text-gray-400">{round.artist}</span>}
                     {round.key && <span>Key: {round.key}</span>}
                     {round.tempo && <span>{round.tempo} BPM</span>}

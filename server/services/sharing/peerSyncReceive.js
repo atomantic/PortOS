@@ -283,6 +283,186 @@ async function assertSchemaVersionGate({ kind, record, issues, linkedCollection,
 // --- Receiver-side push handler -----------------------------------------
 
 /**
+ * Bundled sidecars that ride a series push: child issues, the manuscript-review
+ * doc and the reverse-outline doc. A merge failure never fails the push (the
+ * series already merged); the sidecar docs have no independent reconciliation
+ * cycle, so a failure raises the row's pending flag via `markPending` and the
+ * sender withholds its hash and retries next cycle.
+ */
+async function mergeSeriesSidecars({ record, issues, manuscriptReview, reverseOutline, localEphemeral, bundlesMergeable, source, senderSchemaVersions, markPending }) {
+  // Issues are also skipped for a local-ephemeral series: mergeSeriesFromSync
+  // refused the parent, but `updateSeries` doesn't flip child issues'
+  // `ephemeral` flag, so a stale reverse subscription could otherwise
+  // overwrite the private fork's issue stages. Tombstone pushes still carry
+  // issue tombstones, hence `localEphemeral` rather than `bundlesMergeable`.
+  if (!localEphemeral && Array.isArray(issues) && issues.length > 0) {
+    await mergeIssuesFromSync(issues, { source, senderSchemaVersions });
+  }
+  // Sidecars write under the series record dir, so a malformed id (e.g.
+  // containing `../`) would escape the series store. NOT marked pending: an
+  // invalid id can never become valid, so withholding the hash would retry forever.
+  const seriesIdValid = SERIES_ID_RE.test(record.id);
+  if (!seriesIdValid && (isPlainObject(manuscriptReview) || isPlainObject(reverseOutline))) {
+    console.warn(`⚠️ peerSync: skipped bundled series sidecars for invalid series id`);
+  }
+  if (!seriesIdValid || !bundlesMergeable) return;
+  // Dynamic imports keep the arcPlanner graph off peerSync's load path.
+  if (isPlainObject(manuscriptReview)) {
+    const { mergeReviewFromSync } = await import('../pipeline/manuscriptReview.js');
+    await mergeReviewFromSync(record.id, manuscriptReview).catch(markPending('manuscriptReview'));
+  }
+  if (isPlainObject(reverseOutline)) {
+    const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
+    await mergeOutlineFromSync(record.id, reverseOutline).catch(markPending('reverseOutline'));
+  }
+}
+
+/**
+ * #1858: merge the bundled linked track so a receiver WITHOUT the Tracks
+ * category can still resolve `project.trackId` at render time. The bundle's id
+ * must MATCH the project's `trackId` so a malformed/malicious sender can't
+ * smuggle an unrelated track through. Routed through RECORD_KINDS.track.merge so
+ * exactly one place knows how to merge a track. Non-fatal; returns true only when
+ * the merge RAN and succeeded (#1922: gates `linkedTrack` in `ackedDeletesUpTo`,
+ * so the sender is never told a track tombstone was applied when it wasn't).
+ */
+async function mergeLinkedTrack({ record, linkedTrack, bundlesMergeable, source, markPending }) {
+  if (!bundlesMergeable || !isPlainObject(linkedTrack) || linkedTrack.id !== record.trackId) return false;
+  return RECORD_KINDS.track.merge([linkedTrack], { source }).then(() => true, (err) => {
+    markPending('linkedTrack')(err);
+    return false;
+  });
+}
+
+/**
+ * Media Collections `host` mode: this peer keeps the collection's image/video
+ * bytes, so record them as peer-hosted (rendered on demand via the static-mount
+ * fallback) instead of copying. Only collection-owned assets qualify — a
+ * universe/series' own art still copies. Returns the still-missing assets.
+ */
+async function takeHostedCollectionAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets }) {
+  const senderPeer = await findPeerById(sourceInstanceId);
+  if (senderPeer?.mediaSyncMode !== 'host') return missingAssets;
+  const collection = kind === 'mediaCollection' ? record : linkedCollection;
+  const assetKey = (entry) => `${entry.kind}:${entry.filename}`;
+  const collectionKeys = new Set(isPlainObject(collection) ? referenceCollectionAssetManifest(collection).map(assetKey) : []);
+  if (kind !== 'mediaCollection' && desc.referencedAssets) {
+    // Assets the record itself references stay copies even when the linked
+    // collection also holds them.
+    for (const entry of await desc.referencedAssets(record, { issues, linkedTrack })) collectionKeys.delete(assetKey(entry));
+  }
+  return collectionKeys.size > 0 ? takeHostedAssets(sourceInstanceId, missingAssets, collectionKeys) : missingAssets;
+}
+
+/**
+ * Writers Room: the file-primary draft `.md` bodies and bible docs ride their
+ * own manifests (the generic asset pipeline keys on a flat basename + single dir
+ * per kind). Diff against local disk and background-pull the missing ones from
+ * the sender. `includeMismatched: workMergeApplied` is the data-safety gate — a
+ * present-but-different local body is only replaced when the receiver also
+ * accepted the remote record (so a stale push can't clobber newer local prose);
+ * an absent body is always pulled. Returns the draft bodies still missing.
+ */
+async function reconcileWriterRoomBodies({ record, draftBodyManifest, bibleManifest, workMergeApplied, sourceInstanceId, pending }) {
+  const { diffWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
+  // Scope the manifests to THIS work: an entry's path is works/<workId>/..., so
+  // an entry for another workId would write bytes into a DIFFERENT local work's
+  // draft. A peer may only replicate the bodies of the work it actually pushed.
+  const ownBodies = Array.isArray(draftBodyManifest)
+    ? draftBodyManifest.filter((e) => e && e.workId === record.id)
+    : [];
+  const missingDraftBodies = await diffWorkBodyManifest(ownBodies, { includeMismatched: workMergeApplied });
+  const ownBibles = Array.isArray(bibleManifest) ? bibleManifest.filter((e) => e?.workId === record.id) : [];
+  const bibleDiffFailed = (err) => {
+    pending.add('bibleSyncPending');
+    console.error(`❌ peerSync: bible diff failed: ${err.message}`);
+  };
+  const missingBibles = await diffWorkBibleManifest(ownBibles, { onError: bibleDiffFailed }).catch((err) => {
+    bibleDiffFailed(err);
+    return [];
+  });
+  if (missingBibles.length) {
+    pending.add('bibleSyncPending');
+    pullMissingWorkBibles(sourceInstanceId, missingBibles).catch((err) => {
+      console.error(`❌ peerSync: bible pull failed: ${err.message}`);
+    });
+  }
+  if (missingDraftBodies.length > 0) {
+    pullMissingWorkBodies(sourceInstanceId, missingDraftBodies).catch((err) => {
+      console.log(`⚠️ peerSync: draft-body pull from ${sourceInstanceId} failed: ${err.message}`);
+    });
+  }
+  return missingDraftBodies;
+}
+
+/**
+ * Cheap shape validation, run BEFORE auth and the schema-version gate. The gate's
+ * 409 body includes `receiverSchemaVersions` — a mild version-fingerprint
+ * disclosure — so unidentified or malformed requests get a clean 400 with no
+ * version information. Returns the payload for destructuring.
+ */
+function assertPushEnvelopeShape(payload) {
+  if (!isPlainObject(payload)) {
+    throw makeErr('payload must be an object', ERR_VALIDATION);
+  }
+  const { kind, record, sourceInstanceId } = payload;
+  if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
+    throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
+  }
+  if (!isNonBlankStr(sourceInstanceId) || sourceInstanceId === UNKNOWN_INSTANCE_ID) {
+    throw makeErr('sourceInstanceId required (and not "unknown")', ERR_VALIDATION);
+  }
+  if (!isPlainObject(record) || !isNonBlankStr(record.id)) {
+    throw makeErr('record must be an object with a string id', ERR_VALIDATION);
+  }
+  return payload;
+}
+
+/**
+ * Apply the bundled linkedCollection and catalog rows. Both are best-effort: the
+ * record itself already merged and the next snapshot/catalog-sync cycle reconciles
+ * a divergence. Both bundles are already null unless bound to the record (#12427);
+ * the `bundlesMergeable` gate is kept as defense in depth against a tombstone
+ * push resurrecting collection/catalog state, or a stale subscription mutating a
+ * record the user opted out of syncing. Merges route through RECORD_KINDS /
+ * applyCatalogBundle so each has exactly one merge implementation.
+ */
+async function applyLinkedBundles({ bundlesMergeable, linkedCollection, catalogBundle, portosMeta, source }) {
+  if (!bundlesMergeable) return;
+  if (isPlainObject(linkedCollection)) {
+    await RECORD_KINDS.mediaCollection.merge([linkedCollection], { source }).catch((err) => {
+      console.log(`⚠️ peerSync: linkedCollection merge failed: ${err.message}`);
+    });
+  }
+  if (isPlainObject(catalogBundle)) {
+    await applyCatalogBundle(catalogBundle, portosMeta).catch((err) => {
+      console.log(`⚠️ peerSync: catalog bundle apply failed: ${err.message}`);
+    });
+  }
+}
+
+/**
+ * Diff the pushed asset manifest against local disk and return what is missing.
+ * Only assets the record (or its bundles) actually references count. A
+ * non-mergeable push references nothing, so it reports no missing assets (no
+ * "still syncing" UI for a record we refused).
+ */
+async function diffIncomingAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, assetManifest, applied, bundlesMergeable, sourceInstanceId }) {
+  const references = bundlesMergeable && desc.referencedAssets
+    ? await desc.referencedAssets(record, { issues, linkedCollection, linkedTrack })
+    : [];
+  const referencedKeys = new Set(references.map((entry) => `${entry.kind}:${entry.filename}`));
+  const incomingAssets = Array.isArray(assetManifest) ? assetManifest : [];
+  const ownAssets = incomingAssets.filter((entry) => entry && referencedKeys.has(`${entry.kind}:${entry.filename}`));
+  if (ownAssets.length < incomingAssets.length) {
+    console.warn(`⚠️ peerSync: ignored ${incomingAssets.length - ownAssets.length} unreferenced push assets`);
+  }
+  const missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: applied });
+  if (missingAssets.length === 0 || !bundlesMergeable) return missingAssets;
+  return takeHostedCollectionAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets });
+}
+
+/**
  * Apply an incoming push to local state. Wraps the existing `merge*FromSync`
  * dispatch + computes the asset-diff response + (best-effort) creates a
  * reverse subscription back to the sender so subsequent edits flow both
@@ -292,26 +472,7 @@ async function assertSchemaVersionGate({ kind, record, issues, linkedCollection,
  * the body shape, call this function, return the response.
  */
 export async function applyIncomingPush(payload, authorization) {
-  if (!isPlainObject(payload)) {
-    throw makeErr('payload must be an object', ERR_VALIDATION);
-  }
-  const { kind, record, issues, linkedCollection: pushedCollection, linkedTrack: pushedTrack, catalogBundle: pushedCatalog, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, bibleManifest, sourceInstanceId, portosMeta } = payload;
-  if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
-    throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
-  }
-  // Identity + record-shape checks happen BEFORE the schema-version gate.
-  // The gate's 409 body includes `receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS`
-  // — a (mild) version-fingerprint disclosure — and we don't want to surface
-  // it to callers that haven't even identified themselves correctly. Move
-  // the cheap shape validation first so unidentified or malformed requests
-  // get a clean 400 with no version information.
-  if (!isNonBlankStr(sourceInstanceId) || sourceInstanceId === UNKNOWN_INSTANCE_ID) {
-    throw makeErr('sourceInstanceId required (and not "unknown")', ERR_VALIDATION);
-  }
-  if (!isPlainObject(record) || !isNonBlankStr(record.id)) {
-    throw makeErr('record must be an object with a string id', ERR_VALIDATION);
-  }
-
+  const { kind, record, issues, linkedCollection: pushedCollection, linkedTrack: pushedTrack, catalogBundle: pushedCatalog, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, bibleManifest, sourceInstanceId, portosMeta } = assertPushEnvelopeShape(payload);
   await authorizeIncomingPush(payload, authorization);
 
   // The gate sees the bundles as pushed: a schema-ahead sender is rejected even
@@ -353,7 +514,9 @@ export async function applyIncomingPush(payload, authorization) {
   };
   // Bundles that are not bound to `record` are dropped here (#12427), so every
   // later use (merge, asset diff, host-mode ownership) sees only bound ones.
-  // Tombstone and local-ephemeral pushes merge no bundles, so they bind none.
+  // The receiver's safety rule, defined once: a local-ephemeral record or a
+  // tombstone push merges no bundled sidecars, pulls no assets or bodies, and
+  // binds no bundles. Every bundle/asset/body step below gates on this.
   const bundlesMergeable = !localEphemeral && record.deleted !== true;
   const linkedCollection = bundlesMergeable
     ? await bindLinkedCollection({ kind, record, linkedCollection: pushedCollection, sourceInstanceId })
@@ -365,12 +528,7 @@ export async function applyIncomingPush(payload, authorization) {
   const linkedTrack = bundlesMergeable && kind === 'musicVideoProject'
     ? await bindLinkedTrack({ record, linkedTrack: pushedTrack, sourceInstanceId, onLookupError: markPending('linkedTrack') })
     : null;
-  // #1922: true only once the bundled linkedTrack merge actually RAN and
-  // succeeded — gates whether `linkedTrack` may contribute to
-  // `ackedDeletesUpTo` below. Stays false on every skip path (mismatched id,
-  // local-ephemeral, tombstoned project) and on a merge failure
-  // (`trackSyncPending`), so the sender can never be told "the receiver
-  // applied this track tombstone" when it didn't.
+  // #1922: true only once the bundled linkedTrack merge ran and succeeded.
   let linkedTrackApplied = false;
   // Set true when a writersRoomWork merge accepted the remote (insert/remote-won)
   // — gates whether a present-but-different local draft body may be overwritten.
@@ -387,152 +545,15 @@ export async function applyIncomingPush(payload, authorization) {
   // add their bundled-doc handling on top of this single call.
   const mergeResult = await desc.merge([record], { source, senderSchemaVersions });
   if (kind === 'series') {
-    // Bundled issues: skip the entire batch if the LOCAL series is
-    // ephemeral. mergeSeriesFromSync already refused the parent record on
-    // its own, but child issue merges are a separate code path —
-    // `updateSeries` doesn't auto-flip child issues' `ephemeral` flag when
-    // the parent is marked ephemeral, so without this gate a stale reverse
-    // subscription could overwrite the private fork's issue stages.
-    if (!localEphemeral && Array.isArray(issues) && issues.length > 0) {
-      await mergeIssuesFromSync(issues, { source, senderSchemaVersions });
-    }
-    // Bundled sidecar docs (manuscript-review, reverse-outline) write under the
-    // series record dir, so a malformed id (e.g. containing `../`) would escape
-    // the series store. mergeSeriesFromSync already refused the record itself;
-    // skip its sidecars too. NOT marked pending: an invalid id can never become
-    // valid, so withholding the sender's hash would retry it forever.
-    const seriesIdValid = SERIES_ID_RE.test(record.id);
-    if (!seriesIdValid && (isPlainObject(manuscriptReview) || isPlainObject(reverseOutline))) {
-      console.warn(`⚠️ peerSync: skipped bundled series sidecars for invalid series id`);
-    }
-    // Merge the bundled manuscript-review sibling doc, LWW-per-comment. Same
-    // guards as the issue batch + linkedCollection below: skip for local-
-    // ephemeral records (the user opted this series out of sync) and tombstone
-    // pushes (a deleted series carries no live review). A merge failure must
-    // NOT fail the push (the series/issues already merged) — but unlike the
-    // linkedCollection bundle, the review has NO independent reconciliation
-    // cycle, so a swallowed failure could never resend once the sender saves
-    // lastPushedHash. Raise the row's pending flag so the sender withholds the
-    // hash (mirrors the missing-assets guard) and retries next cycle.
-    // Dynamic import keeps the arcPlanner graph off peerSync's load path.
-    if (seriesIdValid && !localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {
-      const { mergeReviewFromSync } = await import('../pipeline/manuscriptReview.js');
-      await mergeReviewFromSync(record.id, manuscriptReview).catch(markPending('manuscriptReview'));
-    }
-    // Merge the bundled reverse-outline sibling doc, whole-doc LWW on
-    // generatedAt. Same ephemeral/tombstone guards + pending-signal contract as
-    // the review above: a merge failure must withhold the sender's hash so the
-    // outline (which has no independent reconciliation cycle) re-sends next
-    // cycle. Dynamic import keeps the arcPlanner graph off peerSync's load path.
-    if (seriesIdValid && !localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
-      const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
-      await mergeOutlineFromSync(record.id, reverseOutline).catch(markPending('reverseOutline'));
-    }
+    await mergeSeriesSidecars({ record, issues, manuscriptReview, reverseOutline, localEphemeral, bundlesMergeable, source, senderSchemaVersions, markPending });
   } else if (kind === 'writersRoomWork') {
-    // Did the receiver accept the remote work (insert / remote-won LWW)? This
-    // gates whether a PRESENT-but-different local draft body may be overwritten —
-    // a stale push that lost the LWW must NOT clobber newer local prose.
     workMergeApplied = mergeResult?.applied === true;
   } else if (kind === 'musicVideoProject') {
-    // #1858: merge the bundled linked track record so a receiver WITHOUT the
-    // Tracks category can still resolve `project.trackId` (getTrack) at render
-    // time. The audio bytes already pulled via assetManifest. Non-fatal: the
-    // project itself is merged; skip on a tombstone push, a local-ephemeral
-    // (opted-out) project, or a missing bundle — same contract as linkedCollection.
-    // Require the bundle's id to MATCH the project's `trackId` so a malformed/
-    // malicious sender can't smuggle an unrelated track record through the
-    // music-video push (the project only needs the track it actually links).
-    // Routed through RECORD_KINDS.track.merge — the same function `track`
-    // subscriptions merge through — rather than importing mergeTracksFromSync
-    // directly, so there is exactly one place that knows how to merge a track.
-    if (!localEphemeral && record.deleted !== true && isPlainObject(linkedTrack)
-        && linkedTrack.id === record.trackId) {
-      await RECORD_KINDS.track.merge([linkedTrack], { source }).then(() => {
-        linkedTrackApplied = true;
-      }).catch(markPending('linkedTrack'));
-    }
+    linkedTrackApplied = await mergeLinkedTrack({ record, linkedTrack, bundlesMergeable, source, markPending });
   }
 
-  // Apply the bundled collection (if any) — same LWW + union-of-items
-  // semantics as the snapshot-sync mediaCollections category. Failures here
-  // don't fail the push: the record itself is already merged and the next
-  // snapshot-sync cycle will reconcile the collection if it diverged. The
-  // sanitizer in mediaCollections drops a peer-supplied `id` that isn't a
-  // valid path-segment (the store's id allowlist), so a bogus payload can't
-  // plant a malformed row or abort the batch.
-  //
-  // Defense in depth on the peer-supplied envelope:
-  //   - plain-object check (arrays would get wrapped and the sanitizer
-  //     would drop them, but skipping early avoids the wasted call)
-  //   - refuse to merge when the record is a tombstone (`deleted === true`)
-  //     — the sender already skips bundling for tombstones, so a present
-  //     `linkedCollection` on a tombstone push is either a bug or a
-  //     malicious peer trying to resurrect a collection during delete
-  //     propagation.
-  //   - refuse to merge when the LOCAL record is ephemeral — the user
-  //     explicitly opted out of sync for this record, so peer-pushed
-  //     collection mutations must not land.
-  if (!localEphemeral && record.deleted !== true && isPlainObject(linkedCollection)) {
-    // Routed through RECORD_KINDS.mediaCollection.merge — the same function
-    // `mediaCollection` subscriptions merge through — rather than importing
-    // mergeMediaCollectionsFromSync directly.
-    await RECORD_KINDS.mediaCollection.merge([linkedCollection], { source }).catch((err) => {
-      console.log(`⚠️ peerSync: linkedCollection merge failed: ${err.message}`);
-    });
-  }
-
-  // Apply the bundled catalog rows (ingredients + universe→ingredient refs)
-  // through the same LWW upsert path as direct catalog sync. Same guards as the
-  // linkedCollection merge: skip for local-ephemeral records and tombstone
-  // pushes (a deleted universe's catalog refs tombstone locally on the next
-  // catalog-sync cycle; resurrecting them here would be wrong). Postgres-only
-  // and best-effort — a failure doesn't fail the push (the universe record is
-  // already merged; the receiver's backfill still derives a lossy view, and
-  // the next catalog-sync cycle reconciles the enriched rows).
-  if (!localEphemeral && record.deleted !== true && isPlainObject(catalogBundle)) {
-    await applyCatalogBundle(catalogBundle, portosMeta).catch((err) => {
-      console.log(`⚠️ peerSync: catalog bundle apply failed: ${err.message}`);
-    });
-  }
-
-  // Diff incoming asset manifest against local disk. We (the receiver) are
-  // the ones that will background-pull `missingAssets` from the sender's
-  // `/data/{images,image-refs,videos}/<filename>` static mount in Stage 3
-  // — the sender just needs to keep those files served, no action required
-  // from it here. We return the list to the sender in the response so it
-  // can surface progress in its UI ("N/M assets still syncing to peer X").
-  // For local-ephemeral records, skip the diff entirely so we don't even
-  // report a non-empty missingAssets back to the sender (which would
-  // surface a "still syncing" UI for a record we silently refused).
-  const references = !localEphemeral && record.deleted !== true && desc.referencedAssets
-    ? await desc.referencedAssets(record, { issues, linkedCollection, linkedTrack })
-    : [];
-  const referencedKeys = new Set(references.map((entry) => `${entry.kind}:${entry.filename}`));
-  const incomingAssets = Array.isArray(assetManifest) ? assetManifest : [];
-  const ownAssets = incomingAssets.filter((entry) => entry && referencedKeys.has(`${entry.kind}:${entry.filename}`));
-  if (ownAssets.length < incomingAssets.length) {
-    console.warn(`⚠️ peerSync: ignored ${incomingAssets.length - ownAssets.length} unreferenced push assets`);
-  }
-  let missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: mergeResult?.applied === true });
-
-  // Media Collections `host` mode: this peer keeps the collection's image/video
-  // bytes, so record them as peer-hosted (rendered on demand via the static-mount
-  // fallback) instead of copying. Only collection-owned assets qualify — a
-  // universe/series' own art still copies.
-  if (missingAssets.length > 0 && !localEphemeral && record.deleted !== true) {
-    const senderPeer = await findPeerById(sourceInstanceId);
-    if (senderPeer?.mediaSyncMode === 'host') {
-      const collection = kind === 'mediaCollection' ? record : linkedCollection;
-      const assetKey = (entry) => `${entry.kind}:${entry.filename}`;
-      const collectionKeys = new Set(isPlainObject(collection) ? referenceCollectionAssetManifest(collection).map(assetKey) : []);
-      if (kind !== 'mediaCollection' && desc.referencedAssets) {
-        // Assets the record itself references stay copies even when the linked
-        // collection also holds them.
-        for (const entry of await desc.referencedAssets(record, { issues, linkedTrack })) collectionKeys.delete(assetKey(entry));
-      }
-      if (collectionKeys.size > 0) missingAssets = await takeHostedAssets(sourceInstanceId, missingAssets, collectionKeys);
-    }
-  }
+  await applyLinkedBundles({ bundlesMergeable, linkedCollection, catalogBundle, portosMeta, source });
+  const missingAssets = await diffIncomingAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, assetManifest, applied: mergeResult?.applied === true, bundlesMergeable, sourceInstanceId });
 
   // Compute the deletedAt water-mark we can ack. Use the maximum across the
   // record + its issues + a bundled linkedTrack tombstone (#1858 bundles the
@@ -566,6 +587,8 @@ export async function applyIncomingPush(payload, authorization) {
   // future edits flow BACK; the user can also create one manually.
   // Skip for local-ephemeral: the user said "don't sync this record"; we
   // shouldn't auto-create a sub the next edit would push out to a peer.
+  // A tombstone is not skipped here: only a local-ephemeral record (the user's
+  // opt-out) blocks a reverse subscription.
   const reverseSubscriptionCreated = localEphemeral ? false : await maybeCreateReverseSubscription({
     peerId: sourceInstanceId,
     recordKind: kind,
@@ -586,48 +609,10 @@ export async function applyIncomingPush(payload, authorization) {
     });
   }
 
-  // Writers Room: the file-primary draft `.md` bodies ride their own manifest
-  // (the generic asset pipeline keys on a flat basename + single dir per kind;
-  // bodies live at works/<workId>/drafts/<draftId>.md). Diff against local disk
-  // and background-pull the missing ones from the sender's /data/writers-room
-  // static mount. `includeMismatched: workMergeApplied` is the data-safety gate —
-  // a present-but-different local body is only replaced when the receiver also
-  // accepted the remote record (so a stale push can't clobber newer local prose);
-  // an absent body is always pulled (fills inserts + retries a failed pull).
-  // Same guards as the asset path: skip for local-ephemeral and tombstone pushes.
-  let missingDraftBodies = [];
-  if (kind === 'writersRoomWork' && !localEphemeral && record.deleted !== true) {
-    const { diffWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
-    // Scope the manifest to THIS work: a body entry's path is works/<workId>/...,
-    // so an entry whose workId != the pushed record's id would write bytes into a
-    // DIFFERENT local work's draft (clobbering unrelated prose when the merge
-    // accepted the remote). A peer may only replicate the bodies of the work it
-    // actually pushed.
-    const ownBodies = Array.isArray(draftBodyManifest)
-      ? draftBodyManifest.filter((e) => e && e.workId === record.id)
-      : [];
-    missingDraftBodies = await diffWorkBodyManifest(ownBodies, { includeMismatched: workMergeApplied });
-    const ownBibles = Array.isArray(bibleManifest) ? bibleManifest.filter((e) => e?.workId === record.id) : [];
-    const bibleDiffFailed = (err) => {
-      pending.add('bibleSyncPending');
-      console.error(`❌ peerSync: bible diff failed: ${err.message}`);
-    };
-    const missingBibles = await diffWorkBibleManifest(ownBibles, { onError: bibleDiffFailed }).catch((err) => {
-      bibleDiffFailed(err);
-      return [];
-    });
-    if (missingBibles.length) {
-      pending.add('bibleSyncPending');
-      pullMissingWorkBibles(sourceInstanceId, missingBibles).catch((err) => {
-        console.error(`❌ peerSync: bible pull failed: ${err.message}`);
-      });
-    }
-    if (missingDraftBodies.length > 0) {
-      pullMissingWorkBodies(sourceInstanceId, missingDraftBodies).catch((err) => {
-        console.log(`⚠️ peerSync: draft-body pull from ${sourceInstanceId} failed: ${err.message}`);
-      });
-    }
-  }
+  // Writers Room draft bodies and bibles (see reconcileWriterRoomBodies).
+  const missingDraftBodies = kind === 'writersRoomWork' && bundlesMergeable
+    ? await reconcileWriterRoomBodies({ record, draftBodyManifest, bibleManifest, workMergeApplied, sourceInstanceId, pending })
+    : [];
 
   return {
     missingAssets,

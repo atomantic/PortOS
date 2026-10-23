@@ -7,17 +7,9 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  */
 
 import { updateAgent } from './cosAgentLifecycle.js';
-// `getConfig` comes from cosState.js, NOT cos.js, and that asymmetry with the
-// other cos.js getConfig importers is load-bearing — do not "fix" it for
-// consistency. This module sits on a cycle (cos.js → agentState.js →
-// agentOrchestrator.js → agentManagement.js → agentFinalization.js → here), and
-// pointing this import back at cos.js while cos.js re-exports getConfig from
-// cosState.js leaves cos.js's own re-exported bindings uninitialized at import
-// time — `firstLine is not a function` in cos.test.js, verified.
-//
-// agentCompletion.test.js's getConfig stub therefore has to name cosState.js
-// too — pointed at cos.js it intercepts nothing, and the suite silently
-// exercises the real loadState() against the running install's config.
+// agentCompletion.test.js's getConfig stub must name cosState.js: that is the
+// declaring module, and a stub on any other specifier intercepts nothing (the
+// suite would silently read the running install's config).
 import { getConfig } from './cosState.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { emitLog } from './cosEvents.js';

@@ -265,3 +265,33 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
     expect(screen.getByRole('button', { name: /Memory/ })).toBeTruthy();
   });
 });
+
+describe('GoalDetailPanel link picker load states', () => {
+  it('shows an independent retryable error per list, and a distinct empty state on success', async () => {
+    api.getActivities.mockRejectedValueOnce(new Error('activities down'));
+    api.getCalendarAccounts.mockRejectedValueOnce(new Error('calendars down'));
+    await renderPanel();
+
+    expect(screen.getByText(/Could not load activities — activities down/)).toBeTruthy();
+    expect(screen.getByText(/Could not load calendars — calendars down/)).toBeTruthy();
+    expect(screen.queryByText('No activities available to link.')).toBeNull();
+    expect(api.getActivities).toHaveBeenCalledWith({ silent: true });
+    expect(api.getCalendarAccounts).toHaveBeenCalledWith({ silent: true });
+
+    // Retry only the activities list; calendars stay in error.
+    api.getActivities.mockResolvedValueOnce([{ name: 'Running' }]);
+    const retries = screen.getAllByRole('button', { name: 'Retry' });
+    expect(retries).toHaveLength(2);
+    await act(async () => { fireEvent.click(retries[0]); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByRole('combobox', { name: 'Activity' })).toBeTruthy();
+    expect(screen.queryByText(/Could not load activities/)).toBeNull();
+    expect(screen.getByText(/Could not load calendars/)).toBeTruthy();
+  });
+
+  it('renders explicit empty copy when both lists load successfully but are empty', async () => {
+    await renderPanel();
+    expect(screen.getByText('No activities available to link.')).toBeTruthy();
+    expect(screen.getByText('No calendars available to link.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

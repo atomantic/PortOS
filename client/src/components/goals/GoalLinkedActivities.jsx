@@ -1,7 +1,8 @@
 import { Link2, Unlink } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 
 export default function GoalLinkedActivities({
-  goal, activities, selectedActivity, setSelectedActivity,
+  goal, activities, activitiesState, activitiesError, retryActivities, selectedActivity, setSelectedActivity,
   handleLinkActivity, handleUnlinkActivity
 }) {
   return (
@@ -28,6 +29,13 @@ export default function GoalLinkedActivities({
             </div>
           ))}
         </div>
+      )}
+      {activitiesState === 'error' && (
+        <ListLoadError what="activities" error={activitiesError} onRetry={retryActivities} />
+      )}
+      {activitiesState === 'loading' && <p className="text-xs text-gray-500">Loading activities…</p>}
+      {activitiesState === 'ready' && activities.length === 0 && (
+        <p className="text-xs text-gray-500">No activities available to link.</p>
       )}
       {activities.length > 0 && (
         <div className="flex gap-1">

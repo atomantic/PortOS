@@ -17,8 +17,8 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 export const queueConfigWrite = createFileWriteQueue();
 
 /**
- * Serializes read-modify-write of `blood-tests.json`, `epigenetic-tests.json`
- * and `eyes.json`. One shared tail (not one per file): the three are tiny and
- * rarely written, so the simpler single queue costs nothing.
+ * Serializes local, import and sync read-modify-writes of `blood-tests.json`,
+ * `epigenetic-tests.json`, `eyes.json`, `health-metrics.json` and `workouts.json`.
+ * These are tiny and rarely written, so one shared tail costs nothing.
  */
 export const queueHealthWrite = createFileWriteQueue();

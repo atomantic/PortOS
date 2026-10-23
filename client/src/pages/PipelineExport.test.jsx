@@ -64,4 +64,12 @@ describe('PipelineExport attribution rollup', () => {
     expect(await screen.findByLabelText('Attribution and licenses')).toHaveTextContent('Example Model');
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+  it('reads the full video history, not the compact catalog, so stamped video licenses survive the rollup', async () => {
+    api.listMediaCollections.mockResolvedValue([{ id: 'sc-ser-1', items: [{ kind: 'image', ref: 'img-1.png' }] }]);
+    renderPage();
+
+    expect(await screen.findByLabelText('Attribution and licenses')).toBeTruthy();
+    expect(api.listVideoHistory).toHaveBeenCalledWith({ silent: true });
+  });
 });

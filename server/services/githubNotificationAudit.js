@@ -42,7 +42,8 @@ const OUTCOMES_SQL = `
       EXISTS (SELECT 1 FROM github_notification_events e
               WHERE e.account_id = n.account_id AND e.thread_id = n.thread_id AND e.actor = 'automation' AND e.kind <> 'triaged') AS automation_acted
     FROM github_notifications n
-    WHERE n.account_id = $1 AND n.gh_updated_at > NOW() - make_interval(days => $2)
+    -- A global advisory names no repo, so there is no repo to watch or mute.
+    WHERE n.account_id = $1 AND n.repo_full_name <> '' AND n.gh_updated_at > NOW() - make_interval(days => $2)
   )
   SELECT repo_full_name, reason, COUNT(*)::int AS total,
     COUNT(*) FILTER (WHERE operator_acted)::int AS acted,
@@ -183,7 +184,7 @@ export async function undoAuditChange(id) {
  * takes a tap on the Audit tab. A report with no suggestions sends nothing.
  */
 export async function sendDueAuditReports({ now = Date.now() } = {}) {
-  const accounts = (await listAccounts()).filter((account) => account.enabled && account.auditReport === true);
+  const accounts = (await listAccounts()).filter((account) => account.enabled && account.mode !== 'disabled' && account.auditReport === true);
   if (!accounts.length) return [];
   const { rows } = await query(
     'SELECT account_id, last_sent_at FROM github_notification_audit_reports WHERE account_id = ANY($1::text[])',

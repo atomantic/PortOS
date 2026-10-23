@@ -15,8 +15,13 @@ const MANIFEST = JSON.parse(readFileSync(
   'utf8',
 ));
 
-const isScalarAsset = (name) => /\.(js|css)$/.test(name)
-  && (name.includes('Scalar') || /(^|[.-])vue-/.test(name));
+const isScalarAsset = (name) => {
+  if (!/\.(js|css)$/.test(name)) return false;
+  // Vite's eight-character content hash can contain hyphens and dependency
+  // names: Loops-vue-yDU1.js is a React route, not a Vue chunk.
+  const chunkName = name.replace(/(?:-[\w-]{8})?\.(?:js|css)$/, '');
+  return chunkName.includes('Scalar') || /(^|[.-])vue(?:[.-]|$)/.test(chunkName);
+};
 
 const ASSETS_DIR = ['dist/assets', 'client/dist/assets']
   .map((rel) => resolve(process.cwd(), rel))
@@ -25,6 +30,19 @@ const ASSETS_DIR = ['dist/assets', 'client/dist/assets']
 const hasBuild = existsSync(ASSETS_DIR);
 
 describe('API Explorer Scalar removal', () => {
+  it.each([
+    ['Scalar-ABCD1234.js', true],
+    ['Scalar-ABCD1234.css', true],
+    ['vue-ABCD1234.js', true],
+    ['vendor-vue-ABCD1234.js', true],
+    ['vue.runtime-esm-ABCD1234.js', true],
+    ['Loops-vue-yDU1.js', false],
+    ['Example-Scalar12.css', false],
+    ['Example-ABCD1234.js', false],
+  ])('classifies the chunk name separately from its hash: %s', (name, expected) => {
+    expect(isScalarAsset(name)).toBe(expected);
+  });
+
   it('does not declare @scalar/api-reference-react on the client manifest', () => {
     const declared = {
       ...MANIFEST.dependencies,

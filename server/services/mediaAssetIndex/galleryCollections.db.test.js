@@ -15,6 +15,7 @@ vi.mock('../videoGen/history.js', async () => {
 });
 vi.mock('../mediaCollections.js', () => ({ listCollections: async () => state.collections,
   getCollection: async id => state.collections.find(collection => collection.id === id) }));
+vi.mock('../peerHostedMedia.js', () => ({ resolveMediaLocations: async items => items.map(() => ({ location: 'local' })) }));
 vi.mock('../mediaAnnotations.js', () => ({ listAnnotations: async () => state.annotations }));
 let client;
 let available = false;
@@ -80,7 +81,7 @@ it('preserves cover fallback, stable membership order, visibility and stale-refe
   state.file = true;
   const expected = await listGalleryCollectionSummaries(disk);
   const facets = await listGalleryFacets(disk);
-  expect(expected[0]).toEqual({ id: 'unsorted', cover: '/data/images/loose.png', total: 2, counts: { image: 1, video: 1, all: 2 } });
+  expect(expected[0]).toEqual({ id: 'unsorted', cover: '/data/image-thumbnails/loose.webp', total: 2, counts: { image: 1, video: 1, all: 2 } });
   expect(expected[1]).toMatchObject({ cover: '/custom/z.png', total: 4 });
   state.file = false;
   state.query.mockClear();
@@ -127,7 +128,7 @@ it('keeps summary and picker query counts constant for the synthetic 2400-image/
     state.query.mockClear();
     const pinned = await listGalleryCollectionSummaries(disk);
     expect(state.query).toHaveBeenCalledTimes(1);
-    for (let i = 0; i < count; i++) expect(pinned[i + 1].cover).toBe(state.images[i * 20 + 19].path);
+    for (let i = 0; i < count; i++) expect(pinned[i + 1].cover).toBe(state.images[i * 20 + 19].path.replace('/data/images/', '/data/image-thumbnails/').replace(/\.png$/, '.webp'));
     state.query.mockClear();
     expect((await listGalleryFacets(disk)).collections).toHaveLength(count);
     expect(state.query).toHaveBeenCalledTimes(2);

@@ -101,7 +101,8 @@ import backupRoutes from './routes/backup.js';
 import legacyExportRoutes from './routes/legacyExport.js';
 import eidoverseWorldRoutes from './routes/eidoverseWorldRoutes.js';
 import eidoverseTravelRoutes from './routes/eidoverseTravelRoutes.js';
-import { createManagedVisitorRoutes, createManagedVisitorAdminRoutes } from './routes/managedVisitors.js';
+import { createManagedVisitorRoutes } from './routes/managedVisitors.js';
+import { createManagedVisitorAdminRoutes } from './routes/managedVisitorAdmin.js';
 import databaseRoutes from './routes/database.js';
 import localLlmRoutes from './routes/localLlm.js';
 import codeReviewRoutes from './routes/codeReview.js';
@@ -599,13 +600,15 @@ if (!isSmokeBoot()) {
   // Reminders for scheduled human action steps (Brain threads); zero provider calls.
   import('./services/humanActionReminders.js').then(({ initHumanActionReminders }) => initHumanActionReminders())
     .catch((err) => console.error(`❌ Human action reminders could not start: ${err.message}`));
-  import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
-    .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
+  import('./services/fleetLlmHost.js').then(({ startFleetLlmHost, describeFleetHostError }) => startFleetLlmHost().catch((err) => {
+    console.error(`❌ Dedicated model host listener could not start (${describeFleetHostError(err)}); open AI Providers → Model host setup.`);
+  }))
+    .catch((err) => console.error(`❌ Dedicated model host listener could not load: ${err.message}`));
   // Local file scan only (no provider calls); keeps the federated Claude Code
   // token history current even when the usage page is never opened.
   import('./services/claudeCodeTranscriptUsage.js').then(({ startTranscriptUsageRefresh }) => startTranscriptUsageRefresh())
     .catch((err) => console.error(`❌ Claude Code transcript usage refresh could not start: ${err.message}`));
-  // Same for interactive Grok / Antigravity sessions (local files, zero provider calls).
+  // Same for interactive Claude Code / Codex / Grok / Antigravity sessions (local files, zero provider calls).
   import('./services/usageInteractiveScan.js').then(({ startInteractiveUsageRefresh }) => startInteractiveUsageRefresh())
     .catch((err) => console.error(`❌ Interactive usage scan could not start: ${err.message}`));
 }

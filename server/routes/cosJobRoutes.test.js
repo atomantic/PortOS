@@ -4,8 +4,10 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import jobRoutes from './cosJobRoutes.js';
 
+vi.mock('../services/cosTaskStore.js', () => ({
+  addTask: vi.fn()
+}));
 vi.mock('../services/cos.js', () => ({
-  addTask: vi.fn(),
   forceSpawnTask: vi.fn()
 }));
 
@@ -46,7 +48,8 @@ vi.mock('../services/userTimezone.js', () => ({
   getUserTimezone: vi.fn(),
 }));
 
-import * as cos from '../services/cos.js';
+import { addTask } from '../services/cosTaskStore.js';
+import { forceSpawnTask } from '../services/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
@@ -520,8 +523,8 @@ describe('CoS Job Routes', () => {
       autonomousJobs.isShellJob.mockReturnValue(false);
       autonomousJobs.isScriptJob.mockReturnValue(false);
       autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
-      cos.addTask.mockResolvedValue({ id: 'task-1' });
-      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+      addTask.mockResolvedValue({ id: 'task-1' });
+      forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
@@ -530,7 +533,7 @@ describe('CoS Job Routes', () => {
       expect(response.body.status).toBe('queued');
       expect(response.body.started).toBe(true);
       expect(response.body.taskId).toBe('task-1');
-      expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-1');
+      expect(forceSpawnTask).toHaveBeenCalledWith('task-1');
     });
 
     it('re-aims one run with the request body values without touching the stored job', async () => {
@@ -548,8 +551,8 @@ describe('CoS Job Routes', () => {
       autonomousJobs.isShellJob.mockReturnValue(false);
       autonomousJobs.isScriptJob.mockReturnValue(false);
       autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
-      cos.addTask.mockResolvedValue({ id: 'task-1' });
-      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+      addTask.mockResolvedValue({ id: 'task-1' });
+      forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
 
       const response = await request(app)
         .post('/api/cos/jobs/j1/trigger')
@@ -580,8 +583,8 @@ describe('CoS Job Routes', () => {
       autonomousJobs.isShellJob.mockReturnValue(false);
       autonomousJobs.isScriptJob.mockReturnValue(false);
       autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
-      cos.addTask.mockResolvedValue({ id: 'task-1' });
-      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+      addTask.mockResolvedValue({ id: 'task-1' });
+      forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
 
       await request(app).post('/api/cos/jobs/j1/trigger').send({ formValues: { subject: 'One-off subject' } });
 
@@ -589,7 +592,7 @@ describe('CoS Job Routes', () => {
       // configuration rides at the end of the prompt where that key never
       // reaches it — so without the changed value named here, aiming this job
       // somewhere else while the first run is still queued is silently dropped.
-      expect(cos.addTask).toHaveBeenCalledWith(
+      expect(addTask).toHaveBeenCalledWith(
         expect.objectContaining({ description: expect.stringContaining('Review — Subject: One-off subject') }),
         'internal',
         expect.anything()
@@ -607,14 +610,14 @@ describe('CoS Job Routes', () => {
       autonomousJobs.isShellJob.mockReturnValue(false);
       autonomousJobs.isScriptJob.mockReturnValue(false);
       autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
-      cos.addTask.mockResolvedValue({ id: 'task-1' });
-      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+      addTask.mockResolvedValue({ id: 'task-1' });
+      forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
 
       await request(app).post('/api/cos/jobs/j1/trigger').send({ formValues: { subject: 'Saved subject' } });
 
       // Re-running a job as saved is the SAME piece of work, so it must keep the
       // plain description and stay dedupable against the run already queued.
-      expect(cos.addTask).toHaveBeenCalledWith(
+      expect(addTask).toHaveBeenCalledWith(
         expect.objectContaining({ description: 'Review' }),
         'internal',
         expect.anything()
@@ -654,13 +657,13 @@ describe('CoS Job Routes', () => {
           prompt: 'Review\n\n## Preloaded task data\nSnapshot'
         }
       });
-      cos.addTask.mockResolvedValue({ id: 'task-2' });
-      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-2' });
+      addTask.mockResolvedValue({ id: 'task-2' });
+      forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-2' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
       expect(response.status).toBe(200);
-      expect(cos.addTask).toHaveBeenCalledWith(
+      expect(addTask).toHaveBeenCalledWith(
         expect.objectContaining({
           app: 'app-xyz',
           useWorktree: true,
@@ -676,7 +679,7 @@ describe('CoS Job Routes', () => {
         'internal',
         { suppressDequeue: true }
       );
-      expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-2');
+      expect(forceSpawnTask).toHaveBeenCalledWith('task-2');
     });
 
     it('should preserve the no-change success contract when Run now queues an agent job', async () => {
@@ -694,12 +697,12 @@ describe('CoS Job Routes', () => {
           noChangeSuccess: true,
         }
       });
-      cos.addTask.mockResolvedValue({ id: 'task-no-change' });
+      addTask.mockResolvedValue({ id: 'task-no-change' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
       expect(response.status).toBe(200);
-      expect(cos.addTask).toHaveBeenCalledWith(
+      expect(addTask).toHaveBeenCalledWith(
         expect.objectContaining({ autonomousJob: true, jobId: 'j1', noChangeSuccess: true }),
         'internal',
         { suppressDequeue: true }
@@ -715,18 +718,18 @@ describe('CoS Job Routes', () => {
         priority: 'MEDIUM',
         metadata: { provider: 'anthropic', model: 'claude-opus-4-8', effort: 'high' }
       });
-      cos.addTask.mockResolvedValue({ id: 'task-3' });
-      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-3' });
+      addTask.mockResolvedValue({ id: 'task-3' });
+      forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-3' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
       expect(response.status).toBe(200);
-      expect(cos.addTask).toHaveBeenCalledWith(
+      expect(addTask).toHaveBeenCalledWith(
         expect.objectContaining({ provider: 'anthropic', model: 'claude-opus-4-8', effort: 'high' }),
         'internal',
         { suppressDequeue: true }
       );
-      expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-3');
+      expect(forceSpawnTask).toHaveBeenCalledWith('task-3');
     });
 
     it('reports a direct-spawn failure while retaining the queued task', async () => {
@@ -734,8 +737,8 @@ describe('CoS Job Routes', () => {
       autonomousJobs.isShellJob.mockReturnValue(false);
       autonomousJobs.isScriptJob.mockReturnValue(false);
       autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
-      cos.addTask.mockResolvedValue({ id: 'task-4' });
-      cos.forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (1/1)' });
+      addTask.mockResolvedValue({ id: 'task-4' });
+      forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (1/1)' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
@@ -762,7 +765,7 @@ describe('CoS Job Routes', () => {
       autonomousJobs.isShellJob.mockReturnValue(false);
       autonomousJobs.isScriptJob.mockReturnValue(false);
       autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
-      cos.addTask.mockResolvedValue(null);
+      addTask.mockResolvedValue(null);
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 

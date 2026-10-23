@@ -33,8 +33,15 @@ vi.mock('../services/cos.js', () => ({
   stop: vi.fn(),
   pause: vi.fn(),
   resume: vi.fn(),
-  getConfig: vi.fn(),
   updateConfig: vi.fn(),
+  listScripts: vi.fn(),
+  getScript: vi.fn(),
+  forceSpawnTask: vi.fn()
+}));
+vi.mock('../services/cosState.js', () => ({
+  getConfig: vi.fn()
+}));
+vi.mock('../services/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(),
   getUserTasks: vi.fn(),
   getCosTasks: vi.fn(),
@@ -44,22 +51,36 @@ vi.mock('../services/cos.js', () => ({
   // Read by the DELETE route so the ledger row keeps the task's description.
   getTaskById: vi.fn(async () => null),
   deleteTask: vi.fn(),
-  approveTask: vi.fn(),
-  evaluateTasks: vi.fn(),
+  approveTask: vi.fn()
+}));
+vi.mock('../services/cosTaskGenerator.js', () => ({
+  evaluateTasks: vi.fn()
+}));
+vi.mock('../services/cosHealthMonitor.js', () => ({
   getHealthStatus: vi.fn(),
-  runHealthCheck: vi.fn(),
+  runHealthCheck: vi.fn()
+}));
+vi.mock('../services/cosAgentLifecycle.js', () => ({
   cleanupZombieAgents: vi.fn(),
   getAgents: vi.fn(),
-  getAgentDates: vi.fn(),
-  getAgentsByDate: vi.fn(),
-  getCompletedAgentPage: vi.fn(),
-  getPendingAgentFeedback: vi.fn(),
   getAgent: vi.fn(),
   deleteAgent: vi.fn(),
-  clearCompletedAgents: vi.fn(),
+  sendBtwToAgent: vi.fn()
+}));
+vi.mock('../services/cosAgentIndex.js', () => ({
+  getAgentDates: vi.fn(),
+  getAgentsByDate: vi.fn(),
+  getCompletedAgentPage: vi.fn()
+}));
+vi.mock('../services/cosAgentFeedback.js', () => ({
+  getPendingAgentFeedback: vi.fn(),
   submitAgentFeedback: vi.fn(),
-  sendBtwToAgent: vi.fn(),
-  getFeedbackStats: vi.fn(),
+  getFeedbackStats: vi.fn()
+}));
+vi.mock('../services/cosAgentArchive.js', () => ({
+  clearCompletedAgents: vi.fn()
+}));
+vi.mock('../services/cosReports.js', () => ({
   listReports: vi.fn(),
   getTodayReport: vi.fn(),
   getReport: vi.fn(),
@@ -67,9 +88,6 @@ vi.mock('../services/cos.js', () => ({
   listBriefings: vi.fn(),
   getLatestBriefing: vi.fn(),
   getBriefing: vi.fn(),
-  listScripts: vi.fn(),
-  getScript: vi.fn(),
-  forceSpawnTask: vi.fn(),
   getTodayActivity: vi.fn(),
   getWhileAwayActivity: vi.fn(),
   getRecentTasks: vi.fn()
@@ -138,7 +156,16 @@ vi.mock('../services/codeReview.js', () => ({
 }));
 
 // Import mocked modules
-import * as cos from '../services/cos.js';
+import { addTask, approveTask, deleteTask, reorderTasks, updateTask } from '../services/cosTaskStore.js';
+import { cleanupZombieAgents, deleteAgent, getAgent, getAgents, sendBtwToAgent } from '../services/cosAgentLifecycle.js';
+import { clearCompletedAgents } from '../services/cosAgentArchive.js';
+import { evaluateTasks } from '../services/cosTaskGenerator.js';
+import { generateReport, getBriefing, getLatestBriefing, getReport, getTodayActivity, getTodayReport, getWhileAwayActivity, listBriefings, listReports } from '../services/cosReports.js';
+import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cosAgentIndex.js';
+import { getConfig } from '../services/cosState.js';
+import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cosAgentFeedback.js';
+import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
+import { getScript, getStatus, listScripts, pause, resume, start, stop, updateConfig } from '../services/cos.js';
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
@@ -160,7 +187,7 @@ describe('CoS Routes', () => {
     // Reset all mocks
     vi.clearAllMocks();
     // GET /tasks settles its payload against the live agent list (#spawn window).
-    cos.getAgents.mockResolvedValue([]);
+    getAgents.mockResolvedValue([]);
   });
 
   describe('GET /api/cos', () => {
@@ -172,7 +199,7 @@ describe('CoS Routes', () => {
         config: {},
         stats: {}
       };
-      cos.getStatus.mockResolvedValue(mockStatus);
+      getStatus.mockResolvedValue(mockStatus);
 
       const response = await request(app).get('/api/cos');
 
@@ -184,31 +211,31 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/start', () => {
     it('should start CoS daemon', async () => {
-      cos.start.mockResolvedValue({ success: true });
+      start.mockResolvedValue({ success: true });
 
       const response = await request(app).post('/api/cos/start');
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(cos.start).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
     });
   });
 
   describe('POST /api/cos/stop', () => {
     it('should stop CoS daemon', async () => {
-      cos.stop.mockResolvedValue({ success: true });
+      stop.mockResolvedValue({ success: true });
 
       const response = await request(app).post('/api/cos/stop');
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(cos.stop).toHaveBeenCalled();
+      expect(stop).toHaveBeenCalled();
     });
   });
 
   describe('POST /api/cos/pause', () => {
     it('should pause CoS daemon with reason', async () => {
-      cos.pause.mockResolvedValue({ success: true, pausedAt: '2024-01-15T10:00:00Z' });
+      pause.mockResolvedValue({ success: true, pausedAt: '2024-01-15T10:00:00Z' });
 
       const response = await request(app)
         .post('/api/cos/pause')
@@ -216,13 +243,13 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(cos.pause).toHaveBeenCalledWith('User requested pause');
+      expect(pause).toHaveBeenCalledWith('User requested pause');
     });
   });
 
   describe('POST /api/cos/resume', () => {
     it('should resume CoS daemon', async () => {
-      cos.resume.mockResolvedValue({ success: true });
+      resume.mockResolvedValue({ success: true });
 
       const response = await request(app).post('/api/cos/resume');
 
@@ -236,7 +263,7 @@ describe('CoS Routes', () => {
       const mockConfig = {
         maxConcurrentAgents: 3
       };
-      cos.getConfig.mockResolvedValue(mockConfig);
+      getConfig.mockResolvedValue(mockConfig);
 
       const response = await request(app).get('/api/cos/config');
 
@@ -248,40 +275,40 @@ describe('CoS Routes', () => {
   describe('PUT /api/cos/config', () => {
     it('should update configuration', async () => {
       const updates = { maxConcurrentAgents: 5 };
-      cos.updateConfig.mockResolvedValue({ ...updates });
+      updateConfig.mockResolvedValue({ ...updates });
 
       const response = await request(app)
         .put('/api/cos/config')
         .send(updates);
 
       expect(response.status).toBe(200);
-      expect(cos.updateConfig).toHaveBeenCalledWith(updates);
+      expect(updateConfig).toHaveBeenCalledWith(updates);
     });
 
     it('accepts the investigation auto-approval setting', async () => {
       const updates = { autoApproveInvestigations: true };
-      cos.updateConfig.mockResolvedValue(updates);
+      updateConfig.mockResolvedValue(updates);
 
       const response = await request(app)
         .put('/api/cos/config')
         .send(updates);
 
       expect(response.status).toBe(200);
-      expect(cos.updateConfig).toHaveBeenCalledWith(updates);
+      expect(updateConfig).toHaveBeenCalledWith(updates);
     });
 
     it('validates machine-local maintainer intent without granting other capabilities', async () => {
       const updates = { persistentMindMaintainer: { enabled: true, appIds: ['example-app'], intervalMinutes: 60 } };
-      cos.updateConfig.mockResolvedValue(updates);
+      updateConfig.mockResolvedValue(updates);
       expect((await request(app).put('/api/cos/config').send(updates)).status).toBe(200);
-      expect(cos.updateConfig).toHaveBeenCalledWith(updates);
+      expect(updateConfig).toHaveBeenCalledWith(updates);
       expect((await request(app).put('/api/cos/config').send({ persistentMindMaintainer: { intervalMinutes: 0 } })).status).toBe(400);
       expect((await request(app).put('/api/cos/config').send({ persistentMindMaintainer: { createTasks: true } })).status).toBe(400);
     });
 
     it('validates the persistent mind wake cadence', async () => {
       const updates = { persistentMindProfile: { wakeIntervalMinutes: 60 } };
-      cos.updateConfig.mockResolvedValue(updates);
+      updateConfig.mockResolvedValue(updates);
 
       const accepted = await request(app).put('/api/cos/config').send(updates);
       const rejected = await request(app).put('/api/cos/config').send({
@@ -289,7 +316,7 @@ describe('CoS Routes', () => {
       });
 
       expect(accepted.status).toBe(200);
-      expect(cos.updateConfig).toHaveBeenCalledWith(updates);
+      expect(updateConfig).toHaveBeenCalledWith(updates);
       expect(rejected.status).toBe(400);
     });
 
@@ -299,13 +326,13 @@ describe('CoS Routes', () => {
       ['immediateExecution', true],
       ['proactiveMode', false],
     ])('accepts but ignores the retired %s config field for older clients', async (field, value) => {
-      cos.updateConfig.mockResolvedValue({ maxConcurrentAgents: 5 });
+      updateConfig.mockResolvedValue({ maxConcurrentAgents: 5 });
       const response = await request(app)
         .put('/api/cos/config')
         .send({ [field]: value, maxConcurrentAgents: 5 });
 
       expect(response.status).toBe(200);
-      expect(cos.updateConfig).toHaveBeenCalledWith({ maxConcurrentAgents: 5 });
+      expect(updateConfig).toHaveBeenCalledWith({ maxConcurrentAgents: 5 });
     });
   });
 
@@ -315,7 +342,7 @@ describe('CoS Routes', () => {
         description: 'Test task',
         priority: 'HIGH'
       };
-      cos.addTask.mockResolvedValue({
+      addTask.mockResolvedValue({
         id: 'task-001',
         ...taskData,
         status: 'pending'
@@ -327,7 +354,7 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.id).toBe('task-001');
-      expect(cos.addTask).toHaveBeenCalledWith(
+      expect(addTask).toHaveBeenCalledWith(
         expect.objectContaining({ description: 'Test task' }),
         'user'
       );
@@ -350,14 +377,14 @@ describe('CoS Routes', () => {
           { filename: 'b-456.png', originalName: 'photo-two.png', path: '/data/cos/attachments/b-456.png', size: 200, mimeType: 'image/png' },
         ]
       };
-      cos.addTask.mockResolvedValue({ id: 'task-002', ...taskData, status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-002', ...taskData, status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks')
         .send(taskData);
 
       expect(response.status).toBe(200);
-      expect(cos.addTask).toHaveBeenCalledWith(
+      expect(addTask).toHaveBeenCalledWith(
         expect.objectContaining({
           screenshots: taskData.screenshots,
           attachments: taskData.attachments,
@@ -370,14 +397,14 @@ describe('CoS Routes', () => {
   describe('POST /api/cos/tasks/reorder', () => {
     it('should reorder tasks', async () => {
       const taskIds = ['task-002', 'task-001', 'task-003'];
-      cos.reorderTasks.mockResolvedValue({ success: true, order: taskIds });
+      reorderTasks.mockResolvedValue({ success: true, order: taskIds });
 
       const response = await request(app)
         .post('/api/cos/tasks/reorder')
         .send({ taskIds });
 
       expect(response.status).toBe(200);
-      expect(cos.reorderTasks).toHaveBeenCalledWith(taskIds);
+      expect(reorderTasks).toHaveBeenCalledWith(taskIds);
     });
 
     it('should return 400 if taskIds is missing', async () => {
@@ -400,25 +427,25 @@ describe('CoS Routes', () => {
   describe('PUT /api/cos/tasks/:id', () => {
     it('should update a task', async () => {
       const updates = { status: 'completed' };
-      cos.updateTask.mockResolvedValue({ id: 'task-001', ...updates });
+      updateTask.mockResolvedValue({ id: 'task-001', ...updates });
 
       const response = await request(app)
         .put('/api/cos/tasks/task-001')
         .send(updates);
 
       expect(response.status).toBe(200);
-      expect(cos.updateTask).toHaveBeenCalledWith('task-001', expect.objectContaining({ status: 'completed' }), 'user');
+      expect(updateTask).toHaveBeenCalledWith('task-001', expect.objectContaining({ status: 'completed' }), 'user');
     });
 
     it('should update an internal task in the internal queue', async () => {
-      cos.updateTask.mockResolvedValue({ id: 'sys-001', model: 'gpt-5.6-terra' });
+      updateTask.mockResolvedValue({ id: 'sys-001', model: 'gpt-5.6-terra' });
 
       const response = await request(app)
         .put('/api/cos/tasks/sys-001')
         .send({ model: 'gpt-5.6-terra', type: 'internal' });
 
       expect(response.status).toBe(200);
-      expect(cos.updateTask).toHaveBeenCalledWith(
+      expect(updateTask).toHaveBeenCalledWith(
         'sys-001',
         expect.objectContaining({ model: 'gpt-5.6-terra' }),
         'internal'
@@ -426,7 +453,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if task not found', async () => {
-      cos.updateTask.mockResolvedValue({ error: 'Task not found' });
+      updateTask.mockResolvedValue({ error: 'Task not found' });
 
       const response = await request(app)
         .put('/api/cos/tasks/task-999')
@@ -436,14 +463,14 @@ describe('CoS Routes', () => {
     });
 
     it('should set blocker metadata when marking as blocked', async () => {
-      cos.updateTask.mockResolvedValue({ id: 'task-001', status: 'blocked' });
+      updateTask.mockResolvedValue({ id: 'task-001', status: 'blocked' });
 
       const response = await request(app)
         .put('/api/cos/tasks/task-001')
         .send({ status: 'blocked', blockedReason: 'Waiting for API access' });
 
       expect(response.status).toBe(200);
-      expect(cos.updateTask).toHaveBeenCalledWith(
+      expect(updateTask).toHaveBeenCalledWith(
         'task-001',
         expect.objectContaining({
           status: 'blocked',
@@ -454,14 +481,14 @@ describe('CoS Routes', () => {
     });
 
     it('should not send metadata when changing status to pending (service handles cleanup)', async () => {
-      cos.updateTask.mockResolvedValue({ id: 'task-001', status: 'pending' });
+      updateTask.mockResolvedValue({ id: 'task-001', status: 'pending' });
 
       const response = await request(app)
         .put('/api/cos/tasks/task-001')
         .send({ status: 'pending' });
 
       expect(response.status).toBe(200);
-      const callArgs = cos.updateTask.mock.calls[0][1];
+      const callArgs = updateTask.mock.calls[0][1];
       expect(callArgs.status).toBe('pending');
       expect(callArgs.metadata).toBeUndefined();
     });
@@ -469,16 +496,16 @@ describe('CoS Routes', () => {
 
   describe('DELETE /api/cos/tasks/:id', () => {
     it('should delete a task', async () => {
-      cos.deleteTask.mockResolvedValue({ success: true, taskId: 'task-001' });
+      deleteTask.mockResolvedValue({ success: true, taskId: 'task-001' });
 
       const response = await request(app).delete('/api/cos/tasks/task-001');
 
       expect(response.status).toBe(200);
-      expect(cos.deleteTask).toHaveBeenCalledWith('task-001', 'user');
+      expect(deleteTask).toHaveBeenCalledWith('task-001', 'user');
     });
 
     it('should return 404 if task not found', async () => {
-      cos.deleteTask.mockResolvedValue({ error: 'Task not found' });
+      deleteTask.mockResolvedValue({ error: 'Task not found' });
 
       const response = await request(app).delete('/api/cos/tasks/task-999');
 
@@ -488,16 +515,16 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/tasks/:id/approve', () => {
     it('should approve a task', async () => {
-      cos.approveTask.mockResolvedValue({ id: 'sys-001', autoApproved: true });
+      approveTask.mockResolvedValue({ id: 'sys-001', autoApproved: true });
 
       const response = await request(app).post('/api/cos/tasks/sys-001/approve');
 
       expect(response.status).toBe(200);
-      expect(cos.approveTask).toHaveBeenCalledWith('sys-001');
+      expect(approveTask).toHaveBeenCalledWith('sys-001');
     });
 
     it('should return 400 if task does not require approval', async () => {
-      cos.approveTask.mockResolvedValue({ error: 'Task does not require approval' });
+      approveTask.mockResolvedValue({ error: 'Task does not require approval' });
 
       const response = await request(app).post('/api/cos/tasks/task-001/approve');
 
@@ -507,21 +534,21 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/evaluate', () => {
     it('should trigger task evaluation', async () => {
-      cos.evaluateTasks.mockResolvedValue();
+      evaluateTasks.mockResolvedValue();
 
       const response = await request(app).post('/api/cos/evaluate');
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(cos.evaluateTasks).toHaveBeenCalled();
+      expect(evaluateTasks).toHaveBeenCalled();
     });
   });
 
   describe('GET /api/cos/agents', () => {
     it('should return state-resident agents without waiting for zombie cleanup', async () => {
       let releaseCleanup;
-      cos.cleanupZombieAgents.mockReturnValue(new Promise((resolve) => { releaseCleanup = resolve; }));
-      cos.getAgents.mockResolvedValue([
+      cleanupZombieAgents.mockReturnValue(new Promise((resolve) => { releaseCleanup = resolve; }));
+      getAgents.mockResolvedValue([
         { id: 'agent-001', status: 'running' },
         { id: 'agent-002', status: 'completed' }
       ]);
@@ -530,7 +557,7 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(2);
-      expect(cos.cleanupZombieAgents).toHaveBeenCalled();
+      expect(cleanupZombieAgents).toHaveBeenCalled();
       releaseCleanup({ cleaned: [], count: 0 });
     });
   });
@@ -538,7 +565,7 @@ describe('CoS Routes', () => {
   describe('GET /api/cos/agents listing projection', () => {
     it('strips the transcript and bounds a pasted-prompt description', async () => {
       const long = 'Refactor the queue. '.repeat(5000);
-      cos.getAgents.mockResolvedValue([
+      getAgents.mockResolvedValue([
         { id: 'agent-001', status: 'completed', output: ['a', 'b'], metadata: { taskDescription: long, model: 'opus' } }
       ]);
 
@@ -552,7 +579,7 @@ describe('CoS Routes', () => {
     });
 
     it('leaves a normal description unflagged so the client never hydrates for nothing', async () => {
-      cos.getAgents.mockResolvedValue([
+      getAgents.mockResolvedValue([
         { id: 'agent-001', status: 'running', metadata: { taskDescription: 'Fix the thing' } }
       ]);
 
@@ -565,7 +592,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/agents/history', () => {
     it('should return available date buckets', async () => {
-      cos.getAgentDates.mockResolvedValue([
+      getAgentDates.mockResolvedValue([
         { date: '2026-02-25', count: 5 },
         { date: '2026-02-24', count: 3 }
       ]);
@@ -576,22 +603,22 @@ describe('CoS Routes', () => {
       expect(response.body.dates).toHaveLength(2);
       expect(response.body.dates[0]).toEqual({ date: '2026-02-25', count: 5 });
       expect(response.body).not.toHaveProperty('latest');
-      expect(cos.getAgentsByDate).not.toHaveBeenCalled();
+      expect(getAgentsByDate).not.toHaveBeenCalled();
     });
 
     it('?hydrate=1 also returns the newest bucket, so the tab needs one round trip', async () => {
-      cos.getAgentDates.mockResolvedValue([
+      getAgentDates.mockResolvedValue([
         { date: '2026-02-25', count: 5 },
         { date: '2026-02-24', count: 3 }
       ]);
-      cos.getAgentsByDate.mockResolvedValue([
+      getAgentsByDate.mockResolvedValue([
         { id: 'agent-001', status: 'completed', output: ['a'], metadata: { taskDescription: 'Short' } }
       ]);
 
       const response = await request(app).get('/api/cos/agents/history?hydrate=1');
 
       expect(response.status).toBe(200);
-      expect(cos.getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
+      expect(getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
       expect(response.body.latest.date).toBe('2026-02-25');
       expect(response.body.latest.agents).toHaveLength(1);
       // The hydrated bucket goes through the same listing projection.
@@ -599,19 +626,19 @@ describe('CoS Routes', () => {
     });
 
     it('hydrates to null on an install with no archived runs', async () => {
-      cos.getAgentDates.mockResolvedValue([]);
+      getAgentDates.mockResolvedValue([]);
 
       const response = await request(app).get('/api/cos/agents/history?hydrate=1');
 
       expect(response.status).toBe(200);
       expect(response.body.latest).toBeNull();
-      expect(cos.getAgentsByDate).not.toHaveBeenCalled();
+      expect(getAgentsByDate).not.toHaveBeenCalled();
     });
   });
 
   describe('GET /api/cos/agents/history/:date', () => {
     it('should return agents for a valid date', async () => {
-      cos.getAgentsByDate.mockResolvedValue([
+      getAgentsByDate.mockResolvedValue([
         { id: 'agent-001', status: 'completed' }
       ]);
 
@@ -619,7 +646,7 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(1);
-      expect(cos.getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
+      expect(getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
     });
 
     it('should return 400 for invalid date format', async () => {
@@ -637,7 +664,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/agents/:id', () => {
     it('should return agent by ID', async () => {
-      cos.getAgent.mockResolvedValue({ id: 'agent-001', status: 'running' });
+      getAgent.mockResolvedValue({ id: 'agent-001', status: 'running' });
 
       const response = await request(app).get('/api/cos/agents/agent-001');
 
@@ -646,7 +673,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.getAgent.mockResolvedValue(null);
+      getAgent.mockResolvedValue(null);
 
       const response = await request(app).get('/api/cos/agents/agent-999');
 
@@ -781,16 +808,16 @@ describe('CoS Routes', () => {
 
   describe('DELETE /api/cos/agents/:id', () => {
     it('should delete an agent', async () => {
-      cos.deleteAgent.mockResolvedValue({ success: true, agentId: 'agent-001' });
+      deleteAgent.mockResolvedValue({ success: true, agentId: 'agent-001' });
 
       const response = await request(app).delete('/api/cos/agents/agent-001');
 
       expect(response.status).toBe(200);
-      expect(cos.deleteAgent).toHaveBeenCalledWith('agent-001');
+      expect(deleteAgent).toHaveBeenCalledWith('agent-001');
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.deleteAgent.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
+      deleteAgent.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
 
       const response = await request(app).delete('/api/cos/agents/agent-999');
 
@@ -800,7 +827,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/health', () => {
     it('should return health status', async () => {
-      cos.getHealthStatus.mockResolvedValue({
+      getHealthStatus.mockResolvedValue({
         lastCheck: '2024-01-15T10:00:00Z',
         issues: []
       });
@@ -814,7 +841,7 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/health/check', () => {
     it('should force health check', async () => {
-      cos.runHealthCheck.mockResolvedValue({
+      runHealthCheck.mockResolvedValue({
         metrics: {},
         issues: []
       });
@@ -822,13 +849,13 @@ describe('CoS Routes', () => {
       const response = await request(app).post('/api/cos/health/check');
 
       expect(response.status).toBe(200);
-      expect(cos.runHealthCheck).toHaveBeenCalled();
+      expect(runHealthCheck).toHaveBeenCalled();
     });
   });
 
   describe('GET /api/cos/reports', () => {
     it('should list all reports', async () => {
-      cos.listReports.mockResolvedValue(['2024-01-15', '2024-01-14']);
+      listReports.mockResolvedValue(['2024-01-15', '2024-01-14']);
 
       const response = await request(app).get('/api/cos/reports');
 
@@ -839,7 +866,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/reports/today', () => {
     it('should return today report', async () => {
-      cos.getTodayReport.mockResolvedValue({
+      getTodayReport.mockResolvedValue({
         date: '2024-01-15',
         summary: { tasksCompleted: 5 }
       });
@@ -853,7 +880,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/reports/:date', () => {
     it('should return report by date', async () => {
-      cos.getReport.mockResolvedValue({
+      getReport.mockResolvedValue({
         date: '2024-01-14',
         summary: {}
       });
@@ -864,7 +891,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if report not found', async () => {
-      cos.getReport.mockResolvedValue(null);
+      getReport.mockResolvedValue(null);
 
       const response = await request(app).get('/api/cos/reports/1999-01-01');
 
@@ -875,7 +902,7 @@ describe('CoS Routes', () => {
       const response = await request(app).get('/api/cos/reports/not-a-date');
 
       expect(response.status).toBe(400);
-      expect(cos.getReport).not.toHaveBeenCalled();
+      expect(getReport).not.toHaveBeenCalled();
     });
   });
 
@@ -915,7 +942,7 @@ describe('CoS Routes', () => {
       'scan'
     ])('should create a task from slashdo command %s', async (command) => {
       getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
-      cos.addTask.mockResolvedValue({ id: `task-sd-${command}`, status: 'pending' });
+      addTask.mockResolvedValue({ id: `task-sd-${command}`, status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
@@ -927,7 +954,7 @@ describe('CoS Routes', () => {
       // the invocation + inline the body once the provider is known — it no
       // longer eagerly loads the body or hardcodes `/do:` into the description
       // (both assumed a Claude host that can type slash commands).
-      const [taskData] = cos.addTask.mock.calls.at(-1);
+      const [taskData] = addTask.mock.calls.at(-1);
       expect(taskData.slashdoCommand).toBe(command);
       expect(taskData.context).toBeUndefined();
       expect(taskData.description).not.toContain('/do:');
@@ -946,7 +973,7 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('UNSUPPORTED_PLAN_ONLY_TRACKER');
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     });
 
     // #3636: the catalog posture's `worktreeChangesExpected` must reach the task,
@@ -964,14 +991,14 @@ describe('CoS Routes', () => {
       ['depfree', true]
     ])('threads the catalog deliverable posture — %s ⇒ worktreeChangesExpected %s', async (command, expected) => {
       getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
-      cos.addTask.mockResolvedValue({ id: `task-wce-${command}`, status: 'pending' });
+      addTask.mockResolvedValue({ id: `task-wce-${command}`, status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
         .send({ command, app: 'my-app' });
 
       expect(response.status).toBe(200);
-      expect(cos.addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(expected);
+      expect(addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(expected);
     });
 
     // The run drawer's removal bar reaches the bundled command as its own flag;
@@ -985,14 +1012,14 @@ describe('CoS Routes', () => {
       ['better', 'extreme', undefined]
     ])('forwards the depfree removal bar as a command flag — %s + %s ⇒ %s', async (command, depfreeMode, slashdoArgs) => {
       getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
-      cos.addTask.mockResolvedValue({ id: 'task-depfree-mode', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-depfree-mode', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
         .send({ command, app: 'my-app', ...(depfreeMode ? { depfreeMode } : {}) });
 
       expect(response.status).toBe(200);
-      const [taskData] = cos.addTask.mock.calls.at(-1);
+      const [taskData] = addTask.mock.calls.at(-1);
       expect(taskData.slashdoArgs).toBe(slashdoArgs);
       expect(taskData.description.includes('mode)')).toBe(slashdoArgs !== undefined);
     });
@@ -1003,19 +1030,19 @@ describe('CoS Routes', () => {
         .post('/api/cos/tasks/slashdo')
         .send({ command: 'depfree', app: 'my-app', depfreeMode: 'zero' });
       expect(response.status).toBe(400);
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     });
 
     it('queues the SwiftUI audit for a Swift app', async () => {
       getAppById.mockResolvedValue({ id: 'my-ios', name: 'MyPhone', type: 'ios-native', repoPath: '/repo' });
-      cos.addTask.mockResolvedValue({ id: 'task-sd-swift', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-sd-swift', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
         .send({ command: 'better-swift', app: 'my-ios' });
 
       expect(response.status).toBe(200);
-      expect(cos.addTask.mock.calls.at(-1)[0].slashdoCommand).toBe('better-swift');
+      expect(addTask.mock.calls.at(-1)[0].slashdoCommand).toBe('better-swift');
     });
 
     // The panel only offers the applicable one of better / better-swift, but the
@@ -1033,7 +1060,7 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('WORKFLOW_APP_TYPE_MISMATCH');
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     });
 
     it('404s an unknown app for every command, not just next', async () => {
@@ -1044,7 +1071,7 @@ describe('CoS Routes', () => {
         .send({ command: 'push', app: 'ghost-app' });
 
       expect(response.status).toBe(404);
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     });
 
     // The Issues tab's Replan button: `replan` + a pinned issue is a per-issue
@@ -1061,7 +1088,7 @@ describe('CoS Routes', () => {
         target: '42',
         taskMetadata: { useWorktree: false, openPR: false, noCodeOutput: true, worktreeChangesExpected: false }
       });
-      cos.addTask.mockResolvedValue({ id: 'task-replan-42', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-replan-42', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
@@ -1072,7 +1099,7 @@ describe('CoS Routes', () => {
         expect.objectContaining({ id: 'my-app' }),
         expect.objectContaining({ target: '42', overrideContext: 'focus on the migration' })
       );
-      const [taskData] = cos.addTask.mock.calls.at(-1);
+      const [taskData] = addTask.mock.calls.at(-1);
       expect(taskData.prompt).toBe('REPLAN ISSUE PROMPT');
       // Same reason `next` carries none: the assembled prompt IS the task prompt.
       expect(taskData.slashdoCommand).toBeUndefined();
@@ -1088,7 +1115,7 @@ describe('CoS Routes', () => {
 
     it('leaves an untargeted replan on the bundled backlog-audit workflow', async () => {
       getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
-      cos.addTask.mockResolvedValue({ id: 'task-replan-all', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-replan-all', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
@@ -1096,7 +1123,7 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(buildIssueReplanTask).not.toHaveBeenCalled();
-      expect(cos.addTask.mock.calls.at(-1)[0].slashdoCommand).toBe('replan');
+      expect(addTask.mock.calls.at(-1)[0].slashdoCommand).toBe('replan');
     });
 
     it('surfaces the builder\'s tracker rejection instead of queuing a run with nothing to comment on', async () => {
@@ -1111,7 +1138,7 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('UNSUPPORTED_REPLAN_TRACKER');
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     });
 
     it('does not queue a manual claim when contributor-label cleanup fails', async () => {
@@ -1121,7 +1148,7 @@ describe('CoS Routes', () => {
       const response = await request(app).post('/api/cos/tasks/slashdo')
         .send({ command: 'next', app: 'my-app', target: '42' });
       expect(response.status).toBe(502);
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     });
 
     it('routes /do:next through the app Work Tracker instead of the raw command', async () => {
@@ -1133,7 +1160,7 @@ describe('CoS Routes', () => {
         prompt: 'CLAIM ISSUE PROMPT',
         taskMetadata: { useWorktree: false, openPR: false }
       });
-      cos.addTask.mockResolvedValue({ id: 'task-sd-next', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-sd-next', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
@@ -1144,7 +1171,7 @@ describe('CoS Routes', () => {
       expect(buildClaimWorkTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-app' }), expect.any(Object));
       // The raw do:next body must NOT be inlined for the next command.
       expect(loadSlashdoCommand).not.toHaveBeenCalledWith('next');
-      const [taskData] = cos.addTask.mock.calls.at(-1);
+      const [taskData] = addTask.mock.calls.at(-1);
       // The claim body is the agent PROMPT, not the one-line human note (#4153).
       expect(taskData.prompt).toBe('CLAIM ISSUE PROMPT');
       expect(taskData.context).toBeUndefined();
@@ -1182,14 +1209,14 @@ describe('CoS Routes', () => {
           swarmCount: 6
         }
       });
-      cos.addTask.mockResolvedValue({ id: 'task-sd-next-reviewers', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-sd-next-reviewers', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
         .send({ command: 'next', app: 'my-app' });
 
       expect(response.status).toBe(200);
-      const [taskData] = cos.addTask.mock.calls.at(-1);
+      const [taskData] = addTask.mock.calls.at(-1);
       expect(taskData).toMatchObject({
         reviewers: ['codex', 'claude'],
         usernames: ['alice'],
@@ -1217,14 +1244,14 @@ describe('CoS Routes', () => {
         prompt: 'CLAIM ISSUE PROMPT',
         taskMetadata: { useWorktree: false, openPR: false, worktreeChangesExpected: false }
       });
-      cos.addTask.mockResolvedValue({ id: 'task-sd-next-wce', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-sd-next-wce', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
         .send({ command: 'next', app: 'my-app' });
 
       expect(response.status).toBe(200);
-      expect(cos.addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(false);
+      expect(addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(false);
     });
 
     // …and when the claim flow says nothing, the catalog's commit-shaped default
@@ -1238,14 +1265,14 @@ describe('CoS Routes', () => {
         prompt: 'CLAIM PLAN PROMPT',
         taskMetadata: { useWorktree: false, openPR: false }
       });
-      cos.addTask.mockResolvedValue({ id: 'task-sd-next-default', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-sd-next-default', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
         .send({ command: 'next', app: 'my-app' });
 
       expect(response.status).toBe(200);
-      expect(cos.addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(true);
+      expect(addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(true);
     });
 
     it('threads the run drawer settings — target/author-filter/reviewers into the claim prompt, provider/model/effort/simplify onto the task', async () => {
@@ -1258,7 +1285,7 @@ describe('CoS Routes', () => {
         taskMetadata: { useWorktree: false, openPR: false },
         target: '412'
       });
-      cos.addTask.mockResolvedValue({ id: 'task-sd-target', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-sd-target', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
@@ -1278,7 +1305,7 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(prepareAppIssueClaim).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-app' }), '412', 'github');
-      expect(prepareAppIssueClaim.mock.invocationCallOrder[0]).toBeLessThan(cos.addTask.mock.invocationCallOrder[0]);
+      expect(prepareAppIssueClaim.mock.invocationCallOrder[0]).toBeLessThan(addTask.mock.invocationCallOrder[0]);
       expect(buildClaimWorkTask).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'my-app' }),
         {
@@ -1299,7 +1326,7 @@ describe('CoS Routes', () => {
           reviewerMaxRounds: { codex: 2, ollama: 1 }
         }
       );
-      const [taskData] = cos.addTask.mock.calls.at(-1);
+      const [taskData] = addTask.mock.calls.at(-1);
       expect(taskData.provider).toBe('claude-cli');
       expect(taskData.model).toBe('claude-opus-5');
       expect(taskData.effort).toBe('high');
@@ -1322,7 +1349,7 @@ describe('CoS Routes', () => {
         taskMetadata: { useWorktree: false, openPR: false, prCompletion: 'merge-on-green' },
         target: '412'
       });
-      cos.addTask.mockResolvedValue({ id: 'task-sd-mog', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-sd-mog', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
@@ -1337,7 +1364,7 @@ describe('CoS Routes', () => {
         expect.objectContaining({ id: 'my-app' }),
         expect.objectContaining({ prCompletion: 'merge-on-green' })
       );
-      const [taskData] = cos.addTask.mock.calls.at(-1);
+      const [taskData] = addTask.mock.calls.at(-1);
       expect(taskData.prCompletion).toBe('merge-on-green');
     });
 
@@ -1402,7 +1429,7 @@ describe('CoS Routes', () => {
 
     it('should return 409 for duplicate task', async () => {
       getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
-      cos.addTask.mockResolvedValue({ duplicate: true, status: 'pending' });
+      addTask.mockResolvedValue({ duplicate: true, status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
@@ -1421,7 +1448,7 @@ describe('CoS Routes', () => {
       getAppById.mockResolvedValue(jiraApp);
       getTaskPrompt.mockResolvedValue(TEMPLATE);
       getCodeReviewDefaults.mockResolvedValue({ reviewers: ['claude'] });
-      cos.addTask.mockResolvedValue({ id: 'task-jira-1', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-jira-1', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/jira-ticket')
@@ -1431,7 +1458,7 @@ describe('CoS Routes', () => {
       expect(response.body.id).toBe('task-jira-1');
       expect(getTaskPrompt).toHaveBeenCalledWith('claim-issue-jira');
 
-      const [taskData, taskType] = cos.addTask.mock.calls.at(-1);
+      const [taskData, taskType] = addTask.mock.calls.at(-1);
       expect(taskType).toBe('user');
       // Placeholders substituted, ticket constraint appended.
       expect(taskData.prompt).toContain('Work MyApp at /repo (app my-app); reviewers: claude.');
@@ -1449,14 +1476,14 @@ describe('CoS Routes', () => {
       getAppById.mockResolvedValue(jiraApp);
       getTaskPrompt.mockResolvedValue(TEMPLATE);
       getCodeReviewDefaults.mockResolvedValue(null);
-      cos.addTask.mockResolvedValue({ id: 'task-jira-2', status: 'pending' });
+      addTask.mockResolvedValue({ id: 'task-jira-2', status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/jira-ticket')
         .send({ app: 'my-app', ticketKey: 'proj-7' });
 
       expect(response.status).toBe(200);
-      const [taskData] = cos.addTask.mock.calls.at(-1);
+      const [taskData] = addTask.mock.calls.at(-1);
       expect(taskData.description).toContain('PROJ-7');
       expect(taskData.prompt).toContain('PROJ-7');
     });
@@ -1469,7 +1496,7 @@ describe('CoS Routes', () => {
         .send({ app: 'ghost', ticketKey: 'PROJ-1' });
 
       expect(response.status).toBe(404);
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     });
 
     it('returns 400 when JIRA is not enabled for the app', async () => {
@@ -1480,7 +1507,7 @@ describe('CoS Routes', () => {
         .send({ app: 'my-app', ticketKey: 'PROJ-1' });
 
       expect(response.status).toBe(400);
-      expect(cos.addTask).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
     });
 
     it('returns 400 for a malformed ticket key', async () => {
@@ -1496,7 +1523,7 @@ describe('CoS Routes', () => {
       getAppById.mockResolvedValue(jiraApp);
       getTaskPrompt.mockResolvedValue(TEMPLATE);
       getCodeReviewDefaults.mockResolvedValue(null);
-      cos.addTask.mockResolvedValue({ duplicate: true, status: 'pending' });
+      addTask.mockResolvedValue({ duplicate: true, status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/jira-ticket')
@@ -1508,7 +1535,7 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/tasks (duplicate)', () => {
     it('should return 409 for duplicate task', async () => {
-      cos.addTask.mockResolvedValue({ duplicate: true, status: 'running' });
+      addTask.mockResolvedValue({ duplicate: true, status: 'running' });
 
       const response = await request(app)
         .post('/api/cos/tasks')
@@ -1524,7 +1551,7 @@ describe('CoS Routes', () => {
 
   describe('DELETE /api/cos/agents/completed', () => {
     it('should clear completed agents', async () => {
-      cos.clearCompletedAgents.mockResolvedValue({ cleared: 3 });
+      clearCompletedAgents.mockResolvedValue({ cleared: 3 });
 
       const response = await request(app).delete('/api/cos/agents/completed');
 
@@ -1535,7 +1562,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/agents/feedback/pending', () => {
     it('returns the durable count and the reconciled eligible agent projection', async () => {
-      cos.getPendingAgentFeedback.mockResolvedValue({
+      getPendingAgentFeedback.mockResolvedValue({
         count: 1,
         agents: [{ id: 'agent-001', status: 'completed', metadata: { taskType: 'user' } }],
         unavailable: [{ agentId: 'agent-old', availability: 'unavailable', unavailableReason: 'deleted' }],
@@ -1552,14 +1579,14 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/agents/:id/feedback', () => {
     it('should submit positive feedback', async () => {
-      cos.submitAgentFeedback.mockResolvedValue({ success: true });
+      submitAgentFeedback.mockResolvedValue({ success: true });
 
       const response = await request(app)
         .post('/api/cos/agents/agent-001/feedback')
         .send({ rating: 'positive', comment: 'Great work' });
 
       expect(response.status).toBe(200);
-      expect(cos.submitAgentFeedback).toHaveBeenCalledWith('agent-001', { rating: 'positive', comment: 'Great work' });
+      expect(submitAgentFeedback).toHaveBeenCalledWith('agent-001', { rating: 'positive', comment: 'Great work' });
     });
 
     it('should return 400 for invalid rating', async () => {
@@ -1571,7 +1598,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.submitAgentFeedback.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
+      submitAgentFeedback.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
 
       const response = await request(app)
         .post('/api/cos/agents/agent-999/feedback')
@@ -1581,7 +1608,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 400 (INVALID_STATE) when the agent is not completed', async () => {
-      cos.submitAgentFeedback.mockRejectedValue(new ServerError('Can only submit feedback for completed agents', { status: 400, code: 'INVALID_STATE' }));
+      submitAgentFeedback.mockRejectedValue(new ServerError('Can only submit feedback for completed agents', { status: 400, code: 'INVALID_STATE' }));
 
       const response = await request(app)
         .post('/api/cos/agents/agent-001/feedback')
@@ -1594,14 +1621,14 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/agents/:id/btw', () => {
     it('should send btw message to agent', async () => {
-      cos.sendBtwToAgent.mockResolvedValue({ success: true });
+      sendBtwToAgent.mockResolvedValue({ success: true });
 
       const response = await request(app)
         .post('/api/cos/agents/agent-001/btw')
         .send({ message: 'Additional context here' });
 
       expect(response.status).toBe(200);
-      expect(cos.sendBtwToAgent).toHaveBeenCalledWith('agent-001', 'Additional context here');
+      expect(sendBtwToAgent).toHaveBeenCalledWith('agent-001', 'Additional context here');
     });
 
     it('should return 400 for empty message', async () => {
@@ -1629,7 +1656,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.sendBtwToAgent.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
+      sendBtwToAgent.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
 
       const response = await request(app)
         .post('/api/cos/agents/agent-999/btw')
@@ -1639,7 +1666,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 400 (INVALID_STATE) when BTW is unsupported for the agent', async () => {
-      cos.sendBtwToAgent.mockRejectedValue(new ServerError('Agent is not running', { status: 400, code: 'INVALID_STATE' }));
+      sendBtwToAgent.mockRejectedValue(new ServerError('Agent is not running', { status: 400, code: 'INVALID_STATE' }));
 
       const response = await request(app)
         .post('/api/cos/agents/agent-001/btw')
@@ -1652,7 +1679,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/feedback/stats', () => {
     it('should return feedback statistics', async () => {
-      cos.getFeedbackStats.mockResolvedValue({ total: 10, positive: 7, negative: 2, neutral: 1 });
+      getFeedbackStats.mockResolvedValue({ total: 10, positive: 7, negative: 2, neutral: 1 });
 
       const response = await request(app).get('/api/cos/feedback/stats');
 
@@ -1667,14 +1694,14 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/reports/generate', () => {
     it('should generate a report', async () => {
-      cos.generateReport.mockResolvedValue({ date: '2026-02-25', summary: {} });
+      generateReport.mockResolvedValue({ date: '2026-02-25', summary: {} });
 
       const response = await request(app)
         .post('/api/cos/reports/generate')
         .send({ date: '2026-02-25' });
 
       expect(response.status).toBe(200);
-      expect(cos.generateReport).toHaveBeenCalledWith('2026-02-25');
+      expect(generateReport).toHaveBeenCalledWith('2026-02-25');
     });
 
     it('should reject a date that is not a bare YYYY-MM-DD day', async () => {
@@ -1685,13 +1712,13 @@ describe('CoS Routes', () => {
         .send({ date: '2026-02-25T00:00:00.000Z' });
 
       expect(response.status).toBe(400);
-      expect(cos.generateReport).not.toHaveBeenCalled();
+      expect(generateReport).not.toHaveBeenCalled();
     });
   });
 
   describe('GET /api/cos/briefings', () => {
     it('should list all briefings', async () => {
-      cos.listBriefings.mockResolvedValue(['2026-02-25', '2026-02-24']);
+      listBriefings.mockResolvedValue(['2026-02-25', '2026-02-24']);
 
       const response = await request(app).get('/api/cos/briefings');
 
@@ -1702,7 +1729,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/briefings/latest', () => {
     it('should return latest briefing', async () => {
-      cos.getLatestBriefing.mockResolvedValue({ date: '2026-02-25', content: 'Latest' });
+      getLatestBriefing.mockResolvedValue({ date: '2026-02-25', content: 'Latest' });
 
       const response = await request(app).get('/api/cos/briefings/latest');
 
@@ -1713,7 +1740,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/briefings/:date', () => {
     it('should return briefing by date', async () => {
-      cos.getBriefing.mockResolvedValue({ date: '2026-02-24', content: 'Briefing' });
+      getBriefing.mockResolvedValue({ date: '2026-02-24', content: 'Briefing' });
 
       const response = await request(app).get('/api/cos/briefings/2026-02-24');
 
@@ -1721,7 +1748,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if briefing not found', async () => {
-      cos.getBriefing.mockResolvedValue(null);
+      getBriefing.mockResolvedValue(null);
 
       const response = await request(app).get('/api/cos/briefings/1999-01-01');
 
@@ -1732,7 +1759,7 @@ describe('CoS Routes', () => {
       const response = await request(app).get('/api/cos/briefings/not-a-date');
 
       expect(response.status).toBe(400);
-      expect(cos.getBriefing).not.toHaveBeenCalled();
+      expect(getBriefing).not.toHaveBeenCalled();
     });
   });
 
@@ -1759,7 +1786,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/scripts', () => {
     it('should list scripts', async () => {
-      cos.listScripts.mockResolvedValue([{ name: 'backup.sh' }]);
+      listScripts.mockResolvedValue([{ name: 'backup.sh' }]);
 
       const response = await request(app).get('/api/cos/scripts');
 
@@ -1770,7 +1797,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/scripts/:name', () => {
     it('should return script content', async () => {
-      cos.getScript.mockResolvedValue({ name: 'backup.sh', content: '#!/bin/bash' });
+      getScript.mockResolvedValue({ name: 'backup.sh', content: '#!/bin/bash' });
 
       const response = await request(app).get('/api/cos/scripts/backup.sh');
 
@@ -1779,7 +1806,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if script not found', async () => {
-      cos.getScript.mockResolvedValue(null);
+      getScript.mockResolvedValue(null);
 
       const response = await request(app).get('/api/cos/scripts/missing.sh');
 
@@ -1789,7 +1816,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/activity/today', () => {
     it('should return today activity summary', async () => {
-      cos.getTodayActivity.mockResolvedValue({ stats: { completed: 5 } });
+      getTodayActivity.mockResolvedValue({ stats: { completed: 5 } });
 
       const response = await request(app).get('/api/cos/activity/today');
 
@@ -1800,42 +1827,42 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/activity/while-away', () => {
     it('passes a valid ISO since through to the service', async () => {
-      cos.getWhileAwayActivity.mockResolvedValue({ stats: { completed: 3 } });
+      getWhileAwayActivity.mockResolvedValue({ stats: { completed: 3 } });
       const since = '2026-06-01T00:00:00.000Z';
 
       const response = await request(app).get(`/api/cos/activity/while-away?since=${encodeURIComponent(since)}`);
 
       expect(response.status).toBe(200);
       expect(response.body.stats.completed).toBe(3);
-      expect(cos.getWhileAwayActivity).toHaveBeenCalledWith(since);
+      expect(getWhileAwayActivity).toHaveBeenCalledWith(since);
     });
 
     it('tolerates a garbage since (200 + service fallback, not 400)', async () => {
-      cos.getWhileAwayActivity.mockResolvedValue({ stats: { completed: 0 } });
+      getWhileAwayActivity.mockResolvedValue({ stats: { completed: 0 } });
 
       const response = await request(app).get('/api/cos/activity/while-away?since=not-a-date');
 
       expect(response.status).toBe(200);
       // Malformed value is dropped to undefined so the service applies its
       // own 24h fallback rather than the route 400-ing the dashboard card.
-      expect(cos.getWhileAwayActivity).toHaveBeenCalledWith(undefined);
+      expect(getWhileAwayActivity).toHaveBeenCalledWith(undefined);
     });
 
     it('works with no since param', async () => {
-      cos.getWhileAwayActivity.mockResolvedValue({ stats: { completed: 1 } });
+      getWhileAwayActivity.mockResolvedValue({ stats: { completed: 1 } });
 
       const response = await request(app).get('/api/cos/activity/while-away');
 
       expect(response.status).toBe(200);
-      expect(cos.getWhileAwayActivity).toHaveBeenCalledWith(undefined);
+      expect(getWhileAwayActivity).toHaveBeenCalledWith(undefined);
     });
   });
 describe('CoS scoped collections', () => {
   it('scopes live agents and validates completed page bounds without changing legacy lists', async () => {
-    cos.getAgents.mockResolvedValue([{ id: 'running', status: 'running' }, { id: 'done', status: 'completed' }]);
+    getAgents.mockResolvedValue([{ id: 'running', status: 'running' }, { id: 'done', status: 'completed' }]);
     expect((await request(app).get('/api/cos/agents?active=1')).body.map(agent => agent.id)).toEqual(['running']);
     expect((await request(app).get('/api/cos/agents')).body).toHaveLength(2);
-    cos.getCompletedAgentPage.mockResolvedValue({ items: [{ id: 'done', output: ['private transcript'], metadata: { taskSummary: 'x'.repeat(100000), simplifySummary: 'y'.repeat(100000) } }], total: 1, nextCursor: null });
+    getCompletedAgentPage.mockResolvedValue({ items: [{ id: 'done', output: ['private transcript'], metadata: { taskSummary: 'x'.repeat(100000), simplifySummary: 'y'.repeat(100000) } }], total: 1, nextCursor: null });
     const page = await request(app).get('/api/cos/agents/completed?limit=25');
     expect(page.body).toMatchObject({ items: [{ id: 'done', metadata: { taskSummaryTruncated: true, simplifySummaryTruncated: true } }], total: 1, nextCursor: null });
     expect(page.body.items[0]).not.toHaveProperty('output');

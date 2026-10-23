@@ -103,13 +103,13 @@ export const PINNED_IMAGE_MODE_IDS = Object.freeze(Object.keys(PINNED_IMAGE_MODE
  * Override-capable modes deliberately NOT audited here, each with its reason —
  * the coverage guard accepts a mode in exactly one of the two lists.
  *
- * fal.ai: its model ids come from PortOS's own curated catalog
- * (lib/falImageModels.js), not a provider record whose catalog a vendor
- * refresh can retire. `resolveCloudProviderConfig` already refuses a per-render
+ * fal.ai and Runway: their model ids come from PortOS's curated catalogs
+ * (lib/falImageModels.js and lib/runwayImageModels.js), not a provider record
+ * whose catalog a vendor refresh can retire. `resolveCloudProviderConfig` already refuses a per-render
  * id outside it and degrades a stale saved one to the shipped default, so
  * there is no provider catalog to reconcile a pin against.
  */
-export const CATALOG_VALIDATED_IMAGE_MODE_IDS = Object.freeze([IMAGE_GEN_MODE.FAL]);
+export const CATALOG_VALIDATED_IMAGE_MODE_IDS = Object.freeze([IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY]);
 export { MODEL_OVERRIDE_CAPABLE_MODES };
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');

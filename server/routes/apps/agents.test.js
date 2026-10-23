@@ -6,14 +6,17 @@ import agentRoutes from './agents.js';
 vi.mock('../../services/apps.js', () => ({
   getAppById: vi.fn(),
 }));
-vi.mock('../../services/cos.js', () => ({
+vi.mock('../../services/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(),
+}));
+vi.mock('../../services/cosAgentIndex.js', () => ({
   getAgentDates: vi.fn(),
   getAgentsByDate: vi.fn(),
 }));
 
 import * as appsService from '../../services/apps.js';
-import * as cos from '../../services/cos.js';
+import { getAgentDates, getAgentsByDate } from '../../services/cosAgentIndex.js';
+import { getAgents } from '../../services/cosAgentLifecycle.js';
 
 const APP = { id: 'app-001', name: 'Widget' };
 
@@ -33,9 +36,9 @@ describe('GET /api/apps/:id/agents', () => {
     app.use('/api/apps', agentRoutes);
     vi.clearAllMocks();
     appsService.getAppById.mockResolvedValue(APP);
-    cos.getAgents.mockResolvedValue([]);
-    cos.getAgentDates.mockResolvedValue([]);
-    cos.getAgentsByDate.mockResolvedValue([]);
+    getAgents.mockResolvedValue([]);
+    getAgentDates.mockResolvedValue([]);
+    getAgentsByDate.mockResolvedValue([]);
   });
 
   // This response carries up to 500 records; shipping each one's transcript and
@@ -44,9 +47,9 @@ describe('GET /api/apps/:id/agents', () => {
   // never reuses the text, so the bounded copy is all it needs.
   it('projects the combined list: no transcripts, bounded descriptions', async () => {
     const long = 'Refactor the queue. '.repeat(5000);
-    cos.getAgents.mockResolvedValue([agentFor('agent-running', { status: 'running' })]);
-    cos.getAgentDates.mockResolvedValue([{ date: '2026-07-13', count: 1 }]);
-    cos.getAgentsByDate.mockResolvedValue([
+    getAgents.mockResolvedValue([agentFor('agent-running', { status: 'running' })]);
+    getAgentDates.mockResolvedValue([{ date: '2026-07-13', count: 1 }]);
+    getAgentsByDate.mockResolvedValue([
       agentFor('agent-done', { metadata: { taskApp: APP.id, taskDescription: long } }),
     ]);
 

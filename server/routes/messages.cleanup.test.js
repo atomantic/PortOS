@@ -8,6 +8,8 @@ import { request } from '../lib/testHelper.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'messages-cleanup-test-'));
+vi.mock('../services/humanActivity.js', () => ({ deleteEvents: vi.fn().mockResolvedValue({ deleted: 0 }) }));
+vi.mock('../services/tribe.js', () => ({ deleteAutoTouchpoints: vi.fn().mockResolvedValue({ touchpoints: 0, auditRows: 0 }) }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {

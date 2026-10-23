@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  # The main -> release pull request already ran the complete suite on the very
+  # The candidate -> release pull request already ran the complete suite on the very
   # tree this push carries. Look for that green gate instead of paying for it
   # twice; anything unverified (a direct push to release, a merge that changed
   # the tree, an API failure) still falls through to the full run below.
@@ -248,7 +248,7 @@ jobs:
             # The archive commit lands on main ONLY. `release` stays pinned to
             # the CI-verified commit: pushing main:release here would publish
             # unverified main commits, or be rejected as non-fast-forward when
-            # the branches diverged. The next main -> release promotion picks
+            # the branches diverged. The next candidate -> release promotion picks
             # this commit up through the normal verified path.
             for attempt in 1 2 3; do
               git fetch origin main

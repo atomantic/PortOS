@@ -402,6 +402,8 @@ describe('applyReleaseOptions — the do-release {releaseOptions} block', () => 
     // Only a real boolean false disables — the sanitizer drops non-booleans.
     expect(out).toContain('**Make decisions: ON**');
     expect(out).not.toContain('{releaseOptions}');
+    expect(out).toContain('only for evidenced candidate-gating fixes');
+    expect(out).toContain('later development merges and unrelated open issues/PRs wait for the next release');
     expect(out.startsWith('Options:')).toBe(true);
   });
 
@@ -417,6 +419,9 @@ describe('applyReleaseOptions — the do-release {releaseOptions} block', () => 
     expect(out.startsWith('## Release options for this run')).toBe(true);
     expect(out).toContain('**Resolve blockers: OFF**');
     expect(out.endsWith('my custom release prompt')).toBe(true);
+    expect(out).toContain("recover the existing candidate's recorded cutoff");
+    expect(out).toContain('Never pull, rebase, or merge the live development branch into the candidate');
+    expect(out).toContain('override broader backlog-sweep instructions in a customized prompt');
   });
 
   it('targets the branch-reconcile trigger at the released app, or PortOS on the global lane', () => {

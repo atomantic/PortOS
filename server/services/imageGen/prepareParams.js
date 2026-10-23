@@ -262,7 +262,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // Freeze the selected preference before capability checks. Explicit ids stay
   // untouched so the existing unknown/hardware rejection still applies.
   if (!data.modelId && localModel?.id) data.modelId = localModel.id;
-  const referenceCap = localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : 4;
+  const selectedCloudModel = mode === IMAGE_GEN_MODE.RUNWAY ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : null;
+  const referenceCap = mode === IMAGE_GEN_MODE.RUNWAY ? maxInputImages(mode, selectedCloudModel) : localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : 4;
   if (referenceImageCount > referenceCap) {
     cleanupReqFilesTemp();
     throw new ServerError(
@@ -336,7 +337,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // so this only fires for direct API callers — but a silent drop is exactly
   // the failure the sidecar-honesty rule exists to prevent. `resolveInputImages`
   // keeps its own cap as the backstop for in-process callers that skip the route.
-  const inputImageCap = localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : maxInputImages(mode);
+  const inputImageCap = localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : maxInputImages(mode, selectedCloudModel);
   if (inputImageCap != null && inputImageCount > inputImageCap) {
     cleanupReqFilesTemp();
     throw new ServerError(

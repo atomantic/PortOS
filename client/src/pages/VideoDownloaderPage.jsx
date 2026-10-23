@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import PageHeader from '../components/PageHeader';
 import { Download, Film, Loader2, Trash2, ExternalLink, Video } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import ListLoadError from '../components/ui/ListLoadError';
@@ -50,15 +51,14 @@ export default function VideoDownloaderPage() {
   });
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold flex items-center gap-2">
-          <Film size={20} className="text-port-accent" /> Video Downloader
-        </h1>
-        <p className="text-sm text-gray-400 mt-1">
-          Download a full video from a YouTube or x.com/Twitter URL. Downloaded clips also appear in your media gallery.
-        </p>
-      </header>
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={Film}
+        title="Video Downloader"
+        subtitle="Download a full video from a YouTube or x.com/Twitter URL. Downloaded clips also appear in your media gallery."
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+      <div className="max-w-4xl mx-auto space-y-6">
 
       <YtDlpUpdateCard />
 
@@ -188,6 +188,8 @@ export default function VideoDownloaderPage() {
           </ul>
         )}
       </section>
+    </div>
+      </div>
     </div>
   );
 }

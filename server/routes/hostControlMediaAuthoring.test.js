@@ -114,6 +114,7 @@ vi.mock('../services/musicVideo/productionService.js', () => ({
 }));
 vi.mock('../services/musicVideo/songRevision.js', () => ({
   resolveSongRevisionScenes: vi.fn(async () => ({ project: {} })),
+  generateSongRevision: vi.fn(async () => ({ project: {} })),
 }));
 vi.mock('../services/musicVideo/productionReviewService.js', () => ({
   reviseProductionFromFeedback: vi.fn(async () => ({ project: {} })),
@@ -149,7 +150,7 @@ import codeAnimationRoutes from './codeAnimation.js';
 import musicRoutes from './music.js';
 import tracksRoutes from './tracks.js';
 import musicVideoRoutes from './musicVideo.js';
-import { generateCodeAnimationBrief, startCodeAnimationGeneration } from '../services/codeAnimation/index.js';
+import { buildCodeAnimationRequest, generateCodeAnimationBrief, startCodeAnimationGeneration } from '../services/codeAnimation/index.js';
 import { startProductionStageRun } from '../services/codeAnimation/stages.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
 import { drawWaveSketch, drawWaveSketchForTrack } from '../services/musicWaveform.js';
@@ -158,7 +159,7 @@ import { startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtra
 import { startAutonomousVideo, resumeAutonomousVideo } from '../services/musicVideo/autonomousService.js';
 
 import { createSession, revokeSessionById } from '../services/auth.js';
-import { resolveSongRevisionScenes } from '../services/musicVideo/songRevision.js';
+import { generateSongRevision, resolveSongRevisionScenes } from '../services/musicVideo/songRevision.js';
 import { reviseProductionFromFeedback } from '../services/musicVideo/productionReviewService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { compileTreatment } from '../services/musicVideo/treatmentService.js';
@@ -187,6 +188,8 @@ const authoring = [
 ];
 const musicVideoAuthoring = [
   [`/api/music-video/${id}/song-revision/scenes`, { revisionId: 'example-revision', action: 'replan', ...picker }, resolveSongRevisionScenes, 200, 'post'],
+  // Drives the signed-in browser to submit a Suno song (#13055).
+  [`/api/music-video/${id}/song-revision/generate`, { revisionId: 'example-revision' }, generateSongRevision, 202, 'post'],
   [`/api/music-video/${id}/production-review/revise`, { stage: 'storyboard', ...picker }, reviseProductionFromFeedback, 200, 'post'],
   [`/api/music-video/${id}/plan`, { ...picker }, planProject, 200, 'post'],
   [`/api/music-video/${id}/treatment/compile`, { baseRevision: 0, ...picker }, compileTreatment, 200, 'post'],
@@ -291,6 +294,31 @@ describe('media authoring operator authority (#9512, #9869)', () => {
     }
   });
 
+  it('gates the code-animation prompt only when it studies a reference video (#13055)', async () => {
+    const withVideo = ['/api/code-animation/prompt', { concept: 'Example scene', referenceVideo: { filename: 'example.mp4' } }];
+    for (const [address, headers] of [
+      ['192.0.2.10', {}],
+      ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
+    ]) {
+      const refused = await call(appFor(address), withVideo, headers);
+      expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(buildCodeAnimationRequest).not.toHaveBeenCalled();
+
+    expect((await call(appFor(), ['/api/code-animation/prompt', { concept: 'Example scene', referenceVideo: null }])).status).toBe(200);
+    const agentSession = await createSession({ label: 'agent' });
+    for (const [enabled, address, headers] of [
+      [false, '127.0.0.1', {}],
+      [true, '192.0.2.10', { Authorization: `Bearer ${ownerSession.token}` }],
+      [true, '192.0.2.10', { Authorization: `Bearer ${agentSession.token}` }],
+    ]) {
+      auth.enabled = enabled;
+      expect((await call(appFor(address), withVideo, headers)).status).toBe(200);
+    }
+    expect(buildCodeAnimationRequest).toHaveBeenCalledTimes(4);
+    expect(buildCodeAnimationRequest).toHaveBeenLastCalledWith(expect.objectContaining({ referenceVideo: expect.objectContaining({ filename: 'example.mp4' }) }));
+  });
+
   it('keeps song-revision remove and dismiss available without host authority', async () => {
     for (const action of ['remove', 'dismiss']) {
       const body = { revisionId: 'example-revision', action };
@@ -379,7 +407,6 @@ describe('media authoring operator authority (#9512, #9869)', () => {
     for (const [path, body, status] of [
       ['/api/code-animation/prompt', { concept: 'Example scene' }, 200],
       [`/api/code-animation/projects/${id}/stage-runs/${id}/cancel`, {}, 200],
-      [`/api/code-animation/${id}/export`, {}, 202],
       [`/api/tracks/${id}/waveform/render`, {}, 200],
       [`/api/music-video/${id}/autonomous/stop`, {}, 200],
       [`/api/music-video/${id}/autonomous/cancel`, {}, 200],

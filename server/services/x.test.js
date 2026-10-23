@@ -196,6 +196,48 @@ describe('syncAccount error reporting', () => {
     expect(result.ingested).toBe(2);
   });
 
+  it('stores only the account\'s own posts, purges stored reposts, and keeps posts with no readable handle', async () => {
+    executeXBrowserRead.mockImplementation(async (name) => {
+      if (name === 'people') return { handles: [], exactMatch: false };
+      if (name === 'profile') {
+        return {
+          profile: { username: 'example_user' },
+          posts: [
+            { authorHandle: '@Example_User', remoteId: '1750000000000000001' },
+            { authorHandle: 'other_user', remoteId: '1750000000000000002' },
+            { authorHandle: '', remoteId: '1750000000000000003' },
+          ],
+        };
+      }
+      return { posts: [] };
+    });
+    const client = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    withTransaction.mockImplementation(async (callback) => callback(client));
+
+    const result = await syncAccount('acct-1');
+
+    const inserted = client.query.mock.calls.filter(([sql]) => /INSERT INTO x_posts/.test(sql)).map(([, params]) => params[2]);
+    expect(inserted).toEqual(['1750000000000000001', '1750000000000000003']);
+    const purge = client.query.mock.calls.find(([sql]) => /DELETE FROM x_posts/.test(sql));
+    expect(purge[1]).toEqual(['acct-1', ['1750000000000000002']]);
+    expect(result.ingested).toBe(2);
+  });
+
+  it('applies the 100-post cap after dropping reposts', async () => {
+    const reposts = Array.from({ length: 100 }, (_, i) => ({ authorHandle: 'other_user', remoteId: String(1760000000000000000n + BigInt(i)) }));
+    const own = { authorHandle: 'example_user', remoteId: '1750000000000000001' };
+    executeXBrowserRead.mockImplementation(async (name) => (name === 'profile'
+      ? { profile: { username: 'example_user' }, posts: [...reposts, own] }
+      : { posts: [], handles: [] }));
+    const client = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    withTransaction.mockImplementation(async (callback) => callback(client));
+
+    await syncAccount('acct-1');
+
+    const inserted = client.query.mock.calls.filter(([sql]) => /INSERT INTO x_posts/.test(sql)).map(([, params]) => params[2]);
+    expect(inserted).toEqual([own.remoteId]);
+  });
+
   // Re-entrancy guard, not a concurrency defense (see the Security Model): the
   // UI can fire the same sync twice — from a button and a socket refresh — and
   // the second must join the in-flight read instead of opening a second browser

@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -26,6 +26,9 @@ const effects = vi.hoisted(() => ({
   walk: vi.fn(async () => ({})), track: vi.fn(async () => ({})),
   binding: vi.fn(async () => ({})), publish: vi.fn(async () => ({})),
   create: vi.fn(async () => ({})), refine: vi.fn(async () => ({})),
+  filmLook: vi.fn(async () => ({ filename: 'example_look.png' })),
+  lastFrame: vi.fn(async () => ({ filename: 'example-frame.png' })),
+  lightRegen: vi.fn(async () => ({ filename: 'example_regen-light.png' })),
 }));
 vi.mock('../services/auth.js', () => ({
   isAuthEnabled: vi.fn(async () => auth.enabled),
@@ -54,7 +57,8 @@ vi.mock('../lib/multipart.js', () => {
 });
 vi.mock('./imageGenSetup.js', () => ({ default: express.Router() }));
 vi.mock('../services/imageGen/index.js', async () => ({
-  ...await import('../services/imageGen/modes.js'), local: {},
+  ...await import('../services/imageGen/modes.js'),
+  local: { assertGalleryFilename: vi.fn(), readImageSidecar: vi.fn(async () => ({ metadata: {} })) },
   generateImage: effects.image, generateAvatar: effects.avatar,
   checkConnection: vi.fn(async () => ({})), cancel: vi.fn(() => ({ cancelled: true })),
 }));
@@ -71,6 +75,7 @@ vi.mock('../services/character.js', () => ({ setAvatar: vi.fn() }));
 vi.mock('../services/videoGen/submitJob.js', () => ({ submitVideoGenJob: effects.video }));
 vi.mock('../services/videoGen/local.js', () => ({
   BYOV_RUNTIME_INFO: {}, getHistoryItem: vi.fn(async id => ({ id, filename: 'example.mp4' })),
+  extractLastFrame: effects.lastFrame,
 }));
 vi.mock('../services/videoGen/batch.js', () => ({ MAX_VIDEO_BATCH_SIZE: 8 }));
 vi.mock('../services/sprites/records.js', () => ({
@@ -117,13 +122,22 @@ vi.mock('../services/videoUpload.js', () => ({}));
 vi.mock('../services/hfDownloadStream.js', () => ({}));
 vi.mock('../services/mediaSketches.js', () => ({}));
 vi.mock('../services/universeCanon.js', () => ({}));
-vi.mock('../services/imageGen/variants.js', () => ({}));
+vi.mock('../services/imageGen/variants.js', () => ({ applyLightRegenVariant: effects.lightRegen }));
+vi.mock('../services/imageGen/filmLookBake.js', () => ({ applyFilmLookBake: effects.filmLook }));
+vi.mock('../services/imageGen/regen.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  resolveRegenBackend: vi.fn(async () => ({ available: true, model: { id: 'example-model' }, pythonPath: null })),
+  readImageDimensions: vi.fn(async () => ({ width: 64, height: 64 })),
+}));
 vi.mock('../services/fableLoom/records.js', () => ({}));
 vi.mock('../services/fableLoom/visualConditioning.js', () => ({}));
 vi.mock('../services/federatedMedia/remoteSubmission.js', () => ({}));
 vi.mock('../services/federatedMedia/inputAssets.js', () => ({}));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { PATHS } from '../lib/fileUtils.js';
+import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
 import imageRoutes from './imageGen.js';
 import videoRoutes from './videoGen.js';
 import spriteRoutes from './sprites.js';
@@ -142,6 +156,11 @@ const operations = [
   ['post', `/api/sprites/${id}/tracks/scanner/generate`, { direction: 'south', correctionPrompt: 'Example correction' }, effects.track, 200],
   ['post', '/api/threejs-models', { name: 'Example model', filename: 'example.png', providerId: 'example-api', prompt: 'Example shape' }, effects.create, 202],
   ['post', '/api/threejs-models/example-model/generate', { providerId: 'example-api', feedback: 'Example refinement' }, effects.refine, 202],
+  // Film-look bake (headless browser), SynthID flux regen (local Python job)
+  // and last-frame extraction (ffmpeg) run host processes (#13055).
+  ['post', '/api/image-gen/example.png/film-look', { look: { grain: 0.5 } }, effects.filmLook, 200],
+  ['post', '/api/image-gen/example.png/regenerate', {}, effects.enqueue, 200],
+  ['post', '/api/video-gen/last-frame/22222222-2222-4222-8222-222222222222', {}, effects.lastFrame, 200],
   ['put', `/api/sprites/${id}/publish-binding`, { binding: null }, effects.binding, 200],
   ['post', `/api/sprites/${id}/atlas/publish`, {}, effects.publish, 200],
 ];
@@ -151,7 +170,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json());
+  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
   app.use('/api/image-gen', imageRoutes);
   app.use('/api/video-gen', videoRoutes);
   app.use('/api/sprites', spriteRoutes);
@@ -167,6 +186,12 @@ const call = (app, [method, path, body], headers = {}) => {
 const expectNoEffects = () => {
   for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
 };
+
+beforeAll(async () => {
+  // The regenerate route resolves its source in the gallery before queueing.
+  await mkdir(PATHS.images, { recursive: true });
+  await writeFile(join(PATHS.images, 'example.png'), 'example');
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -221,7 +246,8 @@ describe('media generation and source publication authority (#9667)', () => {
     }
     expect(effects.create).toHaveBeenLastCalledWith(expect.objectContaining({ providerId: 'example-api' }));
     expect(effects.refine).toHaveBeenLastCalledWith('example-model', expect.objectContaining({ providerId: 'example-api' }));
-    expect(effects.enqueue).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ mode: 'grok' }) }));
+    expect(effects.enqueue).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ mode: 'grok' }) }));
+    expect(effects.enqueue).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ mode: 'local', regenOf: 'example.png' }) }));
   });
 
   it('refuses multipart uploads before the upload middleware can stage files', async () => {
@@ -232,6 +258,16 @@ describe('media generation and source publication authority (#9667)', () => {
       expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expectNoEffects();
+  });
+
+  it('keeps the in-process light SynthID regen open to a remote caller (#13055)', async () => {
+    const response = await call(appFor(), ['post', '/api/image-gen/example.png/regenerate', { method: 'light' }]);
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(effects.lightRegen).toHaveBeenCalledTimes(1);
+    expect(effects.enqueue).not.toHaveBeenCalled();
+    const refused = await call(appFor(), ['post', '/api/image-gen/example.png/regenerate', { method: 'flux' }]);
+    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(effects.enqueue).not.toHaveBeenCalled();
   });
 
   it('retains remote reads and cancellation', async () => {

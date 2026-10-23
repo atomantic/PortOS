@@ -53,15 +53,14 @@ const UNKNOWN_BLOCK_TTL_MS = 60 * 60 * 1000;
 // Only the cloud CLIs spend remote image quota — local renders run on the
 // user's own GPU and external hits their own SD endpoint, so neither has
 // anything to report. Keyed off CLOUD_IMAGE_GEN_MODES rather than a second
-// hand-maintained list, so a 4th cloud backend is tracked the moment it is
+// hand-maintained list, so a subscription backend is tracked the moment it is
 // added there. Display names come from `modeLabel` for the same reason — one
 // backend must not appear under two names across the UI.
 //
-// fal.ai is the one cloud backend excluded: it is billed per image on a metered
-// account, not drawn from a subscription quota window, so there is no reset to
-// observe and its failures (content policy, bad input) are not quota blocks.
-// Its spend is recorded per render instead (`estimatedCostUsd` in the sidecar).
-export const isQuotaTrackedImageMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode) && mode !== IMAGE_GEN_MODE.FAL;
+// Metered fal.ai and Runway images are excluded: they do not draw from a
+// subscription quota window. Policy/input failures must not become quota blocks.
+// Their spend is recorded per render (`estimatedCostUsd` in the sidecar).
+export const isQuotaTrackedImageMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode) && ![IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY].includes(mode);
 
 /** Card id for the image-gen quota card, in the same namespace as the provider
  * family ids in providerUsage.js — a per-family read has to be able to name it. */

@@ -1,5 +1,6 @@
+import { assertRunwayCatalogModel } from './runwayModelCatalog.js';
 /**
- * Runway developer API — the task transport for the Runway video backend.
+ * Runway developer API — the shared task transport for image and video backends.
  *
  * Runway runs every generation as a task: POST the input to
  * `/v1/image_to_video` (or `/v1/text_to_video`), which answers `{ id }`; poll
@@ -16,6 +17,8 @@
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { openAsBlob } from 'node:fs';
+import { basename } from 'node:path';
 
 export const RUNWAY_API_BASE = 'https://api.dev.runwayml.com';
 // Every request names the API version it was written against.
@@ -39,6 +42,33 @@ const headers = (apiKey, json = false) => ({
   'X-Runway-Version': RUNWAY_API_VERSION,
   ...(json ? { 'Content-Type': 'application/json' } : {}),
 });
+
+/** Upload just before dispatch: ephemeral URIs expire after 24h and never enter queue params. */
+export async function uploadRunwayVideo({ apiKey, filePath, signal }) {
+  signal?.throwIfAborted();
+  const file = await openAsBlob(filePath);
+  if (file.size < 512 || file.size > 200 * 1024 * 1024) throw new Error('Runway uploads must be 512 bytes–200 MB.');
+  const registration = await fetchWithTimeout(`${RUNWAY_API_BASE}/v1/uploads`, {
+    method: 'POST', headers: headers(apiKey, true), signal,
+    body: JSON.stringify({ filename: basename(filePath), type: 'ephemeral' }),
+  }, RUNWAY_SUBMIT_TIMEOUT_MS);
+  if (!registration.ok) throw new Error(`Runway upload registration failed: HTTP ${registration.status}`);
+  const data = await registration.json();
+  if (typeof data.uploadUrl !== 'string' || !data.uploadUrl.startsWith('https://')
+    || typeof data.runwayUri !== 'string' || !data.runwayUri.startsWith('runway://')
+    || !data.fields || typeof data.fields !== 'object' || Array.isArray(data.fields)
+    || Object.values(data.fields).some((value) => typeof value !== 'string')) throw new Error('Invalid Runway upload registration.');
+  signal?.throwIfAborted();
+  const form = new FormData();
+  for (const [key, value] of Object.entries(data.fields)) form.append(key, value);
+  form.append('file', file, basename(filePath));
+  // The signed storage fields authorize this POST. Never send the API key to storage.
+  const uploaded = await fetchWithTimeout(data.uploadUrl, { method: 'POST', body: form, signal }, 10 * 60 * 1000);
+  await uploaded.body?.cancel?.();
+  if (!uploaded.ok) throw new Error(`Runway media upload failed: HTTP ${uploaded.status}`);
+  signal?.throwIfAborted();
+  return data.runwayUri;
+}
 
 /** A short, single-line reason from a Runway error body (`error`, `issues`), or ''. */
 function runwayErrorDetail(payload) {
@@ -78,8 +108,10 @@ export async function cancelRunwayTask(entry) {
   if (!entry.remoteTerminal) maintenance.markCurrentUnsettled();
 }
 
-/** Submit one paid generation to `endpoint` ('image_to_video' | 'text_to_video'). Resolves to the task id. */
-export async function submitRunwayTask({ apiKey, endpoint, body }) {
+/** Submit one paid generation to a generation endpoint. Resolves to the task id. */
+export async function submitRunwayTask({ apiKey, endpoint, body, signal }) {
+  await assertRunwayCatalogModel(endpoint, body.model);
+  signal?.throwIfAborted(); // a cancel during the catalog load must not start a paid render
   const res = await fetchWithTimeout(`${RUNWAY_API_BASE}/v1/${endpoint}`, {
     method: 'POST', headers: headers(apiKey, true), body: JSON.stringify(body),
   }, RUNWAY_SUBMIT_TIMEOUT_MS).catch((err) => {
@@ -113,7 +145,7 @@ async function getRunwayTask({ apiKey, taskId }) {
  * THROTTLED, RUNNING) for the caller's progress wording.
  */
 export async function awaitRunwayTask({
-  entry, apiKey, deadline, timeoutMs, onPoll = () => {}, onStatus = () => {}, pollIntervalMs = RUNWAY_POLL_INTERVAL_MS,
+  entry, apiKey, deadline, timeoutMs, onPoll = () => {}, onStatus = () => {}, pollIntervalMs = RUNWAY_POLL_INTERVAL_MS, verbatimFailure = false,
 }) {
   let statusFailures = 0;
   // A cancel (entry.controller.abort()) ends the wait at once rather than after the next interval.
@@ -147,13 +179,13 @@ export async function awaitRunwayTask({
       entry.remoteTerminal = true;
       if (entry.aborted) return { outcome: 'canceled' };
       const outputUrl = Array.isArray(task.output) ? task.output.find((url) => typeof url === 'string' && url.trim()) : null;
-      return outputUrl ? { outcome: 'completed', outputUrl } : { outcome: 'failed', reason: 'Runway finished but returned no video URL' };
+      return outputUrl ? { outcome: 'completed', outputUrl } : { outcome: 'failed', reason: 'Runway finished but returned no output URL' };
     }
     if (task?.status === 'FAILED' || task?.status === 'CANCELLED' || task?.status === 'CANCELED') {
       entry.remoteTerminal = true;
       if (entry.aborted) return { outcome: 'canceled' };
       const code = typeof task.failureCode === 'string' ? ` (${task.failureCode})` : '';
-      return { outcome: 'failed', reason: `Runway render failed: ${task.failure || task.status.toLowerCase()}${code}` };
+      return { outcome: 'failed', reason: verbatimFailure && task.failure ? task.failure : `Runway render failed: ${task.failure || task.status.toLowerCase()}${code}` };
     }
     onStatus(task?.status, Number.isFinite(task?.progress) ? task.progress : null);
     await wait();

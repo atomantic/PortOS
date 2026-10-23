@@ -10,6 +10,8 @@ import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVide
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../../lib/runwayVideoModels.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { VIDEO_GEN_MODE, isVideoModeUsable } from './modes.js';
+import { getRunwaySpecialVideoModel, buildRunwaySpecialVideoRequest } from '../../lib/runwaySpecialVideoModels.js';
+import { validateRunwayVideoInput } from './runwayVideoInputs.js';
 
 // Every hosted backend anchors a reference image as frame one, so a loose
 // reference mode is a local-runtime promise it can never keep. Submission
@@ -68,6 +70,24 @@ async function stageRunwayInputs(ctx) {
     throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
   };
   if (uploads.audioFile) await refuse('Runway renders cutaways only; it takes no source audio.');
+  const special = getRunwaySpecialVideoModel(body.runwayModelId);
+  if (special) {
+    if ((uploads.sourceImage || body.sourceImageFile) && !sourceImagePath) await refuse('The requested Runway guidance or character image could not be resolved.');
+    buildRunwaySpecialVideoRequest({
+      modelId: special.id, videoMode: body.mode, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      videoUri: uploads.runwayVideo ? 'pending:video' : null,
+      characterVideoUri: uploads.runwayCharacterVideo ? 'pending:character' : null,
+      imageUri: sourceImagePath, endImageUri: uploads.lastImage || body.lastImageFile,
+      bodyControl: body.runwayBodyControl, expressionIntensity: body.runwayExpressionIntensity,
+      targetAspectRatio: body.runwayTargetAspect, ratio: body.runwayRatio, seed: body.runwaySeed,
+    });
+    const runwayVideoPath = await ctx.stageUploadDurable(uploads.runwayVideo, 'runway-video');
+    await validateRunwayVideoInput(runwayVideoPath, special);
+    const runwayCharacterVideoPath = uploads.runwayCharacterVideo ? await ctx.stageUploadDurable(uploads.runwayCharacterVideo, 'runway-character') : null;
+    if (runwayCharacterVideoPath) await validateRunwayVideoInput(runwayCharacterVideoPath, special, { character: true });
+    return { runwayVideoPath, runwayCharacterVideoPath, uploadedTempPaths: [runwayVideoPath, runwayCharacterVideoPath].filter(Boolean) };
+  }
+  if (uploads.runwayVideo || uploads.runwayCharacterVideo || !['text', 'image', undefined].includes(body.mode)) await refuse('Choose the Runway model matching these video inputs.');
   const model = getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
   if (!model) await refuse(`"${body.runwayModelId}" is not a Runway model PortOS offers`);
   if (!sourceImagePath && !runwayModelTakesText(model)) await refuse(`${model.label} renders from a start frame — supply a source image.`);
@@ -172,6 +192,10 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     // The model, length and size are resolved against the curated catalog by videoGen/runway.js.
     buildParams: (body, prepared) => ({
       modelId: body.runwayModelId,
+      videoMode: body.mode,
+      ...(prepared.runwayVideoPath ? { runwayVideoPath: prepared.runwayVideoPath, runwayCharacterVideoPath: prepared.runwayCharacterVideoPath } : {}),
+      targetAspectRatio: body.runwayTargetAspect, ratio: body.runwayRatio,
+      bodyControl: body.runwayBodyControl, expressionIntensity: body.runwayExpressionIntensity, seed: body.runwaySeed,
       ...(prepared.lastImagePath ? { lastImagePath: prepared.lastImagePath } : {}),
       ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,

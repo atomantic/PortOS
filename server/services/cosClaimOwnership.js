@@ -171,7 +171,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
     const others = agentId ? agents.filter((a) => a?.id !== agentId) : agents;
     const reason = resolveLiveOwnerReason({
       branch, path: holder?.path || null, locked: Boolean(holder?.locked),
-      activeAgentIds: buildActiveOwnerIds(getActiveAgentIds().filter((id) => id !== agentId), others),
+      activeAgentIds: buildActiveOwnerIds(new Set(getActiveAgentIds().filter((id) => id !== agentId)), others),
     }) || claimCheckoutOwnerReason({ branchName: branch, holderPath: holder?.path || null, sourceWorkspace: repoPath, agents: others });
     return reason ? { admitted: false, reason } : { admitted: true };
   };

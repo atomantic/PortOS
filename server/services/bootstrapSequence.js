@@ -129,9 +129,9 @@ export const runPreRouteSequence = async ({
  * for pending tasks while it initializes; emitted before the spawner registered
  * its listener, those events are dropped and the tasks sit forever.
  */
-export const initCosAfterSpawner = ({ spawnerReady, initCos }) =>
+export const initCosAfterSpawner = ({ spawnerReady, initCos, isStopping = () => false }) =>
   Promise.resolve(spawnerReady)
-    .then(() => initCos())
+    .then(() => { if (!isStopping()) return initCos(); })
     .catch(logFailure('CoS init failed'));
 
 /**
@@ -386,43 +386,49 @@ export const runPostRouteSequence = ({
   runDatabasePhase: databasePhase,
   loadSeriesCoverBackfill,
   startListening,
+  isStopping = () => false,
   onFatal = () => process.exit(1)
 }) => {
+  if (isStopping()) return Promise.resolve();
+  // An awaited boot step can settle after SIGTERM has closed the listeners
+  // and quiesced workers. Never re-arm recovery or open a listener afterwards.
+  const whileRunning = (step) => () => { if (!isStopping()) return step(); };
   startBackgroundServices();
 
   return Promise.resolve()
-    .then(() => ensureSelf())
-    .then(() => initSyncLog())
-    .then(() => {
+    .then(whileRunning(ensureSelf))
+    .then(whileRunning(initSyncLog))
+    .then(whileRunning(() => {
       bestEffort(recoverStuckClassifications(), logFailure('Brain recovery failed'));
       return bestEffort(recoverInterruptedRepoClones(), logFailure('Brain clone recovery failed'));
-    })
-    .then(() => initMediaJobQueue({ deferCompletionRecovery: true }))
-    .then(() => bestEffort(initLoraTraining(), logFailure('loraTraining init failed')))
-    .then(() => initMediaJobDependentHooks())
-    .then(() => {
+    }))
+    .then(whileRunning(() => initMediaJobQueue({ deferCompletionRecovery: true })))
+    .then(whileRunning(() => bestEffort(initLoraTraining(), logFailure('loraTraining init failed'))))
+    .then(whileRunning(initMediaJobDependentHooks))
+    .then(whileRunning(() => {
       // Recovery may wait behind a backup cut; arm it without blocking boot.
       resumeMediaJobCompletions();
-    })
-    .then(() => {
+    }))
+    .then(whileRunning(() => {
       // Sharing attaches chokidar watchers + drains the offline manifest
       // backlog. Fire-and-forget — a failed bucket shouldn't block boot.
       bestEffort(initSharing(), logFailure('Sharing init failed'));
-    })
-    .then(() => {
+    }))
+    .then(whileRunning(() => {
       // Nudges Creative Director projects the media-queue reload just marked
       // 'failed (interrupted by restart)' so they don't sit frozen. Owns its own
       // failure path (it must resolve the CD recovery gate either way).
       recoverCreativeDirectorProjects();
-    })
-    .then(() => databasePhase())
-    .then(async () => {
+    }))
+    .then(whileRunning(databasePhase))
+    .then(whileRunning(async () => {
       // Load awaited, run not — see point 6 above.
       const backfillSeriesCoverImages = await loadSeriesCoverBackfill();
-      bestEffort(backfillSeriesCoverImages(), logFailure('series cover backfill failed at boot'));
-    })
-    .then(() => startListening())
+      if (!isStopping()) bestEffort(backfillSeriesCoverImages(), logFailure('series cover backfill failed at boot'));
+    }))
+    .then(whileRunning(startListening))
     .catch((err) => {
+      if (isStopping()) return;
       console.error(`❌ Instance init failed: ${err.message}`);
       onFatal();
     });
@@ -443,12 +449,15 @@ export const runPostListenSequence = ({
   relayUnloggedBrainRecords,
   startPolling,
   initSyncOrchestrator,
-  startBrainScheduler
+  startBrainScheduler,
+  isStopping = () => false
 }) => {
+  if (isStopping()) return Promise.resolve();
   announceListening();
   setupProcessErrorHandlers();
   return bestEffort(
     Promise.resolve(backfillOriginInstanceId()).then(() => {
+      if (isStopping()) return;
       bestEffort(relayUnloggedBrainRecords(), logFailure('Brain relay sweep failed'));
       startPolling();
       initSyncOrchestrator();

@@ -61,6 +61,7 @@ import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CatalogCharacterCanon from '../components/catalog/CatalogCharacterCanon';
+import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
 import CatalogMergePanel from '../components/catalog/CatalogMergePanel';
 import CatalogIdentityPanel from '../components/catalog/CatalogIdentityPanel';
 import CatalogIdentityNotice from '../components/catalog/CatalogIdentityNotice';
@@ -77,6 +78,7 @@ import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime } from '../utils/formatters';
 import { humanizeIntegrityField } from '../lib/characterIntegrity';
 import { listSheetPointers } from '../lib/sheetPointers';
+import { formsOf } from '../lib/catalogForms';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -141,6 +143,9 @@ const DETAIL_TAB_ICONS = {
   references: Images,
   images: ImageIcon,
 };
+
+// Canon types whose records carry alternate ages/looks (`payload.forms`).
+const FORM_TYPES = new Set(['character', 'place', 'object']);
 
 // Payload fields the universe sheet renderer writes (via the canon→catalog
 // projection); see lib/sheetPointers.js.
@@ -657,7 +662,7 @@ function IngredientEditor() {
 
   return (
     <CatalogImagePreviewProvider key={record.id} name={record.name}>
-    <section className="h-full overflow-y-auto p-4 md:p-6">
+    <fieldset disabled={mergeBusy} className="flex h-full min-h-0 min-w-0 flex-col">
       <UnsavedChangesConfirm
         guard={routeGuard}
         when={!saving}
@@ -665,31 +670,34 @@ function IngredientEditor() {
         label={`Discard unsaved changes to ${record.name || 'this ingredient'}`}
         onDiscard={discardAndExit}
       />
-      <fieldset disabled={mergeBusy} className="w-full min-w-0 space-y-5">
-        <header className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="flex items-start gap-3 min-w-0">
-            <Sparkles className="w-6 h-6 text-port-accent mt-1 flex-shrink-0" aria-hidden="true" />
+      {/* Same flush header + sub-nav as PageHeader/RouteTabsHeader pages:
+          edge to edge under the app nav, only the content below scrolls. */}
+      <header className="shrink-0 px-3 py-2 sm:px-4 sm:py-3 border-b border-port-border">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <Link to={backPath} aria-label={`Back to ${library?.label || 'Catalog'}`} title="Back"
+              className="shrink-0 inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-2 rounded-lg text-gray-400 hover:text-white">
+              <ArrowLeft size={18} aria-hidden="true" />
+            </Link>
             <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 min-w-0">
                 <h1
-                  className="min-w-0 line-clamp-2 break-words text-2xl font-bold text-white"
+                  className="min-w-0 truncate text-lg sm:text-xl font-bold text-white leading-tight"
                   title={record.name || '(untitled)'}
                 >
                   {record.name || '(untitled)'}
                 </h1>
-                <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${badgeClass}`}>
+                <span className={`shrink-0 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${badgeClass}`}>
                   {record.type}
                 </span>
               </div>
-              <p className="text-xs text-gray-500 mt-1 font-mono break-all">{record.id}</p>
+              <p className="hidden sm:block text-xs text-gray-500 font-mono truncate leading-tight" title={record.id}>{record.id}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <Link to={backPath} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
-              <ArrowLeft size={14} aria-hidden="true" /> Back
-            </Link>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
             <button type="button" onClick={handleSave} disabled={saving || lookSaving || unlocking || mergeBusy || identityReadOnly}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
+              className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
             <AddToThreadButton
@@ -699,42 +707,44 @@ function IngredientEditor() {
                 label: name || record.name || record.id
               }}
               buttonText="Thread"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white hover:border-port-accent/40 transition-colors"
+              className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white hover:border-port-accent/40 transition-colors"
             />
-            {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
             {armedDelete ? (
               <span className="inline-flex items-center gap-1 text-sm">
-                <span className="text-gray-400 px-1">Delete this ingredient?</span>
+                <span className="text-gray-400 px-1">Delete?</span>
                 <button type="button" onClick={confirmDelete} disabled={identityReadOnly}
-                  className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-port-error/20 text-port-error hover:bg-port-error/30 font-medium">
+                  className="inline-flex items-center gap-1 min-h-[40px] px-3 py-2 rounded-lg bg-port-error/20 text-port-error hover:bg-port-error/30 font-medium">
                   <Trash2 size={14} aria-hidden="true" /> Yes, delete
                 </button>
                 <button type="button" onClick={() => setArmedDelete(false)}
-                  className="px-3 py-2 rounded-lg text-gray-400 hover:text-white">
+                  className="min-h-[40px] px-3 py-2 rounded-lg text-gray-400 hover:text-white">
                   Cancel
                 </button>
               </span>
             ) : (
               <button type="button" onClick={() => setArmedDelete(true)} disabled={identityReadOnly}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-400 hover:text-port-error"
+                className="inline-flex items-center justify-center gap-1.5 min-w-[40px] min-h-[40px] px-2.5 sm:px-3 py-2 rounded-lg text-sm border border-port-border text-gray-400 hover:text-port-error"
                 aria-label="Delete ingredient" title="Delete">
-                <Trash2 size={14} /> Delete
+                <Trash2 size={14} aria-hidden="true" /> <span className="hidden sm:inline">Delete</span>
               </button>
             )}
           </div>
-        </header>
+        </div>
+      </header>
 
+      {tabs && (
+        <TabPills
+          tabs={tabs}
+          activeTab={activeTab}
+          onChange={(tabId) => navigate(detailTabPath(library, record.id, tabId))}
+          ariaLabel={`${library.label} record sections`}
+          className="w-full min-w-0 shrink-0"
+        />
+      )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 md:p-6">
+      <div className="w-full min-w-0 space-y-5">
         <CatalogIdentityNotice identity={record.sharedIdentity} type={record.type} />
-
-        {tabs && (
-          <TabPills
-            tabs={tabs}
-            activeTab={activeTab}
-            onChange={(tabId) => navigate(detailTabPath(library, record.id, tabId))}
-            mobileCompact
-            ariaLabel={`${library.label} record sections`}
-          />
-        )}
 
         {activeTab === 'profile' && (
           <>
@@ -784,6 +794,12 @@ function IngredientEditor() {
                 <fieldset disabled={identityReadOnly}><EditableListFields fields={typeDef.editableListFields} payload={payload} onChange={updatePayload} /></fieldset>
               )}
             </div>
+
+            {FORM_TYPES.has(record.type) && (
+              <fieldset disabled={identityReadOnly} className="min-w-0">
+                <CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} />
+              </fieldset>
+            )}
 
             {record.type === 'character' && (
               <>
@@ -868,7 +884,7 @@ function IngredientEditor() {
         )}
 
         {activeTab === 'references' && record.type === 'character' && (
-          <CatalogReferenceLibrary ingredientId={record.id} media={media} readOnly={identityReadOnly} onChanged={refreshMedia} />
+          <CatalogReferenceLibrary ingredientId={record.id} media={media} forms={formsOf(record.payload)} readOnly={identityReadOnly} onChanged={refreshMedia} />
         )}
 
         {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
@@ -922,8 +938,9 @@ function IngredientEditor() {
             onRestore={handleRestore}
           />
         )}
-      </fieldset>
-    </section>
+      </div>
+      </div>
+    </fieldset>
     </CatalogImagePreviewProvider>
   );
 }

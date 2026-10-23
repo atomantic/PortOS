@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // maybeCreateInvestigationTask → createInvestigationTask → addTask does real
 // store I/O; stub it so the skip-vs-create gate can be asserted in isolation.
 // getAllTasks feeds the fingerprint dedup scan (#2615).
-vi.mock('./cos.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks: vi.fn() }));
+vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks: vi.fn() }));
 
 import {
   analyzeAgentFailure,
@@ -33,7 +33,7 @@ import { PII_PATTERNS } from '../lib/piiRedactionPatterns.js';
 import { detectImmediateFallbackSignal } from '../lib/aiToolkit/errorDetection.js';
 import { API_ACCESS_ERROR_CATEGORIES } from './agentErrorAnalysis.js';
 import { ENVIRONMENTAL_ERROR_CATEGORIES } from './taskLearning/metrics.js';
-import { addTask, updateTask, getAllTasks } from './cos.js';
+import { addTask, updateTask, getAllTasks } from './cosTaskStore.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks } from '../lib/taskParser.js';
 

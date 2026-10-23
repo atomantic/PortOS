@@ -98,6 +98,19 @@ beforeEach(() => {
 });
 
 describe('ImageGenTab grouped tabs', () => {
+  // Catches persisting a second key or dropping Runway's enable/model/resolution slice.
+  it('configures Runway images with the shared credential and persists its own rendering settings', async () => {
+    await renderTab(['/media/image?mediaTab=runway']);
+    expect(screen.getByRole('heading', { name: 'Runway Imagegen' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Settings → Credentials' }).getAttribute('href')).toBe('/settings/credentials');
+    expect(screen.queryByPlaceholderText('key_...')).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Enable Runway Imagegen' }));
+    fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'gen4_image_turbo' } });
+    fireEvent.change(screen.getByLabelText('Resolution'), { target: { value: '1080p' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith('imageGen.runway', expect.objectContaining({ enabled: true, model: 'gen4_image_turbo', resolution: '1080p' }), expect.anything()));
+  });
+
   it.each([undefined, { min: 1, max: Number.MAX_SAFE_INTEGER, default: 1 }])(
     'loads and saves render limits above ten with bounds %j', async (parallelLimitBounds) => {
       getSettings.mockResolvedValue({
@@ -779,3 +792,5 @@ describe('ImageGenTab local runtime card', () => {
     await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'flux2-klein-4b', expect.anything()));
   });
 });
+
+vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));

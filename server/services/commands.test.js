@@ -127,3 +127,27 @@ describe('executeCommand stop and timeout lifecycle (#12021)', () => {
     expect(unbounded.kill).not.toHaveBeenCalled();
   });
 });
+
+describe('executeCommand history is best-effort (#12978)', () => {
+  it('logs a failed history write instead of leaving an unowned rejection', async () => {
+    spawnMock.mockReset();
+    logAction.mockReset();
+    logAction.mockRejectedValue(new Error('ENOSPC: no space left'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const child = createChild();
+      spawnMock.mockReturnValue(child);
+      const onComplete = vi.fn();
+      executeCommand('pwd', null, null, onComplete);
+      child.emit('close', 0, null);
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(expect.stringContaining('Failed to log command history')));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+      error.mockRestore();
+    }
+  });
+});

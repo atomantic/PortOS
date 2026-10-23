@@ -1,12 +1,15 @@
 import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
-  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
-  githubNotificationCadenceSchema, githubAuditApplySchema } from '../lib/validation.js';
+  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
+  githubNotificationCadenceSchema, githubAuditApplySchema, githubNotificationAgentRunSchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
 import * as githubNotifications from '../services/githubNotifications.js';
 import * as githubAudit from '../services/githubNotificationAudit.js';
+import * as githubDeployment from '../services/githubNotificationDeployment.js';
+import { retriageOpenThreads } from '../services/githubNotificationTriage.js';
+import { requestHasHostControl } from '../services/authGate.js';
 
 const router = express.Router();
 
@@ -114,7 +117,13 @@ router.post('/accounts', asyncHandler(async (req, res) => {
 
 router.put('/accounts/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(githubAccountUpdateSchema, req.body);
-  res.json(await githubAccounts.updateAccount(req.params.id, body));
+  const before = await githubAccounts.getAccount(req.params.id);
+  const updated = await githubAccounts.updateAccount(req.params.id, body);
+  // Threads triaged under the old trust settings are decided again on the next check.
+  if (before.trust !== updated.trust || (before.trustInstanceUsers === true) !== (updated.trustInstanceUsers === true)) {
+    await retriageOpenThreads(updated.id);
+  }
+  res.json(updated);
 }));
 
 router.delete('/accounts/:id', asyncHandler(async (req, res) => {
@@ -137,14 +146,26 @@ router.get('/notifications', asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /api/github/notifications/sync — fetch unread notifications from GitHub
+ * POST /api/github/notifications/sync — fetch unread notifications from GitHub.
+ * Open as a refresh; Assist/Autopilot run only for a caller with host control
+ * (lib/hostControlRoutes.js, #12952).
  */
 router.post('/notifications/sync', asyncHandler(async (req, res) => {
   const { accountId } = validateRequest(githubNotificationsSyncSchema, req.body ?? {});
+  const options = { automate: requestHasHostControl(req) };
   const results = accountId
-    ? [{ ...(await githubNotifications.syncAccountNotifications(accountId)), ok: true }]
-    : await githubNotifications.syncAllNotifications();
+    ? [{ ...(await githubNotifications.syncAccountNotifications(accountId, options)), ok: true }]
+    : await githubNotifications.syncAllNotifications(options);
   res.json({ results });
+}));
+
+/**
+ * POST /api/github/notifications/clear-finished — mark every open closed,
+ * merged, folded-duplicate or PR-workflow thread done on GitHub
+ */
+router.post('/notifications/clear-finished', asyncHandler(async (req, res) => {
+  const { accountId } = validateRequest(githubNotificationsClearSchema, req.body ?? {});
+  res.json(await githubNotifications.clearFinishedNotifications({ accountId }));
 }));
 
 const threadIdParam = (req) => {
@@ -170,10 +191,29 @@ router.post('/notifications/:accountId/:threadId', asyncHandler(async (req, res)
 }));
 
 /**
- * POST /api/github/notifications/:accountId/:threadId/agent — Resolve with agent: queue the thread's lane now
+ * POST /api/github/notifications/:accountId/:threadId/agent — Resolve with agent: queue the thread's lane now.
+ * An optional `{ provider, model, effort }` body picks this run's agent; a key
+ * sent as null means Auto, and no keys at all means the rule pin or account defaults.
  */
 router.post('/notifications/:accountId/:threadId/agent', asyncHandler(async (req, res) => {
-  res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req)));
+  const body = validateRequest(githubNotificationAgentRunSchema, req.body ?? {});
+  const perRun = Object.keys(body).length ? body : undefined;
+  res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req), perRun));
+}));
+
+/**
+ * GET /api/github/notifications/:accountId/:threadId/deployment — the environments a waiting run needs you to approve
+ */
+router.get('/notifications/:accountId/:threadId/deployment', asyncHandler(async (req, res) => {
+  res.json(await githubDeployment.getDeploymentReview(req.params.accountId, threadIdParam(req)));
+}));
+
+/**
+ * POST /api/github/notifications/:accountId/:threadId/deployment — approve or reject those environments
+ */
+router.post('/notifications/:accountId/:threadId/deployment', asyncHandler(async (req, res) => {
+  const body = validateRequest(githubDeploymentReviewSchema, req.body ?? {});
+  res.json(await githubDeployment.reviewDeployment(req.params.accountId, threadIdParam(req), body));
 }));
 
 /**

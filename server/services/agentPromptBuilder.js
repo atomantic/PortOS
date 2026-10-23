@@ -36,6 +36,7 @@ import { applySlashdoInvocation } from './promptSections/slashdo.js';
 import { manualForgeCli, resolveManualForgeCli } from './promptSections/forge.js';
 import { buildOrchestrationDoctrineSection } from './promptSections/orchestrationDoctrine.js';
 import { buildIssueFilingSection } from './promptSections/plannerAttribution.js';
+import { buildPrAttributionSection } from './promptSections/prAttribution.js';
 import { buildSecurityAuditRuntimeSection } from './promptSections/securityAudit.js';
 import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
 import { COMPLETION_MODES, resolveCompletionMode } from '../lib/agentCompletionMode.js';
@@ -422,8 +423,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const providerId = options.providerId || null;
   const providerCommand = options.providerCommand || null;
   const agentId = options.agentId || null;
-  // The model this run was actually dispatched with — the planner identity a
-  // filing agent stamps as `planner:<model>`. It cannot self-report this.
+  // The dispatched model supplies issue-planner and PR-opener attribution.
   const providerModel = options.providerModel || null;
   const isTui = providerType === PROVIDER_TYPES.TUI;
   const leanMode = options.leanMode === true;
@@ -641,14 +641,18 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // reviewer-visible projection so a Security Scan report meant for the human
   // never reaches a pipeline reviewer's prompt.
   const contextBlock = taskContextBlock(taskVisibleToPipelineReviewer(task));
-  // Issue filing and planner attribution. Skipped for Creative Director runs
-  // alongside the rest of the dev context — a scene evaluation files no issue.
-  // The forge is left at the default here rather than probed: this path is
-  // API-provider-only, and the two CLIs' `label create` idioms differ only in
-  // flag spelling, which the guidance spells out for whichever the agent has.
+  // Resolve the code forge even for Jira claims; attribution labels live on
+  // the PR/MR, not the ticket. Creative Director runs need no dev contracts.
+  const attributionOptions = skipDevContext ? null : {
+    providerId, model: providerModel,
+    forgeCli: await resolveManualForgeCli(workspaceDir, worktreeInfo, task),
+  };
   const issueFilingSection = skipDevContext
     ? ''
-    : buildIssueFilingSection({ providerId, model: providerModel, taskBody: [task.description, contextBlock] });
+    : [
+      buildIssueFilingSection({ ...attributionOptions, taskBody: [task.description, contextBlock] }),
+      buildPrAttributionSection(attributionOptions),
+    ].filter(Boolean).join('\n\n');
   const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
 
   return finalizePrompt(buildFullAgentPrompt({
@@ -1124,6 +1128,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // and a model cannot name itself.
   const lightFilingSection = buildIssueFilingSection({ providerId, model: providerModel, forgeCli: resolvedForgeCli, taskBody: [task.description, context] });
   if (lightFilingSection) contractSections.push(lightFilingSection);
+  contractSections.push(buildPrAttributionSection({ model: providerModel, forgeCli: resolvedForgeCli }));
 
   // --- Orchestrated execution ---------------------------------------------
   // Sits directly after planner attribution and before the worktree/completion

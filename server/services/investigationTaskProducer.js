@@ -25,7 +25,7 @@
  * subscribes to it, so the facade would close a load-time cycle there.)
  */
 
-import { addTask, getAllTasks } from './cos.js';
+import { addTask, getAllTasks } from './cosTaskStore.js';
 import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   INVESTIGATION_CIRCUIT_WINDOW_MS,

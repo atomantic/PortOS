@@ -24,7 +24,7 @@
     "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
     "data-safety": "25e79bc34cfadeab3cc3969a6c3421c2",
     "dependency-updates": "8ce4e7e33c5c7554b89af7d35a471c31",
-    "do-release": "3061f2041d25fd80d60189f68ac5c3e0",
+    "do-release": "22c7fa45352bd013b4208cbe8188b5cd",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "c94797b4bd3a0d554e225888ed48b76b",
     "error-handling": "416b4e9aa2c1fcc3bfea7a2d38814ae5",
@@ -39,7 +39,7 @@
     "model-comparison-refresh": "f66e070fa08e30edda2c3020289f0c67",
     "module-hygiene": "1637fd164737e20db284fe5c2b440453",
     "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
-    "performance": "4f8ddada54d7c6f31b7fb35aeb0f29db",
+    "performance": "b5a221d23042b7751d5ece776399b403",
     "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
     "plan-task": "b718701c2d4ed2b4900225fc58857208",
     "plan-task-claim": "07f6252f00905f9c6e4134a3d3587310",
@@ -89,7 +89,7 @@
     "data-integrity": 1,
     "data-safety": 3,
     "dependency-updates": 9,
-    "do-release": 20,
+    "do-release": 21,
     "do-replan": 2,
     "documentation": 9,
     "error-handling": 4,
@@ -104,7 +104,7 @@
     "model-comparison-refresh": 4,
     "module-hygiene": 3,
     "observability": 2,
-    "performance": 6,
+    "performance": 7,
     "plan-feature": 6,
     "plan-task": 24,
     "pr-reviewer": 5,
@@ -344,7 +344,8 @@
       "e2fb83ae74cc759d1fface857169badc",
       "0ee9c504bad68f4a73be15f0b955a796",
       "dcb1b0c84712f7824afd9c44cb4208da",
-      "97ce61508d7dd6616a8c02e2c365b872"
+      "97ce61508d7dd6616a8c02e2c365b872",
+      "3061f2041d25fd80d60189f68ac5c3e0"
     ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
@@ -417,7 +418,8 @@
       "672bd3958b12afb0f382bcebb6dc3b33",
       "d7e3a80f42903fbf90be0efc9b559c0b",
       "b69bf4cbd2b3c272b5650608c62cede3",
-      "8b297d723f9f39154c9cf6d501738494"
+      "8b297d723f9f39154c9cf6d501738494",
+      "4f8ddada54d7c6f31b7fb35aeb0f29db"
     ],
     "plan-feature": [
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",

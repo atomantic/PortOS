@@ -91,7 +91,7 @@ const CLI_DETAIL_MAX_CHARS = 200;
  * callers can tell "no detail available" apart from a detail that redacted to
  * an empty string.
  */
-function redactCliDetail(stderr) {
+export function redactCliDetail(stderr) {
   const lines = String(stderr || '').split('\n').map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return null;
   const detail = redactPii(scrubSecretTokens(lines[lines.length - 1]));
@@ -156,11 +156,16 @@ async function resolveGitlabNamespace(repoPath) {
   return segments.join('/');
 }
 
+// gh pr list defaults to 30; match the issue listing cap
+const IN_FLIGHT_PR_LIMIT = 500;
+
 /**
  * Collect the set of issue numbers currently in flight, evidenced by an open
  * `claim/issue-<num>` / `cos/.../issue-<num>/...` / `next/issue-<num>` (slashdo
  * `/do:next`, #8161) branch (local or remote) or an open PR/MR source ref.
- * Best-effort — degrades to whatever evidence is reachable. `forge` selects
+ * Local branches are supplementary; a failed PR/MR listing (timeout, auth,
+ * rate limit) returns `{ error, detail }` rather than an under-counted set,
+ * since a short set makes issues with an open PR look claimable. `forge` selects
  * how open changes are listed: GitHub PR head refs (`gh pr list`) vs GitLab
  * MR source branches (`glab mr list`).
  */
@@ -169,11 +174,14 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.
   const prListCall = forge === 'gitlab'
     ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath, env)
-    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName', '-q', '.[].headRefName'], repoPath, env);
+    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName', '--limit', String(IN_FLIGHT_PR_LIMIT), '-q', '.[].headRefName'], repoPath, env);
   const [branchRes, prRes] = await Promise.all([
     runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
     prListCall
   ]);
+  if (prRes.code !== 0) {
+    return { error: `${forge === 'gitlab' ? 'glab' : 'gh'}-unavailable`, detail: redactCliDetail(prRes.stderr) };
+  }
   const refs = (branchRes.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
   if (forge === 'gitlab') {
     // glab returns MR objects as JSON; the in-flight ref is each MR's source_branch.
@@ -191,7 +199,7 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
     const n = issueNumberFromRef(ref);
     if (n != null) nums.add(n);
   }
-  return nums;
+  return { nums };
 }
 
 /**
@@ -407,13 +415,11 @@ const MAX_COLLABORATOR_AUTHOR_QUERIES = 25;
 async function resolveGithubDetectorEnv(repoPath, env) {
   if (env) return env;
   const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
-  const overlay = await resolveForgeTokenEnv(repoPath).catch(() => ({}));
-  if (!overlay?.GH_TOKEN) return undefined;
-  const merged = { ...process.env, ...overlay };
-  delete merged.GITHUB_TOKEN;
-  delete merged.GH_ENTERPRISE_TOKEN;
-  delete merged.GITHUB_ENTERPRISE_TOKEN;
-  return merged;
+  const overlay = await resolveForgeTokenEnv(repoPath);
+  if (!overlay?.GH_TOKEN && !overlay?.GH_ENTERPRISE_TOKEN) return undefined;
+  const merged = { ...process.env };
+  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete merged[key];
+  return { ...merged, ...overlay };
 }
 
 // Per-forge config for the shared issue detector. Each entry captures only what
@@ -758,12 +764,17 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   }
 
   const hasAssignedIssue = issues.some((issue) => Array.isArray(issue.assignees) && issue.assignees.length > 0);
-  const [inFlight, currentLoginResult] = await Promise.all([
+  const [inFlightResult, currentLoginResult] = await Promise.all([
     inFlightIssueNumbers(repoPath, cfg.inFlightForge, resolvedEnv),
     hasAssignedIssue
       ? resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, resolvedEnv)
       : Promise.resolve({ login: null })
   ]);
+  if (inFlightResult.error) {
+    console.log(`⏭️ In-flight claim evidence unavailable (${inFlightResult.error}); skipping this dispatch`);
+    return forgeTransient(cfg, inFlightResult.error, null, inFlightResult.detail);
+  }
+  const inFlight = inFlightResult.nums;
   if (currentLoginResult.error) return forgeTransient(cfg, currentLoginResult.error, null, currentLoginResult.detail);
   const currentLogin = currentLoginResult.login || null;
   const total = issues.length;

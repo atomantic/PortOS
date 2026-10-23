@@ -14,6 +14,8 @@ vi.mock('../components/ui/Toast', () => {
 
 import toast from '../components/ui/Toast';
 import { throwApiError, request, uploadBody, isServerUnreachable } from './apiCore.js';
+import { getSettings, getCapabilities } from './apiSystem.js';
+import { getVoiceConfig } from './apiVoice.js';
 
 const makeResponse = ({ status = 400, ok = false, json = null } = {}) => ({
   status,
@@ -105,6 +107,16 @@ describe('request() error path (now delegating to throwApiError)', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it('toasts a host-control refusal even for a silent caller, unless the read is marked optional', async () => {
+    const refusal = { error: 'Host control requires an operator session.', code: 'HOST_CONTROL_FORBIDDEN' };
+    global.fetch.mockResolvedValue(makeResponse({ status: 403, json: refusal }));
+    await expect(request('/x', { silent: true })).rejects.toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN', status: 403 });
+    expect(toast.error).toHaveBeenCalledWith(refusal.error);
+    toast.error.mockClear();
+    await expect(request('/x', { silent: true, hostControlOptional: true })).rejects.toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it('rejects with SERVER_UNREACHABLE code when fetch fails to connect', async () => {
     global.fetch.mockRejectedValue(new Error('Connection refused'));
     await expect(request('/x', { silent: true })).rejects.toMatchObject({
@@ -146,4 +158,52 @@ it('streams Blob uploads with a browser boundary and retains legacy JSON callers
   expect(options.body.get('file').name).toBe('clip.mp4');
   expect(await options.body.get('file').text()).toBe('video bytes');
   expect(JSON.parse(uploadBody('YWJj', 'old.mp4'))).toEqual({ data: 'YWJj', filename: 'old.mp4' });
+});
+
+describe('shell bootstrap reads are single-flight', () => {
+  it('shares one request across concurrent consumers, then refetches after settle', async () => {
+    global.fetch.mockImplementation(async () => makeResponse({ status: 200, ok: true, json: { n: 1 } }));
+    const [a, b] = await Promise.all([getSettings({ silent: true }), getSettings({ silent: true })]);
+    await Promise.all([getVoiceConfig(), getVoiceConfig(), getCapabilities(), getCapabilities()]);
+    expect(global.fetch.mock.calls.map(([url]) => url)).toEqual(['/api/settings', '/api/voice/config', '/api/capabilities']);
+    expect(a).toEqual({ n: 1 });
+    expect(a).not.toBe(b);
+    await getSettings();
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps silent and non-silent callers on separate flights so error handling is not inherited', async () => {
+    global.fetch.mockImplementation(async () => makeResponse({ status: 500, json: { error: 'boom' } }));
+    const results = await Promise.allSettled([getSettings(), getSettings({ silent: true }), getSettings({ silent: true })]);
+    expect(results.every((r) => r.status === 'rejected')).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('isolates a caller-owned abort from concurrent shared bootstrap readers', async () => {
+    global.fetch.mockImplementation((_url, { signal }) => {
+      if (!signal) return Promise.resolve(makeResponse({ status: 200, ok: true, json: { theme: 'classic-midnight' } }));
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    });
+    const controller = new AbortController();
+    const abandoned = getSettings({ silent: true, signal: controller.signal }).catch((err) => err);
+    const readers = Promise.allSettled([getSettings({ silent: true }), getSettings({ silent: true })]);
+    controller.abort();
+
+    await expect(readers).resolves.toEqual([
+      { status: 'fulfilled', value: { theme: 'classic-midnight' } },
+      { status: 'fulfilled', value: { theme: 'classic-midnight' } },
+    ]);
+    await expect(abandoned).resolves.toMatchObject({ code: 'SERVER_UNREACHABLE' });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache a failure', async () => {
+    global.fetch.mockResolvedValueOnce(makeResponse({ status: 500, json: { error: 'boom' } }));
+    await expect(getSettings({ silent: true })).rejects.toMatchObject({ status: 500 });
+    global.fetch.mockResolvedValueOnce(makeResponse({ status: 200, ok: true, json: { ok: 1 } }));
+    await expect(getSettings({ silent: true })).resolves.toEqual({ ok: 1 });
+  });
 });

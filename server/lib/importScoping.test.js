@@ -46,6 +46,24 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/cosLocalEndpointSlots.js', 'services/promptRunner.js',
+    'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
+  ['services/cos.js', 'services/promptRunner.js',
+    'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
+  ['services/agentFinalization.js', 'services/promptRunner.js',
+    'writes task state through the task store without loading the CoS daemon graph'],
+  ['services/agentFinalization.js', 'services/cosTaskGenerator.js',
+    'writes task state through the task store without loading the CoS daemon graph'],
+  ['services/investigationTaskProducer.js', 'services/cos.js',
+    'queues investigation tasks through the task store, not the CoS daemon'],
+  ['services/repoIntake.js', 'services/cos.js',
+    'queues intake tasks through the task store, not the CoS daemon'],
+  ['services/askPromote.js', 'services/cos.js',
+    'queues promoted tasks through the task store, not the CoS daemon'],
+  ['routes/gsd.js', 'services/cos.js',
+    'queues GSD tasks through the task store, not the CoS daemon'],
+  ['routes/apps/agents.js', 'services/cos.js',
+    'lists agents from the declaring agent modules, not the CoS daemon'],
   ['services/imageGen/prepareParams.js', 'services/imageGen/index.js',
     'reads cleaner request policy without loading execution backends'],
   ['services/codeReview.js', 'lib/validation.js',
@@ -266,6 +284,10 @@ describe('instance identity stays a leaf (#6836)', () => {
 // [entry, target, why, specifier] — same first three columns as NARROWED above,
 // plus the specifier the call site must still name in its `await import()`.
 const DEFERRED = [
+  ['services/ollamaManager.js', 'services/ollamaSafetensorsImport.js',
+    'loads staging and child supervision only for a curated Safetensors import', './ollamaSafetensorsImport.js'],
+  ['services/aiProvider.js', 'services/providerExecutionReadiness.js',
+    'loads managed runtime readiness only for an actual inference call', './providerExecutionReadiness.js'],
   ['services/codeReview.js', 'services/lmStudioManager.js',
     'reads the live endpoint only for a selected LM Studio review', './lmStudioManager.js'],
   ['services/codeReview.js', 'services/ollamaManager.js',
@@ -328,6 +350,8 @@ describe('deferred imports stay deferred (#6156)', () => {
   // Positive control, mirroring the one above: these targets are real modules
   // with real graphs, so a resolver gap can't be what makes the negatives pass.
   it('still sees the deferred modules from their own entry points', () => {
+    expect(reaches('services/ollamaSafetensorsImport.js', 'lib/openFileHolders.js')).toBe(true);
+    expect(reaches('services/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
     expect(reaches('services/persistentMindAdapter.js', 'services/cosToolRegistry.js')).toBe(true);
     expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
   });

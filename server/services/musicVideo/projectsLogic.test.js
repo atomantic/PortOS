@@ -597,11 +597,11 @@ describe('scene board operations', () => {
     expect(applySceneUpdate(still, scene.sceneId, { visualLayer: 'still' }).updated.stillMove).toBe('push');
   });
 
-  // Uniquely catches a split still's later pieces losing the Move the shot set.
-  it('keeps a still\'s Move on every piece of a split', () => {
-    const { project, scene } = addScene(baseProject(), { prompt: 'a', visualLayer: 'still', stillMove: 'push', camera: { move: 'handheld' }, startSec: 0, endSec: 8 });
+  // Uniquely catches a split still's later pieces losing the Move, or the storyboard panel, the shot set.
+  it('keeps a still\'s Move and its storyboard panel on every piece of a split', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', visualLayer: 'still', stillMove: 'push', camera: { move: 'handheld' }, startSec: 0, endSec: 8, panelId: 'panel-example-1', panelRev: 'abc', panelArt: 'panel-art.png' });
     const split = splitScene(project, scene.sceneId, { atSec: 4 });
-    expect(split.project.scenes.map((s) => s.stillMove)).toEqual(['push', 'push']);
+    expect(split.project.scenes.map((s) => [s.stillMove, s.panelId, s.panelRev, s.panelArt])).toEqual([['push', 'panel-example-1', 'abc', 'panel-art.png'], ['push', 'panel-example-1', 'abc', 'panel-art.png']]);
   });
 
   // Catches the split text disagreeing with its storyboard anchors during an instrumental lead-in.
@@ -1106,6 +1106,9 @@ describe('create-schema parity', () => {
     shotMode: 'performance',
     performanceSpeaker: 'Singer',
     performanceStyle: 'music',
+    panelId: 'panel-example-1',
+    panelRev: 'abc123',
+    panelArt: 'panel-art.png',
   };
 
   it('stores every accepted video setting key on the project record', () => {

@@ -43,6 +43,7 @@ describe('VideoDownloaderPage', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
 
     expect(screen.getByRole('alert')).toHaveTextContent('Could not load downloads — Downloads 500 error');
+    expect(screen.getByRole('heading', { level: 1, name: 'Video Downloader' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.queryByText('No videos downloaded yet.')).not.toBeInTheDocument();
 

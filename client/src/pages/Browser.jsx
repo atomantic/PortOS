@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import PageHeader from '../components/PageHeader';
 import { useSocketResource } from '../hooks/useSocketResource';
 import {
   Globe, Play, Square, RefreshCw, Settings, Activity,
@@ -152,17 +153,12 @@ export default function BrowserPage() {
   const isConnected = status?.connected;
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-            <Globe size={28} className="text-port-accent" />
-            Browser
-          </h2>
-          <p className="text-gray-500">Manage the authenticated CDP/Playwright browser</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap shrink-0">
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={Globe}
+        title="Browser"
+        subtitle="Manage the authenticated CDP/Playwright browser"
+        actions={<>
           <button
             onClick={() => setShowConfig(s => !s)}
             className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg transition-colors ${
@@ -193,8 +189,9 @@ export default function BrowserPage() {
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
             <span>Refresh</span>
           </button>
-        </div>
-      </div>
+        </>}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
 
       {statusError && (
         <p role="alert" className="mb-4 text-sm text-port-error">
@@ -708,6 +705,7 @@ export default function BrowserPage() {
             </ul>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

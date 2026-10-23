@@ -7,10 +7,10 @@ import toast from '../components/ui/Toast';
 import useListResource from '../hooks/useListResource';
 import * as api from '../services/api';
 import { formatDurationSec } from '../utils/formatters';
-import { projectSummary, historySourceDuration } from '../lib/videoTimelineModel';
+import { projectSummary, historySourceDuration, CLIP_CATALOG_QUERY } from '../lib/videoTimelineModel';
 
 const loadTimelineProjects = () => api.listTimelineProjects({ silent: true });
-const loadVideoHistory = () => api.listVideoHistory({ silent: true });
+const loadVideoHistory = () => api.listVideoHistory({ silent: true, query: CLIP_CATALOG_QUERY });
 
 export default function VideoTimeline() {
   const navigate = useNavigate();

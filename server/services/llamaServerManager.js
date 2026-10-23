@@ -548,11 +548,47 @@ async function readLlamaServerStatusRetrying() {
   return status;
 }
 
+const trimmedOrNull = (value) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+
 /**
- * Starts llama-server with the specified model and options under PM2.
+ * Fills defaults for the launch options. Every tuning knob defaults to `null` =
+ * NOT SET: the flag is left off the launch line entirely so llama.cpp applies
+ * its own default. Substituting a number would silently pin a value the user
+ * never chose and make two "default" runs incomparable.
  */
-export async function startLlamaServer(options = {}) {
-  const binaryPath = resolveLlamaServerBinary();
+function normalizeLaunchOptions({
+  model,
+  draftModel,
+  // llama.cpp's multimodal projector (`--mmproj`). Independent of speculative
+  // decoding: a vision-capable GGUF loads text-only without it.
+  projector,
+  specType = 'draft-dflash',
+  port = PORTS.LLAMA_SERVER,
+  host = '127.0.0.1',
+  ctxSize = 32768,
+  nGpuLayers = 99,
+  alias = 'dflash',
+  parallel = 1,
+  batchSize = null,
+  ubatchSize = null,
+  threads = null,
+  flashAttn = false,
+  cacheTypeK = null,
+  cacheTypeV = null,
+  draftMax = null,
+  // `undefined` = not supplied, so fall through to the saved setting; an
+  // explicit number (including 0) is the caller's own choice and wins, which
+  // is what lets a relaunch replay exactly the line it captured.
+  sleepIdleMinutes = undefined,
+}) {
+  return {
+    model, draftModel, projector, specType, port, host, ctxSize, nGpuLayers, alias, parallel,
+    batchSize, ubatchSize, threads, flashAttn, cacheTypeK, cacheTypeV, draftMax, sleepIdleMinutes,
+  };
+}
+
+/** Refuses a launch the host cannot honor: no binary, already online, port taken. */
+async function assertLaunchable(binaryPath, { model, host, port }) {
   if (!binaryPath) {
     throw new ServerError(
       `llama-server binary was not found on PATH. Install it with \`${installPlan().installCommand}\` or build from source.`,
@@ -565,44 +601,12 @@ export async function startLlamaServer(options = {}) {
     throw new ServerError(`llama-server is already running with PID ${pm2Status.pid}`, { status: 409 });
   }
 
-  const {
-    model,
-    draftModel,
-    // llama.cpp's multimodal projector (`--mmproj`). Optional and independent of
-    // speculative decoding: a vision-capable GGUF loads text-only without it.
-    projector,
-    specType = 'draft-dflash',
-    port = PORTS.LLAMA_SERVER,
-    host = '127.0.0.1',
-    ctxSize = 32768,
-    nGpuLayers = 99,
-    alias = 'dflash',
-    parallel = 1,
-    // Tuning knobs (`lib/localModelTuning.js`). Every one defaults to `null` =
-    // NOT SET: the flag is left off the launch line entirely so llama.cpp
-    // applies its own default. Substituting a number here would silently pin a
-    // value the user never chose and make two "default" runs incomparable.
-    batchSize = null,
-    ubatchSize = null,
-    threads = null,
-    flashAttn = false,
-    cacheTypeK = null,
-    cacheTypeV = null,
-    draftMax = null,
-    // Minutes of idleness after which llama.cpp unloads the checkpoint in place.
-    // `undefined` = not supplied, so fall through to the saved setting; an
-    // explicit number (including 0) is the caller's own choice and wins, which
-    // is what lets a relaunch replay exactly the line it captured.
-    sleepIdleMinutes = undefined,
-  } = options;
-
   if (!model || typeof model !== 'string') {
     throw new ServerError('model path is required to start llama-server', { status: 400 });
   }
 
   const endpoint = `http://${host}:${port}/v1`;
-  const reachable = await probeEndpoint(endpoint);
-  if (reachable) {
+  if (await probeEndpoint(endpoint)) {
     throw new ServerError(`Port ${port} is already in use by an active server at ${endpoint}`, { status: 409 });
   }
   if (await isPortInUse(port)) {
@@ -611,37 +615,30 @@ export async function startLlamaServer(options = {}) {
       { status: 409, code: 'LLAMA_SERVER_PORT_IN_USE' }
     );
   }
+  return endpoint;
+}
 
-  // Validate the weights before building the launch line
-  await assertModelFileExists('The base model', model.trim());
-  const configuredDraftPath = typeof draftModel === 'string' && draftModel.trim()
-    ? draftModel.trim()
-    : null;
-  // Unlike the drafter, the projector is resolved against nothing — no spec type
-  // turns vision on or off, so what the caller set is what goes on the line.
-  const projectorPath = typeof projector === 'string' && projector.trim()
-    ? projector.trim()
-    : null;
-  if (projectorPath) await assertModelFileExists('The vision projector', projectorPath);
-
-  // `--spec-type` is a comma-separated LIST, and only its `draft-*` entries want
-  // a drafter GGUF — every `ngram-*` implementation speculates off the tokens
-  // already in the context window. Emitting the flag only alongside a drafter
-  // therefore threw away perfectly valid drafter-free launches
-  // (`--spec-type ngram-map-k`) and silently ignored the ngram half of a mixed
-  // one (`draft-dflash,ngram-map-k`).
-  //
-  // The two halves are resolved against each other, because the launcher card
-  // seeds BOTH fields from a preset: switching Spec Type to an `ngram-*` leaves
-  // the preset's drafter path sitting in the form, and passing that as
-  // `--model-draft` would load weights the run can't use — or fail the
-  // existence check below on a preset GGUF that was never downloaded. So a
-  // drafter is only carried when some requested type actually drafts with one,
-  // and drafter-based types are dropped (with a log line) when no drafter is
-  // set, which keeps the card's documented "clear the field to run without it"
-  // working. An EMPTY spec type deliberately still counts as wanting the
-  // drafter: llama.cpp speculates off a bare `--model-draft`, so dropping it
-  // there would silently disable a working configuration.
+/**
+ * `--spec-type` is a comma-separated LIST, and only its `draft-*` entries want
+ * a drafter GGUF — every `ngram-*` implementation speculates off the tokens
+ * already in the context window. Emitting the flag only alongside a drafter
+ * would throw away valid drafter-free launches (`--spec-type ngram-map-k`) and
+ * silently ignore the ngram half of a mixed one (`draft-dflash,ngram-map-k`).
+ *
+ * The two halves are resolved against each other, because the launcher card
+ * seeds BOTH fields from a preset: switching Spec Type to an `ngram-*` leaves
+ * the preset's drafter path sitting in the form, and passing that as
+ * `--model-draft` would load weights the run can't use — or fail the existence
+ * check on a preset GGUF that was never downloaded. So a drafter is only
+ * carried when some requested type actually drafts with one, and drafter-based
+ * types are dropped when no drafter is set, which keeps the card's documented
+ * "clear the field to run without it" working. An EMPTY spec type deliberately
+ * still counts as wanting the drafter: llama.cpp speculates off a bare
+ * `--model-draft`, so dropping it there would silently disable a working
+ * configuration.
+ */
+function resolveSpecDrafter({ specType, draftModel }) {
+  const configuredDraftPath = trimmedOrNull(draftModel);
   const requestedSpecTypes = parseSpecTypes(specType);
   const drafterInUse = requestedSpecTypes.length === 0 || requestedSpecTypes.some(isDraftSpecType);
   const draftPath = drafterInUse ? configuredDraftPath : null;
@@ -649,95 +646,171 @@ export async function startLlamaServer(options = {}) {
     ? requestedSpecTypes
     : requestedSpecTypes.filter((type) => !isDraftSpecType(type));
   const droppedSpecTypes = requestedSpecTypes.filter((type) => !effectiveSpecTypes.includes(type));
+  return { configuredDraftPath, draftPath, effectiveSpecTypes, droppedSpecTypes };
+}
 
-  if (draftPath) await assertModelFileExists('The drafter model', draftPath);
+/**
+ * llama.cpp's in-place idle unload. A build without the flag gets the line it
+ * would have got before this feature existed — never a rejected launch.
+ * `effective` is what actually reached the process, so the status card reports
+ * the truth rather than the request.
+ */
+async function resolveIdleMinutes({ sleepIdleMinutes, binaryPath }) {
+  const requested = Number.isFinite(sleepIdleMinutes)
+    ? Math.max(0, Math.floor(sleepIdleMinutes))
+    : await configuredSleepIdleMinutes();
+  const pinned = await configuredSleepIdleKeepLoaded();
+  const effective = !pinned && requested > 0 && await supportsSleepIdle(binaryPath)
+    ? requested
+    : 0;
+  return { requested, effective, pinned };
+}
 
-  const args = ['-m', expandHome(model.trim())];
-  if (draftPath) args.push('--model-draft', expandHome(draftPath));
-  if (projectorPath) args.push('--mmproj', expandHome(projectorPath));
-  if (effectiveSpecTypes.length > 0) args.push('--spec-type', effectiveSpecTypes.join(','));
-  if (port) args.push('--port', String(port));
-  if (host) args.push('--host', host);
-  if (ctxSize) args.push('--ctx-size', String(ctxSize));
-  if (nGpuLayers !== undefined && nGpuLayers !== null) args.push('-ngl', String(nGpuLayers));
+/** Everything the launch line and `currentConfig` are derived from. */
+async function resolveLaunch(options, binaryPath) {
+  const opts = normalizeLaunchOptions(options);
+  // Validate the weights before building the launch line
+  await assertModelFileExists('The base model', opts.model.trim());
+  // Unlike the drafter, the projector is resolved against nothing — no spec type
+  // turns vision on or off, so what the caller set is what goes on the line.
+  const projectorPath = trimmedOrNull(opts.projector);
+  if (projectorPath) await assertModelFileExists('The vision projector', projectorPath);
+  const drafter = resolveSpecDrafter(opts);
+  if (drafter.draftPath) await assertModelFileExists('The drafter model', drafter.draftPath);
+  // Resolved AFTER the rest so a relaunch that carried an explicit value replays
+  // it verbatim, and only then falls back to the saved setting.
+  const idle = await resolveIdleMinutes({ sleepIdleMinutes: opts.sleepIdleMinutes, binaryPath });
   // Always on the line — leaving it off reverts to llama.cpp's multi-slot
   // default, which is the VRAM tax this pin exists to avoid. `null` from a
   // recovered pre-flag launch still means 1, not "daemon default".
-  const parallelSlots = Number.isFinite(parallel) && parallel >= 1 ? parallel : 1;
-  args.push('--parallel', String(parallelSlots));
-  if (Number.isFinite(batchSize)) args.push('-b', String(batchSize));
-  if (Number.isFinite(ubatchSize)) args.push('-ub', String(ubatchSize));
-  if (Number.isFinite(threads)) args.push('-t', String(threads));
-  if (flashAttn) args.push('--flash-attn');
-  if (cacheTypeK) args.push('--cache-type-k', String(cacheTypeK));
-  if (cacheTypeV) args.push('--cache-type-v', String(cacheTypeV));
+  const parallelSlots = Number.isFinite(opts.parallel) && opts.parallel >= 1 ? opts.parallel : 1;
+  return { ...opts, ...drafter, projectorPath, parallelSlots, idle };
+}
+
+/** The llama-server argv, in a stable order. Pure over the resolved launch. */
+function buildLaunchArgs(r) {
+  const args = ['-m', expandHome(r.model.trim())];
+  if (r.draftPath) args.push('--model-draft', expandHome(r.draftPath));
+  if (r.projectorPath) args.push('--mmproj', expandHome(r.projectorPath));
+  if (r.effectiveSpecTypes.length > 0) args.push('--spec-type', r.effectiveSpecTypes.join(','));
+  if (r.port) args.push('--port', String(r.port));
+  if (r.host) args.push('--host', r.host);
+  if (r.ctxSize) args.push('--ctx-size', String(r.ctxSize));
+  if (r.nGpuLayers !== undefined && r.nGpuLayers !== null) args.push('-ngl', String(r.nGpuLayers));
+  args.push('--parallel', String(r.parallelSlots));
+  if (Number.isFinite(r.batchSize)) args.push('-b', String(r.batchSize));
+  if (Number.isFinite(r.ubatchSize)) args.push('-ub', String(r.ubatchSize));
+  if (Number.isFinite(r.threads)) args.push('-t', String(r.threads));
+  if (r.flashAttn) args.push('--flash-attn');
+  if (r.cacheTypeK) args.push('--cache-type-k', String(r.cacheTypeK));
+  if (r.cacheTypeV) args.push('--cache-type-v', String(r.cacheTypeV));
   // Only meaningful alongside a drafter — passing it without one makes
   // llama-server reject the launch line outright.
-  if (Number.isFinite(draftMax) && draftPath) args.push('--spec-draft-n-max', String(draftMax));
-  if (alias) args.push('--alias', alias);
+  if (Number.isFinite(r.draftMax) && r.draftPath) args.push('--spec-draft-n-max', String(r.draftMax));
+  if (r.alias) args.push('--alias', r.alias);
+  if (r.idle.effective > 0) args.push(SLEEP_IDLE_FLAG, String(r.idle.effective * 60));
+  return args;
+}
 
-  // llama.cpp's in-place idle unload. Resolved AFTER the rest of the line so a
-  // relaunch that carried an explicit value replays it verbatim, and only then
-  // falls back to the saved setting.
-  const requestedIdleMinutes = Number.isFinite(sleepIdleMinutes)
-    ? Math.max(0, Math.floor(sleepIdleMinutes))
-    : await configuredSleepIdleMinutes();
-  // A build without the flag gets the line it would have got before this
-  // feature existed — never a rejected launch. `effectiveIdleMinutes` is what
-  // actually reached the process, so the status card reports the truth rather
-  // than the request.
-  const isPinned = await configuredSleepIdleKeepLoaded();
-  const effectiveIdleMinutes = !isPinned && requestedIdleMinutes > 0 && await supportsSleepIdle(binaryPath)
-    ? requestedIdleMinutes
-    : 0;
-  if (effectiveIdleMinutes > 0) args.push(SLEEP_IDLE_FLAG, String(effectiveIdleMinutes * 60));
+/**
+ * What the status card reports: the values actually on the launch line (the
+ * drafter, projector and spec types that survived resolution), not what the
+ * form happened to hold. `null` projector/drafter means the process runs without.
+ */
+function buildCurrentConfig(r) {
+  return {
+    model: r.model,
+    draftModel: r.draftPath,
+    projector: r.projectorPath,
+    specType: r.effectiveSpecTypes.join(','),
+    port: r.port,
+    host: r.host,
+    ctxSize: r.ctxSize,
+    nGpuLayers: r.nGpuLayers,
+    alias: r.alias,
+    parallel: r.parallelSlots,
+    batchSize: r.batchSize,
+    ubatchSize: r.ubatchSize,
+    threads: r.threads,
+    flashAttn: r.flashAttn,
+    cacheTypeK: r.cacheTypeK,
+    cacheTypeV: r.cacheTypeV,
+    draftMax: r.draftMax,
+    sleepIdleMinutes: r.idle.effective,
+  };
+}
+
+function logLaunchResolution(r, args) {
+  if (!r.idle.pinned && r.idle.requested > 0 && r.idle.effective === 0) {
+    appendLog(`This llama-server build has no ${SLEEP_IDLE_FLAG} — the model stays resident while idle`);
+  }
+  if (r.droppedSpecTypes.length > 0) {
+    appendLog(`Ignoring spec-type ${r.droppedSpecTypes.join(',')} — no drafter model is set`);
+    console.log(`🦙 llama-server dropping drafter-based spec types ${r.droppedSpecTypes.join(',')} (no --model-draft configured)`);
+  }
+  if (r.configuredDraftPath && !r.draftPath) {
+    appendLog(`Ignoring drafter ${r.configuredDraftPath} — no requested spec type uses one`);
+    console.log(`🦙 llama-server ignoring drafter ${r.configuredDraftPath} (spec types ${r.effectiveSpecTypes.join(',') || 'none'} need no drafter)`);
+  }
+  appendLog(`Starting: llama-server ${args.join(' ')}`);
+}
+
+const isDeadPm2Status = (proc) =>
+  Boolean(proc) && (proc.status === 'errored' || proc.status === 'stopped' || proc.status === 'not_found');
+
+/** Polls until the server answers, PM2 reports the process dead, or the wait times out. */
+async function waitForServerOnline(endpoint) {
+  const startTime = Date.now();
+  let online = false;
+  let proc = null;
+  while (Date.now() - startTime < startupWaitTimeoutMs) {
+    await sleep(startupPollDelayMs);
+    clearJlistCache();
+    proc = await getAppStatusStrict(LLAMA_APP);
+    if (isDeadPm2Status(proc)) break;
+    online = await probeEndpoint(endpoint);
+    if (online) break;
+  }
+  return { online, proc };
+}
+
+/** Surfaces the dead process's log tail, cleans up its PM2 entry, and throws. */
+async function failEarlyExit(proc) {
+  const exitLogs = await execPm2(['logs', LLAMA_APP, '--nostream', '--lines', '15']).catch(() => null);
+  const lines = (exitLogs?.stderr || exitLogs?.stdout || '').trim().split('\n').map((l) => l.trimEnd()).filter(Boolean);
+  for (const line of lines) appendLog(line);
+  const tail = (lines.length ? lines : daemon.snapshotLogs()).slice(-4).join(' | ');
+
+  lastExitError = `PM2 status: ${proc.status}`;
+
+  await execPm2(['delete', LLAMA_APP]).catch(() => {});
+  clearJlistCache();
+  throw new ServerError(
+    `llama-server exited immediately (${lastExitError}).${tail ? ` Last output: ${tail}` : ''}`,
+    { status: 500, code: 'LLAMA_SERVER_EXITED' }
+  );
+}
+
+/**
+ * Starts llama-server with the specified model and options under PM2.
+ */
+export async function startLlamaServer(options = {}) {
+  const binaryPath = resolveLlamaServerBinary();
+  const endpoint = await assertLaunchable(binaryPath, normalizeLaunchOptions(options));
+  const resolved = await resolveLaunch(options, binaryPath);
+  const args = buildLaunchArgs(resolved);
+  const { host, port, model, draftPath, projectorPath } = resolved;
 
   lastExitError = null;
   daemon.resetLogs();
-  if (!isPinned && requestedIdleMinutes > 0 && effectiveIdleMinutes === 0) {
-    appendLog(`This llama-server build has no ${SLEEP_IDLE_FLAG} — the model stays resident while idle`);
-  }
-  if (droppedSpecTypes.length > 0) {
-    appendLog(`Ignoring spec-type ${droppedSpecTypes.join(',')} — no drafter model is set`);
-    console.log(`🦙 llama-server dropping drafter-based spec types ${droppedSpecTypes.join(',')} (no --model-draft configured)`);
-  }
-  if (configuredDraftPath && !draftPath) {
-    appendLog(`Ignoring drafter ${configuredDraftPath} — no requested spec type uses one`);
-    console.log(`🦙 llama-server ignoring drafter ${configuredDraftPath} (spec types ${effectiveSpecTypes.join(',') || 'none'} need no drafter)`);
-  }
-  appendLog(`Starting: llama-server ${args.join(' ')}`);
+  logLaunchResolution(resolved, args);
 
   // A fresh launch line supersedes any baseline: whatever PortOS tuned is gone
   // with the process it tuned, and restoring the old daemon's configuration over
   // this one would undo a start the user just asked for. A relaunch re-arms this
   // AFTER the start returns, from the baseline it captured itself.
   preTuningConfig = null;
-  currentConfig = {
-    model,
-    // The drafter actually on the launch line, so the status card reports what
-    // is running rather than what the form happened to be holding.
-    draftModel: draftPath,
-    // Same reason: `null` here means the running process is text-only, which is
-    // what the card says rather than echoing an unused form field.
-    projector: projectorPath,
-    // The types actually on the launch line, so the status card reports what is
-    // running rather than what was asked for.
-    specType: effectiveSpecTypes.join(','),
-    port,
-    host,
-    ctxSize,
-    nGpuLayers,
-    alias,
-    parallel: parallelSlots,
-    batchSize,
-    ubatchSize,
-    threads,
-    flashAttn,
-    cacheTypeK,
-    cacheTypeV,
-    draftMax,
-    sleepIdleMinutes: effectiveIdleMinutes,
-  };
+  currentConfig = buildCurrentConfig(resolved);
 
   // Delete stale PM2 entry so our own previous instance doesn't count as a collision
   await execPm2(['delete', LLAMA_APP]).catch(() => {});
@@ -754,36 +827,8 @@ export async function startLlamaServer(options = {}) {
   ]);
   clearJlistCache();
 
-  // Wait a short beat and verify probe
-  const startTime = Date.now();
-  let online = false;
-  let currentProc = null;
-  while (Date.now() - startTime < startupWaitTimeoutMs) {
-    await sleep(startupPollDelayMs);
-    clearJlistCache();
-    currentProc = await getAppStatusStrict(LLAMA_APP);
-    if (currentProc && (currentProc.status === 'errored' || currentProc.status === 'stopped' || currentProc.status === 'not_found')) {
-      break;
-    }
-    online = await probeEndpoint(endpoint);
-    if (online) break;
-  }
-
-  if (currentProc && (currentProc.status === 'errored' || currentProc.status === 'stopped' || currentProc.status === 'not_found')) {
-    const exitLogs = await execPm2(['logs', LLAMA_APP, '--nostream', '--lines', '15']).catch(() => null);
-    const lines = (exitLogs?.stderr || exitLogs?.stdout || '').trim().split('\n').map((l) => l.trimEnd()).filter(Boolean);
-    for (const line of lines) appendLog(line);
-    const tail = (lines.length ? lines : daemon.snapshotLogs()).slice(-4).join(' | ');
-
-    lastExitError = `PM2 status: ${currentProc.status}`;
-
-    await execPm2(['delete', LLAMA_APP]).catch(() => {});
-    clearJlistCache();
-    throw new ServerError(
-      `llama-server exited immediately${lastExitError ? ` (${lastExitError})` : ''}.${tail ? ` Last output: ${tail}` : ''}`,
-      { status: 500, code: 'LLAMA_SERVER_EXITED' }
-    );
-  }
+  const { online, proc } = await waitForServerOnline(endpoint);
+  if (isDeadPm2Status(proc)) await failEarlyExit(proc);
 
   const finalProc = await getAppStatusStrict(LLAMA_APP);
 

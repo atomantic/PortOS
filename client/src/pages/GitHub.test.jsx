@@ -21,6 +21,9 @@ const mock = vi.hoisted(() => ({
   syncGitHubNotifications: vi.fn(),
   applyGitHubNotificationAction: vi.fn(),
   resolveGitHubNotificationWithAgent: vi.fn(),
+  clearFinishedGitHubNotifications: vi.fn(),
+  getGitHubDeploymentReview: vi.fn(),
+  reviewGitHubDeployment: vi.fn(),
   getGitHubNotification: vi.fn(),
   getGitHubAutomations: vi.fn(),
   setGitHubNotificationCadence: vi.fn(),
@@ -37,6 +40,10 @@ const mock = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/api', () => mock);
+vi.mock('../services/apiLocalLlm', () => ({
+  getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
+  getVisionModels: vi.fn().mockResolvedValue({ models: [] }),
+}));
 
 vi.mock('../services/socket', () => {
   const listeners = new Map();
@@ -95,6 +102,8 @@ describe('GitHub account setup', () => {
     const signIn = await screen.findByRole('link', { name: 'Sign in with GitHub' });
     expect(decodeURIComponent(signIn.getAttribute('href'))).toContain('/shell?cmd=gh auth login');
     expect(screen.getByRole('button', { name: 'Sync Repos' })).toBeDisabled();
+    expect(screen.getByRole('heading', { level: 1, name: 'GitHub' })).toBeInTheDocument();
+    expect(screen.getByLabelText('GitHub views')).toBeInTheDocument();
   });
 
   it('describes a signed-out legacy cache without rendering a null account', async () => {
@@ -324,6 +333,19 @@ describe('GitHub accounts tab', () => {
     await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', expect.objectContaining({ trust: 'private', allowedProviders: ['cloud-api'] })));
   });
 
+  it('lets a Private Enterprise account opt in to agents', async () => {
+    mock.updateGitHubAccount.mockImplementation(async (id, body) => ({ ...IMPLICIT, ...body, id }));
+    renderAccounts();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.queryByLabelText(/Allow agents/)).toBeNull();
+    // github.com is never trusted wholesale.
+    expect(screen.queryByLabelText('Trust everyone on this instance')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Trust'), { target: { value: 'private' } });
+    fireEvent.click(await screen.findByLabelText(/Allow agents/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', expect.objectContaining({ trust: 'private', allowAgents: true })));
+  });
+
   it('lists each account with its trust level and live sign-in state', async () => {
     renderAccounts();
     expect(await screen.findByText('Signed in')).toBeTruthy();
@@ -346,9 +368,12 @@ describe('GitHub accounts tab', () => {
     fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'ghe.example.com' } });
     fireEvent.change(screen.getByLabelText('Login'), { target: { value: 'alice' } });
     expect(screen.getByLabelText('Trust').value).toBe('private');
+    // An Enterprise host can trust its whole instance, independent of where text goes.
+    fireEvent.change(screen.getByLabelText('Trust'), { target: { value: 'public' } });
+    fireEvent.click(screen.getByLabelText('Trust everyone on this instance'));
     fireEvent.click(screen.getAllByRole('button', { name: 'Add account' }).at(-1));
 
-    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'private', allowedProviders: null });
+    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'public', allowedProviders: null, allowAgents: false, trustInstanceUsers: true });
     const signIn = await screen.findByRole('link', { name: 'Sign in on ghe.example.com' });
     expect(decodeURIComponent(signIn.getAttribute('href'))).toBe('/shell?cmd=gh auth login --hostname ghe.example.com --web --clipboard');
   });
@@ -370,6 +395,20 @@ const NOTIFICATION = {
   unread: true, state: 'open', updatedAt: '2026-10-01T10:00:00.000Z',
 };
 
+// The inbox lists, syncs, then lists again on mount. Settle that whole chain
+// inside act before the test goes on, so its last state update cannot land
+// after the test ends and be reported against a later one.
+async function renderInbox(tab = 'inbox') {
+  const view = renderTab(tab);
+  await waitFor(() => expect(mock.getGitHubNotifications.mock.calls.length).toBeGreaterThanOrEqual(2));
+  await act(async () => {
+    const pending = [mock.getGitHubAccounts, mock.syncGitHubNotifications, mock.getGitHubNotifications]
+      .flatMap((fn) => fn.mock.results.map((result) => result.value));
+    await Promise.allSettled(pending);
+  });
+  return view;
+}
+
 describe('GitHub inbox tab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -379,7 +418,7 @@ describe('GitHub inbox tab', () => {
   });
 
   it('opens by default, syncs on arrival, and links only to the stored GitHub page', async () => {
-    renderTab('');
+    await renderInbox('');
     expect(await screen.findByText('Example change')).toBeTruthy();
     expect(screen.getByText('Review requested')).toBeTruthy();
     expect(screen.getByText('Your repo')).toBeTruthy();
@@ -388,31 +427,160 @@ describe('GitHub inbox tab', () => {
     expect(mock.getGitHubRepos).not.toHaveBeenCalled();
   });
 
-  it('marks a thread done and takes it out of Needs you', async () => {
-    mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, state: 'done', unread: false });
-    renderTab('inbox');
-    fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
-    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'done');
-    expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+  it('offers Add automation rule from a row, linked to a form prefilled with its kind and repo (#13192)', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [{ ...NOTIFICATION, ruleKind: 'review-request' }], sync: {} });
+    await renderInbox();
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions for Example change' }));
+    const link = await screen.findByRole('menuitem', { name: /Add automation rule/ });
+    expect(link.getAttribute('href')).toBe('/devtools/github/automations?ruleAccount=github-com&ruleKind=review-request&ruleRepo=octocat%2Fhello');
   });
 
-  it('resolves an actionable thread with an agent in one tap, and says why when it cannot', async () => {
+  it('links a deployment approval to the run waiting on you', async () => {
+    const runUrl = 'https://github.com/octocat/hello/actions/runs/4242';
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{
+        ...NOTIFICATION, reason: 'approval_requested', subjectType: 'WorkflowRun', title: 'Someone requested your review to deploy to an environment',
+        decision: 'surface-high', htmlUrl: runUrl, deployment: { runId: 4242, name: 'Deploy (prod)', headBranch: 'main', displayTitle: 'Example change', htmlUrl: runUrl },
+      }],
+      sync: {},
+    });
+    await renderInbox();
+    expect(await screen.findByText('Deploy approval')).toBeTruthy();
+    expect(screen.getByText('Deploy (prod)')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open' }).getAttribute('href')).toBe(runUrl);
+  });
+
+  it('approves a waiting deployment from its row, only for environments you can approve', async () => {
+    const deployment = { runId: 4242, name: 'Deploy (prod)', headBranch: 'main', displayTitle: 'Example change', htmlUrl: 'https://github.com/octocat/hello/actions/runs/4242' };
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, reason: 'approval_requested', subjectType: 'WorkflowRun', decision: 'surface-high', htmlUrl: deployment.htmlUrl, deployment }],
+      sync: {},
+    });
+    mock.getGitHubDeploymentReview.mockResolvedValue({
+      runId: 4242,
+      environments: [
+        { environmentId: 11, name: 'prod', canApprove: true, waitTimer: 0, reviewers: ['octocat'] },
+        { environmentId: 12, name: 'prod-eu', canApprove: false, waitTimer: 0, reviewers: ['release-team'] },
+      ],
+    });
+    mock.reviewGitHubDeployment.mockResolvedValue({ ...NOTIFICATION, state: 'done' });
+    await renderInbox();
+    fireEvent.click(await screen.findByRole('button', { name: 'Review deployment' }));
+    expect((await screen.findByLabelText(/^prod$/)).checked).toBe(true);
+    expect(screen.getByLabelText(/prod-eu/).disabled).toBe(true);
+    expect(screen.getByText(/only release-team can approve/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and deploy' }));
+    await waitFor(() => expect(mock.reviewGitHubDeployment).toHaveBeenCalledWith('github-com', '101', { state: 'approved', environmentIds: [11] }));
+    expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
+  });
+
+  it('turns a suggestion into a button that does it, and leaves informational decisions as pills', async () => {
     mock.getGitHubNotifications.mockResolvedValue({
       notifications: [
-        { ...NOTIFICATION, agent: { lane: 'pr-reviewer', refused: null } },
-        { ...NOTIFICATION, threadId: '102', title: 'Alert elsewhere', reason: 'security_alert', agent: { lane: 'dependency-updates', refused: 'no-managed-app' } },
+        { ...NOTIFICATION, threadId: '201', title: 'Quiet thread', decision: 'suggest-mute', reason: 'subscribed' },
+        { ...NOTIFICATION, threadId: '202', title: 'Outside PR', decision: 'suggest-untrusted-review', agent: { lane: 'pr-reviewer', refused: 'no-managed-app', pin: null } },
+        { ...NOTIFICATION, threadId: '203', title: 'Red main', decision: 'surface', reason: 'ci_activity', subjectType: 'CheckSuite' },
       ],
       sync: {},
     });
-    mock.resolveGitHubNotificationWithAgent.mockResolvedValue({ ...NOTIFICATION, decision: 'handed-off', agent: null });
-    renderTab('inbox');
+    mock.applyGitHubNotificationAction.mockImplementation(async (_account, threadId) => ({ ...NOTIFICATION, threadId, state: 'muted' }));
+    await renderInbox();
+    fireEvent.click(await screen.findByRole('button', { name: 'Mute' }));
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '201', 'mute');
+    // A suggestion whose lane is refused is a disabled button that says why.
+    const review = screen.getByRole('button', { name: 'Untrusted:Review' });
+    expect(review.disabled).toBe(true);
+    expect(document.getElementById(review.getAttribute('aria-describedby'))).toBeTruthy();
+    // "Worth a look" is information, not an action.
+    expect(screen.getByText('Worth a look').closest('button')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Quiet thread')).toBeNull());
+  });
+
+  it('opens the agent picker from a review suggestion', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, decision: 'suggest-review', agent: { lane: 'do-review', refused: null, pin: null } }],
+      sync: {},
+    });
+    await renderInbox();
+    fireEvent.click(await screen.findByRole('button', { name: 'Do:Review' }));
+    expect(await screen.findByRole('button', { name: 'Start agent' })).toBeTruthy();
+  });
+
+  it('marks a thread done and takes it out of the inbox', async () => {
+    mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, state: 'done', unread: false });
+    await renderInbox();
+    fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'done');
+    expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
+  });
+
+  it('labels handled read threads with where they were read', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [
+        { ...NOTIFICATION, unread: false },
+        { ...NOTIFICATION, threadId: '102', title: 'Read elsewhere', unread: false, readOnGithub: true },
+      ],
+      counts: { 'needs-you': 0, handled: 2 }, sync: {},
+    });
+    await renderInbox();
+    fireEvent.click(screen.getByRole('button', { name: /Handled/ }));
+    expect(await screen.findByText('Read')).toBeTruthy();
+    expect(screen.getByText('Read on GitHub')).toBeTruthy();
+  });
+
+  it('marks every finished or read thread done in one tap', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [NOTIFICATION, { ...NOTIFICATION, threadId: '102', title: 'Folded CI notice', decision: 'duplicate' }],
+      counts: { 'needs-you': 2, suspect: 0, handled: 0, all: 2, finished: 1, clearable: 3 },
+      sync: {},
+    });
+    mock.clearFinishedGitHubNotifications.mockResolvedValue({ cleared: 1, failed: 0 });
+    await renderInbox();
+    // The inbox mirrors GitHub's, so a folded duplicate is listed with its pill.
+    expect(await screen.findByText('Folded CI notice')).toBeTruthy();
+    // Its suggestion is the action itself.
+    expect(screen.getAllByRole('button', { name: 'Mark done' }).length).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Mark 3 finished or read done' }));
+    await waitFor(() => expect(mock.clearFinishedGitHubNotifications).toHaveBeenCalledWith(null));
+  });
+
+  it('offers Resolve with agent on every open row, runs it on the picked agent, and says why when it cannot', async () => {
+    mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [
+        { ...NOTIFICATION, agent: { lane: 'notification-resolve', refused: null, pin: { provider: 'example-provider', model: 'example-model' } } },
+        { ...NOTIFICATION, threadId: '102', title: 'Alert elsewhere', reason: 'security_alert', agent: { lane: 'dependency-updates', refused: 'no-managed-app', pin: null } },
+        { ...NOTIFICATION, threadId: '103', title: 'Outside thread', agent: { lane: 'notification-resolve', refused: 'outside-content', pin: null } },
+      ],
+      sync: {},
+    });
+    mock.resolveGitHubNotificationWithAgent.mockResolvedValue({ ...NOTIFICATION, decision: 'handed-off', agent: { lane: 'notification-resolve', refused: 'handed-off', pin: null } });
+    await renderInbox();
     expect(await screen.findByText('Add this repo as a PortOS app to resolve it with an agent')).toBeTruthy();
+    expect(screen.getByText(/Outside content goes only to the screened/)).toBeTruthy();
     const buttons = screen.getAllByRole('button', { name: 'Resolve with agent' });
-    expect(buttons).toHaveLength(1);
+    expect(buttons.map((button) => button.disabled)).toEqual([false, true, true]);
     fireEvent.click(buttons[0]);
-    expect(mock.resolveGitHubNotificationWithAgent).toHaveBeenCalledWith('github-com', '101');
-    // A handed-off thread is something else's now, so it leaves Needs you.
-    await waitFor(() => expect(screen.queryByText('Example change')).toBeNull());
+    // The picker starts from the rule pin or account defaults the server sent.
+    const start = await screen.findByRole('button', { name: 'Start agent' });
+    await waitFor(() => expect(start.disabled).toBe(false));
+    await waitFor(() => expect(screen.getByLabelText(/^Provider/).value).toBe('example-provider'));
+    fireEvent.click(start);
+    await waitFor(() => expect(mock.resolveGitHubNotificationWithAgent).toHaveBeenCalledWith('github-com', '101', { provider: 'example-provider', model: 'example-model', effort: null }));
+    // A handed-off thread stays in the inbox, as it does on GitHub, with its pill.
+    expect(await screen.findByText('Handed off')).toBeTruthy();
+    expect(screen.getByText('Example change')).toBeTruthy();
+    expect(screen.getByText('An agent already has this thread')).toBeTruthy();
+  });
+
+  it('links an Agent failed pill to the run that failed', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, agent: { lane: 'notification-resolve', refused: null, pin: null }, agentFailed: { taskId: 'task-1', agentId: 'agent-7' } }],
+      sync: {},
+    });
+    await renderInbox();
+    expect((await screen.findByText('Agent failed')).closest('a').getAttribute('href')).toBe('/cos/agents/agent-7');
+    expect(screen.getByRole('button', { name: 'Resolve with agent' }).disabled).toBe(false);
   });
 
   it('undoes Done locally and a mute by re-subscribing', async () => {
@@ -421,8 +589,8 @@ describe('GitHub inbox tab', () => {
       sync: {},
     });
     mock.applyGitHubNotificationAction.mockImplementation(async (_account, threadId) => ({ ...NOTIFICATION, threadId, state: 'open' }));
-    renderTab('inbox');
-    fireEvent.click(await screen.findByRole('button', { name: 'Handled' }));
+    await renderInbox();
+    fireEvent.click(await screen.findByRole('button', { name: /^Handled/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Back to inbox' }));
     fireEvent.click(screen.getByRole('button', { name: 'Unmute' }));
     await waitFor(() => expect(mock.applyGitHubNotificationAction).toHaveBeenCalledTimes(2));
@@ -431,11 +599,25 @@ describe('GitHub inbox tab', () => {
     await act(async () => {});
   });
 
+  it('shows each view count in its tile and narrows the list to one repository', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [NOTIFICATION, { ...NOTIFICATION, threadId: '102', title: 'Other repo change', repoFullName: 'octocat/other' }],
+      counts: { 'needs-you': 2, suspect: 0, handled: 14, all: 16, 'with-agents': 3 },
+      sync: {},
+    });
+    await renderInbox();
+    expect(await screen.findByRole('button', { name: 'Handled 14' })).toBeTruthy();
+    expect(screen.getByText('3 with an agent now')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octocat/other' } });
+    expect(screen.queryByText('Example change')).toBeNull();
+    expect(screen.getByText('Other repo change')).toBeTruthy();
+  });
+
   it('shows a failed sync for the account instead of an empty inbox', async () => {
     mock.getGitHubNotifications.mockResolvedValue({
       notifications: [], sync: { 'github-com': { lastSyncAt: null, lastError: 'gh cannot act as github.com (not-authenticated).' } },
     });
-    renderTab('inbox');
+    await renderInbox();
     expect((await screen.findByRole('alert')).textContent).toContain('not-authenticated');
   });
 });
@@ -453,10 +635,10 @@ describe('GitHub inbox triage', () => {
       sync: {},
     });
     renderTab('inbox');
-    expect(await screen.findByText('Suggest Untrusted:Review')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Untrusted:Review' })).toBeTruthy();
     expect(screen.getByText('Outside')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Suspect' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Suspect/ }));
     await waitFor(() => expect(mock.getGitHubNotifications).toHaveBeenLastCalledWith({ accountId: null, view: 'suspect' }, { silent: true }));
 
     const calls = mock.getGitHubNotifications.mock.calls.length;
@@ -544,6 +726,171 @@ describe('GitHub automations tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run now/ }));
     await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
     await waitFor(() => expect(mock.getGitHubAutomations).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows agent rules on a Private account and allows agents, or stops, from its card', async () => {
+    const enterprise = { ...OVERVIEW.accounts[0], id: 'ghe', label: 'ghe.example.com', host: 'ghe.example.com', trust: 'private', mode: 'autopilot', agentRules: [], repos: [] };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...enterprise, allowAgents: false }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ ...enterprise, id, ...data }));
+    renderTab('automations');
+    expect(await screen.findByRole('button', { name: /Add rule/ })).toBeTruthy();
+    expect(screen.getByText(/start no agent until you allow agents/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Allow agents on this account' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('ghe', { allowAgents: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop allowing agents' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('ghe', { allowAgents: false }));
+    expect(await screen.findByRole('button', { name: 'Allow agents on this account' })).toBeTruthy();
+  });
+
+  it('sets an account\'s agent defaults for Resolve with agent, and clears them back to CoS defaults', async () => {
+    mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], agentDefaults: { provider: 'example-provider', effort: 'high' }, agentRules: [], repos: [] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ ...OVERVIEW.accounts[0], id, ...data }));
+    renderTab('automations');
+    expect(await screen.findByText(/^Example Provider · high effort/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/ }));
+    const save = await screen.findByRole('button', { name: 'Save defaults' });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    await waitFor(() => expect(screen.getByLabelText(/^Provider/).value).toBe('example-provider'));
+    fireEvent.change(screen.getByLabelText(/^Provider/), { target: { value: '' } });
+    fireEvent.click(save);
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentDefaults: null }));
+    expect(await screen.findByText(/^CoS defaults/)).toBeTruthy();
+  });
+
+  it('adds a rule from an inbox row link, shows how many threads it matches and applies it now (#13192)', async () => {
+    mock.getGitHubAutomations.mockResolvedValue({
+      ...OVERVIEW,
+      accounts: [{
+        ...OVERVIEW.accounts[0], mode: 'assist', agentRules: [], repos: ['octocat/hello'],
+        openByKind: [
+          { kind: 'ci-activity', repo: 'octocat/hello', total: 2, actionable: 2 },
+          { kind: 'ci-activity', repo: 'octocat/other', total: 3, actionable: 3 },
+          { kind: 'mention', repo: 'octocat/hello', total: 4, actionable: 4 },
+        ],
+      }],
+    });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    render(
+      <MemoryRouter initialEntries={['/devtools/github/automations?ruleAccount=github-com&ruleKind=ci-activity&ruleRepo=octocat%2Fhello']}>
+        <Routes><Route path="/devtools/github/:tab" element={<GitHub />} /></Routes>
+      </MemoryRouter>,
+    );
+    const form = await screen.findByRole('form', { name: 'New automation rule' });
+    expect(screen.getByLabelText('When I get').value).toBe('ci-activity');
+    expect(screen.getByLabelText('In').value).toBe('octocat/hello');
+    expect(screen.getByLabelText('Then').value).toBe('done');
+    expect(screen.getByText('Matches 2 open threads now.')).toBeTruthy();
+    // All repos is one change away, and counts every repo.
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: '*' } });
+    expect(screen.getByText('Matches 5 open threads now.')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: 'octocat/hello' } });
+    fireEvent.click(screen.getByLabelText('Apply to these 2 now'));
+    fireEvent.submit(form);
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', {
+      agentRules: [expect.objectContaining({ kind: 'ci-activity', repo: 'octocat/hello', action: 'done' })],
+    }));
+    await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
+    expect(screen.queryByRole('form', { name: 'New automation rule' })).toBeNull();
+  });
+
+  it('saves and edits owner rules while counting only threads without a repo override', async () => {
+    mock.getGitHubAutomations.mockResolvedValue({
+      ...OVERVIEW,
+      accounts: [{ ...OVERVIEW.accounts[0], mode: 'autopilot',
+        agentRules: [{ id: 'quiet', kind: 'review-request', repo: 'octocat/quiet', action: 'leave' }],
+        repos: ['octocat/hello', 'octocat/quiet', 'watched/app'],
+        openByKind: [
+          { kind: 'review-request', repo: 'octocat/hello', total: 2, actionable: 2 },
+          { kind: 'review-request', repo: 'octocat/future', total: 3, actionable: 3 },
+          { kind: 'review-request', repo: 'octocat/quiet', total: 4, actionable: 4 },
+          { kind: 'review-request', repo: 'watched/app', total: 8, actionable: 8 },
+        ],
+      }],
+    });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+    const addOwnerRule = await screen.findByRole('button', { name: /Add rule/ });
+    await act(async () => fireEvent.click(addOwnerRule));
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: 'octocat/*' } });
+    expect(screen.getByText('Matches 5 open threads now.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', {
+      agentRules: [expect.objectContaining({ id: 'quiet' }), expect.objectContaining({ kind: 'review-request', repo: 'octocat/*', action: 'agent' })],
+    }));
+    const editOwnerRule = await screen.findByRole('button', { name: 'Edit Review requests rule for octocat (all repos)' });
+    await act(async () => fireEvent.click(editOwnerRule));
+    expect(screen.getByLabelText('In').value).toBe('octocat/*');
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: '__owner__' } });
+    fireEvent.change(screen.getByLabelText('Account or organization name'), { target: { value: 'new-org' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenLastCalledWith('github-com', {
+      agentRules: [expect.objectContaining({ id: 'quiet' }), expect.objectContaining({ repo: 'new-org/*', action: 'agent' })],
+    }));
+    const editCustomOwnerRule = await screen.findByRole('button', { name: 'Edit Review requests rule for new-org (all repos)' });
+    await act(async () => fireEvent.click(editCustomOwnerRule));
+    expect(screen.getByLabelText('Account or organization name').value).toBe('new-org');
+    fireEvent.change(screen.getByLabelText('Account or organization name'), { target: { value: 'bad/name' } });
+    expect(screen.getByRole('button', { name: 'Save rule' }).disabled).toBe(true);
+  });
+
+  it('adds an agent rule for review requests in one repo and refuses a duplicate', async () => {
+    mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
+    mock.getGitHubAutomations.mockResolvedValue({
+      ...OVERVIEW,
+      accounts: [{ ...OVERVIEW.accounts[0], mode: 'autopilot', agentRules: [{ id: 'rule-1', kind: 'review-request', repo: '*', agent: false }], repos: ['octocat/hello'] }],
+    });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+
+    // A stored legacy `agent: false` rule reads as Leave in the inbox.
+    expect(await screen.findByText('Leave in the inbox')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Add rule/ }));
+    // Same kind and repo as the existing rule: refused until changed.
+    expect(await screen.findByText(/There is already a rule/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: 'octocat/hello' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', {
+      agentRules: [
+        { id: 'rule-1', kind: 'review-request', repo: '*', agent: false },
+        expect.objectContaining({ kind: 'review-request', repo: 'octocat/hello', action: 'agent' }),
+      ],
+    }));
+    expect(await screen.findByText('octocat/hello', { selector: 'span' })).toBeTruthy();
+  });
+
+  it('preserves a saved agent rule pin while its provider catalog is loading', async () => {
+    let resolveProviders;
+    mock.getProviders.mockReturnValue(new Promise((resolve) => { resolveProviders = resolve; }));
+    const rule = { id: 'rule-pinned', kind: 'review-request', repo: '*', action: 'agent', provider: 'example-provider', model: 'example-model', effort: 'high' };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], agentRules: [rule], repos: [] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+    const edit = await screen.findByRole('button', { name: 'Edit Review requests rule for All repos' });
+    await act(async () => fireEvent.click(edit));
+    const form = screen.getByRole('form', { name: 'Edit automation rule' });
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
+    fireEvent.submit(form);
+    expect(mock.updateGitHubAccount).not.toHaveBeenCalled();
+
+    await act(async () => resolveProviders({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] }));
+    await waitFor(() => expect(screen.getByLabelText(/^Provider/)).toHaveValue('example-provider'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentRules: [rule] }));
+  });
+
+  it('allows non-agent rule edits while the provider catalog is loading', async () => {
+    mock.getProviders.mockReturnValue(new Promise(() => {}));
+    const rule = { id: 'rule-done', kind: 'ci-activity', repo: '*', action: 'done' };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], agentRules: [rule], repos: [] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit CI activity rule for All repos' }));
+    fireEvent.change(screen.getByLabelText('Then'), { target: { value: 'leave' } });
+    const save = screen.getByRole('button', { name: 'Save rule' });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentRules: [{ ...rule, action: 'leave' }] }));
   });
 });
 

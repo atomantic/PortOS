@@ -37,7 +37,7 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   cancelJob: (...args) => mockCancelJob(...args),
 }));
 
-vi.mock('../cos.js', () => ({
+vi.mock('../cosTaskStore.js', () => ({
   updateTask: (...args) => mockUpdateTask(...args),
 }));
 

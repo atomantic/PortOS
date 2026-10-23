@@ -55,8 +55,30 @@ export function request(endpoint, options = {}) {
   return trackRequest(performRequest(endpoint, options));
 }
 
+// Shell bootstrap reads (settings, voice config, capabilities) are fetched by
+// several concurrently mounted components. Share one in-flight request per key;
+// the entry clears on settle so later calls (e.g. after a socket push) refetch.
+// Each caller gets its own clone so one consumer's mutation can't leak into another.
+const inflightReads = new Map();
+// Options that change error handling are part of the key, so a silent caller never
+// joins (or starts) a flight whose failure toasts, and vice versa.
+export function singleFlightRead(endpoint, start, options = {}) {
+  // A caller owns its signal's lifetime; aborting it must not cancel another
+  // consumer's read or make a remount join the request its cleanup just aborted.
+  if (options.signal) return start();
+  const key = `${endpoint}|silent:${!!options.silent}|hco:${!!options.hostControlOptional}`;
+  let pending = inflightReads.get(key);
+  if (!pending) {
+    pending = start().finally(() => inflightReads.delete(key));
+    inflightReads.set(key, pending);
+  }
+  return pending.then((value) => (value && typeof value === 'object' ? structuredClone(value) : value));
+}
+
 async function performRequest(endpoint, options = {}) {
-  const { silent, responseType, ...fetchOptions } = options;
+  // `hostControlOptional` marks a background read whose caller renders its own
+  // "needs operator authority" state, so a host-control refusal does not toast.
+  const { silent, responseType, hostControlOptional, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
   // Skip the JSON content-type header for FormData bodies — the browser must
   // set `multipart/form-data; boundary=…` itself, and any pre-supplied value
@@ -84,11 +106,12 @@ async function performRequest(endpoint, options = {}) {
     try {
       await throwApiError(response);
     } catch (err) {
-      // A host-control refusal (server: lib/hostControlRoutes.js) always
-      // surfaces, even from a silent caller: the operator pressed a button
-      // that ran nothing, and only this message says why.
+      // A host-control refusal (server: lib/hostControlRoutes.js) surfaces even
+      // from a silent caller: the operator pressed a button that ran nothing,
+      // and only this message says why. A `hostControlOptional` read was not a
+      // button press and shows the refusal itself.
       if (err.code === 'HOST_CONTROL_FORBIDDEN') {
-        toast.error(err.message);
+        if (!hostControlOptional) toast.error(err.message);
       } else if (!silent) {
         // Platform unavailability is a warning, not an error
         if (err.code === 'PLATFORM_UNAVAILABLE') {
@@ -115,6 +138,9 @@ async function performRequest(endpoint, options = {}) {
   // side when needed.
   if (responseType === 'text') {
     return response.text();
+  }
+  if (responseType === 'blob') {
+    return response.blob();
   }
 
   return response.json();

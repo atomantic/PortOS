@@ -16,7 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
 // clearing, just as the process-wide event buses retain their subscriptions.
-const queueListeners = vi.hoisted(() => ({ cos: [], review: [], brain: [], twin: [] }));
+const queueListeners = vi.hoisted(() => ({ cos: [], review: [], brain: [], twin: [], errors: [] }));
 
 /**
  * Tests for socket.js initSocket behavior.
@@ -36,7 +36,7 @@ vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), 
 vi.mock('./appProcessStatus.js', () => ({ resolvePm2HomeForProcess: vi.fn() }));
 // logAction appends to the real history file — mock it or this suite writes to data/.
 vi.mock('./history.js', () => ({ logAction: vi.fn(async () => {}) }));
-vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn() } }));
+vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn((...args) => queueListeners.errors.push(args)) } }));
 vi.mock('./autoFixer.js', () => ({ handleErrorRecovery: vi.fn() }));
 vi.mock('./pm2Standardizer.js', () => ({ analyzeApp: vi.fn(), createGitBackup: vi.fn(), applyStandardization: vi.fn(), runStandardizeFlow: vi.fn(), standardizeRefusalFor: vi.fn(() => null) }));
 vi.mock('./notifications.js', () => ({ notificationEvents: { on: vi.fn() }, getNotifications: vi.fn(async () => []) }));
@@ -438,8 +438,10 @@ describe('socket.js — initSocket', () => {
     const run = { id: 'run-example', loomId: 'loom-example', revision: 1 };
     fableLoomRunEvents.emit('editorial', run);
     fableLoomRunEvents.emit('production', run);
+    fableLoomRunEvents.emit('shots', run);
     expect(viewer.emitted).toContainEqual(['fableloom:editorial:run', run]);
     expect(viewer.emitted).toContainEqual(['fableloom:production:run', run]);
+    expect(viewer.emitted).toContainEqual(['fableloom:shots:run', run]);
     expect(peer.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
     expect(io.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
     viewer.handlers['fableloom:unsubscribe']();
@@ -821,6 +823,23 @@ describe('socket.js — initSocket', () => {
     socket.handlers['errors:subscribe']();
 
     expect(socket.emitted.some(([ev]) => ev === 'errors:subscribed')).toBe(true);
+  });
+
+  it('notifies error subscribers of server faults but not of 4xx refusals answered to their caller', () => {
+    const socket = makeSocket('err-notify');
+    createdSockets.push(socket);
+    io.connect(socket);
+    socket.handlers['errors:subscribe']();
+    const [, onError] = queueListeners.errors.find(([event]) => event === 'error');
+    const notified = () => socket.emitted.filter(([ev]) => ev === 'error:notified').map(([, payload]) => payload.code);
+
+    onError({ status: 409, code: 'CHECKOUT_REVIEW_REFUSED', message: 'Checkout review refused' }, {});
+    onError({ status: 400, code: 'VALIDATION_ERROR', message: 'Validation failed' }, {});
+    onError({ status: 404, code: 'NOT_FOUND', message: 'App not found', severity: 'critical' }, {});
+    onError({ status: 500, code: 'INTERNAL_ERROR', message: 'timeout exceeded when trying to connect' }, {});
+    onError({ code: 'AI_PROVIDER_EXECUTION_FAILED', message: 'Provider failed' }, {});
+
+    expect(notified()).toEqual(['NOT_FOUND', 'INTERNAL_ERROR', 'AI_PROVIDER_EXECUTION_FAILED']);
   });
 
   // ===========================================================================

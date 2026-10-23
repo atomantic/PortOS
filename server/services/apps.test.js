@@ -382,6 +382,17 @@ describe('deleteApp', () => {
     expect(persisted.apps[PORTOS_APP_ID]).toMatchObject({ name: 'PortOS' });
   });
 
+  it('logs the removed app id once the registry write lands', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      readJSONFile.mockResolvedValue({ apps: { [PORTOS_APP_ID]: { name: 'PortOS' }, 'app-1': { name: 'Example App' } } });
+      await expect(deleteApp('app-1')).resolves.toBe(true);
+      expect(log).toHaveBeenCalledWith('🗑️ Removed app app-1 from registry');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('protects the PortOS baseline record', async () => {
     await expect(deleteApp(PORTOS_APP_ID)).resolves.toBe(false);
     expect(readJSONFile).not.toHaveBeenCalled();

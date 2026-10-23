@@ -71,7 +71,7 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
         )}
         <span className="ml-auto flex flex-wrap items-center gap-2">
           {rendering ? (
-            <button type="button" className={BUTTON} onClick={() => cancelMusicVideoShotRender(projectId, sceneId, { silent: true }).catch(() => {})}>
+            <button type="button" className={BUTTON} onClick={() => cancelMusicVideoShotRender(projectId, sceneId).catch(() => {})}>
               <Square size={12} aria-hidden="true" /> Stop
             </button>
           ) : shot && !rendered ? (

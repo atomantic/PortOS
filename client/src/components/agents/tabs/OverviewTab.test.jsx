@@ -28,6 +28,42 @@ beforeEach(() => {
   getAgentActivityStats.mockResolvedValue(null);
 });
 
+describe('agent load failures', () => {
+  it('shows a retryable account error instead of an endless loading message, and recovers on Retry', async () => {
+    getPlatformAccounts
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <OverviewTab agentId="agent-1" agent={{ id: 'agent-1', enabled: true, aiConfig: {} }} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/Could not load platform accounts/)).toBeInTheDocument();
+    expect(screen.queryByText('Loading accounts...')).not.toBeInTheDocument();
+    expect(getPlatformAccounts).toHaveBeenLastCalledWith('agent-1', null, { silent: true });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByText('No platform accounts linked to this agent')).toBeInTheDocument();
+    expect(getPlatformAccounts).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces a failed provider read instead of an empty provider list', async () => {
+    getProviders.mockRejectedValueOnce(new Error('network unavailable'));
+
+    render(
+      <MemoryRouter>
+        <OverviewTab agentId="agent-1" agent={{ id: 'agent-1', enabled: true, aiConfig: {} }} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/Could not load AI providers/)).toBeInTheDocument();
+    expect(getProviders).toHaveBeenLastCalledWith({ silent: true });
+  });
+});
+
 describe('agent AI provider pickers', () => {
   it('offers only text API providers for Moltbook content and engagement', async () => {
     render(

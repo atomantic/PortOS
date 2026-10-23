@@ -6,7 +6,9 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
 import { listProcesses, listProcessesStrict } from '../services/pm2.js';
-import { getStatus, getPendingTaskIds, getAgents } from '../services/cos.js';
+import { getStatus } from '../services/cos.js';
+import { getPendingTaskIds } from '../services/cosTaskStore.js';
+import { getAgents } from '../services/cosAgentLifecycle.js';
 import { getSelf } from '../services/instanceIdentity.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { checkGhHealth } from '../services/github.js';
@@ -64,8 +66,12 @@ vi.mock('../services/appProcessStatus.js', () => ({
 }));
 
 vi.mock('../services/cos.js', () => ({
-  getStatus: vi.fn().mockResolvedValue(null),
-  getPendingTaskIds: vi.fn().mockResolvedValue([]),
+  getStatus: vi.fn().mockResolvedValue(null)
+}));
+vi.mock('../services/cosTaskStore.js', () => ({
+  getPendingTaskIds: vi.fn().mockResolvedValue([])
+}));
+vi.mock('../services/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn().mockResolvedValue([])
 }));
 

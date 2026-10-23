@@ -1,5 +1,5 @@
 import { afterAll, expect, it as vitestIt } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,13 +60,21 @@ it('drains the image cleaner request before removing its cancelled fixture', asy
 
       it('idempotent:`)
       .replace('  await rm(sandbox, { recursive: true, force: true });', `  probe.events.push('cleanup-start');
-        await rm(sandbox, { recursive: true, force: true });
-        probe.events.push('cleanup-finished');
+        // A removal failure is recorded in the trace, not thrown past it: the outer
+        // test asserts on the trace, so it must always be written.
+        let removeError = null;
+        try {
+          await rm(sandbox, { recursive: true, force: true });
+          probe.events.push('cleanup-finished');
+        } catch (error) {
+          removeError = error.code ?? error.message;
+        }
         await probe.finished;
         const { writeFileSync, existsSync, readdirSync } = await import('node:fs');
         writeFileSync(${JSON.stringify(traceFile)}, JSON.stringify({
           events: probe.events,
           remaining: existsSync(sandbox) ? readdirSync(sandbox) : null,
+          removeError,
         }));`);
     expect(source).toContain('probe.signal = signal;');
     expect(source).toContain('return actual.atomicWrite(...args);');
@@ -81,10 +89,13 @@ it('drains the image cleaner request before removing its cancelled fixture', asy
     const output = `${result.stdout}\n${result.stderr}`;
     expect(result.error, output).toBeUndefined();
     expect(result.status, output).toBe(1);
+    // Absent only if the nested worker died before its afterAll finished; say so with the run output.
+    expect(existsSync(traceFile), `nested afterAll never wrote its trace\n${output}`).toBe(true);
     const trace = JSON.parse(readFileSync(traceFile, 'utf8'));
     expect(trace, output).toEqual({
       events: ['publication-held', 'publication-released', 'body-settled', 'cleanup-start', 'cleanup-finished'],
       remaining: null,
+      removeError: null,
     });
     const report = JSON.parse(readFileSync(resultsFile, 'utf8'));
     expect(report.numFailedTests, output).toBe(1);

@@ -58,6 +58,12 @@ async function readHostEnv() {
   return { project, env, apiKey };
 }
 
+/** Bounded, secret-free cause for a listener failure: code/syscall/port, else a truncated first message line. */
+export function describeFleetHostError(err) {
+  if (err?.code) return [err.code, err.syscall, err.port].filter(Boolean).join(' ');
+  return String(err?.message ?? err).split('\n')[0].slice(0, 200);
+}
+
 export async function startFleetLlmHost() {
   if (gateway) return;
   const enabled = parseEnvContents((await tryReadFile(PORTOS_ENV_PATH)) || '').get(ENABLED_KEY) === '1';
@@ -72,7 +78,7 @@ export async function startFleetLlmHost() {
     next.server.once('error', reject);
     next.server.listen(PORTS.FLEET_LLM, '0.0.0.0', resolve);
   });
-  next.server.on('error', () => console.error('❌ Fleet inference listener failed'));
+  next.server.on('error', (err) => console.error(`❌ Fleet inference listener failed (${describeFleetHostError(err)})`));
   gateway = next;
   noteFleetHostChanged();
 }

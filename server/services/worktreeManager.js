@@ -262,7 +262,7 @@ async function queueWorktreeCreate(repo, fn) {
   if (!key) key = '__unknown__';
   return queueWorktreeCreateForKey(key, async () => {
     const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-    return withCheckoutPublication(repo, fn);
+    return withCheckoutPublication(repo, () => fn(common));
   });
 }
 
@@ -275,7 +275,7 @@ async function queueWorktreeCreate(repo, fn) {
  */
 export function deleteCompletedLocalBranch(repoPath, branch, expectedHead, { beforeMutation = async () => {} } = {}) {
   let callbackError;
-  return queueWorktreeCreate(repoPath, async () => {
+  return queueWorktreeCreate(repoPath, async (commonDir) => {
     if (PROTECTED_BRANCHES.includes(branch)) return false;
     const { getDefaultBranch } = await import('./git.js');
     const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -283,7 +283,8 @@ export function deleteCompletedLocalBranch(repoPath, branch, expectedHead, { bef
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return false;
     const ref = `refs/heads/${branch}`;
     if ((await execGit(['check-ref-format', ref], repoPath, { ignoreExitCode: true })).exitCode !== 0) return false;
-    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath)).stdout.trim();
+    const common = (commonDir && isAbsolute(commonDir)) ? commonDir
+      : (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath)).stdout.trim();
     if (!isAbsolute(common)) return false;
     const preservation = await preserveBranchRetirement(repoPath, common, branch, expectedHead);
     if (!await preservation.verify()) return false;
@@ -376,11 +377,15 @@ async function probeWorktreeRemoval(repo, worktreePath) {
     (err) => (err?.code === 'ENOENT' || err?.code === 'ENOTDIR' ? 'absent' : 'unknown'),
   );
   const target = canonicalPath(worktreePath);
+  let entries = null;
   const registration = await listWorktrees(repo).then(
-    (entries) => (entries.some(wt => canonicalPath(wt.path) === target) ? 'registered' : 'absent'),
+    (list) => {
+      entries = list;
+      return list.some(wt => canonicalPath(wt.path) === target) ? 'registered' : 'absent';
+    },
     () => 'unknown',
   );
-  return { directory, registration };
+  return { directory, registration, entries };
 }
 
 /**
@@ -457,7 +462,7 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     const holder = entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
     if (holder?.locked) return 'worktree-locked';
     if (!verifyRemoval) return null;
-    const reason = await verifyRemoval(holder).catch(() => 'worktree-ownership-unreadable');
+    const reason = await verifyRemoval(holder, entries).catch(() => 'worktree-ownership-unreadable');
     if (reason) return reason;
     // Ownership/content checks await I/O. Refresh their registration afterward;
     // Git's own removal still honors locks acquired after this final read.
@@ -485,7 +490,9 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
       if (logAll) console.log(`⚠️ Worktree prune failed for ${subject}: ${pruneErr.message}`);
     });
   });
-  const outcome = removalOutcome(worktreePath, await probeWorktreeRemoval(repo, worktreePath), heldReason || lastFailure);
+  const probe = await probeWorktreeRemoval(repo, worktreePath);
+  const outcome = removalOutcome(worktreePath, probe, heldReason || lastFailure);
+  if (probe.entries) outcome.entries = probe.entries;
   if (heldReason) outcome.reason = heldReason;
   if (!outcome.removed && label) {
     // A gate keeping the checkout is the cleanup working as designed (the warning
@@ -2225,7 +2232,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       const agents = await readOwners();
       const ownerReason = claimCheckoutOwnerReason({ branchName, holderPath: wt.path, sourceWorkspace, agents });
       if (ownerReason) return ownerReason;
-      const policyHold = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
+      const policyHold = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, tip: wt.head, retirement: true });
       if (policyHold) return policyHold;
       const reason = worktreeOwnershipReason({ path: wt.path, locked: holder.locked, activeAgentIds: readActiveIds(), roots: managedRoots, requireKnownLiveness: true });
       if (reason) return reason;
@@ -2257,7 +2264,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
           skipped.push({ path: wt.path, branch: branchName, reason: removal.reason || 'remove-failed', warning: removal.warning });
           return;
         }
-        const holders = await listWorktrees(sourceWorkspace).catch(() => null);
+        const holders = removal.entries || await listWorktrees(sourceWorkspace).catch(() => null);
         const branchDeleted = holders && !holders.some(holder => holder.branch === wt.branch)
           && await deleteCompletedLocalBranch(sourceWorkspace, branchName, wt.head);
         reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: Boolean(branchDeleted), archiveDir: preservation.archiveDir });

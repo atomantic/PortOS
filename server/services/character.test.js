@@ -619,6 +619,8 @@ describe('Character mutation queue (#9817)', () => {
 
   it('a rejected mutation neither persists nor wedges the queue', async () => {
     await expect(characterService.takeDamage('not-dice')).rejects.toThrow(/Invalid dice/);
+    // Bounded before the roll loop: an unbounded count must fail fast, not allocate (#13088).
+    await expect(characterService.takeDamage('1000000000d6')).rejects.toMatchObject({ status: 400 });
     store.beforeWrite = async () => { throw new Error('disk full'); };
     await expect(characterService.addXP(5, 'x', 'x')).rejects.toThrow('disk full');
     store.beforeWrite = null;

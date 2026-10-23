@@ -113,6 +113,7 @@ export const CATEGORIES = {
   'db-dumps': { label: 'DB Dumps', description: 'PostgreSQL database backups', archivable: true, deletable: true, purgeScope: 'category' },
   'digital-twin': { label: 'Digital Twin', description: 'Identity, goals, character data', archivable: true, deletable: false },
   'eidoverse': { label: 'Eidoverse Worlds', description: 'Machine-local world history owned by the optional Eidoverse runtime — backed up and not federated', archivable: true, deletable: false },
+  'fableloom-shot-runs': { label: 'FableLoom Shot Runs', description: 'Machine-local shot-planning drafts, reviews and resume checkpoints — regenerating them costs provider calls', archivable: true, deletable: false },
   'fableloom': { label: 'FableLoom', description: 'Branching-narrative records (file mirror of the Postgres store)', archivable: true, deletable: false },
   // Another machine's conditioning images, staged for one federated render and
   // swept on a TTL (#4348). Not archivable for the same reason it is excluded
@@ -357,22 +358,81 @@ async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
   return { size: kb * 1024, fileCount };
 }
 
-export async function getDataOverview({ strict = false } = {}) {
-  // Capacity of the volume holding data/ so the page can show how much room is
-  // left, not just what PortOS occupies. Null when the platform can't say.
-  // Independent of the scans below, so it runs alongside them.
-  const diskPromise = statfs(DATA_DIR).then(parseFilesystemStats).catch(() => null);
+// The scan is the multi-second part of the overview (du + a recursive walk per
+// category), and the Data page, the resources report and the data-introspection
+// harbor all request it. Share one result per `strict` mode for a short window
+// after it completes and coalesce concurrent callers while it is pending;
+// mutations here invalidate it. Rejections are never
+// cached. Busy state and disk capacity are read fresh on every call.
+const OVERVIEW_SCAN_TTL_MS = 30_000;
+const overviewScans = new Map();
+
+function invalidateOverviewScan() {
+  overviewScans.clear();
+}
+
+async function scanDataTree(strict) {
+  let rootUnreadable = false;
   const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch((err) => {
     if (strict) throw err;
+    rootUnreadable = true;
     return [];
   });
   const dirs = entries.filter(e => e.isDirectory());
+  const topFiles = entries.filter(e => e.isFile());
 
-  // Parallel: get total size + per-directory sizes in one batch
-  const [totalResult, ...dirResults] = await Promise.all([
-    getDirSizeAndCount(DATA_DIR, { strict }),
-    ...dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name), { strict }))
+  // The root is the sum of its parts: scanning DATA_DIR itself would re-walk
+  // every category. Top-level files are sized by allocated blocks to match du.
+  // allSettled: a strict failure waits for its sibling scans rather than
+  // leaving them running unobserved after the rejection.
+  const settled = await Promise.allSettled([
+    ...dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name), { strict })),
+    ...topFiles.map(f => stat(join(DATA_DIR, f.name)).then(
+      st => (typeof st.blocks === 'number' ? st.blocks * 512 : st.size),
+      (err) => {
+        if (strict) throw err;
+        return 0;
+      },
+    )),
   ]);
+  const failed = settled.find(r => r.status === 'rejected');
+  if (failed) throw failed.reason;
+  const values = settled.map(r => r.value);
+  const dirResults = values.slice(0, dirs.length);
+  const fileSizes = values.slice(dirs.length);
+
+  let totalSize = fileSizes.reduce((sum, n) => sum + n, 0);
+  let totalFileCount = rootUnreadable ? null : topFiles.length;
+  for (const r of dirResults) {
+    totalSize += r.size;
+    // A failed non-strict walk or root listing reports a null count; keep the total unknown too.
+    totalFileCount = totalFileCount === null || r.fileCount === null ? null : totalFileCount + r.fileCount;
+  }
+  return { dirs, dirResults, totalSize, totalFileCount };
+}
+
+function getCachedOverviewScan(strict) {
+  const cached = overviewScans.get(strict);
+  // A pending scan is always shared; the TTL starts when it fulfills.
+  if (cached && (cached.at === null || Date.now() - cached.at < OVERVIEW_SCAN_TTL_MS)) return cached.promise;
+  const promise = scanDataTree(strict);
+  const entry = { at: null, promise };
+  overviewScans.set(strict, entry);
+  promise.then(
+    () => { entry.at = Date.now(); },
+    () => {
+      if (overviewScans.get(strict) === entry) overviewScans.delete(strict);
+    },
+  );
+  return promise;
+}
+
+export async function getDataOverview({ strict = false } = {}) {
+  // Capacity of the volume holding data/ so the page can show how much room is
+  // left, not just what PortOS occupies. Null when the platform can't say.
+  // Independent of the scan below, so it runs alongside it.
+  const diskPromise = statfs(DATA_DIR).then(parseFilesystemStats).catch(() => null);
+  const { dirs, dirResults, totalSize, totalFileCount } = await getCachedOverviewScan(strict);
 
   // Busy state ships with the overview so the Data Manager can drop the Purge
   // button before the user commits, rather than failing on click (#3342). Only
@@ -392,8 +452,8 @@ export async function getDataOverview({ strict = false } = {}) {
   const disk = await diskPromise;
 
   return {
-    totalSize: totalResult.size,
-    totalFileCount: totalResult.fileCount,
+    totalSize,
+    totalFileCount,
     categories,
     disk,
     dataDir: 'data'
@@ -461,6 +521,14 @@ export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
 }
 
 export async function archiveCategory(categoryKey, options = {}) {
+  try {
+    return await archiveCategoryUncached(categoryKey, options);
+  } finally {
+    invalidateOverviewScan();
+  }
+}
+
+async function archiveCategoryUncached(categoryKey, options) {
   if (!SAFE_NAME.test(categoryKey)) throw new ServerError('Invalid category name', { status: 400, code: 'VALIDATION_ERROR' });
   const meta = CATEGORIES[categoryKey];
   if (!meta?.archivable) {
@@ -552,15 +620,26 @@ export async function archiveCategory(categoryKey, options = {}) {
         }
       });
     }
-    return categoryKey === 'health'
-      ? { archived: capturedDays.length, removed, retained, alreadyAbsent, archivePath: relative(process.cwd(), archivePath), size: archiveStat.size }
-      : { archived: 0, archivePath: relative(process.cwd(), archivePath), archiveSize: archiveStat.size };
+    if (categoryKey === 'health') {
+      console.log(`📦 Archived data/health to ${archiveName}: ${capturedDays.length} days, ${removed} removed, ${retained} retained, ${alreadyAbsent} already absent`);
+      return { archived: capturedDays.length, removed, retained, alreadyAbsent, archivePath: relative(process.cwd(), archivePath), size: archiveStat.size };
+    }
+    console.log(`📦 Archived data/${categoryKey} to ${archiveName}`);
+    return { archived: 0, archivePath: relative(process.cwd(), archivePath), archiveSize: archiveStat.size };
   } finally {
     await rmGuarded(operationDir, { recursive: true, force: true });
   }
 }
 
 export async function purgeCategory(categoryKey, options = {}) {
+  try {
+    return await purgeCategoryUncached(categoryKey, options);
+  } finally {
+    invalidateOverviewScan();
+  }
+}
+
+async function purgeCategoryUncached(categoryKey, options) {
   // A purge may retain external record references by explicit operator choice,
   // but its deletions must never interleave with a snapshot's copy and dump.
   return withBackupAssetPublication(async () => {
@@ -694,5 +773,7 @@ export async function deleteBackup(filename) {
     throw new ServerError('Path traversal not allowed', { status: 400, code: 'VALIDATION_ERROR' });
   }
   await rmGuarded(fullPath);
+  invalidateOverviewScan();
+  console.log(`🗑️ Deleted backup archive ${filename}`);
   return { deleted: filename };
 }

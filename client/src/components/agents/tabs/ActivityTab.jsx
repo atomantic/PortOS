@@ -1,37 +1,49 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 import { ACTION_TYPES } from '../constants';
 import { formatDateTime } from '../../../utils/formatters';
+
+const PAGE_SIZE = 50;
 
 export default function ActivityTab({ agentId }) {
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionFilter, setActionFilter] = useState('');
   const [hasMore, setHasMore] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const activitiesData = await api.getAgentActivities(
-      50, [agentId], actionFilter || null
-    );
-    setActivities(activitiesData);
-    setHasMore(activitiesData.length >= 50);
-    setLoading(false);
+    setLoadError(false);
+    await api.getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
+      .then((activitiesData) => {
+        setActivities(activitiesData);
+        setHasMore(activitiesData.length >= PAGE_SIZE);
+      })
+      .catch(() => setLoadError(true))
+      .finally(() => setLoading(false));
   }, [agentId, actionFilter]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
+  // Spinner only on a retry; background refreshes keep the current view mounted.
+  const retry = () => {
+    setLoading(true);
+    fetchData();
+  };
+
   const loadMore = async () => {
     if (activities.length === 0) return;
 
     const lastTimestamp = activities[activities.length - 1].timestamp;
     const moreData = await api.getAgentActivityTimeline(
-      50, [agentId], lastTimestamp
+      PAGE_SIZE, [agentId], lastTimestamp, actionFilter || null
     );
 
-    if (moreData.length < 50) {
+    if (moreData.length < PAGE_SIZE) {
       setHasMore(false);
     }
 
@@ -58,6 +70,14 @@ export default function ActivityTab({ agentId }) {
 
   if (loading) {
     return <div className="p-4"><BrailleSpinner text="Loading activity" /></div>;
+  }
+
+  if (loadError) {
+    return (
+      <div className="p-4">
+        <ListLoadError what="activity log" onRetry={retry} />
+      </div>
+    );
   }
 
   return (

@@ -455,21 +455,38 @@ export function analyzeStoryOutlineTeleplaySync(episode, outline, {
         && node.playbackMode !== 'cut'
         ? 'offscreen'
         : 'onscreen');
-    const semanticFieldsMatch = scene.title === node.title
-      && (scene.plotPointId || null) === (node.plotPointId || null)
-      && (scene.challengePhase || null) === (node.challengePhase || null)
-      && scene.playbackMode === node.playbackMode
-      && scene.audienceConnection === node.audienceConnection
-      && scene.protagonistPresence === expectedProtagonistPresence
-      && scene.isEnding === node.isEnding
-      && (scene.endingLabel || '') === (node.endingLabel || '');
+    // An ending has no outgoing paths, so its playbackMode carries no meaning.
+    const comparePlayback = !scene.isEnding || !node.isEnding;
+    const fieldChecks = [
+      ['title', scene.title, node.title],
+      ['plotPointId', scene.plotPointId || null, node.plotPointId || null],
+      ['challengePhase', scene.challengePhase || null, node.challengePhase || null],
+      ['playbackMode', comparePlayback ? scene.playbackMode : null, comparePlayback ? node.playbackMode : null],
+      ['audienceConnection', scene.audienceConnection, node.audienceConnection],
+      ['protagonistPresence', scene.protagonistPresence, expectedProtagonistPresence],
+      ['isEnding', scene.isEnding, node.isEnding],
+      ['endingLabel', scene.endingLabel || '', node.endingLabel || ''],
+    ];
+    const differingFields = fieldChecks
+      .filter(([, expected, actual]) => expected !== actual)
+      .map(([field, expected, actual]) => ({ field, outline: expected, teleplay: actual }));
     const outlineTransitions = sortedTransitionContract(scene.transitions, 'targetKey');
     const nodeTransitions = sortedTransitionContract(node.transitions, 'targetNodeId');
-    if (!semanticFieldsMatch || JSON.stringify(outlineTransitions) !== JSON.stringify(nodeTransitions)) {
+    if (JSON.stringify(outlineTransitions) !== JSON.stringify(nodeTransitions)) {
+      differingFields.push({
+        field: 'transitions',
+        outline: outlineTransitions.map((item) => item.replace('\u0000', ' -> ')),
+        teleplay: nodeTransitions.map((item) => item.replace('\u0000', ' -> ')),
+      });
+    }
+    if (differingFields.length) {
+      const detail = differingFields
+        .map(({ field, outline: o, teleplay: t }) => `${field}: outline=${JSON.stringify(o)}, teleplay=${JSON.stringify(t)}`)
+        .join('; ');
       push(
         OUTLINE_ISSUE_CODES.TELEPLAY_SCENE_CONTRACT_MISMATCH,
-        `Beat "${scene.title || scene.key}" no longer matches its expanded teleplay scene contract.`,
-        { sceneKey: node.id },
+        `Beat "${scene.title || scene.key}" no longer matches its expanded teleplay scene contract (${detail}).`,
+        { sceneKey: node.id, fields: differingFields },
       );
     }
   }

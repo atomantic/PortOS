@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import PageHeader from '../components/PageHeader';
 import { Camera, Mic, MicOff, Video, VideoOff, RefreshCw, Settings, Volume2 } from 'lucide-react';
 import api from '../services/api';
 import Banner from '../components/ui/Banner';
@@ -358,16 +359,15 @@ export default function Security() {
   }, [streaming, startMedia]);
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h2 className="text-2xl font-bold text-white">Security</h2>
-          <p className="text-gray-500">Turn your PortOS host into a remote security camera and microphone, accessible from your phone over Tailscale</p>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="flex h-full flex-col">
+      <PageHeader
+        icon={Camera}
+        title="Security Camera"
+        subtitle="Turn your PortOS host into a remote security camera and microphone, accessible from your phone over Tailscale"
+        actions={<>
           <button
             onClick={() => setShowSettings(s => !s)}
+            aria-expanded={showSettings}
             className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg transition-colors ${
               showSettings
                 ? 'bg-port-accent text-white'
@@ -375,10 +375,11 @@ export default function Security() {
             }`}
           >
             <Settings size={16} />
-            <span className="max-sm:sr-only">Settings</span>
+            <span className="max-sm:sr-only">Devices</span>
           </button>
-        </div>
-      </div>
+        </>}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
 
       {/* Error display */}
       {error && (
@@ -633,18 +634,8 @@ export default function Security() {
               </div>
             </div>
           </div>
-
-          {/* Instructions */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <h3 className="font-semibold text-white mb-3">Instructions</h3>
-            <ul className="space-y-2 text-sm text-gray-400">
-              <li>1. Click &quot;Start Media&quot; to stream from server</li>
-              <li>2. Video and audio stream from the PortOS server</li>
-              <li>3. Use controls to toggle camera/mic</li>
-              <li>4. Select different devices in Settings</li>
-            </ul>
-          </div>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -28,7 +28,7 @@ import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readWorktreeStatus } from './worktreeManager.js';
-import { isAgentWorktreeId, isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
+import { isAgentWorktreeId, isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
@@ -148,104 +148,110 @@ export function isMalformedClaimBranch(branch) {
 const PR_LIST_LIMIT = 200;
 
 /**
- * Pure classifier: map one branch's git/PR facts to a reconcile state.
- * First match wins.
+ * Ordered classifier rules; the FIRST whose `when` matches decides. Each rule's
+ * `id` is copied onto the classified entry as `rule`, so callers read WHICH
+ * gate fired instead of re-deriving it from the input fields. Order is
+ * load-bearing — moving a rule changes what gets deleted, retired or delegated:
+ *   draft              WIP            explicit human-review handoff, even after its agent exits
+ *   completion-policy  WIP            policy hold. Sits BEFORE merged so a merged pointer is not
+ *                                     deleted by cleanupMerged without the review proof that
+ *                                     prepareReconcileRetirements requires (it scans these rows).
+ *   abandoned-wip      ABANDONED_WIP  dirty tree of an INACTIVE run, no live owner → agent finishes it.
+ *                                     Before merged: a dead agent that never committed leaves its
+ *                                     pointer on an old default-branch commit, which reads as MERGED
+ *                                     and was only ever skipped by cleanupMerged (dirty), invisibly.
+ *                                     The live-owner gate stays in front of this exception.
+ *   merged             MERGED         fully in the default branch → deterministic cleanup. Before
+ *                                     live-owner: cleanupMerged applies the same protection and
+ *                                     reports it as held back.
+ *   live-owner         WIP            an active CoS agent or lock owns it; handing it to the
+ *                                     coordinator would race the live session's git operations
+ *   dirty              WIP            uncommitted changes are never handed to the coordinator
+ *                                     (rebase/resolve/merge could discard them), whatever the PR state
+ *   open-pr            CONFLICTED | IN_REVIEW
+ *   pr-state-unavailable WIP          the forge was unreadable (#3358): "no PR" was not learned, so
+ *                                     do not dispatch an agent to open one that may exist
+ *   needs-pr           NEEDS_PR       tracks a remote, or never pushed but holds commits and a
+ *                                     remote exists to push to. `ahead` is what separates a
+ *                                     never-pushed branch with work from a bare pointer (#3358);
+ *                                     `hasOrigin` gates only the ahead arm because nothing else
+ *                                     proves that work is shippable.
+ *   bare-pointer       WIP            nothing to ship; unreadable `ahead` (null) also lands here,
+ *                                     since a git failure must never manufacture work
+ */
+const CLASSIFY_RULES = [
+  { id: 'draft', state: 'WIP', when: ({ openPr }) => Boolean(openPr?.isDraft) },
+  { id: 'completion-policy', state: 'WIP', when: ({ completionPolicyReason }) => Boolean(completionPolicyReason) },
+  { id: 'abandoned-wip', state: 'ABANDONED_WIP', when: ({ worktreeDirty, liveOwnerReason, abandonedAgentWorktree, abandonedClaimWorktree }) => Boolean(worktreeDirty && !liveOwnerReason && (abandonedAgentWorktree || abandonedClaimWorktree)) },
+  { id: 'merged', state: 'MERGED', when: ({ isMerged }) => Boolean(isMerged) },
+  { id: 'live-owner', state: 'WIP', when: ({ liveOwnerReason }) => Boolean(liveOwnerReason) },
+  { id: 'dirty', state: 'WIP', when: ({ worktreeDirty }) => Boolean(worktreeDirty) },
+  { id: 'open-pr', state: ({ openPr }) => (openPr.mergeable === 'CONFLICTING' ? 'CONFLICTED' : 'IN_REVIEW'), when: ({ openPr }) => Boolean(openPr) },
+  { id: 'pr-state-unavailable', state: 'WIP', when: ({ prStateUnavailable }) => Boolean(prStateUnavailable) },
+  { id: 'needs-pr', state: 'NEEDS_PR', when: ({ hasUpstream, hasOrigin, ahead }) => Boolean(hasUpstream || (hasOrigin && typeof ahead === 'number' && ahead > 0)) },
+  { id: 'bare-pointer', state: 'WIP', when: () => true },
+];
+
+/**
+ * Pure classifier: map one branch's git/PR facts to a reconcile state and the
+ * named rule that matched (see CLASSIFY_RULES for the order). States:
  *   ABANDONED_WIP — dirty worktree of an INACTIVE PortOS run → agent finishes it
  *   MERGED     — work is fully in the default branch → deterministic cleanup
  *   CONFLICTED — open PR with merge conflicts        → agent resolves
  *   IN_REVIEW  — open PR, otherwise                  → agent drives to merge
  *   NEEDS_PR   — unmerged work, no PR, clean          → agent verifies + opens PR
  *                (pushed-with-no-PR, or never pushed but holding commits)
- *   WIP        — bare pointer, dirty, or LIVE-owned   → skip + report (never touch)
+ *   WIP        — not dispatched to the coordinator: draft, completion-policy hold, live owner,
+ *                dirty tree, unreadable forge, or bare pointer. It is NOT "never touch":
+ *                completion-policy rows are still scanned for review-gated retirement.
  *
- * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
+ * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, completionPolicyReason?:string|null, openPr:({mergeable?:string, isDraft?:boolean}|null), prStateUnavailable?:boolean }} input
  *   `ahead` is the branch's own commit count over the default branch (null =
  *   unreadable), and `hasOrigin` says the repo has a remote to push that work to.
- *   Together they are what make a never-pushed branch actionable — see the
- *   NEEDS_PR gate below. `hasOrigin` defaults to FALSE (fail-closed): a caller
- *   that cannot vouch for a remote must not have one invented for it.
+ *   `hasOrigin` defaults to FALSE (fail-closed): a caller that cannot vouch for a
+ *   remote must not have one invented for it.
  *   `prStateUnavailable` means the forge could not be READ this cycle — distinct
  *   from `openPr: null` ("the forge answered: no open PR").
  *   `liveOwnerReason` is `resolveLiveOwnerReason`'s verdict for the branch — non-null
  *   means an active CoS agent or deliberate lock owns it right now, whether or not
  *   its worktree still exists. A clean `claim-*` directory is only a claim marker;
  *   an inactive dirty claim is actionable only when `abandonedClaimWorktree` is true.
+ *   `completionPolicyReason` is a non-null policy hold (e.g. pr-completion-review-required).
+ *   An `openPr.isDraft` is an explicit human-review handoff.
+ * @returns {{state:'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP', rule:string}}
+ */
+function classifyBranchRule(input) {
+  const rule = CLASSIFY_RULES.find((candidate) => candidate.when({ hasOrigin: false, ahead: null, ...input }));
+  return { state: typeof rule.state === 'function' ? rule.state(input) : rule.state, rule: rule.id };
+}
+
+/**
+ * Same as classifyBranchRule, state only. Input is the same facts object (see
+ * classifyBranchRule); a draft is deliberately `draft`, never `completion-policy`.
+ * @param {Parameters<typeof classifyBranchRule>[0]} input
  * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
  */
-export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, isMerged, worktreeDirty, abandonedAgentWorktree, abandonedClaimWorktree, liveOwnerReason = null, completionPolicyReason = null, openPr, prStateUnavailable = false }) {
-  // A draft is an explicit human-review handoff, even after its agent exits.
-  // Protect it before dirty/merged classification can delegate or retire it.
-  if (openPr?.isDraft || completionPolicyReason) return 'WIP';
-  // A dead agent's worktree that still holds uncommitted work is the ONE dirty
-  // case that must be driven rather than skipped — and it must be caught BEFORE
-  // the `isMerged` test, because an agent that exited without committing leaves
-  // its branch pointer parked on an old default-branch commit, which reads as
-  // MERGED. That combination (merged pointer + dirty tree) is exactly what made
-  // these branches invisible: MERGED sent them to `cleanupMerged`, which
-  // correctly refused to delete a dirty worktree, so they were only ever
-  // reported as `skipped` and never appeared in-flight. The work sat there
-  // indefinitely while every run logged "nothing in-flight".
-  // Dirty work is normally protected, but a dirty claim tree is the one
-  // exception branch-reconcile can safely hand to its coordinator: claim
-  // worktrees have no durable agent id, and the caller supplied an authoritative
-  // active-agent set before marking this tree abandoned. Keep the live-owner gate
-  // in front of the exception so a contradictory caller can never dispatch onto
-  // a tree it also says is owned right now.
-  if (worktreeDirty && !liveOwnerReason && (abandonedAgentWorktree || abandonedClaimWorktree)) return 'ABANDONED_WIP';
-  if (isMerged) return 'MERGED';
-  // A branch with a LIVE owner belongs to an active CoS agent or an explicitly
-  // locked worktree. It may keep moving (commits, a PR opened, a rebase) for as
-  // long as that session runs, so handing it to the coordinator races the live
-  // session's git operations and can re-advance the drain's progress signature.
-  // Checked AFTER `isMerged` on purpose — a merged branch with a live owner still
-  // belongs in the MERGED bucket, where `cleanupMerged` applies the same protection
-  // and reports it as held back. A clean `claim-*` tree is not a live-owner signal;
-  // a dirty one is caught by the ordinary WIP guard below.
-  if (liveOwnerReason) return 'WIP';
-  // A worktree with real uncommitted changes is NEVER handed to the coordinator
-  // agent — even for a branch with an open PR. The agent's per-state actions
-  // (rebase/resolve/merge) run git operations that could stash/reset/checkout
-  // and silently discard the user's in-progress work. Skip it as WIP regardless
-  // of PR state; the `cleanupMerged` path applies the same guard for MERGED.
-  if (worktreeDirty) return 'WIP';
-  if (openPr) return openPr.mergeable === 'CONFLICTING' ? 'CONFLICTED' : 'IN_REVIEW';
-  // The forge was unreadable this cycle, so "no open PR" is not something we
-  // learned — it is something we failed to ask (#3358). Report the branch as WIP
-  // (skip + never touch) rather than dispatching an agent to open a PR that may
-  // already exist. MERGED above is unaffected: that verdict is pure git truth.
-  if (prStateUnavailable) return 'WIP';
-  // Unmerged commits that nothing else owns are in-flight work whether or not
-  // they were ever PUSHED. Gating this on `hasUpstream` alone is what made a
-  // whole shelf of `claim/*` branches invisible: a /claim session that dies
-  // before its `git push -u` leaves commits ahead of the default branch with no
-  // upstream, so every run classified them WIP and parked on "no branches in
-  // flight" while the work sat there. NEEDS_PR already tells the agent to push
-  // (`/do:pr`, or `git push -u origin <branch>` by hand), so the un-pushed case
-  // needs no separate state — only to stop being skipped.
-  //
-  // `ahead` is the discriminator the upstream check was standing in for: a branch
-  // with NO commits of its own is a bare pointer with nothing to ship, and stays
-  // WIP. Unknown (`null`, an unreadable rev-list) also stays WIP — a git failure
-  // must never manufacture work.
-  //
-  // `hasOrigin` gates only the ahead-based arm, because that arm is the one with
-  // nothing else proving the work is shippable. On a managed repo with NO remote,
-  // every branch has `hasUpstream: false` and `getOpenPrsByHead` answers with an
-  // empty Map, so without this gate a clean local branch would be dispatched to a
-  // coordinator that can only fail at `git push -u origin <branch>` — spending an
-  // agent run to discover there is nowhere to push. `hasUpstream` needs no such
-  // gate: a branch that tracks a remote branch is itself proof the remote exists.
-  if (hasUpstream || (hasOrigin && typeof ahead === 'number' && ahead > 0)) return 'NEEDS_PR';
-  return 'WIP';
+export function classifyBranch(input) {
+  return classifyBranchRule(input).state;
+}
+
+/**
+ * The idle-park cause for a WIP row. Priority is draft, live owner, completion
+ * policy, then unfinished-work. A live owner outranks a completion policy HERE
+ * even though the completion-policy rule outranks the live-owner rule in the
+ * classified state; that difference is intentional and persisted as skipCauses.
+ */
+function wipParkCause(entry) {
+  return entry.openPr?.isDraft ? 'draft-review-required' : entry.liveOwnerReason || entry.completionPolicyReason || 'unfinished-work';
 }
 
 /**
  * Classify a list of gathered branch inputs. Pure.
  * @param {object[]} inputs - each from `gatherBranchState`
- * @returns {object[]} inputs with a `state` field added
+ * @returns {object[]} inputs with `state` and the matched `rule` id added
  */
 export function classifyBranches(inputs) {
-  return inputs.map((input) => ({ ...input, state: classifyBranch(input) }));
+  return inputs.map((input) => ({ ...input, ...classifyBranchRule(input) }));
 }
 
 /**
@@ -345,12 +351,21 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
  * worktree outside them is `worktree-unmanaged-location` before any of the above:
  * a directory PortOS never created carries no ownership signal at all.
  *
- * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number, staleClaimIdleMs?:number, roots?:Array<{path:string, requireAgentId?:boolean}> }} input
+ * `activeAgentIds` is read through `knownAgentIds`: a Set (even an empty one) is
+ * authoritative, anything else is UNKNOWN liveness and holds every `agent-*` tree
+ * (`worktree-agent-liveness-unknown`). A missing `path` is
+ * `worktree-missing-path`, never null — null means only "this caller may remove it".
+ *
+ * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string>|null, ageMs?:number, staleClaimIdleMs?:number, roots?:Array<{path:string, requireAgentId?:boolean}> }} input
  * @returns {string|null}
  */
-export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [], unmanagedIdleMs }) {
-  if (!path) return null;
-  return worktreeOwnershipReason({
+export function worktreeProtectionReason(input) {
+  return worktreeOwnershipReason(teardownGate(input));
+}
+
+/** The teardown posture both protection helpers share: stale claims reclaimable, unknown liveness held. */
+function teardownGate({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [], unmanagedIdleMs }) {
+  return {
     path,
     locked,
     activeAgentIds,
@@ -360,7 +375,8 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
     ageMs,
     staleClaimIdleMs,
     unmanagedIdleMs,
-  });
+    requireKnownLiveness: true,
+  };
 }
 
 /**
@@ -402,19 +418,8 @@ function reconcileWorktreeRoots(repoPath) {
  * @param {{ path:string|null, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number|null, staleClaimIdleMs?:number, allowLiveClaim?:boolean }} input
  * @returns {string|null} ISO timestamp
  */
-export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [], unmanagedIdleMs }) {
-  if (!path) return null;
-  return worktreeHoldExpiresAt({
-    path,
-    locked,
-    activeAgentIds,
-    roots,
-    allowStaleClaim: true,
-    allowLiveClaim,
-    unmanagedIdleMs,
-    ageMs,
-    staleClaimIdleMs,
-  });
+export function worktreeProtectionExpiresAt(input) {
+  return worktreeHoldExpiresAt(teardownGate(input));
 }
 
 /**
@@ -422,12 +427,18 @@ export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageM
  * plus every running or paused record's id and its workspace basename (a claim
  * tree uses a branch-shaped directory name, not the run's `agent-*` id). Pure.
  *
- * @param {Iterable<string>} runtimeIds - `getActiveAgentIds()`
- * @param {object[]} liveAgents - the agent registry
- * @returns {Set<string>}
+ * Unknown stays unknown: a `runtimeIds` that is not a Set (see `knownAgentIds`)
+ * or an unreadable registry returns null, never an empty Set — `new Set(null)`
+ * would read as "nobody is running" and release every `agent-*` tree.
+ *
+ * @param {Set<string>|null|undefined} runtimeIds - `new Set(getActiveAgentIds())`
+ * @param {object[]|null} liveAgents - the agent registry
+ * @returns {Set<string>|null}
  */
 export function buildActiveOwnerIds(runtimeIds, liveAgents) {
-  const ids = new Set(runtimeIds);
+  const known = knownAgentIds(runtimeIds);
+  if (!known || !Array.isArray(liveAgents)) return null;
+  const ids = new Set(known);
   for (const agent of liveAgents) {
     if (agent?.status !== 'running' && agent?.status !== 'paused') continue;
     if (agent.id) ids.add(agent.id);
@@ -498,8 +509,8 @@ function pendingMergeReason(pendingMergeBranches, branch) {
  * `activeAgentIds` is a sentinel, not a plain collection: a Set (INCLUDING an
  * empty one — "no agents running", the common case) is an authoritative liveness
  * answer, while a missing/non-Set value means liveness is UNKNOWN and every agent
- * worktree stays protected. Same fail-safe posture as `worktreeProtectionReason`'s
- * unknown-age branch — never infer abandonment from an answer we didn't get.
+ * worktree stays protected (`knownAgentIds`). `worktreeProtectionReason` holds
+ * the same way — never infer abandonment from an answer we didn't get.
  *
  * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string> }} input
  * @returns {boolean}
@@ -533,7 +544,7 @@ export function isAbandonedAgentWorktree({ path, locked, activeAgentIds }) {
  * @returns {boolean}
  */
 export function isAbandonedClaimWorktree({ path, locked, worktreeDirty = false, activeAgentIds }) {
-  if (!worktreeDirty || !(activeAgentIds instanceof Set) || !isHumanClaimWorktree(worktreeAgentId(path))) return false;
+  if (!worktreeDirty || !knownAgentIds(activeAgentIds) || !isHumanClaimWorktree(worktreeAgentId(path))) return false;
   return worktreeOwnershipReason({
     path,
     locked,
@@ -546,12 +557,10 @@ export function isAbandonedClaimWorktree({ path, locked, worktreeDirty = false, 
  * Why this branch must be left ALONE this cycle — the dispatch-side counterpart to
  * `worktreeProtectionReason`'s teardown gate. Three cases that gate doesn't cover:
  *
- * 1. **Liveness we could not determine.** `worktreeProtectionReason` is only ever
- *    called with an authoritative `activeAgentIds` Set (cleanupMerged defaults it to
- *    an empty one), so a missing Set reads there as "no agents running" and returns
- *    null. For a DISPATCH decision that default is backwards: an `agent-*` worktree
- *    whose owner's liveness is UNKNOWN must be presumed live, exactly as
- *    `isAbandonedAgentWorktree` presumes it. Fail safe toward not-touching.
+ * 1. **Liveness we could not determine.** An `agent-*` worktree whose owner's
+ *    liveness is UNKNOWN (`knownAgentIds` returned null) is presumed live —
+ *    the same posture `worktreeProtectionReason` and `isAbandonedAgentWorktree`
+ *    take. Fail safe toward not-touching.
  * 2. **A live agent whose worktree is already GONE.** Ownership is in the branch
  *    NAME, not the worktree: CoS branches are `cos/<taskId>/<agentId>` and the
  *    worktree basename is that same `<agentId>`. An agent that removed its worktree
@@ -583,7 +592,7 @@ export function resolveLiveOwnerReason({ branch, path, locked, activeAgentIds })
   // The branch's own trailing segment is an agent id for CoS branches — checked
   // FIRST because it holds even after the worktree is gone.
   const owner = (branch || '').split('/').pop() || '';
-  if (isAgentWorktreeId(owner) && activeAgentIds instanceof Set && activeAgentIds.has(owner)) {
+  if (isAgentWorktreeId(owner) && knownAgentIds(activeAgentIds)?.has(owner)) {
     return 'branch-active-agent';
   }
   if (!path) return null;
@@ -1052,7 +1061,7 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
   }
   for (const entry of detachedWorktrees) add(entry, entry.reason || 'detached-worktree-held');
   for (const entry of superseded) add(entry, entry.holdReason || 'superseded-branch-held');
-  for (const entry of wip) add(entry, entry.openPr?.isDraft ? 'draft-review-required' : entry.liveOwnerReason || entry.completionPolicyReason || 'unfinished-work');
+  for (const entry of wip) add(entry, wipParkCause(entry));
   for (const entry of heldLive) if (!holds.has(entry.branch || entry.path)) add(entry, entry.liveOwnerReason || 'live-owner');
   for (const entry of gated) add(entry, entry.openPr?.isDraft ? 'draft-review-required' : 'action-disabled');
   // Marker cleanup is distinct from successful local branch retirement.
@@ -1148,22 +1157,19 @@ async function claimIssueUnreserved(target, issue, forgeExec) {
  * @param {string} repoPath
  * @param {string} defaultBranch
  * @param {object[]} merged - gathered inputs whose state === 'MERGED'
- * @param {{ activeAgentIds?: Set<string> }} [opts] - CoS agents currently running;
+ * @param {{ activeAgentIds?: Set<string>|null }} [opts] - CoS agents currently running;
  *   their worktrees are never torn down even when the branch is merged + clean.
+ *   Omitted or null is unknown liveness and holds every `agent-*` worktree.
+ *   A `claim-*` checkout keeps its claim hold; only exact completion evidence
+ *   (see `admitBranchRetirement`) waives it.
  * @returns {Promise<{cleaned:string[], skipped:{branch:string,reason:string,retryAt?:string}[]}>}
  *   A skip carries `retryAt` when its hold is known to lift at a specific time.
  */
-export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds = new Set(), claimOwners, origin, forgeExec, forgeAccount = null } = {}) {
+export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount = null } = {}) {
   const cleaned = [];
   const skipped = [];
   const claimMarkersHeld = [];
   for (const b of merged) {
-    // Re-verify at action time — state may have shifted since the gather.
-    const hasMergeEvidence = await hasBranchMergeEvidence(repoPath, b.branch, defaultBranch);
-    if (!hasMergeEvidence) {
-      skipped.push({ branch: b.branch, reason: 'not-merged-on-recheck' });
-      continue;
-    }
     const retired = await retireBranch(repoPath, b, {
       activeAgentIds,
       claimOwners,
@@ -1174,7 +1180,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
     });
     if (!retired.ok) {
       const { ok, ...failure } = retired;
-      skipped.push({ branch: b.branch, ...(b.worktreePath && { path: b.worktreePath }), ...failure });
+      skipped.push({ branch: b.branch, ...(failure.reason !== 'not-merged-on-recheck' && b.worktreePath && { path: b.worktreePath }), ...failure });
       continue;
     }
     const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin, forgeExec });
@@ -1219,7 +1225,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
  * @returns {Promise<{reaped:string[], held:object[], skipped:{branch:string,reason:string,retryAt?:string}[]}>}
  *   `held` is the live entries the reap could not take, for the caller to report.
  */
-export async function reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds = new Set(), claimOwners, cosDir } = {}) {
+export async function reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds, claimOwners, cosDir } = {}) {
   const reaped = [];
   const held = [];
   const skipped = [];
@@ -1345,13 +1351,12 @@ async function retireBranch(repoPath, b, opts) {
         branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents,
       });
       if (reason) return { result: { ok: false, reason } };
-      // A fresh registry read under the binding lock supersedes the directory-age
-      // proxy. A claim name alone is not a live owner. Keep all other retirement
-      // gates, and refresh workspace owners too (not only explicit claim bindings).
+      // Refresh workspace owners from the registry read under the binding lock
+      // (not only explicit claim bindings). The caller's `allowLiveClaim` stands:
+      // a merged claim's hold is waived only by completion evidence, below.
       const gated = await admitBranchRetirement(repoPath, b, {
         ...opts,
         activeAgentIds: buildActiveOwnerIds(opts.activeAgentIds, agents),
-        allowLiveClaim: true,
       });
       if (gated.result) return gated;
       if (!gated.archiveTree && !gated.prepare) return { result: await finishBranchRetirement(repoPath, gated) };
@@ -1371,24 +1376,25 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
   if (!defaultBranch) return stop({ ok: false, reason: 'default-branch-unavailable' });
   if (b.branch === defaultBranch) return stop({ ok: false, reason: 'protected-branch' });
+  const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-  const readPolicyHold = () => readBranchCompletionHold({ repoPath, branch: b.branch, retirement: mergedRetirement });
+  const readPolicyHold = (tip = expectedHead) => readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
   const policyHold = await readPolicyHold();
   if (policyHold) return stop({ ok: false, reason: policyHold });
   let archiveTree = null;
   let claimCompletion = null;
-  const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
+  let holders = null;
   if (mergedRetirement) {
     // Completion audits may know only the branch. Resolve its actual holder,
     // and pin merge evidence to its current commit rather than the scan's flag.
-    const holders = await listWorktrees(repoPath).catch(() => null);
+    holders = await listWorktrees(repoPath).catch(() => null);
     if (!holders) return stop({ ok: false, reason: 'worktree-ownership-unreadable' });
     const holder = holders.find(wt => wt.branch === `refs/heads/${b.branch}`);
     if (!await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return stop({ ok: false, reason: 'not-merged-on-recheck' });
@@ -1411,7 +1417,12 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
       roots: reconcileWorktreeRoots(repoPath),
       unmanagedIdleMs,
     };
-    const protectedReason = worktreeProtectionReason(gate);
+    let protectedReason = worktreeProtectionReason(gate);
+    // The claim gate runs LAST, so `worktree-human-claim` means every other hold
+    // already cleared. For a merged claim that one hold is waivable, but only by
+    // the exact completion evidence required below — never by the claim name or
+    // the registry's silence (#12990).
+    if (protectedReason === 'worktree-human-claim' && mergedRetirement) protectedReason = null;
     if (protectedReason) {
       // Carry WHEN the hold lifts when it lifts on a clock (a claim worktree
       // still inside its grace window). Without it the caller can only park on
@@ -1434,7 +1445,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
       const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
       if (!records) return stop({ ok: false, reason: 'claim-ownership-unreadable' });
       if (await hasCompletedCheckoutEvidence(records, {
-        repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
+        repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead, worktrees: holders,
       })) claimCompletion = 'receipt';
       else {
         const hold = await manualClaimShippedHold(repoPath, b, expectedHead, forgeAccount);
@@ -1444,7 +1455,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds = new Set(), 
         claimCompletion = 'forge-merged';
       }
     }
-    const tree = (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
+    const tree = holders ? holders.find(wt => wt.path === b.worktreePath) : (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
     if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
     archiveTree = tree;
   }
@@ -1495,15 +1506,16 @@ export async function checkoutIdleMs(worktreePath) {
  * `prepare` backup, each taken after admission with the ownership lock released.
  */
 async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion }, { prepared = null, preservation = null } = {}) {
+  let removal = null;
   if (b.worktreePath) {
-    const verifyRemoval = async (holder) => {
+    const verifyRemoval = async (holder, worktrees) => {
       if (!holder || holder.branch !== `refs/heads/${b.branch}` || holder.head !== expectedHead) return 'worktree-holder-changed';
       if (claimOwners !== undefined) {
         const agents = claimOwners?.readAgents ? await claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
         const reason = claimCheckoutOwnerReason({ branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents });
         if (reason) return reason;
       }
-      const policyHold = await readPolicyHold();
+      const policyHold = await readPolicyHold(expectedHead);
       if (policyHold) return policyHold;
       // A forge-merged exact head cannot un-merge, and the holder check above
       // pins that head; only a run receipt can be superseded by a later owner.
@@ -1512,7 +1524,7 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
         const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
         const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
         if (!records || !await hasCompletedCheckoutEvidence(records, {
-          repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead,
+          repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead, worktrees,
         })) return 'claim-completion-unverified';
       }
       const dirtyPaths = await worktreeDirtyPaths(b.worktreePath);
@@ -1523,19 +1535,19 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       if (mergedRetirement && !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return 'not-merged-on-recheck';
       return preservation ? preservation.verify(holder) : null;
     };
-    const removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval });
+    removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval });
     // The branch is still checked out by a surviving worktree: deleting it would
     // fail, and reporting success would mark the branch reconciled while it is held.
     if (!removal.removed) return { ok: false, reason: removal.reason || 'worktree-remove-failed' };
   }
-  const latestPolicyHold = await readPolicyHold();
+  const latestPolicyHold = await readPolicyHold(expectedHead);
   if (latestPolicyHold) return { ok: false, reason: latestPolicyHold };
   if (claimOwners !== undefined) {
     const agents = claimOwners?.readAgents ? await claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
     const reason = claimCheckoutOwnerReason({ branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents });
     if (reason) return { ok: false, reason };
   }
-  const holders = await listWorktrees(repoPath).catch(() => null);
+  const holders = removal?.entries || await listWorktrees(repoPath).catch(() => null);
   if (!holders || holders.some(wt => wt.branch === `refs/heads/${b.branch}`)) return { ok: false, reason: 'branch-has-new-holder' };
   if (mergedRetirement) {
     if (!await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return { ok: false, reason: 'not-merged-on-recheck' };
@@ -1562,8 +1574,8 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
  * @param {string} defaultBranch
  * @returns {Promise<{path:string, head:string|null, locked:boolean, worktreeAgeMs:number|null, dirtyPaths:string[]}[]>}
  */
-async function gatherDetachedWorktrees(repoPath, defaultBranch) {
-  const worktrees = await listWorktrees(repoPath).catch(() => []);
+async function gatherDetachedWorktrees(repoPath, defaultBranch, preloadedTrees = null) {
+  const worktrees = preloadedTrees || await listWorktrees(repoPath).catch(() => []);
   const detached = [];
   for (const [index, entry] of worktrees.entries()) {
     // git lists the main checkout first; the path check covers a caller whose list is not ordered.
@@ -1587,8 +1599,8 @@ const isCommitOnBranch = (repoPath, sha, branch) =>
 
 // Read after cleanup so removed holders cannot survive in the recovery report.
 // No content or ownership inference: retirement still uses its existing gates.
-async function gatherRecoveryWorktrees(repoPath) {
-  const trees = await listWorktrees(repoPath).catch(() => null);
+async function gatherRecoveryWorktrees(repoPath, preloadedTrees = null) {
+  const trees = preloadedTrees || await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return null;
   return trees.slice(1).filter(tree => !tree.bare).map(tree => {
     const managed = worktreeOwnershipReason({ path: tree.path, roots: reconcileWorktreeRoots(repoPath), allowLiveClaim: true }) !== 'worktree-unmanaged-location';
@@ -1633,7 +1645,7 @@ const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
  * @param {{ activeAgentIds?: Set<string>, claimOwners?: { agents: object[]|null } }} [opts]
  * @returns {Promise<{cleaned:string[], skipped:object[], held:{path:string, head:string|null, reason:string, managed:boolean, retryAt?:string}[]}>}
  */
-async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { activeAgentIds = new Set(), claimOwners } = {}) {
+async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { activeAgentIds, claimOwners } = {}) {
   const cleaned = [];
   const skipped = [];
   const held = [];
@@ -1849,8 +1861,10 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
   // Detached worktrees have no branch, so nothing above can see them (#10825).
+  const postCleanupWorktrees = await listWorktrees(repoPath).catch(() => []);
+  const detachedWorktrees = await gatherDetachedWorktrees(repoPath, defaultBranch, postCleanupWorktrees);
   const detachedReap = cleanup
-    ? await reapDetachedWorktrees(repoPath, defaultBranch, await gatherDetachedWorktrees(repoPath, defaultBranch), { activeAgentIds, claimOwners })
+    ? await reapDetachedWorktrees(repoPath, defaultBranch, detachedWorktrees, { activeAgentIds, claimOwners })
     : { cleaned: [], skipped: [], held: [] };
   const cleaned = [...new Set([...cleanedWorktrees, ...cleanedBranches, ...detachedReap.cleaned])];
 
@@ -1881,7 +1895,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     skipped: [...skipped, ...supersededReap.skipped, ...detachedReap.skipped],
     // Detached trees at merged commits that were NOT removed, managed or not.
     detachedWorktrees: detachedReap.held,
-    worktreeInventory: await gatherRecoveryWorktrees(repoPath),
+    worktreeInventory: await gatherRecoveryWorktrees(repoPath, detachedReap.cleaned.length === 0 ? postCleanupWorktrees : null),
     orphanRemotes,
     prStateUnavailable
   };

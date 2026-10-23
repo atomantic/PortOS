@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn(),
+}));
+vi.mock('./cos.js', () => ({
   forceSpawnTask: vi.fn(),
 }));
 
-import { addTask, forceSpawnTask } from './cos.js';
+import { addTask } from './cosTaskStore.js';
+import { forceSpawnTask } from './cos.js';
 import { isDoReviewTask, spawnPrDoReviewTask } from './prDoReviewTask.js';
 
 const APP = { id: 'app-001', name: 'Widget' };
@@ -79,6 +82,24 @@ describe('spawnPrDoReviewTask', () => {
     expect(addTask).toHaveBeenCalledWith(expect.anything(), 'user', { suppressDequeue: true });
     expect(forceSpawnTask).toHaveBeenCalledWith('task-1');
     expect(result).toMatchObject({ duplicate: false, dispatch: { started: true, reason: null } });
+  });
+
+  it('leaves an automated run to the normal queue, and needs no app for a PR read through gh', async () => {
+    const result = await queue({ app: null, immediate: false });
+
+    expect(addTask).toHaveBeenCalledWith(expect.anything(), 'user', { suppressDequeue: false });
+    expect(queuedTask().app).toBeUndefined();
+    expect(queuedTask().description).toBe('Review PR #17 for acme/widget');
+    expect(forceSpawnTask).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ duplicate: false, dispatch: { started: false, reason: null } });
+  });
+
+  it('keeps an inbox review bound to the selected account even without a managed app', async () => {
+    await queue({ app: null, immediate: false, notificationAccount: { id: 'inbox-b', host: 'ghe.example.com', login: 'inbox-user' } });
+    expect(queuedTask().metadata).toEqual({
+      targetPullRequest: 17,
+      githubNotificationAccount: { accountId: 'inbox-b', host: 'ghe.example.com', login: 'inbox-user', origin: 'user' },
+    });
   });
 
   it('reports a refused dispatch as queued-not-started rather than as a running agent', async () => {

@@ -82,7 +82,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Reality universe as fiction.
   // v13 = durable character sheet request identities (#11669). Older peers
   // must not strip supersession state during an unrelated canon edit.
-  universes: 13,
+  // v14 = canon entries gained optional `forms[]` (alternate ages, eras and
+  // looks/styles beside the canonical present-story form). A <=v13 peer would
+  // sanitize them away and LWW the loss back.
+  universes: 14,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -444,7 +447,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v12 = `catalog_ingredient_media.library` (Casting reference library:
   // variant age/era/wardrobe, tags, render-guide flag). A ≤v11 receiver would
   // drop it and whole-row LWW it back, so live transfers need equal versions.
-  catalog: 12,
+  // v13 = bible payloads gained optional `forms[]` (alternate ages/looks) and
+  // media `library.variant.formId`. A <=v12 peer's sanitizer and library
+  // normalizer would strip both and whole-row LWW the loss back.
+  catalog: 13,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
@@ -507,7 +513,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // nulls an unknown mode on receive, and its next edit would LWW that lost pin
   // back onto the newer peer. Backend values in `IMAGE_GEN_MODES` /
   // `VIDEO_GEN_MODES` are pinned in schemaVersions.test.js to move with this.
-  fableLoom: 10,
+  // v11 adds Runway image backend pins; older peers would erase the unknown mode.
+  fableLoom: 11,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
@@ -740,8 +747,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `offsetFrames`, `reverse`, `holdLastFrame`, `filmLook`, `transitionIn`/
   // `transitionOut`, `glitches`, `cutEffect`, `imageEffect`/`imageEffectSec`,
   // `stillMove` and `performanceStyle`. Optional fields on the same layout; no
-  // migration or backfill. A field added to these normalizers later needs v23.
-  musicVideoProjects: 22,
+  // migration or backfill.
+  // v23 = a shot's storyboard panel link (`scene.panelId`/`panelRev`, Fit to
+  // song), which a v22 re-plan or split rebuilds without. Optional, no backfill.
+  // v24 = the panel's art as the shot's frame reference (`scene.panelArt`),
+  // which a v23 re-plan or split rebuilds without. Optional, no backfill.
+  // A field added to these normalizers later needs v25.
+  musicVideoProjects: 24,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
@@ -784,7 +796,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // value into `auto`, and its next edit would LWW that un-pinned downgrade back
   // onto the newer peer. Any new `IMAGE_GEN_MODES`/`VIDEO_GEN_MODES` value needs
   // another bump (guarded in schemaVersions.test.js).
-  creativeCommissions: 5,
+  // v6 adds Runway image backend pins; older peers would coerce them to auto.
+  creativeCommissions: 6,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep

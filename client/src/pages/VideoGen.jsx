@@ -1,3 +1,7 @@
+import { useRunwayCatalog } from '../hooks/useRunwayCatalog.js';
+import RunwayCatalogStatus from '../components/imageGen/RunwayCatalogStatus.jsx';
+import RunwayVideoInputPanel from '../components/videoGen/RunwayVideoInputPanel.jsx';
+import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../../server/lib/runwaySpecialVideoModels.js';
 /**
  * Video Generation page (LTX models via mlx_video on macOS, diffusers on
  * Windows), with local, Grok, and federated render targets.
@@ -89,7 +93,7 @@ import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
   getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen, previewVideoPrompt,
-  listVideoHistory, deleteVideoHistoryItem, setVideoHidden,
+  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, setVideoHidden,
   patchSettingsSlice,
   getActiveVideoJob,
   getSettings,
@@ -106,8 +110,8 @@ import {
 } from '../lib/falVideoModels.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import {
-  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, describeRunwayVideoRate, estimateRunwayVideoCostUsd, getRunwayVideoModel,
-  runwayModelTakesText, runwayVideoLengths, runwayVideoResolutions,
+  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, describeRunwayVideoRate, estimateRunwayVideoCostUsd, getRunwayVideoModel,
+  runwayVideoLengths, runwayVideoResolutions,
 } from '../lib/runwayVideoModels.js';
 import { videoGenEnqueuePolicy } from '../lib/videoGenEnqueuePolicy.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
@@ -132,6 +136,9 @@ const MODES = [
 
 // Stable fetcher for useListResource — the hook re-runs on identity change.
 const loadLoraLibrary = () => listLorasFull({ silent: true });
+
+// The gallery shows the newest records; older ones are reached by id (Remix) or Media History.
+const HISTORY_PAGE_LIMIT = 200;
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -241,7 +248,7 @@ export default function VideoGen() {
   // share. See client/src/hooks/useVideoGenForm.js.
   const {
     backend, hostedLane, isGrok, isFal, isReactor, isRunway, handleBackendChange, grokDuration, setGrokDuration,
-    runwayModelId, setRunwayModelId, runwayDuration, setRunwayDuration, runwayResolution, setRunwayResolution,
+    runwayModelId, setRunwayModelId, runwayDuration, setRunwayDuration, runwayResolution, setRunwayResolution, runwayInputs, setRunwayInputs,
     falDuration, setFalDuration, falModelId, setFalModelId,
     falResolution, setFalResolution, falGenerateAudio, setFalGenerateAudio,
     reactorClipId, setReactorClipId, reactorSeconds, setReactorSeconds, reactorSeed, setReactorSeed,
@@ -411,7 +418,7 @@ export default function VideoGen() {
   // gallery simply staying empty), so the shared toast would double it.
   const refreshHistory = useCallback(() => {
     historyInFlightRef.current += 1;
-    return listVideoHistory({ silent: true })
+    return listVideoHistory({ silent: true, query: { limit: HISTORY_PAGE_LIMIT } })
       .then((items) => {
         setHistory(Array.isArray(items) ? items : []);
         setHistoryLoad('loaded');
@@ -547,6 +554,26 @@ export default function VideoGen() {
       return next;
     }, { replace: true });
   }, [setSearchParams]);
+  // The page loads only the newest HISTORY_PAGE_LIMIT records, so an older clip
+  // is hydrated by id before it is called missing. The handoff id is already
+  // marked settled, so a history refresh mid-flight cannot start a second lookup;
+  // a handoff that changed or cleared meanwhile resets that ref, which makes the
+  // answer stale.
+  const hydrateOlderRemix = useCallback((id) => {
+    const current = () => settledRemixHandoffRef.current === id;
+    getVideoHistoryItem(id, { silent: true })
+      .then((older) => {
+        if (!current()) return;
+        applyRemix(older);
+        setRemixHandoffProblem(null);
+        consumeRemixHandoff();
+      })
+      .catch((err) => {
+        if (!current()) return;
+        // Only a 404 means the clip is gone; any other failure keeps the param so Retry resolves it.
+        if (err?.status === 404) { setRemixHandoffProblem('missing'); consumeRemixHandoff(); } else setRemixHandoffProblem('error');
+      });
+  }, [applyRemix, consumeRemixHandoff]);
   useEffect(() => {
     // No handoff in the URL — including right after this one consumed its own.
     // Clearing the settled id here is what lets the NEXT handoff through, even
@@ -573,11 +600,11 @@ export default function VideoGen() {
     if (record) {
       applyRemix(record);
       setRemixHandoffProblem(null);
-    } else {
-      setRemixHandoffProblem('missing');
+      consumeRemixHandoff();
+      return;
     }
-    consumeRemixHandoff();
-  }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
+    hydrateOlderRemix(remixHandoffId);
+  }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff, hydrateOlderRemix]);
   // Back to 'loading' first, so a retry that fails again still moves the state
   // ('loading' → 'error') and re-runs the effect above.
   const retryRemixHandoff = useCallback(() => {
@@ -948,7 +975,13 @@ export default function VideoGen() {
     // Cancel targets only the run this page owns — started here or resumed
     // after a reload. With nothing owned there is no job id to name, and an
     // unscoped cancel could kill an unrelated parallel render.
-    await cancelRun();
+    // A refused cancel (job already finishing, or unknown) leaves the run and
+    // its stream attached, so only a server-accepted cancel reads as Cancelled.
+    const refused = await cancelRun().then(() => false, (err) => {
+      toast.error(err.message || 'Cancel failed');
+      return true;
+    });
+    if (refused) return;
     setGenerating(false);
     setStatusMsg('Cancelled');
   };
@@ -967,8 +1000,12 @@ export default function VideoGen() {
   const modelFieldVisible = !modelsLoading || modelContextLoading;
   const falModel = getFalVideoModel(falModelId);
   const falResolutions = falVideoResolutions(falModel);
-  const runwayModel = getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
-  const runwayResolutions = runwayVideoResolutions(runwayModel);
+  const runwayCatalog = useRunwayCatalog(isRunway, mode);
+  const runwaySpecial = isRunway && RUNWAY_SPECIAL_VIDEO_MODES.includes(mode);
+  const runwayPerformance = isRunway && mode === 'character-performance';
+  const runwayModel = getRunwaySpecialVideoModel(runwayModelId) || getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
+  const runwaySizeModel = mode === 'text' && runwayModel?.textToVideo ? { ...runwayModel, size: runwayModel.textToVideo.size } : runwayModel;
+  const runwayResolutions = runwayVideoResolutions(runwaySizeModel);
 
   const notConnected = !!status && status.connected === false && !needsByovProbe;
 
@@ -987,7 +1024,7 @@ export default function VideoGen() {
       : prompt.length),
     [promptCap, prompt, negativePrompt, stylePreset, selectedUniverse],
   );
-  const promptOverLimit = promptCap != null && submittedPromptLength > promptCap;
+  const promptOverLimit = !runwayPerformance && promptCap != null && submittedPromptLength > promptCap;
 
   // Budget the AI enhancer writes inside. It's the backend cap MINUS the style
   // preset / universe prefix, because that prefix is part of what PortOS
@@ -1040,8 +1077,9 @@ export default function VideoGen() {
   const effectiveBatchSize = rendersOnThisMachine
     && currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1;
 
-  const { canEnqueue, generateTitle, queueTitle, optionsHint } = videoGenEnqueuePolicy({
+  const { canEnqueue: backendCanEnqueue, generateTitle, queueTitle, optionsHint } = videoGenEnqueuePolicy({
     prompt,
+    promptOptional: runwaySpecial,
     remixHandoffPending,
     promptOverLimit,
     isRemote: remoteTarget.isRemote,
@@ -1062,6 +1100,8 @@ export default function VideoGen() {
     keyframesBlocked,
     keyframesError,
   });
+  const specialInputsReady = !runwaySpecial || (!!runwayInputs.video && (!runwayPerformance || !!(runwayInputs.characterVideo || sourceImageFile || sourceImageUpload)));
+  const canEnqueue = backendCanEnqueue && specialInputsReady && (!isRunway || runwayCatalog.videoModels.some((m) => m.id === runwayModel?.id));
 
   return (
     <div className="space-y-3">
@@ -1185,7 +1225,7 @@ export default function VideoGen() {
           WAI-ARIA Tabs, since the mode-specific inputs aren't structured as
           tabpanels and we don't implement roving-tabindex/arrow-key focus. */}
       <div className="bg-port-card border border-port-border rounded-xl p-1 flex flex-wrap gap-1" role="group" aria-label="Video generation mode">
-        {(rendersOffMachine ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
+        {(isRunway ? [...MODES.filter((m) => m.id === 'text' || m.id === 'image'), { id: 'video-edit', label: 'Video edit', icon: SlidersHorizontal, desc: 'Edit a source video with Aleph 2' }, { id: 'character-performance', label: 'Character performance', icon: SlidersHorizontal, desc: 'Apply a performance to a character with Act-Two' }] : rendersOffMachine ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
           const active = mode === id;
           return (
             <button
@@ -1281,7 +1321,7 @@ export default function VideoGen() {
               repairing={modelDownload.repairing}
             />
           ))}
-          <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+          {!runwayPerformance && <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
             <AutoSizeTextarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -1313,7 +1353,7 @@ export default function VideoGen() {
                 This model does not use a negative prompt.
               </p>
             )}
-          </FormField>
+          </FormField>}
 
           <div
             className="sticky top-0 z-10 -mx-4 flex flex-wrap items-center gap-2 border-y border-port-border bg-port-card/95 px-4 py-2 backdrop-blur lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none"
@@ -1383,7 +1423,7 @@ export default function VideoGen() {
             </summary>
             <div className="mt-3 grid min-w-0 grid-cols-1 gap-4 lg:mt-0 @3xl/video-form:grid-cols-2">
               <section aria-label="Prompt styling and reference media" className="min-w-0 space-y-3">
-              <div className="grid min-w-0 grid-cols-1 gap-3 @5xl/video-form:grid-cols-2">
+              {!runwayPerformance && <div className="grid min-w-0 grid-cols-1 gap-3 @5xl/video-form:grid-cols-2">
               <UniverseStylePicker
                 value={selectedUniverse?.id || ''}
                 onChange={setSelectedUniverse}
@@ -1392,8 +1432,8 @@ export default function VideoGen() {
                 value={stylePreset?.id || ''}
                 onChange={setStylePreset}
               />
-              </div>
-              {negativePromptSupported && (
+              </div>}
+              {!runwayPerformance && negativePromptSupported && (
                 <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                   <AutoSizeTextarea
                     value={negativePrompt}
@@ -1408,7 +1448,7 @@ export default function VideoGen() {
           {/* Keep Enhance live while a render is in flight so the next clip
               can be composed and submitted to its server queue. Generate
               itself becomes Cancel. */}
-          <PromptEnhancer
+          {!runwayPerformance && <PromptEnhancer
             kind="video"
             prompt={prompt}
             setPrompt={setPrompt}
@@ -1416,7 +1456,7 @@ export default function VideoGen() {
             setNegativePrompt={negativePromptSupported ? setNegativePrompt : undefined}
             renderConfig={{ stylePreset: stylePreset?.id, mode, model: modelId }}
             maxPromptLength={enhancePromptBudget}
-          />
+          />}
 
           {mode === 'fflf' && keyframesSupported && (
             <KeyframePanel
@@ -1433,10 +1473,10 @@ export default function VideoGen() {
             />
           )}
 
-          {(mode === 'image' || (mode === 'fflf' && !keyframesActive)) && (
+          {(mode === 'image' || (runwaySpecial && !runwayInputs.characterVideo) || (mode === 'fflf' && !keyframesActive)) && (
             <div className={`grid gap-2 ${mode === 'fflf' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
               <FramePanel
-                label={mode === 'fflf' ? 'First frame' : 'Source image'}
+                label={runwayPerformance ? 'Character image' : runwaySpecial ? 'Guidance image (optional)' : mode === 'fflf' ? 'First frame' : 'Source image'}
                 file={sourceImageFile}
                 upload={sourceImageUpload}
                 uploadUrl={sourceUploadUrl}
@@ -1660,6 +1700,7 @@ export default function VideoGen() {
             </div>
           ) : isRunway ? (
             <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2"><RunwayCatalogStatus catalog={runwayCatalog} /></div>
               <FormField className="col-span-2" label="Runway model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                 <select
                   id="runway-video-model"
@@ -1667,13 +1708,15 @@ export default function VideoGen() {
                   onChange={(e) => setRunwayModelId(e.target.value)}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                 >
-                  {RUNWAY_VIDEO_MODELS.filter((m) => mode !== 'text' || runwayModelTakesText(m)).map((m) => (
+                  {!runwayCatalog.videoModels.some((m) => m.id === runwayModel?.id) && <option value={runwayModel?.id || runwayModelId}>{runwayModel?.label || runwayModelId} (unavailable)</option>}
+                  {runwayCatalog.videoModels.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {`${m.label} · ${describeRunwayVideoRate(m.id)}${m.id === RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL ? ' (default)' : ''}`}
+                      {`${m.label} · ${describeRunwayVideoRate(m.id) || 'price varies'}${m.id === RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL ? ' (default)' : ''}`}
                     </option>
                   ))}
                 </select>
               </FormField>
+              {runwaySpecial ? <RunwayVideoInputPanel key={mode} mode={mode} value={runwayInputs} onChange={setRunwayInputs} /> : <>
               <FormField label="Clip length" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                 <select
                   id="runway-video-length"
@@ -1702,13 +1745,14 @@ export default function VideoGen() {
                     onChange={(e) => setRunwayResolution(e.target.value)}
                     className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                   >
-                    <option value="">{`${runwayModel.size.default} (default)`}</option>
-                    {runwayResolutions.map((res) => <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res)}`}</option>)}
+                    <option value="">{`${runwaySizeModel.size.default} (default)`}</option>
+                    {runwayResolutions.map((res) => <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res) || 'price varies'}`}</option>)}
                   </select>
                 </FormField>
               )}
+              </>}
               <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
-                {mode === 'image' ? 'Animates your start frame' : 'Renders from your prompt'} on the Runway API. Counts against your Runway credits
+                {runwaySpecial ? 'Uses your video inputs' : mode === 'image' ? 'Animates your start frame' : 'Renders from your prompt'} on the Runway API. Counts against your Runway credits
                 {(() => {
                   const estimate = estimateRunwayVideoCostUsd({
                     modelId: runwayModel?.id, seconds: runwayDuration === '' ? null : Number(runwayDuration), resolution: runwayResolution,

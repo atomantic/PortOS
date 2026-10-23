@@ -16,7 +16,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import * as convs from './askConversations.js';
 import * as brainService from './brain.js';
-import * as cosService from './cos.js';
+import { addTask } from './cosTaskStore.js';
 import * as identityService from './identity.js';
 
 // Cap promoted task descriptions so a long assistant answer doesn't bloat
@@ -66,7 +66,7 @@ export async function promoteTurnContent({ conversationId, turn, target, priorit
     const description = content.length <= TASK_DESCRIPTION_MAX
       ? content
       : `${content.slice(0, TASK_DESCRIPTION_MAX - 1)}…`;
-    const result = await cosService.addTask({
+    const result = await addTask({
       description,
       priority,
       context: `Promoted from Ask Yourself conversation ${conversationId}`,

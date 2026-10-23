@@ -36,6 +36,8 @@ describe('ProcessesPage list resources (#12171)', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
     expect(screen.getByTestId('processes-tab')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Processes' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /PM2 Save/ })).toBeInTheDocument();
   });
 
   it('shows empty copy when managed apps list is empty', async () => {

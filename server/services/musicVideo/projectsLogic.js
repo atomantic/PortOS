@@ -549,6 +549,7 @@ function buildScene(input, { order }) {
     shotMode: input.shotMode ?? 'cutaway',
     ...(input.performanceSpeaker ? { performanceSpeaker: input.performanceSpeaker } : {}),
     ...(input.performanceStyle === 'music' ? { performanceStyle: 'music' } : {}),
+    ...(input.panelId ? { panelId: input.panelId, panelRev: input.panelRev ?? null, panelArt: input.panelArt ?? null } : {}),
     referenceImageId: null,
     videoHistoryId: null,
     // #8965 — immutable candidate takes; the two slot fields above are the
@@ -649,7 +650,7 @@ export function replaceScenes(project, sceneInputs) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'characterVariant'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds', 'characterVariant', 'panelId', 'panelRev', 'panelArt'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -837,6 +838,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         performanceSpeaker: scene.performanceSpeaker ?? null,
         performanceStyle: scene.performanceStyle ?? null,
         ...(scene.camera ? { camera: scene.camera } : {}),
+        ...(scene.panelId ? { panelId: scene.panelId, panelRev: scene.panelRev ?? null, panelArt: scene.panelArt ?? null } : {}),
         ...timing,
       }),
     }, { order: 0 });

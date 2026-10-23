@@ -307,8 +307,8 @@ export async function navigateToUrl(url) {
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`CDP navigate failed (${response.status}): ${text}`);
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`CDP navigate failed (${response.status})`);
   }
 
   // A successful CDP /json/new always returns a target with an id; a malformed
@@ -316,10 +316,10 @@ export async function navigateToUrl(url) {
   // undefined id/url that a caller mistakes for a successful navigation.
   const page = await readResponseJson(response, { fallback: null, emptyValue: null });
   if (!page?.id) {
-    throw new Error(`CDP navigate returned a malformed response for ${url}`);
+    throw new Error('CDP navigate returned a malformed response');
   }
   browserEvents.emit('pages:changed');
-  console.log(`🌐 Opened ${url} in CDP browser (tab ${page.id})`);
+  console.log('🌐 Opened tab in CDP browser');
   return { id: page.id, title: page.title || '(loading)', url: page.url, type: page.type };
 }
 
@@ -555,7 +555,7 @@ export function collectWebSocketHosts(messages) {
 
 // Pure gate over a captured CDP message stream: returns a refusal reason string,
 // or null when the navigation is safe to read. Exported for unit testing.
-export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId = null) {
+export function ssrfPinRefusalReason(messages, verifyRemoteIp, _url, topFrameId = null) {
   const { hops, pendingMainRequestUrls } = pickMainFrameHops(messages, topFrameId);
   if (!hops.length) return 'no main-frame document response was observed';
   // The main document must have a verifiable (present) connection IP — an empty
@@ -582,14 +582,13 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId =
     const detail = noConnection
       ? `${describeHopDelivery(hop)}; no verified network address for this navigation`
       : describeHopDelivery(hop);
-    return `Chrome connected to an unverifiable address for ${hop.url || url} (${detail})`;
+    return `Chrome connected to an unverifiable address for a main-frame document (${detail})`;
   }
   // A top-level navigation that STARTED, produced no response, and was not
-  // reported as failed was never pinned — Chrome could be mid-connect to a
-  // private/metadata target. Name the URL(s): the bare message is undiagnosable
-  // once the capture window is gone.
+  // reported as failed was never pinned. Counts retain diagnostic value without
+  // copying browsing history or URL credentials into errors and their logs.
   if (pendingMainRequestUrls.length) {
-    return `a top-level navigation was still in flight (unpinned): ${pendingMainRequestUrls.join(', ')}`;
+    return `a top-level navigation was still in flight (unpinned): ${pendingMainRequestUrls.length} pending`;
   }
   // EVERY connection Chrome made must dial an allowed address — not just the
   // main document. A rebinding page can load public, then `fetch()` its
@@ -599,7 +598,7 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId =
   // loopback/link-local/metadata, not RFC1918 LAN, so LAN pages aren't refused.)
   for (const conn of collectConnectedIps(messages)) {
     if (!verifyRemoteIp(conn.remoteIPAddress)) {
-      return `Chrome connected to a disallowed address ${conn.remoteIPAddress} for ${conn.url || url}`;
+      return 'Chrome connected to a disallowed address';
     }
   }
   // WebSockets: CDP exposes no remoteIPAddress for WS, so we can only refuse a WS
@@ -611,7 +610,7 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId =
   // the primary target, is HTTP-only and fully covered above.
   for (const ws of collectWebSocketHosts(messages)) {
     if (!ws.host || !verifyRemoteIp(ws.host)) {
-      return `page opened a WebSocket to a disallowed host ${ws.host || '(unparseable)'} (${ws.url})`;
+      return 'page opened a WebSocket to a disallowed host';
     }
   }
   return null;
@@ -680,13 +679,13 @@ export async function navigateToUrlPinned(url, {
   // document request (and its remoteIPAddress).
   const response = await cdpRequest('/json/new?about:blank', { method: 'PUT', timeout: navigateTimeoutMs });
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`CDP open-blank failed (${response.status}): ${text}`);
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`CDP open-blank failed (${response.status})`);
   }
   browserEvents.emit('pages:changed');
   const target = await readResponseJson(response, { fallback: null, emptyValue: null });
   if (!target?.id || !target?.webSocketDebuggerUrl) {
-    throw new Error(`CDP open-blank returned a malformed response for ${url}`);
+    throw new Error('CDP open-blank returned a malformed response');
   }
 
   const READ_ID = 3;
@@ -747,7 +746,7 @@ export async function navigateToUrlPinned(url, {
       // A Page.navigate Chrome rejects outright (bad scheme, etc.) errors on id 2;
       // otherwise its result carries the top frame's `frameId` we pin against.
       if (msg.id === 2) {
-        if (msg.error) return finish({ ok: false, reason: msg.error.message || 'navigate rejected' });
+        if (msg.error) return finish({ ok: false, reason: 'CDP rejected navigation' });
         if (msg.result?.frameId) topFrameId = msg.result.frameId;
         return;
       }
@@ -756,7 +755,7 @@ export async function navigateToUrlPinned(url, {
         // Non-fatal: a Chrome that rejects one of these just keeps its service
         // worker / cache in front of the document, and the empty-IP gate still
         // fails closed on the unpinnable response — never under-verifies.
-        if (msg.error) console.warn(`⚠️ CDP ${PIN_SETUP_COMMANDS[setupIndex].method} rejected: ${msg.error.message || 'unknown error'}`);
+        if (msg.error) console.warn(`⚠️ CDP ${PIN_SETUP_COMMANDS[setupIndex].method} rejected`);
         return;
       }
       if (msg.id === READ_ID) {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -58,6 +58,39 @@ describe('RunsTab ?run= deep link', () => {
 
     expect(await screen.findByText('first prompt')).toBeInTheDocument();
     expect(api.getRunPrompt).not.toHaveBeenCalled();
+  });
+
+  it('shows each execution state and complete failure guidance before optional diagnostics', async () => {
+    const error = 'The provider could not start after checking the configured connection and model.\nChoose an available model for this service.';
+    const suggestedFix = 'Open AI Services and reconnect the provider before resuming.';
+    api.getRuns.mockResolvedValue({ runs: [
+      { ...RUNS[0], id: 'failed', success: false, error, suggestedFix, exitCode: 1 },
+      { ...RUNS[0], id: 'running', success: null },
+      RUNS[1],
+    ] });
+    renderTab('/cos/runs');
+
+    expect(await screen.findByText(/Choose an available model for this service/)).toHaveTextContent(error.replace('\n', ' '));
+    expect(screen.getByRole('note')).toHaveTextContent(/Open AI Services and reconnect/);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    for (const [id, label] of [['failed', 'Failed'], ['running', 'Running'], ['run-b', 'Succeeded']]) {
+      expect(within(screen.getByTestId(`run-row-${id}`)).getByText(label)).toBeVisible();
+    }
+    expect(api.getRunPrompt).not.toHaveBeenCalled();
+    expect(api.getRunOutput).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('run-row-failed')).getByRole('button', { name: 'Expand run details' }));
+    });
+    expect(await screen.findByText('full output for run-b')).toBeVisible();
+    expect(screen.getAllByText(/Choose an available model for this service/)).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /View system logs/i })).toHaveLength(1);
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('run-row-run-b')).getByRole('button', { name: 'Expand run details' }));
+    });
+    expect(screen.getAllByRole('button', { name: 'Resume run' })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Continue Conversation' })).not.toBeInTheDocument();
   });
 
   it('renders a failed runs read as an error row with Retry, not "No AI runs yet"', async () => {

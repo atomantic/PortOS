@@ -246,6 +246,9 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     await writeFile(songPath, resung);
     expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath))
       .toEqual([{ sceneId: 'mvs-1', reason: 'audio-changed' }]);
+    // A read-only caller without host control never starts that decode (#13156):
+    // the re-sung window goes unchecked rather than stale.
+    expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath, { decode: false })).toEqual([]);
 
     // A take made before window fingerprints existed is compared against its
     // old master when the track's render history still holds it, and is stale

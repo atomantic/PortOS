@@ -1290,7 +1290,7 @@ describe('peerSync', () => {
       expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
     });
 
-    it('continues peer-online backfill after a kind inventory fails without logging private errors', async () => {
+    it('continues peer-online backfill after a kind inventory fails, logging the peer and cause', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
       const { instanceEvents } = await import('../instanceEvents.js');
@@ -1306,8 +1306,9 @@ describe('peerSync', () => {
       });
       await __drainForTests();
       expect(await findPeerSubscription('peer-a', 'series', 'ser-1')).not.toBeNull();
-      expect(errorLog).toHaveBeenCalledWith('⚠️ peerSync: backfill inventory unavailable for universe/records');
-      expect([...log.mock.calls, ...errorLog.mock.calls].flat().join(' ')).not.toContain('private inventory details');
+      const logged = errorLog.mock.calls.flat().join(' ');
+      expect(logged).toContain('backfill inventory unavailable for universe → A');
+      expect(logged).toContain('private inventory details');
       log.mockRestore();
       errorLog.mockRestore();
     });
@@ -4892,7 +4893,7 @@ describe('peerSync', () => {
         expect(call).toBeDefined();
         const body = JSON.parse(call[1].body);
         expect(body.portosMeta).toBeDefined();
-        expect(body.portosMeta.schemaVersions.universes).toBe(13);
+        expect(body.portosMeta.schemaVersions.universes).toBe(14);
         expect(typeof body.portosMeta.portosVersion).toBe('string');
       });
 
@@ -5518,6 +5519,36 @@ describe('peerSync', () => {
         payload.bibleManifest = undefined;
         await applyIncomingPush(payload);
         expect(vi.mocked(diffWorkBibleManifest)).toHaveBeenLastCalledWith([], expect.any(Object));
+      });
+
+      it('a tombstone writersRoomWork push diffs and pulls no draft bodies or bibles', async () => {
+        const payload = RECEIVE_CARRIERS.bibleManifest.payload();
+        payload.record = { id: 'wr-work-aaaa', deleted: true, deletedAt: '2026-06-02T00:00:00Z' };
+        payload.draftBodyManifest = [{ workId: 'wr-work-aaaa', draftId: 'd1', sha256: 'b'.repeat(64), updatedAt: '2026-06-02T00:00:00Z' }];
+        vi.mocked(diffWorkBibleManifest).mockClear();
+        const result = await applyIncomingPush(payload);
+        expect(diffWorkBibleManifest).not.toHaveBeenCalled();
+        expect(result).not.toHaveProperty('missingDraftBodies');
+        expect(result).not.toHaveProperty('bibleSyncPending');
+      });
+
+      it('a local-ephemeral universe push merges no bundle, reports no assets and creates no reverse subscription', async () => {
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', ephemeral: true });
+        vi.mocked(mergeMediaCollectionsFromSync).mockClear();
+        const result = await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo', deleted: false, deletedAt: null },
+          linkedCollection: { id: 'col-1', name: 'Universe: U', items: [{ kind: 'image', ref: 'private.png' }] },
+          catalogBundle: { ingredients: [{ id: 'cat-chr-1', type: 'character', name: 'Hero', updatedAt: '2026-01-02T00:00:00Z' }], refs: [] },
+          assetManifest: [{ kind: 'image', filename: 'private.png', size: 1, sha256: 'c'.repeat(64) }],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
+        });
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+        expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+        expect(result.missingAssets).toEqual([]);
+        expect(result.reverseSubscriptionCreated).toBe(false);
       });
 
       it('has a receiver-side carrier for every sidecar row', () => {

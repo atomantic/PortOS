@@ -21,22 +21,29 @@ import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, optionalBooleanMap, validateRequest } from '../lib/validation.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { isPeerBasicBootstrapRequest } from '../lib/apiAccessPolicy.js';
+import { requestHasHostControl } from '../services/authGate.js';
 
 const router = Router();
 
-// Peer admission is local authority even when the instance password is off.
-// Announcements remain discoverable. Reciprocal category changes also require
-// local authority: an anonymous callback cannot admit a discovery-only peer.
+// Peer admission is local authority: an operator session, or a local connection
+// on a password-free install (requestHasHostControl, the policy every other
+// operator route uses). Announcements remain discoverable. The reciprocal
+// category callback additionally accepts a paired peer's scoped credential
+// (PEER_API_SURFACE), bound to its own instance id in the route; anonymous and
+// Basic callers cannot admit a discovery-only peer.
 router.use(asyncHandler(async (req, _res, next) => {
   if (!req.path.toLowerCase().startsWith('/peers') || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)
     || req.path.toLowerCase().replace(/\/$/, '') === '/peers/announce') return next();
   // Vite and other private transports can forward a remote request over a
   // loopback socket. Neither that socket nor supplied Origin/Host proves the
   // operator's identity. Verify the existing session even when auth is off.
-  if (!isCrossOrigin(req) && await verifyRequestSession(req)) {
+  if (!isCrossOrigin(req) && (await verifyRequestSession(req)
+    || (req.portosAuthContext?.method !== 'peer' && requestHasHostControl(req)))) {
     req.peerSettingsOperator = true;
     return next();
   }
+  if (req.method === 'POST' && req.path.toLowerCase().replace(/\/$/, '') === '/peers/sync-categories'
+    && req.portosAuthContext?.authenticated === true && req.portosAuthContext.method === 'peer') return next();
   // The pairing callback is the only peer-settings mutation accepted with
   // Basic auth. It is bound to the caller's existing peer identity below and
   // installs only a peer-scoped secret; peer tokens still cannot reach it.
@@ -394,6 +401,13 @@ router.post('/peers/:id/connect', asyncHandler(async (req, res) => {
 // instanceId in the body (we may not know its local-peer-id mapping).
 router.post('/peers/sync-categories', asyncHandler(async (req, res) => {
   const data = validateRequest(reciprocalSyncSchema, req.body);
+  // authGate verified the credential against the instance id in this header;
+  // a peer may only reciprocate for itself, never for another registered peer.
+  if (req.peerSettingsOperator !== true && req.get(PEER_INSTANCE_HEADER) !== data.instanceId) {
+    throw new ServerError('A peer may only change its own reciprocal sync settings', {
+      status: 403, code: 'PEER_SETTINGS_OPERATOR_REQUIRED',
+    });
+  }
   const { changed } = await instances.applyReciprocalSync(data.instanceId, data.syncCategories, { fullSync: data.fullSync });
   // 200 even when the peer is unknown to us / nothing changed — this is a
   // best-effort convergence signal, not a command that must succeed. We return

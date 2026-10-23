@@ -9,6 +9,7 @@ import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js'
 // create another cognitive task for an absent, unverified original checkout.
 vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
 const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, archive: {} }));
+vi.mock('./cos.js', () => ({}));
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: '/synthetic/agents',
   withStateLock: createFileWriteQueue(),
@@ -27,10 +28,10 @@ vi.mock('./cosAgentIndex.js', async () => ({
 }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: async () => Object.values(f.state.agents) }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id] ?? null }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn(async () => ({ id: 'task-recovery-1' })),
   getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })),
+  getTaskById: async id => f.tasks[id] ?? null,
 }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: () => [] }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [] }));
@@ -55,7 +56,7 @@ const BRANCH = vi.hoisted(() => 'cos/task-parent/parent-1');
 const PR_URL = 'https://github.com/example/repo/pull/7';
 const REPOSITORY = 'github.com/example/repo';
 
-import { addTask } from './cos.js';
+import { addTask } from './cosTaskStore.js';
 import { findPullRequestForBranch } from './github.js';
 import { buildTaskMetadata } from './cosTaskIntake.js';
 import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';

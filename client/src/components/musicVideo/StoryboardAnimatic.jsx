@@ -569,6 +569,11 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       };
       handle = requestAnimationFrame(settle);
     });
+    // The click can land before a tick's queued setT has rendered; pause() stops
+    // further ticks, so the clock the settle wait observed is the one captured.
+    // Later outro changes (late stats, a restart) still invalidate the capture.
+    basis.outroTime = captureBasis.current.outroTime;
+    basis.outroStats = captureBasis.current.outroStats;
     const unchanged = () => {
       const current = captureBasis.current;
       return current.project === basis.project && current.lyricsOn === basis.lyricsOn && current.lookOn === basis.lookOn

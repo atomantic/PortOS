@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { formatCooldown, formatDateTime } from '../../../utils/formatters';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
@@ -43,6 +44,7 @@ export default function ToolsTab({ agentId, agent }) {
 
   // Drafts state
   const [drafts, setDrafts] = useState([]);
+  const [draftsError, setDraftsError] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState(null);
 
   // Cooldown timer state
@@ -107,8 +109,10 @@ export default function ToolsTab({ agentId, agent }) {
 
   const loadDrafts = useCallback(async () => {
     if (!agentId) return;
-    const data = await api.getAgentDrafts(agentId);
-    setDrafts(data);
+    setDraftsError(false);
+    await api.getAgentDrafts(agentId, { silent: true })
+      .then((data) => setDrafts(data))
+      .catch(() => setDraftsError(true));
   }, [agentId]);
 
   // Load drafts on mount
@@ -650,6 +654,9 @@ export default function ToolsTab({ agentId, agent }) {
             </div>
 
             {/* Drafts */}
+            {draftsError && (
+              <ListLoadError what="drafts" onRetry={loadDrafts} className="mb-4" />
+            )}
             {drafts.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg p-4">
                 <h3 className="font-semibold text-white mb-3">

@@ -562,3 +562,16 @@ describe('Memory version API', () => {
     expect(embeddings.generateMemoryEmbedding).not.toHaveBeenCalled();
   });
 });
+
+describe('Memory reject API', () => {
+  it('treats rejecting an already-deleted memory as success', async () => {
+    const memoryService = await import('../services/memoryBackend.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/memory', memoryRoutes);
+    memoryService.rejectMemory.mockResolvedValue({ success: false, error: 'Memory not found' });
+    const response = await request(app).post('/api/memory/gone-1/reject').send({});
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ success: true, alreadyResolved: true });
+  });
+});

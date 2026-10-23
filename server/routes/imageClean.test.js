@@ -25,6 +25,9 @@ import imageCleanRoutes from './imageClean.js';
 // for image/* content-types, so the route's own express.raw() owns the body.
 const buildApp = () => {
   const app = express();
+  // A local password-free caller holds host control, which the GPU pass needs
+  // (#13055); hostControlPreGuardMedia.test.js covers the refusal.
+  app.use((req, _res, next) => { req.portosAuthContext = { enabled: false }; next(); });
   app.use(express.json({ limit: '55mb' }));
   app.use('/api/image-clean', imageCleanRoutes);
   app.use(errorMiddleware);

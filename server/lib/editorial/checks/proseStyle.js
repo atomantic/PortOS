@@ -1,5 +1,6 @@
 // Editorial checks — proseStyle group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   ADVERSARIAL_CUTS_STAGE,
   CUT_TYPES,
@@ -73,7 +74,7 @@ export const proseStyleChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => runManuscriptLlmCheck(ctx, {
       stage: INFO_DUMPING_STAGE,
       category: 'exposition',
@@ -150,7 +151,7 @@ export const proseStyleChecks = [
     ],
     // Only run when the style guide sets a target AND there's prose to measure.
     gate: (ctx) => Number.isFinite(ctx.series?.styleGuide?.readingLevel)
-      && (ctx.manuscript || '').trim().length > 0,
+      && hasManuscript(ctx),
     run: (ctx) => {
       const target = ctx.series?.styleGuide?.readingLevel;
       if (!Number.isFinite(target)) return [];
@@ -245,7 +246,7 @@ export const proseStyleChecks = [
     ],
     // Skip unless there's prose AND the style guide declares at least one
     // conformance-relevant field (tense / POV / rating / profanity / audience).
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0
+    gate: (ctx) => hasManuscript(ctx)
       && hasConformanceFields(ctx.series?.styleGuide),
     run: (ctx) => {
       const expectations = styleGuideExpectations(ctx.series?.styleGuide);
@@ -314,7 +315,7 @@ export const proseStyleChecks = [
         help: 'Series-specific stock phrases to add to the seed list (comma-separated or one per line).',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -387,7 +388,7 @@ export const proseStyleChecks = [
         help: 'Cap findings so an adjective-heavy draft can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const minStack = cfg.minStack ?? 3;
@@ -442,7 +443,7 @@ export const proseStyleChecks = [
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Filter words to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra filter words to flag', type: 'text', help: 'Series-specific distancing verbs to add (comma-separated or one per line).' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => runDensityCheck(ctx, {
       scan: (text, cfg) => findFilterWords(text, { allowWords: splitPhraseList(cfg.allowWords), extraWords: splitPhraseList(cfg.extraWords) }),
       noun: 'filter words',
@@ -477,7 +478,7 @@ export const proseStyleChecks = [
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Hedge words to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra hedge words to flag', type: 'text', help: 'Series-specific hedges/weasel words to add (comma-separated or one per line).' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => runDensityCheck(ctx, {
       scan: (text, cfg) => findHedgeWords(text, { allowWords: splitPhraseList(cfg.allowWords), extraWords: splitPhraseList(cfg.extraWords) }),
       noun: 'hedge words',
@@ -513,7 +514,7 @@ export const proseStyleChecks = [
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Crutch words to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra crutch words to flag', type: 'text', help: 'Series-specific fillers to add (comma-separated or one per line).' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => runDensityCheck(ctx, {
       scan: (text, cfg) => findCrutchWords(text, { includeThat: cfg.includeThat === true, allowWords: splitPhraseList(cfg.allowWords), extraWords: splitPhraseList(cfg.extraWords) }),
       noun: 'crutch words',
@@ -547,7 +548,7 @@ export const proseStyleChecks = [
       { key: 'extraWords', label: 'Extra adverbs to flag', type: 'text', help: 'Series-specific adverbs the -ly heuristic misses, e.g. "fast", "well", "hard" (comma-separated or one per line).' },
       { key: 'flagReportingTags', label: 'Also flag reporting tags', type: 'boolean', help: 'By default only emotion-telling dialogue tags ("said angrily") are flagged; reporting tags ("said quietly") are treated as invisible stage directions. Enable to flag every adverb-laden tag.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -633,7 +634,7 @@ export const proseStyleChecks = [
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Participles to never treat as passive — archaic/adjectival "-ed" forms like "blessed", "beloved" (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra participles to flag', type: 'text', help: 'Series-specific irregular participles the heuristic misses, e.g. "begun", "hewn" (comma-separated or one per line).' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // Parse the word lists once (not per section, the way the adverbs check
       // hoists its own) — runDensityCheck calls scan() for every section.
@@ -675,7 +676,7 @@ export const proseStyleChecks = [
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Gesture verbs to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra gestures to track', type: 'text', help: 'Series-specific gestures to add (comma-separated or one per line).' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -754,7 +755,7 @@ export const proseStyleChecks = [
       { key: 'minOpenerRun', label: 'Repeated-opener run to flag', type: 'number', min: 2, max: 8, step: 1, help: 'How many sentences in a row starting with the same word trips the repeated-opener flag.' },
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -819,7 +820,7 @@ export const proseStyleChecks = [
       { key: 'minSentences', label: 'Minimum sentences to judge', type: 'number', min: 3, max: 50, step: 1, help: 'Skip passages shorter than this many sentences (too few to judge rhythm).' },
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -864,7 +865,7 @@ export const proseStyleChecks = [
     configFields: [
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Localized prose-level findings (one told emotion = one spot), so this stays
     // a plain per-chunk run with no cross-chunk digest — mirrors prose.dead-metaphor.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
@@ -893,7 +894,7 @@ export const proseStyleChecks = [
     configFields: [
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Localized prose-level findings (one essayistic thought = one spot), so this
     // stays a plain per-chunk run with no cross-chunk digest — mirrors
     // prose.telling-emotion. The prompt reconciles a character's thought against
@@ -932,7 +933,7 @@ export const proseStyleChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Localized prose-level findings (one tired phrase = one spot), so this stays
     // a plain per-chunk run with no cross-chunk digest — mirrors prose.info-dumping.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
@@ -969,7 +970,7 @@ export const proseStyleChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Each mirror moment is a localized spot — plain per-chunk run, no digest.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
       stage: MIRROR_DESCRIPTION_STAGE,
@@ -1010,7 +1011,7 @@ export const proseStyleChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       // The intended-voice block is fixed per-call overhead (re-sent on each chunk)
       // and pure context: it lets the model measure each issue's narration against
@@ -1124,7 +1125,7 @@ export const proseStyleChecks = [
         help: 'What each issue is measured against: "drafted" (the mean of the drafted issues — the default), "exemplars" (the style guide\'s voice-exemplar profile, so drift is judged against the voice you CHOSE, not the average of what got drafted), or "blended" (the midpoint). Exemplars/blended fall back to drafted when the style guide has too little exemplar prose.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const wells = parseVoiceWells(cfg.vocabularyWells || '');
@@ -1203,7 +1204,7 @@ export const proseStyleChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     // Localized prose-level findings (one precious passage = one spot) — plain
     // per-chunk run, no cross-chunk digest.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
@@ -1273,7 +1274,7 @@ export const proseStyleChecks = [
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: async (ctx) => {
       const cfg = ctx.config || {};
       const cutTargetPercent = cfg.cutTargetPercent ?? 10;
@@ -1384,7 +1385,7 @@ export const proseStyleChecks = [
         help: 'Cap findings so a thought-italics-heavy draft can not flood the review.',
       },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const minWords = cfg.minWords ?? 4;

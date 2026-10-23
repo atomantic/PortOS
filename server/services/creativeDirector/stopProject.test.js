@@ -24,7 +24,7 @@ vi.mock('../agentManagement.js', () => ({
 }));
 
 const updateTaskMock = vi.fn(async () => ({}));
-vi.mock('../cos.js', () => ({ updateTask: (...a) => updateTaskMock(...a) }));
+vi.mock('../cosTaskStore.js', () => ({ updateTask: (...a) => updateTaskMock(...a) }));
 
 const listJobsMock = vi.fn(() => []);
 const cancelJobMock = vi.fn(async () => ({}));

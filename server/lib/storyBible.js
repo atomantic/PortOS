@@ -454,10 +454,16 @@ const ADDITIVE_CHARACTER_FIELD_VERSIONS = Object.freeze({
   psychology: 11,
   // v13 — durable per-variant render intent (#11669).
   referenceSheetRequests: 13,
+  // v14 — alternate ages/looks beside the canonical form.
+  forms: 14,
 });
 const ADDITIVE_OBJECT_FIELD_VERSIONS = Object.freeze({
   // v7 — structured object↔character attachments (#1288).
   attachments: 7,
+  forms: 14,
+});
+const ADDITIVE_PLACE_FIELD_VERSIONS = Object.freeze({
+  forms: 14,
 });
 
 // "The sender carried nothing here." Covers both absent-when-empty fields
@@ -504,6 +510,13 @@ function preserveLegacyEntryFields(remoteEntries, localEntries, fieldVersions, s
 export function preserveLegacyCharacterFields(remoteCharacters, localCharacters, senderUniversesVersion) {
   return preserveLegacyEntryFields(
     remoteCharacters, localCharacters, ADDITIVE_CHARACTER_FIELD_VERSIONS, senderUniversesVersion,
+  );
+}
+
+/** Preserve additive place fields when an older peer wins LWW. */
+export function preserveLegacyPlaceFields(remotePlaces, localPlaces, senderUniversesVersion) {
+  return preserveLegacyEntryFields(
+    remotePlaces, localPlaces, ADDITIVE_PLACE_FIELD_VERSIONS, senderUniversesVersion,
   );
 }
 
@@ -818,6 +831,22 @@ function sanitizeCharacterSliders(raw) {
   return Object.fromEntries(CHARACTER_SLIDER_AXES.map((axis) => [axis, ensureSlider(src[axis])]));
 }
 
+// Alternate form of a canon entry: another age, era or look/style of the same
+// subject. Ids stay short because a form's sheet role is
+// `sheet:<variant>@<formId>` under the 64-char media role cap.
+export const FORM_ID_PATTERN = /^[A-Za-z0-9_-]{1,24}$/;
+function sanitizeForm(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const label = trimTo(raw.label, BIBLE_LIMITS.FORM_LABEL_MAX);
+  if (!label) return null;
+  return {
+    id: isStr(raw.id) && FORM_ID_PATTERN.test(raw.id) ? raw.id : `form-${randomUUID().slice(0, 8)}`,
+    label,
+    age: trimTo(raw.age, BIBLE_LIMITS.FORM_AGE_MAX),
+    description: trimTo(raw.description, BIBLE_LIMITS.FORM_DESCRIPTION_MAX),
+  };
+}
+
 // Shared canon extras applied to every kind. Persists explicit `locked: true`
 // AND `locked: false` so a Universe-Builder caller can flip the bit and have
 // the change survive round-trips. Missing `locked` still collapses to absent
@@ -848,6 +877,12 @@ function applyCanonExtras(raw) {
   else if (raw.locked === false) out.locked = false;
   if (raw.spoiler === true) out.spoiler = true;
   else if (raw.spoiler === false) out.spoiler = false;
+  // Absent stays absent so entries without alternate forms keep their shape.
+  if (Array.isArray(raw.forms)) {
+    const seen = new Set();
+    out.forms = sanitizeListWith(raw.forms, sanitizeForm, BIBLE_LIMITS.FORMS_PER_ENTRY_MAX)
+      .filter((form) => !seen.has(form.id) && seen.add(form.id));
+  }
   return out;
 }
 

@@ -154,6 +154,19 @@ afterEach(async () => {
 });
 afterAll(cleanupTempDataRoots);
 
+describe('stitch selection integrity', () => {
+  it('refuses a missing selected clip before publishing a shortened video', async () => {
+    const before = await loadHistory();
+    const selected = [sourceIds[0], randomUUID(), sourceIds[1]];
+
+    await expect(stitchVideos(selected)).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+
+    expect(await loadHistory()).toEqual(before);
+    expect((await readdir(PATHS.videos)).sort()).toEqual(sourceIds.map(id => `${id}.mp4`).sort());
+    expect(await readdir(PATHS.videoThumbnails)).toEqual([]);
+  });
+});
+
 for (const [name, run] of Object.entries(lanes)) describe(`${name} backup publication`, () => {
   it('holds a completed producer out of a cut; bypass demonstrates dangling copied records', async () => {
     let cut = await acquireBackupSnapshotCut();

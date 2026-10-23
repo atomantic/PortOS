@@ -7,6 +7,7 @@
  * list, naming a downgraded test file that is not tracked, or reporting
  * "CI will also run: db" from a plan field that has since been renamed.
  */
+import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync } from 'fs';
@@ -35,7 +36,7 @@ import {
   unmergedIndexPaths,
 } from './pregate.js';
 import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash } from './lib/pregateReport.js';
-import { probeTestDatabase, TEST_DATABASE, testDatabaseStageEnv } from './lib/pregateResources.js';
+import { probeTestDatabase, TEST_DATABASE, uncreatableExtensions, testDatabaseStageEnv } from './lib/pregateResources.js';
 
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { BROWSER_FIDELITY_FILES } from './lib/browserTestProfiles.js';
@@ -61,7 +62,7 @@ const planWith = (overrides = {}) => ({
 });
 
 const DEFAULT_OPTIONS = {
-  base: null, full: false, skipLint: false, planOnly: false, help: false,
+  base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false, mergedWith: null,
   skipDb: false, skipBrowser: false, skipBuild: false, skipSmoke: false,
 };
 
@@ -155,7 +156,7 @@ describe('pregate hidden-content invocation', () => {
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateAttestation.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -197,6 +198,90 @@ describe('pregate hidden-content invocation', () => {
 
   afterAll(async () => {
     if (template?.scratch) await destroyGitSandbox(template.scratch);
+  });
+
+  // A branch and base can each be green while their combined route inventory fails.
+  it('runs guards on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
+    git('config', 'core.autocrlf', 'true');
+    mkdirSync(join(root, 'server/routes'), { recursive: true });
+    write('server/routes/universe-builder.js', 'export const mutation = false;\n');
+    write('server/lib/strict.js', 'export const strict = false;\n');
+    write('server/lib/hostControlRoutes.test.js', `
+      import { readFileSync } from 'fs';
+      import { strict } from './strict.js';
+      if (strict && readFileSync('server/routes/universe-builder.js', 'utf8').includes('mutation = true')) {
+        throw new Error('hostControlRoutes.test.js: unclassified Universe Builder mutation');
+      }
+    `);
+    write('scripts/run-ci-tests.js', `
+      import { resolve } from 'path';
+      import { pathToFileURL } from 'url';
+      if (process.env.PORTOS_TEST_MEMO !== 'off') throw new Error('merged guards reused memo');
+      for (const file of JSON.parse(process.env.CI_TEST_FILES)) {
+        if (file.endsWith('hostControlRoutes.test.js')) await import(pathToFileURL(resolve(file)));
+      }
+    `);
+    git('add', '--all');
+    git('commit', '-qm', 'green common guard');
+    const common = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'new-base');
+    write('docs/tracked note.md', '# Unrelated base move\n');
+    git('add', '--all'); git('commit', '-qm', 'base move');
+    const movedBase = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'feature', common);
+    const invoke = (...flags) => spawnSync(process.execPath, ['scripts/pregate.js', ...flags], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, PORTOS_TEST_MEMO: 'on' },
+    });
+    mkdirSync(join(root, '.cache/pregate'), { recursive: true });
+    write(PREGATE_REPORT_PATH, 'original attestation receipt');
+    const original = { ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') };
+    const green = invoke('--guards-only', '--merged-with', movedBase);
+    expect(green.status, green.stderr).toBe(0);
+    expect(green.stdout).toContain('Merged-tree guards: HEAD');
+    expect(green.stdout).not.toContain('hidden-content scan');
+    expect(green.stdout).not.toContain('client/server lint');
+    expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(original);
+    expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
+
+    // The base tightens its guard independently; feature remains green in its own tree.
+    write('server/routes/universe-builder.js', 'export const mutation = true;\n');
+    git('add', '--all'); git('commit', '-qm', 'feature mutation before stricter guard');
+    const branchOnly = invoke('--guards-only', '--base', common);
+    expect(branchOnly.status, branchOnly.stderr).toBe(0);
+    // The stricter base policy and feature route change do not conflict textually.
+    git('checkout', 'new-base');
+    write('server/lib/strict.js', 'export const strict = true;\n');
+    git('add', '--all'); git('commit', '-qm', 'strict inventory');
+    const strictBase = git('rev-parse', 'HEAD');
+    git('checkout', 'feature');
+    const before = { ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') };
+    const failed = invoke('--guards-only', '--merged-with', strictBase);
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain('hostControlRoutes.test.js: unclassified Universe Builder mutation');
+    expect(failed.stdout).not.toContain('Pregate passed');
+    expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(before);
+    expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
+
+    const originalDocBytes = readFileSync(join(root, 'docs/tracked note.md'));
+    write('docs/tracked note.md', '# Pending local work\n');
+    const dirty = snapshot();
+    const refused = invoke('--guards-only', '--merged-with', strictBase);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain('requires a clean committed checkout');
+    expect(snapshot()).toEqual(dirty);
+    writeFileSync(join(root, 'docs/tracked note.md'), originalDocBytes);
+
+    git('checkout', 'new-base');
+    write('server/routes/universe-builder.js', 'export const mutation = "conflicting";\n');
+    git('add', '--all'); git('commit', '-qm', 'conflicting mutation');
+    const conflictBase = git('rev-parse', 'HEAD');
+    git('checkout', 'feature');
+    const preConflict = snapshot();
+    const conflict = invoke('--guards-only', '--merged-with', conflictBase);
+    expect(conflict.status).not.toBe(0);
+    expect(conflict.stderr).toContain('Cannot construct merged guard tree');
+    expect(conflict.stdout).not.toContain('Pregate passed');
+    expect(snapshot()).toEqual(preConflict);
   });
 
   // This regression catches stale inherited packages before any lint/test child
@@ -569,8 +654,8 @@ describe('pregate hidden-content invocation', () => {
 });
 
 describe('pregateWorkerEnv', () => {
-  it('bounds workers by default but honors an operator budget', () => {
-    expect(pregateWorkerEnv({}).PORTOS_PREGATE_MAX_WORKERS).toBe('4');
+  it('derives the budget from the CoS settings but honors an explicit handoff', () => {
+    expect(pregateWorkerEnv({}).PORTOS_PREGATE_MAX_WORKERS).toBe(String(cosWorkerBudget()));
     expect(pregateWorkerEnv({ PORTOS_PREGATE_MAX_WORKERS: '2' }).PORTOS_PREGATE_MAX_WORKERS).toBe('2');
   });
 });
@@ -619,6 +704,15 @@ describe('parseArgs', () => {
     expect(parseArgs(['--base', 'origin/release', '--full'])).toEqual({
       ...DEFAULT_OPTIONS, base: 'origin/release', full: true,
     });
+  });
+
+  it('accepts guard-only merged validation and rejects combinations that can skip it', () => {
+    expect(parseArgs(['--guards-only', '--merged-with', 'origin/main'])).toMatchObject({ guardsOnly: true, mergedWith: 'origin/main' });
+    expect(() => parseArgs(['--merged-with', 'origin/main'])).toThrow('requires --guards-only');
+    expect(() => parseArgs(['--guards-only', '--merged-with'])).toThrow('requires a value');
+    expect(() => parseArgs(['--guards-only', '--full'])).toThrow('cannot be combined');
+    expect(() => parseArgs(['--guards-only', '--skip-lint'])).toThrow('cannot be combined');
+    expect(() => parseArgs(['--guards-only', '--merged-with', 'origin/main', '--base', 'HEAD'])).toThrow('cannot be combined');
   });
 
   it('accepts one skip flag per resource suite', () => {
@@ -808,7 +902,7 @@ describe('the gate end to end', () => {
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateAttestation.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
@@ -1015,7 +1109,7 @@ describe('uncoveredSuites', () => {
 describe('stageSpawnEnv', () => {
   it('applies stage values and removes the variables a stage sets to undefined', () => {
     const env = stageSpawnEnv({ TEST_DB_OK: '1', PGDATABASE: 'portos', KEEP: 'x' }, { TEST_DB_OK: undefined, PGDATABASE: 'portos_test' }, { ownsGroup: false });
-    expect(env).toEqual({ KEEP: 'x', PGDATABASE: 'portos_test', PORTOS_PREGATE_MAX_WORKERS: '4' });
+    expect(env).toEqual({ KEEP: 'x', PGDATABASE: 'portos_test', PORTOS_PREGATE_MAX_WORKERS: String(cosWorkerBudget()) });
     expect('TEST_DB_OK' in env).toBe(false);
   });
 
@@ -1051,6 +1145,15 @@ describe('testDatabaseStageEnv', () => {
   });
 });
 
+describe('uncreatableExtensions', () => {
+  it('flags a missing extension a non-superuser cannot create, and nothing else', () => {
+    expect(uncreatableExtensions({ installed: ['pgcrypto'], trusted: [], superuser: false })).toEqual(['vector']);
+    expect(uncreatableExtensions({ installed: [], trusted: ['vector', 'pgcrypto'], superuser: false })).toEqual([]);
+    expect(uncreatableExtensions({ installed: ['vector', 'pgcrypto'], trusted: [], superuser: false })).toEqual([]);
+    expect(uncreatableExtensions({ installed: [], trusted: [], superuser: true })).toEqual([]);
+  });
+});
+
 describe('probeTestDatabase', () => {
   it('reports an unreachable server as a missing prerequisite without the endpoint in the reason', async () => {
     const { createServer } = await import('node:net');
@@ -1070,6 +1173,44 @@ describe('probeTestDatabase', () => {
     expect(result.reason).toMatch(/^Postgres not reachable \(/);
     expect(result.reason).not.toContain(String(port));
     expect(result.endpoint).toBe(`127.0.0.1:${port}/portos_test`);
+  });
+
+  // A single pg connection queues overlapping queries (and pg@9 drops that), so the probe must await them in turn.
+  const fakeClient = ({ installed = [], trusted = [], superuser = true }) => {
+    let inFlight = false;
+    const respond = (sql) => {
+      if (sql.includes('pg_extension')) return { rows: installed.map((extname) => ({ extname })) };
+      if (sql.includes('pg_available_extension_versions')) return { rows: trusted.map((name) => ({ name })) };
+      if (sql.includes('pg_roles')) return { rows: [{ rolsuper: superuser }] };
+      return { rows: [] };
+    };
+    return {
+      connect: async () => {},
+      end: async () => {},
+      query(sql) {
+        if (inFlight) throw new Error('overlapping query on one client');
+        inFlight = true;
+        return Promise.resolve().then(() => {
+          inFlight = false;
+          return respond(sql);
+        });
+      },
+    };
+  };
+  const probeWith = (opts) => probeTestDatabase(
+    { PGHOST: '127.0.0.1', PGPORT: '5432', PGUSER: 'portos', PGPASSWORD: 'portos' },
+    { repoRoot: REPO_ROOT, createClient: () => fakeClient(opts) },
+  );
+
+  it('awaits its extension and role probes in turn on the single client', async () => {
+    const result = await probeWith({ installed: ['vector', 'pgcrypto'] });
+    expect(result).toEqual({ ok: true, endpoint: `127.0.0.1:5432/${TEST_DATABASE}`, provision: false });
+  });
+
+  it('still names a missing extension a non-superuser cannot create', async () => {
+    const result = await probeWith({ installed: ['pgcrypto'], superuser: false });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/^Postgres extension\(s\) vector missing/);
   });
 });
 

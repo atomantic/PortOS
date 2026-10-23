@@ -19,7 +19,7 @@ import { getSeries, MANUSCRIPT_TYPES } from './series.js';
 import { getIssue, updateStageWithLatest, updateStagesWithLatest } from './issues.js';
 import { collectManuscriptSections, stageVersionsOf, sectionsCorpus, manuscriptSectionHeader } from './arcPlanner.js';
 import { getComment, updateComment } from './manuscriptComments.js';
-import { escapeRegExp } from '../../lib/textUtils.js';
+import { locateFindSpan } from '../../lib/manuscriptLocate.js';
 import { codedError } from '../../lib/codedError.js';
 
 export const ERR_VALIDATION = 'PIPELINE_MANUSCRIPT_FIX_VALIDATION';
@@ -203,55 +203,8 @@ function editsFromAcceptRequest({ comment, find, replace, edits }) {
   return [];
 }
 
-// Locate the `find` span to replace. `indexOf` alone edits the FIRST match,
-// which silently corrupts the wrong spot when `find` recurs in the issue. When
-// it's ambiguous, disambiguate by the finding's `anchorQuote` — pick the
-// occurrence nearest the anchor — so the edit lands where the comment points.
-// Returns the start index, or -1 if `find` isn't present at all.
-function locateFind(text, find, anchorQuote) {
-  const first = text.indexOf(find);
-  if (first === -1) return -1;
-  if (text.indexOf(find, first + 1) === -1) return first; // unique — no ambiguity
-  const anchorIdx = anchorQuote ? text.indexOf(anchorQuote) : -1;
-  if (anchorIdx === -1) return first; // can't disambiguate — first match
-  let best = first;
-  let bestDist = Math.abs(first - anchorIdx);
-  for (let i = text.indexOf(find, first + 1); i !== -1; i = text.indexOf(find, i + 1)) {
-    const dist = Math.abs(i - anchorIdx);
-    if (dist < bestDist) { best = i; bestDist = dist; }
-  }
-  return best;
-}
-
-// LLMs routinely reformat whitespace when "quoting" a passage (an extra blank
-// line between a page header and its first panel, collapsed indentation, etc.),
-// so an exact `find` often isn't a verbatim substring even when it clearly
-// targets a real span. Locate the span tolerating whitespace-only differences:
-// try exact first (with nearest-anchor disambiguation), then a regex where every
-// run of whitespace in `find` matches any run of whitespace in the text. Returns
-// the matched { start, end } in the ORIGINAL text (so the splice covers the real
-// span, whose length may differ from `find.length`), or null if not found.
-function buildWhitespaceTolerantRegex(find) {
-  const escaped = escapeRegExp(find);
-  return new RegExp(escaped.replace(/\s+/g, '\\s+'));
-}
-
-export function locateFindSpan(text, find, anchorQuote) {
-  if (!find) return null;
-  const exact = locateFind(text, find, anchorQuote);
-  if (exact !== -1) return { start: exact, end: exact + find.length };
-
-  const re = new RegExp(buildWhitespaceTolerantRegex(find).source, 'g');
-  const anchorIdx = anchorQuote ? text.indexOf(anchorQuote) : -1;
-  let best = null;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    const cand = { start: m.index, end: m.index + m[0].length };
-    if (!best) best = cand;
-    else if (anchorIdx !== -1 && Math.abs(cand.start - anchorIdx) < Math.abs(best.start - anchorIdx)) best = cand;
-    if (m.index === re.lastIndex) re.lastIndex += 1; // guard against zero-width matches
-  }
-  return best;
-}
+// Re-exported for compatibility; the implementation is shared with the client preview.
+export { locateFindSpan };
 
 // Shape one manuscript section response from a freshly-written stage.
 const sectionFrom = (issue, stageId, stage) => ({

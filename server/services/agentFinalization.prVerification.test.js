@@ -59,7 +59,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
 }));
 
 const updateTaskMock = vi.fn(async () => ({}));
-vi.mock('./cos.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
+vi.mock('./cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
 vi.mock('./providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('./providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),
@@ -406,6 +406,14 @@ describe('verifyPrClaim (#3358)', () => {
     expect(verdict.ok).toBe(true);
     expect(verdict.branchProvenEmpty).toBe(true);
     expect(getPullRequestStateMock).not.toHaveBeenCalled();
+  });
+
+  it('reports unavailable credentials without probing the PR as another account', async () => {
+    onBranch('claim/issue-1');
+    resolveForgeForRepoMock.mockRejectedValueOnce(Object.assign(new Error('Pin unavailable'), { code: 'FORGE_ACCOUNT_UNAVAILABLE' }));
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
+    expect(verdict).toMatchObject({ ok: false, category: FORGE_UNREACHABLE_CATEGORY });
+    expect(findPullRequestForBranchMock).not.toHaveBeenCalled();
   });
 
   it('fails with forge-unreachable — NOT pr-missing — when we could not ask', async () => {

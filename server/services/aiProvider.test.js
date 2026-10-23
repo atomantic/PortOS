@@ -524,6 +524,40 @@ describe('HTTP provider body cancellation', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('reports a deadline hit before response headers as a connect/first-byte stall', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_url, { signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('This operation was aborted')), { once: true });
+    })));
+    const pending = callProviderAISimple(provider, 'model', 'prompt', { allowModelRecovery: false });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ stallPhase: 'no-response', error: expect.stringMatching(/timed out after 1000ms before the provider sent response headers/) });
+  });
+
+  it('reports a deadline hit after response headers as a body stall', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => ({ ok: true, text: () => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('body aborted')), { once: true });
+    }) })));
+    const pending = callProviderAISimple(provider, 'model', 'prompt', { allowModelRecovery: false });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ stallPhase: 'response-body', error: expect.stringMatching(/timed out after 1000ms after response headers/) });
+  });
+
+  it('does not label a caller cancel as a stall', async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn((_url, { signal }) => new Promise((_, reject) => {
+      if (signal.aborted) reject(new Error('This operation was aborted'));
+      else signal.addEventListener('abort', () => reject(new Error('This operation was aborted')), { once: true });
+    })));
+    const pending = callProviderAISimple(provider, 'model', 'prompt', { signal: caller.signal, allowModelRecovery: false });
+    caller.abort();
+    const result = await pending;
+    expect(result.stallPhase).toBeUndefined();
+    expect(result.error).not.toContain('timed out');
+  });
+
   it.each(['list', 'load-error'])('bounds the LM Studio %s body after headers', async (stage) => {
     vi.useFakeTimers();
     let started;

@@ -11,6 +11,7 @@ Leaf modules used by `agentPromptBuilder.js`. The builder remains the public fac
 | `instructions.js` | Skill-template routing and bounded instruction-file discovery. |
 | `orchestrationDoctrine.js` | The architect doctrine an orchestrated run (#5992) gets — role/provider/model table, delegate-exploration and emit-specs rules, and the six-part spec contract incl. the pass-through `REASONING:` rung. Empty for a `direct` task. |
 | `plannerAttribution.js` | Runtime issue-filing contract for every CLI/API task, plus the `planner:<model>` label resolved from the run's own provider/model. |
+| `prAttribution.js` | PR/MR opener model label (`implementer:<model>`), supplied at runtime for scheduled and manual claims, including custom prompts. |
 | `reviewLifecycle.js` | Reviewer, CI-gate, and merge sections. |
 | `slashdo.js` | Slashdo invocation and procedure expansion. |
 | `taskContext.js` | Task, attachment, split-context, and compaction sections. |

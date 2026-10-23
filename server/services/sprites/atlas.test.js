@@ -194,15 +194,16 @@ async function buildFinalizedScannerSet(recordId, {
     status: 'complete',
     directions: {},
   };
-  for (const direction of SPRITE_DIRECTIONS) {
+  // Independent fixture files can be materialized together; retain registry
+  // order when hashing the selection rather than completion order on disk.
+  const directions = await Promise.all(SPRITE_DIRECTIONS.map(async direction => {
     const runId = `${trackId}-${direction}-${(seq++).toString(16).padStart(8, '0')}`;
     const generatedRel = `runs/${runId}/generated`;
-    const frames = [];
-    for (let i = 0; i < labels.length; i++) {
+    const frames = await Promise.all(labels.map(async (phase, i) => {
       const rel = `${generatedRel}/frames/${String(i).padStart(2, '0')}-${labels[i]}.png`;
       await walkFramePng(join(dir, rel), 36 + i * 12, 2 + i * 2);
-      frames.push({ outputIndex: i, phase: labels[i], path: rel, sha256: sha256(await readFile(join(dir, rel))) });
-    }
+      return { outputIndex: i, phase, path: rel, sha256: sha256(await readFile(join(dir, rel))) };
+    }));
     const runManifest = {
       schemaVersion: 1,
       kind: `deterministically-packaged-grok-${trackId}-video`,
@@ -217,11 +218,12 @@ async function buildFinalizedScannerSet(recordId, {
     const manifestRel = `${generatedRel}/${recordId}-${trackId}-${direction}-manifest.json`;
     const manifestBytes = JSON.stringify(runManifest);
     await writeFile(join(dir, manifestRel), manifestBytes);
-    selection.directions[direction] = {
+    return [direction, {
       status: 'approved', runId, runPath: `runs/${runId}`, runManifest: manifestRel,
       runManifestSha256: sha256(Buffer.from(manifestBytes)), approvedAt: new Date().toISOString(),
-    };
-  }
+    }];
+  }));
+  selection.directions = Object.fromEntries(directions);
   await mkdir(join(dir, trackId), { recursive: true });
   const selectionRel = `${trackId}/${recordId}-${trackId}-selection-v1.json`;
   const selectionBytes = JSON.stringify(selection);

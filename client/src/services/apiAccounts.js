@@ -121,7 +121,7 @@ export const moltworldWsInteract = (to, payload) =>
   });
 
 // Agent Drafts
-export const getAgentDrafts = (agentId) => request(`/agents/tools/drafts?agentId=${agentId}`);
+export const getAgentDrafts = (agentId, options = {}) => request(`/agents/tools/drafts?agentId=${agentId}`, options);
 export const createAgentDraft = (data) => request('/agents/tools/drafts', {
   method: 'POST',
   body: JSON.stringify(data)

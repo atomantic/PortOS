@@ -4,7 +4,11 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import * as cos from '../services/cos.js';
+import { getAgents } from '../services/cosAgentLifecycle.js';
+import { getAllTasks } from '../services/cosTaskStore.js';
+import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
+import { getPendingAgentFeedbackCount } from '../services/cosAgentFeedback.js';
+import { getRecentTasks, getTodayActivity } from '../services/cosReports.js';
 import * as taskLearning from '../services/taskLearning.js';
 import { getActivityCalendar } from '../services/cosActivityCalendar.js';
 import * as goalProgress from '../services/goalProgress.js';
@@ -13,6 +17,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parsePagination, validateRequest } from '../lib/validation.js';
 import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
+import { requestHasHostControl } from '../services/authGate.js';
 
 const router = Router();
 
@@ -29,15 +34,18 @@ router.get('/activity-calendar', asyncHandler(async (req, res) => {
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
   const { cachedHealth } = validateRequest(z.object({ cachedHealth: z.literal('1').optional() }), req.query);
+  // The live check is the PM2 sweep that restarts errored processes, the work
+  // POST /api/cos/health/check gates; anyone else reads the last snapshot (#13097).
+  const liveHealth = !cachedHealth && requestHasHostControl(req);
   const [tasksData, learningSummary, healthCheck, notificationsModule, pendingFeedbackCount, leftoverFindings, agents] = await Promise.all([
-    cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
+    getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
-    (cachedHealth ? cos.getHealthStatus() : cos.runHealthCheck()).catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return null; }),
+    (liveHealth ? runHealthCheck() : getHealthStatus()).catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return null; }),
     import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
-    cos.getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; }),
+    getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; }),
     detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; }),
     // Settles the pending list against live agents — see lib/cosSpawnWindow.js.
-    cos.getAgents().catch(err => { console.error(`❌ Failed to load agents: ${err.message}`); return []; })
+    getAgents().catch(err => { console.error(`❌ Failed to load agents: ${err.message}`); return []; })
   ]);
   const runningAgents = runningAgentsByTaskId(agents);
 
@@ -221,7 +229,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
 // GET /api/cos/recent-tasks - Get recent completed tasks for dashboard widget
 router.get('/recent-tasks', asyncHandler(async (req, res) => {
   const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
-  const recentTasks = await cos.getRecentTasks(limit);
+  const recentTasks = await getRecentTasks(limit);
   res.json(recentTasks);
 }));
 
@@ -229,12 +237,12 @@ router.get('/recent-tasks', asyncHandler(async (req, res) => {
 // Combines today's activity and queue counts into one efficient call.
 router.get('/quick-summary', asyncHandler(async (req, res) => {
   const [todayActivity, tasksData, agents] = await Promise.all([
-    cos.getTodayActivity(),
-    cos.getAllTasks(),
+    getTodayActivity(),
+    getAllTasks(),
     // The dashboard widget renders this queue total beside its own "N agents
     // running" line, so a raw pending count showed the one task already being
     // worked on both — see lib/cosSpawnWindow.js.
-    cos.getAgents().catch(() => [])
+    getAgents().catch(() => [])
   ]);
   const runningAgents = runningAgentsByTaskId(agents);
 

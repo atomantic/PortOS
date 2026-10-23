@@ -53,6 +53,7 @@ const PRE_INSTALL_ENTRYPOINTS = [
  */
 const BARE_CHECKOUT_SCRIPTS = [
   'scripts/ci-gate-report.js',
+  'scripts/ci-nightly-report.js',
   'scripts/ci-retry-cancelled-run.js',
   'scripts/doctor.js',
 ];
@@ -132,6 +133,7 @@ describe('scripts that run from a sparse checkout of scripts/', () => {
   /** Jobs that pass `sparse-checkout: scripts` → the script each one runs. */
   const SPARSE_CHECKOUT_SCRIPTS = [
     'scripts/ci-gate-report.js',
+    'scripts/ci-nightly-report.js',
     'scripts/ci-retry-cancelled-run.js',
   ];
 

@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import { RefreshCw, AlertTriangle, DatabaseZap, Network } from 'lucide-react';
@@ -15,7 +17,7 @@ import FleetUsageCard from '../components/usage/FleetUsageCard';
 import RollingCostCard from '../components/usage/RollingCostCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
-import ModelsTabsHeader, { ModelsSectionLayout } from '../components/models/ModelsTabsHeader';
+import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
 
 
@@ -161,7 +163,7 @@ function ProviderQuotaSection() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl sm:text-2xl font-bold text-white">Subscription Usage</h1>
+        <h2 className="text-xl sm:text-2xl font-bold text-white">Subscription quotas</h2>
         <button
           type="button"
           onClick={() => load(true)}
@@ -445,11 +447,15 @@ function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
           {opt.label}
         </button>
       ))}
-      <div className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${isCustom ? 'border-port-accent bg-port-accent/10' : 'border-port-border'}`}>
-        <label htmlFor="usage-from" className="text-xs text-gray-400">From</label>
-        <RangeDateInput id="usage-from" label="From date" value={from} onCommit={(v) => onRange(v, to)} />
-        <label htmlFor="usage-to" className="text-xs text-gray-400">To</label>
-        <RangeDateInput id="usage-to" label="To date" value={to} onCommit={(v) => onRange(from, v)} />
+      <div className={`flex flex-wrap items-center gap-1.5 rounded-xl border px-2 py-0.5 ${isCustom ? 'border-port-accent bg-port-accent/10' : 'border-port-border'}`}>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="usage-from" className="text-xs text-gray-400">From</label>
+          <RangeDateInput id="usage-from" label="From date" value={from} onCommit={(v) => onRange(v, to)} />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="usage-to" className="text-xs text-gray-400">To</label>
+          <RangeDateInput id="usage-to" label="To date" value={to} onCommit={(v) => onRange(from, v)} />
+        </div>
       </div>
     </div>
   );
@@ -657,7 +663,7 @@ function InternalUsageMetrics() {
     <div className="space-y-6">
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
       {/* Trailing 30 days across every instance — independent of the range below. */}
-      <RollingCostCard rollingCost={usage.rollingCost} />
+      <RollingCostCard />
       {reportControls}
 
       <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -924,13 +930,12 @@ function InternalUsageMetrics() {
 
 export function UsagePage() {
   return (
-    <ModelsSectionLayout activeTab="usage">
-      <ModelsTabsHeader activeTab="usage" />
-      <div className="min-h-0 min-w-0 flex-1 space-y-6 overflow-auto">
+    <PageLayout header={<PageHeader title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
+      <div className="space-y-6">
         <ProviderQuotaSection />
         <InternalUsageMetrics />
       </div>
-    </ModelsSectionLayout>
+    </PageLayout>
   );
 }
 

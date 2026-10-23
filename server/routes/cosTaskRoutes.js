@@ -6,7 +6,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { existsSync } from 'fs';
 import { isRepo, notGitRepoMessage } from '../services/git.js';
-import * as cos from '../services/cos.js';
+import { addTask, approveTask, challengeTask, deleteTask, findTaskWithSource, getAllTasks, getTaskById, getTaskView, reorderTasks, resolveTaskChallenge, resolveTaskChallengeWithRecheck, updateTask } from '../services/cosTaskStore.js';
+import { evaluateTasks } from '../services/cosTaskGenerator.js';
+import { forceSpawnTask } from '../services/cos.js';
+import { getAgents } from '../services/cosAgentLifecycle.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
@@ -163,7 +166,7 @@ const router = Router();
 // too. Settling HERE rather than in `getAllTasks()` keeps the dispatch readers
 // (task generation, retry revival, dedup) on the raw truth they need, while
 // every API consumer gets an honest queue depth without knowing the window
-// exists. The bounded views (`cos.getTaskView`) select from the parsed snapshot
+// exists. The bounded views (`getTaskView`) select from the parsed snapshot
 // before cloning; only `view=full` pays for the whole store.
 //
 // With no params it returns a bounded `{ user, cos }` projection: all non-completed
@@ -192,13 +195,13 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   });
   // The bounded views select inside the store BEFORE cloning, so a queue refresh
   // never copies archived prompt bodies (#9677). Settlement runs on the selection.
-  const agentsPromise = cos.getAgents().catch(() => []);
+  const agentsPromise = getAgents().catch(() => []);
   if (query.view === 'completed') {
     const { limit } = validateRequest(z.object({ limit: z.coerce.number().int().min(1).max(100).default(25) }), req.query);
-    return res.json(await cos.getTaskView({ kind: 'completed', source: query.source, cursor: query.cursor, limit }));
+    return res.json(await getTaskView({ kind: 'completed', source: query.source, cursor: query.cursor, limit }));
   }
   if (query.view === 'queue') {
-    const [view, agents] = await Promise.all([cos.getTaskView({ kind: 'queue', selected: query.selected }), agentsPromise]);
+    const [view, agents] = await Promise.all([getTaskView({ kind: 'queue', selected: query.selected }), agentsPromise]);
     const tasks = settleView(view, runningAgentsByTaskId(agents));
     // `tasks` stays whole (open queue + the selected historical task); the derived
     // lists shrink to id/status summaries.
@@ -212,18 +215,18 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   }
   if (!isPaginationRequested(req.query)) {
     if (query.view === 'full') {
-      const [allTasks, agents] = await Promise.all([cos.getAllTasks(), agentsPromise]);
+      const [allTasks, agents] = await Promise.all([getAllTasks(), agentsPromise]);
       return res.json(settleView(allTasks, runningAgentsByTaskId(agents)));
     }
     // Bare form: bounded projection. Every non-completed task stays whole; the
     // completed history (96% of the bytes on a long-lived install, and once
     // more inside `grouped`) shrinks to the first `view=completed` page plus
     // `completedCount`. `view=full` is the raw-store escape hatch.
-    const [view, agents] = await Promise.all([cos.getTaskView({ kind: 'bare' }), agentsPromise]);
+    const [view, agents] = await Promise.all([getTaskView({ kind: 'bare' }), agentsPromise]);
     return res.json(settleView(view, runningAgentsByTaskId(agents)));
   }
   const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
-  const [view, agents] = await Promise.all([cos.getTaskView({ kind: 'window', offset, limit }), agentsPromise]);
+  const [view, agents] = await Promise.all([getTaskView({ kind: 'window', offset, limit }), agentsPromise]);
   const runningAgents = runningAgentsByTaskId(agents);
   const { totals } = view;
   res.json({
@@ -233,16 +236,15 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/cos/tasks/user - Get user tasks
+// Source-specific bounded views: open tasks plus the first completed page.
+// Further history is available through /tasks?view=completed; raw data through /tasks?view=full.
 router.get('/tasks/user', asyncHandler(async (req, res) => {
-  const tasks = await cos.getUserTasks();
-  res.json(tasks);
+  res.json((await getTaskView({ kind: 'bare' })).user);
 }));
 
 // GET /api/cos/tasks/internal - Get CoS internal tasks
 router.get('/tasks/internal', asyncHandler(async (req, res) => {
-  const tasks = await cos.getCosTasks();
-  res.json(tasks);
+  res.json((await getTaskView({ kind: 'bare' })).cos);
 }));
 
 // GET /api/cos/tasks/:id - One task with the queue it lives in. The Chief of
@@ -250,7 +252,7 @@ router.get('/tasks/internal', asyncHandler(async (req, res) => {
 // holds, instead of re-reading the whole queue per click (#12032). Registered
 // after the literal /tasks/user and /tasks/internal routes so those still win.
 router.get('/tasks/:id', asyncHandler(async (req, res) => {
-  const found = await cos.findTaskWithSource(req.params.id);
+  const found = await findTaskWithSource(req.params.id);
   if (!found) throw new ServerError('Task not found', { status: 404, code: 'NOT_FOUND' });
   res.json(found);
 }));
@@ -259,7 +261,7 @@ router.get('/tasks/:id', asyncHandler(async (req, res) => {
 router.post('/tasks/reorder', asyncHandler(async (req, res) => {
   const { taskIds } = validateRequest(cosTaskReorderBodySchema, req.body);
 
-  const result = await cos.reorderTasks(taskIds);
+  const result = await reorderTasks(taskIds);
   res.json(result);
 }));
 
@@ -440,7 +442,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     simplify: simplify === true,
     reviewLoop: false
   };
-  const result = await cos.addTask(planTask ? { ...taskData, prompt: planTask.prompt } : taskData, 'user');
+  const result = await addTask(planTask ? { ...taskData, prompt: planTask.prompt } : taskData, 'user');
 
   if (result?.duplicate) {
     throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
@@ -479,7 +481,7 @@ router.post('/tasks/jira-ticket', asyncHandler(async (req, res) => {
     simplify: false,
     reviewLoop: false,
   };
-  const result = await cos.addTask(taskData, 'user');
+  const result = await addTask(taskData, 'user');
 
   if (result?.duplicate) {
     throw new ServerError(`A task for ${key} is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
@@ -517,7 +519,7 @@ router.post('/tasks', asyncHandler(async (req, res) => {
       { ...preparedTask, fingerprint: clientInvestigationFingerprint(preparedTask) },
       { taskType: type, delivery }
     )).task
-    : await cos.addTask(preparedTask, type);
+    : await addTask(preparedTask, type);
 
   if (result?.duplicate) {
     throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
@@ -569,7 +571,7 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
     updates.metadata = { ...updates.metadata, blocker: blockedReason };
   }
 
-  const result = await cos.updateTask(id, updates, type);
+  const result = await updateTask(id, updates, type);
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
@@ -599,8 +601,8 @@ router.delete('/tasks/:id', asyncHandler(async (req, res) => {
   // only handle on what was thrown away would be an opaque task id.
   // `.catch` because this read only supplies a LABEL — a task file that will not
   // parse must not turn a working delete into a 500.
-  const doomed = await cos.getTaskById(id).catch(() => null);
-  const result = await cos.deleteTask(id, type);
+  const doomed = await getTaskById(id).catch(() => null);
+  const result = await deleteTask(id, type);
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
@@ -621,7 +623,7 @@ router.delete('/tasks/:id', asyncHandler(async (req, res) => {
 router.post('/tasks/:id/approve', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const result = await cos.approveTask(id);
+  const result = await approveTask(id);
   if (result?.error) {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
   }
@@ -644,7 +646,7 @@ router.post('/tasks/:id/approve', asyncHandler(async (req, res) => {
 router.post('/tasks/:id/challenge', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { reason, evidence, reviewer } = validateRequest(challengeTaskSchema, req.body);
-  const result = await cos.challengeTask(id, { reason, evidence, reviewer });
+  const result = await challengeTask(id, { reason, evidence, reviewer });
   if (result?.error) {
     const status = (result.code === 'CHALLENGE_EXHAUSTED' || result.code === 'CHALLENGE_BUDGET_EXHAUSTED' || result.code === 'CANNOT_CHALLENGE_COMPLETED') ? 409
       : result.code === 'NOT_FOUND' ? 404 : 400;
@@ -662,8 +664,8 @@ router.post('/tasks/:id/challenge/resolve', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { outcome, recheck, note, resolvedBy } = validateRequest(resolveChallengeSchema, req.body);
   const result = recheck
-    ? await cos.resolveTaskChallengeWithRecheck(id, { recheck, resolvedBy })
-    : await cos.resolveTaskChallenge(id, { outcome, note, resolvedBy });
+    ? await resolveTaskChallengeWithRecheck(id, { recheck, resolvedBy })
+    : await resolveTaskChallenge(id, { outcome, note, resolvedBy });
   if (result?.error) {
     const status = result.code === 'NOT_FOUND' ? 404
       : result.code === 'NOT_CHALLENGED' ? 409
@@ -688,13 +690,13 @@ router.post('/goal-fidelity/false-positive', asyncHandler(async (req, res) => {
 
 // POST /api/cos/evaluate - Force task evaluation
 router.post('/evaluate', asyncHandler(async (req, res) => {
-  await cos.evaluateTasks();
+  await evaluateTasks();
   res.json({ success: true, message: 'Evaluation triggered' });
 }));
 
 // POST /api/cos/tasks/:id/spawn - Force-spawn a pending task
 router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
-  const result = await cos.forceSpawnTask(req.params.id);
+  const result = await forceSpawnTask(req.params.id);
   if (result.error) {
     const message = String(result.error);
     let status = 400;

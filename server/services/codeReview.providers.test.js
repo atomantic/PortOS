@@ -373,6 +373,16 @@ describe('configured provider reviewers', () => {
     expect(result.error).toContain('42 KiB');
   });
 
+  it.each([
+    ['no-response', 'backend never answered'],
+    ['response-body', 'backend was reachable but did not finish'],
+  ])('reports the %s stall point of a timed-out API reviewer', async (stallPhase, description) => {
+    callProviderAISimple.mockResolvedValue({ error: 'Provider request failed: This operation was aborted', stallPhase });
+    const result = await runLocalCodeReview({ backend, diff: 'x'.repeat(42 * 1024) });
+    expect(result.error).toContain(description);
+    expect(result.error).toContain('timed out after');
+  });
+
   describe('getProviderReviewUnsupported', () => {
     // Any CLI with a command can review code (confined when it has no enforced
     // mode), so only a missing command is reported.

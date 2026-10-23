@@ -140,7 +140,8 @@ describe('HTTP Gmail reply identity', () => {
   it('revalidates the claimed subject if it changes while provider metadata is loading', async () => {
     const id = await approvedReply();
     doubles.metadata.mockImplementationOnce(async () => {
-      await updateDraft(id, { subject: 'Different conversation' });
+      // Re-approved, since a content edit alone drops approval (#13055).
+      await updateDraft(id, { subject: 'Different conversation', status: 'approved' });
       return metadata();
     });
     const response = await request(app).post(`/api/messages/drafts/${id}/send`);

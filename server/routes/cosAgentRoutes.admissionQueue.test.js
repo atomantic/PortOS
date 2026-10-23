@@ -5,7 +5,11 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 const fixture = vi.hoisted(() => ({ state: null, disk: null, queue: null, enqueued: null, read: null, origin: null, save: null }));
-vi.mock('../services/cos.js', () => ({}));
+vi.mock('../services/cosAgentArchive.js', () => ({}));
+vi.mock('../services/cosAgentFeedback.js', () => ({}));
+vi.mock('../services/cosAgentIndex.js', () => ({}));
+vi.mock('../services/cosAgentLifecycle.js', () => ({}));
+vi.mock('../services/cosHealthMonitor.js', () => ({}));
 vi.mock('../services/agentOrchestrator.js', () => ({}));
 vi.mock('../services/cosState.js', () => ({
   withStateLock: (fn) => { const result = fixture.queue(fn); fixture.enqueued?.(); return result; },

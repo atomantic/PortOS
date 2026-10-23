@@ -326,6 +326,9 @@ export async function purgeConversation(chatKey) {
   const chatGuid = decodeChatKey(chatKey);
   if (chatGuid == null) return { deleted: 0, chatGuid: null };
   const result = await humanActivity.deleteEvents({ source: SOURCE, chatGuid });
+  // Touchpoint summaries carry the chat name; dedupe keys are imsg:<chatGuid>:<day>.
+  const { deleteAutoTouchpoints } = await import('./tribe.js');
+  await deleteAutoTouchpoints({ dedupePrefix: `imsg:${chatGuid}:` });
   return { ...result, chatGuid, chatKey: encodeChatKey(chatGuid) };
 }
 

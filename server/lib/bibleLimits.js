@@ -156,6 +156,12 @@ export const BIBLE_LIMITS = Object.freeze({
   WARDROBE_NAME_MAX: 120,
   WARDROBE_DESCRIPTION_MAX: 800,
   WARDROBES_PER_CHARACTER_MAX: 10,
+  // Alternate forms (other ages, eras, looks/styles) of any canon entry. The
+  // entry's own fields are its canonical present-story form.
+  FORM_LABEL_MAX: 80,
+  FORM_AGE_MAX: 80,
+  FORM_DESCRIPTION_MAX: 1500,
+  FORMS_PER_ENTRY_MAX: 12,
   EVIDENCE_ITEM_MAX: 500,
   EVIDENCE_PER_ENTRY_MAX: 20,
   // Places

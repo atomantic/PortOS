@@ -6,6 +6,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { FormField } from '../ui/FormField';
 import ProviderModelSelector from '../ProviderModelSelector';
 import EmptyState from '../EmptyState';
+import ListLoadError from '../ui/ListLoadError';
 import * as api from '../../services/api';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
@@ -15,6 +16,7 @@ import { pluralize } from '../../lib/textUtils';
 export default function AgentList() {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [stats, setStats] = useState({ agents: 0, accounts: 0, schedules: 0, totalRuns: 0 });
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({
@@ -41,42 +43,53 @@ export default function AgentList() {
   const [scheduleCounts, setScheduleCounts] = useState({});
 
   const fetchData = useCallback(async () => {
-    const [agentsData, accountsData, scheduleStats, providersData] = await Promise.all([
-      api.getAgentPersonalities(),
-      api.getPlatformAccounts(),
-      api.getScheduleStats(),
-      api.getProviders()
-    ]);
-    setAgents(agentsData);
-    setProviders((providersData.providers || []).filter(p => p.enabled));
-    setStats({
-      agents: agentsData.length,
-      accounts: accountsData.length,
-      schedules: scheduleStats.total,
-      totalRuns: scheduleStats.totalRuns || 0
-    });
+    setLoadError(false);
+    // silent: the inline error below owns the failure UI, so no toast per call.
+    await Promise.all([
+      api.getAgentPersonalities(null, { silent: true }),
+      api.getPlatformAccounts(null, null, { silent: true }),
+      api.getScheduleStats({ silent: true }),
+      api.getProviders({ silent: true }),
+      api.getAutomationSchedules(null, null, { silent: true })
+    ]).then(([agentsData, accountsData, scheduleStats, providersData, schedData]) => {
+      setAgents(agentsData);
+      setProviders((providersData.providers || []).filter(p => p.enabled));
+      setStats({
+        agents: agentsData.length,
+        accounts: accountsData.length,
+        schedules: scheduleStats.total,
+        totalRuns: scheduleStats.totalRuns || 0
+      });
 
-    // Count accounts per agent
-    const acctCounts = {};
-    accountsData.forEach(a => {
-      acctCounts[a.agentId] = (acctCounts[a.agentId] || 0) + 1;
-    });
-    setAccountCounts(acctCounts);
+      // Count accounts per agent
+      const acctCounts = {};
+      accountsData.forEach(a => {
+        acctCounts[a.agentId] = (acctCounts[a.agentId] || 0) + 1;
+      });
+      setAccountCounts(acctCounts);
 
-    // Count schedules per agent from schedule list
-    const schedData = await api.getAutomationSchedules();
-    const schedCounts = {};
-    schedData.forEach(s => {
-      schedCounts[s.agentId] = (schedCounts[s.agentId] || 0) + 1;
+      // Count schedules per agent from schedule list
+      const schedCounts = {};
+      schedData.forEach(s => {
+        schedCounts[s.agentId] = (schedCounts[s.agentId] || 0) + 1;
+      });
+      setScheduleCounts(schedCounts);
+    }).catch(() => {
+      setLoadError(true);
+    }).finally(() => {
+      setLoading(false);
     });
-    setScheduleCounts(schedCounts);
-
-    setLoading(false);
   }, []);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Spinner only on a retry; background refreshes keep the current view mounted.
+  const retry = () => {
+    setLoading(true);
+    fetchData();
+  };
 
   // Sync raw text fields when formData changes
   useEffect(() => {
@@ -163,6 +176,14 @@ export default function AgentList() {
 
   if (loading) {
     return <div className="p-6"><BrailleSpinner text="Loading agents" /></div>;
+  }
+
+  if (loadError) {
+    return (
+      <div className="p-6">
+        <ListLoadError what="social agents" onRetry={retry} />
+      </div>
+    );
   }
 
   return (

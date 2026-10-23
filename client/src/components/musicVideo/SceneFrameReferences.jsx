@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
@@ -24,7 +24,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const pressTimer = useRef(null);
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
-  const choices = [...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
+  const choices = [...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
   if (!choices.length) return null;
   const chosen = musicVideoConditioningReferences(project, scene, castMedia);
   const ids = chosen.map((ref) => ref.id);

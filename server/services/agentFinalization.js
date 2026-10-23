@@ -31,7 +31,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // import, which puts it inside the facade's closure, so the facade is out of
 // reach here.
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
-import { updateTask } from './cos.js';
+import { updateTask } from './cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderUnavailable } from './providerStatus.js';
@@ -606,7 +606,11 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
   // used. Dropping it would query as whatever ambient account `gh` happens to be
   // on, which on a multi-login host may not even see the PR — reading as
   // "no PR" for a run that opened one.
-  const { cli, env } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh', env: null }));
+  const forge = await resolveForgeForRepo(workspacePath).catch(() => null);
+  if (!forge) return prObservation(PR_OBSERVATION.FORGE_UNAVAILABLE, {
+    branch, message: 'Could not resolve the repository forge account', inconclusive: true,
+  });
+  const { cli, env } = forge;
   const draft = task?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT;
   const found = cli === 'glab'
     ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath, ...(draft ? [{ includeDraft: true }] : []))
@@ -832,16 +836,18 @@ async function hasEmptyDependencyInventories(workspacePath) {
   const { getOriginInfo } = await import('../lib/gitRemote.js');
   const origin = await getOriginInfo(workspacePath);
   if (!origin.host || !origin.owner || !origin.repo) return false;
+  const { githubApiHost } = await import('../lib/workTracker.js');
+  const host = githubApiHost(origin.host.toLowerCase());
   const { resolveForgeForRepo } = await import('./git.js');
   const forge = await resolveForgeForRepo(workspacePath);
-  if (forge.cli !== 'gh' || forge.host !== origin.host || forge.owner !== origin.owner) return false;
+  if (forge.cli !== 'gh' || githubApiHost(forge.host?.toLowerCase()) !== host || forge.owner !== origin.owner) return false;
   const { execGh } = await import('./github.js');
   const inventories = await Promise.all([
     'dependabot/alerts',
     'pulls',
   ].map(async resource => {
     const raw = await execGh([
-      'api', '--hostname', origin.host, '--paginate', '--slurp',
+      'api', '--hostname', host, '--paginate', '--slurp',
       `repos/${origin.owner}/${origin.repo}/${resource}?state=open&per_page=100`,
     ], 30_000, { cwd: workspacePath, env: forge.env });
     const pages = safeJSONParse(raw, null);

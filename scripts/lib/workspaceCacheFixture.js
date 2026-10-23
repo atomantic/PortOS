@@ -60,6 +60,8 @@ function checkout(host, name, workspace, configName, dependencies) {
   for (const file of ['lib/vitestTempRoot.js', 'lib/dbTestFiles.js', 'lib/browserSuites.js', 'lib/workspaceTests.js', 'vitestCiPool.js', 'vitestTempRootSetup.js']) {
     link(join(REPO, 'scripts', file), join(parent, 'scripts', file));
   }
+  // The data exclusion belongs to the synthetic checkout, like its cache paths.
+  copyFileSync(join(REPO, 'scripts/lib/vitestWatch.js'), join(parent, 'scripts/lib/vitestWatch.js'));
   if (workspace === 'server') {
     // Both configs load this environment relative to themselves. Copy its
     // Node-only support closure intact so setup and teardown run in this checkout.
@@ -79,6 +81,9 @@ function checkout(host, name, workspace, configName, dependencies) {
   if (configAt === -1) args.push('--config', join(root, configName));
   else args[configAt + 1] = join(root, configName);
   args.push('--root', root, '--maxWorkers', '1');
+  // This proof exercises cache publication, not DOM behavior. Three client
+  // launches otherwise pay for happy-dom against one 15s enclosing budget.
+  if (workspace === 'client') args.push('--environment', 'node');
   // Test roots and the caller's cwd differ from the config's parent directory.
   const cwd = join(parent, 'caller');
   mkdirSync(cwd);

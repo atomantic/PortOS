@@ -6,7 +6,7 @@ import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePreset';
 import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../lib/runnerFamilies';
 import {
-  FAL_IMAGE_DEFAULT_MODEL,
+  FAL_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_DEFAULT_MODEL,
   IMAGE_GEN_MODE,
   LOCAL_IMAGEGEN_DEFAULT_MODEL,
   cloudPromptRequired,
@@ -31,7 +31,7 @@ import {
   listLorasFull,
 } from '../services/api';
 
-const REFERENCE_SLOT_COUNT = 10;
+const REFERENCE_SLOT_COUNT = 16;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
 const IMAGE_GEN_RESTORE_PARAM_KEYS = ['prompt', 'negativePrompt', 'modelId', 'width', 'height', 'seed', 'steps', 'guidance', 'quantize'];
 const IMAGE_GEN_HANDOFF_PARAM_KEYS = ['remix', ...IMAGE_GEN_RESTORE_PARAM_KEYS, 'initImageFile'];
@@ -96,6 +96,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const [selectedLoras, setSelectedLoras] = useState([]);
   const [agyModel, setAgyModel] = useState('');
   const [savedAgyModel, setSavedAgyModel] = useState('');
+  const [runwayModel, setRunwayModel] = useState('');
+  const [savedRunwayModel, setSavedRunwayModel] = useState('');
   // Per-render fal.ai model ('' = the Settings default) and that default, for
   // the picker's "Settings default (…)" row.
   const [falModel, setFalModel] = useState('');
@@ -134,6 +136,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       codex: resolveCleanersFromConfig(settings?.imageGen?.codex, IMAGE_GEN_MODE.CODEX),
       grok: resolveCleanersFromConfig(settings?.imageGen?.grok, IMAGE_GEN_MODE.GROK),
       agy: resolveCleanersFromConfig(settings?.imageGen?.agy, IMAGE_GEN_MODE.AGY),
+      runway: resolveCleanersFromConfig(settings?.imageGen?.runway, IMAGE_GEN_MODE.RUNWAY),
       fal: resolveCleanersFromConfig(settings?.imageGen?.fal, IMAGE_GEN_MODE.FAL),
     };
     const c2 = {
@@ -142,6 +145,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       codex: perMode.codex.cleanC2PA,
       grok: perMode.grok.cleanC2PA,
       agy: perMode.agy.cleanC2PA,
+      runway: perMode.runway.cleanC2PA,
       fal: perMode.fal.cleanC2PA,
     };
     const dn = {
@@ -150,11 +154,13 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       codex: perMode.codex.denoise,
       grok: perMode.grok.denoise,
       agy: perMode.agy.denoise,
+      runway: perMode.runway.denoise,
       fal: perMode.fal.denoise,
     };
     const saved = settings?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
     const next = configureBackends(backends, saved);
     setSavedAgyModel(settings?.imageGen?.agy?.model || '');
+    setSavedRunwayModel(settings?.imageGen?.runway?.model || RUNWAY_IMAGE_DEFAULT_MODEL);
     setSavedFalModel(settings?.imageGen?.fal?.model || '');
     setSavedLocalModelId(settings?.imageGen?.local?.modelId || '');
     setSavedCleanC2PAByMode(c2);
@@ -475,10 +481,10 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     hasInitImage: initImage.source != null,
     // fal.ai's edit models take 9–14 references (a mood board is the point),
     // so it gets every form slot; the per-model cap below still bounds it.
-    maxSlots: (isLocalMode && isQwen21Model) || isFalMode ? REFERENCE_SLOT_COUNT : 4,
+    maxSlots: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? REFERENCE_SLOT_COUNT : (isLocalMode && isQwen21Model) || isFalMode ? 10 : 4,
     localSupportsReferences: isFlux2Model || isQwen21Model,
     localInputCap: isQwen21Model ? 10 : null,
-    cloudModelId: isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL) : null,
+    cloudModelId: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? (runwayModel || savedRunwayModel || 'gen4_image') : isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL) : null,
   });
   const activeStylePresets = useMemo(() => [
     selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
@@ -686,6 +692,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
       setSelectedLoras,
       agyModel,
       setAgyModel,
+      runwayModel, setRunwayModel,
       falModel,
       setFalModel,
       batchCount,
@@ -707,6 +714,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     },
     settings: {
       savedAgyModel,
+      savedRunwayModel,
       savedFalModel,
       savedCleanC2PAByMode,
       savedDenoiseByMode,

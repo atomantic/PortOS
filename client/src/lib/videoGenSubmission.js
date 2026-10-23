@@ -119,9 +119,22 @@ function falVideoSubmission({
 // text-to-video rule, from the prompt alone (Text mode). The negative prompt is sent; the server passes it
 // natively or as an "Avoid:" line, listed as a chip in the sent-prompt view.
 function runwayVideoSubmission({
-  composed, runwayModelId, runwayDuration, runwayResolution,
+  composed, runwayModelId, runwayDuration, runwayResolution, runwayInputs = {},
   width, height, mode, sourceImageFile, sourceImageUpload,
 }) {
+  if (mode === 'video-edit' || mode === 'character-performance') return {
+    backend: 'runway', mode, runwayModelId,
+    prompt: mode === 'character-performance' ? '' : composed.prompt,
+    negativePrompt: mode === 'character-performance' ? '' : composed.negativePrompt,
+    runwayVideo: runwayInputs.video || '',
+    runwayCharacterVideo: mode === 'character-performance' ? runwayInputs.characterVideo || '' : '',
+    sourceImageFile: runwayInputs.characterVideo ? '' : sourceImageFile || '',
+    sourceImage: runwayInputs.characterVideo ? '' : sourceImageUpload || '',
+    ...(runwayInputs.targetAspectRatio ? { runwayTargetAspect: runwayInputs.targetAspectRatio } : {}),
+    ...(runwayInputs.ratio ? { runwayRatio: runwayInputs.ratio } : {}),
+    ...(mode === 'character-performance' ? { runwayBodyControl: runwayInputs.bodyControl ?? true, runwayExpressionIntensity: runwayInputs.expressionIntensity ?? 3 } : {}),
+    ...(runwayInputs.seed != null && runwayInputs.seed !== '' ? { runwaySeed: Number(runwayInputs.seed) } : {}),
+  };
   return {
     backend: 'runway',
     prompt: composed.prompt,
@@ -343,7 +356,8 @@ export function buildVideoGenSubmission(args) {
   const shared = { ...args, composed };
 
   const isLocal = !hostedLane && !remoteSubmissionFields;
-  const additions = videoPromptAdditions({ ...args, isLocal });
+  const additions = hostedLane === 'runway' && args.mode === 'character-performance'
+    ? [] : videoPromptAdditions({ ...args, isLocal });
   const payload = hostedLane ? HOSTED_VIDEO_SUBMISSIONS[hostedLane](shared)
     : remoteSubmissionFields ? remoteVideoSubmission(shared)
     : localVideoSubmission(args, {

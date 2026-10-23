@@ -1,4 +1,6 @@
 const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
+const mergeRecoveryCheck = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./pendingMergeRecovery.js', () => ({ validatePendingMergeRecovery: (...args) => mergeRecoveryCheck(...args) }));
 vi.mock('./cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ recordBranchCompletionPolicy: vi.fn() }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
@@ -42,21 +44,25 @@ vi.mock('../lib/uuid.js', () => ({
   v4: vi.fn(() => 'mock-uuid')
 }));
 
-vi.mock('./cos.js', () => ({
-  cosEvents: { on: vi.fn(), emit: vi.fn() },
+vi.mock('./cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
   appendAgentOutput: vi.fn().mockResolvedValue(undefined),
-  getConfig: vi.fn().mockResolvedValue({}),
-  updateTask: vi.fn().mockResolvedValue(undefined),
-  addTask: vi.fn().mockResolvedValue(undefined),
-  emitLog: vi.fn(),
-  getTaskById: vi.fn().mockResolvedValue(null),
-  forceSpawnTask: vi.fn().mockResolvedValue({ success: true }),
   getAgent: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null),
   getAgents: vi.fn().mockResolvedValue([])
+}));
+vi.mock('./cosState.js', () => ({
+  getConfig: vi.fn().mockResolvedValue({})
+}));
+vi.mock('./cosTaskStore.js', () => ({
+  updateTask: vi.fn().mockResolvedValue(undefined),
+  addTask: vi.fn().mockResolvedValue(undefined),
+  getTaskById: vi.fn().mockResolvedValue(null)
+}));
+vi.mock('./cos.js', () => ({
+  forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
 vi.mock('./appActivity.js', () => ({
@@ -213,7 +219,10 @@ vi.mock('./prWatcher.js', () => ({
 // before it died, and cleanup hands that orphan to the same follow-up machinery.
 const getPullRequestStateMock = vi.fn();
 const findPullRequestForBranchMock = vi.fn().mockResolvedValue({ status: 'unavailable' });
+// Reviewer-identity preflight lookups: resolves = the forge knows the login.
+const execGhMock = vi.fn().mockResolvedValue('{}');
 vi.mock('./github.js', () => ({
+  execGh: (...args) => execGhMock(...args),
   findPullRequestForBranch: (...args) => findPullRequestForBranchMock(...args),
   getPullRequestState: (...args) => getPullRequestStateMock(...args)
 }));
@@ -248,7 +257,9 @@ import { existsSync as existsSyncMock } from 'fs';
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
 import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
-import { getAgent, getAgentRecord, getAgents, getTaskById, addTask, forceSpawnTask, updateTask, updateAgent } from './cos.js';
+import { getAgent, getAgentRecord, getAgents, updateAgent } from './cosAgentLifecycle.js';
+import { getTaskById, addTask, updateTask } from './cosTaskStore.js';
+import { forceSpawnTask } from './cos.js';
 import { listWorktrees, removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
@@ -1253,6 +1264,51 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['CodeReviewbot']);
   });
 
+  describe('reviewer identity preflight (#13115)', () => {
+    const missing = (login) => (args) => (args.includes(`users/${login}`)
+      ? Promise.reject(Object.assign(new Error('gh: Not Found (HTTP 404)'), { ghNoAccess: true, ghStderr: 'gh: Not Found (HTTP 404)' }))
+      : Promise.resolve('{}'));
+    const run = (extra) => cleanupAgentWorktree('agent-1', true, {
+      prCreation: 'always', requestCopilotReview: true, reviewers: ['copilot'], description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' },
+      ...extra
+    });
+    beforeEach(async () => {
+      const { __resetReviewerIdentityCache } = await import('./reviewerIdentity.js');
+      __resetReviewerIdentityCache();
+      git.push.mockResolvedValue(undefined);
+      git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/61' });
+      git.requestCopilotReview.mockResolvedValue({ success: true });
+      addTask.mockResolvedValue({ id: 'sys-rl-id' });
+    });
+
+    it('refuses a follow-up whose REQUIRED reviewer verifiably does not exist', async () => {
+      execGhMock.mockImplementation((args) => missing('ghost-reviewer')(args));
+      const result = await run({ usernames: ['ghost-reviewer'] });
+      expect(addTask).not.toHaveBeenCalled();
+      expect(result.join(' ')).toMatch(/Required reviewer not found.*ghost-reviewer/);
+    });
+
+    it('skips a missing OPTIONAL reviewer for the run, records it, and keeps the others', async () => {
+      execGhMock.mockImplementation((args) => missing('ghost-reviewer')(args));
+      await run({ usernames: ['ghost-reviewer', 'real-reviewer'], optionalReviewers: ['@ghost-reviewer'] });
+      const [followUp] = addTask.mock.calls[0];
+      expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['real-reviewer']);
+      expect(followUp.metadata.reviewLoopOptionalReviewers).toEqual([]);
+      expect(followUp.metadata.reviewLoopReviewerIdentityFaults).toEqual([
+        expect.objectContaining({ token: 'ghost-reviewer' })
+      ]);
+    });
+
+    it('treats a failed lookup as inconclusive: the roster goes out untouched', async () => {
+      execGhMock.mockRejectedValue(Object.assign(new Error('gh: HTTP 401 Bad credentials'), { ghStderr: 'gh: HTTP 401 Bad credentials' }));
+      await run({ usernames: ['ghost-reviewer'] });
+      const [followUp] = addTask.mock.calls[0];
+      expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['ghost-reviewer']);
+      expect(followUp.metadata.reviewLoopReviewerIdentityFaults).toBeUndefined();
+    });
+  });
+
   it('spawns a username-only follow-up on a non-GitHub forge (copilot stripped, username drives the loop)', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://gitlab.com/group/proj/-/merge_requests/13' });
@@ -1859,6 +1915,24 @@ describe('spawnReviewLoopFollowUp', () => {
     addTask.mockResolvedValue({ id: 'sys-rl-x' });
     forceSpawnTask.mockResolvedValue({ success: true });
     readClaimOwnershipAgents.mockResolvedValue([]);
+    mergeRecoveryCheck.mockReset().mockResolvedValue(null);
+  });
+
+  it('transfers unbound merge custody only to a persisted task carrying the exact initial head', async () => {
+    const originalTask = { id: 'source-task', metadata: { app: 'example' } };
+    const target = { sourceAgentId: 'owner', sourceTaskId: originalTask.id, prUrl: 'https://github.com/o/r/pull/7', branch: 'feature', headSha: 'a'.repeat(40) };
+    const request = { originalAgentId: 'owner', originalTask, prUrl: target.prUrl, prBranch: target.branch,
+      sourceWorkspace: '/repo', prCompletion: 'merge-on-green', reviewers: [], mergeGuardTarget: target };
+    getTaskById.mockResolvedValue({ id: 'sys-rl-x', status: 'pending', metadata: { pendingMergeGuardTarget: target } });
+    expect((await spawnReviewLoopFollowUp(request)).metadata.pendingMergeGuardTarget).toEqual(target);
+    // Auto-dequeue may already have consumed the verified initial pin.
+    getTaskById.mockResolvedValue({ id: 'sys-rl-x', status: 'in_progress', metadata: { pendingMergeGuardLaunchEvidence: target } });
+    expect((await spawnReviewLoopFollowUp(request)).metadata.pendingMergeGuardTarget).toEqual(target);
+    addTask.mockResolvedValue({ id: 'existing', duplicate: true });
+    getTaskById.mockResolvedValue({ id: 'existing', status: 'pending', metadata: {} });
+    expect(await spawnReviewLoopFollowUp(request)).toEqual({ deferred: true });
+    mergeRecoveryCheck.mockResolvedValue('recovery-head-moved');
+    expect(await spawnReviewLoopFollowUp(request)).toEqual({ blocked: 'recovery-head-moved' });
   });
 
   it('pins a missing-review followup to its inspected owner and head without resetting the task budget', async () => {

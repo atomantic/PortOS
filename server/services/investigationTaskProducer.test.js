@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'sys-1' }),
   getAllTasks: vi.fn().mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } }),
 }));
 
-const { addTask, getAllTasks } = await import('./cos.js');
+const { addTask, getAllTasks } = await import('./cosTaskStore.js');
 const {
   fileInvestigationTask,
   investigationCircuitOpen,

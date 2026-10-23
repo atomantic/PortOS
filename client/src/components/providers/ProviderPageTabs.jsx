@@ -1,5 +1,3 @@
-import RouteTabsHeader from '../ui/RouteTabsHeader';
-
 /**
  * The AI Providers page's three views (#7567, epic #7561), each its own URL so
  * a card is linkable and reachable from ⌘K and voice:
@@ -9,6 +7,9 @@ import RouteTabsHeader from '../ui/RouteTabsHeader';
  *   - **Harnesses** — the programs that drive a model and whether each is
  *     switched on, plus the credential-bootstrap apps a composite can spawn through.
  *   - **Services** — instances of a service definition: plan, credential, catalog.
+ *
+ * Navigation between them is the Models section strip; this module is only the
+ * route resolver, with no tab row of its own.
  *
  * Exported so the page test can enumerate the views without a second list.
  */
@@ -23,7 +24,3 @@ export const providerPageTabForPath = (pathname) => {
   const bare = String(pathname || '').replace(/\/+$/, '');
   return PROVIDER_PAGE_TABS.find((tab) => bare === tab.to || bare.startsWith(`${tab.to}/`))?.id ?? 'presets';
 };
-
-export default function ProviderPageTabs({ activeTab }) {
-  return <RouteTabsHeader tabs={PROVIDER_PAGE_TABS} activeTab={activeTab} ariaLabel="AI provider views" />;
-}

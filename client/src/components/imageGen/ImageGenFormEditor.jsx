@@ -1,3 +1,4 @@
+import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import { ChevronDown, Sparkles, X } from 'lucide-react';
 import StylePresetPicker from '../media/StylePresetPicker';
 import UniverseStylePicker from '../media/UniverseStylePicker';
@@ -17,6 +18,7 @@ import LoraPicker from './LoraPicker';
 import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
 import {
+  RUNWAY_IMAGE_DEFAULT_MODEL,
   AGY_IMAGEGEN_DEFAULT_MODEL, FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE, falImageFamily,
 } from '../../lib/imageGenBackends';
 
@@ -27,6 +29,7 @@ const ERROR_HEADINGS = {
 };
 
 export default function ImageGenFormEditor({ form, backend, generation }) {
+  const runwayCatalog = useRunwayCatalog(backend?.isRunwayMode);
   const {
     fields,
     catalogs,
@@ -41,7 +44,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
     effectiveMode,
     isLocalMode,
     isAgyMode,
-    isFalMode,
+    isFalMode, isRunwayMode, effectiveRunwayModel,
     remoteTarget,
     effectiveAgyModel,
     effectiveFalModel,
@@ -61,6 +64,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
     refreshFlux2Status,
     needsFlux2Token,
   } = generation;
+  const resolvedRunwayModel = effectiveRunwayModel || settings.savedRunwayModel || RUNWAY_IMAGE_DEFAULT_MODEL;
 
   return (
     <div className="min-w-0 bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
@@ -81,7 +85,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
       >
         <button
           type="submit"
-          disabled={derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || (derived.remoteTargetActive
+          disabled={(isRunwayMode && !runwayCatalog.imageModels.some((m) => m.id === resolvedRunwayModel)) || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || (derived.remoteTargetActive
             ? derived.remoteBlocked !== null
             : (derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt))}
           title={derived.unsupportedLocalInputs ? 'Remove unsupported LoRAs and input images in Options before rendering.' : loraTest.pending ? 'Preparing this LoRA test…' : loraTest.error || (remix.pending
@@ -240,11 +244,11 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             modelStatus={isLocalMode ? modelDownload.getStatus(fields.modelId) : null}
             onModelDownload={isLocalMode ? modelDownload.start : undefined}
             onModelDownloadCancel={modelDownload.cancel}
-            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : []}
-            cloudModel={isFalMode ? effectiveFalModel : effectiveAgyModel}
-            onCloudModelChange={isFalMode ? fields.setFalModel : fields.setAgyModel}
-            cloudModelLabel={isFalMode ? 'fal.ai model' : 'Agent model'}
-            cloudModelDefaultLabel={isFalMode
+            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isRunwayMode ? [...runwayCatalog.imageModels, ...(effectiveRunwayModel && !runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel) ? [{ id: effectiveRunwayModel, label: `${effectiveRunwayModel} (unavailable)` }] : [])] : []}
+            cloudModel={isRunwayMode ? effectiveRunwayModel : isFalMode ? effectiveFalModel : effectiveAgyModel}
+            onCloudModelChange={isRunwayMode ? fields.setRunwayModel : isFalMode ? fields.setFalModel : fields.setAgyModel}
+            cloudModelLabel={isRunwayMode ? 'Runway model' : isFalMode ? 'fal.ai model' : 'Agent model'}
+            cloudModelDefaultLabel={isRunwayMode ? settings.savedRunwayModel || RUNWAY_IMAGE_DEFAULT_MODEL : isFalMode
               ? falImageFamily(settings.savedFalModel || FAL_IMAGE_DEFAULT_MODEL)?.label || FAL_IMAGE_DEFAULT_MODEL
               : settings.savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
           />

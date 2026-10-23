@@ -439,7 +439,7 @@ async function recoverHeldCleanup(app, entry, binding) {
       ? { ...entry, cleanup: { ...entry.cleanup, status: 'pending', retryAt: 0, recoveryCompleted: true } } : entry;
   }
   if (await currentHandoffOwnerPolicy(binding, { recovery: true })) return entry;
-  const { addTask } = await import('./cos.js');
+  const { addTask } = await import('./cosTaskStore.js');
   const task = await addTask({
     description: `[Recovery] Prepare retained checkout for coordinator retirement: ${entry.prBranch} in ${app.name || app.id}`,
     app: app.id, priority: 'HIGH', isRecovery: true, useWorktree: false,
@@ -526,8 +526,300 @@ function joinPendingMergeSweep(appId, start) {
   return settled;
 }
 
+// Each per-entry step answers `{ outcome, tally }`: `outcome` is the entry to
+// persist (`null` drops it) and `tally` holds the sweep counters it adds.
+const NOT_ASSESSED = { reason: null, hold: null };
+
+function addTally(result, tally) {
+  for (const [counter, count] of Object.entries(tally)) result[counter] = (result[counter] || 0) + count;
+}
+
+async function validateHandoffBinding(entry, origin) {
+  const binding = readHandoffBinding(entry);
+  if (!binding || binding === INVALID_HANDOFF) return binding;
+  const { repositoryKey } = await import('./cosMergeAdmission.js');
+  return binding.repository === repositoryKey(origin) ? binding : INVALID_HANDOFF;
+}
+
+// One spent cycle. At the budget a bound receipt stays queued in attention for
+// recovery, while a legacy entry is dropped; both notify once.
+async function advanceTicks(ctx, entry, base, binding, { reason, attention = reason }) {
+  const next = { ...base, ticks: entry.ticks + ctx.charge };
+  if (next.ticks < MAX_PENDING_MERGE_TICKS) return { outcome: next, tally: {} };
+  if (!entry.attention) await notifyPendingMergeTimeout(ctx.app, entry, reason);
+  return { outcome: binding ? { ...next, ticks: MAX_PENDING_MERGE_TICKS, attention } : null, tally: { timedOut: 1 } };
+}
+
+// An unreadable PR is still a cycle this entry spent pending, so it has to
+// tick. A PR whose `gh pr view` fails PERMANENTLY (deleted PR, renamed repo,
+// revoked token) would otherwise be re-queued unchanged forever:
+// MAX_PENDING_MERGE_TICKS never fires, the entry leaks in apps.json, and we
+// re-shell to `gh` on every cadence with nothing surfaced to the user. The
+// cycle is both an error and a tick.
+async function settleUnreadablePr(entry, binding, ctx) {
+  const step = await advanceTicks(ctx, entry, entry, binding, {
+    reason: 'it could not be read from the forge', attention: 'forge-unreadable',
+  });
+  return { outcome: step.outcome, tally: { ...step.tally, errors: 1 } };
+}
+
+// The owning task deferred (keep waiting) or refused (hold until a fresh
+// verified handoff replaces this receipt).
+async function holdForOwner(app, entry, binding, ownerBlocked, retained = entry) {
+  if (ownerBlocked) await notifyPendingMergeTimeout(app, entry, null,
+    `PR #${entry.prNumber} remains owned by task ${binding.taskId}: ${ownerBlocked}.`);
+  return { outcome: ownerBlocked ? { ...retained, recoveryBlocked: ownerBlocked } : retained, tally: { waiting: 1 } };
+}
+
+async function escalatePrFailure(entry, binding, { failure, headMoved }, { app }) {
+  try {
+    const ownerPolicy = await currentHandoffOwnerPolicy(binding, { recovery: true });
+    if (ownerPolicy) return await holdForOwner(app, entry, binding, ownerPolicy.ownerBlocked);
+    const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
+    const recovery = await spawnReviewLoopFollowUp({
+      originalAgentId: entry.sourceAgentId || null,
+      originalTask: entry.sourceTask,
+      prUrl: entry.prUrl,
+      prBranch: entry.prBranch,
+      sourceWorkspace: app.repoPath,
+      ...followUpPolicy(entry, binding),
+    });
+    if (recovery?.deferred) return { outcome: entry, tally: { waiting: 1 } };
+    if (recovery?.blocked) {
+      await notifyPendingMergeTimeout(app, entry, null,
+        `PR #${entry.prNumber} remains owned by review task ${recovery.id}: ${recovery.blocked}. Resume that task after resolving the blocker; its worktree and exact-head merge gate are preserved.`);
+      return { outcome: { ...entry, recoveryBlocked: recovery.blocked }, tally: {} };
+    }
+    if (!recovery?.id) return { outcome: { ...entry, attention: 'recovery-not-persisted' }, tally: { errors: 1 } };
+    console.log(`🔁 Pending PR #${entry.prNumber}: ${failure}; coordinator ${recovery?.id || 'queued'}${recovery?.resumed ? ' resumed' : ''}`);
+    if (!headMoved) return { outcome: null, tally: { escalated: 1 } };
+    console.warn(`⚠️ Pending merge handoff for PR #${entry.prNumber} invalidated: head moved from the handed-off commit`);
+    return { outcome: null, tally: { escalated: 1, invalidated: 1 } };
+  } catch (err) {
+    console.error(`❌ Failed to escalate PR #${entry.prNumber}: ${err.message}`);
+    return { outcome: entry, tally: { errors: 1 } };
+  }
+}
+
+// The last assessment withheld for this exact head and configuration. While
+// neither has changed a retry cannot succeed, so the sweep skips the classifier
+// run and the repository's merge-admission lease; the entry stays in attention.
+async function unchangedAssessmentHold(entry, prView) {
+  const held = entry.assessmentWithheld;
+  if (!held) return null;
+  const { getContributionAssessmentFingerprint } = await import('./untrustedContent.js');
+  const policy = await getContributionAssessmentFingerprint().catch(() => null);
+  return policy && held.policy === policy && String(prView.headRefOid || '').toLowerCase() === held.headSha ? held : null;
+}
+
+async function describeWithheldAssessment(assessment, expectedHeadSha) {
+  const code = assessment.code || 'security-action-assessment-unavailable';
+  const detail = assessment.cause ? `${code}: ${assessment.cause}` : code;
+  // `message` is server-authored. A thrown error's message is not: it can
+  // echo the contribution, so the assessment catch records only the code.
+  const message = typeof assessment.message === 'string'
+    ? assessment.message.replace(/[\r\n]+/g, ' ').trim().slice(0, 240)
+    : '';
+  const reason = message ? `${detail} — ${message}` : detail;
+  // Evidence, mutable-state, transport and provider-readiness failures can
+  // clear on a retry of the same head; only a stable outcome of this head
+  // under this configuration is cached.
+  if (assessment.code !== 'security-action-assessment-withheld' || !STABLE_ASSESSMENT_CAUSES.has(assessment.cause)) {
+    return { reason, hold: null };
+  }
+  const { getContributionAssessmentFingerprint } = await import('./untrustedContent.js');
+  const policy = await getContributionAssessmentFingerprint().catch(() => null);
+  return { reason, hold: policy ? { headSha: String(expectedHeadSha).toLowerCase(), code: detail, policy, reason } : null };
+}
+
+// Runs inside merge admission. Answers the merge attempt (or owner policy) plus
+// the withheld-assessment evidence the settle path records.
+async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeExec }, guard) {
+  const currentPr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
+  if (!currentPr || !isPendingMergeReady(currentPr)) {
+    return { merge: { success: false, error: 'Current head is not merge-ready' }, assessed: NOT_ASSESSED };
+  }
+  const expectedHeadSha = binding ? binding.headSha : currentPr.headRefOid;
+  if (String(currentPr.headRefOid || '').toLowerCase() !== String(expectedHeadSha).toLowerCase()) {
+    return { merge: { success: false, error: 'Current head is not the handed-off head' }, assessed: NOT_ASSESSED };
+  }
+  const { assessPullRequestForAction } = await import('./prReviewerSecurity.js');
+  const readDiff = () => execGh(['pr', 'diff', String(entry.prNumber), '--repo', repoSpec],
+    undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
+  const assessment = await assessPullRequestForAction({
+    pr: currentPr, diff: await readDiff(), repoFullName: origin.fullName,
+    readPr: () => readPendingPullRequest(repoSpec, entry.prNumber, forgeExec),
+    readDiff,
+    readIssue: async (number) => safeJSONParse(await execGh([
+      'api', '--hostname', githubApiHost(origin.host), `repos/${origin.fullName}/issues/${number}`,
+    ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
+  }).catch(() => ({ ok: false, code: 'security-action-assessment-error' }));
+  const assessed = assessment.ok ? NOT_ASSESSED : await describeWithheldAssessment(assessment, expectedHeadSha);
+  if (assessment.ok && guard) {
+    const { pendingMergeGuardCurrent } = await import('./pendingMergeGuard.js');
+    const livePr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
+    if (!livePr || !isPendingMergeReady(livePr) || !await pendingMergeGuardCurrent(guard, livePr,
+      () => readPendingDefault({ origin, repoSpec, forgeExec })).catch(() => false)) {
+      return { merge: { guardDeferred: true }, assessed };
+    }
+  }
+  // Re-read the durable owner's policy inside admission, after remote
+  // assessment and immediately before merge. Waiting CI is not authority to
+  // ignore a later manual hold or a changed review requirement.
+  const ownerPolicy = await currentHandoffOwnerPolicy(binding);
+  if (ownerPolicy) return { merge: ownerPolicy, assessed };
+  const merge = assessment.ok
+    ? await git.mergePR(app.repoPath, entry.prNumber, {
+      forgeAccount: app?.forgeAccount || null, expectedHeadSha,
+    }).catch((err) => ({ success: false, error: err.message }))
+    : { success: false, error: assessed.reason };
+  return { merge, assessed };
+}
+
+async function readPendingDefault({ origin, repoSpec, forgeExec }) {
+  const name = await getDefaultBranch(repoSpec, forgeExec);
+  if (!name) return null;
+  const sha = await execGh(['api', '--hostname', githubApiHost(origin.host),
+    `repos/${origin.fullName}/git/ref/heads/${encodeURIComponent(name)}`, '--jq', '.object.sha'],
+  undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
+  return sha ? { name, sha: sha.trim() } : null;
+}
+
+// Answers `{ step }` when the entry is finished this sweep, otherwise
+// `{ assessed }` for the settle path.
+async function attemptAdmittedMerge(entry, binding, prView, ctx) {
+  const ownerPolicy = await currentHandoffOwnerPolicy(binding);
+  if (ownerPolicy) return { step: await holdForOwner(ctx.app, entry, binding, ownerPolicy.ownerBlocked) };
+  const { preparePendingMergeGuard, summarizeMergeGuardOutput } = await import('./pendingMergeGuard.js');
+  const guard = await preparePendingMergeGuard({ app: ctx.app, entry, binding, prView,
+    readDefault: () => readPendingDefault(ctx), env: ctx.forgeExec.env,
+  }).catch(error => {
+    const detail = summarizeMergeGuardOutput(error.message);
+    console.error(`❌ Pending PR #${entry.prNumber} merged-tree validation unavailable: ${detail}`);
+    return { ok: false, reason: 'merged-tree-validation-unavailable', evidence: { detail } };
+  });
+  if (!guard.ok) {
+    const retained = { ...entry, mergedTreeGuard: { ...guard.evidence, reason: guard.reason } };
+    if (guard.reason === 'merged-tree-recovery-required') {
+      return { step: await recoverUnboundMerge(retained, prView, ctx) };
+    }
+    if (['merged-tree-validation-unavailable', 'merged-tree-default-branch-unavailable'].includes(guard.reason)) {
+      return { step: await advanceTicks(ctx, entry, retained, binding, { reason: guard.reason }) };
+    }
+    if (guard.reason !== 'merged-tree-base-moved') {
+      retained.recoveryBlocked = guard.reason;
+      retained.attention = guard.reason;
+      await notifyPendingMergeTimeout(ctx.app, entry, null,
+        `PR #${entry.prNumber} cannot pass merged-tree validation: ${guard.reason}${guard.evidence?.failedTest ? ` — ${guard.evidence.failedTest}` : ''}. Its receipt, checkout, and any mergedTreeGuard log are retained. Repair and submit a fresh verified handoff.`);
+    }
+    return { step: { outcome: retained, tally: { waiting: 1 } } };
+  }
+  const retained = guard.evidence ? { ...entry, mergedTreeGuard: guard.evidence } : entry;
+  const { withPendingMergeAdmission, markMergeHandoffMerged } = await import('./cosMergeAdmission.js');
+  const admitted = await withPendingMergeAdmission(ctx.origin, () => mergeAssessedHead(entry, binding, ctx, guard.evidence));
+  if (!admitted.admitted) {
+    console.log(`⏳ Pending merge deferred for PR #${entry.prNumber}: ${admitted.reason}`);
+    return { step: { outcome: retained, tally: { waiting: 1 } } };
+  }
+  const { merge, assessed } = admitted.result;
+  if (merge.guardDeferred) return { step: { outcome: retained, tally: { waiting: 1 } } };
+  if (merge.ownerDeferred || merge.ownerBlocked) {
+    const held = assessed.hold ? { ...retained, assessmentWithheld: assessed.hold } : retained;
+    return { step: await holdForOwner(ctx.app, entry, binding, merge.ownerBlocked, held) };
+  }
+  if (merge.success) {
+    // The post-merge gate audit (#12549) exempts only a merge made here.
+    if (binding) {
+      await markMergeHandoffMerged({ agentId: binding.agentId, receiptId: binding.receiptId, headSha: binding.headSha })
+        .catch((err) => console.warn(`⚠️ Could not mark PR #${entry.prNumber} as coordinator-merged: ${err.message}`));
+    }
+    // Admission has released before potentially slow archival cleanup.
+    return { step: { outcome: await finishMergedReceipt(ctx.app, entry, binding), tally: { merged: 1 } } };
+  }
+  console.error(`❌ Deterministic merge failed for PR #${entry.prNumber}: ${merge.error || 'unknown error'}`);
+  return { assessed };
+}
+
+// Legacy queue producers cannot supply a verified checkout. Transfer custody
+// only after a pinned recovery is persisted; missing authority remains queued.
+async function recoverUnboundMerge(entry, prView, ctx) {
+  try {
+    const { preparePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
+    const prepared = await preparePendingMergeRecovery({ app: ctx.app, entry, headSha: prView.headRefOid });
+    if (prepared.deferred) return { outcome: entry, tally: { waiting: 1 } };
+    let recovery = prepared;
+    if (prepared.target) {
+      const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
+      recovery = await spawnReviewLoopFollowUp({ originalAgentId: entry.sourceAgentId || null,
+        originalTask: prepared.task, prUrl: entry.prUrl, prBranch: entry.prBranch,
+        sourceWorkspace: ctx.app.repoPath, ...prepared.policy, mergeGuardTarget: prepared.target });
+    }
+    if (recovery?.deferred) return { outcome: entry, tally: { waiting: 1 } };
+    if (recovery?.blocked) {
+      await notifyPendingMergeTimeout(ctx.app, entry, null,
+        `PR #${entry.prNumber} needs a verified checkout before merged-tree validation: ${recovery.blocked}. The pending entry is retained for explicit owner recovery.`);
+      return { outcome: { ...entry, recoveryBlocked: recovery.blocked }, tally: { waiting: 1 } };
+    }
+    if (!recovery?.id) return { outcome: entry, tally: { errors: 1 } };
+    return { outcome: null, tally: { escalated: 1 } };
+  } catch (error) {
+    const { summarizeMergeGuardOutput } = await import('./pendingMergeGuard.js');
+    console.error(`❌ Pending PR #${entry.prNumber} checkout recovery could not be persisted: ${summarizeMergeGuardOutput(error.message)}`);
+    return { outcome: entry, tally: { errors: 1 } };
+  }
+}
+
+// Merge a ready PR, otherwise spend a tick toward the budget.
+async function mergeOrSettle(entry, binding, prView, ctx) {
+  const ready = isPendingMergeReady(prView);
+  const cachedHold = ready ? await unchangedAssessmentHold(entry, prView) : null;
+  let assessed = { reason: cachedHold?.reason, hold: cachedHold };
+  if (ready && !cachedHold) {
+    const attempt = await attemptAdmittedMerge(entry, binding, prView, ctx);
+    if (attempt.step) return attempt.step;
+    assessed = attempt.assessed;
+  }
+  const { assessmentWithheld: _previous, ...settled } = entry;
+  const reason = String(prView.state || '').toUpperCase() !== 'OPEN'
+    ? `it is ${String(prView.state).toLowerCase()} rather than open`
+    : assessed.reason || 'CI or mergeability did not settle';
+  return advanceTicks(ctx, entry, assessed.hold ? { ...settled, assessmentWithheld: assessed.hold } : settled, binding, { reason });
+}
+
+async function processReadablePr(entry, binding, prView, ctx) {
+  const state = String(prView.state || '').toUpperCase();
+  if (state === 'MERGED') return { outcome: await finishMergedReceipt(ctx.app, entry, binding), tally: {} };
+  if (binding && state === 'CLOSED') {
+    if (!entry.recoveryBlocked) await notifyPendingMergeTimeout(ctx.app, entry, null,
+      `PR #${entry.prNumber} was closed without merging. Its receipt retains the branch and checkout; explicit disposition is required.`);
+    return { outcome: { ...entry, recoveryBlocked: 'pr-closed-unmerged' }, tally: {} };
+  }
+  // A refused owner/policy or exhausted budget remains refused even if CI
+  // later turns green. Only a fresh verified handoff replaces this receipt.
+  if (entry.recoveryBlocked) return { outcome: entry, tally: {} };
+  // A head other than the one handed off was never validated by that run:
+  // drop the binding and dispatch fresh validation/review rather than merge.
+  const headMoved = binding && String(prView.headRefOid || '').toLowerCase() !== binding.headSha;
+  const failure = headMoved ? 'head-moved' : classifyPrFailure(prView);
+  if (failure) return escalatePrFailure(entry, binding, { failure, headMoved }, ctx);
+  return mergeOrSettle(entry, binding, prView, ctx);
+}
+
+async function processPendingMergeEntry(entry, ctx) {
+  if (Date.now() < (entry.cleanup?.retryAt || 0)) return { outcome: entry, tally: {} };
+  const binding = await validateHandoffBinding(entry, ctx.origin);
+  if (binding === INVALID_HANDOFF) {
+    if (!entry.recoveryBlocked) await notifyPendingMergeTimeout(ctx.app, entry, null,
+      'PortOS will not merge this handed-off PR: its recorded head/policy binding is unreadable or names another repository. Verify the PR and merge or re-dispatch it.');
+    return { outcome: { ...entry, recoveryBlocked: 'handoff-binding-unreadable' }, tally: { invalidated: 1 } };
+  }
+  const prView = await readPendingPullRequest(ctx.repoSpec, entry.prNumber, ctx.forgeExec);
+  if (!prView) return settleUnreadablePr(entry, binding, ctx);
+  const step = await processReadablePr(entry, binding, prView, ctx);
+  return { outcome: step.outcome, tally: { checked: 1, ...step.tally } };
+}
+
 async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
-  const charge = spendTicks ? 1 : 0;
   const pending = readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean)
     .filter(entry => receipts === null || receipts.includes(JSON.stringify(entry.handoff)));
   if (pending.length === 0) return { ok: true, checked: 0, merged: 0, escalated: 0, timedOut: 0 };
@@ -547,6 +839,7 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
   });
   if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status };
 
+  const ctx = { app, origin, repoSpec, forgeExec, charge: spendTicks ? 1 : 0 };
   const outcomes = new Map();
   const withheldGenerations = new Map();
   const result = { ok: true, checked: 0, merged: 0, escalated: 0, invalidated: 0, timedOut: 0, errors: 0 };
@@ -554,224 +847,9 @@ async function runPendingMergePrs(app, { spendTicks, receipts = null }) {
   for (const entry of pending) {
     const key = pendingMergeKey(entry);
     withheldGenerations.set(key, assessmentHoldGeneration);
-    if (Date.now() < (entry.cleanup?.retryAt || 0)) {
-      outcomes.set(key, entry);
-      continue;
-    }
-    let binding = readHandoffBinding(entry);
-    if (binding && binding !== INVALID_HANDOFF) {
-      const { repositoryKey } = await import('./cosMergeAdmission.js');
-      if (binding.repository !== repositoryKey(origin)) binding = INVALID_HANDOFF;
-    }
-    if (binding === INVALID_HANDOFF) {
-      if (!entry.recoveryBlocked) await notifyPendingMergeTimeout(app, entry, null,
-        'PortOS will not merge this handed-off PR: its recorded head/policy binding is unreadable or names another repository. Verify the PR and merge or re-dispatch it.');
-      outcomes.set(key, { ...entry, recoveryBlocked: 'handoff-binding-unreadable' });
-      result.invalidated += 1;
-      continue;
-    }
-    const prView = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
-    if (!prView) {
-      // An unreadable PR is still a cycle this entry spent pending, so it has to
-      // tick. A PR whose `gh pr view` fails PERMANENTLY (deleted PR, renamed
-      // repo, revoked token) would otherwise be re-queued unchanged forever:
-      // MAX_PENDING_MERGE_TICKS never fires, the entry leaks in apps.json, and
-      // we re-shell to `gh` on every cadence with nothing surfaced to the user.
-      // `result.errors` accounting is unchanged — the cycle is both an error and
-      // a tick.
-      result.errors += 1;
-      const unreadable = { ...entry, ticks: entry.ticks + charge };
-      if (unreadable.ticks >= MAX_PENDING_MERGE_TICKS) {
-        if (!entry.attention) await notifyPendingMergeTimeout(app, entry, 'it could not be read from the forge');
-        outcomes.set(key, binding ? { ...unreadable, ticks: MAX_PENDING_MERGE_TICKS, attention: 'forge-unreadable' } : null);
-        result.timedOut += 1;
-      } else {
-        outcomes.set(key, unreadable);
-      }
-      continue;
-    }
-    result.checked += 1;
-
-    if (String(prView.state || '').toUpperCase() === 'MERGED') {
-      outcomes.set(key, await finishMergedReceipt(app, entry, binding));
-      continue;
-    }
-
-    if (binding && String(prView.state || '').toUpperCase() === 'CLOSED') {
-      if (!entry.recoveryBlocked) await notifyPendingMergeTimeout(app, entry, null,
-        `PR #${entry.prNumber} was closed without merging. Its receipt retains the branch and checkout; explicit disposition is required.`);
-      outcomes.set(key, { ...entry, recoveryBlocked: 'pr-closed-unmerged' });
-      continue;
-    }
-
-    // A refused owner/policy or exhausted budget remains refused even if CI
-    // later turns green. Only a fresh verified handoff replaces this receipt.
-    if (entry.recoveryBlocked) {
-      outcomes.set(key, entry);
-      continue;
-    }
-
-    // A head other than the one handed off was never validated by that run:
-    // drop the binding and dispatch fresh validation/review rather than merge.
-    const headMoved = binding && String(prView.headRefOid || '').toLowerCase() !== binding.headSha;
-    const failure = headMoved ? 'head-moved' : classifyPrFailure(prView);
-    if (failure) {
-      try {
-        const ownerPolicy = await currentHandoffOwnerPolicy(binding, { recovery: true });
-        if (ownerPolicy) {
-          outcomes.set(key, ownerPolicy.ownerBlocked ? { ...entry, recoveryBlocked: ownerPolicy.ownerBlocked } : entry);
-          result.waiting = (result.waiting || 0) + 1;
-          if (ownerPolicy.ownerBlocked) await notifyPendingMergeTimeout(app, entry, null,
-            `PR #${entry.prNumber} remains owned by task ${binding.taskId}: ${ownerPolicy.ownerBlocked}.`);
-          continue;
-        }
-        const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
-        const recovery = await spawnReviewLoopFollowUp({
-          originalAgentId: entry.sourceAgentId || null,
-          originalTask: entry.sourceTask,
-          prUrl: entry.prUrl,
-          prBranch: entry.prBranch,
-          sourceWorkspace: app.repoPath,
-          ...followUpPolicy(entry, binding),
-        });
-        if (recovery?.deferred) {
-          outcomes.set(key, entry);
-          result.waiting = (result.waiting || 0) + 1;
-          continue;
-        }
-        if (recovery?.blocked) {
-          outcomes.set(key, { ...entry, recoveryBlocked: recovery.blocked });
-          await notifyPendingMergeTimeout(app, entry, null,
-            `PR #${entry.prNumber} remains owned by review task ${recovery.id}: ${recovery.blocked}. Resume that task after resolving the blocker; its worktree and exact-head merge gate are preserved.`);
-          continue;
-        }
-        if (!recovery?.id) {
-          outcomes.set(key, { ...entry, attention: 'recovery-not-persisted' });
-          result.errors += 1;
-          continue;
-        }
-        outcomes.set(key, null);
-        result.escalated += 1;
-        console.log(`🔁 Pending PR #${entry.prNumber}: ${failure}; coordinator ${recovery?.id || 'queued'}${recovery?.resumed ? ' resumed' : ''}`);
-        if (headMoved) {
-          result.invalidated += 1;
-          console.warn(`⚠️ Pending merge handoff for PR #${entry.prNumber} invalidated: head moved from the handed-off commit`);
-        }
-      } catch (err) {
-        console.error(`❌ Failed to escalate PR #${entry.prNumber}: ${err.message}`);
-        outcomes.set(key, entry);
-        result.errors += 1;
-      }
-      continue;
-    }
-
-    let withheldReason = null;
-    // The last assessment withheld for this exact head and configuration. While
-    // neither has changed a retry cannot succeed, so skip the classifier run and
-    // the repository's merge-admission lease; the entry stays in attention.
-    let assessmentWithheld = null;
-    const ready = isPendingMergeReady(prView);
-    if (ready && entry.assessmentWithheld) {
-      const { getContributionAssessmentFingerprint } = await import('./untrustedContent.js');
-      const policy = await getContributionAssessmentFingerprint().catch(() => null);
-      const held = entry.assessmentWithheld;
-      if (policy && held.policy === policy
-        && String(prView.headRefOid || '').toLowerCase() === held.headSha) {
-        assessmentWithheld = held;
-        withheldReason = held.reason;
-      }
-    }
-    if (ready && !assessmentWithheld) {
-      const { withPendingMergeAdmission } = await import('./cosMergeAdmission.js');
-      const admitted = await withPendingMergeAdmission(origin, async () => {
-        const currentPr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
-        if (!currentPr || !isPendingMergeReady(currentPr)) return { success: false, error: 'Current head is not merge-ready' };
-        const expectedHeadSha = binding ? binding.headSha : currentPr.headRefOid;
-        if (String(currentPr.headRefOid || '').toLowerCase() !== String(expectedHeadSha).toLowerCase()) {
-          return { success: false, error: 'Current head is not the handed-off head' };
-        }
-        const { assessPullRequestForAction } = await import('./prReviewerSecurity.js');
-        const readDiff = () => execGh(['pr', 'diff', String(entry.prNumber), '--repo', repoSpec],
-          undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
-        const assessment = await assessPullRequestForAction({
-          pr: currentPr, diff: await readDiff(), repoFullName: origin.fullName,
-          readPr: () => readPendingPullRequest(repoSpec, entry.prNumber, forgeExec),
-          readDiff,
-          readIssue: async (number) => safeJSONParse(await execGh([
-            'api', '--hostname', githubApiHost(origin.host), `repos/${origin.fullName}/issues/${number}`,
-          ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
-        }).catch(() => ({ ok: false, code: 'security-action-assessment-error' }));
-        if (!assessment.ok) {
-          const code = assessment.code || 'security-action-assessment-unavailable';
-          const detail = assessment.cause ? `${code}: ${assessment.cause}` : code;
-          // `message` is server-authored. A thrown error's message is not: it can
-          // echo the contribution, so the catch above records only the code.
-          const message = typeof assessment.message === 'string'
-            ? assessment.message.replace(/[\r\n]+/g, ' ').trim().slice(0, 240)
-            : '';
-          withheldReason = message ? `${detail} — ${message}` : detail;
-          // Evidence, mutable-state, transport and provider-readiness failures
-          // can clear on a retry of the same head; only a stable outcome of this
-          // head under this configuration is cached.
-          if (assessment.code === 'security-action-assessment-withheld' && STABLE_ASSESSMENT_CAUSES.has(assessment.cause)) {
-            const { getContributionAssessmentFingerprint } = await import('./untrustedContent.js');
-            const policy = await getContributionAssessmentFingerprint().catch(() => null);
-            if (policy) assessmentWithheld = { headSha: String(expectedHeadSha).toLowerCase(), code: detail, policy, reason: withheldReason };
-          }
-        } else withheldReason = null;
-        // Re-read the durable owner's policy inside admission, after remote
-        // assessment and immediately before merge. Waiting CI is not authority
-        // to ignore a later manual hold or a changed review requirement.
-        const ownerPolicy = await currentHandoffOwnerPolicy(binding);
-        if (ownerPolicy) return ownerPolicy;
-        return assessment.ok
-          ? await git.mergePR(app.repoPath, entry.prNumber, {
-            forgeAccount: app?.forgeAccount || null, expectedHeadSha,
-          }).catch((err) => ({ success: false, error: err.message }))
-          : { success: false, error: withheldReason };
-      });
-      if (!admitted.admitted) {
-        result.waiting = (result.waiting || 0) + 1;
-        outcomes.set(key, entry);
-        console.log(`⏳ Pending merge deferred for PR #${entry.prNumber}: ${admitted.reason}`);
-        continue;
-      }
-      const merge = admitted.result;
-      if (merge.ownerDeferred || merge.ownerBlocked) {
-        const retained = assessmentWithheld ? { ...entry, assessmentWithheld } : entry;
-        outcomes.set(key, merge.ownerBlocked ? { ...retained, recoveryBlocked: merge.ownerBlocked } : retained);
-        result.waiting = (result.waiting || 0) + 1;
-        if (merge.ownerBlocked) await notifyPendingMergeTimeout(app, entry, null,
-          `PR #${entry.prNumber} remains owned by task ${binding.taskId}: ${merge.ownerBlocked}.`);
-        continue;
-      }
-      if (merge.success) {
-        // The post-merge gate audit (#12549) exempts only a merge made here.
-        if (binding) {
-          const { markMergeHandoffMerged } = await import('./cosMergeAdmission.js');
-          await markMergeHandoffMerged({ agentId: binding.agentId, receiptId: binding.receiptId, headSha: binding.headSha })
-            .catch((err) => console.warn(`⚠️ Could not mark PR #${entry.prNumber} as coordinator-merged: ${err.message}`));
-        }
-        // Admission has released before potentially slow archival cleanup.
-        outcomes.set(key, await finishMergedReceipt(app, entry, binding));
-        result.merged += 1;
-        continue;
-      }
-      console.error(`❌ Deterministic merge failed for PR #${entry.prNumber}: ${merge.error || 'unknown error'}`);
-    }
-
-    const { assessmentWithheld: _previous, ...settled } = entry;
-    const next = { ...settled, ticks: entry.ticks + charge, ...(assessmentWithheld ? { assessmentWithheld } : {}) };
-    if (next.ticks >= MAX_PENDING_MERGE_TICKS) {
-      const reason = String(prView.state || '').toUpperCase() !== 'OPEN'
-        ? `it is ${String(prView.state).toLowerCase()} rather than open`
-        : withheldReason || 'CI or mergeability did not settle';
-      if (!entry.attention) await notifyPendingMergeTimeout(app, entry, reason);
-      outcomes.set(key, binding ? { ...next, ticks: MAX_PENDING_MERGE_TICKS, attention: reason } : null);
-      result.timedOut += 1;
-    } else {
-      outcomes.set(key, next);
-    }
+    const { outcome, tally } = await processPendingMergeEntry(entry, ctx);
+    outcomes.set(key, outcome);
+    addTally(result, tally);
   }
 
   await mutatePendingMergePrs(app.id, (current) => current.flatMap((entry) => {

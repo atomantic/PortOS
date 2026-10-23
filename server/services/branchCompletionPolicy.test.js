@@ -17,6 +17,7 @@ vi.mock('../lib/fileUtils.js', async () => ({
 }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: runtime.trusted, agents: runtime.agents }) }));
 vi.mock('./cosAgentLifecycle.js', () => ({
+  getAgents: async () => [],
   getAgentRecord: async id => runtime.agents[id],
   updateAgent: async (id, patch) => { runtime.agents[id].metadata = { ...runtime.agents[id].metadata, ...patch.metadata }; },
 }));
@@ -34,7 +35,8 @@ vi.mock('./github.js', () => ({
   },
   getIssueDispatchHint: async () => ({ status: 'unavailable' }),
 }));
-vi.mock('./cos.js', () => ({ addTask: async task => ({ ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }), forceSpawnTask: vi.fn(), getAgents: async () => [], updateTask: vi.fn() }));
+vi.mock('./cosTaskStore.js', () => ({ addTask: async task => ({ ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }), updateTask: vi.fn() }));
+vi.mock('./cos.js', () => ({ forceSpawnTask: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./cosAgentIndex.js', () => ({ removeDanglingAgentIndexEntries: vi.fn(async ids => ids.length) }));
 vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main', hasBranchMergeEvidence: async () => runtime.merged }));

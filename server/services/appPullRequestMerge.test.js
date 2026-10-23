@@ -92,6 +92,25 @@ describe('mergeAppPullRequest', () => {
     expect(result).toMatchObject({ ok: false, code: 'merge-failed' });
   });
 
+  // Enterprise hosts are the common case for this failure: the host must come
+  // from the app's own forge target, not default to github.com.
+  it('reports a token missing an OAuth scope with the scopes and the forge host', async () => {
+    resolveAppForgeTarget.mockResolvedValue({
+      tracker: 'github',
+      target: { forge: 'github', fullName: 'acme/widget', repoSpec: 'ghe.example.com/acme/widget', apiHost: 'ghe.example.com', webHost: 'ghe.example.com' },
+    });
+    const workflowRefusal = 'GraphQL: refusing to allow an OAuth App to create or update workflow `.github/workflows/admin.yml` without `workflow` scope (mergePullRequest)';
+    execGh.mockRejectedValue(Object.assign(new Error(workflowRefusal), { ghStderr: workflowRefusal }));
+
+    expect(await mergeAppPullRequest(APP, PR)).toMatchObject({
+      ok: false,
+      code: 'missing-scope',
+      scopes: ['workflow'],
+      host: 'ghe.example.com',
+      error: workflowRefusal,
+    });
+  });
+
   it('merges a GitLab request immediately instead of waiting on its pipeline', async () => {
     resolveAppForgeTarget.mockResolvedValue({
       tracker: 'gitlab',

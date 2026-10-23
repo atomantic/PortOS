@@ -1927,6 +1927,7 @@ CREATE TABLE IF NOT EXISTS x_posts (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (account_id, remote_id)
 );
+ALTER TABLE x_posts ADD COLUMN IF NOT EXISTS author_handle TEXT;
 CREATE INDEX IF NOT EXISTS idx_x_posts_account_received ON x_posts (account_id, received_at DESC);
 CREATE TABLE IF NOT EXISTS x_drafts (
   id UUID PRIMARY KEY,
@@ -1969,6 +1970,7 @@ ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS trust TEXT;
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS suspect BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS triaged_for TIMESTAMPTZ;
+ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS read_on_github_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS github_notification_sync (
   account_id TEXT PRIMARY KEY,
   last_modified TEXT,

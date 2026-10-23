@@ -1,9 +1,9 @@
-import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isFalsyMeta, isTruthyMeta } from '../lib/metadataFlags.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
+import { MAX_ORPHAN_RETRIES, ORPHAN_GUARDS, buildOrphanOutcome, classifyOrphanGuard, decideOrphanRetry } from './agentOrphanRecovery.js';
 /**
  * Agent Management
  *
@@ -22,7 +22,9 @@ import { emitLog } from './cosEvents.js';
 // that declares it; a barrel would be a third answer to "where does completeAgent
 // live", which is the thing this sequencing keeps removing.
 import { completeAgent, updateAgent, getAgents, getAgentRecord, AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
-import { updateTask, addTask, getTaskById, reviveBlockedTask, evaluateTasks, forceSpawnTask } from './cos.js';
+import { updateTask, addTask, getTaskById, reviveBlockedTask } from './cosTaskStore.js';
+import { evaluateTasks } from './cosTaskGenerator.js';
+import { forceSpawnTask } from './cos.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
@@ -53,11 +55,6 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import * as shellService from './shell.js';
 
 const ROOT_DIR = PATHS.root;
-
-// Max retries before creating investigation task
-const MAX_ORPHAN_RETRIES = 3;
-// Minimum cooldown between orphan retries (30 minutes)
-const ORPHAN_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
 
 // Startup has two callers for this sweep: cos.start() awaits it before the
 // first dequeue, while the spawner's delayed safety sweep runs shortly after
@@ -1174,12 +1171,6 @@ export function cleanupOrphanedAgents() {
 }
 
 async function runCleanupOrphanedAgents() {
-  // Was `await import('./cos.js')` destructuring all four of these (#3450). The
-  // deferral bought nothing — this module already imports `./cos.js` statically
-  // at the top, so the module was loaded either way — while routing two agent
-  // functions through the `cos.js` re-export block, i.e. reaching a transition
-  // through a barrel. `completeAgent`/`getAgents` now come from the module that
-  // declares them and `evaluateTasks` joined the existing static `cos.js` import.
   const agents = await getAgents();
   let cleanedCount = 0;
   const orphanedTaskIds = [];
@@ -1490,292 +1481,205 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // Without this, correctness depended on `cleanupOrphanedAgents` happening to
   // run before `resetOrphanedTasks` in cos.js's boot sequence.
   const wasInterrupted = interrupted ?? (agentMetadata?.interruptedBy === HOST_SHUTDOWN_REASON);
-  // Consume the breadcrumb the moment it's honored, exactly as the marker is
-  // consumed after the sweep. It is written once and would otherwise stay on the
-  // agent record forever: `resetOrphanedTasks` keys on the most recent agent per
-  // task, so a respawn that dies before creating its own agent record would keep
-  // re-deriving `wasInterrupted` from this same stale breadcrumb — and, because
-  // an interrupted run bypasses the cooldown, respawn on EVERY 15-minute sweep
-  // instead of once per 30 minutes.
-  if (wasInterrupted && agentMetadata?.interruptedBy === HOST_SHUTDOWN_REASON) {
-    await updateAgent(agentId, { metadata: { interruptedBy: null } })
-      .catch(err => emitLog('warn', `Could not clear interrupted breadcrumb on ${agentId}: ${err.message}`, { agentId }));
-  }
-  if (isPrivateSecurityTask({ metadata: agentMetadata })) {
-    const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
-    await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
-  }
+  await consumeInterruptedBreadcrumb(agentId, agentMetadata, wasInterrupted);
+  if (isPrivateSecurityTask({ metadata: agentMetadata })) await removePrivateSecurityScratch(agentId);
+
   const task = await getTaskByIdFn(taskId).catch(() => null);
   if (!task) {
     emitLog('warn', `Could not find task ${taskId} for orphaned agent ${agentId}`, { taskId, agentId });
     return;
   }
 
-  // User stops and policy refusals remain terminal across recovery sweeps.
-  if (task.status === 'blocked' && ['user-terminated', 'content-refusal', 'content-filtered'].includes(task.metadata?.blockedCategory)) {
-    emitLog('info', `⏭️ Skipping orphaned task ${taskId} — ${task.metadata.blockedCategory}`, { taskId, agentId });
-    return;
-  }
+  const ctx = { taskId, agentId, task, agentMetadata, agentStartedAt };
+  const guard = classifyOrphanGuard(task, agentMetadata);
+  if (guard) return ORPHAN_GUARD_HANDLERS[guard](ctx);
+  if (await completeIfCommitted(ctx)) return;
 
-  // Lost in-memory source scope cannot validate a recovered assessment. Never
-  // hand its transcript to an ordinary investigation or retry provider.
-  if (isPrivateSecurityTask(task) || isPrivateSecurityTask({ metadata: agentMetadata })) {
-    if (task.status === 'completed') return;
-    const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
-    await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
-    const taskUpdate = await stampLiExecutionVerdict({ status: 'blocked', metadata: { ...task.metadata,
-      blockedAt: new Date().toISOString(), blockedCategory: 'private-security-assessment-failed',
-      blockedReason: 'Private assessment was interrupted. Inspect its local output and explicitly rerun it; no automatic investigation or provider fallback will run.',
-    } }, task, { success: false });
-    await updateTask(taskId, taskUpdate, task.taskType || 'user');
-    return;
-  }
+  const decision = decideOrphanRetry({ task, wasInterrupted, now: Date.now() });
+  await applyOrphanDecision(ctx, decision);
+}
 
-  // If a prior orphan in this sweep already routed the task through this handler
-  // (max-retries → investigation task created, or orphan-cooldown → blocked until later),
-  // skip — otherwise each additional orphaned agent for the same task spawns a
-  // duplicate investigation task and inflates orphanRetryCount past its ceiling.
-  if (task.status === 'blocked' &&
-      (task.metadata?.blockedCategory === 'max-retries' ||
-       task.metadata?.blockedCategory === 'orphan-cooldown')) {
-    emitLog('info', `⏭️ Skipping orphaned task ${taskId} — already handled (${task.metadata.blockedCategory})`, {
-      taskId, agentId, blockedCategory: task.metadata.blockedCategory
-    });
-    return;
-  }
+/**
+ * Consume the interrupted breadcrumb the moment it's honored, exactly as the
+ * marker is consumed after the sweep. It is written once and would otherwise stay
+ * on the agent record forever: `resetOrphanedTasks` keys on the most recent agent
+ * per task, so a respawn that dies before creating its own agent record would keep
+ * re-deriving `wasInterrupted` from this same stale breadcrumb — and, because an
+ * interrupted run bypasses the cooldown, respawn on EVERY 15-minute sweep instead
+ * of once per 30 minutes.
+ */
+async function consumeInterruptedBreadcrumb(agentId, agentMetadata, wasInterrupted) {
+  if (!wasInterrupted || agentMetadata?.interruptedBy !== HOST_SHUTDOWN_REASON) return;
+  await updateAgent(agentId, { metadata: { interruptedBy: null } })
+    .catch(err => emitLog('warn', `Could not clear interrupted breadcrumb on ${agentId}: ${err.message}`, { agentId }));
+}
 
-  // Skip tasks already completed
-  if (task.status === 'completed') {
-    emitLog('debug', `⏭️ Skipping orphaned task ${taskId} — already completed`, { taskId, agentId });
-    return;
-  }
+async function removePrivateSecurityScratch(agentId) {
+  const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
+  await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
+}
 
-  // A crash/restart after the refusal was saved must not authorize a retry or
-  // commit rescue. Do not let an older refused run block a newer invocation.
-  const interruption = agentMetadata?.executionInterruption;
-  if (['content-refusal', 'content-filtered'].includes(interruption?.category)) {
+function skipTerminalBlockedOrphan({ taskId, agentId, task }) {
+  emitLog('info', `⏭️ Skipping orphaned task ${taskId} — ${task.metadata.blockedCategory}`, { taskId, agentId });
+}
+
+function skipHandledOrphan({ taskId, agentId, task }) {
+  const { blockedCategory } = task.metadata;
+  emitLog('info', `⏭️ Skipping orphaned task ${taskId} — already handled (${blockedCategory})`, { taskId, agentId, blockedCategory });
+}
+
+function skipCompletedOrphan({ taskId, agentId }) {
+  emitLog('debug', `⏭️ Skipping orphaned task ${taskId} — already completed`, { taskId, agentId });
+}
+
+async function recoverPrivateSecurityOrphan({ taskId, agentId, task }) {
+  if (task.status === 'completed') return;
+  await removePrivateSecurityScratch(agentId);
+  const taskUpdate = await stampLiExecutionVerdict({ status: 'blocked', metadata: { ...task.metadata,
+    blockedAt: new Date().toISOString(), blockedCategory: 'private-security-assessment-failed',
+    blockedReason: 'Private assessment was interrupted. Inspect its local output and explicitly rerun it; no automatic investigation or provider fallback will run.',
+  } }, task, { success: false });
+  await updateTask(taskId, taskUpdate, task.taskType || 'user');
+}
+
+async function recoverRefusedOrphan({ taskId, task, agentMetadata, agentStartedAt }) {
+  const interruption = agentMetadata.executionInterruption;
+  // Do not let an older refused run block a newer invocation.
+  const startedAt = toEpochMs(agentStartedAt);
+  if (startedAt && toEpochMs(task.metadata?.[LAST_SPAWNED_AT_KEY]) > startedAt) return;
+  await updateTask(taskId, await stampLiExecutionVerdict({ status: 'blocked', metadata: {
+    ...task.metadata, ...clearedRetryHoldMetadata(), executionInterruption: interruption,
+    blockedAt: new Date().toISOString(), blockedCategory: interruption.category,
+    blockedReason: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
+  } }, task, { success: false }), task.taskType || 'user');
+}
+
+async function recoverDeepAuditOrphan({ taskId, agentId, task, agentMetadata, agentStartedAt }) {
+  if (task.status !== 'in_progress') return;
+  const held = isRetryHeld(task.metadata);
+  if (held && task.metadata[RETRY_HOLD_KEY] !== agentId) return;
+  if (!held) {
+    const spawnedAt = toEpochMs(task.metadata?.[LAST_SPAWNED_AT_KEY]);
     const startedAt = toEpochMs(agentStartedAt);
-    if (startedAt && toEpochMs(task.metadata?.[LAST_SPAWNED_AT_KEY]) > startedAt) return;
-    await updateTask(taskId, await stampLiExecutionVerdict({ status: 'blocked', metadata: {
-      ...task.metadata, ...clearedRetryHoldMetadata(), executionInterruption: interruption,
-      blockedAt: new Date().toISOString(), blockedCategory: interruption.category,
-      blockedReason: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
-    } }, task, { success: false }), task.taskType || 'user');
+    // A legacy/unknown owner cannot authorize parking a newer invocation.
+    if (!spawnedAt || !startedAt || spawnedAt > startedAt) return;
+    const agents = await getAgents();
+    if (!Array.isArray(agents) || agents.some(entry => entry.taskId === taskId && entry.id !== agentId
+      && (entry.status === 'running' || toEpochMs(entry.startedAt) > startedAt))) return;
+  }
+  const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata });
+  await updateTask(taskId, { status: 'blocked', metadata: {
+    ...resumePatch, ...clearedRetryHoldMetadata(), blockedCategory: 'deep-audit-partial',
+    blockedReason: 'Interrupted Deep audit; inspect checkpoint and resume explicitly', blockedAt: new Date().toISOString(),
+  } }, task.taskType || 'user', { expectedStatus: 'in_progress',
+    expectedMetadata: held ? { [RETRY_HOLD_KEY]: agentId } : { [LAST_SPAWNED_AT_KEY]: task.metadata[LAST_SPAWNED_AT_KEY] },
+  });
+}
+
+/**
+ * The run's verdict is already persisted — it failed, and was budgeted a retry —
+ * so this is not a fresh orphan: finish the transition the dead process started
+ * (resolve the pointer, flip to `pending`, drop the marker) rather than charging
+ * it orphan budget for a decision already made. Precedes the commit check: a failed
+ * run that committed is exactly the case the resume pointer exists for, and
+ * completing the task on that evidence would discard the retry finalizeAgent granted.
+ */
+async function recoverRetryHeldOrphan({ taskId, agentId, task, agentMetadata }) {
+  const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata }).catch(err => {
+    emitLog('warn', `Resume pointer for held task ${taskId} could not be resolved: ${err.message}`, { taskId, agentId });
+    return {};
+  });
+  const targetBranch = resolveTaskTargetBranch(resumePatch);
+  const result = await updateTask(taskId, {
+    status: 'pending',
+    metadata: { ...resumePatch, ...clearedRetryHoldMetadata() }
+  }, task.taskType || 'user', {
+    expectedStatus: 'in_progress', expectedMetadata: { [RETRY_HOLD_KEY]: task.metadata[RETRY_HOLD_KEY] },
+  });
+  if (result?.error) {
+    emitLog('error', `Interrupted retry transition for task ${taskId} failed: ${result.error}`, { taskId, agentId });
     return;
   }
+  if (result?.statusChanged) return;
+  emitLog('info', `🔓 Completed interrupted retry transition for task ${taskId}${targetBranch ? ` — resuming ${targetBranch}` : ''}`, {
+    taskId, agentId, branchName: targetBranch
+  });
+}
 
-  // Recovery of a dead Deep invocation is a checkpoint, never permission to
-  // auto-launch another provider call or to treat commits as completed coverage.
-  if (isLegacyDeepAudit(task.metadata)) {
-    if (task.status !== 'in_progress') return;
-    const held = isRetryHeld(task.metadata);
-    if (held && task.metadata[RETRY_HOLD_KEY] !== agentId) return;
-    if (!held) {
-      const spawnedAt = toEpochMs(task.metadata?.[LAST_SPAWNED_AT_KEY]);
-      const startedAt = toEpochMs(agentStartedAt);
-      // A legacy/unknown owner cannot authorize parking a newer invocation.
-      if (!spawnedAt || !startedAt || spawnedAt > startedAt) return;
-      const agents = await getAgents();
-      if (!Array.isArray(agents) || agents.some(entry => entry.taskId === taskId && entry.id !== agentId
-        && (entry.status === 'running' || toEpochMs(entry.startedAt) > startedAt))) return;
-    }
-    const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata });
-    await updateTask(taskId, { status: 'blocked', metadata: {
-      ...resumePatch, ...clearedRetryHoldMetadata(), blockedCategory: 'deep-audit-partial',
-      blockedReason: 'Interrupted Deep audit; inspect checkpoint and resume explicitly', blockedAt: new Date().toISOString(),
-    } }, task.taskType || 'user', { expectedStatus: 'in_progress',
-      expectedMetadata: held ? { [RETRY_HOLD_KEY]: agentId } : { [LAST_SPAWNED_AT_KEY]: task.metadata[LAST_SPAWNED_AT_KEY] },
-    });
-    return;
-  }
+// One handler per `ORPHAN_GUARDS` reason; the precedence lives in that list.
+const ORPHAN_GUARD_HANDLERS = {
+  'terminal-block': skipTerminalBlockedOrphan,
+  'private-security': recoverPrivateSecurityOrphan,
+  'already-handled': skipHandledOrphan,
+  'completed': skipCompletedOrphan,
+  'content-refusal': recoverRefusedOrphan,
+  'deep-audit': recoverDeepAuditOrphan,
+  'retry-held': recoverRetryHeldOrphan,
+};
+for (const { reason } of ORPHAN_GUARDS) {
+  if (!ORPHAN_GUARD_HANDLERS[reason]) throw new Error(`No orphan recovery handler for guard "${reason}"`);
+}
 
-  // A retry hold whose process died mid-transition (#3373). The run's verdict is
-  // already persisted — it failed, and was budgeted a retry — so this is not a
-  // fresh orphan: finish the transition the dead process started (resolve the
-  // pointer, flip to `pending`, drop the marker) rather than charging it orphan
-  // budget for a decision that was already made. Runs BEFORE the commit check
-  // below: a failed run that committed is exactly the case the resume pointer
-  // exists for, and completing the task on that evidence would discard the retry
-  // finalizeAgent already granted.
-  if (isRetryHeld(task.metadata)) {
-    const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata }).catch(err => {
-      emitLog('warn', `Resume pointer for held task ${taskId} could not be resolved: ${err.message}`, { taskId, agentId });
-      return {};
-    });
-    const targetBranch = resolveTaskTargetBranch(resumePatch);
-    const result = await updateTask(taskId, {
-      status: 'pending',
-      metadata: { ...resumePatch, ...clearedRetryHoldMetadata() }
-    }, task.taskType || 'user', {
-      expectedStatus: 'in_progress', expectedMetadata: { [RETRY_HOLD_KEY]: task.metadata[RETRY_HOLD_KEY] },
-    });
-    if (result?.error) {
-      emitLog('error', `Interrupted retry transition for task ${taskId} failed: ${result.error}`, { taskId, agentId });
-      return;
-    }
-    if (result?.statusChanged) return;
-    emitLog('info', `🔓 Completed interrupted retry transition for task ${taskId}${targetBranch ? ` — resuming ${targetBranch}` : ''}`, {
-      taskId, agentId, branchName: targetBranch
-    });
-    return;
-  }
+/**
+ * Did the agent actually commit work before it died? Scoped to the dead run's OWN
+ * window (#3637): the retired task-id commit marker was never emitted by anything,
+ * and an unbounded `git log` would credit this task with any commit in the repo —
+ * including another agent's. `toEpochMs` accepts both shapes the agent record can
+ * carry (the persisted ISO string and a raw epoch-ms number); without a start time
+ * the probe is skipped.
+ */
+async function completeIfCommitted({ taskId, agentId, task, agentMetadata, agentStartedAt }) {
+  const runStartedAt = toEpochMs(agentStartedAt);
+  const commitFound = Number.isFinite(runStartedAt)
+    && await committedDuringRun(agentMetadata?.workspacePath || ROOT_DIR, runStartedAt);
+  if (!commitFound) return false;
+  emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
+  const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success: true });
+  await updateTask(taskId, taskUpdate, task.taskType || 'user');
+  return true;
+}
 
-  // Check if the agent actually committed work before treating as orphaned.
-  // Scoped to the dead run's OWN window (#3637): the retired task-id commit marker
-  // was never emitted by anything, and an unbounded `git log` would credit this
-  // task with any commit in the repo — including another agent's.
-  // Both shapes the agent record can carry — the persisted ISO string and a raw
-  // epoch-ms number (see toEpochMs for why a bare Date.parse drops the latter).
-  const orphanRunStartedAt = toEpochMs(agentStartedAt);
-  const commitFound = Number.isFinite(orphanRunStartedAt)
-    && await committedDuringRun(agentMetadata?.workspacePath || ROOT_DIR, orphanRunStartedAt);
-  if (commitFound) {
-    emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
-    const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success: true });
-    await updateTask(taskId, taskUpdate, task.taskType || 'user');
-    return;
-  }
-
-  // Get current retry count from task metadata.
-  //
-  // Retry budget and the cooldown exist to stop a task that keeps KILLING ITS OWN
-  // agent from spawning forever. A PortOS host restart is not that: the agent was
-  // healthy and PortOS took it down (#3202). Charging it a retry — and arming the
-  // 30-minute cooldown — punishes the task for our maintenance, and three routine
-  // restarts were enough to exhaust the budget and block the task outright. So an
-  // interrupted run costs no retry and arms no cooldown; it just requeues with a
-  // resume pointer. `MAX_TOTAL_SPAWNS` still applies, so nothing can spawn
-  // unboundedly even under a restart loop.
-  const priorOrphanRetries = Number(task.metadata?.orphanRetryCount) || 0;
-  const retryCount = wasInterrupted ? priorOrphanRetries : priorOrphanRetries + 1;
-  const taskType = task.taskType || 'user';
-
-  // `totalSpawnCount` is incremented when a task goes `in_progress`, so the run a
-  // restart destroyed already consumed a spawn. REFUND it: that spawn produced no
-  // work and was ended by PortOS, not by the task. Without the refund the fix is
-  // only half-done — the ceiling moves from 3 restarts to MAX_TOTAL_SPAWNS, after
-  // which the task is still blocked `max-retries` AND an "[Auto-Fix] Investigate
-  // repeated agent orphaning" task is filed blaming an agent that never failed.
-  // The refund keeps a real ceiling on genuine failures (each still costs a
-  // spawn) while making a restart cost nothing.
-  const priorTotalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
-  const totalSpawns = wasInterrupted ? Math.max(0, priorTotalSpawns - 1) : priorTotalSpawns;
-
-  // Block if total spawn count across all retry types is exhausted
-  const totalExceeded = totalSpawns >= MAX_TOTAL_SPAWNS;
-
-  // Enforce cooldown between orphan retries
-  const lastOrphanedAt = task.metadata?.lastOrphanedAt ? new Date(task.metadata.lastOrphanedAt).getTime() : 0;
-  const cooldownRemaining = lastOrphanedAt ? ORPHAN_RETRY_COOLDOWN_MS - (Date.now() - lastOrphanedAt) : 0;
-  const inCooldown = !wasInterrupted && cooldownRemaining > 0;
-
-  // An interrupted run is exempt from the orphan ceiling for the same reason it
-  // is exempt from the counter: it isn't one of the failures the ceiling counts.
-  // `totalExceeded` still gates it, so a restart loop can't spawn without bound.
-  const withinOrphanBudget = wasInterrupted || retryCount < MAX_ORPHAN_RETRIES;
-
-  if (withinOrphanBudget && !totalExceeded && !inCooldown) {
-    emitLog('info', wasInterrupted
+function logOrphanDecision(taskId, decision) {
+  const { outcome, interrupted, retryCount, totalSpawns, cooldownMinutes, reason } = decision;
+  if (outcome === 'requeue') {
+    emitLog('info', interrupted
       ? `Resuming task ${taskId} interrupted by a PortOS restart (no retry charged; total spawns ${totalSpawns}/${MAX_TOTAL_SPAWNS})`
       : `Resetting orphaned task ${taskId} for retry (attempt ${retryCount}/${MAX_ORPHAN_RETRIES}, total spawns ${totalSpawns}/${MAX_TOTAL_SPAWNS})`, {
-      taskId,
-      retryCount,
-      totalSpawns,
-      interrupted: wasInterrupted,
-      maxRetries: MAX_ORPHAN_RETRIES
+      taskId, retryCount, totalSpawns, interrupted, maxRetries: MAX_ORPHAN_RETRIES
     });
+  } else if (outcome === 'cooldown') {
+    emitLog('info', `⏳ Orphan retry for task ${taskId} in cooldown (${cooldownMinutes}m remaining)`, { taskId, cooldownMinutes, retryCount });
+  } else {
+    emitLog('warn', `Task ${taskId} blocked: ${reason}, creating investigation task`, { taskId, retryCount, totalSpawns });
+  }
+}
 
-    // Point the retry at whatever the dead run left behind — its branch, or the
-    // whole worktree when the process died mid-edit and the uncommitted work is
-    // still sitting in it. Folded into THIS write rather than stamped separately
-    // beforehand: the flip to `pending` emits `tasks:changed`, which can spawn the
-    // retry immediately, so a pointer written afterwards could land too late.
-    // Fails open to "start clean": requeueing the task matters far more than
-    // resuming it, and a throw here would strand it in_progress until the next sweep.
-    const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata }).catch(err => {
+/** Persist the retry decision: requeue, orphan-cooldown block, or max-retries block + investigation. */
+async function applyOrphanDecision({ taskId, agentId, task, agentMetadata }, decision) {
+  logOrphanDecision(taskId, decision);
+  const requeue = decision.outcome === 'requeue';
+  // Point the retry at whatever the dead run left behind — its branch, or the
+  // whole worktree when the process died mid-edit and the uncommitted work is
+  // still sitting in it. Folded into THIS write rather than stamped separately
+  // beforehand: the flip to `pending` emits `tasks:changed`, which can spawn the
+  // retry immediately, so a pointer written afterwards could land too late.
+  // Fails open to "start clean": requeueing the task matters far more than
+  // resuming it, and a throw here would strand it in_progress until the next sweep.
+  const resumePatch = requeue
+    ? await resolveTaskResumePatch({ task, agentId, agentMetadata }).catch(err => {
       emitLog('warn', `Resume pointer for task ${taskId} could not be resolved: ${err.message}`, { taskId, agentId });
       return {};
-    });
+    })
+    : {};
+  const outcome = buildOrphanOutcome({ decision, task, agentId, now: Date.now(), resumePatch });
+  const taskUpdate = requeue ? outcome : await stampLiExecutionVerdict(outcome, task, { success: false });
+  await updateTask(taskId, taskUpdate, task.taskType || 'user');
+  if (decision.outcome === 'blocked') await fileOrphanInvestigation({ taskId, agentId, task, decision });
+}
 
-    // An interrupted run records WHAT happened without touching the orphan
-    // bookkeeping: `lastOrphanedAt` stays as-is so a later genuine orphan's
-    // cooldown is still measured from the last genuine orphan, not from our
-    // restart. The genuine-orphan branch clears `interruptedByRestart` — the
-    // metadata spread below carries every prior key forward, so leaving it set
-    // would make a task that was once restarted look permanently restart-
-    // interrupted, through this orphan and every later one.
-    const now = new Date().toISOString();
-    const recoveryMetadata = wasInterrupted
-      ? {
-        // Persist the refunded count (see the totalSpawns note above) so the
-        // restart's spawn is genuinely given back rather than just ignored once.
-        totalSpawnCount: totalSpawns,
-        lastInterruptedAt: now,
-        lastInterruptedAgentId: agentId,
-        interruptedByRestart: true,
-      }
-      : {
-        orphanRetryCount: retryCount,
-        lastOrphanedAt: now,
-        lastOrphanedAgentId: agentId,
-        interruptedByRestart: false,
-      };
-
-    await updateTask(taskId, {
-      status: 'pending',
-      metadata: {
-        ...task.metadata,
-        ...recoveryMetadata,
-        ...resumePatch
-      }
-    }, taskType);
-  } else if (inCooldown && retryCount < MAX_ORPHAN_RETRIES && !totalExceeded) {
-    const cooldownMinutes = Math.ceil(cooldownRemaining / 60000);
-    emitLog('info', `⏳ Orphan retry for task ${taskId} in cooldown (${cooldownMinutes}m remaining)`, {
-      taskId, cooldownMinutes, retryCount
-    });
-
-    await updateTask(taskId, await stampLiExecutionVerdict({
-      status: 'blocked',
-      metadata: {
-        ...task.metadata,
-        orphanRetryCount: retryCount,
-        lastOrphanedAt: new Date().toISOString(),
-        lastOrphanedAgentId: agentId,
-        // Cleared for the same reason the requeue branch clears it: the metadata
-        // spread carries every prior key forward, so a task interrupted once
-        // would read as restart-interrupted through every later outcome.
-        interruptedByRestart: false,
-        blockedReason: `Orphan retry cooldown (${cooldownMinutes}m remaining)`,
-        blockedCategory: 'orphan-cooldown',
-        blockedAt: new Date().toISOString(),
-        cooldownUntil: new Date(Date.now() + cooldownRemaining).toISOString()
-      }
-    }, task, { success: false }), taskType);
-  } else {
-    const reason = totalExceeded
-      ? `total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`
-      : `orphan retries exceeded (${retryCount}/${MAX_ORPHAN_RETRIES})`;
-    emitLog('warn', `Task ${taskId} blocked: ${reason}, creating investigation task`, {
-      taskId,
-      retryCount,
-      totalSpawns
-    });
-
-    await updateTask(taskId, await stampLiExecutionVerdict({
-      status: 'blocked',
-      metadata: {
-        ...task.metadata,
-        orphanRetryCount: retryCount,
-        // See the requeue branch: the metadata spread carries prior keys forward.
-        interruptedByRestart: false,
-        blockedReason: reason,
-        blockedCategory: 'max-retries',
-        blockedAt: new Date().toISOString()
-      }
-    }, task, { success: false }), taskType);
-
-    const description = `[Auto-Fix] Investigate repeated agent orphaning for task ${taskId}
+async function fileOrphanInvestigation({ taskId, agentId, task, decision }) {
+  const { retryCount, totalSpawns, reason } = decision;
+  const description = `[Auto-Fix] Investigate repeated agent orphaning for task ${taskId}
 
 **Original Task**: ${(task.description || '').substring(0, 200)}
 **Orphan Retries**: ${retryCount}
@@ -1791,20 +1695,19 @@ This task has been blocked after ${totalSpawns} total agent spawns. Investigate:
 
 Once the issue is resolved, task \`${taskId}\` is retried automatically — completing this task revives it.`;
 
-    // Filed through the shared producer so this participates in the same
-    // loop-aware approval policy, storm counter, and fingerprint dedup as every
-    // other investigation (#3714), and so `affectedTasks` closes the loop: the
-    // orphaned task comes back on its own when this one completes. Hardcoding
-    // `approvalRequired: true` here is what turned one repeatedly-orphaned task
-    // into a queue of approvals nobody asked for.
-    await fileInvestigationTask({
-      description,
-      priority: 'HIGH',
-      context: `Auto-generated from repeated orphan failures for task ${taskId}`,
-      fingerprint: buildInvestigationFingerprint(task, { category: 'max-retries' }),
-      affectedTasks: [taskId]
-    }).catch(err => {
-      emitLog('error', `Failed to create investigation task: ${err.message}`, { taskId, error: err.message });
-    });
-  }
+  // Filed through the shared producer so this participates in the same
+  // loop-aware approval policy, storm counter, and fingerprint dedup as every
+  // other investigation (#3714), and so `affectedTasks` closes the loop: the
+  // orphaned task comes back on its own when this one completes. Hardcoding
+  // `approvalRequired: true` here is what turned one repeatedly-orphaned task
+  // into a queue of approvals nobody asked for.
+  await fileInvestigationTask({
+    description,
+    priority: 'HIGH',
+    context: `Auto-generated from repeated orphan failures for task ${taskId}`,
+    fingerprint: buildInvestigationFingerprint(task, { category: 'max-retries' }),
+    affectedTasks: [taskId]
+  }).catch(err => {
+    emitLog('error', `Failed to create investigation task: ${err.message}`, { taskId, error: err.message });
+  });
 }

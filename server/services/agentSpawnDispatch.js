@@ -1,7 +1,8 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { getConfig, updateTask } from './cos.js';
+import { getConfig } from './cosState.js';
+import { updateTask } from './cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
@@ -93,6 +94,22 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     validateModel: validatePublicReviewModel,
   });
   if (publicReviewBlock) return context.blockAndBail(publicReviewBlock);
+  // Inbox actions can target a different account and repository from this
+  // checkout. Bind their credential before any workspace work or registration.
+  const inboxAccountTask = task.metadata?.githubNotificationAccount || task.metadata?.githubNotificationResolve || task.metadata?.githubSecurityFix;
+  if (publicReview && inboxAccountTask) return context.blockAndBail({
+    reason: 'An inbox account credential cannot be given to a public-content review stage.',
+    category: 'github-inbox-account-unavailable',
+  });
+  const notificationAuth = inboxAccountTask
+    ? await import('./githubNotificationAgentAuth.js')
+      .then(({ resolveNotificationAgentEnv }) => resolveNotificationAgentEnv(task))
+      .then(env => ({ env }), error => ({ error }))
+    : { env: null };
+  if (notificationAuth.error) return context.blockAndBail({
+    reason: notificationAuth.error.message,
+    category: 'github-inbox-account-unavailable',
+  });
   const dispatchUseRunner = (publicReview || hasCredentialBootstrap(provider)) ? false : useRunner;
   let publicReviewPromptData = null;
 
@@ -153,6 +170,13 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       : basePrompt;
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
     const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
+    if (notificationAuth.env) {
+      // This copy exists only for this launch. The stored provider and agent/run
+      // registration retain the original provider, with no inbox token added.
+      // Every CLI/TUI/runner composer already carries provider.envVars and skips
+      // its checkout credential lookup when this explicit token is present.
+      requestedProvider.envVars = { ...requestedProvider.envVars, ...notificationAuth.env };
+    }
     const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
       requestedProvider,
       selectedModel,

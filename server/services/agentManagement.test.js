@@ -44,13 +44,17 @@ const AGENT_MANAGEMENT_SRC = normalizeEol(readFileSync(join(__dirname, 'agentMan
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(true),
   addTask: vi.fn().mockResolvedValue({ id: 'sys-mocked' }),
   getTaskById: vi.fn(),
   getAllTasks: vi.fn(),
-  reviveBlockedTask: vi.fn().mockResolvedValue(true),
-  evaluateTasks: vi.fn().mockResolvedValue(undefined),
+  reviveBlockedTask: vi.fn().mockResolvedValue(true)
+}));
+vi.mock('./cosTaskGenerator.js', () => ({
+  evaluateTasks: vi.fn().mockResolvedValue(undefined)
+}));
+vi.mock('./cos.js', () => ({
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
@@ -163,7 +167,8 @@ import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AG
 import { updateRun, getProject } from './creativeDirector/local.js';
 import { advanceAfterPlanStepSettled } from './creativeDirector/planAdvance.js';
 import { advanceAfterSceneSettled } from './creativeDirector/completionHook.js';
-import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask, forceSpawnTask } from './cos.js';
+import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask } from './cosTaskStore.js';
+import { forceSpawnTask } from './cos.js';
 import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
@@ -755,6 +760,141 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
       await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(task));
 
       expect(stampLiExecutionVerdict).toHaveBeenCalledWith(expect.anything(), task, { success: false });
+    });
+  });
+});
+
+// Pins the exact metadata handleOrphanedTask persists for each recovery outcome and
+// the precedence between its guards (#12945). The retry budget is a documented
+// contract (#3202 refund rules): a drift here retries a task forever or blocks it early.
+describe('handleOrphanedTask — persisted outcome shapes and guard precedence (#12945)', () => {
+  const NOW = Date.parse('2026-06-01T12:00:00.000Z');
+  const iso = (ms) => new Date(ms).toISOString();
+  const MIN = 60 * 1000;
+  const taskWith = (metadata, status = 'in_progress') =>
+    ({ id: 'task-foo', status, taskType: 'user', description: 'Original work', metadata });
+  const run = (task, options) => handleOrphanedTask('task-foo', 'agent-dead', vi.fn().mockResolvedValue(task), options);
+  const persisted = () => updateTask.mock.calls[0];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('requeues a genuine orphan: charges a retry, stamps the orphan breadcrumb, clears interruptedByRestart', async () => {
+    resolveTaskResumePatch.mockResolvedValueOnce({ resumeBranch: 'branch-a' });
+    await run(taskWith({ keep: 'x', orphanRetryCount: 1, totalSpawnCount: 2, interruptedByRestart: true }));
+
+    expect(persisted()).toEqual(['task-foo', {
+      status: 'pending',
+      metadata: {
+        keep: 'x', orphanRetryCount: 2, totalSpawnCount: 2, interruptedByRestart: false,
+        lastOrphanedAt: iso(NOW), lastOrphanedAgentId: 'agent-dead',
+        resumeBranch: 'branch-a',
+      },
+    }, 'user']);
+  });
+
+  it('requeues a restart-interrupted run without charging a retry, refunding the spawn and leaving lastOrphanedAt alone', async () => {
+    await run(taskWith({ orphanRetryCount: 2, totalSpawnCount: 3, lastOrphanedAt: iso(NOW - MIN) }), { interrupted: true });
+
+    expect(persisted()).toEqual(['task-foo', {
+      status: 'pending',
+      metadata: {
+        orphanRetryCount: 2, totalSpawnCount: 2, lastOrphanedAt: iso(NOW - MIN),
+        lastInterruptedAt: iso(NOW), lastInterruptedAgentId: 'agent-dead', interruptedByRestart: true,
+      },
+    }, 'user']);
+  });
+
+  it('blocks a second genuine orphan inside the cooldown, with the remaining time and a cleared interruptedByRestart', async () => {
+    await run(taskWith({ orphanRetryCount: 1, totalSpawnCount: 2, lastOrphanedAt: iso(NOW - 10 * MIN), interruptedByRestart: true }));
+
+    expect(persisted()).toEqual(['task-foo', {
+      status: 'blocked',
+      metadata: {
+        orphanRetryCount: 2, totalSpawnCount: 2, lastOrphanedAt: iso(NOW), interruptedByRestart: false,
+        lastOrphanedAgentId: 'agent-dead',
+        blockedReason: 'Orphan retry cooldown (20m remaining)', blockedCategory: 'orphan-cooldown',
+        blockedAt: iso(NOW), cooldownUntil: iso(NOW + 20 * MIN),
+      },
+    }, 'user']);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('blocks as max-retries and files an investigation once the orphan retries are spent', async () => {
+    await run(taskWith({ orphanRetryCount: 2, totalSpawnCount: 3, interruptedByRestart: true }));
+
+    expect(persisted()).toEqual(['task-foo', {
+      status: 'blocked',
+      metadata: {
+        orphanRetryCount: 3, totalSpawnCount: 3, interruptedByRestart: false,
+        blockedReason: 'orphan retries exceeded (3/3)', blockedCategory: 'max-retries', blockedAt: iso(NOW),
+      },
+    }, 'user']);
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask.mock.calls[0][0].description).toContain('**Orphan Retries**: 3\n**Total Spawns**: 3');
+  });
+
+  it('blocks as max-retries on the spawn ceiling even for a restart-interrupted run, without charging a retry', async () => {
+    // 6 spawns minus the refunded one is still at the MAX_TOTAL_SPAWNS ceiling of 5.
+    await run(taskWith({ orphanRetryCount: 0, totalSpawnCount: 6 }), { interrupted: true });
+
+    expect(persisted()).toEqual(['task-foo', {
+      status: 'blocked',
+      metadata: {
+        orphanRetryCount: 0, totalSpawnCount: 6, interruptedByRestart: false,
+        blockedReason: 'total spawns exceeded (5/5)', blockedCategory: 'max-retries', blockedAt: iso(NOW),
+      },
+    }, 'user']);
+    expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
+  describe('guard precedence', () => {
+    const refusal = { executionInterruption: { category: 'content-refusal' } };
+
+    it('terminal user-terminated outranks the private-security failure write', async () => {
+      await run(taskWith({ analysisType: 'private-security-assessment', blockedCategory: 'user-terminated' }, 'blocked'));
+      expect(updateTask).not.toHaveBeenCalled();
+    });
+
+    it('the private-security failure write outranks the already-handled skip', async () => {
+      await run(taskWith({ analysisType: 'private-security-assessment', blockedCategory: 'max-retries' }, 'blocked'));
+      expect(updateTask).toHaveBeenCalledTimes(1);
+      expect(updateTask.mock.calls[0][1].metadata.blockedCategory).toBe('private-security-assessment-failed');
+    });
+
+    it('a completed private-security task is left alone', async () => {
+      await run(taskWith({ analysisType: 'private-security-assessment' }, 'completed'));
+      expect(updateTask).not.toHaveBeenCalled();
+    });
+
+    it('the already-handled skip outranks the content-refusal write', async () => {
+      await run(taskWith({ blockedCategory: 'orphan-cooldown' }, 'blocked'), { agentMetadata: refusal });
+      expect(updateTask).not.toHaveBeenCalled();
+    });
+
+    it('the completed skip outranks the content-refusal write', async () => {
+      await run(taskWith({}, 'completed'), { agentMetadata: refusal });
+      expect(updateTask).not.toHaveBeenCalled();
+    });
+
+    it('the content-refusal write outranks the retry-hold transition', async () => {
+      await run(taskWith({ retryPendingCleanup: 'agent-dead' }), { agentMetadata: refusal });
+      expect(updateTask).toHaveBeenCalledTimes(1);
+      expect(updateTask.mock.calls[0][1].metadata.blockedCategory).toBe('content-refusal');
+    });
+
+    it('a retry-held task finishes its transition instead of being completed by a commit found in the run window', async () => {
+      committedDuringRun.mockResolvedValueOnce(true);
+      await run(taskWith({ retryPendingCleanup: 'agent-dead' }), { agentStartedAt: iso(NOW - MIN) });
+      expect(committedDuringRun).not.toHaveBeenCalled();
+      expect(updateTask.mock.calls[0][1].status).toBe('pending');
     });
   });
 });

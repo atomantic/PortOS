@@ -231,8 +231,10 @@ const describeDependencyVerdict = (path, { escalate, reason, packages }) => {
 // package, an `engines`/`overrides`/non-dependency field change, or a manifest
 // the planner could not read and compare escalates Windows.
 const FULL_TRIGGER_RULES = [
-  // Defines the windows-server job itself.
-  { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsEscalates: true },
+  // ci.yml defines the windows-server job itself. The other workflows (release,
+  // acceptance, cancel recovery) never run on windows-latest.
+  { re: /^\.github\/workflows\/ci\.yml$/, reason: 'workflow definition changed', windowsEscalates: true },
+  { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsEscalates: false },
   { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsEscalates: 'dependencies' },
   // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
   // it on the Windows install too.
@@ -265,9 +267,13 @@ const FULL_TRIGGER_RULES = [
   { re: /^server\/sockets\/logs\.js$/, reason: 'log socket source changed (broad import fanout)', windowsEscalates: true },
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
-  // prove themselves against the complete suite rather than their own scope —
-  // including on Windows, whose shard matrix ci-test-plan.js itself emits.
-  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|ci-test-plan|run-ci-(?:lint|tests)|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: true },
+  // prove themselves against the complete suite rather than their own scope.
+  // Only the ones the windows-server job itself executes (ci-base-sha,
+  // run-ci-tests and the githubOutput helper it imports) escalate Windows; the
+  // planner, lint runner, hidden-content scan and status verifier run on Linux
+  // jobs only, so a Windows run would observe nothing they change.
+  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: true },
+  { re: /^scripts\/(?:ci-test-plan|run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: false },
 ];
 
 // Files whose Windows behavior is not faithfully exercised by pinPlatform()
@@ -454,6 +460,9 @@ export const ALWAYS_RUN_TESTS = [
   // walkers (#8723): the offending file is never imported by the guard, so
   // impact selection only reaches them when the guard itself changes.
   'server/lib/apiRouteGraph.test.js',
+  // Route inventories and write-back scans depend on independently changed files (#13224).
+  'server/lib/hostControlRoutes.test.js',
+  'server/jsonWritebackConventions.test.js',
   // Whole-tree scanner (#9982): any server module can start taking backup
   // admission with no import edge back to the owner inventory it must join.
   'server/lib/backupAssetOwners.test.js',
@@ -514,7 +523,11 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner (#12048): server/index.js can mount a new router that no
   // test imports, with no import edge from that router to this guard.
   'server/routeTestCoverageConventions.test.js',
+  // Whole-tree scanner (#12952): server/index.js can mount a mutating route that
+  // no host-control classification names, with no import edge to this guard.
+  'server/hostControlCoverage.test.js',
   'server/routeValidationConventions.test.js',
+  'server/floatingAsyncConventions.test.js',
   'server/timerCallbackConventions.test.js',
   // Whole-tree scanner (#12815): any server file can bind a bare JSON.stringify to
   // a jsonb parameter, with no import edge to this guard.
@@ -535,6 +548,15 @@ const DOCUMENTATION_RULES = [
   /^docs\//,
   /^(?:README|CHANGELOG|CONTRIBUTING|LICENSE)(?:\.|$)/i,
   /\.(?:md|mdx|png|jpe?g|gif|webp|svg|ico)$/i,
+];
+
+// Generated data no code or test reads from this checkout: the repo-root
+// `.quality.json` is the numeric snapshot `appQualitySnapshotFile.js` lands
+// through its own immediately-merged PR. A PR touching only these skips every
+// runner, the always-run guards included — there is nothing for them to check.
+// The hidden-content diff scan in the impact job still reads it.
+const GENERATED_DATA_RULES = [
+  /^\.quality\.json$/,
 ];
 
 // Text snapshots are executable test inputs, but their extension is deliberately
@@ -766,6 +788,7 @@ const isPythonScript = (path) => PYTHON_SCRIPT_RE.test(path);
 const isExecutable = (path) => EXECUTABLE_RE.test(path) || isPythonScript(path);
 // A documentation directory can also contain runnable contracts and helpers.
 const isDocumentationOnly = (path) => !isExecutable(path) && DOCUMENTATION_RULES.some((rule) => rule.test(path));
+const isGeneratedData = (path) => GENERATED_DATA_RULES.some((rule) => rule.test(path));
 const isServerRunnerFile = (path) => RUNNER_ROOTS.server.some((root) => path.startsWith(root));
 const isClientRunnerFile = (path) => RUNNER_ROOTS.client.some((root) => path.startsWith(root));
 
@@ -796,6 +819,7 @@ const featureDirectory = (path) => {
 const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
   '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
   'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
+  'scripts/lib/vitestWatch.js',
   'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
   'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
   'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
@@ -1125,14 +1149,17 @@ function buildSuitePlan(changedFiles, {
     });
   }
 
-  const alwaysRun = alwaysRunTests(trackedSet);
+  const dataOnly = changed.length > 0 && changed.every(isGeneratedData);
+  const alwaysRun = dataOnly ? [] : alwaysRunTests(trackedSet);
 
-  const relevant = changed.filter((path) => !isDocumentationOnly(path));
+  const relevant = changed.filter((path) => !isDocumentationOnly(path) && !isGeneratedData(path));
   if (relevant.length === 0) {
     const { server: alwaysRunServer, client: alwaysRunClient } = splitByRunner(alwaysRun);
+    const reason = dataOnly ? 'generated data-only change'
+      : changed.length ? 'documentation-only change' : 'no changed files';
     const plan = {
       full: false,
-      reason: changed.length ? 'documentation-only change' : 'no changed files',
+      reason,
       changedFiles: changed,
       server: alwaysRunServer.length > 0 ? { mode: 'files', files: alwaysRunServer, sources: [] } : skippedRunner(),
       client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient, sources: [] } : skippedRunner(),

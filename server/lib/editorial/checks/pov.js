@@ -1,5 +1,6 @@
 // Editorial checks — pov group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   HEAD_HOPPING_STAGE,
   POV_PERSON_LABELS,
@@ -335,7 +336,7 @@ export const povChecks = [
     // Skip when there's no prose, OR when the style guide declares third-person
     // omniscient — an omniscient narrator may freely roam between heads, so
     // "head-hopping" is intentional and there's nothing to police (#1311).
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0
+    gate: (ctx) => hasManuscript(ctx)
       && ctx.series?.styleGuide?.povPerson !== 'third-omniscient',
     run: (ctx) => {
       // The POV-per-scene map is fixed per-call overhead (re-sent on each chunk).

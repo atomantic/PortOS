@@ -65,6 +65,62 @@ const feedSequenceValues = async () => Object.fromEntries((await query(
   [syncFeedTables.map(syncFeedSequenceName)],
 )).rows.map(({ sequencename, v }) => [sequencename, v]));
 
+const REQUIRED_EXTENSIONS = ['vector', 'pgcrypto'];
+const extensionIds = async () => (await query(
+  'SELECT extname, oid::text AS oid FROM pg_extension WHERE extname = ANY($1::text[]) ORDER BY extname', [REQUIRED_EXTENSIONS],
+)).rows;
+
+// The application role cannot CREATE EXTENSION (needs a superuser), so a
+// fixture that drops them (DROP SCHEMA public CASCADE) cannot rebuild itself
+// (#13120). Remove only application objects, atomically in one DO block, and
+// leave extension members (types, operators, functions) and the namespace.
+// The run-wide DB advisory lock gives this suite exclusive ownership.
+const DROP_APPLICATION_OBJECTS = `DO $portos_fixture_reset$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT c.oid::regclass::text AS name, c.relkind FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm', 'r', 'p', 'f', 'c')
+    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass
+      AND d.objid = c.oid AND d.deptype = 'e')
+    ORDER BY CASE WHEN c.relkind IN ('v', 'm') THEN 0 ELSE 1 END
+  LOOP
+    EXECUTE format('DROP %s IF EXISTS %s CASCADE',
+      CASE r.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' WHEN 'c' THEN 'TYPE' ELSE 'TABLE' END, r.name);
+  END LOOP;
+  FOR r IN SELECT c.oid::regclass::text AS name FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'S'
+    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass
+      AND d.objid = c.oid AND d.deptype = 'e')
+  LOOP EXECUTE format('DROP SEQUENCE IF EXISTS %s CASCADE', r.name); END LOOP;
+  FOR r IN SELECT p.oid::regprocedure::text AS name FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass
+      AND d.objid = p.oid AND d.deptype = 'e')
+  LOOP EXECUTE format('DROP ROUTINE IF EXISTS %s CASCADE', r.name); END LOOP;
+  FOR r IN SELECT t.oid::regtype::text AS name FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typtype IN ('d', 'e', 'r', 'm') AND t.typcategory <> 'A'
+    AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_type'::regclass
+      AND d.objid = t.oid AND d.deptype = 'e')
+  LOOP EXECUTE format('DROP TYPE IF EXISTS %s CASCADE', r.name); END LOOP;
+END
+$portos_fixture_reset$`;
+
+// Refuse before touching anything when provisioning is missing, and prove the
+// extensions survived the reset by identity (an unchanged oid was not recreated).
+async function resetApplicationObjects() {
+  const before = await extensionIds();
+  if (before.length !== REQUIRED_EXTENSIONS.length) {
+    throw new Error(`${REQUIRED_EXTENSIONS.join(' and ')} must be provisioned by an administrator first `
+      + `(see docs/CONTRIBUTING.md "Repairing a test database whose extensions were dropped"); found ${before.map(e => e.extname).join(', ') || 'none'}`);
+  }
+  await query(DROP_APPLICATION_OBJECTS);
+  expect(await extensionIds()).toEqual(before);
+}
+
 const health = await checkHealth();
 const ready = requireDbOrSkip('services/backup.db.test',
   health.connected && spawnSync('psql', ['--version']).status === 0,
@@ -177,7 +233,26 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
     }
   }
 
+  // Fixture setup failure must never leave later DB suites on a half-built
+  // schema: rebuild the base schema, then surface the original failure.
   async function prepareFixture() {
+    try {
+      await buildFixture();
+    } catch (thrown) {
+      const error = thrown instanceof Error ? thrown : new Error(String(thrown));
+      try {
+        await resetApplicationObjects();
+        await query(await readFile(new URL('../scripts/init-db.sql', import.meta.url), 'utf8'));
+        await ensureSchema({ force: true });
+        await runDbMigrations();
+      } catch (recoveryError) {
+        error.message += ` (schema recovery also failed: ${recoveryError.message})`;
+      }
+      throw error;
+    }
+  }
+
+  async function buildFixture() {
     // Other branches can leave entirely retired functions, not just overloads
     // of names current DDL still owns. Model that residue before rebuilding the
     // disposable fixture; production restore must continue refusing it (#12526).
@@ -186,8 +261,8 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
     // The run-wide DB lock grants this whole-database restore suite exclusive
     // ownership. Start from a clean schema instead of dumping another branch's
     // objects into every snapshot. Reapply base DDL before its additive upgrades.
-    await query('DROP SCHEMA public CASCADE');
-    await query('CREATE SCHEMA public');
+    await resetApplicationObjects();
+    expect((await query("SELECT 1 FROM pg_proc WHERE proname = 'restore_retired_fixture_function'")).rowCount).toBe(0);
     await query(await readFile(new URL('../scripts/init-db.sql', import.meta.url), 'utf8'));
     await ensureSchema({ force: true });
     await runDbMigrations();

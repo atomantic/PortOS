@@ -1033,6 +1033,7 @@
       "description": "Generates a complete interactive-video episode as single-camera-cut nodes, choosing its own node and ending counts from the story. Automatic cuts use one Continue path; decision nodes loop while waiting on viewer intent. Each node includes image, video, and camera-movement direction.",
       "model": "heavy",
       "returnsJson": true,
+      "timeout": 1200000,
       "variables": []
     },
     "fableloom-outline-episode": {
@@ -1138,6 +1139,7 @@
       "description": "Episode-scoped short-shot production planning before media generation.",
       "model": "default",
       "returnsJson": true,
+      "timeout": 1200000,
       "variables": [
         "source",
         "guidance",

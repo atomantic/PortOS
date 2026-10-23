@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import { FINDING_CATEGORY_LABELS } from './findingCategories.js';
+import { hasManuscript } from './checkInfra/gates.js';
 import {
   EDITORIAL_CHECKS,
   EDITORIAL_SOURCES,
@@ -119,6 +120,24 @@ describe('editorial check registry — shape invariants', () => {
         `${check.id} category "${check.category}"`,
       ).toBe(true);
     }
+  });
+
+  // The one place the shared 'needs drafted prose' gate (checkInfra/gates.js) is
+  // pinned; also catches a manuscript-consuming check added without any gate.
+  it('every needsManuscript check is gated off without prose, and the shared gate is a strict boolean', () => {
+    for (const check of EDITORIAL_CHECKS.filter((c) => c.needsManuscript)) {
+      expect(typeof check.gate, `${check.id} gate`).toBe('function');
+      for (const manuscript of ['', '   ', undefined]) {
+        expect(check.gate({ manuscript }), `${check.id} blank ${JSON.stringify(manuscript)}`).toBeFalsy();
+      }
+      if (check.gate === hasManuscript) {
+        expect(check.gate({ manuscript: '' })).toBe(false);
+        expect(check.gate({ manuscript: '   ' })).toBe(false);
+        expect(check.gate({})).toBe(false);
+        expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBe(true);
+      }
+    }
+    expect(EDITORIAL_CHECKS.some((c) => c.gate === hasManuscript)).toBe(true);
   });
 
   it('ships both reference checks (one deterministic, one llm)', () => {
@@ -596,12 +615,6 @@ describe('pov.head-hopping — LLM check (#1311)', () => {
     expect(check.severityDefault).toBe('medium');
   });
 
-  it('gates on a non-empty manuscript', () => {
-    const check = getCheck(HEAD_HOPPING);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('no-ops (gate false) when the style guide is third-person omniscient', () => {
     const check = getCheck(HEAD_HOPPING);
     expect(check.gate({ manuscript: '# Issue 1\n\nprose', series: { styleGuide: { povPerson: 'third-omniscient' } } })).toBe(false);
@@ -686,12 +699,6 @@ describe.each([
     expect(check.severityDefault).toBe(severityDefault);
   });
 
-  it('gates on a non-empty manuscript', () => {
-    const check = getCheck(id);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('injects the scene map into the prompt vars and counts it into the chunk overhead', async () => {
     let seenVars = null;
     let seenOverhead = 0;
@@ -762,12 +769,6 @@ describe('narration.summary-not-scene — summary-vs-scene LLM check (#3591)', (
     expect(check.defaultEnabled).toBe(true);
     expect(check.needsManuscript).toBe(true);
     expect(check.sources).toEqual(expect.arrayContaining(['manuscript', 'reverseOutline']));
-  });
-
-  it('gates on a non-empty manuscript', () => {
-    const check = getCheck(SUMMARY_NOT_SCENE);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: MANUSCRIPT })).toBeTruthy();
   });
 
   it('injects the scene map into the prompt vars and stamps findings with the pacing category', async () => {
@@ -860,12 +861,6 @@ describe('dialogue.reported-speech — reported-speech LLM check (#3592)', () =>
     expect(check.sources).toEqual(['manuscript']);
   });
 
-  it('gates on a non-empty manuscript', () => {
-    const check = getCheck(REPORTED_SPEECH);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: MANUSCRIPT })).toBeTruthy();
-  });
-
   it('budgets the fixed prompt overhead when planning chunks and stamps findings with the dialogue category', async () => {
     let seenVars = null;
     let seenOverhead = 0;
@@ -948,12 +943,6 @@ describe('interiority.register — interiority-register LLM check (#3593)', () =
     expect(check.sources).toEqual(['manuscript']);
   });
 
-  it('gates on a non-empty manuscript', () => {
-    const check = getCheck(INTERIORITY_REGISTER);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: MANUSCRIPT })).toBeTruthy();
-  });
-
   it('budgets the fixed prompt overhead when planning chunks and stamps findings with the style category', async () => {
     let seenVars = null;
     let seenOverhead = 0;
@@ -1031,12 +1020,6 @@ describe('interiority.protagonist — LLM check (#1294)', () => {
     expect(check.needsManuscript).toBe(true);
   });
 
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(INTERIORITY);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('passes the planned manuscript chunk to the model and forces the character category', async () => {
     let seen = null;
     const ctx = wholeCtx({
@@ -1091,12 +1074,6 @@ describe('chekhov.setups-payoffs — LLM check (#1299)', () => {
     // authored-payoffs block, so a canon edit must re-fingerprint this check.
     expect(check.sources).toEqual(['manuscript', 'canon', 'series.arc.readerMap', 'series.arc.foreshadowing']);
     expect(check.needsManuscript).toBe(true);
-  });
-
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(CHEKHOV);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
   });
 
   it('passes the manuscript + authored reader-map setups to the model and forces the continuity category', async () => {
@@ -1271,12 +1248,6 @@ describe('plot.structure-momentum — LLM check (#1310)', () => {
     expect(check.needsManuscript).toBe(true);
   });
 
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(PLOT_STRUCTURE);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('passes the manuscript, scene map, plotline coverage, and authored setups to the model and forces the plot category', async () => {
     let seenVars = null;
     const ctx = wholeCtx({
@@ -1388,12 +1359,6 @@ describe('pacing.escalation-curve — LLM check (#1618)', () => {
     expect(check.category).toBe('pacing');
     expect(check.sources).toEqual(['manuscript', 'reverseOutline']);
     expect(check.needsManuscript).toBe(true);
-  });
-
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(PACING_ESCALATION);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
   });
 
   it('passes the manuscript, scene map, and conflict-marker tally to the model and forces the pacing category', async () => {
@@ -1561,12 +1526,6 @@ describe('continuity.timeline-contradiction — LLM check (#1581)', () => {
     expect(check.needsManuscript).toBe(true);
   });
 
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(TIMELINE_CONTRADICTION);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('passes the manuscript, continuity ledger, canon facts, and scene map to the model and forces the continuity category', async () => {
     let seenVars = null;
     const ctx = wholeCtx({
@@ -1700,12 +1659,6 @@ describe('character.consistency — LLM check (#1582)', () => {
     expect(check.needsManuscript).toBe(true);
   });
 
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(CHARACTER_CONSISTENCY);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('passes the manuscript, canon traits, and scene map to the model and forces the character category', async () => {
     let seenVars = null;
     const ctx = wholeCtx({
@@ -1826,12 +1779,6 @@ describe('theme.coherence — LLM check (#1317)', () => {
     expect(check.needsManuscript).toBe(true);
   });
 
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(THEME_COHERENCE);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('passes the manuscript, declared themes, and scene map to the model and forces the theme category', async () => {
     let seenVars = null;
     const ctx = wholeCtx({
@@ -1917,12 +1864,6 @@ describe('arc.climax-agency — LLM check (#1583)', () => {
     expect(check.needsManuscript).toBe(true);
   });
 
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(CLIMAX_AGENCY);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('passes the manuscript, authored payoffs, declared themes, and scene map and forces the arc category', async () => {
     let seenVars = null;
     const ctx = wholeCtx({
@@ -2004,12 +1945,6 @@ describe('emotion.reaction-proportionality — LLM check (#1584)', () => {
     expect(check.severityDefault).toBe('medium');
     expect(check.sources).toEqual(['manuscript', 'reverseOutline']);
     expect(check.needsManuscript).toBe(true);
-  });
-
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(REACTION_PROPORTIONALITY);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
   });
 
   it('passes the manuscript + scene map to the model and forces the emotion category', async () => {
@@ -2154,12 +2089,6 @@ describe('character.secondary-arc — LLM check (#1585)', () => {
     expect(check.needsManuscript).toBe(true);
   });
 
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(SECONDARY_ARC);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
-  });
-
   it('passes the manuscript, recurring secondary roster, canon names roster, and canon traits and forces the arc category', async () => {
     let seenVars = null;
     const ctx = wholeCtx({
@@ -2265,12 +2194,6 @@ describe('style.voice-consistency — LLM check (#1586)', () => {
     expect(check.severityDefault).toBe('low');
     expect(check.sources).toEqual(['manuscript', 'series.styleGuide']);
     expect(check.needsManuscript).toBe(true);
-  });
-
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(VOICE_CONSISTENCY);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
   });
 
   it('feeds the style guide intended voice alongside the manuscript and forces the style category', async () => {
@@ -2549,12 +2472,6 @@ describe('endings.cliffhanger — LLM check (#1298)', () => {
     expect(check.category).toBe('pacing');
     expect(check.sources).toEqual(['manuscript', 'series.arc.readerMap']);
     expect(check.needsManuscript).toBe(true);
-  });
-
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(ENDINGS_CLIFF);
-    expect(check.gate({ manuscript: '' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
   });
 
   it('passes the manuscript + authored cliffhangers and forces the pacing category', async () => {
@@ -3460,11 +3377,6 @@ describe('arc.transitions — LLM check (#1293)', () => {
     expect(capturedSceneMap).toContain('present: Mara');
   });
 
-  it('is gated off when the manuscript is empty', () => {
-    expect(getCheck(ARC).gate({ manuscript: '   ' })).toBe(false);
-    expect(getCheck(ARC).gate({ manuscript: 'real prose' })).toBe(true);
-  });
-
   it('degrades gracefully when no authored arcs or outline exist', async () => {
     const ctx = baseCtx({
       series: {},
@@ -3500,12 +3412,6 @@ describe('arc.regression — LLM check (#1619)', () => {
     expect(check.category).toBe('arc');
     expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'series.characterArcs', 'series.characterArcs.evolution']);
     expect(check.needsManuscript).toBe(true);
-  });
-
-  it('only runs when there is drafted prose to scan', () => {
-    const check = getCheck(REG);
-    expect(check.gate({ manuscript: '   ' })).toBe(false);
-    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
   });
 
   it('emits arc-category findings and ships the manuscript + both context blocks', async () => {
@@ -3834,10 +3740,6 @@ describe('objects.unmotivated-interaction — LLM check (#1288)', () => {
     expect(findings).toHaveLength(4);
     expect(findings.every((f) => f.category === 'continuity')).toBe(true);
   });
-
-  it('gates off when the manuscript is empty', () => {
-    expect(getCheck('objects.unmotivated-interaction').gate(baseCtx({ manuscript: '   ' }))).toBe(false);
-  });
 });
 
 describe('objects.weight-proportionality — LLM check (#1624)', () => {
@@ -3899,10 +3801,6 @@ describe('objects.weight-proportionality — LLM check (#1624)', () => {
     }));
     expect(findings).toHaveLength(1);
     expect(findings[0].issueNumber).toBe(7);
-  });
-
-  it('gates off when the manuscript is empty', () => {
-    expect(getCheck('objects.weight-proportionality').gate(baseCtx({ manuscript: '   ' }))).toBe(false);
   });
 });
 
@@ -5037,8 +4935,6 @@ describe('prose.cliches / prose.modifier-stacking / prose.dead-metaphor (#1308)'
       expect(c.category).toBe('style');
       expect(c.sources).toEqual(['manuscript']);
       expect(c.needsManuscript).toBe(true);
-      expect(c.gate({ manuscript: '' })).toBe(false);
-      expect(c.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
     }
   });
 
@@ -5113,8 +5009,6 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
       expect(c.category, id).toBe('style');
       expect(c.sources, id).toEqual(['manuscript']);
       expect(c.needsManuscript, id).toBe(true);
-      expect(c.gate({ manuscript: '' }), id).toBe(false);
-      expect(c.gate({ manuscript: '# Issue 1\n\nprose' }), id).toBeTruthy();
     }
     expect(getCheck(TELLING).kind).toBe('llm');
     expect(getCheck(TELLING).category).toBe('style');
@@ -5318,8 +5212,6 @@ describe('prose anti-pattern bundle (#1300)', () => {
       expect(c.category).toBe(category);
       expect(c.sources).toEqual(['manuscript']);
       expect(c.needsManuscript).toBe(true);
-      expect(c.gate({ manuscript: '' })).toBe(false);
-      expect(c.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
     });
 
     it(`${id} passes the planned chunk to the model and forces its category`, async () => {

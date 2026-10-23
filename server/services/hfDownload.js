@@ -32,6 +32,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { getHfTokenInfo } from './hfToken.js';
 import { safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { createLineReader } from '../lib/streamLines.js';
+import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { getSettings } from './settings.js';
 
 const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'hf_download_repo.py');
@@ -191,8 +192,8 @@ export function buildHfDownloadArgs({ repo, revision = null, only = null, ignore
 }
 
 // Returns `{ promise, kill }`. The promise resolves with `{ ok, sizeBytes,
-// errorKind, errorMessage }`. `kill()` SIGTERMs the python child so the
-// SSE handler can stop the download when the EventSource client closes.
+// errorKind, errorMessage }`. `kill()` cancels the python child and escalates
+// if needed so a disconnected SSE client cannot strand the download slot.
 //
 // `only` is an array of exact repo-relative filenames. When set, the helper
 // runs in SINGLE-FILE mode: it never enumerates the repo and fetches only those
@@ -208,9 +209,22 @@ export function buildHfDownloadArgs({ repo, revision = null, only = null, ignore
 export function downloadHfRepo({ repo, revision = null, only = null, ignore = null, pythonPath: preferredPython = null, onEvent }) {
   let proc = null;
   let killed = false;
+  let processClosed = false;
+  let cancelEscalation = null;
   let errorKind = null;
   let errorMessage = null;
   let sizeBytes = 0;
+
+  const cancelChild = () => {
+    if (!proc || processClosed || cancelEscalation || proc.exitCode !== null || proc.signalCode !== null) return;
+    cancelEscalation = killWithEscalation(proc, {
+      label: 'HuggingFace download', stillRunning: () => !processClosed,
+    });
+  };
+  const finishProcess = () => {
+    processClosed = true;
+    clearTimeout(cancelEscalation);
+  };
 
   const promise = (async () => {
     const pythonPath = await resolveHfDownloadPython(preferredPython);
@@ -247,10 +261,6 @@ export function downloadHfRepo({ repo, revision = null, only = null, ignore = nu
 
     return new Promise((resolve) => {
       proc = spawn(pythonPath, args, safeChildProcessOptions({ env, stdio: ['ignore', 'pipe', 'pipe'] }));
-      // Window: kill() could have fired between the second `if (killed)`
-      // check and the spawn returning the proc handle. Re-check now that we
-      // own a proc — if it raced, kill it immediately.
-      if (killed) proc.kill('SIGTERM');
 
       const handleLine = (raw) => {
         const parsed = parseHfDownloadLine(raw);
@@ -281,11 +291,13 @@ export function downloadHfRepo({ repo, revision = null, only = null, ignore = nu
       proc.stderr.on('data', stderrReader.push);
       proc.stdout.on('data', stdoutReader.push);
       proc.on('error', (err) => {
+        finishProcess();
         const msg = `Failed to spawn python: ${err.message}`;
         onEvent({ type: 'error', message: msg, kind: 'spawn_failed' });
         resolve({ ok: false, errorKind: 'spawn_failed', errorMessage: msg });
       });
       proc.on('close', (code, signal) => {
+        finishProcess();
         // Flush any trailing partial line the python helper emitted without a
         // newline before exit (rare with line-buffered stderr but possible
         // when the process is SIGKILL'd mid-write).
@@ -303,14 +315,17 @@ export function downloadHfRepo({ repo, revision = null, only = null, ignore = nu
         onEvent({ type: 'error', message: msg, kind: errorKind, repo });
         return resolve({ ok: false, errorKind, errorMessage: msg });
       });
+      // Terminal listeners must already own the child when cancellation starts.
+      if (killed) cancelChild();
     });
   })();
 
   return {
     promise,
     kill: () => {
+      if (killed) return;
       killed = true;
-      if (proc && !proc.killed) proc.kill('SIGTERM');
+      cancelChild();
     },
   };
 }

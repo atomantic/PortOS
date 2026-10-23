@@ -41,6 +41,8 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
+  getAgentRecord: vi.fn().mockResolvedValue(null),
+  getAgent: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('./agentRunTracking.js', () => ({
@@ -61,12 +63,12 @@ vi.mock('./cosEvents.js', () => ({
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
 
-vi.mock('./cos.js', () => ({
+vi.mock('./cosState.js', () => ({
   getConfig: vi.fn().mockResolvedValue({}),
+}));
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   getTaskById: vi.fn().mockResolvedValue(null),
-  getAgentRecord: vi.fn().mockResolvedValue(null),
-  getAgent: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
@@ -132,7 +134,8 @@ import { spawnAgentViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } fro
 import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, releaseAgentLane, retireDeadAgent } from './agentFinalization.js';
-import { getAgent, getAgentRecord, getTaskById } from './cos.js';
+import { getAgent, getAgentRecord } from './cosAgentLifecycle.js';
+import { getTaskById } from './cosTaskStore.js';
 import { release } from './executionLanes.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';

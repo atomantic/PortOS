@@ -21,7 +21,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   safeJSONParse: (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } }
 }));
 
-const { listDrafts, createDraft } = await import('./messageDrafts.js');
+const { listDrafts, createDraft, updateDraft, claimDraftForSend, releaseDraftSend } = await import('./messageDrafts.js');
 
 // Seed the file store directly so we control accountId/status without relying on
 // createDraft (which always stamps status 'draft').
@@ -89,5 +89,39 @@ describe('messageDrafts.listDrafts', () => {
     const draft = await createDraft({ accountId: 'acct-1', subject: 'hi' });
     const result = await listDrafts({ status: ['draft', 'pending_review'] });
     expect(result.map(d => d.id)).toEqual([draft.id]);
+  });
+});
+
+// Approval is the send intent claimDraftForSend checks, so it must bind to the
+// content that was approved (#13055): an edit to who or what gets sent drops it.
+describe('messageDrafts.updateDraft approval binding', () => {
+  const approved = {
+    id: 'approved-draft', status: 'approved', to: ['alice@example.com'], cc: [],
+    subject: 'Example subject', body: 'Example reply', createdAt: '2026-01-01T00:00:00.000Z',
+  };
+  const { id, status: _status, createdAt: _createdAt, ...content } = approved;
+
+  beforeEach(() => {
+    fileStore.clear();
+    seed([structuredClone(approved)]);
+  });
+
+  it.each([
+    ['to', ['bob@example.com']],
+    ['cc', ['carol@example.com']],
+    ['subject', 'Changed subject'],
+    ['body', 'Changed reply'],
+  ])('drops approval when %s changes, so the edited draft cannot be claimed for send', async (key, value) => {
+    expect(await updateDraft(id, { [key]: value })).toMatchObject({ [key]: value, status: 'draft' });
+    await expect(claimDraftForSend(id)).rejects.toMatchObject({ status: 409, code: 'DRAFT_STATE_CONFLICT' });
+  });
+
+  it('keeps approval for an unchanged resend and for an edit that re-approves in the same update', async () => {
+    expect((await updateDraft(id, structuredClone(content))).status).toBe('approved');
+    expect(await updateDraft(id, { body: 'Re-approved reply', status: 'approved' }))
+      .toMatchObject({ body: 'Re-approved reply', status: 'approved' });
+    const claimed = await claimDraftForSend(id);
+    expect(claimed).toMatchObject({ body: 'Re-approved reply', status: 'sending' });
+    releaseDraftSend(id, claimed.sendAttemptId);
   });
 });

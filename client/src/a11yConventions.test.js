@@ -4011,13 +4011,8 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
 
   const ROUTE_HEADING_GAP_ALLOWLIST = new Set([
     'src/pages/Ambient.jsx',        // chromeless ambient display — wants an sr-only h1, not a bar
-    'src/pages/Browser.jsx',
-    'src/pages/CapabilityMap.jsx',
-    'src/pages/ImageClean.jsx',
     'src/pages/MoodBoardDetail.jsx',
-    'src/pages/Security.jsx',
     'src/pages/UniverseBuilder.jsx',
-    'src/pages/Uploads.jsx',
   ]);
 
   it('gives every routed page a top-level heading (#7245)', () => {

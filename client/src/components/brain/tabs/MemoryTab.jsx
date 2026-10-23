@@ -32,6 +32,7 @@ import CollapsibleListItem from '../../ui/CollapsibleListItem';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
+import useMounted from '../../../hooks/useMounted';
 import socket from '../../../services/socket';
 
 // Plain-text teaser for imported transcripts — avoids mounting full markdown
@@ -66,9 +67,28 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   currentType.current = activeType;
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
+  const [editStatus, setEditStatus] = useState('ready');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const pendingSave = useRef(false);
+  const editSession = useRef(null);
+  const selectedRecordId = useRef(recordId);
+  selectedRecordId.current = recordId;
+  const mounted = useMounted();
+  const cancelEdit = useCallback(() => {
+    editSession.current = null;
+    setEditingId(null);
+    setEditForm({});
+    setEditStatus('ready');
+  }, []);
+  useEffect(() => {
+    cancelEdit();
+    return () => { editSession.current = null; };
+  }, [activeType, cancelEdit]);
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({});
   const [statusFilter, setStatusFilter] = useState('');
+  const currentStatusFilter = useRef(statusFilter);
+  currentStatusFilter.current = statusFilter;
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [backendStatus, setBackendStatus] = useState(null);
@@ -217,28 +237,33 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   }, [records, searchQuery, removingIds, activeType]);
 
   const handleSave = async () => {
+    const session = editSession.current;
+    if (!session || pendingSave.current || editStatus !== 'ready' || session.type !== activeType) return;
+    pendingSave.current = true;
+    setSavingEdit(true);
+    setEditStatus('saving');
     let result;
-    switch (activeType) {
+    switch (session.type) {
       case 'people':
-        result = await api.updateBrainPerson(editingId, editForm, { silent: true }).catch(err => {
+        result = await api.updateBrainPerson(session.id, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'projects':
-        result = await api.updateBrainProject(editingId, editForm, { silent: true }).catch(err => {
+        result = await api.updateBrainProject(session.id, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'ideas':
-        result = await api.updateBrainIdea(editingId, editForm, { silent: true }).catch(err => {
+        result = await api.updateBrainIdea(session.id, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'admin':
-        result = await api.updateBrainAdminItem(editingId, editForm, { silent: true }).catch(err => {
+        result = await api.updateBrainAdminItem(session.id, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -246,7 +271,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       case 'memories': {
         const { tagInput, ...memData } = editForm;
         if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
-        result = await api.updateBrainMemory(editingId, memData, { silent: true }).catch(err => {
+        result = await api.updateBrainMemory(session.id, memData, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -254,12 +279,15 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       }
     }
 
-    if (result) {
+    pendingSave.current = false;
+    if (mounted.current) setSavingEdit(false);
+    if (editSession.current === session) setEditStatus('ready');
+    if (result && mounted.current && currentType.current === session.type) {
       toast.success('Saved');
-      if (editingId === recordId) setDetailResult({ id: recordId, type: activeType, record: result });
-      setEditingId(null);
-      setEditForm({});
-      paged.refreshFirst();
+      if (session.id === selectedRecordId.current) setDetailResult({ id: session.id, type: session.type, record: result });
+      if (editSession.current === session) cancelEdit();
+      if (currentStatusFilter.current && result.status !== currentStatusFilter.current) paged.removeItem(session.id);
+      else paged.setItems(items => items.map(item => item.id === session.id ? result : item));
       onRefresh?.();
     }
   };
@@ -401,15 +429,23 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   };
 
   const startEdit = async (record) => {
+    // The token distinguishes separate visits to the same record as well as
+    // different records. A canceled load/save cannot acquire the next editor.
+    const session = { id: record.id, type: activeType };
+    editSession.current = session;
     setEditingId(record.id);
     if (activeType === 'memories' && record.contentTruncated) {
-      setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
-      const full = await api.getBrainMemory(record.id).catch(() => null);
-      if (full) {
+      setEditForm({});
+      setEditStatus('loading');
+      const full = await api.getBrainMemory(record.id, { silent: true }).catch(() => null);
+      if (editSession.current !== session) return;
+      if (full?.id === record.id && !full.contentTruncated) {
         setEditForm({ ...full, tagInput: (full.tags || []).join(', ') });
-      }
+        setEditStatus('ready');
+      } else setEditStatus('error');
     } else {
       setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
+      setEditStatus('ready');
     }
   };
 
@@ -629,17 +665,25 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     if (editingId === record.id && (recordId !== record.id || inReader)) {
       return (
         <div key={record.id} className="p-4 bg-port-card border border-port-accent/50 rounded-lg">
-          {renderForm(editForm, setEditForm, true)}
+          {editStatus === 'loading' ? <BrailleSpinner text="Loading entry for editing" /> : editStatus === 'error' ? (
+            <Banner tone="error" title="Couldn't load this entry for editing">
+              The full record must load before changes can be saved.
+              <button onClick={() => startEdit(record)} className="block min-h-[44px] text-port-accent hover:underline">Retry</button>
+            </Banner>
+          ) : (
+            <fieldset disabled={editStatus === 'saving'}>{renderForm(editForm, setEditForm, true)}</fieldset>
+          )}
           <div className="flex items-center gap-2 mt-3">
             <button
               onClick={handleSave}
-              className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
+              disabled={editStatus !== 'ready' || savingEdit}
+              className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
             >
               <Save size={14} />
               Save
             </button>
             <button
-              onClick={() => { setEditingId(null); setEditForm({}); }}
+              onClick={cancelEdit}
               className="px-3 py-1.5 text-gray-400 hover:text-white"
             >
               Cancel

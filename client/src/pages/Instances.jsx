@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Network, Plus, Trash2, RefreshCw, Edit3, Check, X,
@@ -306,7 +308,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
           aria-pressed={mode === 'classic'}
           disabled={adding || serveBusy}
           onClick={() => setMode('classic')}
-          className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'classic' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
+          className={`text-xs px-2.5 py-1 min-h-11 rounded border transition-colors ${mode === 'classic' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
         >
           Host / port
         </button>
@@ -315,7 +317,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
           aria-pressed={mode === 'tailcat'}
           disabled={adding || serveBusy}
           onClick={() => setMode('tailcat')}
-          className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'tailcat' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
+          className={`text-xs px-2.5 py-1 min-h-11 rounded border transition-colors ${mode === 'tailcat' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
         >
           Tailcat
         </button>
@@ -327,7 +329,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
             aria-pressed={dialDirection === 'dial-them'}
             disabled={adding || serveBusy}
             onClick={() => setDialDirection('dial-them')}
-            className={`text-xs px-2.5 py-1 rounded border transition-colors ${dialDirection === 'dial-them' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
+            className={`text-xs px-2.5 py-1 min-h-11 rounded border transition-colors ${dialDirection === 'dial-them' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
           >
             Dial them
           </button>
@@ -336,7 +338,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
             aria-pressed={dialDirection === 'they-dial-us'}
             disabled={adding || serveBusy}
             onClick={() => setDialDirection('they-dial-us')}
-            className={`text-xs px-2.5 py-1 rounded border transition-colors ${dialDirection === 'they-dial-us' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
+            className={`text-xs px-2.5 py-1 min-h-11 rounded border transition-colors ${dialDirection === 'they-dial-us' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
           >
             They dial us
           </button>
@@ -351,23 +353,23 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
             onChange={e => setTcAddress(e.target.value)}
             placeholder="tcEXAMPLE…"
             required
-            className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[200px] font-mono"
+            className="bg-port-bg border border-port-border rounded px-3 py-2 min-h-11 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[200px] font-mono"
           />
           <input type="number" aria-label="Remote Tailcat port" min="1" max="65535" required
             value={tailcatRemotePort} onChange={(event) => setTailcatRemotePort(event.target.value)}
             title="Use the port shown beside the remote serve address; older manually served peers may use 5555"
-            className="w-24 bg-port-bg border border-port-border rounded px-3 py-2 text-sm" />
+            className="w-24 bg-port-bg border border-port-border rounded px-3 py-2 min-h-11 text-sm" />
           <input
             aria-label="Peer name"
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Name (optional)"
-            className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
+            className="bg-port-bg border border-port-border rounded px-3 py-2 min-h-11 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
           />
           <button
             type="submit"
             disabled={adding || !canSubmit}
-            className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium transition-colors"
+            className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 min-h-11 rounded text-sm font-medium transition-colors"
           >
             {adding ? 'Connecting...' : 'Add via tailcat'}
           </button>
@@ -386,7 +388,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
               type="button"
               disabled={serveBusy || serveStatus?.live}
               onClick={ensureOurServe}
-              className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium transition-colors"
+              className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 min-h-11 rounded text-sm font-medium transition-colors"
             >
               {serveBusy ? 'Starting...' : (serveStatus?.live ? 'Serve running' : 'Start serve')}
             </button>
@@ -404,7 +406,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
           placeholder="100.64.x.x"
           pattern="^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$"
           required
-          className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[140px]"
+          className="bg-port-bg border border-port-border rounded px-3 py-2 min-h-11 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[140px]"
         />
         <input
           aria-label="Peer port"
@@ -414,19 +416,19 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
           type="number"
           min="1"
           max="65535"
-          className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent w-20"
+          className="bg-port-bg border border-port-border rounded px-3 py-2 min-h-11 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent w-20"
         />
         <input
           aria-label="Peer name"
           value={name}
           onChange={e => setName(e.target.value)}
           placeholder="Name (optional)"
-          className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
+          className="bg-port-bg border border-port-border rounded px-3 py-2 min-h-11 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
         />
         <button
           type="submit"
           disabled={adding || !canSubmit}
-          className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium transition-colors"
+          className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 min-h-11 rounded text-sm font-medium transition-colors"
         >
           {adding ? 'Adding...' : 'Add'}
         </button>
@@ -434,7 +436,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
       )}
       {mode === 'tailcat' && dialDirection === 'dial-them' && (
         <>
-          <label htmlFor="tailcat-https" className="flex items-center gap-2 text-sm text-gray-400 mt-3">
+          <label htmlFor="tailcat-https" className="flex items-center gap-2 min-h-11 text-sm text-gray-400 mt-3">
             <input id="tailcat-https" type="checkbox" checked={tailcatHttps}
               onChange={e => setTailcatHttps(e.target.checked)} disabled={adding} />
             Remote PortOS uses HTTPS
@@ -451,7 +453,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
         <button
           type="button"
           onClick={() => setShowAuth(v => !v)}
-          className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-300 transition-colors"
+          className="inline-flex items-center gap-1 min-h-11 text-[11px] text-gray-500 hover:text-gray-300 transition-colors"
         >
           <Lock size={11} />
           {showAuth ? 'Hide credentials' : 'Add credentials (peer behind an auth proxy)'}
@@ -464,7 +466,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
               onChange={e => setUsername(e.target.value)}
               placeholder="Username (optional)"
               autoComplete="off"
-              className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
+              className="bg-port-bg border border-port-border rounded px-3 py-2 min-h-11 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
             />
             <input
               aria-label="Peer password"
@@ -473,7 +475,7 @@ export function AddPeerForm({ onAdd, addressRef, drawer }) {
               placeholder="Password"
               type="password"
               autoComplete="new-password"
-              className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
+              className="bg-port-bg border border-port-border rounded px-3 py-2 min-h-11 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
             />
           </div>
         )}
@@ -1561,10 +1563,6 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   );
 }
 
-export default function Instances() {
-  return <TailcatServeProvider><InstancesContent /></TailcatServeProvider>;
-}
-
 function InstancesContent() {
   const peerAddressRef = useRef(null);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1673,12 +1671,6 @@ function InstancesContent() {
       renderPanel={(forwardsPanel, orphanCount) => (
         <UnattendedRenderRouting peers={peers} renderPanel={(routingPanel, routeAttention) => (
           <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <Network size={24} className="text-port-accent" />
-              <h1 className="text-2xl font-bold text-white">Instances</h1>
-              <span className="text-sm text-gray-500">PortOS Federation</span>
-            </div>
-
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => openDrawer('add')}
                 className="min-h-[44px] inline-flex items-center gap-1 rounded-lg bg-port-accent px-3 text-sm text-white">
@@ -1788,5 +1780,13 @@ function InstancesContent() {
           </div>
         )} />
       )} />
+  );
+}
+
+export default function Instances() {
+  return (
+    <PageLayout header={<PageHeader icon={Network} title="Instances" subtitle="PortOS Federation" />}>
+      <TailcatServeProvider><InstancesContent /></TailcatServeProvider>
+    </PageLayout>
   );
 }

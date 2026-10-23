@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
@@ -18,6 +18,11 @@ const MODULE_FILES = readdirSync(join(HERE, 'seriesAutopilot'))
   .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'))
   .sort();
 
+// A template `import()` with a literal prefix is compiled by Vite into a glob map frozen at transform
+// time, and the fs module cache keys it on THIS file alone, so a newly added module throws "Unknown
+// variable dynamic import" until the cache is cleared (#13087). A file URL skips that analysis.
+const importModule = (f) => import(/* @vite-ignore */ pathToFileURL(join(HERE, 'seriesAutopilot', f)).href);
+
 // Issue #2842 split the 2,541-line seriesAutopilot.js into ./seriesAutopilot/*
 // with the original file kept as a re-exporting barrel (the same treatment
 // #1152 gave arcPlanner.js). This pins that contract so the routes, the CDO
@@ -31,7 +36,7 @@ describe('seriesAutopilot barrel re-exports (issue #2842)', () => {
   });
 
   it.each(MODULE_FILES)('%s exports are reachable from the barrel as the same objects', async (f) => {
-    const mod = await import(`./seriesAutopilot/${f.slice(0, -3)}.js`);
+    const mod = await importModule(f);
     const keys = Object.keys(mod);
     expect(keys.length, `${f} exports nothing`).toBeGreaterThan(0);
     for (const key of keys) {
@@ -43,7 +48,7 @@ describe('seriesAutopilot barrel re-exports (issue #2842)', () => {
     const seen = new Map();
     const collisions = [];
     for (const f of MODULE_FILES) {
-      const mod = await import(`./seriesAutopilot/${f.slice(0, -3)}.js`);
+      const mod = await importModule(f);
       for (const key of Object.keys(mod)) {
         if (seen.has(key) && seen.get(key).value !== mod[key]) {
           collisions.push(`${key}: ${seen.get(key).file} vs ${f}`);

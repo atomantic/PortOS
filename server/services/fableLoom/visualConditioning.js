@@ -16,6 +16,7 @@ import {
   matchCharactersInText, matchObjectsInText, matchPlacesInText,
 } from '../../lib/scenePrompt.js';
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
+import { IMAGE_GEN_PROVIDER_CAPABILITIES, maxInputImages } from '../../lib/imageGenCapabilities.js';
 import { CLOUD_IMAGE_GEN_MODES } from '../../lib/generationModes.js';
 import { buildFableLoomVisualPrompts } from '../../lib/fableLoomVisualPrompts.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -400,7 +401,14 @@ export async function compileFableLoomVisualRequest({
     universeId: universe.id,
     capability,
     bindings: manifestBindings(bindings),
-    assets: allocation.accepted.map(({ path: _path, ...asset }) => asset),
+    assets: allocation.accepted.map(({ path: _path, ...asset }) => {
+      if (capability.backend !== 'runway') return asset;
+      const entry = asset.role.startsWith('character')
+        ? bindings.boundCharacters.find(({ character }) => character.id === asset.bindingId)?.character
+        : asset.role === 'environment' ? bindings.boundPlace
+          : bindings.boundObjects.find((object) => object.id === asset.bindingId);
+      return { ...asset, ...(entry?.name ? { label: entry.name } : {}) };
+    }),
     adapters,
     omitted,
     warnings,
@@ -426,6 +434,7 @@ export async function compileFableLoomVisualRequest({
 
 export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4 }) {
   const localFlux2 = mode === 'local' && model?.runner === 'flux2';
+  const runwayCapability = mode === 'runway' ? IMAGE_GEN_PROVIDER_CAPABILITIES.runway : null;
   // Every cloud image backend accepts reference images (imageGenCapabilities.js).
   const cloudEdit = CLOUD_IMAGE_GEN_MODES.includes(mode);
   return Object.freeze({
@@ -434,11 +443,11 @@ export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4
     referenceRoles: localFlux2 || cloudEdit
       ? ['temporal-predecessor', 'character-neutral', 'character-profile', 'character-full-body', 'character-expression-gesture', 'character-wardrobe', 'character-prop-scale', 'character-negative-identity', 'character-draft-reference', 'environment', 'object']
       : [],
-    referenceBudget: localFlux2 || cloudEdit ? inputBudget : 0,
+    referenceBudget: localFlux2 || cloudEdit ? Math.min(inputBudget, runwayCapability ? maxInputImages(mode, model?.id) ?? inputBudget : inputBudget) : 0,
     supportsLora: localFlux2 || (mode === 'local' && model?.runner === 'mflux'),
     loraCompatKey: model?.loraCompatKey || null,
     loraBudget: 8,
-    multiCharacterPreservation: localFlux2,
+    multiCharacterPreservation: localFlux2 || runwayCapability?.multiCharacterPreservation === true,
   });
 }
 

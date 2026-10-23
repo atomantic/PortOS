@@ -74,8 +74,9 @@ vi.mock('../services/socket', () => ({
 vi.mock('../hooks/useLocalModels', () => ({
   default: () => localModels.value,
 }));
-vi.mock('../components/models/ModelsTabsHeader', () => ({
-  default: ({ activeTab }) => <div data-testid="models-tabs-header" data-active-tab={activeTab} />,
+vi.mock('../components/models/ModelsTabsHeader', async (importOriginal) => ({
+  // The real strip: it is the page's only tab row, so tests drive navigation through it.
+  ...(await importOriginal()),
   ModelsSectionLayout: ({ children }) => <>{children}</>,
 }));
 vi.mock('../components/install/RuntimeInstallModal', () => ({
@@ -394,7 +395,8 @@ describe('AIProviders page load error handling', () => {
 
     await renderPage();
 
-    expect(await screen.findByTestId('models-tabs-header')).toHaveAttribute('data-active-tab', 'providers');
+    const strip = await screen.findByRole('tablist', { name: 'Models sections' });
+    expect(within(strip).getByRole('tab', { name: 'Providers', selected: true })).toBeInTheDocument();
   });
 
   // The page hosts ModelsTabsHeader; before #5653 it also hand-rolled a
@@ -413,7 +415,7 @@ describe('AIProviders page load error handling', () => {
     await screen.findByText('OpenAI');
     const headings = screen.getAllByRole('heading', { level: 1 });
     expect(headings).toHaveLength(1);
-    expect(headings[0]).toHaveAccessibleName('AI Providers');
+    expect(headings[0]).toHaveAccessibleName('Providers');
   });
 
   it('shows a blank secret environment value as not set', async () => {
@@ -2287,13 +2289,16 @@ describe('page views', () => {
     api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
   });
 
-  it('offers the three views as routed tabs and swaps the header action per view', async () => {
+  it('routes the three views through the Models strip and swaps the header action per view', async () => {
     await renderPage('/ai/services');
     expect(await screen.findByRole('button', { name: 'Add Service' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run Prompt' })).not.toBeInTheDocument();
-    const tabs = screen.getByRole('tablist', { name: 'AI provider views' });
-    expect(within(tabs).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Presets', 'Harnesses', 'Services']);
-    fireEvent.click(within(tabs).getByRole('tab', { name: 'Presets' }));
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('AI Services');
+    expect(screen.queryByRole('tablist', { name: 'AI provider views' })).not.toBeInTheDocument();
+    const tabs = screen.getByRole('tablist', { name: 'Models sections' });
+    expect(within(tabs).getAllByRole('tab', { selected: true }).map((tab) => tab.textContent)).toEqual(['AI Services']);
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'Providers' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Providers' })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Run Prompt' })).toBeInTheDocument();
     // The header action plus the empty state's own — both create a preset.
     expect(screen.getAllByRole('button', { name: 'Add Preset' }).length).toBeGreaterThan(0);

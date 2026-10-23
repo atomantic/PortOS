@@ -59,7 +59,7 @@ import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
 import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
-import { getFleetUsage } from '../services/peerUsage.js';
+import { getFleetUsage, getFleetRollingCost } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import usageRoutes from './usage.js';
 
@@ -117,6 +117,13 @@ describe('usage routes', () => {
     expect(res.body).toEqual({ hourlyActivity: Array(24).fill(0) });
   });
 
+  it('GET /api/usage/rolling-cost passes the chart range through and refuses an unknown one', async () => {
+    const app = buildApp();
+    expect((await request(app).get('/api/usage/rolling-cost?range=1y')).status).toBe(200);
+    expect(getFleetRollingCost).toHaveBeenCalledWith({ providers: [], range: '1y' });
+    expect((await request(app).get('/api/usage/rolling-cost?range=5y')).status).toBe(400);
+  });
+
   it('GET /api/usage returns the usage summary with the default 7d range', async () => {
     usage.getUsageSummary.mockReturnValue({ totalSessions: 4, providers: ['anthropic'] });
     const res = await request(buildApp()).get('/api/usage');
@@ -125,8 +132,7 @@ describe('usage routes', () => {
       totalSessions: 4,
       providers: ['anthropic'],
       subscriptionSavings: { configured: false, families: [] },
-      fleet: { instances: [], totals: null },
-      rollingCost: { windowDays: 30, instanceCount: 1, points: [] }
+      fleet: { instances: [], totals: null }
     });
     const arg = usage.getUsageSummary.mock.calls[0][0];
     expect(arg.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);

@@ -4,7 +4,8 @@ import { persistentMindMaintainerSchema } from '../lib/persistentMindMaintainer.
  */
 
 import { Router } from 'express';
-import * as cos from '../services/cos.js';
+import { getConfig } from '../services/cosState.js';
+import { getStatus, pause, resume, start, stop, updateConfig } from '../services/cos.js';
 import { getAllDomainUsageToday } from '../services/domainUsage.js';
 import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
 import { asyncHandler } from '../lib/errorHandler.js';
@@ -121,38 +122,38 @@ export const cosConfigSchema = z.object({
 
 // GET /api/cos - Get CoS status
 router.get('/', asyncHandler(async (req, res) => {
-  const status = await cos.getStatus();
+  const status = await getStatus();
   res.json(status);
 }));
 
 // POST /api/cos/start - Start CoS daemon
 router.post('/start', asyncHandler(async (req, res) => {
-  const result = await cos.start();
+  const result = await start();
   res.json(result);
 }));
 
 // POST /api/cos/stop - Stop CoS daemon
 router.post('/stop', asyncHandler(async (req, res) => {
-  const result = await cos.stop();
+  const result = await stop();
   res.json(result);
 }));
 
 // POST /api/cos/pause - Pause CoS daemon (stays running but skips evaluations)
 router.post('/pause', asyncHandler(async (req, res) => {
   const { reason } = validateRequest(pauseSchema, req.body);
-  const result = await cos.pause(reason);
+  const result = await pause(reason);
   res.json(result);
 }));
 
 // POST /api/cos/resume - Resume CoS daemon from pause
 router.post('/resume', asyncHandler(async (req, res) => {
-  const result = await cos.resume();
+  const result = await resume();
   res.json(result);
 }));
 
 // GET /api/cos/config - Get configuration
 router.get('/config', asyncHandler(async (req, res) => {
-  const config = await cos.getConfig();
+  const config = await getConfig();
   res.json(config);
 }));
 
@@ -166,7 +167,7 @@ router.get('/budget-usage', asyncHandler(async (req, res) => {
 // PUT /api/cos/config - Update configuration
 router.put('/config', asyncHandler(async (req, res) => {
   const validated = validateRequest(cosConfigSchema, req.body);
-  const config = await cos.updateConfig(validated);
+  const config = await updateConfig(validated);
   if (validated.embeddingProviderId !== undefined || validated.embeddingModel !== undefined) {
     reinitializeEmbeddings();
   }

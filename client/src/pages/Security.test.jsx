@@ -78,6 +78,14 @@ describe('Security monitor iOS audio session', () => {
     vi.unstubAllGlobals();
   });
 
+  it('renders its title and devices control in the shared page header', async () => {
+    render(<Security />);
+    await act(async () => {});
+    expect(screen.getByRole('heading', { level: 1, name: 'Security Camera' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Devices' })).toBeInTheDocument();
+    expect(screen.queryByText('Instructions')).toBeNull();
+  });
+
   it('claims playback once the monitor graph is live', async () => {
     await startMonitor();
     expect(sessionType()).toBe('playback');
@@ -226,7 +234,10 @@ describe('Security monitor toggle posts the new flag value', () => {
     const api = (await import('../services/api')).default;
     render(<Security />);
     await act(async () => {});
-    fireEvent.click(screen.getByRole('button', { name: /Settings/i }));
+    const devicesButton = screen.getByRole('button', { name: 'Devices' });
+    expect(devicesButton.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(devicesButton);
+    expect(devicesButton.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByRole('option', { name: 'Camera 1' })).toBeTruthy();
     api.get.mockResolvedValueOnce({ video: [{ id: '2', name: 'Example replacement camera' }], audio: [] });
     fireEvent.click(screen.getByRole('button', { name: /Refresh devices/i }));

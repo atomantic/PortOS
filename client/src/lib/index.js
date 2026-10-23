@@ -4,7 +4,7 @@ export * from './publicGuestRoutes.js';
 // See client/src/lib/README.md for the human-readable catalog and
 // AGENTS.md "Module organization" for the maintenance convention.
 
-// === Prompt & rendering (mirror server/lib/ — keep byte-for-byte in sync) ===
+// === Prompt & rendering (some re-export server/lib/, others are byte-for-byte mirrors; see client/src/lib/README.md) ===
 export * from './canonPrompt.js';
 export * from './cleanPlatePrompt.js';
 export * from './composeStyledPrompt.js';
@@ -37,6 +37,7 @@ export * from './bibleLimits.js';
 export * from './characterEvolution.js';
 export * from './characterFramework.js';
 export * from './characterIntegrity.js';
+export * from './catalogForms.js';
 export * from './catalogTypes.js';
 export * from './creativeDirectorPlan.js';
 export * from './creativeLibraries.js';
@@ -53,6 +54,7 @@ export * from './glbFailure.js';
 export * from './grokVideoClip.js';
 export * from './reactorVideoClip.js';
 export * from './runwayVideoModels.js';
+export * from './imageThumbnailSrc.js';
 export * from './imageCleaners.js';
 export * from './imageGenBackends.js';
 // Namespace export: imageGenBackends re-exports every imageGenModes symbol

@@ -33,7 +33,7 @@ export async function settleBranchReconcileRun(agent) {
     cleanup: true,
     reapSuperseded: task.metadata.reapSuperseded !== false,
     pendingMergeBranches,
-    activeAgentIds: buildActiveOwnerIds(getActiveAgentIds(), agents),
+    activeAgentIds: buildActiveOwnerIds(new Set(getActiveAgentIds()), agents),
     claimOwners: { agents, readAgents: readClaimOwnershipAgents },
     forgeAccount: app.forgeAccount || null
   });

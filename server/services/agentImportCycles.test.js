@@ -316,13 +316,9 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
       .toContain('requestAgentTermination');
 
     // A FORWARDER is any module that re-exports its way to a declaring module, at
-    // any depth: `cos.js` is one hop (`export { … } from './cosAgentLifecycle.js'`).
-    // It used to be two, through the `cosAgents.js` barrel that sat between them;
-    // that barrel is retired (#3450), leaving `cos.js`'s agent re-export block as
-    // the last forwarder. Walking the re-export edges instead of listing the
-    // barrels means a NEW barrel is covered the day it is written. Asserted
-    // rather than merely computed, so collapsing this last one has to come here
-    // and say so.
+    // any depth. None remain: `cosAgents.js` was retired in #3450 and `cos.js`'s
+    // agent re-export block was the last one. Walking the re-export edges rather
+    // than listing barrels means a NEW barrel is covered the day it is written.
     const reexportEdges = (file) => [
       ...readFileSync(join(SERVICES_DIR, file), 'utf-8')
         .matchAll(/export\s*(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"]([^'"]+)['"]/g)
@@ -342,8 +338,8 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
         }
       }
     }
-    expect([...forwarders].sort(), 'the set of barrels still forwarding a transition changed — intended?')
-      .toEqual(['cos.js']);
+    expect([...forwarders].sort(), 'a barrel forwards a transition again — import the declaring module instead')
+      .toEqual([]);
 
     // Production sources only. A test mirrors whatever its subject imports (a
     // mock pointed at a module the subject no longer imports silently stops
@@ -441,9 +437,8 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
   });
 
   it('keeps cos.js out of every static import cycle (#5684)', () => {
-    // cos.js re-exports cosState/cosTaskStore for backward compat with
-    // `import * as cos`. Two leaf services used to reach THROUGH that barrel for
-    // one symbol each (memoryEmbeddings -> getConfig, character -> the task data),
+    // cos.js used to re-export cosState/cosTaskStore. Two leaf services reached
+    // THROUGH that barrel for one symbol each (memoryEmbeddings -> getConfig, character -> the task data),
     // and because cos.js transitively reaches the CoS tool registry -> voice
     // tools -> askService -> both of those leaves, each one-symbol forward closed
     // a 7-module ring. Both now import the DECLARING module, which is the same

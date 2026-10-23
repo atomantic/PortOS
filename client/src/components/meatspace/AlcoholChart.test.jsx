@@ -5,10 +5,9 @@ vi.mock('../../services/api', () => ({ getDailyAlcohol: vi.fn() }));
 vi.mock('../../hooks/useChartColors.js', () => ({ default: () => ({ grid: '#000', axis: '#000' }) }));
 // Recharts needs layout; a marker stands in for "a chart was drawn".
 vi.mock('recharts', () => {
-  const Pass = ({ children }) => <div>{children}</div>;
   return {
     ResponsiveContainer: ({ children }) => <div data-testid="chart">{children}</div>,
-    BarChart: Pass, Bar: () => null, XAxis: () => null, YAxis: () => null,
+    BarChart: ({ data }) => <div data-testid="bars" data-n={data.length} />, Bar: () => null, XAxis: () => null, YAxis: () => null,
     CartesianGrid: () => null, Tooltip: () => null, ReferenceLine: () => null
   };
 });
@@ -34,5 +33,21 @@ describe('AlcoholChart load failure vs empty', () => {
     render(<AlcoholChart />);
     expect(await screen.findByTestId('chart')).toBeInTheDocument();
     expect(screen.queryByText(/Could not load daily alcohol/)).not.toBeInTheDocument();
+  });
+});
+
+describe('AlcoholChart superseded loads (#12951)', () => {
+  it('draws the selected range when an earlier range resolves last', async () => {
+    let resolveMonth;
+    api.getDailyAlcohol.mockImplementationOnce(() => new Promise((resolve) => { resolveMonth = resolve; }));
+    api.getDailyAlcohol.mockResolvedValueOnce([]);
+    render(<AlcoholChart />);
+    fireEvent.click(screen.getByRole('button', { name: '7 Days' }));
+    const bars = await screen.findByTestId('bars');
+    expect(bars).toHaveAttribute('data-n', '8');
+
+    resolveMonth([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByTestId('bars')).toHaveAttribute('data-n', '8');
   });
 });

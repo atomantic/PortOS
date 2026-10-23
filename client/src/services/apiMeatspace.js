@@ -277,7 +277,7 @@ export const updateMorseLevel = (data, options = {}) => request('/meatspace/post
 
 // Life Calendar
 export const getLifeCalendar = () => request('/meatspace/calendar');
-export const getActivities = () => request('/meatspace/activities');
+export const getActivities = (options = {}) => request('/meatspace/activities', options);
 export const addActivity = (data) => request('/meatspace/activities', {
   method: 'POST', body: JSON.stringify(data)
 });

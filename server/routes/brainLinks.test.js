@@ -39,7 +39,7 @@ vi.mock('../services/repoCloner.js', async () => {
   return { isDerivedClonePath: actual.isDerivedClonePath, pullRepo: vi.fn() };
 });
 
-vi.mock('../services/cos.js', () => ({ addTask: vi.fn() }));
+vi.mock('../services/cosTaskStore.js', () => ({ addTask: vi.fn() }));
 
 vi.mock('../services/repoIntake.js', () => ({
   queueMalwareScan: vi.fn(),

@@ -127,6 +127,7 @@ export {
   secondaryCharacterPresenceSummary,
 } from './checkInfra.js';
 
+import { hasManuscript } from './checkInfra/gates.js';
 import {
   CHECK_FIELD_TYPES,
   CHECK_KINDS,
@@ -658,7 +659,7 @@ export function buildCustomCheck(def) {
     prompt: instructions,
     configSchema: customCheckConfigSchema,
     configFields: CUSTOM_CHECK_CONFIG_FIELDS,
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => runManuscriptLlmCheckInline(ctx, { category, instructions }),
   };
 }

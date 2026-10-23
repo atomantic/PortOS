@@ -488,4 +488,5 @@ export const shotDraftSchema = z.object({
 });
 export const shotGroupsSchema = z.array(z.object({ sceneId: z.string().min(1).max(80), shots: z.array(shotDraftSchema).min(1).max(40) })).min(1).max(200);
 export const shotAutopilotSchema = outlineGenerateSchema.extend({ maxRounds: z.number().int().min(1).max(3).optional(), apply: z.boolean().optional() });
+export const shotRunStartSchema = shotAutopilotSchema.extend({ resume: z.boolean().optional() });
 export const shotApplySchema = z.object({ sourceFingerprint: z.string().length(64), groups: shotGroupsSchema });

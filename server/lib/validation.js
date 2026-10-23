@@ -18,6 +18,7 @@ import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } fro
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
 import { IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { RUNWAY_IMAGE_MODEL_IDS, RUNWAY_IMAGE_RESOLUTIONS } from './runwayImageModels.js';
 import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
@@ -949,7 +950,54 @@ export const GITHUB_ACCOUNT_HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z
 // github.com logins are [A-Za-z0-9-]; Enterprise Managed Users add `_shortcode`.
 export const GITHUB_ACCOUNT_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
-export const GITHUB_ACCOUNT_MODES = Object.freeze(['observe', 'assist', 'autopilot']);
+export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assist', 'autopilot']);
+
+// Per-repo automation rules for the GitHub inbox (#13192): what Assist and
+// Autopilot do with a kind of notification, in one repo (`owner/repo`), an
+// account/org (`owner/*`) or every repo (`*`), and on which provider/model/effort
+// when it starts an agent. Repo > owner > all. Mirrors AGENT_RULE_KINDS and
+// AGENT_RULE_ACTIONS in lib/githubNotificationTriage.js.
+export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'mention', 'release', 'other']);
+export const GITHUB_AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave']);
+export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100}))$/;
+const emptyToNullString = (value) => (value === '' ? null : value);
+// A legacy `agent: true/false` (rules saved before #13192) is accepted and
+// stored as `action: 'agent' / 'leave'`; `action` wins when both are sent.
+export const githubAgentRuleSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+  kind: z.enum(GITHUB_AGENT_RULE_KINDS),
+  repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, owner/* for an account or organization, or * for every repo'),
+  agent: z.boolean().optional(),
+  action: z.enum(GITHUB_AGENT_RULE_ACTIONS).optional(),
+  provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
+  model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
+  effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
+}).strict().superRefine((rule, ctx) => {
+  const action = rule.action ?? (typeof rule.agent === 'boolean' ? (rule.agent ? 'agent' : 'leave') : null);
+  if (!action) ctx.addIssue({ code: 'custom', path: ['action'], message: 'Choose what to do with these notifications' });
+  else if (rule.kind === 'security-alert' && action !== 'agent' && action !== 'leave') {
+    ctx.addIssue({ code: 'custom', path: ['action'], message: 'Security alerts are never marked done or muted by a rule' });
+  }
+}).transform(({ agent, ...rule }) => ({ ...rule, action: rule.action ?? (agent ? 'agent' : 'leave') }));
+export const githubAgentRulesSchema = z.array(githubAgentRuleSchema).max(200).superRefine((rules, ctx) => {
+  const seen = new Set();
+  rules.forEach((rule, index) => {
+    const key = `${rule.kind}#${rule.repo.toLowerCase()}`;
+    if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [index, 'repo'], message: `There is already a ${rule.kind} rule for ${rule.repo}` });
+    seen.add(key);
+  });
+});
+
+// The provider/model/effort an agent run starts from (#13191): the account's
+// defaults, or the operator's choice for one Resolve with agent run. null or
+// '' = Auto (CoS chooses).
+const githubAgentPinFields = {
+  provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
+  model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
+  effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
+};
+export const githubAgentDefaultsSchema = z.object(githubAgentPinFields).strict();
+export const githubNotificationAgentRunSchema = z.object(githubAgentPinFields).strict();
 
 export const githubAccountCreateSchema = z.object({
   label: z.string().trim().max(80).optional(),
@@ -963,6 +1011,13 @@ export const githubAccountCreateSchema = z.object({
   mode: z.enum(GITHUB_ACCOUNT_MODES).optional(),
   // Monthly subscription audit delivered as a PortOS notification (#12874).
   auditReport: z.boolean().optional(),
+  // Private (Enterprise) accounts refuse every agent hand-off unless the operator
+  // opts in: the lanes run on PortOS's own providers, which the allow-list cannot bind.
+  allowAgents: z.boolean().optional(),
+  // Enterprise hosts only: every human on the instance counts as trusted (#13203).
+  trustInstanceUsers: z.boolean().optional(),
+  agentRules: githubAgentRulesSchema.optional(),
+  agentDefaults: githubAgentDefaultsSchema.nullable().optional(),
   enabled: z.boolean().optional(),
 }).strict();
 
@@ -976,6 +1031,17 @@ export const githubNotificationsQuerySchema = z.object({
 
 export const githubNotificationsSyncSchema = z.object({
   accountId: z.string().trim().min(1).max(100).optional(),
+}).strict();
+
+export const githubNotificationsClearSchema = z.object({
+  accountId: z.string().trim().min(1).max(100).optional(),
+}).strict();
+
+// Deployment approval from the inbox (#13198): operator only.
+export const githubDeploymentReviewSchema = z.object({
+  state: z.enum(['approved', 'rejected']),
+  environmentIds: z.array(z.number().int().positive()).min(1).max(20),
+  comment: z.string().trim().max(1000).optional(),
 }).strict();
 
 export const githubNotificationActionSchema = z.object({
@@ -1606,6 +1672,11 @@ export const usageQuerySchema = z.object({
   to: isoDay.optional()
 }).refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be on or before to' });
 
+/** Query for GET /api/usage/rolling-cost — the chart's span, independent of the report window. */
+export const usageRollingCostQuerySchema = z.object({
+  range: z.enum(['1m', '3m', '6m', '1y', 'all']).optional()
+});
+
 /** Query for GET /api/usage/providers. `family` narrows the read to a single
  * quota card (the per-card Refresh on the usage page) so one slow TUI scrape
  * isn't paid for every provider at once. */
@@ -1933,6 +2004,8 @@ export const agentActivityQuerySchema = z.object({
 export const agentActivityTimelineQuerySchema = z.object({
   limit: agentActivityLimit(50),
   agentIds: agentActivityIds,
+  // One action or a comma-separated list (the Moltworld history asks for every mw_* kind).
+  action: csvIdsParam({ max: 10, maxIdLength: 64 }),
   before: z.preprocess(emptyToUndefined, z.string().datetime().optional()),
 }).strict();
 
@@ -2028,6 +2101,16 @@ export function parsePagination(query, { defaultLimit = 50, maxLimit = 200 } = {
   const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
   return { limit, offset };
 }
+
+// Express turns a repeated `?k=a&k=b` into an array; every field must be scalar
+// before any cache read (#13150). Value leniency (bad/absent limit) stays in parsePagination.
+export const messageInboxQuerySchema = z.object({
+  accountId: z.string().optional(),
+  search: z.string().optional(),
+  summary: z.string().optional(),
+  limit: z.string().optional(),
+  offset: z.string().optional()
+});
 
 /**
  * Did the caller explicitly ask for pagination? True when either `limit` or
@@ -2222,6 +2305,15 @@ export const videoModelTermsSchema = z.object({
   accepted: z.boolean(),
 });
 
+// Runway images share the private video credential; only render settings live here.
+export const imageGenRunwaySettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  model: z.preprocess((v) => v === '' ? undefined : v, z.enum(RUNWAY_IMAGE_MODEL_IDS).optional()),
+  resolution: z.enum(RUNWAY_IMAGE_RESOLUTIONS).optional(),
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
+});
+
 // fal.ai Imagegen settings slice (`imageGen.fal`). The API key is NOT here —
 // it is the fal.ai credential the video backend already owns (write-only via
 // PUT /api/settings/credentials/fal). `model` must name a catalog endpoint
@@ -2349,6 +2441,7 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.grok': imageGenGrokSettingsSchema.strict(),
   'imageGen.agy': imageGenAgySettingsSchema.strict(),
   'imageGen.fal': imageGenFalSettingsSchema.strict(),
+  'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
   videoGen: videoGenSettingsSchema.pick({ mode: true, defaultModelId: true, displaySleep: true }).strict(),

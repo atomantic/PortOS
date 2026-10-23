@@ -239,10 +239,16 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
   // `sanitizedScenes`/`bible` are already fresh-only-on-change via useMemo, so
   // depending on them directly (no JSON.stringify) is both cheaper and correct.
   useEffect(() => {
-    if (queuedJobId) return undefined;
-    if (!hasContent) { setPreview(null); setPreviewLoading(false); return undefined; }
-    setPreviewLoading(true);
+    // Every lifetime (including empty/queued transitions and disposal) takes a
+    // fresh id, so a lint response dispatched under an earlier lifetime is dropped.
     const requestId = (previewRequestRef.current += 1);
+    const invalidate = () => {
+      clearTimeout(debounceRef.current);
+      previewRequestRef.current += 1;
+    };
+    if (queuedJobId) return invalidate;
+    if (!hasContent) { setPreview(null); setPreviewLoading(false); return invalidate; }
+    setPreviewLoading(true);
     debounceRef.current = setTimeout(async () => {
       const result = await lintContinuousVideoEpisode({
         scenes: sanitizedScenes, bible, framings: framingsArrayFor(preview?.clips, framings),
@@ -253,7 +259,7 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
       setPreview(result);
       setPreviewLoading(false);
     }, PREVIEW_DEBOUNCE_MS);
-    return () => clearTimeout(debounceRef.current);
+    return invalidate;
     // Re-runs on any scene/bible/framing edit; `preview` itself is excluded to
     // avoid retriggering off its own write.
     // eslint-disable-next-line react-hooks/exhaustive-deps

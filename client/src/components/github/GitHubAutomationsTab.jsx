@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router';
-import { Play, Undo2, X } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router';
+import { Bot, Pencil, Play, Undo2, X } from 'lucide-react';
 import Pill from '../ui/Pill';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -16,21 +16,25 @@ import {
   undoGitHubAutomationAction,
   updateGitHubAccount,
 } from '../../services/api';
-import { ACTION_LABELS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
+import { ACTION_LABELS, AGENT_RULE_KINDS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
+import GitHubAgentRules from './GitHubAgentRules';
+import GitHubAgentPinForm, { describeAgentPin } from './GitHubAgentPinForm';
+import useRunWithPicker from '../../hooks/useRunWithPicker';
 
-const MODE_OPTIONS = ['observe', 'assist', 'autopilot'];
-const MODE_LABELS = { observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
+const MODE_OPTIONS = ['disabled', 'observe', 'assist', 'autopilot'];
+const MODE_LABELS = { disabled: 'Disabled', observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
 
 function modeHint(account) {
+  if (account.mode === 'disabled') return 'This PortOS instance does not fetch or process this account\'s notifications.';
   if (account.mode === 'observe') return 'Records a decision for each notification; changes nothing on GitHub.';
   const where = account.trust === 'private'
     ? 'Text goes only to local AI providers unless you allow others in Accounts.'
     : 'Text goes to the GitHub notifications provider in Models › LLMs › Abuse Guard.';
   const assist = `Screens and sorts notifications no rule decided, marks CI noise and closed threads done. Never acts on outside or suspect threads. ${where}`;
   if (account.mode !== 'autopilot') return assist;
-  const handoff = account.trust === 'private'
-    ? 'Private accounts never hand threads off.'
-    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. Nothing outside your apps is ever started.';
+  const handoff = account.trust === 'private' && !account.allowAgents
+    ? 'Private accounts hand threads off only after you allow agents on them below.'
+    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. A security alert in another repo of yours starts one CoS task per repo that fixes it in a pull request and merges it. Automation rules below turn kinds on or off per repo, mark them done or muted, and pick the provider.';
   return `${assist} ${handoff}`;
 }
 
@@ -40,7 +44,83 @@ const CADENCE_TEXT = {
   off: 'Only when you tap Run now',
 };
 
-function AccountCard({ account, running, onRun, onMode, savingMode }) {
+// A Private account's agent rules only start agents once the operator allows
+// it; the switch sits beside the rules so both ways are reachable from here.
+function AgentAccess({ account, onAllow, saving }) {
+  if (account.trust !== 'private') return null;
+  const allowed = account.allowAgents === true;
+  return (
+    <div className={`flex flex-wrap items-center gap-2 rounded-lg border p-2.5 text-xs ${allowed ? 'border-port-border text-gray-400' : 'border-port-warning/40 bg-port-warning/10 text-gray-300'}`}>
+      <p className="min-w-0 flex-1">
+        {allowed
+          ? 'Agents are allowed on this Private account. They use their own AI providers, not the ones this account allows.'
+          : 'Rules here start no agent until you allow agents on this Private account. Agents use their own AI providers, which this account\'s provider list cannot limit.'}
+      </p>
+      <button
+        type="button"
+        onClick={() => onAllow(account.id, !allowed)}
+        disabled={saving}
+        aria-pressed={allowed}
+        className={`shrink-0 rounded px-3 py-1.5 text-xs disabled:opacity-50 ${allowed ? 'border border-port-border text-gray-300' : 'bg-port-accent text-white'}`}
+      >
+        {allowed ? 'Stop allowing agents' : 'Allow agents on this account'}
+      </button>
+    </div>
+  );
+}
+
+// The provider/model/effort Resolve with agent starts from on this account
+// when no agent rule pins one. Each run can still pick its own.
+function AgentDefaults({ account, onSave, saving }) {
+  const [editing, setEditing] = useState(false);
+  const { providers } = useRunWithPicker({ preselectDefaults: false });
+  const defaults = account.agentDefaults || null;
+  const isSet = Boolean(defaults && (defaults.provider || defaults.model || defaults.effort));
+  const save = async (pin) => {
+    const empty = !pin.provider && !pin.model && !pin.effort;
+    if (await onSave(account.id, { agentDefaults: empty ? null : pin })) setEditing(false);
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400"><Bot size={12} aria-hidden="true" /> Agent defaults</h4>
+        {!editing && (
+          <button type="button" onClick={() => setEditing(true)} className="inline-flex min-h-[36px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300">
+            <Pencil size={12} aria-hidden="true" /> Edit
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <GitHubAgentPinForm
+          pin={defaults}
+          label={`Agent defaults for ${account.label}`}
+          submitLabel={saving ? 'Saving…' : 'Save defaults'}
+          busy={saving}
+          onSubmit={save}
+          onCancel={() => setEditing(false)}
+        />
+      ) : (
+        <p className="text-xs text-gray-400">
+          {isSet ? describeAgentPin(defaults, providers) : 'CoS defaults'}
+          {' · '}Resolve with agent starts here unless an agent rule pins its own; each run can change it.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// An inbox row's Add automation rule links here with the thread's kind and
+// repo, so the form opens prefilled and the link stays shareable.
+const RULE_PARAMS = ['ruleAccount', 'ruleKind', 'ruleRepo'];
+const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
+function rulePrefillFrom(params) {
+  const kind = params.get('ruleKind');
+  const repo = params.get('ruleRepo') || '*';
+  if (!params.get('ruleAccount') || !AGENT_RULE_KINDS.some((option) => option.value === kind) || !RULE_REPO_RE.test(repo)) return null;
+  return { accountId: params.get('ruleAccount'), kind, repo };
+}
+
+function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgents, onSaveRules, savingRules, onSaveAccount, prefill, onPrefillDone }) {
   const selectId = `github-mode-${account.id}`;
   return (
     <li className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-4">
@@ -78,6 +158,9 @@ function AccountCard({ account, running, onRun, onMode, savingMode }) {
       >
         <Play size={12} aria-hidden="true" /> {running ? 'Checking…' : 'Run now'}
       </button>
+      <AgentAccess account={account} onAllow={onAllowAgents} saving={savingMode} />
+      <AgentDefaults account={account} onSave={onSaveAccount} saving={savingMode} />
+      <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} prefill={prefill} onPrefillDone={onPrefillDone} onApplyNow={onRun} />
     </li>
   );
 }
@@ -133,6 +216,13 @@ function RuleList({ rules, onDelete }) {
 }
 
 export default function GitHubAutomationsTab() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rulePrefill = rulePrefillFrom(searchParams);
+  const clearRulePrefill = () => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    RULE_PARAMS.forEach((key) => next.delete(key));
+    return next;
+  }, { replace: true });
   const [overview, setOverview] = useState(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [runningId, setRunningId] = useState(null);
@@ -141,6 +231,7 @@ export default function GitHubAutomationsTab() {
   const [actions, setActions] = useState([]);
   const [rules, setRules] = useState([]);
   const [savingModeId, setSavingModeId] = useState(null);
+  const [savingRulesId, setSavingRulesId] = useState(null);
   const [undoingId, setUndoingId] = useState(null);
 
   const load = useCallback(async () => {
@@ -177,12 +268,29 @@ export default function GitHubAutomationsTab() {
     await load();
   };
 
-  const changeMode = async (accountId, mode) => {
+  const changeAccount = async (accountId, patch) => {
     setSavingModeId(accountId);
-    const updated = await updateGitHubAccount(accountId, { mode }).catch(() => null);
+    const updated = await updateGitHubAccount(accountId, patch).catch(() => null);
     setSavingModeId(null);
-    if (!updated) return;
-    setOverview((prev) => ({ ...prev, accounts: prev.accounts.map((account) => (account.id === accountId ? { ...account, mode: updated.mode } : account)) }));
+    if (!updated) return false;
+    setOverview((prev) => ({
+      ...prev,
+      accounts: prev.accounts.map((account) => (account.id === accountId
+        ? { ...account, mode: updated.mode, allowAgents: updated.allowAgents === true, agentDefaults: updated.agentDefaults || null }
+        : account)),
+    }));
+    return true;
+  };
+  const changeMode = (accountId, mode) => changeAccount(accountId, { mode });
+  const allowAgents = (accountId, allow) => changeAccount(accountId, { allowAgents: allow });
+
+  const saveRules = async (accountId, agentRules) => {
+    setSavingRulesId(accountId);
+    const updated = await updateGitHubAccount(accountId, { agentRules }).catch(() => null);
+    setSavingRulesId(null);
+    if (!updated) return false;
+    setOverview((prev) => ({ ...prev, accounts: prev.accounts.map((account) => (account.id === accountId ? { ...account, agentRules: updated.agentRules || [] } : account)) }));
+    return true;
   };
 
   const undo = async (id) => {
@@ -239,7 +347,20 @@ export default function GitHubAutomationsTab() {
       ) : (
         <ul className="grid grid-cols-1 gap-3 @3xl/page:grid-cols-2">
           {overview.accounts.map((account) => (
-            <AccountCard key={account.id} account={account} running={runningId === account.id} onRun={runNow} onMode={changeMode} savingMode={savingModeId === account.id} />
+            <AccountCard
+              key={account.id}
+              account={account}
+              running={runningId === account.id}
+              onRun={runNow}
+              onMode={changeMode}
+              savingMode={savingModeId === account.id}
+              onAllowAgents={allowAgents}
+              onSaveRules={saveRules}
+              savingRules={savingRulesId === account.id}
+              onSaveAccount={changeAccount}
+              prefill={rulePrefill?.accountId === account.id ? rulePrefill : null}
+              onPrefillDone={clearRulePrefill}
+            />
           ))}
         </ul>
       )}

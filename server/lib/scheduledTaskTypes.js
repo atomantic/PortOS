@@ -1,13 +1,11 @@
 /** Registered scheduled task names, kept separate from schedule configuration. */
 import { PRIVATE_SECURITY_TASK_TYPE } from './privateSecurityPolicy.js';
+import { currentTaskTypeName } from './taskTypeRenames.js';
 import { PROGRAMMATIC_SCHEDULED_TASK_TYPES } from './taskTargetScope.js';
 
-// Retired scheduled task names → their current names. Each rename ships a
-// migration that moves persisted schedule state (408, 417); this map covers
-// what a migration cannot reach — queued/archived tasks carrying the old name
-// and the prompt-integrity history that follows the renamed key.
-export const TASK_TYPE_RENAMES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle', 'release-check': 'do-release' });
-export const currentTaskTypeName = (taskType) => TASK_TYPE_RENAMES[taskType] || taskType;
+// Rename table lives in taskTypeRenames.js (dependency-free, shared with the browser-safe classifier).
+export { TASK_TYPE_RENAMES, currentTaskTypeName } from './taskTypeRenames.js';
+
 // A task type's `task:`-prefixed schedule executions key, under its current name.
 export const taskExecutionKey = (taskType) => `task:${currentTaskTypeName(taskType.startsWith('task:') ? taskType.slice(5) : taskType)}`;
 

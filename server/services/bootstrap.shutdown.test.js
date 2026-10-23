@@ -31,6 +31,85 @@ import { createEventLoopLagProbe, __createManualClock } from '../lib/eventLoopLa
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, 'bootstrap.js'), 'utf-8').replace(/\r\n/g, '\n');
 
+// Execute the signal boundary without importing the live service graph. Module
+// loading is injected so a suspended teardown uses fake time, never a real disk.
+const loadShutdown = (loadModule) => {
+  const signals = new Map();
+  const exit = vi.fn();
+  const marker = vi.fn(async () => {});
+  const flush = vi.fn(async () => ({ ok: true }));
+  const close = vi.fn(async () => {});
+  const noop = () => {};
+  runInNewContext(`
+    ${extractDeclaration(SRC, 'withGrace')}
+    ${extractDeclaration(SRC, 'closeServer')}
+    const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10000;
+    const HTTP_DRAIN_WINDOW_MS = 5000;
+    const PEER_SYNC_STOP_GRACE_MS = 1000;
+    ${extractDeclaration(SRC, 'registerShutdownHandlers').replace(/^export /, '').replace(/\bimport\(/g, 'loadModule(')}
+    registerShutdownHandlers({ io: { close: done => done() }, httpServer: null, localHttpServer: null });
+  `, {
+    process: { on: (signal, handler) => signals.set(signal, handler), exit, env: {}, stdin: {}, pid: 1, ppid: 2 },
+    console: { log: noop, warn: noop, error: noop }, setTimeout, clearTimeout,
+    createHttpDrain: () => ({ begin: async () => ({ remaining: 0 }), destroyUpgraded: noop }),
+    markHostShuttingDown: noop, quiesceMediaJobQueue: noop, quiesceScheduledEvents: noop,
+    drainScheduledEvents: async () => {},
+    createEventLoopLagProbe: () => ({ begin: () => ({ mark: noop, end: noop, snapshot: () => ({ totalMs: 0 }) }) }),
+    describeSlowShutdown: () => null,
+    stopIdleReaper: noop, stopHostedSessionSweep: noop, stopBeeperSocket: noop,
+    activeAgents: new Map([['example-agent', {}]]), dispatchingAgentIds: new Set(),
+    writeHostShutdownMarker: marker, signalDetachedGroups: noop, stopCodexAppServer: async () => {},
+    flushIdeaLoomAutoSync: async () => {}, flushMediaJobQueue: flush,
+    quiesceSharingForExit: noop, drainPeerSyncOperations: async () => {},
+    logBootstrapFailure: noop,
+    loadModule: (path) => path === '../lib/db.js' ? Promise.resolve({ close }) : loadModule(path),
+  });
+  return { stop: () => signals.get('SIGTERM')(), exit, marker, flush, close };
+};
+
+describe('shutdown signal deadline and recovery', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('starts the hard deadline at the signal even when the first teardown import stalls', async () => {
+    vi.useFakeTimers();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const lifecycle = loadShutdown(() => gate);
+    const stopping = lifecycle.stop();
+    try {
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(lifecycle.exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(lifecycle.exit).toHaveBeenCalledWith(1);
+      expect(lifecycle.marker).toHaveBeenCalledOnce();
+    } finally {
+      release({ stopAllForwards: () => {}, stopServeProcess: () => {}, stopFleetLlmHost: async () => {}, stopTailcatIngress: () => {} });
+      await stopping;
+    }
+  });
+
+  it('preserves agent recovery and flushes the queue and DB when model-host usage cannot flush', async () => {
+    vi.useFakeTimers();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const lifecycle = loadShutdown(async () => ({
+      stopAllForwards: () => {}, stopServeProcess: () => {},
+      stopFleetLlmHost: () => gate, stopTailcatIngress: () => {},
+    }));
+    const stopping = lifecycle.stop();
+    try {
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(lifecycle.marker).toHaveBeenCalledOnce();
+      expect(lifecycle.flush).toHaveBeenCalledOnce();
+      expect(lifecycle.close).toHaveBeenCalledOnce();
+      expect(lifecycle.exit).toHaveBeenCalledWith(0);
+    } finally {
+      release();
+      await stopping;
+    }
+  });
+});
+
 describe('shutdown handler — host-restart bookkeeping (#3202)', () => {
   const shutdownBody = extractDeclaration(SRC, 'shutdown');
 
@@ -111,6 +190,22 @@ describe('shutdown handler — request drain ordering (#8323)', () => {
     const dbGrace = Number(code.match(/withGrace\('DB pool', (\d+)/)?.[1]);
     expect(constant('HTTP_DRAIN_WINDOW_MS') + closeGrace + constant('PEER_SYNC_STOP_GRACE_MS') + dbGrace)
       .toBeLessThan(constant('GRACEFUL_SHUTDOWN_TIMEOUT_MS'));
+  });
+});
+
+describe('shutdown handler — scheduled handlers finish before the DB pool closes', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('quiesces and starts a bounded drain before any await, then joins it before DB close', () => {
+    const firstAwait = code.indexOf('await ');
+    expect(code.indexOf('quiesceScheduledEvents()')).toBeGreaterThan(-1);
+    expect(code.indexOf('quiesceScheduledEvents()')).toBeLessThan(firstAwait);
+    expect(code.indexOf('drainScheduledEvents()')).toBeGreaterThan(code.indexOf('quiesceScheduledEvents()'));
+    expect(code.indexOf('drainScheduledEvents()')).toBeLessThan(firstAwait);
+    expect(code).toContain("withGrace('Scheduled events', HTTP_DRAIN_WINDOW_MS,");
+    const joinAt = code.indexOf('await scheduledEventsDrained');
+    expect(joinAt).toBeGreaterThan(code.indexOf('closeServer('));
+    expect(joinAt).toBeLessThan(code.indexOf("withGrace('DB pool'"));
   });
 });
 

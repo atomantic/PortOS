@@ -3,7 +3,7 @@
 // account response); an account payload without the field (older server) is
 // treated as supporting every mode, so nothing is hidden by a missing field.
 
-const ALL_MODES = ['unread', 'full'];
+import { ALL_SYNC_MODES as ALL_MODES } from '../../../server/lib/messageTransport.js';
 
 export const accountSupportsSyncMode = (account, mode) =>
   (Array.isArray(account?.syncModes) ? account.syncModes : ALL_MODES).includes(mode);

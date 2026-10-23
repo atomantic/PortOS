@@ -1,20 +1,21 @@
 // Shared production inbox route, without sync, send, browser or AI endpoints.
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { parsePagination } from '../lib/validation.js';
+import { messageInboxQuerySchema, parsePagination, validateRequest } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import * as messageSync from '../services/messageSync.js';
 
 export const messageInboxRead = asyncHandler(async (req, res) => {
-  const { accountId, search } = req.query;
+  const query = validateRequest(messageInboxQuerySchema, req.query);
+  const { accountId, search } = query;
   if (accountId && !UUID_RE.test(accountId)) {
     throw new ServerError('Invalid accountId format', { status: 400 });
   }
-  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
+  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(query, { defaultLimit: 50, maxLimit: 100 });
   const result = await messageSync.getMessages({
     accountId,
     search,
-    summary: req.query.summary === 'true',
+    summary: query.summary === 'true',
     limit: parsedLimit,
     offset: parsedOffset
   });

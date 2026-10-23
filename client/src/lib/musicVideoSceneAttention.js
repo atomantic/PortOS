@@ -9,12 +9,11 @@
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
-import { clipReversed, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
-import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene } from './musicVideoShotTiming.js';
+import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
+import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
 
-// Mirrors render.js COVERAGE_TOLERANCE_SEC (#8964): a non-looping shot may run this far past its clip.
-export const COVERAGE_TOLERANCE_SEC = 0.25;
+export { COVERAGE_TOLERANCE_SEC } from './musicVideoLayers.js';
 
 export const SCENE_ATTENTION_LABELS = Object.freeze({
   'missing-frame': 'No frame',
@@ -100,9 +99,9 @@ export function sceneAttention(scene, ctx = {}) {
   if (!isSelfDrawnLayer(layer) && !scene.referenceImageId && !codeRendered) codes.push('missing-frame');
   if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
-  if (layer === 'footage' && (scene.loop === false || clipReversed(scene)) && scene.beatAligned && clipSec != null
-    && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
-    && scene.endSec - scene.startSec - clipSec > COVERAGE_TOLERANCE_SEC) codes.push('under-covered');
+  if (layer === 'footage' && scene.beatAligned && sceneHasAuthoredSpan(scene)
+    && clipNeedsMoreFootage({ loop: clipLoops(scene, selectedPerformanceInstruction(scene)?.edit),
+      holdLastFrame: scene.holdLastFrame, spanSec: scene.endSec - scene.startSec, clipSec })) codes.push('under-covered');
   const contract = scene.direction?.actionContract;
   if (contract && shotActionContractProblem(contract, scene)) codes.push('contract-problem');
   if (layer === 'footage' && isPerformanceScene(scene) && performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSettings })) codes.push('perf-blocked');

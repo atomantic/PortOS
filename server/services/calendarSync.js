@@ -3,6 +3,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { overlapsSyncWindow } from '../lib/calendarSyncWindow.js';
 import { calendarTouchpointDedupeKey } from '../lib/tribeMatch.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getAccount, updateSyncStatus } from './calendarAccounts.js';
@@ -247,7 +248,8 @@ async function runAccountSync(accountId, io, options) {
       if (providerStatus === 'success') {
         const fetchedIds = new Set(newEvents.filter(e => e.externalId).map(e => e.externalId));
         const before = cache.events.length;
-        cache.events = cache.events.filter(e => !e.externalId || fetchedIds.has(e.externalId));
+        // A windowed fetch only vouches for events overlapping its window.
+        cache.events = cache.events.filter(e => !e.externalId || fetchedIds.has(e.externalId) || !overlapsSyncWindow(e, providerResult?.dateRange));
         pruned = before - cache.events.length;
         if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale calendar events from ${account.name}`);
       }

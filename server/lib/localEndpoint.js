@@ -90,6 +90,16 @@ const endpointHost = (endpoint) => {
 };
 
 /**
+ * True when a scheme-optional endpoint string (`localhost:11434`, `http://127.0.0.2/v1`)
+ * names this machine. The single "does this provider talk to a local daemon"
+ * answer; do not re-implement it as a regex.
+ */
+export const isLoopbackEndpoint = (endpoint) => {
+  const host = endpointHost(endpoint);
+  return host !== null && isLocalInstanceHost(host);
+};
+
+/**
  * Is this endpoint inside the private network — loopback, a LAN/tailnet
  * address, a `.local`/`.ts.net`/`.internal` name, or a bare single-label host?
  *

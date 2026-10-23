@@ -138,7 +138,13 @@ export function useMediaJobSse(kind, { cancelJob } = {}) {
 
   const attach = useCallback((jobId, handlers) => subscribe(jobId, handlers, (es) => { eventSourceRef.current = es; }), [subscribe]);
 
-  const sendCancel = useCallback((jobId) => Promise.resolve().then(() => cancelJobRef.current?.(jobId)).catch(() => {}), []);
+  // Rejects when the server refused the cancel (error status, or a body with
+  // `ok: false`) so the caller keeps the run attached instead of reporting it
+  // cancelled while the job is still live.
+  const sendCancel = useCallback((jobId) => Promise.resolve().then(() => cancelJobRef.current?.(jobId)).then((res) => {
+    if (res?.ok === false) throw new Error(res.reason || res.error || 'Cancel was refused');
+    return res;
+  }), []);
 
   const start = useCallback((kickoff, handlers = {}, { jobIdOf = defaultJobIdOf, ifIdle = false, onKickoffError } = {}) => {
     if (ifIdle && runRef.current) return Promise.resolve(null);
@@ -155,7 +161,7 @@ export function useMediaJobSse(kind, { cancelJob } = {}) {
           // Cancelled before the acknowledgement: the job exists server-side now,
           // so cancel exactly that job. A detached/superseded run leaves it be.
           const id = run.cancelRequested ? jobIdOf(ack) : null;
-          if (id) sendCancel(id);
+          if (id) sendCancel(id).catch(() => {});
           return;
         }
         // A throwing handler must still settle the run, never leave it dangling.
@@ -184,13 +190,27 @@ export function useMediaJobSse(kind, { cancelJob } = {}) {
 
   // Resolves true when a run was cancelled (false: nothing owned, so nothing to
   // cancel by id — the caller decides whether a legacy cancel still applies).
+  // Rejects, leaving the run and its stream attached, when the server refuses
+  // the cancel of an acknowledged job.
   const cancel = useCallback(async () => {
     const run = runRef.current;
     if (!run) return false;
+    if (run.jobId) {
+      // A repeated click shares the in-flight request instead of racing the
+      // queue into a spurious ALREADY_TERMINAL refusal.
+      run.cancelPending ||= sendCancel(run.jobId).finally(() => { run.cancelPending = null; });
+      await run.cancelPending;
+      // The run may have settled (terminal frame, supersede) while the request was in flight.
+      if (run.canceled) return true;
+      if (runRef.current !== run || run.ended) return false;
+      run.canceled = true;
+      runRef.current = null;
+      retire(run, 'canceled');
+      return true;
+    }
     run.cancelRequested = true;
     runRef.current = null;
     retire(run, 'canceled');
-    if (run.jobId) await sendCancel(run.jobId);
     return true;
   }, [sendCancel]);
 

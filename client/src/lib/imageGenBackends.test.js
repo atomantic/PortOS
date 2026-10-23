@@ -27,7 +27,7 @@ describe('imageGenReadiness', () => {
 describe('I2I_CAPABLE_MODES / isI2iCapableMode', () => {
   it('treats every generation backend as i2i-capable, but not external', () => {
     expect(I2I_CAPABLE_MODES).toEqual([
-      IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL,
+      IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY,
     ]);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.LOCAL)).toBe(true);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.CODEX)).toBe(true);

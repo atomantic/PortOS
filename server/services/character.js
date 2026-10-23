@@ -23,6 +23,7 @@ import { getCharacterSkills } from './characterSkills.js';
 import { getCharacterMetrics } from './characterMetrics.js';
 import { createSignalContext } from './characterSignals.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { requireDiceNotation } from '../lib/diceNotation.js';
 
 const CHARACTER_FILE = path.join(PATHS.data, 'character.json');
 
@@ -455,12 +456,8 @@ export async function setAvatar(avatarPath) {
 }
 
 export function rollDice(notation) {
-  const match = notation.match(/^(\d+)d(\d+)([+-]\d+)?$/);
-  if (!match) throw new Error(`Invalid dice notation: ${notation}`);
-
-  const count = parseInt(match[1], 10);
-  const sides = parseInt(match[2], 10);
-  const modifier = match[3] ? parseInt(match[3], 10) : 0;
+  // Bounded before the roll loop: one array entry per die (#13088).
+  const { count, sides, modifier } = requireDiceNotation(notation);
 
   const rolls = [];
   for (let i = 0; i < count; i++) {

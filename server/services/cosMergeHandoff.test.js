@@ -17,8 +17,10 @@ vi.mock('./cosState.js', async () => {
     readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.state) }),
   };
 });
-vi.mock('./cos.js', () => ({ addTask: vi.fn(async () => ({ id: 'cleanup-recovery' })) }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async (id) => f.tasks[id] ?? null }));
+vi.mock('./cosTaskStore.js', () => ({
+  addTask: vi.fn(async () => ({ id: 'cleanup-recovery' })),
+  getTaskById: async (id) => f.tasks[id] ?? null,
+}));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: async (path) => ({ host: 'github.com', fullName: f.foreign.has(path) ? 'example/other' : 'example/repo' }),
 }));
@@ -47,6 +49,13 @@ vi.mock('./untrustedContent.js', () => ({ screenUntrustedContent: async () => ({
 vi.mock('./codeReview.js', () => ({
   resolveReviewLoopOptions: async () => ({ reviewers: f.reviewers, usernames: [], optionalReviewers: f.optionalReviewers, reviewerMaxRounds: {} }),
 }));
+// This synthetic managed app has no merged-tree capability. Keep its fake-time
+// poll tests independent of real filesystem scheduling; pendingMergeGuard.test
+// exercises the actual capability probe and checkout/command boundary.
+vi.mock('./pendingMergeGuard.js', async importOriginal => ({
+  ...await importOriginal(),
+  preparePendingMergeGuard: async () => ({ ok: true, evidence: null }),
+}));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({ mergePR: (...args) => mergePrMock(...args) }));
 const notifyMock = vi.fn(async () => ({ id: 'notification-1' }));
@@ -63,7 +72,7 @@ vi.mock('./heldCheckoutRecovery.js', () => ({ retirePendingMergeCheckout: (...ar
 import { handoffPendingMerge, hasQueuedMergeHandoff } from './cosMergeHandoff.js';
 import { processPendingMergePrs, readPendingMergePrs, nudgeLocalPendingMergePrs } from './prWatcher.js';
 import { claimMergeAdmission } from './cosMergeAdmission.js';
-import { addTask } from './cos.js';
+import { addTask } from './cosTaskStore.js';
 
 const HEAD = 'a'.repeat(40);
 const PR_URL = 'https://github.com/example/repo/pull/7';
@@ -579,7 +588,7 @@ describe('handoff follow-up poll', () => {
 
   // The coordinator's lazy imports load from disk, which a setImmediate drain
   // does not wait for; warm them so a fresh worker settles like a warm one.
-  beforeAll(() => Promise.all(['./prReviewerSecurity.js', '../lib/validation.js'].map((m) => import(m))));
+  beforeAll(() => Promise.all(['./prReviewerSecurity.js', './pendingMergeGuard.js', '../lib/validation.js'].map((m) => import(m))));
 
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });

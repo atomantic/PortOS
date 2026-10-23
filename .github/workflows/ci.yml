@@ -4,12 +4,15 @@ on:
   # No push trigger. Every change reaches `main` through a pull request whose
   # own CI gate must be green, so re-running the suite on the merge commit only
   # repeats work. The nightly schedule below is the main-branch health signal,
-  # and the main -> release pull request runs the complete suite before a
+  # and the candidate -> release pull request runs the complete suite before a
   # release ships.
   pull_request:
     branches: [main, release]
   schedule:
+    # Twice a day: with no push trigger these are the only runs that test the
+    # combined tree, so the second bounds how long a bad merge can hide.
     - cron: '17 9 * * *'
+    - cron: '17 21 * * *'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -401,8 +404,9 @@ jobs:
       # package versions, Node/platform, gating env — is byte-identical to one
       # a trusted green run verified. Pull requests only read. The scheduled,
       # dispatched and called full runs save, so the cache holds nothing a PR
-      # branch wrote. Each job and shard keeps its own lineage under the key
-      # prefix; a restore takes the newest.
+      # branch wrote. Prefer the same shard's lineage, then any shard of this
+      # job: scoped 1of1 plans have no full-run seed of their own. Per-test
+      # content keys still decide reuse; unmatched files run normally.
       - name: Restore the test memo
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -410,6 +414,7 @@ jobs:
           key: test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
           restore-keys: |
             test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-
+            test-memo-${{ runner.os }}-${{ runner.arch }}-server-
 
       - name: Run server tests
         id: server-tests
@@ -534,6 +539,7 @@ jobs:
           key: test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
           restore-keys: |
             test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-
+            test-memo-${{ runner.os }}-${{ runner.arch }}-client-
 
       - name: Run client tests
         id: client-tests
@@ -1119,6 +1125,7 @@ jobs:
           key: test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
           restore-keys: |
             test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-
+            test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-
 
       - name: Run server tests on Windows
         id: windows-tests
@@ -1425,6 +1432,15 @@ jobs:
           CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}
         run: node scripts/ci-gate-report.js
 
+      # A red scheduled run tested the combined tree with no PR attached, so name
+      # the merges since the last green one instead of leaving a hand bisect.
+      # Diagnostic only; the step above already failed the gate.
+      - name: Name the suspect merges
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci-nightly-report.js
+
   full-gate:
     # A second check run published ONLY when the impact plan chose the complete
     # suite. release.yml keys on this name to skip re-running CI on the push to
@@ -1440,7 +1456,7 @@ jobs:
     # the trigger was Windows-irrelevant (see the FULL_TRIGGER_RULES
     # windowsEscalates flag in the impact planner) — publishing the gate for
     # one of those would vouch for Windows coverage that did not run. Every
-    # force-full path — nightly, the main -> release PR, release, an explicit
+    # force-full path — nightly, the candidate -> release PR, release, an explicit
     # full-CI request — keeps windows_mode == 'full', so the release
     # optimization is unaffected.
     if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full' && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)

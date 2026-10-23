@@ -392,9 +392,11 @@ export const privacyScanStartSchema = z.object({
 // OPT-OUT AUTOMATION ENGINE SCHEMAS (issue #2145, epic #2138)
 // =============================================================================
 // Zod schemas for the opt-out run/verify actions + the user-configured recheck
-// settings slice (`settings.privacy.recheck`). The engine reads its submission
-// autonomy (auto-approve emails / auto-submit web forms) from that slice —
-// BOTH default OFF (a fresh install never auto-sends or auto-submits anything).
+// settings slice (`settings.privacy.recheck`). The engine reads
+// `autoApproveOptOutEmails` from that slice (default OFF): it only pre-approves
+// opt-out email drafts; nothing is ever sent or submitted unattended.
+// `autoSubmitWebForms` is a legacy key kept so stored settings still validate;
+// the engine ignores it (web forms are always queued for the human).
 
 // POST /api/privacy/optout — run one opt-out pass. `runVerification` (default
 // true) folds the verification poll into the same pass.

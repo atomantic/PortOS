@@ -79,9 +79,18 @@ vi.mock('../services/calendarGoogleApiSync.js', () => ({
 }));
 vi.mock('../services/dailyReview.js', () => ({}));
 vi.mock('../services/googleAuth.js', () => ({}));
-vi.mock('../services/googleOAuthAutoConfig.js', () => ({}));
+vi.mock('../services/googleOAuthAutoConfig.js', () => ({
+  startAutoConfig: vi.fn(async () => ({ status: 'opened' })),
+  captureCredentials: vi.fn(async () => ({ status: 'captured' })),
+  runAutomatedSetup: vi.fn(async () => ({ status: 'configured' })),
+}));
 vi.mock('../services/messageTokenExtractor.js', () => ({
-  getToken: vi.fn(), getTokenStatus: vi.fn(), clearTokenCache: vi.fn(),
+  getToken: vi.fn(async () => ({ token: 'example-token', fresh: true, decoded: {} })), getTokenStatus: vi.fn(), clearTokenCache: vi.fn(),
+}));
+// Outlook generic sync: token capture in the signed-in tab, then the Graph fetch.
+// null is its "no token" answer, which syncAccount reports as skipped.
+vi.mock('../services/calendarApiSync.js', async (importOriginal) => ({
+  ...await importOriginal(), syncOutlookCalendarApi: vi.fn(async () => null),
 }));
 
 import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
@@ -91,6 +100,9 @@ import { runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { getAccount, updateSyncStatus, updateSubcalendars } from '../services/calendarAccounts.js';
 import { mutateCache } from '../services/calendarSync.js';
 import { apiSyncAccount, apiDiscoverCalendars } from '../services/calendarGoogleApiSync.js';
+import { startAutoConfig, captureCredentials, runAutomatedSetup } from '../services/googleOAuthAutoConfig.js';
+import { getToken } from '../services/messageTokenExtractor.js';
+import { syncOutlookCalendarApi } from '../services/calendarApiSync.js';
 import calendarRoutes from './calendar.js';
 
 const appFor = (address = '192.0.2.10') => {
@@ -183,7 +195,7 @@ describe('Calendar MCP operator authority (#11051)', () => {
     }
   });
 
-  it('allows remote reference-data edits, push ingestion, direct API operations and generic Google push-only sync without a CLI', async () => {
+  it('allows remote reference-data edits, push ingestion and direct API operations without a CLI', async () => {
     const app = appFor();
     const edited = await request(app).put(`/api/calendar/accounts/${fixture.id}/subcalendars`).send({
       subcalendars: [{ calendarId: fixture.calendarId, name: fixture.marker, enabled: true }],
@@ -199,8 +211,6 @@ describe('Calendar MCP operator authority (#11051)', () => {
     for (const action of ['api', 'discover-api']) expect((await post(app, action)).status).toBe(200);
     expect(apiSyncAccount).toHaveBeenCalledWith(fixture.id, undefined);
     expect(apiDiscoverCalendars).toHaveBeenCalledWith(fixture.id);
-    const generic = await request(app).post(`/api/calendar/sync/${fixture.id}`).send({});
-    expect([generic.status, generic.body.status]).toEqual([200, 'push-only']);
 
     // The stored marker remains data: neither MCP entry point may consume it
     // when this same remote caller tries to start the agent.
@@ -210,5 +220,111 @@ describe('Calendar MCP operator authority (#11051)', () => {
     expect(getAccount).not.toHaveBeenCalled();
     expect(getAllProviders).not.toHaveBeenCalled();
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe('Calendar host-browser automation operator authority (#12952)', () => {
+  const browserActions = [
+    ['/api/calendar/google/auto-configure/start', startAutoConfig],
+    ['/api/calendar/google/auto-configure/capture', captureCredentials],
+    ['/api/calendar/google/auto-configure/run', runAutomatedSetup],
+    ['/api/calendar/debug/test-token', getToken],
+  ];
+
+  it('refuses a remote password-free caller, direct or proxied, before the host browser is driven', async () => {
+    for (const [path, effect] of browserActions) {
+      for (const [address, headers] of [['192.0.2.10', {}], ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }]]) {
+        const pending = request(appFor(address)).post(path);
+        for (const [name, value] of Object.entries(headers)) pending.set(name, value);
+        const response = await pending.send({});
+        expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      }
+      expect(effect, path).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps local, operator-session and delegated-agent callers able to run it', async () => {
+    const operator = await createSession();
+    const agent = await createSession({ label: 'agent' });
+    for (const [enabled, address, headers] of [
+      [false, '127.0.0.1', {}],
+      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
+      [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
+    ]) {
+      auth.enabled = enabled;
+      for (const [path] of browserActions) {
+        const pending = request(appFor(address)).post(path);
+        for (const [name, value] of Object.entries(headers)) pending.set(name, value);
+        const response = await pending.send({});
+        expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(200);
+      }
+    }
+    for (const [path, effect] of browserActions) expect(effect, path).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('Calendar generic sync operator authority (#13055)', () => {
+  // An Outlook account's generic sync captures a bearer token from the
+  // operator's signed-in browser tab on a cache miss, so the route is gated
+  // whole; its /api, /push and /discover-api siblings stay open (above).
+  const path = `/api/calendar/sync/${fixture.id}`;
+  const sync = (app, headers = {}, target = path) => {
+    const pending = request(app).post(target);
+    for (const [name, value] of Object.entries(headers)) pending.set(name, value);
+    return pending.send({});
+  };
+  const expectNotSynced = () => {
+    for (const effect of [getAccount, syncOutlookCalendarApi, getToken]) expect(effect).not.toHaveBeenCalled();
+  };
+  beforeEach(() => {
+    fixture.account = { ...fixture.account, type: 'outlook-calendar' };
+  });
+
+  it('refuses remote, spoofed-proxy and URL-variant callers before the account is read', async () => {
+    for (const [address, headers] of [
+      ['192.0.2.10', {}],
+      ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
+      ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
+    ]) {
+      for (const target of [path, path.toUpperCase() + '/']) {
+        const response = await sync(appFor(address), headers, target);
+        expect([response.status, response.body.code], target).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      }
+    }
+    expectNotSynced();
+  });
+
+  it('requires authentication with a password and denies legacy Basic and scoped-peer credentials', async () => {
+    auth.enabled = true;
+    for (const [headers, status, code] of [
+      [{}, 401, 'AUTH_REQUIRED'],
+      [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
+      [{
+        [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
+        [PEER_INSTANCE_HEADER]: 'example-instance',
+      }, 403, 'PEER_SCOPE_FORBIDDEN'],
+    ]) {
+      const response = await sync(appFor(), headers);
+      expect([response.status, response.body.code]).toEqual([status, code]);
+    }
+    expectNotSynced();
+  });
+
+  it('keeps local, operator-session and delegated-agent callers able to sync', async () => {
+    const operator = await createSession();
+    const agent = await createSession({ label: 'agent' });
+    for (const [enabled, address, headers] of [
+      [false, '127.0.0.1', {}],
+      [true, '192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
+      [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
+    ]) {
+      auth.enabled = enabled;
+      const response = await sync(appFor(address), headers);
+      expect([response.status, response.body.status], JSON.stringify(response.body)).toEqual([200, 'skipped']);
+    }
+    expect(syncOutlookCalendarApi).toHaveBeenCalledTimes(3);
+    expect(syncOutlookCalendarApi).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: fixture.id, type: 'outlook-calendar' }), expect.anything(), undefined, {},
+    );
   });
 });

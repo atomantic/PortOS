@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import TreatmentShotList from './TreatmentShotList.jsx';
 import SceneCard from './SceneCard.jsx';
 
+vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({ src: null }) }));
 
 const contract = { version: 1, purpose: 'The listener decides to stay', startEmotion: 'distrust', endEmotion: 'resolve', activeSpeaker: 'Singer',

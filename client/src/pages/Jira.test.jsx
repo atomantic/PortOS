@@ -60,6 +60,8 @@ describe('Jira page — token age display', () => {
     await renderPage();
 
     await screen.findByText('Acme JIRA');
+    expect(screen.getByRole('heading', { level: 1, name: 'JIRA' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Status Reports' })).toBeInTheDocument();
     expect(screen.queryByText(/Token saved/)).not.toBeInTheDocument();
     expect(screen.queryByText(/age unknown/)).not.toBeInTheDocument();
   });

@@ -67,17 +67,10 @@ export function quotaBurnFamilyOfDescription(description) {
  */
 export const quotaBurnJobKey = (familyId, jobId) => `${familyId}:${jobId}`;
 
-/**
- * `maxDispatchesPerWindow` sentinel for "no cap on how many burns this window
- * may spend" — and the default. Why the cap is opt-in rather than a safety
- * property is argued once, in `docs/QUOTA-BURN.md`.
- *
- * -1 rather than 0/null: it stays a number for the client's `<input
- * type="number">` and the run log, and it can never be confused with "0 burns
- * allowed" (which is what disabling the family already means). It sits BELOW
- * the field's own minimum, which is what `clampDispatchCap` exists to handle.
- */
-export const QUOTA_BURN_UNLIMITED_DISPATCHES = -1;
+// `maxDispatchesPerWindow` "no cap" sentinel (the default). Lives in a leaf
+// module so the client shares it; see docs/QUOTA-BURN.md for why the cap is opt-in.
+export { QUOTA_BURN_UNLIMITED_DISPATCHES, isUnlimitedDispatchCap } from './quotaBurnDispatchCap.js';
+import { QUOTA_BURN_UNLIMITED_DISPATCHES, isUnlimitedDispatchCap } from './quotaBurnDispatchCap.js';
 
 /**
  * Every numeric/length bound in the plan, in ONE place.
@@ -110,9 +103,6 @@ export const QUOTA_BURN_BOUNDS = Object.freeze({
   paramLength: { max: 16000 },
 });
 const BOUNDS = QUOTA_BURN_BOUNDS;
-
-/** Whether a family's dispatch cap means "no cap". Any negative value reads as unlimited. */
-export const isUnlimitedDispatchCap = (cap) => Number(cap) < 0;
 
 /**
  * LEGACY burn job types — a COMPATIBILITY INPUT, frozen.

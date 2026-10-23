@@ -7,6 +7,7 @@
  */
 
 import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
+import { historyListQuerySchema, isHistoryListQuery, listVideoHistoryQuery } from '../services/videoGen/historyList.js';
 import { Router } from 'express';
 import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
 import { basename } from 'path';
@@ -96,6 +97,8 @@ import {
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
+import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
+import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
 
 const router = Router();
 
@@ -171,11 +174,11 @@ export const isAudioMime = (mime, filename) => {
 // upload (icReference). Files stream to disk without a file-size cap.
 // Per-fieldname mime filtering rejects mismatched parts
 // up-front so a stray .mp4 drag-drop can't get staged under these fields.
-const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', 'icReference'], {
+const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
   fileFilter: (_req, file, cb) => {
     const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage';
     const isAudioField = file.fieldname === 'audioFile';
-    const isVideoField = file.fieldname === 'icReference';
+    const isVideoField = ['icReference', 'runwayVideo', 'runwayCharacterVideo'].includes(file.fieldname);
     const okImage = isImageField && file.mimetype.startsWith('image/');
     const okAudio = isAudioField && isAudioMime(file.mimetype, file.originalname);
     // IC-LoRA references are clips — the control weight reads structure/motion
@@ -250,7 +253,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
     (v) => (v == null || v === '' ? undefined : v),
     z.enum(I2V_REFERENCE_MODES).optional(),
   ),
-  [VIDEO_GEN_LOCAL_ONLY_FIELDS.TILING]: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
+  [VIDEO_GEN_LOCAL_ONLY_FIELDS.TILING]: z.enum(VIDEO_TILING_MODES).optional(),
   // Which prompt conditioner reads the prompt (lib/videoTextEncoders.js).
   // Validated loosely here and resolved against the MODEL's own option list in
   // the service — the set is per-runtime, so a route-level enum would either
@@ -322,6 +325,11 @@ const generateBodySchema = z.object({
   // validated like falModelId: the provider refuses an uncatalogued id and
   // rounds a length up to one the model delivers.
   runwayModelId: z.string().min(1).max(64).optional(),
+  runwayTargetAspect: z.enum(RUNWAY_ALEPH_ASPECTS).optional(),
+  runwayRatio: z.enum(RUNWAY_ACT_TWO_RATIOS).optional(),
+  runwayBodyControl: z.preprocess((v) => v === 'true' ? true : v === 'false' ? false : v, z.boolean().optional()),
+  runwayExpressionIntensity: optionalNum(1, 5, 'runwayExpressionIntensity'),
+  runwaySeed: optionalNum(0, 4294967295, 'runwaySeed'),
   runwayDuration: z.preprocess(
     (v) => (v == null || v === '' ? undefined : Number(v)),
     optionalNum(1, 60, 'runwayDuration'),
@@ -352,7 +360,7 @@ const generateBodySchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.enum(REACTOR_ASPECTS).optional(),
   ),
-  prompt: z.string().min(1).max(8000),
+  prompt: z.string().max(20000),
   negativePrompt: z.string().max(8000).optional(),
   modelId: z.string().max(64).optional(),
   width: optionalNum(64, 2048, 'width'),
@@ -376,7 +384,7 @@ const generateBodySchema = z.object({
   // falls back to inferring (sourceImage→i2v, no source→t2v).
   // IC-LoRA remix modes (`ic-control`, …) come from the weight registry so the
   // enum can never drift from what's actually installable.
-  mode: z.enum(['text', 'image', 'fflf', 'extend', 'a2v', ...IC_LORA_MODE_VALUES]).optional(),
+  mode: z.enum(['text', 'image', 'fflf', 'extend', 'a2v', ...IC_LORA_MODE_VALUES, ...RUNWAY_SPECIAL_VIDEO_MODES]).optional(),
   // Chain N renders end-to-end: each chunk's last frame becomes the next
   // chunk's start frame, then ffmpeg concats them into one clip. 1..8 to
   // keep the worst-case wall time bounded (8 × ~5min ≈ 40min on M3 Max).
@@ -544,6 +552,8 @@ const generateBodySchema = z.object({
   // docs/decisions/2026-08-20-federated-visual-prompts.md
   mediaProviderPeerId: z.string().guid().optional(),
   mediaProviderEngine: z.string().trim().min(1).max(80).optional(),
+}).refine((body) => body.prompt.length > 0 || RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode), {
+  message: 'A prompt is required for this workflow.', path: ['prompt'],
 });
 
 // The Video Gen form's preview (#11317): the generate body as the form would
@@ -1079,6 +1089,7 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // 'grok' discriminator for them) and the clip duration — both plain
   // values, safe to echo for the reloading page's form restore.
   'videoMode', 'duration',
+  'targetAspectRatio', 'ratio', 'bodyControl', 'expressionIntensity',
   // reactor.inc jobs (#6214): the clip to chain from, the clip length, and the
   // fast-h3 session canvas — all plain scalars (no filesystem path), safe to
   // echo for the reloading page's form restore. `seed` above already covers
@@ -1169,6 +1180,16 @@ router.get('/:jobId/events', (req, res) => {
   if (!ok) throw new ServerError('Job not found or expired', { status: 404 });
 });
 
+// The queue reports a refused cancel as { ok: false, code }; surface it as an
+// error status so the caller never mistakes a refusal for a cancelled render.
+const cancelOrRefuse = async (jobId) => {
+  const result = await cancelJob(jobId);
+  if (!result?.ok && result?.code) {
+    throw new ServerError(result.error || 'Cancel failed', { status: result.code === 'ALREADY_TERMINAL' ? 409 : 404, code: result.code });
+  }
+  return result;
+};
+
 router.post('/cancel', asyncHandler(async (req, res) => {
   // Cancel selection rules, in priority order:
   //   1. Explicit body.jobId — cancel exactly that job (queued or running).
@@ -1183,18 +1204,18 @@ router.post('/cancel', asyncHandler(async (req, res) => {
     // Validate that the jobId is a video job before cancelling, so a stray
     // image jobId from another tab doesn't accidentally cancel here.
     const job = listJobs({ kind: 'video' }).find((j) => j.id === requestedJobId);
-    if (!job) return res.json({ ok: false, reason: 'video job not found' });
+    if (!job) throw new ServerError('Video job not found', { status: 404, code: 'NOT_FOUND' });
     if (job.status !== 'queued' && job.status !== 'running') {
-      return res.json({ ok: false, reason: `job already ${job.status}` });
+      throw new ServerError(`Job already ${job.status}`, { status: 409, code: 'ALREADY_TERMINAL' });
     }
-    return res.json(await cancelJob(job.id));
+    return res.json(await cancelOrRefuse(job.id));
   }
   const running = listJobs({ kind: 'video', status: 'running' });
-  if (running.length) return res.json(await cancelJob(running[0].id));
+  if (running.length) return res.json(await cancelOrRefuse(running[0].id));
   // No running render — cancel the newest queued video instead so the user
   // can pull back a submission before it starts.
   const queued = listJobs({ kind: 'video', status: 'queued' });
-  if (queued.length) return res.json(await cancelJob(queued[queued.length - 1].id));
+  if (queued.length) return res.json(await cancelOrRefuse(queued[queued.length - 1].id));
   res.json({ ok: false, reason: 'no active or queued video render' });
 }));
 
@@ -1203,8 +1224,11 @@ const updatePromptSchema = z.object({ prompt: z.string().max(8000) });
 // request into a silent unhide.
 const visibilitySchema = z.object({ hidden: z.boolean() });
 
-router.get('/history', asyncHandler(async (_req, res) => {
-  res.json(await withMediaFileSizes(await loadHistory(), 'video'));
+router.get('/history', asyncHandler(async (req, res) => {
+  // No query keeps the legacy full array; see historyList.js for the opt-in form.
+  if (!isHistoryListQuery(req.query)) return res.json(await withMediaFileSizes(await loadHistory(), 'video'));
+  const options = validateRequest(historyListQuerySchema, req.query);
+  res.json(await listVideoHistoryQuery(options, await loadHistory()));
 }));
 
 // One history entry by id (#4165) — see videoHistoryRead.js.

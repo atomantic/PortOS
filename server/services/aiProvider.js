@@ -6,7 +6,6 @@
 import { normalizeReviewFinishReason } from '../lib/reviewerHealth.js';
 import { getAllProviders } from './providers.js';
 import { startAIOp } from './aiStatusEvents.js';
-import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
 // localModelHealing is lazy-imported at its (rare, error-recovery) call site
 // below — a static import here pulls its notifications/providers deps (which
 // eagerly import fileUtils `PATHS`) into every aiProvider consumer's module
@@ -213,7 +212,11 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  // Distinguishes the deadline from a caller cancel, and records how far the
+  // exchange got, so a stalled provider reports WHERE it stalled (#13133).
+  let timedOut = false;
+  let stallPhase = 'no-response';
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
   // The caller's cancellation, folded into the same controller as the deadline.
   // Without it, pressing Stop leaves the request running to its full timeout —
   // most visible on the subscription's fallback leg, which is exactly where a
@@ -230,6 +233,7 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
       signal: controller.signal,
       body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens })
     });
+    stallPhase = 'response-body';
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');
@@ -273,7 +277,12 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
     // `err.cause` and is otherwise silently discarded (#7669).
     const cause = err.cause;
     const causeDetail = cause ? ` (cause: ${[cause.code, cause.message].filter(Boolean).join(' ')})` : '';
-    return { error: `Provider request failed: ${err.message}${causeDetail}` };
+    const stalled = timedOut
+      ? ` — timed out after ${timeout}ms ${stallPhase === 'no-response'
+        ? 'before the provider sent response headers (connect or first byte)'
+        : 'after response headers while the body was still streaming'}`
+      : '';
+    return { error: `Provider request failed: ${err.message}${causeDetail}${stalled}`, ...(timedOut ? { stallPhase } : {}) };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
@@ -529,6 +538,8 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   // bargain — the only place a simple call refreshes the idle clock, so a
   // run that takes an hour still counts as use throughout, and the next call
   // doesn't get a bare connection refusal.
+  // Provider selection and parsing need none of the managed daemon graph.
+  const { ensureManagedRuntimeReady } = await import('./providerExecutionReadiness.js');
   const ready = await ensureManagedRuntimeReady(provider, {
     onStarting: (label) => statusOp.update('provider:starting', `Starting ${label} if needed…`, { providerId: provider.id }),
   });
@@ -553,7 +564,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
       return { text: retry.text, finishReason: retry.finishReason, ...(retry.usage ? { usage: retry.usage } : {}) };
     }
     statusOp.error(retry.error, { model: retryModel });
-    return { error: retry.error, ...(Number.isInteger(retry.status) ? { status: retry.status } : {}) };
+    return { error: retry.error, ...(Number.isInteger(retry.status) ? { status: retry.status } : {}), ...(retry.stallPhase ? { stallPhase: retry.stallPhase } : {}) };
   };
 
   if (options.allowModelRecovery !== false && first.status === 400 && LM_STUDIO_NO_MODEL_RE.test(first.body || '')) {
@@ -579,7 +590,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   }
 
   statusOp.error(first.error);
-  return { error: first.error, ...(Number.isInteger(first.status) ? { status: first.status } : {}) };
+  return { error: first.error, ...(Number.isInteger(first.status) ? { status: first.status } : {}), ...(first.stallPhase ? { stallPhase: first.stallPhase } : {}) };
 }
 
 // Extracted to lib/llmText.js in #4901 — unfencing a string needs no provider,

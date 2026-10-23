@@ -43,10 +43,14 @@ const CLEARED = { target: null, count: 0 };
  * @param {string|null} params.notePath - vault-relative path of the open note.
  * @param {string} params.content - editor buffer to write.
  * @returns {{ saving: boolean, save: (opts?: { force?: boolean }) => Promise<object|null>,
- *   forceOffered: boolean, dismissForce: () => void }}
+ *   forceOffered: boolean, dismissForce: () => void,
+ *   bufferChangedSince: (submitted: string) => boolean }}
  *   `save` resolves the updated note, or `null` when the write did not happen —
  *   either because it was refused (the API layer has already toasted the reason)
  *   or because there was nothing to save / a save was already in flight.
+ *   The textarea stays editable while a write is in flight, so a completion
+ *   handler passes the content it submitted to `bufferChangedSince` and keeps
+ *   the editor open (rather than discarding newer text) when it returns true.
  */
 export function useNoteSave({ vaultId, notePath, content }) {
   const [saving, setSaving] = useState(false);
@@ -57,6 +61,8 @@ export function useNoteSave({ vaultId, notePath, content }) {
   // each extra forced write strands another libuv threadpool thread for the life
   // of the process. Same reason ⌘S must not stack.
   const inFlight = useRef(false);
+  const contentRef = useRef(content);
+  contentRef.current = content;
 
   // Identity of the open note. The path ALONE is not enough: vaults routinely
   // share basenames (`index.md`, `README.md`, daily notes), so a refusal recorded
@@ -97,7 +103,9 @@ export function useNoteSave({ vaultId, notePath, content }) {
     && refusal.target === target
     && refusal.count >= REFUSALS_BEFORE_FORCE;
 
-  return { saving, save, forceOffered, dismissForce: clearRefusals };
+  const bufferChangedSince = useCallback(submitted => contentRef.current !== submitted, []);
+
+  return { saving, save, forceOffered, dismissForce: clearRefusals, bufferChangedSince };
 }
 
 export default useNoteSave;

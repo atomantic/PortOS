@@ -17,8 +17,11 @@ import { invalidateMeatspace, invalidateMortalLoomChanges } from './meatspaceEve
 import { randomUUID } from 'crypto';
 import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir, sleep } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isEvictedStats, materializeAndWait, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
-import { isPlainObject } from '../lib/objects.js';
+import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { rowIdentityKeys, ROW_TOMBSTONES_KEY } from '../lib/meatspaceRowIdentity.js';
+import { isTombstoned } from '../lib/tombstones.js';
+import { queueHealthWrite } from './meatspaceWriteQueues.js';
 import { getSettings, settingsEvents } from './settings.js';
 
 const DEFAULT_ICLOUD_PATH = join(
@@ -796,7 +799,92 @@ export async function getStatus() {
   };
 }
 
-/** Non-destructive import: append MortalLoom records missing from PortOS local files. */
+// Native MortalLoom substance arrays → the `daily-log.json` tenants the local
+// alcohol/nicotine readers consume. Item normalization mirrors
+// buildDailyLogFromMortalLoom so an imported day reads the same as the iCloud view.
+const IMPORT_SUBSTANCES = [
+  {
+    mlKey: 'alcoholDrinks', key: 'alcohol', itemsField: 'drinks', totalField: 'standardDrinks',
+    toItem: ({ name, oz, abv, count }) => ({ name: name || '', oz: Number(oz) || 0, abv: Number(abv) || 0, count: Number(count) || 1 }),
+  },
+  {
+    mlKey: 'nicotineEntries', key: 'nicotine', itemsField: 'items', totalField: 'totalMg',
+    toItem: ({ product, mgPerUnit, count }) => ({ product: product || '', mgPerUnit: Number(mgPerUnit) || 0, count: Number(count) || 1 }),
+  },
+];
+
+/**
+ * Merge native alcohol/nicotine/body rows into a local daily log in place.
+ * Identity is the native event id (two ids with equal content stay distinct); a
+ * locally tombstoned id is never re-added. Id-less rows match id-less local items
+ * of the same day by content as a multiset, so a retry adds nothing while two
+ * identical id-less drinks still import as two. Body fields are fill-only per
+ * date: a field the local day already holds is a local edit and wins.
+ */
+function mergeNativeDailyRecords(log, store, { tombstones, computeTotals }) {
+  const report = { added: {}, skipped: {} };
+  const entryFor = (date) => {
+    let entry = log.entries.find(e => e.date === date);
+    if (!entry) { entry = { date }; log.entries.push(entry); }
+    return entry;
+  };
+  const touched = new Set();
+  for (const { mlKey, key, itemsField, toItem } of IMPORT_SUBSTANCES) {
+    const rows = store[mlKey] || [];
+    let added = 0, skipped = 0;
+    const localItems = log.entries.flatMap(e => (Array.isArray(e[key]?.[itemsField]) ? e[key][itemsField] : []).map(item => [e.date, item]));
+    const seenIds = new Set(localItems.map(([, item]) => item?.id).filter(id => typeof id === 'string' && id));
+    const unmatchedContent = new Map();
+    for (const [date, item] of localItems) {
+      if (item?.id) continue;
+      const contentKey = `${date}\u0000${canonicalStringify(toItem(item || {}))}`;
+      unmatchedContent.set(contentKey, (unmatchedContent.get(contentKey) || 0) + 1);
+    }
+    for (const row of rows) {
+      if (!row.date) { skipped++; continue; }
+      const { id, date, ...fields } = row;
+      const item = toItem(fields);
+      if (id) {
+        if (seenIds.has(id) || isTombstoned(tombstones, id, undefined, 'id')) { skipped++; continue; }
+        seenIds.add(id);
+      } else {
+        const contentKey = `${date}\u0000${canonicalStringify(item)}`;
+        const available = unmatchedContent.get(contentKey) || 0;
+        if (available > 0) { unmatchedContent.set(contentKey, available - 1); skipped++; continue; }
+      }
+      const entry = entryFor(date);
+      if (!isPlainObject(entry[key]) || !Array.isArray(entry[key][itemsField])) entry[key] = { ...(isPlainObject(entry[key]) ? entry[key] : {}), [itemsField]: [] };
+      // Keep native fields the local shape does not name (stamps, app-only metadata).
+      entry[key][itemsField].push({ ...fields, ...item, ...(id ? { id } : {}) });
+      touched.add(entry);
+      added++;
+    }
+    report.added[mlKey] = added; report.skipped[mlKey] = skipped;
+  }
+  for (const entry of touched) computeTotals(entry);
+
+  let bodyAdded = 0, bodySkipped = 0;
+  for (const row of store.bodyEntries || []) {
+    const { id: _id, date, ...fields } = row;
+    if (!date) { bodySkipped++; continue; }
+    const existing = log.entries.find(e => e.date === date);
+    const body = isPlainObject(existing?.body) ? existing.body : {};
+    const fill = Object.entries(fields).filter(([field, value]) => value != null && body[field] === undefined);
+    if (fill.length === 0) { bodySkipped++; continue; }
+    const entry = existing || entryFor(date);
+    entry.body = { ...body, ...Object.fromEntries(fill) };
+    bodyAdded++;
+  }
+  report.added.bodyEntries = bodyAdded; report.skipped.bodyEntries = bodySkipped;
+  return report;
+}
+
+/**
+ * Non-destructive import: add MortalLoom records missing from the local stores
+ * the normal MeatSpace readers consume. Alcohol, nicotine and body rows land in
+ * `daily-log.json`; the profile fills `config.json`. Legacy per-domain copies an
+ * older import wrote are left untouched.
+ */
 export async function importToPortOS() {
   // Use the {present, ok} result, not readStore()'s store-or-null: an evicted
   // store is present-but-unreadable, and reporting it as "file not found" is the
@@ -807,39 +895,90 @@ export async function importToPortOS() {
   if (!store) return { ok: false, reason: 'mortalloom-file-not-found' };
 
   const report = { added: {}, skipped: {} };
+  const dailyKeys = ['alcoholDrinks', 'nicotineEntries', 'bodyEntries'];
   const collectionFiles = [
-    ['alcoholDrinks', 'alcohol-drinks.json'],
-    ['nicotineEntries', 'nicotine-entries.json'],
-    ['bloodTests', 'blood-tests.json'],
-    ['bodyEntries', 'body-entries.json'],
-    ['epigeneticTests', 'epigenetic-tests.json'],
-    ['eyeExams', 'eyes.json'],
+    ['bloodTests', 'blood-tests.json', 'tests'],
+    ['epigeneticTests', 'epigenetic-tests.json', 'tests'],
+    ['eyeExams', 'eyes.json', 'exams'],
     ['saunaSessions', 'sauna-sessions.json'],
     ['habits', 'habits.json'],
-    ['healthMetrics', 'health-metrics.json']
+    ['healthMetrics', 'health-metrics.json', 'entries']
   ];
+  const assertRows = (rows, label) => {
+    if (!Array.isArray(rows) || rows.some(row => !isPlainObject(row)
+      || (row.date != null && typeof row.date !== 'string')
+      || (row.id != null && typeof row.id !== 'string'))) {
+      throw new Error(`MortalLoom import ${label} malformed`);
+    }
+  };
+  // Validate the whole input before even goals can be committed.
+  for (const key of ['goals', ...dailyKeys, ...collectionFiles.map(([key]) => key)]) {
+    if (store[key] !== undefined) assertRows(store[key], key);
+  }
+  for (const row of store.bloodTests || []) {
+    const reserved = ['id', 'date', 'createdAt', 'updatedAt', 'aliasIds', 'markers'];
+    if (row.markers != null && (!isPlainObject(row.markers)
+      || reserved.some(key => Object.hasOwn(row.markers, key)))) {
+      throw new Error('MortalLoom import blood markers malformed');
+    }
+  }
+  if ((store.healthMetrics || []).some(row => !row.date)) {
+    throw new Error('MortalLoom import health metric date malformed');
+  }
+  const profile = isPlainObject(store.profile) ? store.profile : null;
+  const hasDaily = dailyKeys.some(key => store[key]?.length);
+  const [dailyLog, meatspaceConfig] = await Promise.all([
+    import('./meatspaceDailyLog.js'),
+    import('./meatspace.js'),
+  ]);
+  const readDestination = async ({ localPath, fileName, arrayKey }) => {
+    const document = await readJSONFile(localPath, arrayKey ? { [arrayKey]: [] } : [], { strict: true });
+    if (arrayKey && !isPlainObject(document)) {
+      throw new Error(`MortalLoom import ${fileName} malformed`);
+    }
+    const rows = arrayKey ? document[arrayKey] : document;
+    assertRows(rows, fileName);
+    return { document, rows };
+  };
   // Preflight all destinations before the first write; one unreadable local file
-  // must not turn the import into an unreported partially applied batch.
-  const collections = await Promise.all(collectionFiles.map(async ([mlKey, fileName]) => {
+  // must not turn the import into an unreported partially applied batch. These
+  // snapshots are validation only: the queued write re-reads the current rows.
+  const collections = await Promise.all(collectionFiles.map(async ([mlKey, fileName, arrayKey]) => {
     const mlArr = store[mlKey] || [];
-    const localPath = dataPath('meatspace', fileName);
-    const local = mlArr.length ? await readJSONFile(localPath, [], { strict: true }) : [];
-    return { mlKey, mlArr, localPath, local };
+    const collection = { mlKey, mlArr, fileName, arrayKey, localPath: dataPath('meatspace', fileName) };
+    if (mlArr.length) await readDestination(collection);
+    return collection;
   }));
-  const mergeById = async (mlArr, localPath, pathDir, local) => {
-    const localArr = Array.isArray(local) ? local : [];
-    const seen = new Set(localArr.map(x => x.id).filter(Boolean));
+  if (hasDaily) await dailyLog.readLocalDailyLog({ strict: true, label: 'MortalLoom import' });
+  if (profile) await meatspaceConfig.readStoredConfig();
+  const mergeById = async (collection) => queueHealthWrite(async () => {
+    const { mlKey, mlArr, localPath, arrayKey } = collection;
+    const { document, rows } = await readDestination(collection);
+    const keysFor = row => arrayKey
+      ? (mlKey === 'healthMetrics' ? [row.date] : rowIdentityKeys(row))
+      : [row.id || canonicalStringify(row)];
+    const seen = new Set(rows.flatMap(keysFor));
     let added = 0, skipped = 0;
     for (const item of mlArr) {
-      if (item?.id && seen.has(item.id)) { skipped++; continue; }
-      localArr.push(item); added++;
+      // MortalLoom nests blood markers; the local reader consumes flat fields.
+      const { markers, ...rest } = item;
+      const row = mlKey === 'bloodTests' ? { ...(markers || {}), ...rest } : item;
+      const keys = keysFor(row);
+      if (keys.some(key => seen.has(key) || isTombstoned(document[ROW_TOMBSTONES_KEY], key, undefined, 'id'))) {
+        skipped++;
+        continue;
+      }
+      rows.push(row);
+      keys.forEach(key => seen.add(key));
+      added++;
     }
     if (added > 0) {
-      await ensureDir(pathDir);
-      await atomicWrite(localPath, localArr);
+      rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      await ensureDir(dataPath('meatspace'));
+      await atomicWrite(localPath, arrayKey ? { ...document, [arrayKey]: rows } : rows);
     }
     return { added, skipped };
-  };
+  });
 
   // Goals live in a wrapper object, not a bare array
   const { editGoals } = await import('./identity/store.js');
@@ -857,21 +996,48 @@ export async function importToPortOS() {
     report.skipped.goals = skipped;
   }, { localOnly: true });
 
-  for (const { mlKey, mlArr, localPath, local } of collections) {
+  for (const collection of collections) {
+    const { mlKey, mlArr } = collection;
     if (mlArr.length === 0) { report.added[mlKey] = 0; report.skipped[mlKey] = 0; continue; }
-    const { added, skipped } = await mergeById(mlArr, localPath, dataPath('meatspace'), local);
+    const { added, skipped } = await mergeById(collection);
     report.added[mlKey] = added; report.skipped[mlKey] = skipped;
   }
 
-  if (store.profile && typeof store.profile === 'object') {
-    const profilePath = dataPath('meatspace', 'profile.json');
-    if (!existsSync(profilePath)) {
-      await ensureDir(dataPath('meatspace'));
-      await atomicWrite(profilePath, store.profile);
-      report.added.profile = 1; report.skipped.profile = 0;
-    } else {
-      report.added.profile = 0; report.skipped.profile = 1;
-    }
+  if (hasDaily) {
+    const { computeStandardDrinks } = await import('./meatspaceAlcohol.js');
+    // Day totals are recomputed from the full retained item list, with the same
+    // per-item formulas the alcohol/nicotine services use on a local write.
+    const itemTotals = {
+      alcohol: item => computeStandardDrinks((item.oz || 0) * (item.count || 1), item.abv || 0),
+      nicotine: item => (item.mgPerUnit ?? 0) * (item.count ?? 1),
+    };
+    const computeTotals = (entry) => {
+      for (const { key, itemsField, totalField } of IMPORT_SUBSTANCES) {
+        const items = entry[key]?.[itemsField];
+        if (Array.isArray(items)) entry[key][totalField] = Math.round(items.reduce((sum, item) => sum + itemTotals[key](item), 0) * 100) / 100;
+      }
+    };
+    let merged;
+    // Merge under the daily-log queue against a fresh read, so local writes and
+    // overlapping imports committed after preflight are kept; a no-op retry skips the write.
+    await dailyLog.mutateDailyLog((log) => {
+      merged = mergeNativeDailyRecords(log, store, {
+        tombstones: log[dailyLog.DAILY_LOG_TOMBSTONES_KEY], computeTotals,
+      });
+      return Object.values(merged.added).some(n => n > 0) ? merged : null;
+    }, { label: 'MortalLoom import' });
+    Object.assign(report.added, merged.added);
+    Object.assign(report.skipped, merged.skipped);
+  } else {
+    for (const key of dailyKeys) { report.added[key] = 0; report.skipped[key] = 0; }
+  }
+
+  invalidateMeatspace(['overview', 'blood', 'epigenetic', 'eyes', 'body', 'alcohol']);
+
+  if (profile) {
+    const { filled } = await meatspaceConfig.fillConfigFromMortalLoomProfile(profile);
+    report.added.profile = filled.length > 0 ? 1 : 0;
+    report.skipped.profile = filled.length > 0 ? 0 : 1;
   }
 
   report.ok = true;

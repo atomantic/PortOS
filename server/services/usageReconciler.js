@@ -921,7 +921,18 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
  * @param {{ home?: string }} [opts] `home` overrides the transcript root (tests)
  * @returns {Promise<void>}
  */
-export async function recordCompletedRunUsage(metadata, output, { home = homedir(), providers = null } = {}) {
+export async function recordCompletedRunUsage(metadata, output, opts) {
+  // The synchronous estimate prefix in the body runs before its inner catch
+  // chain, so own the whole call here (#12978).
+  try {
+    await recordCompletedRunUsageUnguarded(metadata, output, opts);
+  } catch (err) {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ Failed to record usage: ${err.message}`);
+  }
+}
+
+async function recordCompletedRunUsageUnguarded(metadata, output, { home = homedir(), providers = null } = {}) {
   if (!metadata?.providerId) return;
 
   // OpenCode runs have no transcript store, but their captured stdout IS the

@@ -24,6 +24,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 
 const {
   listIds, listLiveIds, listTombstoneIdsBefore, writeRaw, _resetFableLoomBackend,
+  readRaw, withLoomMediaReferences,
 } = await import('./store.js');
 
 describe('fableLoom store facade — file backend id projections', () => {
@@ -37,6 +38,31 @@ describe('fableLoom store facade — file backend id projections', () => {
     await writeRaw('loom-live', { id: 'loom-live', name: 'Live' });
     await writeRaw('loom-dead', { id: 'loom-dead', name: 'Dead', deleted: true, deletedAt: '2026-01-01T00:00:00.000Z' });
     expect((await listIds()).sort()).toEqual(['loom-dead', 'loom-live']);
+  });
+
+  it('holds file-backend writes until media retirement settles, including failure', async () => {
+    const saved = { id: 'loom-live', videoHistoryId: 'saved-video' };
+    await writeRaw(saved.id, saved);
+    const ready = Promise.withResolvers();
+    const settle = Promise.withResolvers();
+    const retirement = withLoomMediaReferences(async owners => {
+      expect(owners).toEqual([saved]);
+      ready.resolve();
+      await settle.promise;
+      throw new Error('Retirement failed');
+    });
+    retirement.catch(ready.reject);
+    const failure = expect(retirement).rejects.toThrow('Retirement failed');
+    await ready.promise;
+    const changed = { ...saved, videoHistoryId: 'new-video' };
+    const writer = writeRaw(saved.id, changed);
+    try {
+      expect(await readRaw(saved.id)).toEqual(saved);
+    } finally {
+      settle.resolve();
+      await Promise.all([failure, writer]);
+    }
+    expect(await readRaw(saved.id)).toEqual(changed);
   });
 
   it('listLiveIds returns only non-deleted ids', async () => {

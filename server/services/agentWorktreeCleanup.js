@@ -13,10 +13,13 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
  */
 
 import { existsSync } from 'fs';
+import { isDeepStrictEqual } from 'node:util';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
-import { addTask, forceSpawnTask, getAgents, updateTask } from './cos.js';
+import { addTask, updateTask } from './cosTaskStore.js';
+import { forceSpawnTask } from './cos.js';
+import { getAgents } from './cosAgentLifecycle.js';
 import * as git from './git.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
@@ -27,6 +30,7 @@ import { execGit } from '../lib/execGit.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
@@ -130,7 +134,7 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
   const { verifyAgentRepoState } = await import('./agentRepoStateVerification.js');
   // `getAgentRecord`, not `getAgent` — the audit reads three worktree metadata
   // fields and has no use for the run's whole output.txt.
-  const { getAgentRecord } = await import('./cos.js');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgentRecord(agentId).catch(() => null);
   if (publicationHolds.has(agentId) || ['running', 'blocked'].includes(agentState?.metadata?.publicationValidation?.status)) return;
   await verifyAgentRepoState({
@@ -150,7 +154,7 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
  */
 async function auditMergeGate(agentId, originalTask) {
   const { auditClaimMergeGate } = await import('./mergeGateAudit.js');
-  const { getAgentRecord } = await import('./cos.js');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgentRecord(agentId).catch(() => null);
   if (!agentState) return;
   await auditClaimMergeGate({ agentId, task: originalTask, agentState });
@@ -191,7 +195,7 @@ export function resolveWorktreeDisposition({ isWorktree, success, prCreation, di
 }
 
 async function worktreeCleanupContext(agentId, options) {
-  const { getAgent } = await import('./cos.js');
+  const { getAgent } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgent(agentId).catch(() => null);
   const metadata = agentState?.metadata;
   if (!metadata?.isWorktree || metadata.isPersistentWorktree) return { isWorktree: false };
@@ -226,8 +230,9 @@ async function probeWorktreePr(context, success) {
       .catch(err => ({ ok: false, category: 'forge-unreachable', message: err.message }));
   }
   const { findPullRequestForBranch } = await import('./github.js');
-  const { env } = await git.resolveForgeForRepo(worktreePath).catch(() => ({ env: null }));
-  return findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: env || null })
+  const forge = await git.resolveForgeForRepo(worktreePath).catch(() => null);
+  if (!forge) return { status: 'unavailable' };
+  return findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: forge.env || null })
     .catch(() => ({ status: 'unavailable' }));
 }
 
@@ -317,7 +322,7 @@ async function openWorktreePullRequest(context) {
   emitLog('info', `🌳 Opening PR for worktree agent ${agentId} branch ${worktreeBranch}`, { agentId, branchName: worktreeBranch });
 
   if (context.originalTask?.metadata?.app === PORTOS_APP_ID) {
-    const { updateAgent } = await import('./cos.js');
+    const { updateAgent } = await import('./cosAgentLifecycle.js');
     try {
       publicationHolds.set(agentId, { status: 'running' });
       await updateAgent(agentId, { metadata: { publicationValidation: { status: 'running', startedAt: new Date().toISOString() } } });
@@ -979,7 +984,8 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   if (!agentId || !task?.id) return {};
   if (success && !isLegacyDeepAudit(task.metadata)) return {};
 
-  const { getTaskById, getAgentRecord } = await import('./cos.js');
+  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const persisted = await getTaskById(task.id).catch(err => {
     emitLog('warn', `Skipping resume pointer for task ${task.id} — status unreadable: ${err.message}`, { taskId: task.id, agentId });
     return null;
@@ -1105,9 +1111,17 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
  * whether an agent actually started or the task is still waiting (no slots,
  * daemon stopped, …) rather than guessing.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null, mergeGuardTarget = null }) {
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
+
+  if (mergeGuardTarget) {
+    const { validatePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
+    if (mergeGuardTarget.prUrl !== prUrl || mergeGuardTarget.branch !== prBranch
+      || mergeGuardTarget.sourceTaskId !== originalTask?.id || mergeGuardTarget.sourceAgentId !== originalAgentId) return { blocked: 'Merge recovery identity changed' };
+    const refused = await validatePendingMergeRecovery({ target: mergeGuardTarget, workspacePath: sourceWorkspace });
+    if (refused) return { blocked: refused };
+  }
 
   if (reviewTarget) {
     const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
@@ -1121,7 +1135,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // spawn budget on every CI/conflict handoff and recursively nests its title.
   // The id hint also recovers receipts written before the marker was retained.
   if (isTruthyMeta(originalTask?.metadata?.reviewLoopFollowUp) || originalTask?.id?.startsWith('sys-rl-')) {
-    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget);
+    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget, mergeGuardTarget);
   }
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
@@ -1151,10 +1165,39 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // GitHub reviewer usernames are forge-agnostic requested reviewers, so they are
   // NOT stripped on a non-GitHub forge — a username reviewer alone can drive the
   // loop even when copilot was dropped.
-  const effectiveUsernames = selfReview ? [] : normalizeReviewUsernames(usernames);
+  let effectiveUsernames = selfReview ? [] : normalizeReviewUsernames(usernames);
   // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
   // follow-up's `--review-with` marks the same reviewers optional.
-  const effectiveOptionalReviewers = selfReview ? [] : (normalizeOptionalReviewers(optionalReviewers) || []);
+  let effectiveOptionalReviewers = selfReview ? [] : (normalizeOptionalReviewers(optionalReviewers) || []);
+  // Target-forge identity preflight (#13115). A handle the forge verifiably does
+  // not have would fail every PR-side request. A REQUIRED one fails closed (the
+  // run must not merge without the review the operator demanded); an OPTIONAL one
+  // is left out of this run's emitted roster and recorded, never reported clean.
+  // Lookups that merely fail (auth/transport) are inconclusive and change nothing.
+  // The saved roster is never rewritten.
+  let reviewerIdentityFaults = [];
+  if (effectiveUsernames.length || effectiveOptionalReviewers.length) {
+    const { preflightReviewerIdentities } = await import('./reviewerIdentity.js');
+    const preflight = await preflightReviewerIdentities({
+      usernames: effectiveUsernames,
+      optionalReviewers: effectiveOptionalReviewers,
+      forge: isNonGithubForge ? 'gitlab' : 'github',
+      host: parsedPr?.host,
+    });
+    if (preflight.requiredMissing.length) {
+      const detail = preflight.requiredMissing.map((e) => `@${e.token}: ${e.reason}`).join('; ');
+      throw new ServerError(`Required reviewer not found on the target forge — ${detail}. Fix it in Settings → Code Reviewers.`, {
+        status: 409, code: 'REVIEWER_IDENTITY_NOT_FOUND', context: { reviewers: preflight.requiredMissing.map((e) => e.token) },
+      });
+    }
+    if (preflight.optionalMissing.length) {
+      const dropped = new Set(preflight.optionalMissing.map((e) => e.token.toLowerCase()));
+      reviewerIdentityFaults = preflight.optionalMissing.map(({ token, reason }) => ({ token, reason }));
+      effectiveUsernames = effectiveUsernames.filter((u) => !dropped.has(u.toLowerCase()));
+      effectiveOptionalReviewers = effectiveOptionalReviewers.filter((r) => !dropped.has(r.replace(/^@/, '').toLowerCase()));
+      console.log(`🚫 Optional reviewer(s) not found on the target forge, skipped for this run: ${reviewerIdentityFaults.map((f) => `@${f.token}`).join(', ')}`);
+    }
+  }
   // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim
   // so the follow-up's `--review-with` carries the same budgets. Entries for
   // reviewers that were stripped are inert (the emitter only marks tokens it
@@ -1264,6 +1307,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       simplify: false,
       // Marker flags consumed by the agent prompt + completion handler
       reviewLoopFollowUp: true,
+      ...(mergeGuardTarget ? { pendingMergeGuardTarget: mergeGuardTarget } : {}),
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}),
       prCompletion,
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
@@ -1291,6 +1335,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       // and gates the merge on (appended to `--review-with` as `@user`).
       reviewLoopReviewerUsernames: effectiveUsernames,
       reviewLoopOptionalReviewers: effectiveOptionalReviewers,
+      ...(reviewerIdentityFaults.length ? { reviewLoopReviewerIdentityFaults: reviewerIdentityFaults } : {}),
       // Per-reviewer `~max=<n>` caps, keyed by emitted token. Empty object = no
       // caps (leaves slashdo's per-loop built-in default in place); an absent key
       // is NOT `0`, which slashdo reads as "loop until clean".
@@ -1323,6 +1368,13 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // contract on cos.js's `tasks:changed` listener).
   const immediate = dispatch === 'immediate';
   const persisted = await addTask(followUpTask, 'internal', { raw: true, suppressDequeue: immediate });
+
+  if (mergeGuardTarget) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const saved = persisted?.id && await getTaskById(persisted.id).catch(() => null);
+    if (!saved || !['pending', 'in_progress'].includes(saved.status)
+      || !isDeepStrictEqual(saved.metadata?.pendingMergeGuardTarget ?? saved.metadata?.pendingMergeGuardLaunchEvidence, mergeGuardTarget)) return { deferred: true };
+  }
 
   // A duplicate rejection persisted NOTHING under `followUpTaskId` — an equivalent
   // follow-up is already queued under a different id. Return THAT record so a
@@ -1357,8 +1409,8 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   return { ...followUpTask, dispatch: { started: true, reason: null } };
 }
 
-async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null) {
-  const { getTaskById } = await import('./cos.js');
+async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null, mergeGuardTarget = null) {
+  const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(taskId);
   if (!task || task.taskType !== 'internal' || !isTruthyMeta(task.metadata?.reviewLoopFollowUp)
     || task.metadata.reviewLoopPRUrl !== prUrl || task.metadata.reviewLoopPRBranch !== prBranch) {
@@ -1388,6 +1440,7 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget
   const result = await updateTask(taskId, {
     status: 'pending',
     metadata: { reviewLoopRecoveryReason: 'The handed-off PR needs fresh validation, review or conflict resolution',
+      ...(mergeGuardTarget ? { pendingMergeGuardTarget: mergeGuardTarget } : {}),
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}) },
   }, 'internal', {
     expectedStatus: 'completed',

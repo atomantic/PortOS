@@ -43,6 +43,7 @@ import {
   segmentVolumeAt,
   resolvePlaybackLanes,
   historySourceDuration,
+  CLIP_CATALOG_QUERY,
   bedAssetId,
   clampTrim,
   fitFadePatch,
@@ -209,7 +210,7 @@ function TimelineProjectEditor({ projectId }) {
         if (isCurrent()) setError(err.message);
         return null;
       }),
-      api.listVideoHistory({ silent: true }).catch(() => null),
+      api.listVideoHistory({ silent: true, query: CLIP_CATALOG_QUERY }).catch(() => null),
       api.listMusicLibrary({ silent: true }).catch(() => null),
     ]);
     if (!isCurrent()) return;
@@ -262,7 +263,7 @@ function TimelineProjectEditor({ projectId }) {
     const generation = ++catalogGenerationRef.current[kind];
     setCatalogStatus((prev) => ({ ...prev, [kind]: { ...prev[kind], pending: true } }));
     const fetchCatalog = kind === 'clips' ? api.listVideoHistory : api.listMusicLibrary;
-    const result = await fetchCatalog({ silent: true }).catch(() => null);
+    const result = await fetchCatalog(kind === 'clips' ? { silent: true, query: CLIP_CATALOG_QUERY } : { silent: true }).catch(() => null);
     if (!activeRef.current || catalogGenerationRef.current[kind] !== generation) return;
     const ok = kind === 'clips' ? Array.isArray(result) : !!result;
     if (ok) {

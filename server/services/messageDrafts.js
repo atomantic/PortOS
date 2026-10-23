@@ -1,5 +1,6 @@
 
 import { join } from 'path';
+import { isDeepStrictEqual } from 'util';
 import { z } from 'zod';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
@@ -130,10 +131,15 @@ export async function updateDraft(id, updates) {
     if (['sending', 'delivery_unknown', 'sent'].includes(drafts[idx].status) || ['sending', 'delivery_unknown', 'sent', 'failed'].includes(updates.status)) {
       throw new ServerError('Draft cannot be edited in its current send state', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
+    // Approval is send intent for the content the approver saw (#13055): an
+    // edit to who or what gets sent drops it unless the same update re-approves.
+    const contentChanged = ['to', 'cc', 'subject', 'body']
+      .some((key) => updates[key] !== undefined && !isDeepStrictEqual(updates[key], drafts[idx][key]));
     const allowed = ['to', 'cc', 'subject', 'body', 'status'];
     for (const key of allowed) {
       if (updates[key] !== undefined) drafts[idx][key] = updates[key];
     }
+    if (contentChanged && drafts[idx].status === 'approved' && updates.status !== 'approved') drafts[idx].status = 'draft';
     drafts[idx].updatedAt = new Date().toISOString();
     await saveDrafts(drafts);
     return drafts[idx];

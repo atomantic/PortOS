@@ -54,6 +54,19 @@ export function repoApiPath(url, host) {
   return /^repos(?:\/[A-Za-z0-9_.-]{1,100}){3,5}$/.test(path) && !path.split('/').includes('..') ? path : null;
 }
 
+export const GHSA_RE = /^GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}$/;
+
+/**
+ * The GHSA id of a global security advisory thread (one that names no single
+ * repository), from its API url on the account's own host; null otherwise.
+ */
+export function advisoryIdFromUrl(url, host) {
+  const prefix = `${apiRootFor(host)}advisories/`;
+  if (typeof url !== 'string' || !url.startsWith(prefix)) return null;
+  const id = url.slice(prefix.length);
+  return GHSA_RE.test(id) ? id : null;
+}
+
 const SUBJECT_PATHS = { issues: 'issues', pulls: 'pull', commits: 'commit', discussions: 'discussions' };
 
 /**
@@ -61,7 +74,9 @@ const SUBJECT_PATHS = { issues: 'issues', pulls: 'pull', commits: 'commit', disc
  * when GitHub gave an API url we recognize, else the repository page. Any url
  * that would leave `host` is dropped rather than shown.
  */
-function notificationHtmlUrl({ subjectApiUrl, repoFullName }, host) {
+export function notificationHtmlUrl({ subjectApiUrl, repoFullName }, host) {
+  const advisory = advisoryIdFromUrl(subjectApiUrl, host);
+  if (advisory) return `https://${webHostFor(host)}/advisories/${advisory}`;
   const [owner, repo] = String(repoFullName || '').split('/');
   if (!REPO_PART_RE.test(owner || '') || !REPO_PART_RE.test(repo || '')) return '';
   const repoUrl = `https://${webHostFor(host)}/${owner}/${repo}`;
@@ -71,6 +86,13 @@ function notificationHtmlUrl({ subjectApiUrl, repoFullName }, host) {
   if (rest.length || !/^[A-Za-z0-9]{1,64}$/.test(id || '')) return repoUrl;
   if (kind === 'releases') return `${repoUrl}/releases`;
   return SUBJECT_PATHS[kind] ? `${repoUrl}/${SUBJECT_PATHS[kind]}/${id}` : repoUrl;
+}
+
+/** The page of a workflow run on the account's own host, or null for a malformed repo or id. */
+export function workflowRunHtmlUrl(repoFullName, runId, host) {
+  const [owner, repo] = String(repoFullName || '').split('/');
+  if (!REPO_PART_RE.test(owner || '') || !REPO_PART_RE.test(repo || '') || !Number.isInteger(runId) || runId <= 0) return null;
+  return `https://${webHostFor(host)}/${owner}/${repo}/actions/runs/${runId}`;
 }
 
 const rawThreadSchema = z.object({
@@ -84,11 +106,13 @@ const rawThreadSchema = z.object({
     url: z.string().max(2000).nullable().optional(),
     latest_comment_url: z.string().max(2000).nullable().optional(),
   }).passthrough(),
+  // A global security advisory ("affects at least one of your repositories")
+  // may come without a single repository.
   repository: z.object({
     full_name: z.string().max(201),
     private: z.boolean().optional(),
     owner: z.object({ login: z.string().max(100) }).passthrough(),
-  }).passthrough(),
+  }).passthrough().nullable().optional(),
 }).passthrough();
 
 /** A stored-shape record from one raw API thread, or null when malformed. */
@@ -98,9 +122,9 @@ export function toNotificationRecord(raw, host) {
   const { id, unread, reason, updated_at: updatedAt, subject, repository } = parsed.data;
   const record = {
     threadId: id,
-    repoFullName: repository.full_name,
-    repoOwner: repository.owner.login,
-    repoPrivate: repository.private === true,
+    repoFullName: repository?.full_name || '',
+    repoOwner: repository?.owner.login || '',
+    repoPrivate: repository?.private === true,
     reason,
     subjectType: subject.type,
     subjectTitle: Array.from(subject.title).slice(0, MAX_TITLE_CHARS).join(''),

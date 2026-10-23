@@ -36,6 +36,20 @@ describe('Video Gen render ownership', () => {
     expect(stream.closed).toBe(true);
   });
 
+  it('a refused cancel keeps the stream attached and does not report Cancelled', async () => {
+    state.activeJob = { jobId: 'job-a', status: 'running', params: {} };
+    cancelVideoGen.mockRejectedValueOnce(Object.assign(new Error('Job already running'), { code: 'ALREADY_TERMINAL' }));
+    await renderVideoGenPage();
+    await waitFor(() => expect(lastEventSource()?.url).toBe('/api/video-gen/job-a/events'));
+    const stream = lastEventSource();
+
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /^cancel$/i })); });
+
+    expect(cancelVideoGen).toHaveBeenCalledWith('job-a');
+    expect(stream.closed).toBe(false);
+    expect(screen.queryByText('Cancelled')).toBeNull();
+  });
+
   it('a POST acknowledged after unmount opens no stream, and an unmounted active-job read is ignored', async () => {
     let acknowledge;
     state.generateVideo.mockReturnValue(new Promise((resolve) => { acknowledge = resolve; }));

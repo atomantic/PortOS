@@ -64,9 +64,9 @@ vi.mock('./cosState.js', async () => ({
 
 vi.mock('./cos.js', () => ({
   isRunning: vi.fn(() => false),
+}));
+vi.mock('./cosAgentLifecycle.js', () => ({
   getAgentRecord: vi.fn(),
-  getTaskById: (...args) => getTaskById(...args),
-  updateTask: (...args) => updateTask(...args),
 }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -277,6 +277,17 @@ describe('cosTaskStore.getUserTasks / getCosTasks', () => {
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0].description).toBe('do a thing');
     expect(result.tasks[0].priority).toBe('HIGH');
+  });
+
+  it('retains an inbox account binding through normal task intake and a fresh persisted read', async () => {
+    const binding = { accountId: 'inbox-b', host: 'github.com', login: 'inbox-user', origin: 'user' };
+    const created = await addTask({ description: 'Resolve an example inbox thread', metadata: {
+      githubNotificationAccount: binding,
+      githubNotificationResolve: { accountId: binding.accountId, host: binding.host, threadId: '123' },
+    } }, 'user');
+    expect((await stored('user')).find(task => task.id === created.id).metadata.githubNotificationAccount).toEqual(binding);
+    __resetTaskCache();
+    expect((await getTaskById(created.id)).metadata.githubNotificationAccount).toEqual(binding);
   });
 
   it('surfaces autoApproved + awaitingApproval buckets for internal tasks', async () => {

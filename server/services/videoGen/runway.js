@@ -25,6 +25,8 @@ import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, buildRunwayVideoRequest } from '../../lib/runwayVideoModels.js';
+import { getRunwaySpecialVideoModel, buildRunwaySpecialVideoRequest } from '../../lib/runwaySpecialVideoModels.js';
+import { validateRunwayVideoInput } from './runwayVideoInputs.js';
 import { probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
@@ -34,7 +36,7 @@ import { mutateVideoHistory } from './history.js';
 import { getSettings } from '../settings.js';
 import { frameDataUriAtAspect } from './falFrameAspect.js';
 import {
-  awaitRunwayTask, cancelRunwayTask, createRunwayTaskEntry, resolveRunwayApiKey, submitRunwayTask,
+  awaitRunwayTask, cancelRunwayTask, createRunwayTaskEntry, resolveRunwayApiKey, submitRunwayTask, uploadRunwayVideo,
 } from '../runwayApi.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
@@ -74,7 +76,7 @@ export const cancel = (jobId) => {
   if (!entry) return false;
   entry.aborted = true;
   entry.controller.abort();
-  cancelRunwayTask(entry);
+  void cancelRunwayTask(entry);
   return true;
 };
 
@@ -91,11 +93,14 @@ export const cancelAll = () => {
  * the plan and the record of the text Runway receives (#11317); the Video Gen
  * form's preview calls it with the same inputs.
  */
-export function runwayVideoSentPrompt({ hasImage = false, hasEndImage = false, promptAdditions = [], ...spec }) {
+export function runwayVideoSentPrompt({ hasImage = false, hasEndImage = false, hasVideo = false, hasCharacterVideo = false, promptAdditions = [], ...spec }) {
   let planned;
   try {
-    planned = buildRunwayVideoRequest({
+    const build = getRunwaySpecialVideoModel(spec.modelId) ? buildRunwaySpecialVideoRequest : buildRunwayVideoRequest;
+    planned = build({
       ...spec,
+      videoUri: hasVideo ? 'pending:video' : null,
+      characterVideoUri: hasCharacterVideo ? 'pending:character-video' : null,
       imageUri: hasImage ? 'pending:image' : null,
       endImageUri: hasEndImage ? 'pending:end-image' : null,
     });
@@ -141,6 +146,7 @@ async function generateVideoPrepared({
   sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
   uploadedTempPath = null, uploadedTempPaths = [], audioFilePath = null,
   resolution = null, seed, frameAspect = null, shotInstruction = null, promptAdditions = [],
+  videoMode, runwayVideoPath = null, runwayCharacterVideoPath = null, targetAspectRatio, ratio, bodyControl, expressionIntensity,
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -148,6 +154,8 @@ async function generateVideoPrepared({
     throw new ServerError('Runway renders cutaways only; it takes no source audio', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const modelId = requestedModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL;
+  const special = getRunwaySpecialVideoModel(modelId);
+  if (!special && (runwayVideoPath || runwayCharacterVideoPath)) throw new ServerError('This Runway model does not take video inputs.', { status: 400, code: 'VALIDATION_ERROR' });
   const effectiveSettings = settings || (providedApiKey ? null : await getSettings().catch(() => null));
   // Re-resolved from live settings, never threaded through persisted job params.
   const apiKey = providedApiKey || resolveRunwayApiKey(effectiveSettings);
@@ -156,10 +164,11 @@ async function generateVideoPrepared({
   }
   const requestSpec = {
     modelId, prompt, negativePrompt, seconds: duration, aspectRatio: frameAspect || aspectRatio, width, height, resolution,
+    videoMode, targetAspectRatio, ratio, bodyControl, expressionIntensity,
     ...(Number.isInteger(seed) ? { seed } : {}),
   };
   const { planned, record: sentRecord } = runwayVideoSentPrompt({
-    ...requestSpec, promptAdditions, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath,
+    ...requestSpec, promptAdditions, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasVideo: !!runwayVideoPath, hasCharacterVideo: !!runwayCharacterVideoPath,
   });
 
   const jobId = providedJobId || randomUUID();
@@ -178,14 +187,14 @@ async function generateVideoPrepared({
     ...sentRecord,
     filename,
     createdAt: new Date().toISOString(),
-    mode: sourceImagePath ? 'image' : 'text',
+    mode: special?.mode || (sourceImagePath ? 'image' : 'text'),
     ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
   const costNote = meta.estimatedCostUsd != null ? ` ~$${meta.estimatedCostUsd.toFixed(2)}` : ' cost unknown';
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] runway (${planned.model.id}${meta.resolution ? ` ${meta.resolution}` : ''}${costNote}): ${(prompt || '(no prompt)').slice(0, 60)}…`);
+  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] runway (${planned.model.id}${meta.resolution ? ` ${meta.resolution}` : ''}${costNote})`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to Runway…');
@@ -193,6 +202,7 @@ async function generateVideoPrepared({
   runRunwayVideo(job, jobId, {
     apiKey, requestSpec, sourceImagePath, lastImagePath, outputPath, filename, meta,
     uploadedTempPath, uploadedTempPaths, frameAspect,
+    runwayVideoPath, runwayCharacterVideoPath,
   }).catch((err) => {
     console.error(`❌ Runway video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
@@ -221,6 +231,7 @@ async function downloadRunwayOutput(url, signal) {
 async function runRunwayVideo(job, jobId, {
   apiKey, requestSpec, sourceImagePath, lastImagePath, outputPath, filename, meta,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null,
+  runwayVideoPath = null, runwayCharacterVideoPath = null,
 }) {
   const entry = createRunwayTaskEntry(apiKey);
   entry.aborted = preparations.take(jobId);
@@ -246,6 +257,14 @@ async function runRunwayVideo(job, jobId, {
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + RUNWAY_RENDER_TIMEOUT_MS;
   try {
+    if (entry.aborted) return finishFailure('Canceled');
+    const special = getRunwaySpecialVideoModel(requestSpec.modelId);
+    if (special) {
+      const geometry = await validateRunwayVideoInput(runwayVideoPath, special);
+      if (runwayCharacterVideoPath) await validateRunwayVideoInput(runwayCharacterVideoPath, special, { character: true });
+      meta.duration = geometry.durationSec;
+      job.duration = geometry.durationSec;
+    }
     const frame = sourceImagePath ? await runwayFrameDataUri(sourceImagePath, frameAspect) : null;
     const endFrame = lastImagePath ? await runwayFrameDataUri(lastImagePath, frameAspect) : null;
     for (const [label, fit] of [['start', frame], ['end', endFrame]]) {
@@ -255,9 +274,12 @@ async function runRunwayVideo(job, jobId, {
     if (frame?.conformed || endFrame?.conformed) {
       meta.frameConformed = { aspect: frameAspect, ...(frame?.conformed ? { start: frame.conformed } : {}), ...(endFrame?.conformed ? { end: endFrame.conformed } : {}) };
     }
-    const { body, endpoint } = buildRunwayVideoRequest({ ...requestSpec, imageUri: frame?.dataUri ?? null, endImageUri: endFrame?.dataUri ?? null });
+    const videoUri = runwayVideoPath ? await uploadRunwayVideo({ apiKey, filePath: runwayVideoPath, signal: entry.controller.signal }) : null;
+    const characterVideoUri = runwayCharacterVideoPath ? await uploadRunwayVideo({ apiKey, filePath: runwayCharacterVideoPath, signal: entry.controller.signal }) : null;
+    const build = special ? buildRunwaySpecialVideoRequest : buildRunwayVideoRequest;
+    const { body, endpoint } = build({ ...requestSpec, videoUri, characterVideoUri, imageUri: frame?.dataUri ?? null, endImageUri: endFrame?.dataUri ?? null });
     if (entry.aborted) return finishFailure('Canceled');
-    entry.taskId = await submitRunwayTask({ apiKey, endpoint, body });
+    entry.taskId = await submitRunwayTask({ apiKey, endpoint, body, signal: entry.controller.signal });
 
     const polled = await awaitRunwayTask({
       entry, apiKey, deadline, timeoutMs: RUNWAY_RENDER_TIMEOUT_MS,

@@ -7,7 +7,9 @@ vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: async () => ({ s
 vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => [], getRunningJob: () => null }));
 vi.mock('../services/imageTo3d/models.js', () => ({ listGeneratingModelSummaries: async () => [] }));
 vi.mock('../services/ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: deps.loadedError }));
-vi.mock('../services/cos.js', () => ({ getPendingTaskIds: async () => [], getAgents: async () => [] }));
+vi.mock('../services/cos.js', () => ({}));
+vi.mock('../services/cosTaskStore.js', () => ({ getPendingTaskIds: async () => [] }));
+vi.mock('../services/cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
 vi.mock('../services/cosState.js', () => ({ readPersistentMindStateForSafetyCheck: async () => ({ trusted: true }) }));
 vi.mock('../services/appOperations.js', () => ({ listActiveAppOperations: () => [] }));
 vi.mock('../services/updateChecker.js', () => ({ isUpdateInProgress: () => false }));

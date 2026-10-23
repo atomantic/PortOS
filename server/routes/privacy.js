@@ -366,8 +366,9 @@ router.post('/scan', asyncHandler(async (req, res) => {
 // ─── Opt-out automation engine (issue #2145) ───────────────────────────────
 
 // User-triggered opt-out pass: submit found/indirect cases via the chosen lane
-// (web-form / email), poll verifications. Submission autonomy (auto-send /
-// auto-submit) is read from settings.privacy.recheck — both default OFF.
+// (web-form / email), poll verifications. Email drafts are prepared (and
+// pre-approved when settings.privacy.recheck.autoApproveOptOutEmails is on,
+// default OFF) for the human to send; web forms are queued as human tasks.
 router.post('/optout', asyncHandler(async (req, res) => {
   const { runVerification, subjectId } = validateRequest(privacyOptOutPassSchema, req.body ?? {});
   res.json(await runOptOutPass({

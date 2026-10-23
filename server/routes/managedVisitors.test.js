@@ -19,7 +19,8 @@ vi.mock('../services/managedVisitors.js', async () => {
     authenticateManagedVisitorRequest: req => actual.authenticateManagedVisitorRequest(req, shared.broker) };
 });
 import { authGate } from '../services/authGate.js';
-import { createManagedVisitorRoutes, createManagedVisitorAdminRoutes } from './managedVisitors.js';
+import { createManagedVisitorRoutes } from './managedVisitors.js';
+import { createManagedVisitorAdminRoutes } from './managedVisitorAdmin.js';
 let directory, app, clock, host, credentials, count, delayed;
 const appId = 'managed-app', individualId = 'individual-a', individualSessionId = 'runtime-a', worldId = 'quiet-garden';
 const admission = { individualId, individualSessionId, worldId, body: 'fly-v1', ttlMs: 30000 };

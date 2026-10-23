@@ -12,7 +12,8 @@
  * `projectsById` is a `Map<projectId, project>` the parent page fetches once (the
  * CD list route returns full, non-slim payloads, so previews compute with no
  * extra per-card fetch). A run whose project hasn't loaded yet (or was pruned)
- * degrades to a status-only card — the "View output" link still works.
+ * degrades to a state-only card ("Render removed" once loaded) with no "View output"
+ * link; removed renders collapse into one expandable row below the live cards.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -22,11 +23,29 @@ import ProjectPreview from '../creative-director/ProjectPreview.jsx';
 import { previewAspectClass } from '../../lib/creativeDirectorPreview.js';
 import { timeAgo } from '../../utils/formatters';
 
-const STATUS_CLASS = {
-  started: 'text-port-accent',
+// Launch status (`run.status`) is written once when the commission fires and never
+// advances, so only a skipped/failed launch is worth printing. The render's real
+// state comes from the Creative Director project.
+const LAUNCH_PROBLEM_CLASS = {
   skipped: 'text-port-warning',
   failed: 'text-port-error',
 };
+
+const PROJECT_STATE = {
+  complete: ['Complete', 'text-port-success'],
+  rendering: ['Rendering', 'text-port-accent'],
+  stitching: ['Stitching', 'text-port-accent'],
+  planning: ['Planning', 'text-port-accent'],
+  draft: ['Draft', 'text-gray-400'],
+  paused: ['Paused', 'text-port-warning'],
+  failed: ['Failed', 'text-port-error'],
+};
+
+function renderState(run, project, projectsLoading) {
+  if (project) return PROJECT_STATE[project.status] || (project.status ? [project.status, 'text-gray-400'] : null);
+  if (!run.projectId) return null;
+  return projectsLoading ? ['Loading…', 'text-gray-500'] : ['Render removed', 'text-gray-500'];
+}
 
 const TASTE_FEEDBACK_OPTIONS = [
   ['more-familiar', 'More familiar'],
@@ -75,87 +94,120 @@ export default function RenderHistory({ runs, feedback, projectsById, projectsLo
     );
   }
 
+  const gridClass = 'grid grid-cols-1 sm:grid-cols-2 gap-3';
+  const isRemoved = (r) => !!r.projectId && !projectsLoading && !projectsById.get(r.projectId);
+  const liveRuns = orderedRuns.filter((r) => !isRemoved(r));
+  const removedRuns = orderedRuns.filter(isRemoved);
+  const focusIsRemoved = removedRuns.some((r) => r.id === focusRunId);
+  const renderCard = (r) => (
+    <RunCard
+      key={r.id}
+      run={r}
+      project={r.projectId ? projectsById.get(r.projectId) : null}
+      focused={r.id === focusRunId}
+      projectsLoading={projectsLoading}
+      current={feedbackByRun[r.id]}
+      onRate={onRate}
+    />
+  );
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {orderedRuns.map((r) => {
-        const project = r.projectId ? projectsById.get(r.projectId) : null;
-        const focused = r.id === focusRunId;
-        return (
-          <div
-            key={r.id}
-            id={`commission-run-${r.id}`}
-            className={`bg-port-card border rounded-lg overflow-hidden flex flex-col ${focused ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'}`}
-          >
-            {/* Produced-media preview (or a status-only placeholder). Width-capped,
-                not height-capped: ProjectPreview's box derives its height from an
-                aspect-ratio class, so clamping height with overflow-hidden crops
-                it — and pushes ProjectPreview's absolutely-centered play button
-                and bottom label below the visible area for any non-16:9 ratio.
-                Constraining width instead lets aspect-ratio derive a height that
-                already fits, matching previewMaxWidthClass's documented approach
-                in lib/creativeDirectorPreview.js. */}
-            <div className="max-w-[220px] mx-auto">
-              {project ? (
-                <ProjectPreview project={project} to={`/creative-director/${encodeURIComponent(r.projectId)}`} />
-              ) : (
-                // `project` is null in this branch, so the placeholder falls back to
-                // the default 16:9 box. Distinguish the transient load window (project
-                // list still fetching) from a genuinely pruned/missing render — a real
-                // render must not flash "unavailable" before the fetch resolves.
-                <div className={`${previewAspectClass()} bg-port-bg flex flex-col items-center justify-center gap-1 text-gray-600 text-xs`}>
-                  <Film className="w-4 h-4 opacity-50" aria-hidden="true" />
-                  <span>{r.projectId ? (projectsLoading ? 'loading…' : 'render unavailable') : 'no render'}</span>
-                </div>
-              )}
-            </div>
+    <div className="space-y-3">
+      {liveRuns.length > 0 && <div className={gridClass}>{liveRuns.map(renderCard)}</div>}
+      {removedRuns.length > 0 && (
+        <details open={focusIsRemoved || undefined} className="border border-port-border rounded-lg bg-port-card/50">
+          <summary className="cursor-pointer px-3 py-2 text-sm text-gray-400">
+            {removedRuns.length === 1
+              ? '1 older render is no longer available'
+              : `${removedRuns.length} older renders are no longer available`}
+          </summary>
+          <div className={`${gridClass} p-3 pt-1`}>{removedRuns.map(renderCard)}</div>
+        </details>
+      )}
+    </div>
+  );
+}
 
-            <div className="p-3 flex flex-col gap-2 flex-1">
-              <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-gray-400 flex items-center gap-1.5">
-                  {timeAgo(r.ranAt)}
-                  {/* Runs persisted before the trigger field exist only from cron ticks — no badge. */}
-                  {r.trigger === 'manual' && (
-                    <span className="text-[10px] uppercase px-1 py-0.5 rounded bg-port-accent/20 text-port-accent">manual</span>
-                  )}
-                </span>
-                <span className={STATUS_CLASS[r.status] || 'text-gray-400'}>
-                  {r.status}{r.reason ? ` · ${r.reason}` : ''}{r.error ? ` · ${r.error}` : ''}
-                </span>
-              </div>
-
-              {r.projectId && (
-                <Link
-                  to={`/creative-director/${encodeURIComponent(r.projectId)}`}
-                  className="text-port-accent hover:text-blue-400 inline-flex items-center gap-1 text-xs"
-                >
-                  <ExternalLink className="w-3 h-3" /> View output
-                </Link>
-              )}
-
-              {r.tasteRecipe && (
-                <TasteRecipeSummary recipe={r.tasteRecipe} output={r.musicOutput || project?.musicBed} />
-              )}
-
-              {/* Rate/annotate — pushed to the bottom of the card so cards align.
-                  Keyed on the persisted reaction's timestamp so an externally-changed
-                  note (a federated rating from another machine, arriving via a refetch)
-                  remounts the control and re-seeds its local note, instead of leaving a
-                  stale empty field that a Save could clobber the peer's note with. */}
-              {r.projectId && onRate && (
-                <div className="mt-auto pt-1">
-                  <RunFeedback
-                    key={feedbackByRun[r.id]?.at || 'unrated'}
-                    runId={r.id}
-                    current={feedbackByRun[r.id]}
-                    onRate={onRate}
-                    tasteAware={!!r.tasteRecipe}
-                  />
-                </div>
-              )}
-            </div>
+function RunCard({ run: r, project, focused, projectsLoading, current, onRate }) {
+  const state = renderState(r, project, projectsLoading);
+  const launchProblem = LAUNCH_PROBLEM_CLASS[r.status];
+  return (
+    <div
+      id={`commission-run-${r.id}`}
+      className={`bg-port-card border rounded-lg overflow-hidden flex flex-col ${focused ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'}`}
+    >
+      {/* Produced-media preview (or a status-only placeholder). Width-capped,
+          not height-capped: ProjectPreview's box derives its height from an
+          aspect-ratio class, so clamping height with overflow-hidden crops
+          it — and pushes ProjectPreview's absolutely-centered play button
+          and bottom label below the visible area for any non-16:9 ratio.
+          Constraining width instead lets aspect-ratio derive a height that
+          already fits, matching previewMaxWidthClass's documented approach
+          in lib/creativeDirectorPreview.js. */}
+      <div className="max-w-[220px] mx-auto">
+        {project ? (
+          <ProjectPreview project={project} to={`/creative-director/${encodeURIComponent(r.projectId)}`} />
+        ) : (
+          // `project` is null in this branch, so the placeholder falls back to
+          // the default 16:9 box. Distinguish the transient load window (project
+          // list still fetching) from a genuinely pruned/missing render — a real
+          // render must not flash "unavailable" before the fetch resolves.
+          <div className={`${previewAspectClass()} bg-port-bg flex flex-col items-center justify-center gap-1 text-gray-600 text-xs`}>
+            <Film className="w-4 h-4 opacity-50" aria-hidden="true" />
+            <span>{r.projectId ? (projectsLoading ? 'loading…' : 'no preview') : 'no render'}</span>
           </div>
-        );
-      })}
+        )}
+      </div>
+
+      <div className="p-3 flex flex-col gap-2 flex-1">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-gray-400 flex items-center gap-1.5">
+            {timeAgo(r.ranAt)}
+            {/* Runs persisted before the trigger field exist only from cron ticks — no badge. */}
+            {r.trigger === 'manual' && (
+              <span className="text-[10px] uppercase px-1 py-0.5 rounded bg-port-accent/20 text-port-accent">manual</span>
+            )}
+          </span>
+          <span className="text-right">
+            {state && <span className={state[1]}>{state[0]}</span>}
+            {launchProblem && (
+              <span className={launchProblem}>
+                {state ? ' · ' : ''}{r.status}{r.reason ? ` · ${r.reason}` : ''}{r.error ? ` · ${r.error}` : ''}
+              </span>
+            )}
+          </span>
+        </div>
+
+        {project && (
+          <Link
+            to={`/creative-director/${encodeURIComponent(r.projectId)}`}
+            className="text-port-accent hover:text-blue-400 inline-flex items-center gap-1 text-xs"
+          >
+            <ExternalLink className="w-3 h-3" /> View output
+          </Link>
+        )}
+
+        {r.tasteRecipe && (
+          <TasteRecipeSummary recipe={r.tasteRecipe} output={r.musicOutput || project?.musicBed} />
+        )}
+
+        {/* Rate/annotate — pushed to the bottom of the card so cards align.
+            Keyed on the persisted reaction's timestamp so an externally-changed
+            note (a federated rating from another machine, arriving via a refetch)
+            remounts the control and re-seeds its local note, instead of leaving a
+            stale empty field that a Save could clobber the peer's note with. */}
+        {r.projectId && onRate && (
+          <div className="mt-auto pt-1">
+            <RunFeedback
+              key={current?.at || 'unrated'}
+              runId={r.id}
+              current={current}
+              onRate={onRate}
+              tasteAware={!!r.tasteRecipe}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

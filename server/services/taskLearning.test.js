@@ -11,7 +11,8 @@ vi.mock('fs', () => ({
 }));
 
 // Mock cos.js to avoid circular dependency
-vi.mock('./cos.js', () => ({
+vi.mock('./cos.js', () => ({}));
+vi.mock('./cosEvents.js', () => ({
   cosEvents: { on: vi.fn(), emit: vi.fn() },
   emitLog: vi.fn()
 }));

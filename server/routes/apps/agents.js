@@ -5,7 +5,8 @@
  */
 
 import { Router } from 'express';
-import * as cos from '../../services/cos.js';
+import { getAgentDates, getAgentsByDate } from '../../services/cosAgentIndex.js';
+import { getAgents } from '../../services/cosAgentLifecycle.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
 import { toAgentListItems } from '../../lib/cosAgentListProjection.js';
 import { parsePagination } from '../../lib/validation.js';
@@ -18,19 +19,19 @@ router.get('/:id/agents', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
   const { limit } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
 
-  const runningAgents = await cos.getAgents().catch(() => []);
+  const runningAgents = await getAgents().catch(() => []);
   const appRunning = runningAgents.filter(a =>
     a.metadata?.app === app.id || a.metadata?.taskApp === app.id
   );
 
   // Scan last 14 days of agent history for this app
-  const dates = await cos.getAgentDates().catch(() => []);
+  const dates = await getAgentDates().catch(() => []);
   const recentDates = dates.slice(0, 14);
   const historyAgents = [];
 
   for (const { date } of recentDates) {
     if (historyAgents.length >= limit) break;
-    const dayAgents = await cos.getAgentsByDate(date).catch(() => []);
+    const dayAgents = await getAgentsByDate(date).catch(() => []);
     const appAgents = dayAgents.filter(a =>
       a.metadata?.app === app.id || a.metadata?.taskApp === app.id
     );

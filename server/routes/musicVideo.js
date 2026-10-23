@@ -94,7 +94,7 @@ import {
   musicVideoDocumentCandidateSchema,
   musicVideoMixedMediaRegenerateSchema,
   isPaginationRequested,
-  paginateArray,
+  parsePagination,
 } from '../lib/validation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -104,6 +104,7 @@ import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipe
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import {
   listProjects,
+  listProjectPage,
   getProject,
   createProject,
   cloneProject,
@@ -267,21 +268,20 @@ async function presentProjectForRead(project) {
 
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(musicVideoProjectListQuerySchema, req.query);
-  const projects = await Promise.all((await listProjects()).map((project) => presentProjectForRead(project)));
-  if (query.summary === '1' || query.summary === 'true') {
-    const summaries = projects.sort(compareMusicVideoProjectsNewestFirst)
-      .map((project) => summarizeMusicVideoProject(project, project.productionReadiness));
+  const summary = query.summary === '1' || query.summary === 'true';
+  if (summary || isPaginationRequested(query)) {
     // The cursor is the next page's offset; `cursor` wins over `offset`.
     const cursor = parseInt(query.cursor, 10);
-    const page = paginateArray(summaries, Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
+    const paging = parsePagination(summary && Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
       { defaultLimit: 50, maxLimit: 500 });
-    const next = page.offset + page.items.length;
-    return res.json({ ...page, nextCursor: next < page.total ? String(next) : null });
+    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst } : {}) });
+    const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
+    const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
+    // A deletion between header selection and hydration still consumes its slot.
+    const next = Math.min(page.offset + page.limit, page.total);
+    return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
-  if (!isPaginationRequested(query)) {
-    return res.json(projects);
-  }
-  res.json(paginateArray(projects, query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(await Promise.all((await listProjects()).map((project) => presentProjectForRead(project))));
 }));
 
 // Bounded projection for the Tracks page MIDI read-through (#10203): the newest
@@ -728,9 +728,18 @@ router.get('/:id/render', (req, res) => {
   res.json({ jobId: getActiveRenderJobId(req.params.id) });
 });
 
+// The shot, look and cleanup reads plan the render, whose performance-take
+// review decodes the song master with ffmpeg; only a caller with host control
+// starts that decode (#13156). Others get the plan with the take unchecked.
+let authGateModule;
+const planOptions = async (req) => {
+  const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));
+  return { decode: requestHasHostControl(req) };
+};
+
 router.get('/:id/render-cleanup', asyncHandler(async (req, res) => {
   const { getRenderCleanup } = await import('../services/musicVideo/renderCleanup.js');
-  res.json(await getRenderCleanup(req.params.id));
+  res.json(await getRenderCleanup(req.params.id, await planOptions(req)));
 }));
 router.post('/:id/render-cleanup', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoRenderCleanupSchema, req.body ?? {});
@@ -742,7 +751,7 @@ router.post('/:id/render-cleanup', asyncHandler(async (req, res) => {
 // shot's render started or stopped, and a rendered shot's silent segment.
 router.get('/:id/shot-renders', asyncHandler(async (req, res) => {
   const { getShotRenderStatus } = await import('../services/musicVideo/shotSegments.js');
-  res.json(await getShotRenderStatus(req.params.id));
+  res.json(await getShotRenderStatus(req.params.id, await planOptions(req)));
 }));
 router.post('/:id/shots/:sceneId/render', asyncHandler(async (req, res) => {
   const { startShotRender } = await import('../services/musicVideo/shotSegments.js');
@@ -761,7 +770,7 @@ router.post('/:id/shot-renders/preview', asyncHandler(async (req, res) => {
 }));
 router.get('/:id/film-looks', asyncHandler(async (req, res) => {
   const { listFilmLooks } = await import('../services/musicVideo/shotSegments.js');
-  res.json(await listFilmLooks(req.params.id));
+  res.json(await listFilmLooks(req.params.id, await planOptions(req)));
 }));
 router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
   const { deleteFilmLook } = await import('../services/musicVideo/shotSegments.js');
@@ -894,8 +903,20 @@ router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req,
 // install; the record keeps a pointer to the current immutable version.
 // A new document gets its overlay text checked in the background, so the
 // findings are waiting at the storyboard approval (local browser work, no provider).
-const checkOverlayTextAfterImport = (projectId) => {
-  import('../services/musicVideo/overlayTextService.js')
+// The check renders the document in the headless composition browser, so it
+// runs only for a caller with host control (#13055); anyone else gets the
+// import alone, and the gated production-review text check runs it later.
+// Decide before responding: once the response ends the socket can close and
+// lose the address that makes a caller local. authGate loads lazily because
+// this router is reached by many suites that mock settings. Both deferred
+// imports (`authGateModule`, declared with `planOptions`, and
+// `overlayTextModule`) are memoized: overlapping first loads of one specifier can resolve
+// past a test's module mock.
+let overlayTextModule;
+const checkOverlayTextAfterImport = async (req, projectId) => {
+  const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));
+  if (!requestHasHostControl(req)) return;
+  (overlayTextModule ??= import('../services/musicVideo/overlayTextService.js'))
     .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId))
     .catch((err) => console.error(`❌ Overlay text check did not start: ${err.message}`));
 };
@@ -915,8 +936,9 @@ router.get('/:id/composition/document', asyncHandler(async (req, res) => {
 router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(async (req, res) => {
   if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
   try {
-    res.status(201).json(await importDocumentZip(req.params.id, req.file.path, req.file.originalname));
-    checkOverlayTextAfterImport(req.params.id);
+    const imported = await importDocumentZip(req.params.id, req.file.path, req.file.originalname);
+    await checkOverlayTextAfterImport(req, req.params.id);
+    res.status(201).json(imported);
   } finally {
     await unlink(req.file.path).catch(() => {});
   }
@@ -924,8 +946,9 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
 
 router.post('/:id/composition/document/directory', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentDirectoryImportSchema, req.body || {});
-  res.status(201).json(await importDocumentDirectory(req.params.id, directory));
-  checkOverlayTextAfterImport(req.params.id);
+  const imported = await importDocumentDirectory(req.params.id, directory);
+  await checkOverlayTextAfterImport(req, req.params.id);
+  res.status(201).json(imported);
 }));
 
 router.post('/:id/composition/document/template', asyncHandler(async (req, res) => {
@@ -960,8 +983,9 @@ router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHan
 
 router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
-  res.json(await acceptMixedMediaDocument(req.params.id, directory));
-  checkOverlayTextAfterImport(req.params.id);
+  const accepted = await acceptMixedMediaDocument(req.params.id, directory);
+  await checkOverlayTextAfterImport(req, req.params.id);
+  res.json(accepted);
 }));
 
 router.delete('/:id/composition/document/candidate', asyncHandler(async (req, res) => {

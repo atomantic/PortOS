@@ -273,6 +273,26 @@ describe('submitVideoGenJob', () => {
     expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
   });
 
+  // Uniquely catches a hosted backend losing its conditioning stub, or a local one stopping at the resolved model.
+  it.each([
+    ['grok', { id: 'grok-video', supportedModes: ['image'] }],
+    ['fal', { id: 'fal-video', supportedModes: ['text', 'image'] }],
+    ['runway', { id: 'runway-video', supportedModes: ['text', 'image'] }],
+    ['reactor', { id: 'reactor-video', supportedModes: ['text', 'image'] }],
+    ['local', { id: 'local-ltx', supportedModes: ['text'], revision: 'r1' }],
+  ])('tells the FableLoom compile which model the %s backend renders with', async (backend, model) => {
+    mocks.prepareVideoGenParams.mockResolvedValue(backend === 'local'
+      ? localPrepared({ effectiveModel: model })
+      : { backend, cleanupStaged: vi.fn(async () => {}), grok: { grokPath: '/example/grok' }, sourceImagePath: null, uploadedTempPath: null });
+    mocks.fableLoomVideoCapabilities.mockReturnValue({ modes: ['text'] });
+    mocks.compileFableLoomVisualRequest.mockResolvedValue({ prompt: 'p', negativePrompt: 'n', sourceImagePath: null, visualConditioning: { version: 1 } });
+
+    await submitVideoGenJob({ prompt: 'Example shot', fableLoom: { loomId: 'loom-example', sceneId: 'scene-example' }, width: 640, height: 360 }, {});
+    expect(mocks.fableLoomVideoCapabilities).toHaveBeenCalledWith({ backend, model });
+    const { visualConditioning } = mocks.enqueueJob.mock.calls.at(-1)[0].params;
+    expect(visualConditioning.render).toMatchObject({ provider: backend, modelId: model.id, modelRevision: model.revision ?? null });
+  });
+
   it('enqueues a standalone fal lip sync with the staged voice clip, owned by the queue', async () => {
     mocks.prepareVideoGenParams.mockResolvedValue({
       backend: 'fal', cleanupStaged: vi.fn(async () => {}), sourceImagePath: '/example/images/face.png', uploadedTempPath: null,
@@ -491,6 +511,41 @@ describe('submitVideoGenJob', () => {
       expect(mocks.enqueueJob.mock.calls.at(-1)[0].params.musicVideoCostUsd).toBeGreaterThan(0);
       await submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', musicVideo: { ...musicVideo, productionRunId: 'mvpr-1', productionStepKey: 'k' } }, {});
       expect(mocks.enqueueJob.mock.calls.at(-1)[0].params).not.toHaveProperty('musicVideoCostUsd');
+    });
+
+    it('stamps the quoted runway estimate on a board-started clip but not on a production-run step (#10157)', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue({ ...falPrepared(), backend: 'runway' });
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', startSec: 0, endSec: 5 }] });
+      await submitVideoGenJob({ prompt: 'selected shot', backend: 'runway', musicVideo }, {});
+      const { params } = mocks.enqueueJob.mock.calls.at(-1)[0];
+      expect(params.musicVideoCostUsd).toBeGreaterThan(0);
+      expect(params.musicVideoCostModelId).toEqual(expect.any(String));
+      await submitVideoGenJob({ prompt: 'selected shot', backend: 'runway', musicVideo: { ...musicVideo, productionRunId: 'mvpr-1', productionStepKey: 'k' } }, {});
+      expect(mocks.enqueueJob.mock.calls.at(-1)[0].params).not.toHaveProperty('musicVideoCostUsd');
+    });
+
+    it('refuses a performance slice cut for a scene whose timing has since changed', async () => {
+      const prepared = falPrepared();
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+      mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: '/example/uploads/mv-performance-1.wav', modelId: 'lip-sync', resolution: '1080P',
+        enableTranscription: true, shotInstruction: { version: 1, shotMode: 'performance', songInterval: { startSec: 0, endSec: 4 }, edit: { inSec: 0 } } });
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', startSec: 0, endSec: 5 }] });
+
+      await expect(submitVideoGenJob({ prompt: 'singer', backend: 'fal', mode: 'image', musicVideo }, {}))
+        .rejects.toMatchObject({ status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses supplied audio prepared against a song that has since changed', async () => {
+      const prepared = { ...falPrepared(), audio: { audioDependencies: null, audioConditioning: { startSample: 0 } } };
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', startSec: 0, endSec: 5 }] });
+
+      await expect(submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', musicVideo }, {}))
+        .rejects.toMatchObject({ status: 409, code: 'MUSIC_VIDEO_AUDIO_SOURCE_CHANGED' });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
     });
 
     it('checks the current production policy after video preparation, before queueing', async () => {

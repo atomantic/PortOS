@@ -4,6 +4,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest, cliReviewerOutcomeSchema, reportReviewerFailureSchema, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
 import { reviewerAccessFailureCode } from '../lib/reviewerHealth.js'
 import { getSettings } from '../services/settings.js'
+import { verifyReviewerIdentities } from '../services/reviewerIdentity.js'
 import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewCapability, withoutResolvedUnsupportedFaults, reportReviewerFailure, reportReviewerSuccess } from '../services/codeReview.js'
 
 const router = Router()
@@ -63,6 +64,30 @@ router.get('/defaults', asyncHandler(async (_req, res) => {
   ])
   const reviewerConfigFaults = withoutResolvedUnsupportedFaults(defaults.reviewerConfigFaults || {}, capable)
   res.json({ ...defaults, reviewerConfigFaults, installed, providerReviewUnsupported: unsupported })
+}))
+
+// GET /api/code-review/reviewer-identities — does each saved `@login` /
+// `@org/team` reviewer exist on the target forge? Separate from /defaults so the
+// settings load never waits on forge lookups. Entries come back as the operator
+// saved them (nothing is dropped or rewritten) with a status of verified,
+// missing (the forge answered 404), unavailable (lookup failed — not a 404), or
+// skipped (forge without a lookup). `required` mirrors dispatch: a username is
+// blocking unless its `@token` is in the optional set.
+const reviewerIdentityQuerySchema = z.object({
+  forge: z.enum(['github', 'gitlab']).default('github'),
+  host: z.string().regex(/^[A-Za-z0-9.-]{1,253}$/).optional(),
+}).strict()
+
+router.get('/reviewer-identities', asyncHandler(async (req, res) => {
+  const { forge, host } = validateRequest(reviewerIdentityQuerySchema, req.query)
+  const defaults = await getCodeReviewDefaults()
+  // `defaults` is already normalized (see pickCodeReviewDefaults).
+  const usernames = defaults.usernames || []
+  const optionalLogins = (defaults.optionalReviewers || []).filter(r => r.startsWith('@')).map(r => r.slice(1))
+  const optionalSet = new Set(optionalLogins.map(r => r.toLowerCase()))
+  const identities = (await verifyReviewerIdentities([...usernames, ...optionalLogins], { forge, host }))
+    .map(entry => ({ ...entry, required: !optionalSet.has(entry.token.toLowerCase()) }))
+  res.json({ forge, identities })
 }))
 
 // POST /api/code-review/local — run a single review pass against the

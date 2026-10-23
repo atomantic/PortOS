@@ -48,6 +48,7 @@ const IMAGE_RENDER_BACKENDS = [
   { id: 'codex', label: 'Codex', icon: Cloud },
   { id: 'grok', label: 'Grok', icon: Cloud },
   { id: 'agy', label: 'Agy', icon: Sparkles },
+  { id: 'runway', label: 'Runway', icon: Cloud },
 ];
 
 const VIDEO_RENDER_BACKENDS = [

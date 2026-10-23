@@ -1,3 +1,4 @@
+import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import RenderPoolPicker from './RenderPoolPicker.jsx';
 import ListLoadError from '../ui/ListLoadError.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
@@ -5,7 +6,7 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_MUSIC_VIDEO_DEFAULT_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falImageVideoQuotes, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
 import {
-  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, describeRunwayVideoRate, getRunwayVideoModel, runwayVideoLengths, runwayVideoResolutions,
+  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, describeRunwayVideoRate, getRunwayVideoModel, runwayVideoLengths, runwayVideoResolutions,
 } from '../../lib/runwayVideoModels.js';
 import { projectFalSpend } from '../../lib/musicVideoStages.js';
 import { formatUsd } from '../../utils/formatters.js';
@@ -28,6 +29,7 @@ const runwayOptionLabel = (model, resolution) => {
 // is in flight or any scene clip is generating, so the job payload and the
 // board's displayed setting cannot disagree.
 export default function VideoRenderSettings({ videoSettings, generating, project = null }) {
+  const runwayCatalog = useRunwayCatalog(videoSettings?.settings?.backend === 'runway');
   const {
     settings, saving, models, modelsLoading, catalogStatus, retryCatalog, defaultModel, effectiveModelId,
     audioReactiveModels, audioReactiveLoras, detectedAudioReactiveLora,
@@ -334,12 +336,12 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             title="Runway image-to-video model for this project's cutaway scenes (list price per generated second)"
             className={`${falSelectCls} sm:max-w-[280px]`}
           >
-            <option value="">{`Default · ${runwayOptionLabel(getRunwayVideoModel(RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL))}`}</option>
-            {RUNWAY_VIDEO_MODELS.filter((model) => model.id !== RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL).map((model) => (
+            <option value="">{`Default · ${runwayOptionLabel(getRunwayVideoModel(RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL))}${runwayCatalog.videoModels.some((m) => m.id === RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL) ? '' : ' (unavailable)'}`}</option>
+            {runwayCatalog.videoModels.map((model) => (
               <option key={model.id} value={model.id}>{runwayOptionLabel(model)}</option>
             ))}
-            {settings.runwayModelId && !runwayModel && (
-              <option value={settings.runwayModelId}>{`${settings.runwayModelId} · cost unknown`}</option>
+            {settings.runwayModelId && !runwayCatalog.videoModels.some((m) => m.id === settings.runwayModelId) && (
+              <option value={settings.runwayModelId}>{`${settings.runwayModelId} (unavailable)`}</option>
             )}
           </select>
           {runwayResolutions.length > 1 && (

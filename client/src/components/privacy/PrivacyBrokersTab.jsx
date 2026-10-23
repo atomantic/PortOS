@@ -181,7 +181,7 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
   };
   const toggleAutoApprove = async () => {
     const next = await saveSchedule({ autoApproveOptOutEmails: !schedule.autoApproveOptOutEmails });
-    if (next) toast.success(next.autoApproveOptOutEmails ? 'Auto-approve opt-out emails ON' : 'Auto-approve opt-out emails OFF');
+    if (next) toast.success(next.autoApproveOptOutEmails ? 'Pre-approve opt-out email drafts ON' : 'Pre-approve opt-out email drafts OFF');
   };
   const saveCron = async () => {
     const next = await saveSchedule({ cronExpression: cronDraft.trim() });
@@ -328,8 +328,8 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
                 disabled={scheduleSaving}
                 className="accent-port-accent"
               />
-              <span className="text-sm text-gray-200">Auto-approve opt-out emails</span>
-              <span className="text-[11px] text-gray-500">standing authorization — off means each draft waits for approval in Comms</span>
+              <span className="text-sm text-gray-200">Pre-approve opt-out email drafts</span>
+              <span className="text-[11px] text-gray-500">pre-approves the draft only; you still send it from Comms. Web forms always queue as human tasks</span>
             </label>
           </div>
         )}

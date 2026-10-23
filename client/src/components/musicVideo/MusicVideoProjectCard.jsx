@@ -89,14 +89,12 @@ export default function MusicVideoProjectCard({
       {/* Top Header & Identification */}
       <div className="space-y-1.5 min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <button
-            type="button"
-            onClick={onSelect}
-            className="text-left font-semibold text-base text-port-text hover:text-port-accent transition-colors break-words max-w-full flex-1 basis-full sm:basis-auto"
+          <h3
+            className="text-left font-semibold text-base text-port-text break-words max-w-full flex-1 basis-full sm:basis-auto"
             title={project.name}
           >
             {project.name}
-          </button>
+          </h3>
           <div className="flex items-center gap-1 shrink-0">
             {onRename && (
               <button
@@ -164,12 +162,7 @@ export default function MusicVideoProjectCard({
           )
         ) : preview.kind === 'video' ? (
           <>
-            <button
-              type="button"
-              onClick={onSelect}
-              className="block w-full h-full text-left"
-              aria-label={`Open project ${project.name}`}
-            >
+            <div className="block w-full h-full">
               {importedDraft ? <VideoArtifactThumbnail src={preview.src}
                 className="w-full h-full object-cover"
                 onLoadedData={() => setDraftMedia({ src: preview.src, available: true })}
@@ -179,7 +172,7 @@ export default function MusicVideoProjectCard({
                 loading="lazy"
                 className="w-full h-full object-cover"
               />}
-            </button>
+            </div>
             <button
               type="button"
               onClick={() => setPlaying(true)}
@@ -195,12 +188,7 @@ export default function MusicVideoProjectCard({
           </>
         ) : preview.kind === 'image' ? (
           <>
-            <button
-              type="button"
-              onClick={onSelect}
-              className="block w-full h-full text-left"
-              aria-label={`Open project ${project.name}`}
-            >
+            <div className="block w-full h-full">
               <MediaImage
                 src={preview.src}
                 fallbackSrc={preview.fallbackSrc}
@@ -208,21 +196,16 @@ export default function MusicVideoProjectCard({
                 loading="lazy"
                 className="w-full h-full object-cover"
               />
-            </button>
+            </div>
             <span className="port-media-overlay-strong absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium pointer-events-none">
               {preview.label}
             </span>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={onSelect}
-            className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-port-text-muted text-xs hover:bg-port-border/20 transition-colors"
-            aria-label={`Open project ${project.name}`}
-          >
+          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-port-text-muted text-xs">
             <Film size={22} className="opacity-40" aria-hidden="true" />
             <span>No render preview yet</span>
-          </button>
+          </div>
         )}
       </div>
 
@@ -346,8 +329,8 @@ export default function MusicVideoProjectCard({
 
       </details>
       {/* Footer Actions */}
-      <div className="flex items-center justify-between gap-2 pt-2 border-t border-port-border mt-auto shrink-0">
-        <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-port-border mt-auto shrink-0">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={onReview || onSelect}

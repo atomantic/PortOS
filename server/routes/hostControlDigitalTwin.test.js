@@ -81,6 +81,8 @@ const operations = [
   ['avatar-bio/polish', picker, effects.polishAvatarBio],
   ['import/analyze', { source: 'goodreads', data: 'Example import data', ...picker }, effects.analyzeImportedData],
   ['import/spotify/browser/import', picker, spotify.importSpotifyFromBrowser],
+  // Opens a tab in the operator's signed-in managed browser (#13055).
+  ['import/spotify/browser/open', {}, spotify.openSpotifyBrowser],
   ['twin-evidence/interpret', picker, evidence.interpretConsumption],
 ];
 const appFor = (address = '192.0.2.10') => {

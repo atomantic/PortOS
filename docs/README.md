@@ -52,6 +52,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [SECURITY_SCANNER_RUNTIME.md](./SECURITY_SCANNER_RUNTIME.md) | Runner-owned Codex security scans, pinned execution, process cleanup and observed evidence |
 | [UX_DESIGN_GUIDE.md](./UX_DESIGN_GUIDE.md) | Admin workspace design specification: icon navigation, responsive layouts, disclosure, visual hierarchy, and redesign acceptance |
 | [UX_DESIGN_AUDIT.md](./UX_DESIGN_AUDIT.md) | Representative UX audit and Jev/Performance pilot content maps |
+| [PAGE_LAYOUT_AUDIT.md](./PAGE_LAYOUT_AUDIT.md) | Routed header/navigation layout inventory, fixes, intentional exceptions, and browser regression coverage |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
 | [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork, and the unattended idle-gated automatic update |
@@ -113,3 +114,5 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 - [Peer push authentication](./PEER_PUSH_AUTH.md)
 
 - [Tool-free model delegation](SANDBOX_DELEGATION.md) — approved API workers, context packets, and advisory fidelity evaluation for Persistent Mind.
+
+- [Runway model catalog](RUNWAY_MODELS.md) — supported operations, public schema source, caching, refresh and workflow limits.

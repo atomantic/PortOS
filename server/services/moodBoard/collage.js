@@ -20,7 +20,7 @@ import { join } from 'path';
 import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, atomicWrite } from '../../lib/fileUtils.js';
-import { findFfmpeg, runFfmpegProcess, probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
+import { FFMPEG_FRAME_TIMEOUT_MS, findFfmpeg, runFfmpegProcess, probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { assetBasename } from '../../lib/localImageFilename.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -70,6 +70,7 @@ async function sampleVideoFrames(videoFile, count, outDir, prefix, picked = null
       bin: ffmpeg,
       args: ['-ss', times[i].toFixed(3), '-i', videoPath, '-frames:v', '1', '-q:v', '1', '-qmin', '1', '-y', out],
       stderrTailBytes: 0,
+      timeoutMs: FFMPEG_FRAME_TIMEOUT_MS,
     });
     if (result.ok) paths.push({ path: out, time: times[i] });
   }

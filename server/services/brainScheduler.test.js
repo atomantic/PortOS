@@ -4,7 +4,7 @@ const loadMeta = vi.hoisted(() => vi.fn());
 const runDailyDigest = vi.hoisted(() => vi.fn());
 const runWeeklyReview = vi.hoisted(() => vi.fn());
 vi.mock('./brainStorage.js', () => ({ loadMeta }));
-vi.mock('./brain.js', () => ({ runDailyDigest, runWeeklyReview }));
+vi.mock('./brain.js', () => ({ runDailyDigest, runWeeklyReview, TOOL_FREE_REQUIRED: 'TOOL_FREE_REQUIRED' }));
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
@@ -49,5 +49,18 @@ describe('brainScheduler opt-in', () => {
     for (let i = 0; i < 40; i++) await vi.advanceTimersByTimeAsync(60000);
     expect(runDailyDigest).toHaveBeenCalledTimes(1);
     expect(runWeeklyReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a run refused for a tool-capable provider without crashing or logging an error', async () => {
+    loadMeta.mockResolvedValue(meta({ scheduledReviewsEnabled: true }));
+    const refusal = Object.assign(new Error("Brain provider 'x' cannot run without tools"), { code: 'TOOL_FREE_REQUIRED' });
+    runDailyDigest.mockRejectedValue(refusal);
+    runWeeklyReview.mockRejectedValue(refusal);
+    startBrainScheduler();
+    await flush();
+    expect(runDailyDigest).toHaveBeenCalledTimes(1);
+    expect(runWeeklyReview).toHaveBeenCalledTimes(1);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('skipped'));
   });
 });

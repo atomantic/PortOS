@@ -15,7 +15,9 @@ const productMetrics = { getProductEngagement: vi.fn() };
 const backup = { getState: vi.fn(), saveState: vi.fn() };
 const settingsMock = { getSettings: vi.fn() };
 const reviewService = { reviewEvents: { emit: vi.fn() }, getItems: vi.fn(), dismissByReferenceId: vi.fn(), dismissItem: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
-const notifications = { getNotifications: vi.fn(), removeNotification: vi.fn() };
+const notifications = { getNotifications: vi.fn(), removeNotification: vi.fn(), removeByMetadata: vi.fn() };
+const memoryService = { approveMemory: vi.fn(), rejectMemory: vi.fn() };
+vi.mock('./memory.js', () => memoryService);
 // Mocked so the meta-field / buildQueue cases don't pull the brain/cos/identity
 // stack in transitively (askPromote imports all three). The promoteAskQueueItem
 // suite drives this mock directly.
@@ -1337,6 +1339,24 @@ describe('reviewQueue.resolveQueueItem', () => {
     expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
       actionKey: 'brain.classify:b1',
     }));
+  });
+
+  it('treats rejecting an already-deleted memory as resolved and clears its stale projections', async () => {
+    memoryService.rejectMemory.mockResolvedValue({ success: false, error: 'Memory not found' });
+    reviewService.dismissByReferenceId.mockResolvedValue(undefined);
+    notifications.removeByMetadata.mockResolvedValue(undefined);
+    const result = await resolveQueueItem('memory:gone-1', 'reject');
+    expect(result).toMatchObject({ source: 'memory', operation: 'reject', resolved: true });
+    expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('gone-1');
+    expect(notifications.removeByMetadata).toHaveBeenCalledWith('memoryId', 'gone-1');
+  });
+
+  it('keeps approving an already-deleted memory a 404 while still clearing its stale rows', async () => {
+    memoryService.approveMemory.mockResolvedValue({ success: false, error: 'Memory not found' });
+    reviewService.dismissByReferenceId.mockResolvedValue(undefined);
+    notifications.removeByMetadata.mockResolvedValue(undefined);
+    await expect(resolveQueueItem('memory:gone-2', 'approve')).rejects.toMatchObject({ status: 404 });
+    expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('gone-2');
   });
 
   it('dispatches draft rows to approveDraft', async () => {

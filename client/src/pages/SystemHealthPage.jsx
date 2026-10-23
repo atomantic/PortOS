@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useEffect, useState, useRef } from 'react';
 import { Link, Navigate, useParams } from 'react-router';
 import { Activity, AlertTriangle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
@@ -76,23 +78,11 @@ export default function SystemResourcesPage() {
   const activeTabLabel = RESOURCE_TABS.find((item) => item.id === tab)?.label;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4">
-      <header className="overflow-hidden rounded-2xl border border-port-border bg-gradient-to-r from-port-card via-port-card to-port-accent/10 p-4 sm:p-5">
-        <div className="flex items-start gap-3">
-          <div className="rounded-xl bg-port-accent/15 p-2.5 text-port-accent"><ServerCog size={22} /></div>
-          <div>
-            <h1 className="text-xl font-bold text-white">System Resources</h1>
-            <p className="mt-1 max-w-3xl text-sm text-gray-400">
-              Health, disk intelligence, and active work queues in one control center.
-            </p>
-          </div>
-        </div>
-        <div className="mt-5">
-          <RouteTabsHeader tabs={RESOURCE_TABS} activeTab={tab} ariaLabel="System resources sections" />
-        </div>
-      </header>
-
-      <div role="tabpanel" aria-labelledby="system-resources-panel-heading">
+    <PageLayout
+      header={<PageHeader icon={ServerCog} title="System Resources" subtitle="Health, disk intelligence, and active work queues in one control center." />}
+      navigation={<RouteTabsHeader tabs={RESOURCE_TABS} activeTab={tab} ariaLabel="System resources sections" />}
+    >
+      <div className="mx-auto max-w-7xl" role="tabpanel" aria-labelledby="system-resources-panel-heading">
         <h2 id="system-resources-panel-heading" className="sr-only">{activeTabLabel}</h2>
         {tab === 'overview' && <SystemHealthOverview />}
         {tab === 'storage' && (
@@ -106,7 +96,7 @@ export default function SystemResourcesPage() {
         )}
         {tab === 'queues' && <QueuesPanel />}
       </div>
-    </div>
+    </PageLayout>
   );
 }
 

@@ -18,6 +18,14 @@ describe('rendered stale impact', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Repair affected dependencies' }));
     expect(repair).toHaveBeenCalledWith('example-basis');
   });
+  it('shows the impact as unavailable, with no error or retry, when host control is refused', async () => {
+    getMusicVideoDependencyImpact.mockRejectedValue(Object.assign(new Error('Host control requires an operator session.'), { code: 'HOST_CONTROL_FORBIDDEN', status: 403 }));
+    render(<DependencyImpactPanel project={project} onRepair={vi.fn()} />);
+    expect(await screen.findByText(/Asset dependency check needs an operator session/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Repair affected dependencies' })).not.toBeInTheDocument();
+    expect(getMusicVideoDependencyImpact).toHaveBeenCalledWith('example-project', { silent: true, hostControlOptional: true });
+  });
   it('says no clips are needed when only review evidence is stale', async () => {
     getMusicVideoDependencyImpact.mockResolvedValue({ ...impact, shots: [], estimate: { maxGenerations: 0, outputSeconds: 0, evidenceRebuilds: 2 } });
     render(<DependencyImpactPanel project={project} onRepair={vi.fn()} />);

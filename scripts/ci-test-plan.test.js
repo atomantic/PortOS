@@ -92,6 +92,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const shared = [
     '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
+    'scripts/lib/vitestWatch.js',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
     'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
     'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
@@ -521,6 +522,35 @@ describe('CI test impact planner', () => {
       smoke: false,
       windows: false,
     });
+  });
+
+  // Quality snapshot PRs land through the publisher's immediate merge; their
+  // diff is one numeric data file nothing reads from the checkout.
+  it('skips every job, always-run guards included, for a quality-snapshot-only change', () => {
+    const plan = buildCiTestPlan(['.quality.json'], { trackedFiles: [...TRACKED, '.quality.json'] });
+
+    expect(plan).toMatchObject({
+      full: false,
+      reason: 'generated data-only change',
+      server: { mode: 'skip' },
+      client: { mode: 'skip' },
+      browserFiles: [],
+      db: false,
+      lint: { mode: 'skip' },
+      build: false,
+      smoke: false,
+      windows: false,
+    });
+  });
+
+  it('keeps the always-run guards when the quality snapshot rides with other changes', () => {
+    const docs = buildCiTestPlan(['.quality.json', 'docs/GITHUB_ACTIONS.md'], { trackedFiles: [...TRACKED, '.quality.json'] });
+    expect(docs).toMatchObject({ reason: 'documentation-only change', server: { mode: 'files' } });
+    expect(docs.server.files).toContain('server/services/taskPromptDefaults.test.js');
+
+    const code = buildCiTestPlan(['.quality.json', 'server/services/auth.js'], { trackedFiles: [...TRACKED, '.quality.json'] });
+    expect(code.reason).not.toMatch(/unmapped executable surface/);
+    expect(code.server.mode).not.toBe('skip');
   });
 
   // The prompt-integrity snapshot guards a cross-install upgrade contract that
@@ -1277,6 +1307,36 @@ describe('CI test impact planner', () => {
       expect(plan.full, path).toBe(true);
       expect(plan.reason, path).toMatch(/CI pipeline script changed/);
     }
+  });
+
+  it('escalates Windows only for the workflow and pipeline scripts the windows-server job runs', () => {
+    const windowsModeOf = (path) => buildCiTestPlan([path], { trackedFiles: TRACKED }).windowsMode;
+    // Defined by / executed on windows-latest.
+    for (const path of [
+      '.github/workflows/ci.yml',
+      'scripts/ci-base-sha.js',
+      'scripts/lib/githubOutput.js',
+      'scripts/run-ci-tests.js',
+      'scripts/run-ci-tests.test.js',
+    ]) expect(windowsModeOf(path), path).toBe('full');
+    // Still a full Linux plan, but nothing on windows-latest loads them: the
+    // baseline runs and the nightly / release PR keep the complete matrix.
+    for (const path of [
+      '.github/workflows/release.yml',
+      '.github/workflows/eidoverse-acceptance.yml',
+      'scripts/ci-test-plan.js',
+      'scripts/ci-test-plan.test.js',
+      'scripts/run-ci-lint.js',
+      'scripts/scan-diff-hidden-content.js',
+      'scripts/verify-ci-status.js',
+    ]) {
+      const plan = buildCiTestPlan([path], { trackedFiles: TRACKED });
+      expect(plan.full, path).toBe(true);
+      expect(plan.windowsMode, path).toBe('files');
+    }
+    // Any matching trigger still wins: ci.yml next to a Linux-only script escalates.
+    expect(windowsModeOf('.github/workflows/ci.yml')).toBe('full');
+    expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('full');
   });
 
   it('routes worktree-manager source to a full plan instead of a broad nominal scoped plan (#9999)', () => {

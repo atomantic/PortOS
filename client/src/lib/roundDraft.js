@@ -5,12 +5,12 @@
 // all read the same caps, id rules, and tempo band instead of re-declaring them.
 // Pure — no React, no API calls.
 
-// Cap on partner songs — mirrors services/rounds.js PARTNERS_MAX. Used only to
-// disable adding more in the editor; the server enforces the real bound.
-export const PARTNERS_MAX = 12;
-// Cap on harmony parts — mirrors services/rounds.js SCORE_PARTS_MAX. Used only
-// to refuse applying an extracted part past the bound; the server enforces it.
-export const SCORE_PARTS_MAX = 12;
+// Part-count caps and the tempo band come from server/lib/roundsBounds.js (the
+// server validator reads the same leaf). PARTNERS_MAX disables adding more
+// partners in the editor; SCORE_PARTS_MAX refuses an extracted part past the
+// bound. The server enforces the real bounds.
+import { TEMPO_MIN, TEMPO_MAX, PARTNERS_MAX, SCORE_PARTS_MAX } from '../../../server/lib/roundsBounds.js';
+export { TEMPO_MIN, TEMPO_MAX, PARTNERS_MAX, SCORE_PARTS_MAX };
 
 // In-session-only id for a freshly-added section/layer, used purely as a React
 // key until the row is saved. Counter-based (not Math.random, which is
@@ -26,13 +26,10 @@ export const localId = (prefix) => `${prefix}-new-${localSeq++}`;
 // (preset ids like `lead`, server-assigned uuids) so dedup + matching survive.
 export const stripTempId = (row) => (TEMP_ID_RE.test(row.id) ? { ...row, id: '' } : row);
 
-// Mirror the server tempo band (services/rounds.js TEMPO_MIN/MAX). We clamp on
-// BLUR, not on every keystroke — clamping each keystroke would turn typing
+// We clamp on BLUR, not on every keystroke — clamping each keystroke would turn typing
 // "68" into "208" (the lone "6" clamps up to 20 first). While editing we keep
 // the raw parsed number; clampTempo runs on blur so the saved value lands in
 // band without an opaque server 400. Empty input clears (null).
-export const TEMPO_MIN = 20;
-export const TEMPO_MAX = 320;
 // Parse a number input's value to a number or null, without clamping (used
 // on change so intermediate digits aren't mangled).
 export const parseTempo = (raw) => {

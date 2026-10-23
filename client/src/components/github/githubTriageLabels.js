@@ -14,6 +14,18 @@ export const DECISION_VIEW = {
   'handed-off': { tone: 'success', label: 'Handed off' },
 };
 
+// Suggestions that are also an action: the chip is a button that does it.
+// `agent` opens Resolve with agent's picker (the thread's own lane decides
+// Do:Review or Untrusted:Review); the rest apply that inbox action.
+export const DECISION_ACTIONS = {
+  'suggest-review': { action: 'agent', label: 'Do:Review' },
+  'suggest-untrusted-review': { action: 'agent', label: 'Untrusted:Review' },
+  'suggest-done': { action: 'done', label: 'Mark done' },
+  'suggest-mark-read': { action: 'done', label: 'Mark done' },
+  duplicate: { action: 'done', label: 'Mark done' },
+  'suggest-mute': { action: 'mute', label: 'Mute' },
+};
+
 export const TRUST_VIEW = {
   yours: { tone: 'success', label: 'You' },
   trusted: { tone: 'success', label: 'Trusted' },
@@ -24,6 +36,7 @@ export const TRUST_VIEW = {
 export const RULE_LABELS = {
   'spam-signal': 'A spam check matched, so nothing will act on it automatically',
   'security-alert': 'Security alerts always surface first',
+  'deployment-approval': 'A deployment is waiting for your approval',
   'invitation-never-accepted': 'Invitations surface and are never accepted automatically',
   'finished-thread': 'The issue or pull request is already closed or merged',
   'ci-default-branch': 'CI failed on the default branch',
@@ -60,17 +73,57 @@ export const LANE_VIEW = {
   'pr-reviewer': { label: 'Untrusted:Review', tab: 'pull-requests' },
   'issue-watcher': { label: 'the issue watcher', tab: 'tasks' },
   'dependency-updates': { label: 'dependency updates', tab: 'tasks' },
+  // A one-off CoS task in a scratch clone, for a repo no app manages.
+  'security-fix': { label: 'a security fix agent', tab: null },
+  'do-review': { label: 'a Do:Review agent', tab: 'pull-requests' },
+  // A one-off CoS task in a scratch clone for any other vouched thread (#13191).
+  'notification-resolve': { label: 'a CoS agent', tab: null },
 };
 
-// Why Resolve with agent is unavailable for a thread.
+// The notification kinds an automation rule can name (GITHUB_AGENT_RULE_KINDS on the server).
+export const AGENT_RULE_KINDS = [
+  { value: 'review-request', label: 'Review requests', hint: 'A review request starts a review-only Do:Review run that publishes an inline review. An outside pull request in one of your apps goes to Untrusted:Review instead.' },
+  { value: 'security-alert', label: 'Security alerts', hint: 'A security alert starts a run that updates the vulnerable dependencies, opens a pull request and merges it when checks pass. A rule never marks one done or mutes it.' },
+  { value: 'issue-activity', label: 'Issue activity', hint: 'Outside activity on an issue in one of your apps goes to its issue watcher.' },
+  { value: 'ci-activity', label: 'CI activity', hint: 'A workflow run or check suite notice. By default Autopilot and Assist mark these done. An agent looks into a failure only in a repo of yours.' },
+  { value: 'own-pr', label: 'Your pull requests', hint: 'Activity on a pull request you opened. An agent takes it only when everyone in the thread is you or trusted.' },
+  { value: 'mention', label: 'Mentions', hint: 'You or your team were mentioned. An agent takes it only when everyone in the thread is you or trusted.' },
+  { value: 'release', label: 'Releases', hint: 'A new release in a repo you watch.' },
+  { value: 'other', label: 'Everything else', hint: 'Any other notification: comments, discussions, commits and subscriptions. An agent takes it only when everyone in the thread is you or trusted.' },
+];
+
+// What an automation rule does (GITHUB_AGENT_RULE_ACTIONS on the server).
+export const RULE_ACTIONS = [
+  { value: 'agent', label: 'Start a CoS agent' },
+  { value: 'done', label: 'Mark done' },
+  { value: 'mute', label: 'Mute the thread' },
+  { value: 'leave', label: 'Leave in the inbox' },
+];
+
+// Security alerts are never marked done or muted by a rule.
+export const actionsForKind = (kind) => (kind === 'security-alert' ? RULE_ACTIONS.filter((option) => option.value === 'agent' || option.value === 'leave') : RULE_ACTIONS);
+
+// A rule's action; a legacy `agent` boolean reads as agent / leave.
+export const ruleActionOf = (rule) => rule?.action || (rule?.agent === true ? 'agent' : 'leave');
+
+// Why Resolve with agent is unavailable for a thread (agentHandoff on the server).
 export const AGENT_REFUSED_LABELS = {
-  'private-account': 'Private accounts never hand off to an agent',
+  'private-account': 'Allow agents on this Private account in Accounts to resolve it with an agent',
   'no-managed-app': 'Add this repo as a PortOS app to resolve it with an agent',
+  'outside-content': 'Outside content goes only to the screened Untrusted:Review and issue watcher lanes',
+  'comment-unchecked': 'Its latest comment has not been checked yet; new activity on the thread re-checks it',
+  'deployment-approval': 'Only you approve deployments: use Review deployment',
+  invitation: 'Only you accept or decline invitations',
+  'security-alert': 'Security alerts go only to their dependency update or security fix agents',
+  finished: 'Nothing is left to do here: mark it done',
+  'handed-off': 'An agent already has this thread',
+  'no-repo': 'It names no repository for an agent to work in',
+  suspect: 'Suspect threads never go to an agent',
 };
 
 // Why Autopilot left a thread with you instead of handing it off.
 export const HANDOFF_SKIP_LABELS = {
-  'private-account': 'Private accounts never hand off: the lanes use their own AI providers',
+  'private-account': 'Agents are not allowed on this Private account (Accounts)',
   'no-managed-app': 'No PortOS app manages this repo',
   'lane-unavailable': 'The lane would not take it',
 };

@@ -225,6 +225,11 @@ describe('isFreeProvider', () => {
     expect(isFreeProvider({ id: 'opencode-mtplx', mtplxBacked: true, command: 'opencode' })).toBe(true);
   });
 
+  it('classifies loopback-alias endpoints (127.0.0.2, [::]) as free', () => {
+    expect(isFreeProvider({ id: 'my-local', type: 'api', endpoint: 'http://127.0.0.2:11434/v1' })).toBe(true);
+    expect(isFreeProvider({ id: 'my-local', type: 'api', endpoint: 'http://[::]:8080' })).toBe(true);
+  });
+
   it('classifies localhost API endpoints as free', () => {
     expect(isFreeProvider({ id: 'my-local', type: 'api', endpoint: 'http://localhost:1234/v1' })).toBe(true);
     expect(isFreeProvider({ id: 'my-local', type: 'api', endpoint: 'http://127.0.0.1:11434/v1' })).toBe(true);

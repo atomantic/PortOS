@@ -41,6 +41,12 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     return includeDeleted ? all : all.filter((project) => !project.deleted);
   }
 
+  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare } = {}) {
+    const projects = await listProjects({ includeDeleted });
+    if (compare) projects.sort(compare);
+    return { items: projects.slice(offset, offset + limit), total: projects.length, limit, offset };
+  }
+
   async function getProject(id, { includeDeleted = false } = {}) {
     const all = await loadAll();
     const found = all.find((project) => project.id === id);
@@ -122,6 +128,7 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     saveAll,
     loadAllAndIndex,
     listProjects,
+    listProjectPage,
     getProject,
     getProjectsByIds,
     listProjectIds,

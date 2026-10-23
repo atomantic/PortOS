@@ -1,5 +1,6 @@
 // Editorial checks — cast group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   UNMODELED_NAMES_STAGE,
   attributeDialogueByOwner,
@@ -133,7 +134,7 @@ export const castChecks = [
       },
     ],
     // Need both prose to scan AND at least one named canon character to scan for.
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0
+    gate: (ctx) => hasManuscript(ctx)
       && Array.isArray(ctx.canon?.characters)
       && ctx.canon.characters.some((c) => typeof c?.name === 'string' && c.name.trim()),
     run: (ctx) => {
@@ -256,7 +257,7 @@ export const castChecks = [
     // Needs prose to scan. Unlike roster.economy this does NOT require a populated
     // canon — an EMPTY bible is the strongest case (every named proper noun is
     // unmodeled), and the prompt's {{^knownCharacters}} branch handles it.
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: async (ctx) => {
       // The known-character roster is fixed per-call overhead (re-sent on each
       // chunk) — it's the exclusion list the model classifies against. Counted into

@@ -42,6 +42,12 @@ describe('VideoTimeline page', () => {
     expect(screen.getByText(/No timeline projects yet/)).toBeInTheDocument();
   });
 
+  it('reads the stat-free compact clip catalog, not the full history', async () => {
+    render(<MemoryRouter><VideoTimeline /></MemoryRouter>);
+    await act(async () => {});
+    expect(listVideoHistory).toHaveBeenCalledWith({ silent: true, query: { compact: true } });
+  });
+
   it('renders ListLoadError on failed video history load', async () => {
     listVideoHistory.mockRejectedValueOnce(new Error('History 500 error'));
     render(

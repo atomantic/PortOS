@@ -334,7 +334,12 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
       if (!app || !mayReadApp(state, id)) { receipt.apps.push({ appId: id, complete: false, blockers: ['app-unavailable-or-not-granted'], pullRequests: [], issues: [] }); continue; }
       let row;
       try { row = await inspectApp(app, allTasks, localReviewTasks, activeAgentTaskIds); }
-      catch { row = { appId: id, complete: false, blockers: ['source-unavailable'], pullRequests: [], issues: [] }; }
+      catch (err) {
+        const { redactCliDetail } = await import('./perpetualWork.js');
+        const detail = redactCliDetail(String(err?.message || '').split('\n')[0]);
+        console.error(`❌ Development watchdog could not inspect app ${id}: ${detail ?? 'no error message'}`);
+        row = { appId: id, complete: false, blockers: ['source-unavailable'], detail, pullRequests: [], issues: [] };
+      }
       if (row.complete && !dryRun && !peers.blockers.length && mayCreateTasksForApp(state, id)) {
         await retireTerminalReviewFollowUps(app, row).catch(err => {
           console.error(`❌ Development watchdog could not retire a completed PR follow-up: ${err.message}`);

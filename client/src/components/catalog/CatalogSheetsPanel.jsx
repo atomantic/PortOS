@@ -11,6 +11,7 @@ import useMounted from '../../hooks/useMounted';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers } from '../../lib/sheetPointers.js';
 import { SHEET_ROLE_PREFIX } from '../../lib/creativeLibraries';
+import { formsOf, splitSheetRole } from '../../lib/catalogForms';
 import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet } from '../../services/apiCatalog';
 
 // Universe-canon sheets live on the payload as pointers into /data/image-refs.
@@ -88,6 +89,9 @@ const SHEET_EVENT = 'reference-sheet:changed';
 // and is attached optimistically via `onSheetFile` (the server hook is
 // idempotent); a universe-linked character's render delegates to the canon
 // renderer and lands as a payload pointer, announced by `reference-sheet:changed`.
+// Sheets group by form: the canonical present-story form first (universe
+// pointers + `sheet:<variant>`), then each alternate age/look
+// (`sheet:<variant>@<formId>`), which always renders through the catalog path.
 export default function CatalogSheetsPanel({
   ingredientId, payload, universeRef, sheetMedia, missingMedia, onDetach,
   blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady,
@@ -96,6 +100,7 @@ export default function CatalogSheetsPanel({
   const [variants, setVariants] = useState(null);
   const [variantsError, setVariantsError] = useState(null);
   const [variantId, setVariantId] = useState('');
+  const [formId, setFormId] = useState(''); // '' = canonical
   const [starting, setStarting] = useState(false);
   const [pending, setPending] = useState(null); // { jobId, role, delegated }
   const [armedDetach, setArmedDetach] = useState(null);
@@ -123,7 +128,10 @@ export default function CatalogSheetsPanel({
   // (the server builds it from the saved record); it is stripped before the call.
   const fetchPreview = useCallback(({ savedStamp: _stamp, ...body }, options) =>
     previewCatalogSheet(ingredientId, body, options).then((r) => r?.preview ?? null), [ingredientId]);
-  const preview = useModelInputPreview(fetchPreview, { variant: variantId, savedStamp }, { enabled: !!variantId });
+  const forms = formsOf(payload);
+  const activeFormId = forms.some((f) => f.id === formId) ? formId : '';
+  const preview = useModelInputPreview(fetchPreview,
+    { variant: variantId, ...(activeFormId ? { formId: activeFormId } : {}), savedStamp }, { enabled: !!variantId });
 
   const jobId = pending?.jobId || null;
   const delegated = !!pending?.delegated;
@@ -157,7 +165,8 @@ export default function CatalogSheetsPanel({
   const handleGenerate = async () => {
     if (!variant || blockedReason) return;
     setStarting(true);
-    const queued = await renderCatalogSheet(ingredientId, { variant: variant.id }, { silent: true })
+    const form = forms.find((f) => f.id === activeFormId) || null;
+    const queued = await renderCatalogSheet(ingredientId, { variant: variant.id, ...(form ? { formId: form.id } : {}) }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Sheet render failed'); return null; });
     if (!mountedRef.current) return;
     setStarting(false);
@@ -167,20 +176,34 @@ export default function CatalogSheetsPanel({
     }
     setPending({
       jobId: queued.jobId,
-      role: queued.role || `${SHEET_ROLE_PREFIX}${queued.variant || variant.id}`,
+      role: queued.role || `${SHEET_ROLE_PREFIX}${queued.variant || variant.id}${form ? `@${form.id}` : ''}`,
       delegated: queued.delegatedTo === 'universe',
     });
+    const what = form ? `${variant.label} · ${form.label}` : variant.label;
     toast.success(queued.delegatedTo === 'universe'
-      ? `Rendering ${variant.label} on the linked universe…`
-      : `Rendering ${variant.label}…`);
+      ? `Rendering ${what} on the linked universe…`
+      : `Rendering ${what}…`);
   };
 
   const pointerSheets = pointerSheetsOf(payload);
   const sheets = Array.isArray(sheetMedia) ? sheetMedia : [];
   const labelFor = (m) => {
-    const id = (m.role || '').slice(SHEET_ROLE_PREFIX.length);
+    const { variant: id } = splitSheetRole(m.role, SHEET_ROLE_PREFIX);
     return (variants || []).find((v) => v.id === id)?.label || id;
   };
+  const sheetsByForm = new Map();
+  for (const m of sheets) {
+    const key = splitSheetRole(m.role, SHEET_ROLE_PREFIX).formId || '';
+    if (!sheetsByForm.has(key)) sheetsByForm.set(key, []);
+    sheetsByForm.get(key).push(m);
+  }
+  const formLabel = (id) => forms.find((f) => f.id === id)?.label || 'Removed age or look';
+  const groups = [
+    { id: '', title: 'Canonical · present story', pointer: pointerSheets, items: sheetsByForm.get('') || [] },
+    ...forms.map((f) => ({ id: f.id, title: [f.label, f.age].filter(Boolean).join(' · '), pointer: [], items: sheetsByForm.get(f.id) || [] })),
+    ...[...sheetsByForm.keys()].filter((k) => k && !forms.some((f) => f.id === k))
+      .map((k) => ({ id: k, title: formLabel(k), pointer: [], items: sheetsByForm.get(k) })),
+  ];
   const universePath = universeCanonPath(universeRef);
   const busy = starting || !!jobId;
 
@@ -205,6 +228,16 @@ export default function CatalogSheetsPanel({
       ) : (
         <div className="space-y-2">
           <div className="flex items-end gap-2 flex-wrap">
+            {forms.length > 0 && (
+              <div className="min-w-0 flex-1 max-w-sm">
+                <label htmlFor="catalog-sheet-form" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Age or look</label>
+                <select id="catalog-sheet-form" value={activeFormId} onChange={(e) => setFormId(e.target.value)} disabled={busy}
+                  className="w-full px-2 py-2 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent">
+                  <option value="">Canonical · present story</option>
+                  {forms.map((f) => <option key={f.id} value={f.id}>{f.label || 'Unnamed'}</option>)}
+                </select>
+              </div>
+            )}
             <div className="min-w-0 flex-1 max-w-sm">
               <label htmlFor="catalog-sheet-variant" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Sheet kind</label>
               <select id="catalog-sheet-variant" value={variantId} onChange={(e) => setVariantId(e.target.value)} disabled={busy}
@@ -229,18 +262,23 @@ export default function CatalogSheetsPanel({
         </div>
       )}
 
-      {pointerSheets.length > 0 || sheets.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {pointerSheets.map(([v, filename]) => <PointerSheetFigure key={`ptr:${v}`} variant={v} filename={filename} />)}
-          {sheets.map((m) => (
-            <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
-              missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
-              armedDetach={armedDetach} onArmDetach={setArmedDetach} />
-          ))}
+      {groups.map((group) => (
+        <div key={group.id || 'canonical'} className="space-y-2">
+          <h3 className="text-xs uppercase tracking-wider text-gray-400">{group.title}</h3>
+          {group.pointer.length > 0 || group.items.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {group.pointer.map(([v, filename]) => <PointerSheetFigure key={`ptr:${v}`} variant={v} filename={filename} />)}
+              {group.items.map((m) => (
+                <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
+                  missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
+                  armedDetach={armedDetach} onArmDetach={setArmedDetach} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">No sheets yet.</p>
+          )}
         </div>
-      ) : (
-        <p className="text-xs text-gray-500">No reference sheets yet.</p>
-      )}
+      ))}
     </section>
   );
 }

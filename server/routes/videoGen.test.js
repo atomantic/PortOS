@@ -12,6 +12,8 @@ const compiledVisual = vi.hoisted(() => ({
 }));
 const probeVideoDuration = vi.hoisted(() => vi.fn(async () => 41.041281));
 const probeVideoGeometry = vi.hoisted(() => vi.fn());
+const validateRunwayVideoInput = vi.hoisted(() => vi.fn(async () => ({ durationSec: 4 })));
+vi.mock('../services/videoGen/runwayVideoInputs.js', () => ({ validateRunwayVideoInput }));
 vi.mock('../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   probeVideoDuration,
@@ -876,6 +878,57 @@ describe('videoGen routes', () => {
       imageGen: { grok: { enabled: true, grokPath: '/example/grok', aspectRatio: '16:9' } },
       videoGen: { fal: { apiKey: 'example-fal-key' }, reactor: { apiKey: 'example-reactor-key' } },
     };
+    it.each([
+      ['aleph2', 'runway'], ['act_two', 'runway'],
+      ['aleph2', undefined], ['act_two', undefined],
+    ])('stages %s inputs with backend %s and preserves the workflow in queued params', async (modelId, backend) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { mode: 'runway', runway: { apiKey: 'example-key' } } });
+      setPendingUpload({ fieldname: 'runwayVideo', path: '/tmp/performance.mp4', originalname: 'performance.mp4' });
+      const mode = modelId === 'aleph2' ? 'video-edit' : 'character-performance';
+      const response = await request(app).post('/api/video-gen/').send({ backend, mode, runwayModelId: modelId, prompt: '',
+        ...(modelId === 'act_two' ? { sourceImageFile: 'character.png', runwayBodyControl: 'false', runwayExpressionIntensity: '4' } : { runwayTargetAspect: '9:16' }),
+      });
+      expect(response.status).toBe(200);
+      const params = mediaJobQueue.enqueueJob.mock.calls[0][0].params;
+      expect(params).toMatchObject({ mode: 'runway', videoMode: mode, modelId, runwayVideoPath: expect.stringContaining('video-runway-video-') });
+      expect(params.uploadedTempPaths).toContain(params.runwayVideoPath);
+      expect(validateRunwayVideoInput).toHaveBeenCalledWith(params.runwayVideoPath, expect.objectContaining({ id: modelId }));
+      expect(JSON.stringify(params)).not.toContain('example-key');
+    });
+
+    it.each(['local', undefined])('refuses an empty-prompt special workflow on non-Runway backend %s', async (backend) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { mode: 'grok' }, imageGen: { grok: { enabled: true } } });
+      const response = await request(app).post('/api/video-gen/').send({ backend, mode: 'character-performance', runwayModelId: 'act_two', prompt: '' });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/matching Runway video workflow/);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('rolls back the durable video if validation fails and refuses a video workflow on another backend', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { runway: { apiKey: 'example-key' } } });
+      validateRunwayVideoInput.mockRejectedValueOnce(Object.assign(new Error('Video is too long'), { status: 400 }));
+      setPendingUpload({ fieldname: 'runwayVideo', path: '/tmp/source.mp4', originalname: 'source.mp4' });
+      const response = await request(app).post('/api/video-gen/').send({ backend: 'runway', mode: 'video-edit', runwayModelId: 'aleph2', prompt: '' });
+      expect(response.status).toBe(400);
+      expect(unlink).toHaveBeenCalledWith(copyFile.mock.calls[0][1]);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      const mismatch = await request(app).post('/api/video-gen/').send({ backend: 'local', mode: 'character-performance', prompt: 'test' });
+      expect(mismatch.status).toBe(400);
+    });
+
+    it('does not silently drop an unresolved Aleph guidance image', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { runway: { apiKey: 'example-key' } } });
+      resolveGalleryImage.mockReturnValueOnce(null);
+      setPendingUpload({ fieldname: 'runwayVideo', path: '/tmp/source.mp4', originalname: 'source.mp4' });
+      const response = await request(app).post('/api/video-gen/').send({ backend: 'runway', mode: 'video-edit', runwayModelId: 'aleph2', prompt: '', sourceImageFile: 'missing.png' });
+      expect(response.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(copyFile).not.toHaveBeenCalled();
+    });
     const providers = [
       { backend: 'grok', input: { grokDuration: 10 },
         minimal: { grokPath: '/example/grok', aspectRatio: '16:9', width: undefined, height: undefined, duration: undefined },
@@ -1146,6 +1199,18 @@ describe('videoGen routes', () => {
       videoGen: { fal: { apiKey: 'example-fal-key' } },
     };
     const style = { id: 'style-preset', label: 'Style preset', text: 'film grain' };
+
+    it.each([['aleph2', 'video-edit'], ['act_two', 'character-performance']])('previews empty-prompt %s using the default Runway backend without staging', async (runwayModelId, mode) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { mode: 'runway', runway: { apiKey: 'example-key' } } });
+      const response = await request(app).post('/api/video-gen/prompt-preview').send({
+        mode, runwayModelId, prompt: '', previewUploads: ['runwayVideo', ...(runwayModelId === 'act_two' ? ['sourceImage'] : [])],
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ backend: 'runway', sentPrompt: '' });
+      expect(copyFile).not.toHaveBeenCalled();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
 
     it('shows the grok agent prompt, its instructions chip and the form\'s chips without queueing', async () => {
       const { getSettings } = await import('../services/settings.js');
@@ -2983,8 +3048,28 @@ describe('videoGen routes', () => {
         { id: 'running-b', kind: 'video', status: 'running' },
       ].filter((j) => (!status || j.status === status) && (!kind || j.kind === kind)));
       const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'finished-a' });
-      expect(r.body.ok).toBe(false);
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('ALREADY_TERMINAL');
       expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 NOT_FOUND for a named id the queue does not know', async () => {
+      mediaJobQueue.listJobs.mockReturnValue([{ id: 'running-b', kind: 'video', status: 'running' }]);
+      const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'ghost' });
+      expect(r.status).toBe(404);
+      expect(r.body.code).toBe('NOT_FOUND');
+      expect(mediaJobQueue.cancelJob).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['ALREADY_TERMINAL', 409],
+      ['NOT_FOUND', 404],
+    ])('maps a queue refusal %s to %i instead of 200', async (code, status) => {
+      mediaJobQueue.listJobs.mockReturnValue([{ id: 'running-b', kind: 'video', status: 'running' }]);
+      mediaJobQueue.cancelJob.mockResolvedValue({ ok: false, code });
+      const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'running-b' });
+      expect(r.status).toBe(status);
+      expect(r.body.code).toBe(code);
     });
 
     // No running job and no jobId — fall back to newest queued so the user
@@ -3013,6 +3098,14 @@ describe('videoGen routes', () => {
       const r = await request(app).get('/api/video-gen/history');
       expect(r.status).toBe(200);
       expect(r.body).toHaveLength(2);
+    });
+
+    it('validates the opt-in query and returns a bounded page', async () => {
+      videoGenService.loadHistory.mockResolvedValue([{ id: 'a', createdAt: '2026-01-01' }, { id: 'b', createdAt: '2026-02-01' }]);
+      const page = await request(app).get('/api/video-gen/history?limit=1&compact=true');
+      expect(page.status).toBe(200);
+      expect(page.body.map((i) => i.id)).toEqual(['b']);
+      expect((await request(app).get('/api/video-gen/history?limit=999')).status).toBe(400);
     });
   });
 

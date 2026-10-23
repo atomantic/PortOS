@@ -259,6 +259,19 @@ export function plannerLabelSpec(name) {
   };
 }
 
+/** PR authorship is separate from issue planning and future dispatch hints. */
+function implementerLabelSpec(name) {
+  if (typeof name !== 'string') return null;
+  const canonical = forgeLabelName(name);
+  if (!canonical.startsWith('implementer:')) return null;
+  const id = normalizePlannerId(canonical.slice('implementer:'.length));
+  return id ? {
+    name: `implementer:${id}`,
+    color: '0075CA',
+    description: `PR opened by the ${id} model`,
+  } : null;
+}
+
 /**
  * The planner-attribution instruction for one run, ready to paste into an
  * issue-filing prompt. `plannerId` is this run's own identity (see
@@ -560,10 +573,9 @@ export function dispatchLabelSpec(name, { cli = 'gh' } = {}) {
       };
     }
   }
-  // Prefix-matched last: the planner axis has no enumerable table, so it must
-  // not shadow a fixed label that happens to start with the same characters.
-  const planner = plannerLabelSpec(name);
-  return planner ? { ...planner, name: forgeLabelName(planner.name, { cli }) } : null;
+  // Attribution axes are open-ended and must not shadow fixed labels.
+  const attribution = plannerLabelSpec(name) || implementerLabelSpec(name);
+  return attribution ? { ...attribution, name: forgeLabelName(attribution.name, { cli }) } : null;
 }
 
 /** All slashdo dispatch-label specs, in axis-then-ramp order. */

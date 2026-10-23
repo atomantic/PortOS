@@ -6,19 +6,29 @@ export function endpointFor(rawUrl) {
   if (pathname.startsWith('/data/')) return '/data/:asset';
   if (/^\/api\/video-gen\/history\/[^/]+$/.test(pathname)) return '/api/video-gen/history/:record';
   if (/^\/api\/messages\/[^/]+\/[^/]+$/.test(pathname)) return '/api/messages/:account/:message';
-  // Collection endpoints and bootstrap paths contain no record identifiers.
-  return pathname.replace(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, ':account')
+  // Collection endpoints and bootstrap paths contain no record identifiers;
+  // arbitrary --route traffic may, so opaque numeric/hex segments collapse too.
+  return pathname.replace(/\/(?:\d+|[a-f0-9]{16,})(?=\/|$)/gi, '/:id').replace(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, ':account')
     .replace(/synthetic-[^/]+/g, ':record');
 }
 
 const empty = () => ({ requests: 0, completed: 0, failed: 0, canceled: 0,
+  duplicates: 0, overlapping: 0, httpErrors: 0,
   encodedBytes: 0, decodedBytes: 0, unavailable: 0, socketSentFrames: 0,
   socketReceivedFrames: 0, socketSentBytes: 0, socketReceivedBytes: 0 });
 
-export function createTrafficAccumulator() {
+/**
+ * `label` maps a raw URL (and method) to the endpoint pattern a report may
+ * hold; the live audit passes a source-route redactor. Exact URLs are kept in
+ * memory only, to count repeats within a phase (`duplicates`) and repeats
+ * started while an identical request was still in flight (`overlapping`).
+ */
+export function createTrafficAccumulator({ label = endpointFor } = {}) {
   const phases = new Map();
   const requests = new Map();
   const sockets = new Map();
+  const seen = new Map();
+  const inFlight = new Map();
   let phase = 'cold';
   const bucket = (endpoint, target = phase) => {
     if (!phases.has(target)) phases.set(target, new Map());
@@ -35,6 +45,9 @@ export function createTrafficAccumulator() {
     row.encodedBytes += Math.max(0, (encoded || 0) - request.encoded);
     row[failed ? 'failed' : 'completed']++;
     if (canceled) row.canceled++;
+    const open = (inFlight.get(request.key) || 1) - 1;
+    if (open) inFlight.set(request.key, open);
+    else inFlight.delete(request.key);
     requests.delete(id);
   };
   return {
@@ -43,14 +56,23 @@ export function createTrafficAccumulator() {
       const id = event.requestId;
       if (name === 'requestWillBeSent') {
         if (event.redirectResponse) finish(id, event.redirectResponse.encodedDataLength, false, false);
-        const endpoint = endpointFor(event.request.url);
-        requests.set(id, { endpoint, encoded: 0 });
-        bucket(endpoint).requests++;
+        const method = event.request.method || 'GET';
+        const endpoint = label(event.request.url, method);
+        const key = method + ' ' + event.request.url;
+        const row = bucket(endpoint);
+        row.requests++;
+        if (!seen.has(phase)) seen.set(phase, new Set());
+        if (seen.get(phase).has(key)) row.duplicates++;
+        else seen.get(phase).add(key);
+        if (inFlight.has(key)) row.overlapping++;
+        inFlight.set(key, (inFlight.get(key) || 0) + 1);
+        requests.set(id, { endpoint, encoded: 0, key });
       } else if (name === 'responseReceived') {
         const request = requests.get(id);
         if (request) {
           const row = bucket(request.endpoint);
           if (event.response.status === 503) row.unavailable++;
+          if (event.response.status >= 400) row.httpErrors++;
           const headers = Math.max(0, event.response.encodedDataLength || 0);
           row.encodedBytes += headers;
           request.encoded += headers;
@@ -65,7 +87,7 @@ export function createTrafficAccumulator() {
         request.encoded += encoded;
       } else if (name === 'loadingFinished') finish(id, event.encodedDataLength, false, false);
       else if (name === 'loadingFailed') finish(id, 0, true, event.canceled);
-      else if (name === 'webSocketCreated') sockets.set(id, endpointFor(event.url));
+      else if (name === 'webSocketCreated') sockets.set(id, label(event.url, 'GET'));
       else if (name === 'webSocketClosed') sockets.delete(id);
       else if (name === 'webSocketFrameSent' || name === 'webSocketFrameReceived') {
         const row = bucket(sockets.get(id) || '/socket.io/');
@@ -81,6 +103,11 @@ export function createTrafficAccumulator() {
         Object.fromEntries([...endpoints].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, { ...value }]))]));
     },
     pending() { return requests.size; },
+    pendingByEndpoint() {
+      const counts = new Map();
+      for (const { endpoint } of requests.values()) counts.set(endpoint, (counts.get(endpoint) || 0) + 1);
+      return Object.fromEntries([...counts].sort(([a], [b]) => a.localeCompare(b)));
+    },
   };
 }
 
@@ -125,4 +152,37 @@ export function trafficFailures(phases) {
     }
   }
   return failures;
+}
+
+/** Idle HTTP/socket bytes scaled to one minute from the measured window. */
+export function idleBytesPerMinute(idle, idleMs) {
+  const entries = Object.values(idle || {});
+  const total = key => entries.reduce((sum, value) => sum + value[key], 0);
+  const scale = bytes => Math.round(bytes * 60000 / idleMs);
+  return { encoded: scale(total('encodedBytes')), decoded: scale(total('decodedBytes')),
+    socketPayload: scale(total('socketSentBytes') + total('socketReceivedBytes')) };
+}
+
+/**
+ * CLI: [output] [--route=/path] [--sibling=/path] [--idle-ms=N]. Routes must be
+ * same-origin absolute paths so the audit can never reach another host.
+ */
+export function parseAuditArgs(argv) {
+  const out = { output: undefined, route: null, sibling: '/messages/contacts', idleMs: 60000 };
+  const path = (name, value) => {
+    if (!/^\/(?!\/)[^\s\\]*$/.test(value || '')) throw new Error('--' + name + ' must be an absolute path such as /');
+    return value;
+  };
+  for (const arg of argv) {
+    const [flag, ...rest] = arg.split('=');
+    const value = rest.join('=');
+    if (flag === '--route') out.route = path('route', value);
+    else if (flag === '--sibling') out.sibling = path('sibling', value);
+    else if (flag === '--idle-ms') {
+      out.idleMs = Number(value);
+      if (!Number.isInteger(out.idleMs) || out.idleMs < 1000 || out.idleMs > 300000) throw new Error('--idle-ms must be 1000-300000');
+    } else if (!arg.startsWith('--') && out.output === undefined) out.output = arg;
+    else throw new Error('Unknown argument: ' + flag);
+  }
+  return out;
 }

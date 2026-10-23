@@ -48,6 +48,7 @@
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';
 import { getSlashdoWorkflow } from '../lib/slashdoCatalog.js';
 import { emitLog } from './cosEvents.js';
+import { notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 
 /** The bundled slashdo workflow this task runs. */
 const DO_REVIEW_COMMAND = 'review';
@@ -98,7 +99,9 @@ function renderContext({ number, url, repoLabel, selfReview }) {
  * that reaches this module (server/AGENTS.md, "Import scoping").
  *
  * @param {Object} params
- * @param {Object} params.app - the managed app record (`id`, `name`)
+ * @param {Object|null} params.app - the managed app record (`id`, `name`), or
+ *   null for a PR in a repo no app manages: PR mode reads it through `gh`, so
+ *   the run needs no checkout of that repo
  * @param {Object} params.pullRequest - the freshly-read open PR (`number`, `url`)
  * @param {string} [params.repoFullName] - `owner/repo`, for the prompt's label
  * @param {string} [params.provider] - "Run with" provider pin
@@ -106,24 +109,30 @@ function renderContext({ number, url, repoLabel, selfReview }) {
  * @param {string} [params.effort] - "Run with" reasoning-effort pin
  * @param {boolean} [params.selfReview] - run with no delegated reviewers, so the
  *   provider above is the only thing that reads the diff (`--review-with none`)
+ * @param {boolean} [params.immediate] - start the agent now (a button press is
+ *   the approval); false leaves it to the normal queue, for automation
  * @param {Object} [params.reviewerConfig] - already-sanitized reviewer override
  *   (`reviewerConfigMetadata`) persisted for the prompt layer to resolve over
  *   the install's Code Review Defaults. Ignored under `selfReview`, which has no
  *   roster to override.
+ * @param {Object|null} [params.notificationAccount] - trusted inbox account to
+ *   bind when this review was requested from the notifications manager
+ * @param {string} [params.notificationOrigin] - user tap or automated handoff
  * @returns {Promise<{task: Object|null, duplicate: boolean, dispatch: {started: boolean, reason: string|null}}>}
  */
 export async function spawnPrDoReviewTask({
   app, pullRequest, repoFullName = '', provider, model, effort,
-  selfReview = false, reviewerConfig = null,
+  selfReview = false, reviewerConfig = null, immediate = true, notificationAccount = null, notificationOrigin = 'user',
 } = {}) {
-  const { addTask, forceSpawnTask } = await import('./cos.js');
+  const { addTask } = await import('./cosTaskStore.js');
+  const { forceSpawnTask } = await import('./cos.js');
   const { number, url } = pullRequest;
-  const appLabel = String(app.name || app.id).replace(/\s+/g, ' ').trim();
+  const appLabel = app ? String(app.name || app.id).replace(/\s+/g, ' ').trim() : repoFullName;
   const repoLabel = repoFullName || appLabel;
 
   const created = await addTask({
     description: `Review PR #${number} for ${appLabel}`,
-    app: app.id,
+    ...(app ? { app: app.id } : {}),
     priority: 'HIGH',
     context: renderContext({ number, url, repoLabel, selfReview }),
     slashdoCommand: DO_REVIEW_COMMAND,
@@ -151,28 +160,32 @@ export async function spawnPrDoReviewTask({
     // Each `/do:*` body owns its own review sequence; a CoS loop on top would
     // review the review.
     reviewLoop: false,
-    metadata: { targetPullRequest: number },
-  }, 'user', { suppressDequeue: true });
+    metadata: {
+      targetPullRequest: number,
+      ...(notificationAccount ? { githubNotificationAccount: notificationAgentAccountBinding(notificationAccount, notificationOrigin) } : {}),
+    },
+  }, 'user', { suppressDequeue: immediate });
 
   if (!created) return { task: null, duplicate: false, dispatch: { started: false, reason: null } };
   if (created.duplicate) {
     emitLog('info', `🔍 /do:review for ${repoLabel} #${number} is already queued as ${created.id}`, {
-      taskId: created.id, appId: app.id, prNumber: number,
+      taskId: created.id, appId: app?.id || null, prNumber: number,
     });
     return { task: created, duplicate: true, dispatch: { started: false, reason: null } };
   }
+  if (!immediate) return { task: created, duplicate: false, dispatch: { started: false, reason: null } };
 
   const spawn = await forceSpawnTask(created.id).catch(err => ({ error: err.message }));
   if (spawn?.error) {
     // The task is persisted and holds its place in the queue — report why it has
     // not started rather than claiming an agent is on it.
     emitLog('warn', `⏳ Queued /do:review task ${created.id} for ${repoLabel} #${number} — ${spawn.error}`, {
-      taskId: created.id, appId: app.id, prNumber: number,
+      taskId: created.id, appId: app?.id || null, prNumber: number,
     });
     return { task: created, duplicate: false, dispatch: { started: false, reason: spawn.error } };
   }
-  emitLog('info', `🔍 Started /do:review agent for task ${created.id} (app ${app.id} request #${number})`, {
-    taskId: created.id, appId: app.id, prNumber: number,
+  emitLog('info', `🔍 Started /do:review agent for task ${created.id} (${repoLabel} request #${number})`, {
+    taskId: created.id, appId: app?.id || null, prNumber: number,
   });
   return { task: created, duplicate: false, dispatch: { started: true, reason: null } };
 }

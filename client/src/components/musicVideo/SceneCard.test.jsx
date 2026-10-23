@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: [], loaded: true, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
@@ -503,6 +504,39 @@ describe('clip playback and coverage', () => {
   };
   const coverage = () => screen.queryByText(/Shot runs .* but its clip is/);
 
+  it('clears both coverage warnings when the director holds the last frame, and restores them when cleared', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [current, setCurrent] = useState(scene);
+      return <SceneCard scene={current} index={0} expanded
+        onEditLocal={(_id, patch) => setCurrent((value) => ({ ...value, ...patch }))} onSave={onSave} />;
+    }
+    const { container } = render(<Harness />);
+    metadata(container.querySelector('video'), 4);
+    expect(coverage()).toBeTruthy();
+    expect(screen.getByText('Clip too short')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/Hold last frame/));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { holdLastFrame: true });
+    expect(coverage()).toBeNull();
+    expect(screen.queryByText('Clip too short')).toBeNull();
+    fireEvent.click(screen.getByLabelText(/Hold last frame/));
+    expect(coverage()).toBeTruthy();
+    expect(screen.getByText('Clip too short')).toBeTruthy();
+  });
+
+  it('measures the selected performance take from its in-point and offers no ineffective loop repair', () => {
+    const trimmed = { ...scene, startSec: 0, endSec: 3, loop: true, takes: [
+      { kind: 'video', assetId: 'clip-1', shotInstruction: { shotMode: 'performance', edit: { inSec: 2, outSec: 4 } } },
+    ] };
+    const props = { index: 0, expanded: true, lipSyncBackend: 'fal', songDurationSec: 30, onEditLocal: vi.fn(), onSave: vi.fn() };
+    const { container, rerender } = render(<SceneCard {...props} scene={trimmed} />);
+    metadata(container.querySelector('video'), 4);
+    rerender(<SceneCard {...props} scene={{ ...trimmed, shotMode: 'performance' }} />);
+    expect(coverage().textContent).toContain('clip is 2.0s');
+    expect(screen.getByText('Clip too short')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Loop clip' })).toBeNull();
+  });
+
   // Catches coverage based on raw file length, a stale clip's measurement, or a trim
   // save that loses millisecond rounding; also pins metadata lifetime across hidden previews.
   it('measures adjusted playback, retains it while hidden, invalidates a replacement, and trims the shot', () => {
@@ -516,7 +550,8 @@ describe('clip playback and coverage', () => {
     expect(coverage()).toBeNull();
     metadata(container.querySelector('video'), 4.567);
     expect(container.querySelector('video').playbackRate).toBeCloseTo(32 / 24);
-    expect(coverage().textContent).toContain('clip is 3.1s');
+    // The render rounds the 3.05025s source window to 3.050s before display.
+    expect(coverage().textContent).toContain('clip is 3.0s');
     expect(screen.getByLabelText('Not 16:9')).toBeTruthy();
     rerender(<SceneCard {...props} scene={{ ...adjusted, visualLayer: 'still' }} />);
     expect(container.querySelector('section[aria-label="Render"] video')).toBeNull();

@@ -3,6 +3,7 @@
 // The pure detectors these checks call live in ../slopScore.js — see that
 // module's doc comment for how it EXTENDS (rather than duplicates) the
 // existing proseTics.js / cliches.js / repetition.js anti-slop primitives.
+import { hasManuscript } from '../checkInfra/gates.js';
 import {
   MIN_DENSITY_OCCURRENCES,
   countSectionBreaks,
@@ -66,7 +67,7 @@ export const slopChecks = [
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Words to leave alone (comma-separated or one per line) — applies to both tiers.' },
       { key: 'extraWords', label: 'Extra banned words to flag', type: 'text', help: 'Series-specific words to add to the seed lists (comma-separated or one per line) — applies to both tiers.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -141,7 +142,7 @@ export const slopChecks = [
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a slop-heavy draft can not flood the review.' },
       { key: 'allowPatterns', label: 'Muted AI-tell patterns', type: 'text', help: 'Pattern ids to leave alone (comma-separated or one per line): sense-of, couldnt-help-but, eyes-widened, breath-didnt-know, wave-of-emotion, heart-pounded-chest, physical-named-emotion.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -194,7 +195,7 @@ export const slopChecks = [
       { key: 'triadicMinRun', label: 'Short sentences in a row to flag', type: 'number', min: 3, max: 8, step: 1, help: 'How many consecutive short sentences trip the "Fast. Precise. Deadly." flag.' },
       { key: 'negativeAssertionDensityPer1000', label: '"Did not" rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose "did not [verb]" / "didn\'t [verb]" frequency per 1000 words is at or above this.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;
@@ -251,7 +252,7 @@ export const slopChecks = [
       { key: 'paragraphUniformityMinRun', label: 'Uniform paragraphs in a row to flag', type: 'number', min: 3, max: 10, step: 1, help: 'How many consecutive similar-length paragraphs trip the mechanical-cadence flag.' },
       { key: 'sectionBreakThresholdPer1000', label: 'Scene-break rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose scene/section-break marker frequency per 1000 words is at or above this — over-fragmented pacing.' },
     ],
-    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    gate: hasManuscript,
     run: (ctx) => {
       const cfg = ctx.config || {};
       const max = cfg.maxFindings ?? 20;

@@ -485,17 +485,20 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
  *
  * Safety: refuses unbounded wipes. Accepts either:
  *   - `ids` (optionally scoped with `source`), or
- *   - `source` + (`chatGuid` and/or `handle`)
+ *   - `source` + (`chatGuid` and/or `handle`), or
+ *   - `accountId` (alone or with `source`) — erases everything an account's sync
+ *     copied in when the account is deleted (#12984)
  *
  * Used by PortOS-side managers (iMessage #2413, later Signal/etc.) — never
  * mutates the external source (chat.db, Gmail, …).
  */
-export async function deleteEvents({ ids, source, chatGuid, handle } = {}) {
+export async function deleteEvents({ ids, source, chatGuid, handle, accountId } = {}) {
   await ensureReady();
   const hasIds = Array.isArray(ids) && ids.length > 0;
   const hasChat = chatGuid != null && String(chatGuid).length > 0;
   const hasHandle = handle != null && String(handle).length > 0;
-  if (!hasIds && !(source && (hasChat || hasHandle))) return { deleted: 0 };
+  const hasAccount = accountId != null && String(accountId).length > 0;
+  if (!hasIds && !hasAccount && !(source && (hasChat || hasHandle))) return { deleted: 0 };
 
   const clauses = [];
   const params = [];
@@ -506,6 +509,10 @@ export async function deleteEvents({ ids, source, chatGuid, handle } = {}) {
   if (source) {
     params.push(String(source));
     clauses.push(`source = $${params.length}`);
+  }
+  if (hasAccount) {
+    params.push(String(accountId));
+    clauses.push(`account_id = $${params.length}`);
   }
   if (hasChat) {
     params.push(String(chatGuid));

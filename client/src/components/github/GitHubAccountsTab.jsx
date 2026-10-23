@@ -19,11 +19,13 @@ import {
 } from '../../services/api';
 
 const GITHUB_DOT_COM = 'github.com';
+// Public/Private is where thread text may go; who counts as trusted is the
+// separate instance-trust switch below.
 const TRUST_OPTIONS = [
-  { value: 'public', label: 'Public', hint: 'Anyone can mention you; outside content is always screened' },
-  { value: 'private', label: 'Private', hint: 'Enterprise: org members trusted; content stays on allowed AI providers' },
+  { value: 'public', label: 'Public', hint: 'Thread text may go to cloud AI providers; outside content is always screened' },
+  { value: 'private', label: 'Private', hint: 'Thread text stays on local or allowed AI providers; org members are trusted' },
 ];
-const MODE_LABELS = { observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
+const MODE_LABELS = { disabled: 'Disabled', observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
 const STATUS_VIEW = {
   ok: { tone: 'success', label: 'Signed in' },
   'wrong-account': { tone: 'warning', label: 'Other login active' },
@@ -34,7 +36,8 @@ const STATUS_VIEW = {
 };
 
 const defaultTrustForHost = (host) => (host.trim().toLowerCase() === GITHUB_DOT_COM ? 'public' : 'private');
-const emptyForm = () => ({ host: GITHUB_DOT_COM, login: '', label: '', trust: 'public', trustTouched: false, allowedProviders: [] });
+const isEnterpriseHost = (host) => Boolean(host.trim()) && host.trim().toLowerCase() !== GITHUB_DOT_COM;
+const emptyForm = () => ({ host: GITHUB_DOT_COM, login: '', label: '', trust: 'public', trustTouched: false, allowedProviders: [], allowAgents: false, trustInstanceUsers: false });
 const formFromAccount = (account) => ({
   host: account.host,
   login: account.login || '',
@@ -42,6 +45,8 @@ const formFromAccount = (account) => ({
   trust: account.trust,
   trustTouched: true,
   allowedProviders: account.allowedProviders || [],
+  allowAgents: account.allowAgents === true,
+  trustInstanceUsers: account.trustInstanceUsers === true,
 });
 // No provider ticked = the Private default, local providers only (null).
 const payloadFromForm = (form) => ({
@@ -50,6 +55,8 @@ const payloadFromForm = (form) => ({
   label: form.label.trim(),
   trust: form.trust,
   allowedProviders: form.trust === 'private' && form.allowedProviders.length ? form.allowedProviders : null,
+  allowAgents: form.trust === 'private' && form.allowAgents,
+  trustInstanceUsers: isEnterpriseHost(form.host) && form.trustInstanceUsers,
 });
 
 const fetchApiProviders = () => getProviders({ silent: true })
@@ -114,6 +121,24 @@ function AccountForm({ form, setForm, onSubmit, onCancel, saving, submitLabel })
         </FormField>
       </div>
       {form.trust === 'private' && <AllowedProviders form={form} setForm={setForm} />}
+      {form.trust === 'private' && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <input id="github-allow-agents" type="checkbox" checked={form.allowAgents} onChange={(event) => setForm((prev) => ({ ...prev, allowAgents: event.target.checked }))} />
+            <label htmlFor="github-allow-agents" className="text-sm text-gray-300">Allow agents to work on this account's threads</label>
+          </div>
+          <p className="text-xs text-gray-500">Lets Autopilot and Resolve with agent hand threads to CoS agents. They run on the providers set in PortOS, not the list above, so this code and discussion may reach those providers.</p>
+        </div>
+      )}
+      {isEnterpriseHost(form.host) && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <input id="github-trust-instance" type="checkbox" checked={form.trustInstanceUsers} onChange={(event) => setForm((prev) => ({ ...prev, trustInstanceUsers: event.target.checked }))} />
+            <label htmlFor="github-trust-instance" className="text-sm text-gray-300">Trust everyone on this instance</label>
+          </div>
+          <p className="text-xs text-gray-500">Every person signed in to this Enterprise host counts as trusted, as a collaborator would: no spam checks, and their pull requests and issues go to the trusted agent lanes. Turn it off for an instance strangers can join.</p>
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={saving || !form.host.trim()} className="px-4 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-50">
           {saving ? 'Saving…' : submitLabel}
@@ -256,6 +281,7 @@ export default function GitHubAccountsTab() {
                     </p>
                   </div>
                   <Pill tone={account.trust === 'private' ? 'accent' : 'muted'}>{account.trust === 'private' ? 'Private' : 'Public'}</Pill>
+                  {account.trustInstanceUsers && <Pill tone="success">Trusts its instance</Pill>}
                   <Pill tone="muted">{MODE_LABELS[account.mode] || account.mode}</Pill>
                 </div>
                 <AccountStatus status={statuses[account.id]} onRecheck={() => checkStatus(account.id)} />

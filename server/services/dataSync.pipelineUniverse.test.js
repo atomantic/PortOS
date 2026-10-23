@@ -163,19 +163,19 @@ describe('dataSync — universe category', () => {
     const snap = await dataSync.getSnapshot('universe');
     expect(snap.portosMeta).toBeDefined();
     expect(typeof snap.portosMeta.portosVersion).toBe('string');
-    expect(snap.portosMeta.schemaVersions.universes).toBe(13);
+    expect(snap.portosMeta.schemaVersions.universes).toBe(14);
   });
 
   it('applyRemote rejects when sender schemaVersions are AHEAD of local code', async () => {
     writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 14 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 15 } } });
     expect(result.applied).toBe(false);
     expect(result.count).toBe(0);
     expect(result.blockedBySchema).toBeDefined();
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'universes', senderV: 14, receiverV: 13 },
+      { category: 'universes', senderV: 15, receiverV: 14 },
     ]);
     expect(result.blockedBySchema.senderPortosVersion).toBe('99.0.0');
     // Nothing was written.
@@ -230,6 +230,23 @@ describe('dataSync — universe category', () => {
     }] }, { portosMeta: { schemaVersions: { universes: 13 } } });
     expect(current.applied).toBe(true);
     expect(readUniverseState().universes[0].characters[0].referenceSheetRequests).toEqual({ standard: next });
+  });
+
+  // Catches an older peer's unrelated canon edit stripping alternate ages/looks.
+  it('keeps character and place forms when a pre-forms peer wins LWW', async () => {
+    const base = { id: 'u-forms', name: 'Example', createdAt: '2026-05-17T09:00:00Z' };
+    const kid = { id: 'form-kid', label: 'Age 7', age: '7', description: 'yellow raincoat' };
+    writeUniverseState({ universes: [{ ...base, updatedAt: '2026-05-17T10:00:00Z',
+      characters: [{ id: 'character-1', name: 'Example', forms: [kid] }],
+      places: [{ id: 'place-1', name: 'Harbor', forms: [{ ...kid, id: 'form-ruin', label: 'Ruined' }] }],
+    }], runs: [] });
+    const behind = await dataSync.applyRemote('universe', { universes: [{ ...base, updatedAt: '2026-05-17T11:00:00Z',
+      characters: [{ id: 'character-1', name: 'Peer edit' }], places: [{ id: 'place-1', name: 'Harbor' }],
+    }] }, { portosMeta: { schemaVersions: { universes: 13 } } });
+    expect(behind.applied).toBe(true);
+    const [universe] = readUniverseState().universes;
+    expect(universe.characters[0].forms).toEqual([kid]);
+    expect(universe.places[0].forms[0].label).toBe('Ruined');
   });
 
   it('applyRemote falls through for legacy senders that send NO portosMeta at all', async () => {

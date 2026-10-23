@@ -21,7 +21,8 @@ vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { 
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () => 'synthetic-instance' }));
 // Accepting a document starts a background overlay text check (its own browser); this suite pins the authoring UI.
 vi.mock('../services/musicVideo/overlayTextService.js', () => ({ checkOverlayTextInBackground: () => {}, startOverlayTextCheck: async () => { throw new Error('not in this suite'); } }));
-vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
+// authGate (reached from the accept route's host-control check) subscribes to settingsEvents at import.
+vi.mock('../services/settings.js', async () => ({ getSettings: async () => ({}), settingsEvents: new (await import('node:events')).EventEmitter() }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyRequestSessionIdentity: async () => ({ kind: 'session', sessionId: 'synthetic-browser', label: null }) }));
 let endpoint;
 vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: path => fetch(`${endpoint}${path}`) }));

@@ -414,6 +414,7 @@ async function deleteAppUnlocked(id) {
 
   delete data.apps[id];
   await saveApps(data);
+  console.log(`🗑️ Removed app ${id} from registry`);
 
   return true;
 }

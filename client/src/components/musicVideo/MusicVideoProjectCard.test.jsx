@@ -133,24 +133,27 @@ describe('MusicVideoProjectCard', () => {
     expect(screen.getByText(/2 scenes · 1 clip/i)).toBeInTheDocument();
   });
 
-  it('handles clicking the open button or title to select project', () => {
-    const onSelect = vi.fn();
-    render(
-      <MusicVideoProjectCard
-        project={BASE_PROJECT}
-        trackLabel="Synth Dreams"
-        onSelect={onSelect}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /^Open$/i }));
-    expect(onSelect).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cyber Horizon' }));
-    expect(onSelect).toHaveBeenCalledTimes(2);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open project Cyber Horizon' }));
-    expect(onSelect).toHaveBeenCalledTimes(3);
+  it('offers the footer as the single project entry on every preview surface', () => {
+    const src = '/api/music-video/example/dev-artifacts/film/file?version=2';
+    const cases = {
+      placeholder: { ...BASE_PROJECT, preview: { kind: 'none', source: null } },
+      image: { ...BASE_PROJECT, preview: { kind: 'image', source: 'frame', src: '/data/images/example.png', label: 'Frame' } },
+      video: { ...BASE_PROJECT, preview: { kind: 'video', source: 'draft', jobId: 'job-1', poster: '/data/images/example.png', label: 'Draft' } },
+      final: { ...BASE_PROJECT, preview: { kind: 'video', source: 'final', jobId: 'job-1', poster: '/data/images/example.png', label: 'Final' } },
+      imported: { ...BASE_PROJECT, preview: { kind: 'video', source: 'animatic', artifactId: 'film', version: 2, src, poster: null, label: 'Imported draft · v2', reviewStatus: 'pending' } },
+    };
+    for (const [name, project] of Object.entries(cases)) {
+      const onSelect = vi.fn(), onReview = vi.fn();
+      const { unmount } = render(<MusicVideoProjectCard project={project} onSelect={onSelect} onReview={name === 'final' || name === 'imported' ? onReview : undefined} />);
+      expect(screen.getByRole('heading', { name: 'Cyber Horizon' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Cyber Horizon' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /Open project/ })).toBeNull();
+      const entry = screen.getByRole('button', { name: /^(Open|Review video|Review draft)\b/ });
+      fireEvent.click(entry);
+      const expected = name === 'final' || name === 'imported' ? onReview : onSelect;
+      expect(expected).toHaveBeenCalledTimes(1);
+      unmount();
+    }
   });
 
   it('renders video preview with play button and handles clicking play', async () => {

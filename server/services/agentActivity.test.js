@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -10,7 +10,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makeProxy(actual);
 });
 
-const { cleanupOldActivity, getActivityTimeline } = await import('./agentActivity.js');
+const { cleanupOldActivity, getActivityTimeline, getTodayActionCount, logActivity } = await import('./agentActivity.js');
 
 const activityRoot = join(tempRoot, 'agents', 'activity');
 
@@ -67,6 +67,26 @@ describe('getActivityTimeline', () => {
 
     expect(first.map(({ id }) => id)).toEqual(['b-later', 'a-tie', 'b-tie']);
     expect(second).toEqual(first);
+  });
+
+  it('filters by action before the limit cut and still honors the cursor', async () => {
+    const mixed = (id, ts, action) => ({ ...entry(id, ts), action });
+    await writeDay('agent-a', '2026-08-23', [
+      mixed('say-1', '2026-08-23T00:00:09.000Z', 'mw_say'),
+      mixed('post-1', '2026-08-23T00:00:08.000Z', 'post'),
+      mixed('think-1', '2026-08-23T00:00:07.000Z', 'mw_think'),
+    ]);
+    await writeDay('agent-a', '2026-08-22', [
+      mixed('say-2', '2026-08-22T00:00:09.000Z', 'mw_say'),
+      mixed('post-2', '2026-08-22T00:00:08.000Z', 'post'),
+    ]);
+
+    const ids = async (options) => (await getActivityTimeline(options)).map(({ id }) => id);
+    await expect(ids({ limit: 2, actions: ['post'] })).resolves.toEqual(['post-1', 'post-2']);
+    await expect(ids({ limit: 3, actions: ['mw_say', 'mw_think'] })).resolves.toEqual(['say-1', 'think-1', 'say-2']);
+    await expect(ids({
+      limit: 5, actions: ['mw_say'], beforeTimestamp: '2026-08-23T00:00:09.000Z',
+    })).resolves.toEqual(['say-2']);
   });
 
   it('skips empty days while walking backward', async () => {
@@ -138,5 +158,33 @@ describe('cleanupOldActivity', () => {
 
     await expect(cleanupOldActivity(3650)).resolves.toBe(0);
     await expect(dayFiles()).resolves.toEqual([`${old}.json`, `${today}.json`].sort());
+  });
+});
+
+describe('logActivity concurrency', () => {
+  beforeEach(async () => {
+    await rm(activityRoot, { recursive: true, force: true });
+  });
+
+  // Fire-and-forget bursts (WebSocket frames) must not lose entries to a
+  // load → push → save race on the same agent/day file.
+  it('persists every entry from an unawaited burst for one agent and day', async () => {
+    const accountId = 'burst-account';
+    const timestamp = new Date().toISOString();
+    const writes = Array.from({ length: 20 }, (_, index) => logActivity({
+      agentId: 'agent-burst',
+      accountId,
+      action: 'burst-action',
+      status: 'completed',
+      params: { index },
+      timestamp,
+    }));
+    await Promise.all(writes);
+
+    const dayFile = (await readdir(join(activityRoot, 'agent-burst')))[0];
+    const { activities } = JSON.parse(await readFile(join(activityRoot, 'agent-burst', dayFile), 'utf-8'));
+    expect(activities).toHaveLength(20);
+    expect(new Set(activities.map(a => a.params.index)).size).toBe(20);
+    await expect(getTodayActionCount(accountId, 'burst-action')).resolves.toBe(20);
   });
 });

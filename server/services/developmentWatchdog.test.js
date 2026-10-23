@@ -28,7 +28,7 @@ vi.mock('./taskSchedule.js', () => ({
   recordExecution: (...args) => m.execution(...args),
 }));
 vi.mock('./github.js', () => ({ execGh: async args => {
-  if (args[0] === 'api') return m.account;
+  if (args[0] === 'api') { if (m.accountFailure) throw new Error(m.accountFailure); return m.account; }
   if (args[0] === m.execGhFailureOn) throw new Error('forge unavailable');
   if (args[0] === m.invalidGhJsonOn) return 'not json';
   return JSON.stringify({ body: '', state: m.dependencyOpen ? 'OPEN' : 'CLOSED', labels: m.dependencyOpen ? [{ name: 'in-progress' }] : [] });
@@ -49,7 +49,7 @@ import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanc
 
 beforeEach(() => {
   m.state = { config: { improvementEnabled: true, persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };
-  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.updates = []; m.branch = ''; m.account = 'atomantic'; m.fullName = 'atomantic/example'; m.execOptions = []; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.prStates = {}; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
+  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.updates = []; m.branch = ''; m.account = 'atomantic'; m.fullName = 'atomantic/example'; m.execOptions = []; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.prStates = {}; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.accountFailure = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
   m.readiness = { shouldRun: true }; m.requests = []; m.duplicate = false;
   m.metadata.mockReset().mockResolvedValue({ metadata: {} });
   m.prepare.mockReset().mockResolvedValue({
@@ -92,6 +92,15 @@ describe('development watchdog scan to dispatch', () => {
     let receipt = await runDevelopmentWatchdog({ force: true }); expect(receipt.apps[0].pullRequests[0].disposition).toBe('waiting-for-ci-review');
     m.tasks = [{ id: 'held', status: 'blocked', metadata: { app: 'app', reviewLoopPRUrl: m.prs[0].url, blockedCategory: 'max-spawns' } }];
     receipt = await runDevelopmentWatchdog({ force: true }); expect(receipt.apps[0].pullRequests[0].disposition).toBe('blocked'); expect(m.adds).toEqual([]);
+  });
+  it('an uninspectable app is logged and its receipt row carries a redacted detail', async () => {
+    m.accountFailure = 'HTTP 401 bad credentials ghp_abcdefghijklmnopqrstuvwxyz0123456789\nsecond line';
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const receipt = await runDevelopmentWatchdog({ force: true });
+    const row = receipt.apps[0]; const logged = spy.mock.calls.map(c => c[0]).join('\n'); spy.mockRestore();
+    expect(row).toMatchObject({ complete: false, blockers: ['source-unavailable'] });
+    expect(row.detail).toContain('HTTP 401'); expect(row.detail).not.toContain('ghp_abcdef'); expect(row.detail).not.toContain('second line');
+    expect(logged).toContain('could not inspect app app: HTTP 401'); expect(logged).not.toContain('ghp_abcdef');
   });
   it('unknown participating peer and wrong account defer work', async () => {
     m.backlog = [{ ref: '42' }]; m.peers = [{ id: 'peer', fullSync: true }];

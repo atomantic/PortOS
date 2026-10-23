@@ -36,7 +36,7 @@
  *
  */
 
-import { updateTask } from './cos.js';
+import { updateTask } from './cosTaskStore.js';
 import { getAgents, updateAgent } from './cosAgentLifecycle.js';
 import { getSettings } from './settings.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';

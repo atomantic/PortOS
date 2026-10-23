@@ -6,7 +6,7 @@
  * an agent from the request's content directly.
  */
 import { ServerError } from '../lib/errorHandler.js';
-import { getAllTasks } from './cos.js';
+import { getAllTasks } from './cosTaskStore.js';
 import { listExternalOpenPullRequests } from './prReviewerSecurity.js';
 import { getOnDemandRequests, triggerOnDemandTask } from './taskSchedule.js';
 

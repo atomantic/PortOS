@@ -84,7 +84,7 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 1. Work on `main` branch (or feature branches merged to `main`)
 2. PRs to `main` trigger CI tests
-3. Push `main` to `release` branch to trigger GitHub Release workflow
+3. Follow the [frozen candidate procedure](./VERSIONING.md#creating-a-release): capture `main` at kickoff, validate an isolated candidate, then merge it into `release` to publish
 4. Before pushing, follow [Regular Development](./VERSIONING.md#regular-development): verify your branch/upstream and working-tree state, preserve unrelated work, and explicitly fetch the intended base for comparison (the tracking branch may differ); integrate it only for conflicts, enforced branch policy, or evidenced integration risk. Run `npm run pregate` after any rebase and before every push. See [AGENTS.md's Git Workflow](../AGENTS.md#git-workflow) for the full contract.
 
 Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
@@ -194,7 +194,7 @@ so write commit subjects/bodies for a human release-note reader (see Commit
 Messages below). See [`.changelog/README.md`](../.changelog/README.md) for
 details.
 
-> **Note:** Some older code or automation notes may still reference a `dev` branch workflow. The `main`→`release` workflow described here is the current source of truth.
+> **Note:** Some older code or automation notes may still reference a `dev` branch workflow. The frozen-candidate→`release` workflow described here is the current source of truth.
 
 ### Line Endings on Windows
 
@@ -264,14 +264,31 @@ dump, so `test:db` takes a session-level Postgres advisory lock for the run
 (`server/test/dbRunExclusivity.js`). A second run from another worktree prints
 `Another DB test run holds portos_test` and waits for the first to finish.
 
+### Repairing a test database whose extensions were dropped
+
+The application role cannot create extensions. `backup.db.test.js` used to
+rebuild `portos_test` with `DROP SCHEMA public CASCADE`, which dropped `vector`
+and `pgcrypto`; it now removes only application objects and leaves them
+installed, and refuses to start (before changing anything) if they are missing.
+A test database an older checkout already stripped needs a one-time repair by a
+superuser, after which `npm run setup:db:test` works with the ordinary role:
+
+```bash
+psql -d portos_test -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;'
+npm run setup:db:test
+```
+
+Do not grant the application role superuser to avoid this step.
+
 Supported full local validation uses the CI worker budget. An unbounded
 `npm test` can oversubscribe a loaded machine: real media, prompt-catalog,
 and nested-worker cases then hit their existing budgets. A green focused
 file run is evidence for that file only, not a full-suite result.
 
 ```bash
-# Server, then client. The value only lowers each workspace cap (client stays at 2).
-PORTOS_PREGATE_MAX_WORKERS=4 npm test
+# Server, then client. Workers derive from the CoS max-concurrent-agents setting
+# (cores / agents, capped at 4; client stays at 2). Lower it in the app to ease host load.
+npm test
 
 # Focused evidence for one file:
 npm test --prefix server -- services/creativeDirector/videoAssembly.test.js

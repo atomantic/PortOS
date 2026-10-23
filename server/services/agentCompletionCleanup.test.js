@@ -13,13 +13,18 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+vi.mock('./cos.js', () => ({}));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
-vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue({}),
   addTask: vi.fn().mockResolvedValue({}),
   reviveBlockedTask: vi.fn().mockResolvedValue({}),
+}));
+vi.mock('./cosTaskGenerator.js', () => ({
   checkStagePrecondition: vi.fn().mockReturnValue({ passed: true }),
+}));
+vi.mock('./cosAgentLifecycle.js', () => ({
+  updateAgent: vi.fn(),
   getAgent: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./jira.js', () => ({ getInstances: vi.fn(), addComment: vi.fn() }));
@@ -40,7 +45,9 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorC
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
-import { updateTask, addTask, reviveBlockedTask, getAgent, checkStagePrecondition } from './cos.js';
+import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
+import { getAgent } from './cosAgentLifecycle.js';
+import { checkStagePrecondition } from './cosTaskGenerator.js';
 import { emitLog } from './cosEvents.js';
 import { cleanupAgentWorktree, releaseRetryHold, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
