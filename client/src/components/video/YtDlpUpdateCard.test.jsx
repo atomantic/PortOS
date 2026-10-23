@@ -10,7 +10,7 @@ vi.mock('../../services/apiVideoDownload.js', () => ({
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const handlers = new Map();
-vi.mock('../../hooks', () => ({
+vi.mock('../../hooks/useSocket.js', () => ({
   useSocket: () => ({
     on: (event, fn) => handlers.set(event, fn),
     off: (event) => handlers.delete(event),

@@ -17,8 +17,8 @@ vi.mock('../../../hooks/useSyncSourceSettings', () => ({
     setIntervalMinutes: vi.fn(), saving: false, status: null, setStatus: vi.fn(), dirty: false, save: vi.fn(),
   }),
 }));
-vi.mock('../../../hooks', () => ({
-  useVideoDownload: () => ({ active: false, percent: 0, stage: null, context: null, start: vi.fn(), cancel: vi.fn() }),
+vi.mock('../../../hooks/useVideoDownload.js', () => ({
+  default: () => ({ active: false, percent: 0, stage: null, context: null, start: vi.fn(), cancel: vi.fn() }),
 }));
 
 import { YoutubeTab } from './YoutubeTab';

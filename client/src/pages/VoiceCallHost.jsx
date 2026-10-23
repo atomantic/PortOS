@@ -22,7 +22,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, PhoneCall, Radio, Volume2 } from 'lucide-react';
 import socket from '../services/socket';
 import TabPills from '../components/ui/TabPills';
-import { useDrawerTab } from '../hooks';
+import useDrawerTab from '../hooks/useDrawerTab.js';
 import {
   CALL_FRAME_SAMPLES,
   CALL_HOST_LOCK,

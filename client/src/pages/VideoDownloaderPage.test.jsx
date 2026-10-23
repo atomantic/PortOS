@@ -8,9 +8,11 @@ vi.mock('../services/apiVideoDownload.js', () => ({
   ]),
   deleteVideoDownload: vi.fn(),
 }));
-vi.mock('../hooks', () => ({
-  useVideoDownload: () => ({ active: false, percent: 0, stage: '', start: vi.fn(), cancel: vi.fn() }),
-  useConfirmDelete: () => ({ isConfirming: () => false, requestDelete: vi.fn(), cancelDelete: vi.fn(), confirmDelete: vi.fn() }),
+vi.mock('../hooks/useVideoDownload.js', () => ({
+  default: () => ({ active: false, percent: 0, stage: '', start: vi.fn(), cancel: vi.fn() }),
+}));
+vi.mock('../hooks/useConfirmDelete.js', () => ({
+  default: () => ({ isConfirming: () => false, requestDelete: vi.fn(), cancelDelete: vi.fn(), confirmDelete: vi.fn() }),
 }));
 vi.mock('../components/video/YtDlpUpdateCard', () => ({ default: () => null }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));

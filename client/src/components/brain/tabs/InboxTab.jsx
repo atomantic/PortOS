@@ -23,7 +23,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
-import { useLocalStorageBool } from '../../../hooks';
+import { useLocalStorageBool } from '../../../hooks/useLocalStorageBool.js';
 import { useFailedCaptures } from '../../../hooks/useFailedCaptures';
 import FailedCaptureList from '../FailedCaptureList';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
@@ -38,7 +38,7 @@ import { timeAgo } from '../../../utils/formatters';
 import { parseBareUrl } from '../../../lib/bareUrl';
 import VoiceCapture from '../VoiceCapture';
 import RepoIntakeOptions from '../RepoIntakeOptions';
-import { useRepoIntake } from '../../../hooks';
+import { useRepoIntake } from '../../../hooks/useRepoIntake.js';
 
 // Where a filed entry's "View" button points. A bare-URL capture is filed to the
 // links collection (see captureUrlAsLink) and lives in the Links tab; every
