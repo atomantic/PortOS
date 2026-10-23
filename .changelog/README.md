@@ -9,7 +9,8 @@ This directory contains detailed release notes for each version of PortOS.
 ### No per-branch entries — release notes come from the commit log
 
 There is nothing to write while you work. `/do:release` builds the changelog
-for a release by reading `git log` since the last tag and grouping commits by
+for a release by reading `git log` from the previous published tag through the
+frozen candidate head (see [the release procedure](../docs/VERSIONING.md#creating-a-release)) and grouping commits by
 feature/theme into a human-readable summary — it does this automatically as
 part of the release, not from anything staged in this directory. Do not create
 a `NEXT.md`, do not write a per-branch fragment, and do not hand-edit a

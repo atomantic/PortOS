@@ -454,8 +454,8 @@ export const LOG_TRIAGE_CAPS = [
 // server drops any key outside that list.
 export const RELEASE_OPTIONS_TASK_TYPES = new Set(['do-release']);
 export const RELEASE_OPTIONS = [
-  { field: 'finishInFlight', label: 'Finish in-flight work', description: 'Merge or close open PRs and reconcile lingering branches that no running agent owns before releasing' },
-  { field: 'mergeDependencyUpdates', label: 'Merge dependency updates', description: 'Merge open Dependabot/Renovate PRs, fixing any that break the build' },
+  { field: 'finishInFlight', label: 'Finish in-flight work', description: 'Finish only in-flight fixes required by the frozen release candidate; leave unrelated PRs for the next release' },
+  { field: 'mergeDependencyUpdates', label: 'Merge dependency updates', description: 'Include only dependency updates required to fix the frozen release candidate' },
   { field: 'resolveBlockers', label: 'Resolve blockers', description: 'Fix failing tests, red CI, and blocking bugs (delegating to a sub-agent) instead of stopping to report them' },
   { field: 'autoDecide', label: 'Make decisions', description: 'Make routine design and preference decisions and list them for your review, instead of stopping to ask' },
 ];
