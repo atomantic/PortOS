@@ -20,7 +20,7 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -32,7 +32,15 @@ vi.mock('../lib/execGit.js', async importOriginal => {
       injected.fetches.push({ args, options });
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
     }
-    return actual.execGit(args, cwd, options);
+    try {
+      return await actual.execGit(args, cwd, options);
+    } catch (error) {
+      // Report only the failed proof phase, never native stderr with host paths.
+      if (options?.env?.GIT_NO_REPLACE_OBJECTS === '1') {
+        injected.proofFailures.push(args.includes('init') ? 'init' : args.includes('unbundle') ? 'unbundle' : 'fsck');
+      }
+      throw error;
+    }
   } };
 });
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ env: { ...process.env, GH_TOKEN: 'synthetic-account-token' } }) }));
@@ -62,7 +70,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async () => {
-    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null });
+    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -123,7 +131,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const { release, saved } = await historicalArchive();
     const before = (await execGit(['show-ref'], repo)).stdout;
     const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
-    expect(outcome.retirementObligations).toEqual([]);
+    expect(outcome.retirementObligations, `Isolated bundle proof failures: ${injected.proofFailures.join(', ') || 'none'}`).toEqual([]);
     expect(outcome.remaining).toEqual([]);
     expect(outcome.recoveredPreservations).toEqual([expect.objectContaining({ path: release.path, branch: release.branch, head: release.head,
       archiveDir: saved.archiveDir, verified: true,
