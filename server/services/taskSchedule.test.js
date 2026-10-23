@@ -78,7 +78,7 @@ vi.mock('./apps.js', () => ({
 
 vi.mock('./taskInputGate.js', () => ({ inputsUnchangedSince: vi.fn().mockResolvedValue(false), readHead: vi.fn() }))
 
-vi.mock('./branchReconcileInventoryPrune.js', () => ({ findGoneInventoryRows: vi.fn().mockResolvedValue([]) }))
+vi.mock('./branchReconcileInventoryPrune.js', async importOriginal => ({ ...await importOriginal(), findGoneInventoryRows: vi.fn().mockResolvedValue([]) }))
 
 vi.mock('./instanceFeatures.js', () => ({
   isInstanceFeatureEnabled: vi.fn().mockResolvedValue(true),
