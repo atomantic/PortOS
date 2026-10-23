@@ -395,6 +395,20 @@ const NOTIFICATION = {
   unread: true, state: 'open', updatedAt: '2026-10-01T10:00:00.000Z',
 };
 
+// The inbox lists, syncs, then lists again on mount. Settle that whole chain
+// inside act before the test goes on, so its last state update cannot land
+// after the test ends and be reported against a later one.
+async function renderInbox(tab = 'inbox') {
+  const view = renderTab(tab);
+  await waitFor(() => expect(mock.getGitHubNotifications.mock.calls.length).toBeGreaterThanOrEqual(2));
+  await act(async () => {
+    const pending = [mock.getGitHubAccounts, mock.syncGitHubNotifications, mock.getGitHubNotifications]
+      .flatMap((fn) => fn.mock.results.map((result) => result.value));
+    await Promise.allSettled(pending);
+  });
+  return view;
+}
+
 describe('GitHub inbox tab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -404,7 +418,7 @@ describe('GitHub inbox tab', () => {
   });
 
   it('opens by default, syncs on arrival, and links only to the stored GitHub page', async () => {
-    renderTab('');
+    await renderInbox('');
     expect(await screen.findByText('Example change')).toBeTruthy();
     expect(screen.getByText('Review requested')).toBeTruthy();
     expect(screen.getByText('Your repo')).toBeTruthy();
@@ -415,7 +429,7 @@ describe('GitHub inbox tab', () => {
 
   it('offers Add automation rule from a row, linked to a form prefilled with its kind and repo (#13192)', async () => {
     mock.getGitHubNotifications.mockResolvedValue({ notifications: [{ ...NOTIFICATION, ruleKind: 'review-request' }], sync: {} });
-    renderTab('inbox');
+    await renderInbox();
     fireEvent.click(await screen.findByRole('button', { name: 'More actions for Example change' }));
     const link = await screen.findByRole('menuitem', { name: /Add automation rule/ });
     expect(link.getAttribute('href')).toBe('/devtools/github/automations?ruleAccount=github-com&ruleKind=review-request&ruleRepo=octocat%2Fhello');
@@ -430,7 +444,7 @@ describe('GitHub inbox tab', () => {
       }],
       sync: {},
     });
-    renderTab('inbox');
+    await renderInbox();
     expect(await screen.findByText('Deploy approval')).toBeTruthy();
     expect(screen.getByText('Deploy (prod)')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open' }).getAttribute('href')).toBe(runUrl);
@@ -450,7 +464,7 @@ describe('GitHub inbox tab', () => {
       ],
     });
     mock.reviewGitHubDeployment.mockResolvedValue({ ...NOTIFICATION, state: 'done' });
-    renderTab('inbox');
+    await renderInbox();
     fireEvent.click(await screen.findByRole('button', { name: 'Review deployment' }));
     expect((await screen.findByLabelText(/^prod$/)).checked).toBe(true);
     expect(screen.getByLabelText(/prod-eu/).disabled).toBe(true);
@@ -470,7 +484,7 @@ describe('GitHub inbox tab', () => {
       sync: {},
     });
     mock.applyGitHubNotificationAction.mockImplementation(async (_account, threadId) => ({ ...NOTIFICATION, threadId, state: 'muted' }));
-    renderTab('inbox');
+    await renderInbox();
     fireEvent.click(await screen.findByRole('button', { name: 'Mute' }));
     expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '201', 'mute');
     // A suggestion whose lane is refused is a disabled button that says why.
@@ -487,14 +501,14 @@ describe('GitHub inbox tab', () => {
       notifications: [{ ...NOTIFICATION, decision: 'suggest-review', agent: { lane: 'do-review', refused: null, pin: null } }],
       sync: {},
     });
-    renderTab('inbox');
+    await renderInbox();
     fireEvent.click(await screen.findByRole('button', { name: 'Do:Review' }));
     expect(await screen.findByRole('button', { name: 'Start agent' })).toBeTruthy();
   });
 
   it('marks a thread done and takes it out of the inbox', async () => {
     mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, state: 'done', unread: false });
-    renderTab('inbox');
+    await renderInbox();
     fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
     expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'done');
     expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
@@ -507,7 +521,7 @@ describe('GitHub inbox tab', () => {
       sync: {},
     });
     mock.clearFinishedGitHubNotifications.mockResolvedValue({ cleared: 1, failed: 0 });
-    renderTab('inbox');
+    await renderInbox();
     // The inbox mirrors GitHub's, so a folded duplicate is listed with its pill.
     expect(await screen.findByText('Folded CI notice')).toBeTruthy();
     // Its suggestion is the action itself.
@@ -527,7 +541,7 @@ describe('GitHub inbox tab', () => {
       sync: {},
     });
     mock.resolveGitHubNotificationWithAgent.mockResolvedValue({ ...NOTIFICATION, decision: 'handed-off', agent: { lane: 'notification-resolve', refused: 'handed-off', pin: null } });
-    renderTab('inbox');
+    await renderInbox();
     expect(await screen.findByText('Add this repo as a PortOS app to resolve it with an agent')).toBeTruthy();
     expect(screen.getByText(/Outside content goes only to the screened/)).toBeTruthy();
     const buttons = screen.getAllByRole('button', { name: 'Resolve with agent' });
@@ -550,7 +564,7 @@ describe('GitHub inbox tab', () => {
       notifications: [{ ...NOTIFICATION, agent: { lane: 'notification-resolve', refused: null, pin: null }, agentFailed: { taskId: 'task-1', agentId: 'agent-7' } }],
       sync: {},
     });
-    renderTab('inbox');
+    await renderInbox();
     expect((await screen.findByText('Agent failed')).closest('a').getAttribute('href')).toBe('/cos/agents/agent-7');
     expect(screen.getByRole('button', { name: 'Resolve with agent' }).disabled).toBe(false);
   });
@@ -561,7 +575,7 @@ describe('GitHub inbox tab', () => {
       sync: {},
     });
     mock.applyGitHubNotificationAction.mockImplementation(async (_account, threadId) => ({ ...NOTIFICATION, threadId, state: 'open' }));
-    renderTab('inbox');
+    await renderInbox();
     fireEvent.click(await screen.findByRole('button', { name: /^Handled/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Back to inbox' }));
     fireEvent.click(screen.getByRole('button', { name: 'Unmute' }));
@@ -577,7 +591,7 @@ describe('GitHub inbox tab', () => {
       counts: { 'needs-you': 2, suspect: 0, handled: 14, all: 16, 'with-agents': 3 },
       sync: {},
     });
-    renderTab('inbox');
+    await renderInbox();
     expect(await screen.findByRole('button', { name: 'Handled 14' })).toBeTruthy();
     expect(screen.getByText('3 with an agent now')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octocat/other' } });
@@ -589,7 +603,7 @@ describe('GitHub inbox tab', () => {
     mock.getGitHubNotifications.mockResolvedValue({
       notifications: [], sync: { 'github-com': { lastSyncAt: null, lastError: 'gh cannot act as github.com (not-authenticated).' } },
     });
-    renderTab('inbox');
+    await renderInbox();
     expect((await screen.findByRole('alert')).textContent).toContain('not-authenticated');
   });
 });
