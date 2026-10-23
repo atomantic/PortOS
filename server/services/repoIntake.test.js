@@ -5,7 +5,8 @@ import { PATHS } from '../lib/fileUtils.js';
 const addTask = vi.fn();
 const getAppById = vi.fn();
 const readOriginRemoteUrl = vi.fn();
-const existsSync = vi.fn();
+// Root discovery can probe the disposable marker during the static imports.
+const { existsSync } = vi.hoisted(() => ({ existsSync: vi.fn() }));
 const pullRepo = vi.fn();
 
 vi.mock('./cosTaskStore.js', () => ({ addTask: (...args) => addTask(...args) }));
