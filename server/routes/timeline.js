@@ -103,15 +103,10 @@ const eventsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(2000).optional(),
 });
 
-// Sources the Timeline store can hold; erasure is limited to these so a typo
-// 400s instead of reporting a successful zero-row delete.
-export const ERASABLE_SOURCES = [
-  'browser', 'calendar', 'discord', 'gmail', 'google-calendar', 'imessage',
-  'location', 'outlook', 'outlook-calendar', 'signal', 'spotify', 'whatsapp', 'youtube',
-];
-
+// The store accepts connector-defined source identifiers. Require an exact,
+// non-empty source instead of duplicating its evolving producer set here.
 const eraseQuerySchema = z.object({
-  source: z.enum(ERASABLE_SOURCES),
+  source: z.string().min(1),
   kind: z.string().max(64).optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),

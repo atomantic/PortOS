@@ -459,15 +459,23 @@ describe('timeline erase routes (#12987)', () => {
     expect(humanActivity.eraseEvents).toHaveBeenCalledWith({ source: 'location', from: '2026-01-01T00:00:00.000Z' });
   });
 
-  it('rejects a missing or unknown source without deleting', async () => {
+  it('rejects a missing or empty source without deleting', async () => {
     expect((await request(app).delete('/api/timeline/events')).status).toBe(400);
-    expect((await request(app).delete('/api/timeline/events?source=nope')).status).toBe(400);
+    expect((await request(app).delete('/api/timeline/events?source=')).status).toBe(400);
     expect(humanActivity.eraseEvents).not.toHaveBeenCalled();
   });
 
-  it('GET /sources lists per-source counts', async () => {
-    const r = await request(app).get('/api/timeline/sources');
-    expect(r.status).toBe(200);
-    expect(r.body.sources[0].source).toBe('location');
+  it('accepts every listed connector source for exact scoped erasure', async () => {
+    const sources = ['location', 'imap', 'teams', `connector-${'x'.repeat(80)}`]
+      .map(source => ({ source, eventCount: 4 }));
+    humanActivity.listSourceCounts.mockResolvedValueOnce(sources);
+    const listed = await request(app).get('/api/timeline/sources');
+    expect(listed.status).toBe(200);
+    expect(listed.body.sources).toEqual(sources);
+    for (const { source } of listed.body.sources) {
+      const erased = await request(app).delete('/api/timeline/events').query({ source });
+      expect(erased.status).toBe(200);
+      expect(humanActivity.eraseEvents).toHaveBeenLastCalledWith({ source });
+    }
   });
 });
