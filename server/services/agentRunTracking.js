@@ -105,7 +105,7 @@ export async function createAgentRun({ agentId, task, model, provider, workspace
  * history would keep saying "success" for exactly the run the agent record and
  * the task status now agree did NOT land its deliverable.
  */
-export async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis = null, successOverride = null) {
+export async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis = null, successOverride = null, delivery = null) {
   if (!runId) return; // Skip if no runId (e.g., agent recovered after restart)
 
   const runDir = join(RUNS_DIR, runId);
@@ -141,6 +141,10 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   if (successOverride === false || refused) success = false;
 
   metadata.success = success;
+  if (delivery) {
+    metadata.executionSuccess = delivery.executionSuccess;
+    metadata.taskOutcome = delivery.taskOutcome;
+  }
   metadata.outputSize = Buffer.byteLength(output || '');
 
   // Store error details - extract from output if no analysis provided. A clean

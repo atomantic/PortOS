@@ -818,7 +818,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     // listeners run as CoS delivers its events; awaiting them keeps the order.
     startNotificationResolveListener();
     const deliver = (event, payload) => Promise.all(cosEvents.listeners(event).map((listener) => listener(payload)));
-    await deliver('agent:completed', { id: 'agent-1', taskId: 'task-1', result: { success: true } });
+    await deliver('agent:completed', { id: 'agent-1', taskId: 'task-1', result: { success: true, taskOutcome: { status: 'completed', reason: 'Verified invented CI repair.' } } });
     expect(actions).toContainEqual(['DELETE', 'notifications/threads/1501']);
     const resolved = await getNotification(account.id, '1501');
     expect(resolved.state).toBe('done');
@@ -827,6 +827,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     // back with its pill, once even when the spawn error and the completion both report it.
     await deliver('agent:completed', { id: 'agent-2', taskId: 'task-2', result: { success: false, resumed: true, resumedTaskId: 'task-2' } });
     expect(await getNotification(account.id, '1505')).toMatchObject({ decision: 'handed-off', agentFailed: null });
+    await deliver('agent:completed', { id: 'agent-2', taskId: 'task-2', result: { success: true, taskOutcome: { status: 'blocked', reason: 'Invented missing prerequisite.' } } });
     await deliver('agent:error', { taskId: 'task-2', error: 'spawn failed' });
     await deliver('agent:completed', { id: 'agent-2', taskId: 'task-2', result: { success: false } });
     const failed = await getNotification(account.id, '1505');

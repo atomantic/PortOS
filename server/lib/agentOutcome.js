@@ -90,3 +90,31 @@ export function agentHandoffReason(agent) {
   const handedOn = !!agent?.result?.resumedTaskId;
   return (handedOn ? pauseReason || error : error || pauseReason) || 'Handed off to a new run';
 }
+
+
+/** Explicit delivery evidence, separate from a process ending normally. */
+export function normalizeTaskOutcome(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!['completed', 'no-action-needed', 'blocked', 'incomplete'].includes(value.status)) return null;
+  if (typeof value.reason !== 'string' || !value.reason.trim()) return null;
+  return { status: value.status, reason: value.reason.trim() };
+}
+
+/** Only evidenced delivery may resolve external work; legacy exits are unknown. */
+export function isTaskDeliveryComplete(agent) {
+  const outcome = normalizeTaskOutcome(agent?.result?.taskOutcome);
+  return !isAgentHandoff(agent) && agent?.result?.success === true
+    && agent.result.validationPassed !== false
+    && ['completed', 'no-action-needed'].includes(outcome?.status);
+}
+
+export function resolveTaskOutcome({ reported, success, validationPassed, branchProvenEmpty, noChangeAllowed }) {
+  if (reported && ['blocked', 'incomplete'].includes(reported.status)) return reported;
+  if (!success || validationPassed === false) return { status: 'incomplete', reason: 'Delivery checks did not pass.' };
+  if (branchProvenEmpty && noChangeAllowed) return { status: 'no-action-needed', reason: 'The permitted no-change result was verified against the repository.' };
+  if (reported?.status === 'no-action-needed' && validationPassed !== true) {
+    return { status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' };
+  }
+  if (reported) return reported;
+  return validationPassed === true ? { status: 'completed', reason: 'The task delivery criteria passed.' } : null;
+}

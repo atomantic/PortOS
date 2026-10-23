@@ -6,4 +6,4 @@
  * digest cannot drift on whether a provider swap was a failure. The file stays so
  * every `lib/agentOutcome` import path in the client is unchanged.
  */
-export { isAgentHandoff, agentHandoffReason } from '../../../server/lib/agentOutcome.js';
+export { isAgentHandoff, agentHandoffReason, normalizeTaskOutcome, isTaskDeliveryComplete } from '../../../server/lib/agentOutcome.js';

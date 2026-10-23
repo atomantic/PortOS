@@ -74,8 +74,10 @@ const SENTINEL_WATCH_TAIL = 'PortOS watches this sentinel and finalizes the run 
  * per-section splice the next mode had to remember. Composing it here keeps
  * "prints a sentinel path" and "says the write is permitted" one fact.
  */
+const TASK_OUTCOME_GUIDANCE = 'Write a JSON envelope with `summary` (your markdown report), `taskOutcome: { "status": "completed" | "no-action-needed" | "blocked" | "incomplete", "reason": "specific evidence or blocker" }`, and the existing `payload` when your task requires one. Use completed only when the requested deliverable is finished; no-action-needed only when checks verified no work remains; blocked for an unmet prerequisite; incomplete for unfinished work. Process exit and writing this file do not prove task achievement. Preserve unfinished work and name what remains in the reason.';
+
 const sentinelCompletionSection = (notice, writeInstruction) =>
-  [notice, '', `${writeInstruction} ${SENTINEL_WATCH_TAIL}`, '', SENTINEL_WRITE_PERMISSION_NOTE].join('\n');
+  [notice, '', `${writeInstruction} ${SENTINEL_WATCH_TAIL}`, '', TASK_OUTCOME_GUIDANCE, '', SENTINEL_WRITE_PERMISSION_NOTE].join('\n');
 
 const REASONING_ONLY_BULLET = '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
 const DISCARD_WORKTREE_HYGIENE = '- **Do NOT commit, push, or open a PR.** This worktree is discarded on exit — your only output is the completion sentinel (see the Completion section above).';
@@ -427,7 +429,7 @@ export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = n
   if (!isTui || !sentinelPath) return notice;
   return sentinelCompletionSection(
     notice,
-    `When you have finished, write a short markdown summary of what you found (and where you recorded it) to \`${sentinelPath}\`, then stop.`
+    `When you have finished, write a JSON envelope summarizing what you found (and where you recorded it) to \`${sentinelPath}\`, then stop.`
   );
 }
 
@@ -499,7 +501,7 @@ export function buildAuditOutputCompletionSection(task, sentinelPath) {
   if (!isAuditTaskType(category)) return '';
   return `## Required audit assessment handoff
 Before writing the completion sentinel, prepare the validated QUALITY_AUDIT_JSON report described in the audit instructions for category "${category}".
-Write your human summary AND exactly one single-line QUALITY_AUDIT_JSON: {...} report together to \`${sentinelPath}\`, then stop. This applies to every provider, including agents that normally finish by exiting.
+Write your human summary AND exactly one single-line QUALITY_AUDIT_JSON: {...} report together inside the \`summary\` string of the JSON completion envelope at \`${sentinelPath}\`, then stop. This applies to every provider, including agents that normally finish by exiting.
 The report is required even when no issues are filed or no code changes are needed. A successful issue or PR does not supply a quality assessment. A final response alone is not enough: PortOS reads the sentinel file to save the dashboard score.
 Preserve the report when following the summary template above; the template's length guidance does not replace this required output. If assessment is unavailable, use sliceScore:null and explain the missing evidence rather than inventing a score.`;
 }
@@ -857,24 +859,19 @@ function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewPolicy }) {
  * The `.agent-done` sentinel-write instruction block shared by
  * buildTuiCompletionSection and buildManualTuiCompletionSection: the "write a
  * short summary, then stop" instruction plus the fenced heredoc template.
- * Returns the lines to splice into the caller's own line array — output must
- * stay byte-identical since this is agent-facing prompt text.
+ * Returns the lines to splice into the caller's completion workflow.
  */
 export function buildSentinelWriteSteps(stepNumber, sentinelPath, sentinelTail) {
   return [
-    `${stepNumber}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS watches it and finalizes the run shortly after it appears. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
+    `${stepNumber}. Write the structured completion JSON envelope to the completion sentinel, then stop — this sentinel is the done signal. PortOS watches it and finalizes the run shortly after it appears. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
     '',
+    `   ${TASK_OUTCOME_GUIDANCE}`,
+    `   Include in the summary: ${sentinelTail.trim()}`,
     `   ${SENTINEL_WRITE_PERMISSION_NOTE}`,
     '',
     '   ```bash',
     `   cat > "${sentinelPath}" <<'EOF'`,
-    '   ## Summary',
-    '   <one-sentence statement of what was accomplished>',
-    '',
-    '   ## Changes',
-    '   - <key file or area>: <what changed and why>',
-    '',
-    sentinelTail,
+    '   {"summary":"## Summary\\n<what was accomplished or remains unfinished>\\n## Changes\\n<changes and verification>","taskOutcome":{"status":"<completed|no-action-needed|blocked|incomplete>","reason":"<evidence or blocker>"}}',
     '   EOF',
     '   ```'
   ];

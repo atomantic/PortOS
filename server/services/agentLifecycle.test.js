@@ -489,7 +489,7 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     const body = AGENT_FINALIZATION_SRC.slice(idx, updateIdx);
     // The verdict is stamped into taskUpdate via the shared helper BEFORE the updateTask
     // call, so it federates in the same write that marks the task terminal.
-    expect(body).toMatch(/await stampLiExecutionVerdict\(taskUpdate, task, \{ success: verdict\.success, validationPassed, errorAnalysis: verdict\.errorAnalysis \}\)/);
+    expect(body).toMatch(/await stampLiExecutionVerdict\(taskUpdate, task, \{ success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict\.errorAnalysis \}\)/);
   });
 
   it('stampLiExecutionVerdict builds the verdict from the task liProposal marker via the shared builder (#2779)', () => {
@@ -512,7 +512,7 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     const body = recoveryBranchSource();
     // The direct-success completion doesn't route through handleOrphanedTask, so it
     // stamps its own clean-completion verdict here.
-    expect(body).toMatch(/await stampLiExecutionVerdict\(\{ status: 'completed' \}, task, \{ success: retiredSuccess \}\)/);
+    expect(body).toMatch(/await stampLiExecutionVerdict\(\{ status: 'completed', metadata: \{ \.\.\.task\.metadata, taskOutcome: taskOutcome \|\| null \} \}, task, \{ success: retiredSuccess \}\)/);
   });
 
   // The failure-path re-stamp used to live here too (re-reading the task after

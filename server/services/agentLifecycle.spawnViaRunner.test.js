@@ -135,7 +135,7 @@ import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, releaseAgentLane, retireDeadAgent } from './agentFinalization.js';
 import { getAgent, getAgentRecord } from './cosAgentLifecycle.js';
-import { getTaskById } from './cosTaskStore.js';
+import { getTaskById, updateTask } from './cosTaskStore.js';
 import { release } from './executionLanes.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
@@ -174,6 +174,20 @@ it('settles an interrupted TUI startup as a restart interruption, charging the t
   expect(release).toHaveBeenCalledWith('agent-interrupted');
   expect(committedDuringRun).not.toHaveBeenCalled();
   expect(runnerAgents.has('agent-interrupted')).toBe(false);
+});
+
+it('does not complete or retry a task whose recovered outcome was held', async () => {
+  vi.clearAllMocks();
+  const task = { id: 'task-blocked', taskType: 'user', status: 'in_progress', metadata: {} };
+  const record = { id: 'agent-blocked', status: 'running', taskId: task.id, metadata: {} };
+  getAgent.mockResolvedValueOnce(record);
+  getTaskById.mockResolvedValueOnce(task);
+  retireDeadAgent.mockResolvedValueOnce({ success: false, deliveryHeld: true,
+    taskOutcome: { status: 'blocked', reason: 'Invented prerequisite.' } });
+  await handleAgentCompletion(record.id, 0, true, 1000);
+  expect(retireDeadAgent).toHaveBeenCalled();
+  expect(handleOrphanedTask).not.toHaveBeenCalled();
+  expect(updateTask).not.toHaveBeenCalled();
 });
 
 describe('interrupted TUI startup — cases that must keep finalizing normally', () => {

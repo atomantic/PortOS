@@ -20,7 +20,7 @@ it('separates clean execution, assessment persistence and delivery validation', 
 
 it('does not invent assessment or delivery validation for ordinary successful runs', () => {
   render(<AgentResultLine agent={{ result: { success: true, validationPassed: null } }} />);
-  expect(screen.getByText('Completed successfully')).toBeInTheDocument();
+  expect(screen.getByText('Execution completed')).toBeInTheDocument();
   expect(screen.queryByText('Assessment saved')).not.toBeInTheDocument();
   expect(screen.queryByText('Delivery validation failed')).not.toBeInTheDocument();
 });
@@ -112,7 +112,7 @@ it('does not promote historical cleanup process success to verified cleanup', ()
   expect(screen.getByText(/Cleanup already absent; preservation unverified/)).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
   view.rerender(<AgentResultLine agent={{ ...agent, metadata: { ...agent.metadata, cleanupOutcome: { status: 'verified' } } }} />);
-  expect(screen.getByText('Completed successfully')).toBeInTheDocument();
+  expect(screen.getByText('Execution completed')).toBeInTheDocument();
 });
 
 it('names the live runs a claim-owner cleanup hold is waiting on', async () => {
@@ -123,4 +123,17 @@ it('names the live runs a claim-owner cleanup hold is waiting on', async () => {
   expect(first.closest('div')).toHaveTextContent('Cleanup blocked: claim-owner-ambiguous — waiting on live runs agent-aaa, agent-bbb');
   expect(first).toHaveAttribute('href', '/cos/agents/agent-aaa');
   expect(screen.getByRole('link', { name: 'agent-bbb' })).toHaveAttribute('href', '/cos/agents/agent-bbb');
+});
+
+
+it('renders delivery separately from normal execution, including historical prose', () => {
+  const agent = { result: { success: true }, metadata: { taskSummary: 'Status: BLOCKED - invented contradictory instructions' } };
+  const view = render(<AgentResultLine agent={agent} />);
+  expect(screen.getByText('Execution completed')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+  for (const [status, label] of [['blocked', 'Task blocked'], ['incomplete', 'Task incomplete'], ['no-action-needed', 'No action needed'], ['completed', 'Completed successfully']]) {
+    view.rerender(<AgentResultLine agent={{ result: { success: true, executionSuccess: true, taskOutcome: { status, reason: 'Invented evidence.' } } }} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText('Invented evidence.')).toBeInTheDocument();
+  }
 });

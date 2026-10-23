@@ -2,25 +2,16 @@ import { Fragment } from 'react';
 import { Link } from 'react-router';
 import { CheckCircle, AlertCircle, RotateCcw } from 'lucide-react';
 import { formatCount, formatUsd } from '../../utils/formatters';
-import { isAgentHandoff, agentHandoffReason } from '../../lib/agentOutcome';
+import { isAgentHandoff, agentHandoffReason, normalizeTaskOutcome, isTaskDeliveryComplete } from '../../lib/agentOutcome';
 
-/**
- * The one-line verdict on a finished agent run — THREE outcomes, not two.
- *
- * A run retired by Resume/Relaunch carries `success: false` because it never
- * reached a verdict: its task was handed to a continuation, usually because the
- * user swapped providers after hitting a usage limit. Rendering that red said the
- * run failed, for something the user did on purpose.
- *
- * Shared by the run card and the Resume dialog. They had the same two-way ternary
- * copy-pasted, so going from two states to three meant editing both — and the
- * copies had already drifted on the fallback text. One component instead, so the
- * next state costs one edit and the two surfaces cannot disagree about what the
- * same record says.
- */
+/** Shared delivery and execution verdict for cards and the Resume dialog. */
 export default function AgentResultLine({ agent, className = '' }) {
   if (!agent?.result) return null;
   const handoff = isAgentHandoff(agent);
+  const outcome = normalizeTaskOutcome(agent.result.taskOutcome);
+  const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status);
+  const deliveryComplete = isTaskDeliveryComplete(agent);
+  const executionSuccess = agent.result.executionSuccess ?? agent.result.success;
   const assessment = [agent.metadata?.auditAssessment, agent.result.auditAssessment]
     .find(value => value?.status === 'recorded') || agent.metadata?.auditAssessment || agent.result.auditAssessment;
   const assessmentUnverified = assessment && assessment.status !== 'recorded';
@@ -34,19 +25,23 @@ export default function AgentResultLine({ agent, className = '' }) {
   const cleanupRecovery = agent.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup';
   const cleanupPending = (cleanupRecovery || cleanup) && cleanup?.status !== 'verified';
   const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;
-  const tone = handoff ? 'text-port-accent' : agent.result.success ? incomplete ? 'text-port-warning' : 'text-port-success' : 'text-port-error';
+  const tone = handoff ? 'text-port-accent' : !executionSuccess ? 'text-port-error' : incomplete || deliveryHeld ? 'text-port-warning'
+    : deliveryComplete ? 'text-port-success' : executionSuccess ? 'text-port-text-muted' : 'text-port-error';
 
   return (
     <div className={`text-sm ${tone} ${className}`.trim()}>
       <span className="flex items-center gap-2">
       {handoff ? (
         <><RotateCcw size={14} aria-hidden="true" /> {agentHandoffReason(agent)}</>
-      ) : agent.result.success ? (
-        <><CheckCircle size={14} aria-hidden="true" /> {incomplete || assessment ? 'Execution completed' : 'Completed successfully'}</>
+      ) : deliveryHeld && executionSuccess ? (
+        <><AlertCircle size={14} aria-hidden="true" /> {outcome.status === 'blocked' ? 'Task blocked' : 'Task incomplete'}</>
+      ) : executionSuccess ? (
+        <><CheckCircle size={14} aria-hidden="true" /> {incomplete || !deliveryComplete ? 'Execution completed' : outcome.status === 'no-action-needed' ? 'No action needed' : 'Completed successfully'}</>
       ) : (
         <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
       )}
       </span>
+      {!handoff && outcome?.reason && <div>{outcome.reason}</div>}
       {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
       {cleanupPending && <div>Cleanup {cleanup?.status === 'already-absent' ? 'already absent; preservation unverified' : cleanup?.status === 'blocked' ? 'blocked' : 'unverified/pending'}{cleanup?.reason ? `: ${cleanup.reason}` : ''}<CleanupHolders owners={cleanup?.owners} /></div>}
       <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />

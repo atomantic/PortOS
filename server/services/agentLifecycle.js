@@ -458,7 +458,7 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
   // message agrees with the record it lands on instead of leaving a failed
   // record with no error string.
   const willSucceed = success && !isPrivateSecurityTask(task) && !isPrivateSecurityTask(cosAgent);
-  const { success: retiredSuccess } = await retireDeadAgent({
+  const { success: retiredSuccess, taskOutcome, deliveryHeld } = await retireDeadAgent({
     agent: cosAgent,
     task,
     success,
@@ -467,13 +467,13 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
     errorMessage: interruptedStartup?.message ?? (willSucceed ? undefined : 'Agent completed after server restart'),
     ...(interruptedStartup ? { category: 'interrupted', agentResultExtra: { interruptedByRestart: true } } : {}),
   });
-  if (cosAgent.taskId && task && task.status !== 'completed') {
+  if (cosAgent.taskId && task && task.status !== 'completed' && !deliveryHeld) {
     if (retiredSuccess) {
       // Stamp the LI hand-off verdict here too (#2779, codex P2) — this post-restart
       // recovery bypasses finalizeAgent, so without it a hand-off that finished while
       // the server was down would never federate its outcome. Only `success` is known
       // on this path (no validationPassed/errorAnalysis), so it records a clean success.
-      const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success: retiredSuccess });
+      const taskUpdate = await stampLiExecutionVerdict({ status: 'completed', metadata: { ...task.metadata, taskOutcome: taskOutcome || null } }, task, { success: retiredSuccess });
       await updateTask(cosAgent.taskId, taskUpdate, task.taskType || 'user');
     } else {
       // Hand the dead run's metadata to the retry handler so it can resume what
