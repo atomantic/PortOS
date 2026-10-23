@@ -953,20 +953,20 @@ export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
 export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assist', 'autopilot']);
 
 // Per-repo automation rules for the GitHub inbox (#13192): what Assist and
-// Autopilot do with a kind of notification, in one repo (`owner/repo`) or every
-// repo (`*`), and on which provider/model/effort when it starts an agent. A repo
-// rule wins over the `*` rule of the same kind. Mirrors AGENT_RULE_KINDS and
+// Autopilot do with a kind of notification, in one repo (`owner/repo`), an
+// account/org (`owner/*`) or every repo (`*`), and on which provider/model/effort
+// when it starts an agent. Repo > owner > all. Mirrors AGENT_RULE_KINDS and
 // AGENT_RULE_ACTIONS in lib/githubNotificationTriage.js.
 export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'mention', 'release', 'other']);
 export const GITHUB_AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave']);
-export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
+export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100}))$/;
 const emptyToNullString = (value) => (value === '' ? null : value);
 // A legacy `agent: true/false` (rules saved before #13192) is accepted and
 // stored as `action: 'agent' / 'leave'`; `action` wins when both are sent.
 export const githubAgentRuleSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
   kind: z.enum(GITHUB_AGENT_RULE_KINDS),
-  repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, or * for every repo'),
+  repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, owner/* for an account or organization, or * for every repo'),
   agent: z.boolean().optional(),
   action: z.enum(GITHUB_AGENT_RULE_ACTIONS).optional(),
   provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),

@@ -26,7 +26,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { advisoryIdFromUrl } from '../lib/githubNotificationParse.js';
 import {
-  agentHandoff, agentRuleScope, agentRunPin, APP_FREE_AGENT_LANES as APP_FREE_LANES, autopilotHandoff, FINISHED_DECISIONS, GENERIC_AGENT_LANE, GENERIC_RULE_KINDS, KIND_SQL,
+  agentHandoff, agentRuleScope, agentRuleScopeSql as inScope, agentRunPin, APP_FREE_AGENT_LANES as APP_FREE_LANES, autopilotHandoff, FINISHED_DECISIONS, GENERIC_AGENT_LANE, GENERIC_RULE_KINDS, KIND_SQL,
 } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { managedAppsByRepoKey, threadDiscussionVouched } from './githubNotificationTriage.js';
@@ -41,8 +41,6 @@ import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 // Threads per run, not agent runs: a run queues at most one agent per repo and lane.
 const MAX_HANDOFFS_PER_RUN = 50;
 const sqlList = (values) => [...values].map((value) => `'${value}'`).join(', ');
-// `inScope(n)` reads one `agentRuleScope` as parameters $n..$n+2.
-const inScope = (n) => `(($${n}::boolean AND NOT (lower(repo_full_name) = ANY($${n + 1}::text[]))) OR lower(repo_full_name) = ANY($${n + 2}::text[]))`;
 const NOT_FINISHED_SQL = `COALESCE(evidence->>'subjectState', '') NOT IN ('merged', 'closed')`;
 const PULL_URL_SQL = `COALESCE(subject_api_url, '') ~ '/pulls/[0-9]{1,9}$'`;
 

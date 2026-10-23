@@ -252,6 +252,24 @@ describe('autopilotHandoff', () => {
     expect(agentRuleScope([], 'review-request', { optIn: true })).toEqual({ all: false, except: [], only: [] });
   });
 
+  it('limits reviews to an owner group, preserves pins and lets repo exceptions win regardless of order', () => {
+    const rules = [
+      { id: 'all', kind: 'review-request', repo: '*', action: 'leave' },
+      { id: 'owner', kind: 'review-request', repo: 'Acme/*', action: 'agent', model: 'owner-model' },
+      { id: 'quiet', kind: 'review-request', repo: 'acme/quiet', action: 'leave' },
+      { id: 'exception', kind: 'review-request', repo: 'other/special', action: 'agent' },
+    ];
+    const row = { ...review, trust: 'trusted', decision: 'suggest-review', evidence: { repoManaged: false } };
+    for (const ordered of [rules, [...rules].reverse()]) {
+      const scoped = { ...account, agentRules: ordered };
+      expect(autopilotHandoff({ account: scoped, row: { ...row, repo_full_name: 'ACME/new-repo' } })).toMatchObject({ lane: 'do-review', pin: { model: 'owner-model' }, rule: { id: 'owner' } });
+      for (const repo of ['acme/quiet', 'acme-other/app', 'watched/app', null]) {
+        expect(autopilotHandoff({ account: scoped, row: { ...row, repo_full_name: repo } }), String(repo)).toBeNull();
+      }
+      expect(autopilotHandoff({ account: scoped, row: { ...row, repo_full_name: 'other/special' } })).toMatchObject({ lane: 'do-review', rule: { id: 'exception' } });
+    }
+  });
+
   it('refuses every hand-off on a Private account until the operator allows agents on it', () => {
     const enterprise = { ...account, trust: 'private' };
     expect(autopilotHandoff({ account: enterprise, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, refused: 'private-account' });
@@ -268,6 +286,15 @@ describe('autopilotHandoff', () => {
 
 describe('ruleAction', () => {
   const ci = { state: 'open', reason: 'ci_activity', subject_type: 'CheckSuite', repo_full_name: 'acme/app', rule: 'ci-other' };
+  it('lets owner rules override defaults and repo rules override owner rules for Assist', () => {
+    const account = { agentRules: [
+      { kind: 'ci-activity', repo: 'ACME/*', action: 'leave' },
+      { kind: 'ci-activity', repo: 'acme/noisy', action: 'mute' },
+    ] };
+    expect(ruleAction({ account, row: ci })).toBeNull();
+    expect(ruleAction({ account, row: { ...ci, repo_full_name: 'acme/noisy' } })).toBe('mute');
+    expect(ruleAction({ account, row: { ...ci, repo_full_name: 'another/app' } })).toBe('done');
+  });
   it('marks CI notices done by default and lets a repo or * rule override it', () => {
     expect(ruleAction({ account: { agentRules: [] }, row: ci })).toBe('done');
     const rules = [{ id: 'a', kind: 'ci-activity', repo: '*', action: 'leave' }, { id: 'b', kind: 'ci-activity', repo: 'acme/app', action: 'mute' }];

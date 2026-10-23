@@ -16,7 +16,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
 import {
-  AGENT_RULE_KINDS, ASSIST_VERDICTS, KIND_SQL, PINNED_TRIAGE_RULES, assistAction, decisionFromVerdict, ruleAction, ruleActionScope, selectNotificationProvider,
+  AGENT_RULE_KINDS, ASSIST_VERDICTS, KIND_SQL, PINNED_TRIAGE_RULES, agentRuleScopeSql, assistAction, decisionFromVerdict, ruleAction, ruleActionScope, selectNotificationProvider,
 } from '../lib/githubNotificationTriage.js';
 import { resolveUntrustedContentPolicy } from '../lib/untrustedContent.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -135,7 +135,7 @@ export async function assistAccountNotifications(account, env, { act }) {
   const scopes = AGENT_RULE_KINDS.map((kind) => ruleActionScope(account, kind));
   const ruleSql = AGENT_RULE_KINDS.map((kind, index) => {
     const n = 4 + index * 3;
-    return `(${KIND_SQL} = '${kind}' AND (($${n}::boolean AND NOT (lower(repo_full_name) = ANY($${n + 1}::text[]))) OR lower(repo_full_name) = ANY($${n + 2}::text[])))`;
+    return `(${KIND_SQL} = '${kind}' AND ${agentRuleScopeSql(n)})`;
   }).join(' OR ');
   const { rows } = await query(
     `SELECT thread_id, decision, trust, suspect, state, reason, subject_type, repo_full_name, evidence->>'rule' AS rule FROM github_notifications
