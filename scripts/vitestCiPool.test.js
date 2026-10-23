@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { EXCLUSIVE_CAPTURE_TESTS, applyRunnerSelection, vitestCaptureProjects, vitestCiPool, vitestRunnerSelection } from './vitestCiPool.js';
 
 describe('vitestCiPool', () => {
@@ -52,17 +53,17 @@ describe('vitestCiPool', () => {
     delete process.env.CI;
     for (const bad of ['0', '-1', 'abc', '2.5', '']) {
       process.env.PORTOS_PREGATE_MAX_WORKERS = bad;
-      expect(vitestCiPool()).toEqual({});
+      expect(vitestCiPool()).toEqual({ maxWorkers: Math.min(4, cosWorkerBudget()) });
     }
     process.env.CI = 'true';
     process.env.PORTOS_PREGATE_MAX_WORKERS = '1';
     expect(vitestCiPool()).toEqual({ maxWorkers: 4 });
   });
 
-  it('leaves local runs unbounded', () => {
+  it('bounds local runs by the CoS-derived budget when no handoff is set', () => {
     delete process.env.CI;
     delete process.env.PORTOS_PREGATE_MAX_WORKERS;
-    expect(vitestCiPool()).toEqual({});
+    expect(vitestCiPool()).toEqual({ maxWorkers: Math.min(4, cosWorkerBudget()) });
   });
 
   it('matches the four CPUs on public GitHub-hosted runners', () => {

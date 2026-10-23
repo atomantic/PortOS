@@ -7,6 +7,7 @@
  * list, naming a downgraded test file that is not tracked, or reporting
  * "CI will also run: db" from a plan field that has since been renamed.
  */
+import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync } from 'fs';
@@ -155,7 +156,7 @@ describe('pregate hidden-content invocation', () => {
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateAttestation.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -653,8 +654,8 @@ describe('pregate hidden-content invocation', () => {
 });
 
 describe('pregateWorkerEnv', () => {
-  it('bounds workers by default but honors an operator budget', () => {
-    expect(pregateWorkerEnv({}).PORTOS_PREGATE_MAX_WORKERS).toBe('4');
+  it('derives the budget from the CoS settings but honors an explicit handoff', () => {
+    expect(pregateWorkerEnv({}).PORTOS_PREGATE_MAX_WORKERS).toBe(String(cosWorkerBudget()));
     expect(pregateWorkerEnv({ PORTOS_PREGATE_MAX_WORKERS: '2' }).PORTOS_PREGATE_MAX_WORKERS).toBe('2');
   });
 });
@@ -901,7 +902,7 @@ describe('the gate end to end', () => {
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/pregateAttestation.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/lib/pregateAttestation.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
@@ -1108,7 +1109,7 @@ describe('uncoveredSuites', () => {
 describe('stageSpawnEnv', () => {
   it('applies stage values and removes the variables a stage sets to undefined', () => {
     const env = stageSpawnEnv({ TEST_DB_OK: '1', PGDATABASE: 'portos', KEEP: 'x' }, { TEST_DB_OK: undefined, PGDATABASE: 'portos_test' }, { ownsGroup: false });
-    expect(env).toEqual({ KEEP: 'x', PGDATABASE: 'portos_test', PORTOS_PREGATE_MAX_WORKERS: '4' });
+    expect(env).toEqual({ KEEP: 'x', PGDATABASE: 'portos_test', PORTOS_PREGATE_MAX_WORKERS: String(cosWorkerBudget()) });
     expect('TEST_DB_OK' in env).toBe(false);
   });
 

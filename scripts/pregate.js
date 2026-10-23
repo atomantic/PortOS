@@ -62,6 +62,7 @@ import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
+import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
@@ -150,14 +151,14 @@ export function describeBrowserSelection(files) {
 }
 
 /** Local pregate worker budget per Vitest workspace; see scripts/vitestCiPool.js. */
-export const PREGATE_DEFAULT_MAX_WORKERS = '4';
-
 /**
- * Env for a stage child: bound Vitest workers unless the operator chose a
- * budget. Direct `npm test` never passes through here, so it stays unbounded.
+ * Env for a stage child: one worker budget, from the CoS max-concurrent-agents
+ * setting (scripts/lib/cosWorkerBudget.js), shared by every Vitest workspace.
  */
+let derivedWorkerBudget;
 export function pregateWorkerEnv(env) {
-  return { ...env, PORTOS_PREGATE_MAX_WORKERS: env.PORTOS_PREGATE_MAX_WORKERS || PREGATE_DEFAULT_MAX_WORKERS };
+  derivedWorkerBudget ??= String(cosWorkerBudget());
+  return { ...env, PORTOS_PREGATE_MAX_WORKERS: env.PORTOS_PREGATE_MAX_WORKERS || derivedWorkerBudget };
 }
 
 /**

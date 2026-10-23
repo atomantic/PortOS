@@ -286,8 +286,9 @@ and nested-worker cases then hit their existing budgets. A green focused
 file run is evidence for that file only, not a full-suite result.
 
 ```bash
-# Server, then client. The value only lowers each workspace cap (client stays at 2).
-PORTOS_PREGATE_MAX_WORKERS=4 npm test
+# Server, then client. Workers derive from the CoS max-concurrent-agents setting
+# (cores / agents, capped at 4; client stays at 2). Lower it in the app to ease host load.
+npm test
 
 # Focused evidence for one file:
 npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
