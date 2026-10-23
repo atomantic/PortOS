@@ -26,7 +26,7 @@ const SEEDREAM_LITE_RATIOS = Object.freeze({
   standard: Object.freeze(['2048:2048', '2304:1728', '1728:2304', '2848:1600', '1600:2848', '2496:1664', '1664:2496', '3136:1344', '3072:3072', '3456:2592', '2592:3456', '4096:2304', '2304:4096', '3744:2496', '2496:3744', '4704:2016']),
 });
 const GEN4 = { ratios: RATIOS, maxReferences: 3, promptMaxChars: 1000, seed: true, referenceMode: 'tagged', defaultResolution: '720p', resolutionMap: Object.freeze({}) };
-// Seedream is text-to-image with unordered, untagged `referenceImages: [{ uri }]` (no documented count; 6 is a
+// Seedream is text-to-image with order-significant, untagged `referenceImages: [{ uri }]` (no documented count; 6 is a
 // conservative ceiling) and no seed field. Credits per Runway's pricing guide.
 const SEEDREAM = { maxReferences: 6, promptMaxChars: 4000, seed: false, referenceMode: 'ordered', minReferences: 0 };
 export const RUNWAY_IMAGE_MODELS = Object.freeze([
