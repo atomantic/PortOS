@@ -1164,6 +1164,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/storyboards/:id/panels/:panelId/takes/:takeId', REMOVES_RECORD],
   ['POST /api/storyboards/:id/panels/:panelId/takes/:takeId/select', RECORDS],
   ['PUT /api/storyboards/:id/recipe', RECORDS],
+  ['POST /api/storyboards/:id/video', RECORDS],
   ['POST /api/storyboards/fit-music-video/:projectId', RECORDS],
   ['POST /api/storyboards/from-music-video/:projectId', RECORDS],
   ['POST /api/storyboards/music-video/:projectId/shots/:sceneId/panel-art', RECORDS],

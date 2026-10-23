@@ -205,7 +205,7 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     styleSpec = '', startingImageFile = null, userStory = null,
     disableAudio = true, autoAcceptScenes = false, sourceIssueId = null, commissionId = null,
     cast = [], generateFirstPass = false, directive = null,
-    modelOverrides = {}, renderBackend = null, styleReferenceImages = null,
+    modelOverrides = {}, renderBackend = null, styleReferenceImages = null, storyboardId = null,
   } = input;
   const referenceImages = normalizeStyleReferenceImages(styleReferenceImages);
   const videoDraft = input.workspace === 'video'
@@ -281,6 +281,10 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     // project's record is unchanged. Additive JSONB — no schema-version bump; a
     // peer without the files just resolves fewer of them.
     ...(referenceImages.length ? { styleReferenceImages: referenceImages } : {}),
+    // The storyboard a Video was started from (services/storyboards/toVideo.js).
+    // SERVER-MANAGED like `commissionId`, and omitted when unset so other
+    // records are unchanged. Additive JSONB — no schema-version bump.
+    ...(storyboardId ? { storyboardId } : {}),
     collectionId,
     timelineProjectId: null,
     finalVideoId: null,

@@ -122,6 +122,7 @@ describe('Storyboards agent runs require operator authority (#12952)', () => {
       'POST /api/storyboards/:id/panels/:panelId/move',
       'POST /api/storyboards/:id/panels/:panelId/takes',
       'POST /api/storyboards/:id/panels/:panelId/takes/:takeId/select',
+      'POST /api/storyboards/:id/video',
       'POST /api/storyboards/fit-music-video/:projectId',
       'POST /api/storyboards/from-music-video/:projectId',
       'POST /api/storyboards/music-video/:projectId/shots/:sceneId/panel-art',

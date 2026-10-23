@@ -151,6 +151,7 @@ export * from './storyboardFit.js';
 export * from './storyboardRecipe.js';
 export * from './storyboardRecord.js';
 export * from './storyboardSongBrief.js';
+export * from './storyboardVideo.js';
 export * from './storyboardVocabulary.js';
 export * from './seasonStructure.js';
 export * from './seriesAutopilotDefaults.js';
