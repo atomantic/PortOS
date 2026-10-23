@@ -129,6 +129,16 @@ describe('retireDeadAgent (#8440)', () => {
     } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
 
+  it('preserves the first attempt pointer when a recovered outcome needs approval', async () => {
+    const taskOutcome = { status: 'blocked', reason: 'Authorized budget exhausted.', recovery: {
+      mode: 'approval', options: ['Increase the budget and retry.', 'Preserve the stopped work.'],
+    } };
+    await retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome } }, task: TASK, success: true, exitCode: 0, duration: 100 });
+    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ deliveryDecisionAgentId: AGENT.id }) }), 'user');
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: AGENT.id, task: TASK, success: false, agentMetadata: AGENT.metadata });
+  });
+
   it('accepts a recovered no-op only after its output hook verifies delivery', async () => {
     const taskOutcome = { status: 'no-action-needed', reason: 'Invented verification found no remaining work.' };
     const hook = vi.fn(async () => ({ accepted: true }));

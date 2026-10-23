@@ -1270,6 +1270,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   await completeAgent(agent.id, {
     success: effectiveSuccess,
     executionSuccess,
+    ...(recoveryUpdate ? { deliveryRecoveryOwned: true } : {}),
     ...(recoveryUpdate?.metadata?.deliveryRecoveryAgentId === agent.id ? { cleanupPending: true } : {}),
     ...(savedCleanup ? { cleanupDeliveryVerified: true } : {}),
     taskOutcome,
@@ -1294,7 +1295,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   await removeCompletionSentinel({ agentId: agent.id, agentState: agent })
     .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
 
-  if (recoveryUpdate?.metadata?.retryPendingCleanup) {
+  if (recoveryUpdate?.metadata?.retryPendingCleanup
+    || ['task-approval', 'task-recovery-exhausted'].includes(recoveryUpdate?.metadata?.blockedCategory)) {
     const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
     await releaseRetryHold({ agentId: agent.id, task, success: false, agentMetadata: agent.metadata })
       .catch(err => emitLog('warn', `Recovered delivery retry deferred for ${agent.id}: ${err.message}`, { agentId: agent.id }));
@@ -1963,7 +1965,11 @@ export async function finalizeAgent({
   // failure.
   await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
-  }), executionSuccess, taskOutcome, ...(taskUpdate.metadata?.deliveryRecoveryAgentId === agentId ? { cleanupPending: true } : {}) });
+  }), executionSuccess, taskOutcome,
+    ...(['task-approval', 'task-recovery-exhausted'].includes(taskUpdate.metadata?.blockedCategory)
+      || taskUpdate.metadata?.retryPendingCleanup === agentId || taskUpdate.metadata?.deliveryRecoveryAgentId === agentId
+      ? { deliveryRecoveryOwned: true } : {}),
+    ...(taskUpdate.metadata?.deliveryRecoveryAgentId === agentId ? { cleanupPending: true } : {}) });
 
   if (runId) {
     // Every failed verdict overrides exit-code/commit rescue in run tracking,

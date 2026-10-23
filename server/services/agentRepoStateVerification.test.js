@@ -195,6 +195,17 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'completed', reasons: ['cleanup-transferred-to-recovery'] }));
   });
 
+  it.each(['OPEN', 'CLOSED'])('transfers a definitive %s undelivered PR out of the cleanup hold', async prState => {
+    updateTask.mockResolvedValueOnce({ status: 'in_progress' });
+    localBranch(true);
+    existsSync.mockReturnValue(true);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: prState, url: 'https://github.com/example/repo/pull/7' });
+    const state = { ...agentState(), result: { success: false, cleanupPending: true } };
+    expect(await run({ success: false, agentState: state })).toMatchObject({ skipReason: 'cleanup-transferred-to-recovery' });
+    expect(releaseRetryHold).toHaveBeenCalledOnce();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('ignores the exact cleanup task itself while preserving a different pending owner', async () => {
     const own = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
       existingBranch: BRANCH, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };

@@ -745,7 +745,7 @@ const TRANSITION_METADATA_CLEARS = Object.freeze([
   // still-paused agent record then read its own pause as spent and spawned a SECOND
   // agent on a fresh task. The failure counters go too, or the revived task
   // re-blocks on the budget it blocked with.
-  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
+  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'deliveryDecisionAgentId', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
   // A retry hold (#3373) only means anything while the task is `in_progress` waiting
   // on a cleanup to resolve its resume pointer. Any other status the task reaches —
   // terminal, or a requeue some other path performed — retires it, so drop the marker

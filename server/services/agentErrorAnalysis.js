@@ -1581,13 +1581,13 @@ export function resolveUndeliveredTaskUpdate(task, outcome, agentId, now = Date.
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId, taskOutcome: outcome } };
   }
   if (!approval && decision.status !== 'blocked') return { status: decision.status,
-    metadata: { ...task.metadata, ...decision.metadataUpdates, blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined, taskOutcome: outcome } };
+    metadata: { ...task.metadata, ...decision.metadataUpdates, deliveryDecisionAgentId: undefined, blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined, taskOutcome: outcome } };
   const options = approval ? outcome.recovery.options : [
     'Fix the reported cause and retry the retained work with a fresh retry budget.',
     'Keep the task stopped and preserve its work; do not spend more agent runs.',
   ];
   return { status: 'blocked', metadata: { ...task.metadata, ...decision.metadataUpdates,
-    taskOutcome: outcome, blockedCategory: approval ? 'task-approval' : 'task-recovery-exhausted',
+    taskOutcome: outcome, deliveryDecisionAgentId: agentId, blockedCategory: approval ? 'task-approval' : 'task-recovery-exhausted',
     blockedAt: new Date(now).toISOString(),
     blockedReason: `${outcome.reason}\n${approval ? 'Approval required before proceeding.' : 'Automatic recovery stopped at the retry/spawn safety limit.'}\nOptions:\n${options.map((option, index) => `${index + 1}. ${option}`).join('\n')}`,
   } };

@@ -275,7 +275,8 @@ export async function verifyAgentRepoState(input) {
     const unsupported = outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
       REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE,
       'retirement-app-unavailable', 'retirement-policy-not-legacy-completed'].includes(item.skipReason)
-      || (item.skipReason === 'cleanup-delivery-unverified' && item.observed?.prState === 'OPEN'));
+      || (item.skipReason === 'cleanup-delivery-unverified' && (['OPEN', 'CLOSED'].includes(item.observed?.prState)
+        || (item.observed?.prState === null && item.observed?.prUrl === null && item.observed?.unreadable?.length === 0))));
     if (cleanupPending && unsupported) {
       const { resolveUndeliveredTaskUpdate } = await import('./agentErrorAnalysis.js');
       const outcome = { status: 'incomplete', reason: `Cleanup verification cannot run (${unsupported.skipReason}). ${input.task.metadata?.taskOutcome?.reason || ''}`.trim() };

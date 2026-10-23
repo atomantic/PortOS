@@ -993,10 +993,11 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   if (!persisted) return {};
 
   if (persisted.status === 'blocked' && ['task-approval', 'task-recovery-exhausted'].includes(persisted.metadata?.blockedCategory)) {
+    if (persisted.metadata.deliveryDecisionAgentId !== agentId) return {};
     const metadata = agentMetadata === undefined ? (await getAgentRecord(agentId))?.metadata : agentMetadata;
     const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
     const result = await updateTask(task.id, { metadata: patch }, task.taskType || persisted.taskType || 'user', {
-      expectedStatus: 'blocked', expectedMetadata: { blockedCategory: persisted.metadata.blockedCategory, blockedAt: persisted.metadata.blockedAt },
+      expectedStatus: 'blocked', expectedMetadata: { blockedCategory: persisted.metadata.blockedCategory, blockedAt: persisted.metadata.blockedAt, deliveryDecisionAgentId: agentId },
     });
     return result?.error || result?.statusChanged ? {} : patch;
   }

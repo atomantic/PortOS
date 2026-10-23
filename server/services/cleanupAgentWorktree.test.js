@@ -1724,14 +1724,22 @@ describe('releaseRetryHold', () => {
   // The direct-CLI / TUI shape: neither spawn path holds the agent record, so the
   // helper has to read it for the worktree fields — via the transcript-free
   // `getAgentRecord`, since a long TUI run's output.txt is megabytes.
+  it('never lets an older completion replace the current decision owner resume pointer', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: {
+      blockedCategory: 'task-approval', blockedAt: 'now', deliveryDecisionAgentId: 'agent-new',
+    } });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   it.each(['task-approval', 'task-recovery-exhausted'])('records a first attempt resume pointer for %s without dispatching it', async blockedCategory => {
-    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: { blockedCategory, blockedAt: 'now' } });
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
     git.getWorktreeBranches.mockResolvedValue(new Set([DEAD_BRANCH]));
     existsSyncMock.mockReturnValue(true);
     await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
     expect(updateTask).toHaveBeenCalledWith('task-1', { metadata: expect.objectContaining({
       existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: DEAD_TREE,
-    }) }, 'user', { expectedStatus: 'blocked', expectedMetadata: { blockedCategory, blockedAt: 'now' } });
+    }) }, 'user', { expectedStatus: 'blocked', expectedMetadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
   });
 
   it('records the pointer for a failed run whose task is still pending', async () => {

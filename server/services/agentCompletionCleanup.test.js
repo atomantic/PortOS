@@ -804,6 +804,15 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     expect(handleCreativeDirectorCompletion.mock.invocationCallOrder[0]).toBeLessThan(cleanupAgentWorktree.mock.invocationCallOrder[0]);
   });
 
+  it('retains cleanup warnings without spawning a second recovery when the original task owns recovery', async () => {
+    const warnings = ['Worktree preserved pending its original recovery owner'];
+    getAgent.mockResolvedValue({ id: 'a1', status: 'completed', result: { success: false, deliveryRecoveryOwned: true }, metadata: {} });
+    cleanupAgentWorktree.mockResolvedValueOnce(warnings);
+    await complete({}, false);
+    expect(spawnMergeRecoveryTask).not.toHaveBeenCalled();
+    expect(updateAgent).toHaveBeenCalledWith('a1', { result: { success: false, deliveryRecoveryOwned: true, warnings } });
+  });
+
   it('preserves the result and publishes cleanup warnings with a recovery task', async () => {
     const warnings = ['Merge failed: resolve example conflict'];
     cleanupAgentWorktree.mockResolvedValueOnce(warnings);
