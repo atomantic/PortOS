@@ -442,6 +442,15 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await expect(reviewDeployment(account.id, '2201', { state: 'rejected', environmentIds: [11] })).rejects.toMatchObject({ code: 'GITHUB_NOTIFICATION_NOT_DEPLOYMENT' });
   });
 
+  it('treats a Dependabot pull request on your repo as a trusted review, not an outside one', async () => {
+    const login = account.login;
+    mockGh(() => listing([thread('2301', { owner: login, reason: 'review_requested' })]), {
+      [`repos/${login}/hello/pulls/2301`]: { author: 'dependabot[bot]', authorType: 'Bot', association: 'NONE', state: 'open', merged: false },
+    });
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '2301')).toMatchObject({ trust: 'trusted', decision: 'suggest-review', suspect: false });
+  });
+
   it('sorts undecided threads only in Assist, acts only on trusted ones, and undoes into a learned rule', async () => {
     const login = account.login;
     const pr = (author, state = 'open', merged = false) => ({ author, association: 'NONE', state, merged });

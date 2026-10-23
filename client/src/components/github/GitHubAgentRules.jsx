@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Bot, Pencil, Plus, X } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
-import { AGENT_RULE_KINDS } from './githubTriageLabels';
+import { AGENT_RULE_KINDS, CI_RULE_ACTIONS } from './githubTriageLabels';
 
 const ALL_REPOS = '*';
 const OTHER_REPO = '__other__';
@@ -12,7 +12,10 @@ const newRuleId = () => `rule-${Date.now().toString(36)}-${Math.random().toStrin
 
 const repoLabel = (repo) => (repo === ALL_REPOS ? 'All repos' : repo);
 
+const ciActionLabel = (action) => CI_RULE_ACTIONS.find((option) => option.value === action)?.label || action;
+
 function pinLabel(rule, providers) {
+  if (rule.kind === 'ci-activity') return ciActionLabel(rule.action);
   if (!rule.agent) return "Don't start an agent";
   const provider = rule.provider ? providers.find((entry) => entry.id === rule.provider)?.name || rule.provider : 'Auto provider';
   return ['Start an agent', provider, rule.model, rule.effort ? `${rule.effort} effort` : null].filter(Boolean).join(' · ');
@@ -25,7 +28,9 @@ function RuleForm({ rule, repos, takenKeys, onCancel, onSubmit, saving }) {
   const knownRepo = !rule || rule.repo === ALL_REPOS || repos.includes(rule.repo);
   const [repoChoice, setRepoChoice] = useState(rule ? (knownRepo ? rule.repo : OTHER_REPO) : ALL_REPOS);
   const [otherRepo, setOtherRepo] = useState(knownRepo ? '' : rule?.repo || '');
-  const [agent, setAgent] = useState(rule ? rule.agent : true);
+  const [agent, setAgent] = useState(rule ? rule.agent !== false : true);
+  const [ciAction, setCiAction] = useState(rule?.action || 'done');
+  const isCi = kind === 'ci-activity';
   const seeded = useRef(false);
   const { loading, setSelectedProviderId, setSelectedModel, setEffort } = picker;
   useEffect(() => {
@@ -43,6 +48,10 @@ function RuleForm({ rule, repos, takenKeys, onCancel, onSubmit, saving }) {
   const submit = (event) => {
     event.preventDefault();
     if (!repoValid || clash) return;
+    if (isCi) {
+      onSubmit({ id: rule?.id || newRuleId(), kind, repo, action: ciAction });
+      return;
+    }
     onSubmit({
       id: rule?.id || newRuleId(),
       kind,
@@ -73,10 +82,16 @@ function RuleForm({ rule, repos, takenKeys, onCancel, onSubmit, saving }) {
         </label>
         <label htmlFor={`${formId}-agent`} className="space-y-1 text-xs text-gray-400">
           <span className="block">Then</span>
-          <select id={`${formId}-agent`} value={agent ? 'agent' : 'none'} onChange={(event) => setAgent(event.target.value === 'agent')} className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 text-sm text-white">
-            <option value="agent">Start a CoS agent</option>
-            <option value="none">Don&apos;t start an agent</option>
-          </select>
+          {isCi ? (
+            <select id={`${formId}-agent`} value={ciAction} onChange={(event) => setCiAction(event.target.value)} className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 text-sm text-white">
+              {CI_RULE_ACTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          ) : (
+            <select id={`${formId}-agent`} value={agent ? 'agent' : 'none'} onChange={(event) => setAgent(event.target.value === 'agent')} className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 text-sm text-white">
+              <option value="agent">Start a CoS agent</option>
+              <option value="none">Don&apos;t start an agent</option>
+            </select>
+          )}
         </label>
       </div>
       {repoChoice === OTHER_REPO && (
@@ -85,7 +100,7 @@ function RuleForm({ rule, repos, takenKeys, onCancel, onSubmit, saving }) {
           <input id={`${formId}-other`} value={otherRepo} onChange={(event) => setOtherRepo(event.target.value)} placeholder="owner/repo" autoComplete="off" className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 font-mono text-sm text-white" />
         </label>
       )}
-      {agent && (
+      {agent && !isCi && (
         <div className="space-y-1">
           <span className="flex items-center gap-1.5 text-xs text-gray-400"><Bot size={12} aria-hidden="true" /> Run with</span>
           <ProviderModelSelector {...picker.selectorProps} compact />
@@ -111,6 +126,8 @@ function RuleForm({ rule, repos, takenKeys, onCancel, onSubmit, saving }) {
 export default function GitHubAgentRules({ account, onSave, saving }) {
   const [editing, setEditing] = useState(null);
   const rules = account.agentRules || [];
+  // Built-in rules apply until the operator saves a rule for the same kind and repo.
+  const defaults = (account.defaultAgentRules || []).filter((rule) => !rules.some((entry) => entry.kind === rule.kind && entry.repo.toLowerCase() === rule.repo.toLowerCase()));
   const { providers } = useRunWithPicker({ preselectDefaults: false });
   const repos = account.repos || [];
   const kindLabel = (kind) => AGENT_RULE_KINDS.find((option) => option.value === kind)?.label || kind;
@@ -135,6 +152,21 @@ export default function GitHubAgentRules({ account, onSave, saving }) {
       </div>
       {account.mode !== 'autopilot' && rules.length > 0 && (
         <p className="text-xs text-port-warning">Autopilot follows these rules. This account is in {{ assist: 'Assist', disabled: 'Disabled' }[account.mode] || 'Observe'}, so nothing starts on its own yet.</p>
+      )}
+      {defaults.length > 0 && (
+        <ul className="divide-y divide-port-border" aria-label="Default rules">
+          {defaults.map((rule) => (
+            <li key={rule.id} className="flex min-w-0 items-center gap-2 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm text-white">{kindLabel(rule.kind)} · {repoLabel(rule.repo)}</p>
+                <p className="truncate text-xs text-port-success">{ciActionLabel(rule.action)} · default</p>
+              </div>
+              <button type="button" onClick={() => setEditing({ id: null, kind: rule.kind, repo: rule.repo, action: rule.action })} disabled={Boolean(editing)} className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded px-2 text-xs text-gray-400 hover:text-white disabled:opacity-40" aria-label={`Override default ${kindLabel(rule.kind)} rule`}>
+                Override
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
       {rules.length === 0 && !editing && (
         <p className="text-xs text-gray-500">No rules: security alerts and outside issues and pull requests in your apps go to their usual agents, and other review requests wait for you.</p>
@@ -162,7 +194,7 @@ export default function GitHubAgentRules({ account, onSave, saving }) {
         </ul>
       )}
       {editing && !editing.id && (
-        <RuleForm rule={null} repos={repos} takenKeys={takenKeys} onCancel={() => setEditing(null)} onSubmit={upsert} saving={saving} />
+        <RuleForm rule={editing.kind ? editing : null} repos={repos} takenKeys={takenKeys} onCancel={() => setEditing(null)} onSubmit={upsert} saving={saving} />
       )}
     </div>
   );

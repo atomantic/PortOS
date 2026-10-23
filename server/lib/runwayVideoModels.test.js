@@ -102,17 +102,33 @@ describe('Runway pricing and lengths', () => {
   it('rounds a shot up to the shortest length that covers it, capped at the longest', () => {
     expect(coerceRunwayVideoSeconds(getRunwayVideoModel('kling2.5_turbo_pro'), 5.01)).toBe(10);
     expect(coerceRunwayVideoSeconds(getRunwayVideoModel('kling2.5_turbo_pro'), 20)).toBe(10);
-    expect(getRunwayVideoModel('veo3.1')).toBeNull();
+    expect(coerceRunwayVideoSeconds(getRunwayVideoModel('veo3.1'), 5)).toBe(6);
     expect(coerceRunwayVideoSeconds(getRunwayVideoModel('gen4_turbo'), 1)).toBe(2);
     expect(coerceRunwayVideoSeconds(getRunwayVideoModel('gen4_turbo'), null)).toBe(5);
   });
 
-  it('quotes every curated model and describes its rate', () => {
+  it('keeps unknown prices explicit and preserves verified model quotes', () => {
     for (const model of RUNWAY_VIDEO_MODELS) {
+      if (model.pricing.perSecond == null) {
+        expect(runwayVideoClipQuote({ modelId: model.id, seconds: 4 })).toBeNull();
+        expect(describeRunwayVideoRate(model.id)).toBeNull();
+        continue;
+      }
       expect(runwayVideoClipQuote({ modelId: model.id, seconds: 4 })?.costUsd).toBeGreaterThan(0);
       expect(describeRunwayVideoRate(model.id)).toMatch(/^\$[\d.]+\/s/);
     }
     expect(runwayVideoClipQuote({ modelId: 'wan3', seconds: 4, resolution: '1080p' })).toMatchObject({ billedSec: 4, perSec: 0.2, costUsd: 0.8 });
     expect(runwayVideoClipQuote({ modelId: 'unknown' })).toBeNull();
+  });
+});
+
+describe('Additional Runway families', () => {
+  it('uses native Veo exclusions, endpoint-specific WAN sizes and resolution plus ratio for Hailuo', () => {
+    expect(buildRunwayVideoRequest({ modelId: 'veo3.1', prompt: 'A coast', negativePrompt: 'text', seconds: 5, resolution: '1080p' }).body).toEqual({ model: 'veo3.1', promptText: 'A coast', negativePrompt: 'text', duration: 6, ratio: '1920:1080', audio: false });
+    expect(build('wan3_prime', { resolution: '1080p' }).body).toMatchObject({ ratio: 'auto_1080p', audio: false });
+    expect(buildRunwayVideoRequest({ modelId: 'wan3_prime', prompt: 'A coast', resolution: '1080p' }).body).toMatchObject({ ratio: '1920:1080' });
+    expect(buildRunwayVideoRequest({ modelId: 'hailuo3', prompt: 'A coast', resolution: '2k', aspectRatio: '9:16' }).body).toEqual({ model: 'hailuo3', promptText: 'A coast', duration: 5, resolution: '2k', ratio: '9:16' });
+    expect(buildRunwayVideoRequest({ modelId: 'h3_max', prompt: 'A coast' }).body).not.toHaveProperty('ratio');
+    expect(() => build('kling3.0_pro', { prompt: 'x' })).toThrow('at least 2');
   });
 });

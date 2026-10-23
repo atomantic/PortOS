@@ -368,7 +368,7 @@ async function generateImagePrepared({
     progress: 0,
     currentImage: null,
   });
-  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] agy: ${prompt.slice(0, 60)}…`);
+  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] agy`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
   broadcastSse(job, { type: 'status', message: 'Spawning agy…' });
 

@@ -98,6 +98,7 @@ import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/syst
 import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
+import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
 
 const router = Router();
 
@@ -173,11 +174,11 @@ export const isAudioMime = (mime, filename) => {
 // upload (icReference). Files stream to disk without a file-size cap.
 // Per-fieldname mime filtering rejects mismatched parts
 // up-front so a stray .mp4 drag-drop can't get staged under these fields.
-const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', 'icReference'], {
+const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
   fileFilter: (_req, file, cb) => {
     const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage';
     const isAudioField = file.fieldname === 'audioFile';
-    const isVideoField = file.fieldname === 'icReference';
+    const isVideoField = ['icReference', 'runwayVideo', 'runwayCharacterVideo'].includes(file.fieldname);
     const okImage = isImageField && file.mimetype.startsWith('image/');
     const okAudio = isAudioField && isAudioMime(file.mimetype, file.originalname);
     // IC-LoRA references are clips — the control weight reads structure/motion
@@ -324,6 +325,11 @@ const generateBodySchema = z.object({
   // validated like falModelId: the provider refuses an uncatalogued id and
   // rounds a length up to one the model delivers.
   runwayModelId: z.string().min(1).max(64).optional(),
+  runwayTargetAspect: z.enum(RUNWAY_ALEPH_ASPECTS).optional(),
+  runwayRatio: z.enum(RUNWAY_ACT_TWO_RATIOS).optional(),
+  runwayBodyControl: z.preprocess((v) => v === 'true' ? true : v === 'false' ? false : v, z.boolean().optional()),
+  runwayExpressionIntensity: optionalNum(1, 5, 'runwayExpressionIntensity'),
+  runwaySeed: optionalNum(0, 4294967295, 'runwaySeed'),
   runwayDuration: z.preprocess(
     (v) => (v == null || v === '' ? undefined : Number(v)),
     optionalNum(1, 60, 'runwayDuration'),
@@ -354,7 +360,7 @@ const generateBodySchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.enum(REACTOR_ASPECTS).optional(),
   ),
-  prompt: z.string().min(1).max(8000),
+  prompt: z.string().max(20000),
   negativePrompt: z.string().max(8000).optional(),
   modelId: z.string().max(64).optional(),
   width: optionalNum(64, 2048, 'width'),
@@ -378,7 +384,7 @@ const generateBodySchema = z.object({
   // falls back to inferring (sourceImage→i2v, no source→t2v).
   // IC-LoRA remix modes (`ic-control`, …) come from the weight registry so the
   // enum can never drift from what's actually installable.
-  mode: z.enum(['text', 'image', 'fflf', 'extend', 'a2v', ...IC_LORA_MODE_VALUES]).optional(),
+  mode: z.enum(['text', 'image', 'fflf', 'extend', 'a2v', ...IC_LORA_MODE_VALUES, ...RUNWAY_SPECIAL_VIDEO_MODES]).optional(),
   // Chain N renders end-to-end: each chunk's last frame becomes the next
   // chunk's start frame, then ffmpeg concats them into one clip. 1..8 to
   // keep the worst-case wall time bounded (8 × ~5min ≈ 40min on M3 Max).
@@ -546,6 +552,8 @@ const generateBodySchema = z.object({
   // docs/decisions/2026-08-20-federated-visual-prompts.md
   mediaProviderPeerId: z.string().guid().optional(),
   mediaProviderEngine: z.string().trim().min(1).max(80).optional(),
+}).refine((body) => body.prompt.length > 0 || RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode), {
+  message: 'A prompt is required for this workflow.', path: ['prompt'],
 });
 
 // The Video Gen form's preview (#11317): the generate body as the form would
@@ -1081,6 +1089,7 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // 'grok' discriminator for them) and the clip duration — both plain
   // values, safe to echo for the reloading page's form restore.
   'videoMode', 'duration',
+  'targetAspectRatio', 'ratio', 'bodyControl', 'expressionIntensity',
   // reactor.inc jobs (#6214): the clip to chain from, the clip length, and the
   // fast-h3 session canvas — all plain scalars (no filesystem path), safe to
   // echo for the reloading page's form restore. `seed` above already covers

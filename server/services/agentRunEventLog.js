@@ -442,25 +442,39 @@ export async function appendMindEvent(input) {
   return result;
 }
 
-/** Resolve once every queued append has landed. Used by the read path + tests. */
+/** Resolve once every queued append has landed. Used by tests; reads take their own queue turn via `withLedgerTurn`. */
 export function flushRunEvents() {
   return appendQueue.then(() => undefined, () => undefined);
 }
 
 /**
- * Queue a prune behind any in-flight appends.
+ * Run `fn` as one exclusive turn on the ledger queue, shared with appends,
+ * rotation, clearing and pruning.
  *
- * The read paths call this so a ledger nobody is appending to still gets its
- * expired generations reclaimed. It goes through the SAME queue as appends —
- * `flushRunEvents()` alone would only prove the queue was empty a tick ago, not
- * that a rewrite can't land mid-append. Absorbs its own errors for the same
- * reason appends do: a read must never fail on account of housekeeping.
+ * Every read of a two-generation snapshot goes through here: rotation renames
+ * active over archive between two file reads, so a reader outside the queue can
+ * pair the old archive with the new active file and silently omit the
+ * generation that just rotated. Awaiting an empty queue first would not help —
+ * a writer can start before the reads finish.
+ *
+ * `fn` runs ON the queue, so it must never call another queued operation
+ * (appendRunEvent, clearPersistentMindHistory, withLedgerTurn): that would wait
+ * on a tail that is itself waiting for `fn`.
  */
-function schedulePrune() {
-  appendQueue = appendQueue.then(() => pruneExpired()).catch((err) => {
+function withLedgerTurn(fn) {
+  const turn = appendQueue.then(fn);
+  appendQueue = turn.then(() => undefined, () => undefined);
+  return turn;
+}
+
+/**
+ * Reclaim expired generations from inside a queued turn. Absorbs its own
+ * errors: a read must never fail on account of housekeeping.
+ */
+async function pruneWithinTurn() {
+  await pruneExpired().catch((err) => {
     console.error(`❌ Failed to prune CoS run event ledger: ${err.message}`);
   });
-  return appendQueue.then(() => undefined, () => undefined);
 }
 
 /**
@@ -480,23 +494,25 @@ function schedulePrune() {
  * @param {number} [options.limit] - newest-N cap (default DEFAULT_READ_LIMIT)
  * @returns {Promise<object[]>} validated events in append order
  */
-async function readRetainedEvents() {
-  await hydrate();
-  await schedulePrune();
-  const [archive, active] = await Promise.all([
-    readJSONLFile(ARCHIVE_PATH),
-    readJSONLFile(ACTIVE_PATH),
-  ]);
-  // The age bound is enforced on read as well as on disk, so it holds in the
-  // window between prunes — a reader must never see an event the retention
-  // policy says is gone.
-  const cutoff = expiryCutoff();
-  // A line that fails the STRUCTURAL check is a corrupt/truncated write, not
-  // data — dropping it keeps one bad line from poisoning the whole projection.
-  // The check deliberately admits kinds this build does not know (see
-  // `isStoredRunEvent`): a newer install's ledger must still read here. The
-  // same predicate bounds the age, so a reader never sees an expired event.
-  return [...archive, ...active].filter((event) => isRetained(event, cutoff) && !isMindShapedEvent(event));
+function readRetainedEvents() {
+  return withLedgerTurn(async () => {
+    await hydrate();
+    await pruneWithinTurn();
+    const [archive, active] = await Promise.all([
+      readJSONLFile(ARCHIVE_PATH),
+      readJSONLFile(ACTIVE_PATH),
+    ]);
+    // The age bound is enforced on read as well as on disk, so it holds in the
+    // window between prunes — a reader must never see an event the retention
+    // policy says is gone.
+    const cutoff = expiryCutoff();
+    // A line that fails the STRUCTURAL check is a corrupt/truncated write, not
+    // data — dropping it keeps one bad line from poisoning the whole projection.
+    // The check deliberately admits kinds this build does not know (see
+    // `isStoredRunEvent`): a newer install's ledger must still read here. The
+    // same predicate bounds the age, so a reader never sees an expired event.
+    return [...archive, ...active].filter((event) => isRetained(event, cutoff) && !isMindShapedEvent(event));
+  });
 }
 
 export async function readRunEvents({ runId, agentId, taskId, kind, since, limit } = {}) {
@@ -513,17 +529,19 @@ export async function readRunEvents({ runId, agentId, taskId, kind, since, limit
 }
 
 /** All retained events for one mind, ordered by durable sequence. */
-export async function readPersistentMindHistory(mindId = PERSISTENT_MIND_ID) {
-  await hydrate();
-  const [archive, active] = await Promise.all([
-    readJSONLFile(MIND_ARCHIVE_PATH),
-    readJSONLFile(MIND_ACTIVE_PATH),
-  ]);
-  return [...archive, ...active]
-    // Preserve structurally valid future kinds in the physical mind stream.
-    // Current projections can ignore an unknown kind without deleting history.
-    .filter((event) => isMindShapedEvent(event) && event.mindId === mindId)
-    .sort((a, b) => a.sequence - b.sequence || String(a.eventId).localeCompare(String(b.eventId)));
+export function readPersistentMindHistory(mindId = PERSISTENT_MIND_ID) {
+  return withLedgerTurn(async () => {
+    await hydrate();
+    const [archive, active] = await Promise.all([
+      readJSONLFile(MIND_ARCHIVE_PATH),
+      readJSONLFile(MIND_ACTIVE_PATH),
+    ]);
+    return [...archive, ...active]
+      // Preserve structurally valid future kinds in the physical mind stream.
+      // Current projections can ignore an unknown kind without deleting history.
+      .filter((event) => isMindShapedEvent(event) && event.mindId === mindId)
+      .sort((a, b) => a.sequence - b.sequence || String(a.eventId).localeCompare(String(b.eventId)));
+  });
 }
 
 /**
@@ -651,14 +669,16 @@ export async function getRunDiagnostic(id) {
  * are held to, so "why is this run missing" has an answer that isn't a guess.
  */
 export async function getRunEventLedgerStats() {
-  await hydrate();
-  await schedulePrune();
-  const [archive, active, mindArchive, mindActive] = await Promise.all([
-    readJSONLFile(ARCHIVE_PATH),
-    readJSONLFile(ACTIVE_PATH),
-    readJSONLFile(MIND_ARCHIVE_PATH),
-    readJSONLFile(MIND_ACTIVE_PATH),
-  ]);
+  const [archive, active, mindArchive, mindActive] = await withLedgerTurn(async () => {
+    await hydrate();
+    await pruneWithinTurn();
+    return Promise.all([
+      readJSONLFile(ARCHIVE_PATH),
+      readJSONLFile(ACTIVE_PATH),
+      readJSONLFile(MIND_ARCHIVE_PATH),
+      readJSONLFile(MIND_ACTIVE_PATH),
+    ]);
+  });
   // Counted through the SAME predicate the read path uses, so "stats say 40
   // events" and "the events endpoint returns 40" can never disagree.
   const cutoff = expiryCutoff();

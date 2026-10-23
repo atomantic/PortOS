@@ -1,3 +1,4 @@
+import { getRunwayImageModel } from './runwayImageModels.js';
 /**
  * Per-backend image-gen capability literals.
  *
@@ -21,7 +22,6 @@
  */
 
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from './generationModes.js';
-import { getRunwayImageModel } from './runwayImageModels.js';
 import { FAL_IMAGE_MIN_INPUT_IMAGES, falImageFamily } from './falImageModels.js';
 
 // Backends that cannot take an input image at all (#3243). Every *queueable*
@@ -225,16 +225,13 @@ export const supportsCloudModelOverride = (mode) => MODEL_OVERRIDE_CAPABLE_MODES
  * reaches the resolver — `isEditCapableMode` rejects it first).
  *
  * `modelId` refines the answer for a backend whose cap depends on the model
- * (fal.ai, Runway); an unknown or absent model falls back to the mode-level value.
+ * (fal.ai); an unknown or absent model falls back to the mode-level value.
  */
 export const maxInputImages = (mode, modelId = null) => {
+  if (mode === IMAGE_GEN_MODE.RUNWAY) return getRunwayImageModel(modelId)?.maxReferences ?? 3;
   if (mode === IMAGE_GEN_MODE.FAL) {
     const family = falImageFamily(modelId);
     if (family) return family.maxInputImages;
-  }
-  if (mode === IMAGE_GEN_MODE.RUNWAY) {
-    const row = getRunwayImageModel(modelId);
-    if (row) return row.maxReferences;
   }
   return IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.maxInputImages ?? null;
 };

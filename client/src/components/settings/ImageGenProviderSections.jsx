@@ -1,3 +1,5 @@
+import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
+import RunwayCatalogStatus from '../imageGen/RunwayCatalogStatus.jsx';
 /**
  * Media settings — the per-provider sections (External SD API, Local
  * runtimes, Codex CLI, Grok CLI, Agy CLI, fal.ai). Every field is read from
@@ -26,7 +28,7 @@ import { getVideoGenModelContext, getProviders } from '../../services/api';
 import {
   isLocalImageConfigured, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily,
   AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL,
-  GROK_ASPECT_RATIOS, localModelSelectOptions, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DISCLOSURE,
+  GROK_ASPECT_RATIOS, localModelSelectOptions, getRunwayImageModel, RUNWAY_IMAGE_DISCLOSURE,
 } from '../../lib/imageGenBackends';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import { effortLevelsForProvider, isCodexSubscriptionProvider, providerModelList } from '../../utils/providers';
@@ -55,6 +57,7 @@ const SECTION_CLASS = 'bg-port-card border border-port-border rounded-xl p-6 spa
 const FIELD_LABEL_CLASS = 'block text-xs font-medium text-gray-400 mb-1';
 
 export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, parallelBounds, falCredential, runwayCredential, localRuntime, onStatusRecheck }) {
+  const runwayCatalog = useRunwayCatalog(mediaTab === 'runway');
   const { values, set } = form;
   const {
     mode, sdapiUrl, pythonPath, localModelId, localVideoModelId,
@@ -531,19 +534,21 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
           <p className="text-xs text-gray-400">{RUNWAY_IMAGE_DISCLOSURE.summary} <a href={RUNWAY_IMAGE_DISCLOSURE.termsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">Runway’s terms</a> and moderation apply. {RUNWAY_IMAGE_DISCLOSURE.billing}</p>
           <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={values.runwayEnabled} onChange={toggleProvider('runwayEnabled', IMAGE_GEN_MODE.RUNWAY)} /><span>Enable Runway Imagegen</span></label>
           <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
-            <select value={values.runwayModel} onChange={(e) => set('runwayModel', e.target.value)} className={INPUT_CLASS}>
-              {RUNWAY_IMAGE_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}{model.minReferences ? ' (requires a reference)' : ''}</option>)}
+            <select value={values.runwayModel} onChange={(e) => { set('runwayModel', e.target.value); set('runwayResolution', getRunwayImageModel(e.target.value).defaultResolution); }} className={INPUT_CLASS}>
+              {!runwayCatalog.imageModels.some((m) => m.id === values.runwayModel) && <option value={values.runwayModel}>{values.runwayModel} (unavailable)</option>}
+              {runwayCatalog.imageModels.map((model) => <option key={model.id} value={model.id}>{model.label}{model.minReferences ? ' (requires a reference)' : ''}</option>)}
             </select>
           </FormField>
           <FormField label="Resolution" labelClassName={FIELD_LABEL_CLASS}>
             <select value={values.runwayResolution} onChange={(e) => set('runwayResolution', e.target.value)} className={INPUT_CLASS}>
-              {['720p', '1080p'].map((resolution) => (
+              {Object.keys(getRunwayImageModel(values.runwayModel)?.ratios || {}).map((resolution) => (
                 <option key={resolution} value={resolution}>
-                  {resolution} · {RUNWAY_IMAGE_MODELS.map((model) => `${model.label}: ${formatCount(model.credits[resolution])} credits`).join(' / ')}
+                  {resolution === 'auto' ? 'Match requested aspect ratio' : resolution.replace(':', ' × ')}{getRunwayImageModel(values.runwayModel)?.credits[resolution] != null ? ` · ${formatCount(getRunwayImageModel(values.runwayModel).credits[resolution])} credits` : ''}
                 </option>
               ))}
             </select>
           </FormField>
+          <RunwayCatalogStatus catalog={runwayCatalog} />
           <CleanersToggles mode={IMAGE_GEN_MODE.RUNWAY} form={form} />
         </div>
       )}

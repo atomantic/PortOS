@@ -14,9 +14,32 @@ const { LEDGER_DIR } = await vi.hoisted(async () => {
   return { LEDGER_DIR: mk(j(tmp(), 'portos-run-events-')) };
 });
 
+// Interleaving barriers: `beforeRead` runs ahead of every JSONL read, `afterRename`
+// after every rotation rename. Both are inert unless a test installs a hook.
+const barriers = vi.hoisted(() => ({ beforeRead: null, afterRename: null }));
+
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, cos: LEDGER_DIR } };
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, cos: LEDGER_DIR },
+    readJSONLFile: async (path, ...rest) => {
+      await barriers.beforeRead?.(path);
+      return actual.readJSONLFile(path, ...rest);
+    },
+  };
+});
+
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    rename: async (...args) => {
+      const result = await actual.rename(...args);
+      barriers.afterRename?.();
+      return result;
+    },
+  };
 });
 
 const {
@@ -662,5 +685,85 @@ describe('retention — one predicate for reads, stats, and the prune (#4540)', 
     const stats = await getRunEventLedgerStats();
     expect(stats.activeEvents).toBe(1);
     expect(await readRunEvents()).toHaveLength(1);
+  });
+});
+
+describe('history reads versus generation rotation', () => {
+  const mindEvent = (index) => buildRunEvent({
+    kind: 'mind.wake',
+    mindId: 'cos-persistent-mind',
+    sequence: index + 1,
+    eventId: `mind-${index}`,
+    at: '2026-08-18T10:00:00.000Z',
+    data: { previousSequence: index || null },
+  });
+  const jsonl = (events) => events.map((event) => `${JSON.stringify(event)}\n`).join('');
+
+  // Seed one archived event and a FULL active generation, warm hydration, then
+  // hold a reader's active-file read while an append rotates the ledger. The
+  // append is not awaited before the gate opens: with the reader holding its
+  // queue turn the append cannot start, so the gate opens once rotation is seen
+  // or the append has demonstrably had every chance (event-loop turns, no timers).
+  async function readAcrossRotation(read) {
+    const archived = mindEvent(0);
+    const active = Array.from({ length: MAX_ACTIVE_MIND_EVENTS }, (_, index) => mindEvent(index + 1));
+    writeFileSync(MIND_ARCHIVE, jsonl([archived]));
+    writeFileSync(MIND_ACTIVE, jsonl(active));
+    await readPersistentMindHistory();
+
+    let openGate;
+    const gate = new Promise((resolve) => { openGate = resolve; });
+    let reachedActive;
+    const reached = new Promise((resolve) => { reachedActive = resolve; });
+    barriers.beforeRead = async (path) => {
+      if (path !== MIND_ACTIVE) return;
+      barriers.beforeRead = null;
+      reachedActive();
+      await gate;
+    };
+    let rotated;
+    const rotation = new Promise((resolve) => { rotated = resolve; });
+    barriers.afterRename = rotated;
+    try {
+      const reading = read({ archived, active });
+      await reached;
+      const appending = appendMindEvent({ kind: 'mind.wake', eventId: 'mind-new' });
+      let turns = 0;
+      const drained = (async () => { while (turns++ < 200) await new Promise((r) => setImmediate(r)); })();
+      await Promise.race([rotation, drained]);
+      openGate();
+      const [result] = await Promise.all([reading, appending]);
+      return { result, archived, active };
+    } finally {
+      barriers.beforeRead = null;
+      barriers.afterRename = null;
+    }
+  }
+
+  it('serves a complete pre-rotation history, never the old archive plus the new active file', async () => {
+    const { result, active } = await readAcrossRotation(() => readPersistentMindHistory());
+    expect(result).toHaveLength(active.length + 1);
+    expect(result.at(-1).eventId).toBe(active.at(-1).eventId);
+    // Rotation then drops the old archive, so the settled ledger is the rotated generation plus the new event.
+    const settled = await readPersistentMindHistory();
+    expect(settled).toHaveLength(active.length + 1);
+    expect(settled.at(-1).eventId).toBe('mind-new');
+  });
+
+  it('keeps trajectory cursor, hasMore and snapshot tied to one generation snapshot', async () => {
+    const { result, archived, active } = await readAcrossRotation(() => readPersistentMindEvents({
+      cursor: persistentMindEventCursor(mindEvent(0)),
+      limit: 500,
+    }));
+    expect(result.gap).toBe(false);
+    expect(result.hasMore).toBe(true);
+    expect(result.events).toHaveLength(500);
+    expect(result.events[0].eventId).toBe(active[0].eventId);
+    expect(archived.eventId).toBe('mind-0');
+  });
+
+  it('counts a complete generation pair in ledger stats while a rotation is racing it', async () => {
+    const { result, active } = await readAcrossRotation(() => getRunEventLedgerStats());
+    expect(result.mindArchivedEvents + result.mindActiveEvents).toBe(active.length + 1);
   });
 });

@@ -8,6 +8,7 @@ import * as githubAccounts from '../services/githubAccounts.js';
 import * as githubNotifications from '../services/githubNotifications.js';
 import * as githubAudit from '../services/githubNotificationAudit.js';
 import * as githubDeployment from '../services/githubNotificationDeployment.js';
+import { retriageOpenThreads } from '../services/githubNotificationTriage.js';
 import { requestHasHostControl } from '../services/authGate.js';
 
 const router = express.Router();
@@ -116,7 +117,13 @@ router.post('/accounts', asyncHandler(async (req, res) => {
 
 router.put('/accounts/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(githubAccountUpdateSchema, req.body);
-  res.json(await githubAccounts.updateAccount(req.params.id, body));
+  const before = await githubAccounts.getAccount(req.params.id);
+  const updated = await githubAccounts.updateAccount(req.params.id, body);
+  // Threads triaged under the old trust settings are decided again on the next check.
+  if (before.trust !== updated.trust || (before.trustInstanceUsers === true) !== (updated.trustInstanceUsers === true)) {
+    await retriageOpenThreads(updated.id);
+  }
+  res.json(updated);
 }));
 
 router.delete('/accounts/:id', asyncHandler(async (req, res) => {

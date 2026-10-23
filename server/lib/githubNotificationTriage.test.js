@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  agentHandoff, agentRuleScope, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
+  agentHandoff, agentRuleScope, ciActivityAction, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
   selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
@@ -18,6 +18,19 @@ describe('computeThreadTrust', () => {
     expect(computeThreadTrust({ ...base, actorLogin: 'alice', actorIsOrgMember: true })).toBe('outside');
     expect(computeThreadTrust({ ...base, accountTrust: 'private', actorLogin: 'alice', actorIsOrgMember: true })).toBe('trusted');
     expect(computeThreadTrust({ ...base, actorLogin: null })).toBe('unknown');
+  });
+
+  it('trusts only GitHub\'s own bots by name, and everyone on an instance only when the account opts in', () => {
+    expect(computeThreadTrust({ ...base, actorLogin: 'dependabot[bot]', actorType: 'Bot' })).toBe('trusted');
+    expect(computeThreadTrust({ ...base, actorLogin: 'github-actions[bot]', actorType: 'Bot' })).toBe('trusted');
+    // A look-alike human, an unreported type, or another app is not.
+    expect(computeThreadTrust({ ...base, actorLogin: 'dependabot', actorType: 'User' })).toBe('outside');
+    expect(computeThreadTrust({ ...base, actorLogin: 'dependabot[bot]' })).toBe('outside');
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot' })).toBe('outside');
+
+    expect(computeThreadTrust({ ...base, actorLogin: 'alice', actorType: 'User', trustInstanceUsers: true })).toBe('trusted');
+    expect(computeThreadTrust({ ...base, actorLogin: 'alice', actorType: 'User' })).toBe('outside');
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot', trustInstanceUsers: true })).toBe('outside');
   });
 
   it('ignores any claim of authority carried in content', () => {
@@ -250,5 +263,19 @@ describe('autopilotHandoff', () => {
     const rules = [{ id: 'r', kind: 'review-request', repo: 'acme/app', agent: true, provider: 'p1' }];
     const enterprise = { ...account, trust: 'private', allowAgents: true, agentRules: rules };
     expect(agentHandoff({ account: enterprise, row: { ...review, repo_full_name: 'acme/app' } })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, pin: { provider: 'p1' }, rule: { id: 'r', agent: true } });
+  });
+});
+
+describe('ciActivityAction', () => {
+  const ci = { reason: 'ci_activity', subject_type: 'CheckSuite', repo_full_name: 'acme/app' };
+  it('marks CI notices done by default and lets a repo or * rule override it', () => {
+    expect(ciActivityAction({ account: { agentRules: [] }, row: ci })).toBe('done');
+    const rules = [{ id: 'a', kind: 'ci-activity', repo: '*', action: 'leave' }, { id: 'b', kind: 'ci-activity', repo: 'acme/app', action: 'mute' }];
+    expect(ciActivityAction({ account: { agentRules: rules }, row: ci })).toBe('mute');
+    expect(ciActivityAction({ account: { agentRules: rules }, row: { ...ci, repo_full_name: 'acme/other' } })).toBe('leave');
+  });
+  it('ignores non-CI threads and malformed rules', () => {
+    expect(ciActivityAction({ account: {}, row: { reason: 'mention', subject_type: 'Issue' } })).toBeNull();
+    expect(ciActivityAction({ account: { agentRules: [{ kind: 'ci-activity', repo: '*', action: 'nuke' }] }, row: ci })).toBe('done');
   });
 });

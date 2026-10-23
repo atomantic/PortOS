@@ -1,35 +1,10 @@
-/**
- * Curated Runway VIDEO model catalog — what PortOS knows about each model it
- * offers through Runway's developer API (`POST /v1/image_to_video`, and
- * `POST /v1/text_to_video` for a row with a `textToVideo` rule): the
- * request fields each model takes (the body is one shape per `model`), its
- * duration and output-size rules, whether it ends on a last frame, and its
- * published price.
- *
- * Every row was checked against Runway's API reference and pricing guide
- * (docs.dev.runwayml.com: api.md, guides/pricing.md, assets/inputs.md) on
- * RUNWAY_VIDEO_PRICING_VERIFIED_AT. Runway changes these; when a render is
- * refused with a 400 or a bill disagrees with an estimate, re-check that
- * model's section and edit its row.
- *
- * Veo is deliberately not offered (a project choice), though
- * Runway serves it; the native `negativePrompt` row field stays for a model
- * that takes one.
- *
- * Every row animates a start frame, and the rows marked `endImage` also end on
- * a last frame. Only Gen-4.5 also renders from text alone; its `textToVideo`
- * rule lists the ratios `/v1/text_to_video` takes (the duration, prompt cap,
- * seed and price are the row's own). The other curated rows stay image-only
- * until a text-to-video need for them is checked against the API reference. Provider audio is always requested off
- * (`audio: false`) where a model has the field, since a PortOS clip is silent
- * unless the caller asks (a Music Video's master song is its only soundtrack),
- * and the silent rate is what is priced.
- *
- * Runway bills credits at $0.01 each; prices below are credits per second ÷ 100.
- *
- * Dependency-free so `client/src/lib/runwayVideoModels.js` can re-export it and
- * the board, the provider and the autopilot price a take identically.
+/** Runway text/image-to-video capabilities shared by forms, submissions and quotes.
+ * Published OpenAPI snapshot: 2026-10-22. Video-editing and performance endpoints
+ * need different input workflows and are reported separately by the catalog API.
+ * Veo is intentionally included under the all-model scope adopted on 2026-10-22,
+ * reversing the earlier project exclusion in #12344; see docs/RUNWAY_MODELS.md.
  */
+import { RUNWAY_CATALOG_SNAPSHOT } from './runwayCatalogSnapshot.js';
 
 /** Date the schemas and prices below were last verified against Runway's docs. */
 export const RUNWAY_VIDEO_PRICING_VERIFIED_AT = '2026-10-19';
@@ -37,83 +12,50 @@ export const RUNWAY_VIDEO_PRICING_VERIFIED_AT = '2026-10-19';
 /** Runway's own Gen-4.5: the default when a request names no model. */
 export const RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL = 'gen4.5';
 
-const GEN4_RATIOS = Object.freeze(['1280:720', '720:1280', '1104:832', '960:960', '832:1104', '1584:672']);
-
-/** The curated catalog, one frozen row per Runway model. */
-export const RUNWAY_VIDEO_MODELS = Object.freeze([
-  {
-    id: 'gen4.5', label: 'Runway Gen-4.5', family: 'runway-gen4',
-    prompt: 'required', promptMaxChars: 1000,
-    endImage: false,
-    duration: { kind: 'range', min: 2, max: 10, defaultSec: 5 },
-    // `ratio` is required and names the output canvas.
-    size: { param: 'ratio', required: true, byResolution: { '720p': GEN4_RATIOS }, default: '720p' },
-    audio: false, seed: true, negativePrompt: false,
-    // `ratio` is required on /v1/text_to_video and offers only these two.
-    textToVideo: { ratios: Object.freeze(['1280:720', '720:1280']) },
-    pricing: { perSecond: 0.12 },
-  },
-  {
-    id: 'gen4_turbo', label: 'Runway Gen-4 Turbo', family: 'runway-gen4',
-    prompt: 'optional', promptMaxChars: 1000,
-    endImage: false,
-    duration: { kind: 'range', min: 2, max: 10, defaultSec: 5 },
-    size: { param: 'ratio', required: true, byResolution: { '720p': GEN4_RATIOS }, default: '720p' },
-    audio: false, seed: true, negativePrompt: false,
-    pricing: { perSecond: 0.05 },
-  },
-  {
-    id: 'kling3.0_standard', label: 'Kling 3.0 Standard', family: 'kling-3.0',
-    prompt: 'optional', promptMaxChars: 2500,
-    endImage: true,
-    duration: { kind: 'range', min: 3, max: 15, defaultSec: 5 },
-    // Optional; with a last frame the canvas follows the first frame.
-    size: { param: 'ratio', required: false, byResolution: { '720p': ['1280:720', '720:1280', '960:960'] }, default: '720p' },
-    // 13 credits/s with audio (Runway's default), 9 with audio off.
-    audio: true, seed: false, negativePrompt: false,
-    pricing: { perSecond: 0.09 },
-  },
-  {
-    id: 'kling3.0_pro', label: 'Kling 3.0 Pro', family: 'kling-3.0',
-    prompt: 'optional', promptMaxChars: 2500,
-    endImage: true,
-    duration: { kind: 'range', min: 3, max: 15, defaultSec: 5 },
-    size: { param: 'ratio', required: false, byResolution: { '1080p': ['1920:1080', '1080:1920', '1440:1440'] }, default: '1080p' },
-    // 17 credits/s with audio, 12 with audio off.
-    audio: true, seed: false, negativePrompt: false,
-    pricing: { perSecond: 0.12 },
-  },
-  {
-    id: 'kling2.5_turbo_pro', label: 'Kling 2.5 Turbo Pro', family: 'kling-2.5',
-    prompt: 'optional', promptMaxChars: 2500,
-    endImage: true,
-    duration: { kind: 'enum', values: [5, 10], defaultSec: 5 },
-    // No ratio field: the canvas follows the start frame.
-    size: null,
-    audio: false, seed: false, negativePrompt: false,
-    pricing: { perSecond: 0.12 },
-  },
-  {
-    id: 'h3_max', label: 'MiniMax H3 Max', family: 'minimax-h3',
-    prompt: 'required', promptMaxChars: 6000,
-    endImage: true,
-    duration: { kind: 'range', min: 5, max: 15, defaultSec: 5 },
-    // A resolution, not a ratio: the canvas follows the start frame.
-    size: { param: 'resolution', required: false, byResolution: { '480p': null, '768p': null }, default: '768p' },
-    audio: false, seed: true, negativePrompt: false,
-    pricing: { perSecond: { '480p': 0.05, '768p': 0.08 } },
-  },
-  {
-    id: 'wan3', label: 'WAN 3.0', family: 'wan-3',
-    prompt: 'required', promptMaxChars: 20000,
-    endImage: true,
-    duration: { kind: 'range', min: 2, max: 30, defaultSec: 5 },
-    // A keyframe render must use an `auto_*` ratio: the canvas follows the first frame.
-    size: { param: 'ratio', required: false, byResolution: { '480p': ['auto_480p'], '720p': ['auto_720p'], '1080p': ['auto_1080p'] }, default: '720p' },
-    audio: true, seed: false, negativePrompt: false,
-    pricing: { perSecond: { '480p': 0.05, '720p': 0.10, '1080p': 0.20 } },
-  },
-].map((model) => Object.freeze(model)));
+const PRICES = {
+  'gen4.5': 0.12, gen4_turbo: 0.05, 'kling3.0_standard': 0.09, 'kling3.0_pro': 0.12,
+  'kling2.5_turbo_pro': 0.12, h3_max: { '480p': 0.05, '768p': 0.08 },
+  wan3: { '480p': 0.05, '720p': 0.10, '1080p': 0.20 },
+};
+const LABELS = {
+  'gen4.5': 'Runway Gen-4.5', gen4_turbo: 'Runway Gen-4 Turbo',
+  'veo3.1': 'Veo 3.1', 'veo3.1_fast': 'Veo 3.1 Fast',
+  hailuo3: 'MiniMax H3', h3_max: 'MiniMax H3 Max', happyhorse_1_0: 'HappyHorse 1.0',
+  wan3: 'WAN 3.0', wan3_prime: 'WAN 3.0 Prime',
+  seedance2: 'Seedance 2.0', seedance2_fast: 'Seedance 2.0 Fast', seedance2_mini: 'Seedance 2.0 Mini', seedance2_5: 'Seedance 2.5',
+  gemini_omni_flash: 'Gemini Omni Flash', 'gemini_omni_flash_1.1': 'Gemini Omni Flash 1.1',
+  grok_imagine_1_5: 'Grok Imagine Video 1.5', grok_imagine_1_5_lite: 'Grok Imagine Video 1.5 Lite',
+};
+function sizeRule(row, textOnly) {
+  if (row.resolutions.length) return {
+    param: 'resolution', required: true, byResolution: Object.fromEntries(row.resolutions.map((r) => [r, null])),
+    default: row.id === 'h3_max' ? '768p' : row.resolutions.includes('720p') ? '720p' : row.resolutions[0],
+  };
+  let ratios = row.ratios;
+  if (row.id.startsWith('wan3')) ratios = ratios.filter((r) => textOnly ? !r.startsWith('auto_') : r.startsWith('auto_'));
+  if (!ratios.length) return null;
+  const byResolution = {};
+  for (const ratio of ratios) {
+    const [w, h] = ratio.split(':').map(Number);
+    const pixels = w * h;
+    const tier = ratio.startsWith('auto_') ? ratio.slice(5) : pixels > 5e6 ? '4k' : pixels > 1.1e6 ? '1080p' : pixels > 5e5 ? '720p' : pixels > 3e5 ? '480p' : '360p';
+    (byResolution[tier] ||= []).push(ratio);
+  }
+  return { param: 'ratio', required: row.ratioRequired, byResolution, default: byResolution['720p'] ? '720p' : Object.keys(byResolution)[0] };
+}
+export const RUNWAY_VIDEO_MODELS = Object.freeze(RUNWAY_CATALOG_SNAPSHOT.image_to_video.map((row) => {
+  const text = RUNWAY_CATALOG_SNAPSHOT.text_to_video.find((m) => m.id === row.id);
+  const d = row.duration;
+  const duration = d.enum ? { kind: 'enum', values: d.enum, defaultSec: d.enum.find((n) => n >= 5) || d.enum[0] }
+    : { kind: 'range', min: d.minimum, max: d.maximum, defaultSec: Math.max(5, d.minimum) };
+  return Object.freeze({
+    id: row.id, label: LABELS[row.id] || row.id.replace('kling', 'Kling ').replaceAll('_', ' '), family: row.id,
+    prompt: row.promptRequired ? 'required' : 'optional', promptMinChars: row.promptMin, promptMaxChars: row.promptMax,
+    endImage: row.endImage, duration, size: sizeRule(row, false), audio: row.audio, seed: row.seed, negativePrompt: row.negativePromptMax > 0, negativePromptMaxChars: row.negativePromptMax,
+    ...(text ? { textToVideo: { ratios: text.ratios.filter((r) => /^\d+:\d+$/.test(r)), size: sizeRule(text, true), promptRequired: text.promptRequired } } : {}),
+    pricing: { perSecond: PRICES[row.id] ?? null },
+  });
+}));
 
 const BY_ID = new Map(RUNWAY_VIDEO_MODELS.map((m) => [m.id, m]));
 
@@ -241,10 +183,11 @@ export function buildRunwayVideoRequest({
   if (!model) throw refuse(`"${modelId}" is not a Runway model PortOS offers`);
   const text = typeof prompt === 'string' ? prompt.trim() : '';
   const avoid = typeof negativePrompt === 'string' ? negativePrompt.trim() : '';
-  if (model.prompt === 'required' && !text) throw refuse(`${model.label} needs a prompt`);
+  if ((model.prompt === 'required' || (!imageUri && model.textToVideo?.promptRequired)) && !text) throw refuse(`${model.label} needs a prompt`);
   // No native field: the negative prompt rides in the prompt as an "Avoid:"
   // clause, shown to the user as a labeled addition (same fallback as fal.ai).
   const sent = !model.negativePrompt && avoid ? `${text}\nAvoid: ${avoid}`.trim() : text;
+  if (sent && sent.length < model.promptMinChars) throw refuse(`${model.label} needs at least ${model.promptMinChars} prompt characters`);
   if (sent.length > model.promptMaxChars) {
     throw refuse(`The prompt is ${sent.length.toLocaleString('en-US')} characters${sent === text ? '' : ' with its "Avoid:" clause'}; ${model.label} takes ${model.promptMaxChars.toLocaleString('en-US')}. Shorten it to render.`);
   }
@@ -266,20 +209,19 @@ export function buildRunwayVideoRequest({
   if (model.negativePrompt && avoid) body.negativePrompt = avoid;
   const coercedSec = coerceRunwayVideoSeconds(model, seconds);
   body.duration = coercedSec;
-  const res = resolveRunwayVideoResolution(model, resolution);
-  if (textOnly) {
-    // No frame to follow, so the canvas is always named: the offered ratio closest to the target.
-    const want = aspectOf({ aspectRatio, width, height }) ?? 16 / 9;
-    body.ratio = model.textToVideo.ratios.reduce((best, r) => (Math.abs(ratioOf(r) - want) < Math.abs(ratioOf(best) - want) ? r : best));
-  } else if (model.size) {
-    const target = aspectOf({ aspectRatio, width, height });
-    // An optional ratio is sent only when there is a target to match and no
-    // last frame (a keyframe render's canvas follows its first frame);
-    // otherwise Runway sizes from the frame.
-    if (model.size.required || model.size.param === 'resolution' || model.size.byResolution[res]?.length === 1
+  const activeModel = textOnly ? { ...model, size: model.textToVideo.size } : model;
+  const res = resolveRunwayVideoResolution(activeModel, resolution);
+  const target = aspectOf({ aspectRatio, width, height });
+  if (activeModel.size) {
+    if (textOnly || resolution || activeModel.size.required || activeModel.size.param === 'resolution' || activeModel.size.byResolution[res]?.length === 1
       || (target != null && !endImageUri)) {
-      body[model.size.param] = pickSizeValue(model, res, target);
+      body[activeModel.size.param] = pickSizeValue(activeModel, res, target);
     }
+  }
+  // These families take both a separate resolution and an aspect-ratio enum.
+  if (textOnly && activeModel.size?.param === 'resolution' && model.textToVideo.ratios.length) {
+    const want = target ?? 16 / 9;
+    body.ratio = model.textToVideo.ratios.reduce((best, r) => Math.abs(ratioOf(r) - want) < Math.abs(ratioOf(best) - want) ? r : best);
   }
   if (model.audio) body.audio = false;
   if (model.seed && Number.isInteger(seed) && seed >= 0 && seed <= 4294967295) body.seed = seed;

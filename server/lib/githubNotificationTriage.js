@@ -36,7 +36,7 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 5;
+export const TRIAGE_RULES_VERSION = 6;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. They stay in the inbox (it
@@ -53,18 +53,26 @@ const MENTION_REASONS = new Set(['mention', 'team_mention']);
 
 const lower = (value) => (typeof value === 'string' ? value.toLowerCase() : null);
 
+// GitHub's own apps. The `[bot]` suffix is reserved for GitHub Apps, and these
+// slugs belong to GitHub; the forge must also report the actor as a Bot.
+const GITHUB_NATIVE_BOTS = new Set(['dependabot[bot]', 'github-actions[bot]']);
+
 /**
  * `yours` for one of the operator's own logins on the host, `trusted` for an
- * actor the forge reports with write access to an owned repo (or, on a Private
- * account, a member of the repo's org), `outside` otherwise, `unknown` when
- * the thread has no human actor (CI, releases).
+ * actor the forge reports with write access to an owned repo, a GitHub-native
+ * bot (Dependabot, a repo's own Actions workflow), a member of the repo's org
+ * on a Private account, or any human on an Enterprise instance whose account
+ * trusts its own users; `outside` otherwise, `unknown` when the thread has no
+ * human actor (CI, releases). `actorType` is the forge's `user.type`.
  */
-export function computeThreadTrust({ actorLogin, ownLogins = [], repoOwned = false, actorHasWriteAccess = false, actorIsOrgMember = false, accountTrust = 'public' }) {
+export function computeThreadTrust({ actorLogin, actorType = null, ownLogins = [], repoOwned = false, actorHasWriteAccess = false, actorIsOrgMember = false, accountTrust = 'public', trustInstanceUsers = false }) {
   const actor = lower(actorLogin);
   if (!actor) return 'unknown';
   if (ownLogins.some((login) => lower(login) === actor)) return 'yours';
+  if (actorType === 'Bot' && GITHUB_NATIVE_BOTS.has(actor)) return 'trusted';
   if (repoOwned && actorHasWriteAccess === true) return 'trusted';
   if (accountTrust === 'private' && actorIsOrgMember === true) return 'trusted';
+  if (trustInstanceUsers === true && actorType === 'User') return 'trusted';
   return 'outside';
 }
 
@@ -229,7 +237,9 @@ const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 
 // The notification kinds an agent rule can name (GITHUB_AGENT_RULE_KINDS in
 // lib/validation.js), and the kind of a thread, or null when no rule applies.
-const RULE_KINDS = new Set(['review-request', 'security-alert', 'issue-activity']);
+const RULE_KINDS = new Set(['review-request', 'security-alert', 'issue-activity', 'ci-activity']);
+// `ci-activity` rules name a GitHub action instead of starting an agent.
+export const CI_RULE_ACTIONS = Object.freeze(['done', 'mute', 'leave']);
 const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
 const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
@@ -250,7 +260,28 @@ function threadAgentKind(row) {
  */
 const validRules = (rules, kind) => (Array.isArray(rules) ? rules : []).filter((rule) => rule
   && RULE_KINDS.has(rule.kind) && rule.kind === kind
-  && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo) && typeof rule.agent === 'boolean');
+  && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo)
+  && (kind === 'ci-activity' ? CI_RULE_ACTIONS.includes(rule.action) : typeof rule.agent === 'boolean'));
+
+// Built-in rules shown under every account. A rule the operator saves for the
+// same kind and repo wins; with none, a CI notice is simply marked done.
+export const DEFAULT_AGENT_RULES = Object.freeze([
+  Object.freeze({ id: 'default-ci-activity', kind: 'ci-activity', repo: '*', action: 'done', builtin: true }),
+]);
+
+const isCiThread = (row) => row?.reason === 'ci_activity' || row?.subject_type === 'CheckSuite';
+
+/**
+ * What the account's rules do with a CI notification: `done`, `mute` or
+ * `leave`. The repo's own rule, else the `*` rule, else the built-in default.
+ * Suspect and closed-out threads are handled elsewhere, so this only reads
+ * the thread's kind and repo.
+ */
+export function ciActivityAction({ account, row }) {
+  if (!isCiThread(row)) return null;
+  const rules = [...(Array.isArray(account?.agentRules) ? account.agentRules : []), ...DEFAULT_AGENT_RULES];
+  return matchAgentRule(rules, 'ci-activity', row.repo_full_name)?.action || null;
+}
 
 function matchAgentRule(rules, kind, repo) {
   if (!kind) return null;

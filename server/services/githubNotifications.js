@@ -24,7 +24,7 @@ import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccou
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
-import { agentHandoff, FINISHED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
+import { agentHandoff, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -670,6 +670,7 @@ export async function getAutomationsOverview() {
         pending: counts?.pending || 0,
         allowAgents: account.allowAgents === true,
         agentRules: Array.isArray(account.agentRules) ? account.agentRules : [],
+        defaultAgentRules: DEFAULT_AGENT_RULES,
         repos: reposById.get(account.id) || [],
       };
     }),

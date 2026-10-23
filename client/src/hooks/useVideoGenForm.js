@@ -25,6 +25,7 @@ import {
 } from '../lib/videoGenParams.js';
 import { videoStreamingModeFromRecord } from '../lib/videoStreamingMode.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../lib/runwayVideoModels.js';
+import { RUNWAY_SPECIAL_VIDEO_MODELS, getRunwaySpecialVideoModel, RUNWAY_SPECIAL_VIDEO_MODES } from '../../../server/lib/runwaySpecialVideoModels.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
 import { useVideoGenValidation } from './useVideoGenValidation.js';
@@ -109,6 +110,7 @@ export function useVideoGenForm({
     runwayModelId, setRunwayModelId,
     runwayDuration, setRunwayDuration,
     runwayResolution, setRunwayResolution,
+    runwayInputs, setRunwayInputs,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
@@ -868,6 +870,14 @@ export function useVideoGenForm({
   // carry over because they apply to all modes.)
   const handleModeChange = (next) => {
     setMode(next);
+    if (next !== mode) setRunwayInputs({});
+    if (isRunway) setRunwayModelId(RUNWAY_SPECIAL_VIDEO_MODELS.find((m) => m.mode === next)?.id || (getRunwaySpecialVideoModel(runwayModelId) ? '' : runwayModelId));
+    if (RUNWAY_SPECIAL_VIDEO_MODES.includes(next)) {
+      clearSourceImage();
+      clearLastImage();
+      setExtendFromVideoId('');
+      setChunks(1);
+    }
     // Audio is only meaningful in a2v mode — drop it on every other switch
     // so a stale upload from a prior pick doesn't sneak into a non-a2v post.
     if (next !== 'a2v') setAudioFile(null);
@@ -951,6 +961,7 @@ export function useVideoGenForm({
   // clip survives the switch and reappears if the user flips back.
   const handleBackendChange = (id) => {
     setBackend(id);
+    if (id !== 'runway' && RUNWAY_SPECIAL_VIDEO_MODES.includes(mode)) handleModeChange('text');
     if ((id === 'grok' || id === 'fal' || id === 'reactor' || id === 'runway') && mode !== 'text' && mode !== 'image') {
       handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
     }
@@ -1254,7 +1265,8 @@ export function useVideoGenForm({
     } else if (p.mode === 'runway') {
       // Runway job: same discriminator shape as fal above.
       setBackend('runway');
-      setMode(p.videoMode === 'text' ? 'text' : 'image');
+      setMode(RUNWAY_SPECIAL_VIDEO_MODES.includes(p.videoMode) ? p.videoMode : p.videoMode === 'text' ? 'text' : 'image');
+      setRunwayInputs({ targetAspectRatio: p.targetAspectRatio, ratio: p.ratio, bodyControl: p.bodyControl, expressionIntensity: p.expressionIntensity, seed: p.seed });
       if (p.modelId) {
         runwayModelPickRef.current = p.modelId;
         setRunwayModelId(p.modelId);
@@ -1343,7 +1355,7 @@ export function useVideoGenForm({
   const submissionState = {
     hostedLane, isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
     isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
-    isRunway, runwayModelId, runwayDuration, runwayResolution,
+    isRunway, runwayModelId, runwayDuration, runwayResolution, runwayInputs,
     displaySleepEnabled,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
@@ -1369,6 +1381,7 @@ export function useVideoGenForm({
     runwayModelId, setRunwayModelId,
     runwayDuration, setRunwayDuration,
     runwayResolution, setRunwayResolution,
+    runwayInputs, setRunwayInputs,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,

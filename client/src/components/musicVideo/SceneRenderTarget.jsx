@@ -1,3 +1,4 @@
+import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, coerceFalVideoSeconds, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
@@ -53,7 +54,7 @@ function savedLabel(saved, performance, scene) {
   return BACKEND_LABELS[saved.backend] || 'install default';
 }
 
-export function renderTargetOptions({ performance, saved, endFrame = false, scene = null }) {
+export function renderTargetOptions({ performance, saved, endFrame = false, scene = null, runwayModels = RUNWAY_VIDEO_MODELS }) {
   return [
     { value: '', label: `Project setting · ${savedLabel(saved, performance, scene)}` },
     { value: 'local', label: performance ? 'Local LTX lip-sync (free)' : 'Local LTX (free)' },
@@ -74,7 +75,7 @@ export function renderTargetOptions({ performance, saved, endFrame = false, scen
     // Runway takes no song audio, so a performance shot cannot render there.
     ...(performance
       ? [{ value: 'runway', label: 'Runway (cutaways only)', disabled: true }]
-      : RUNWAY_VIDEO_MODELS.map((model) => {
+      : runwayModels.map((model) => {
         const rate = describeRunwayVideoRate(model.id);
         return { value: `runway:${model.id}`, label: `Runway · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
       })),
@@ -209,6 +210,7 @@ function OptionSelect({ id, label, value, onChange, disabled, children }) {
 export default function SceneRenderTarget({
   id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, models = [], defaultModel = '', disabled = false,
 }) {
+  const runwayCatalog = useRunwayCatalog();
   const set = (patch) => {
     const next = { ...options, ...patch };
     onOptionsChange?.(next);
@@ -228,7 +230,8 @@ export default function SceneRenderTarget({
         <select id={id} value={value} onChange={(e) => { onChange(e.target.value); onOptionsChange?.({}); rememberRenderTarget(e.target.value); }} disabled={disabled}
           title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
           className={`${SELECT} flex-1 sm:flex-none`}>
-          {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId), scene }).map((option) => (
+          {value.startsWith('runway:') && !runwayCatalog.videoModels.some((m) => `runway:${m.id}` === value) && <option value={value}>{value} (unavailable)</option>}
+          {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId), scene, runwayModels: runwayCatalog.videoModels }).map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
           ))}
         </select>

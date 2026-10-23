@@ -373,7 +373,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   const { jobId, position, status } = await enqueue({
     // Hosted jobs use mode for queue dispatch and videoMode for text/image.
     mode: backend,
-    videoMode: sourceImagePath ? 'image' : 'text',
+    videoMode: body.mode || (sourceImagePath ? 'image' : 'text'),
     prompt: body.prompt,
     negativePrompt: body.negativePrompt || '',
     sourceImagePath,

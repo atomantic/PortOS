@@ -87,7 +87,7 @@ describe('FableLoom visual conditioning compiler', () => {
 
   // Catches Runway's per-model reference cap being ignored, which would starve Seedream of anchors.
   it('admits Seedream with its own wider reference budget', () => {
-    expect(fableLoomImageCapabilities({ mode: 'runway', model: { id: 'seedream5_pro' }, inputBudget: 8 })).toMatchObject({ referenceBudget: 6, multiCharacterPreservation: true });
+    expect(fableLoomImageCapabilities({ mode: 'runway', model: { id: 'seedream5_pro' }, inputBudget: 12 })).toMatchObject({ referenceBudget: 10, multiCharacterPreservation: true });
   });
 
   it('compiles stable bindings, approved identity assets, adapters, graph continuity and provenance', async () => {
