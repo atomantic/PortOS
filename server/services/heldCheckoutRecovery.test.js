@@ -139,6 +139,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
   });
 
+  it.each([false, true])('clears the historical diagnosis after recovery retries, with other holds=%s', async otherHolds => {
+    const { saved } = await historicalArchive();
+    const unavailable = join(PATHS.cos, 'temporarily-unavailable-archive');
+    await rename(saved.archiveDir, unavailable);
+    const remaining = otherHolds ? [{ branch: 'feature/other', reason: 'worktree-locked' }] : [];
+    const unresolved = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining });
+    expect(unresolved.reason).toBe('historical-preservation-unresolved');
+    await rename(unavailable, saved.archiveDir);
+    const recovered = await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome: unresolved });
+    expect(recovered.retirementObligations).toEqual([]);
+    expect(recovered.remaining).toEqual(remaining);
+    expect(recovered).toMatchObject({ status: 'incomplete', reason: otherHolds ? 'remaining-holds' : 'preservation-recovered' });
+    expect(recovered.nextAction).not.toContain('backup');
+  });
+
   it.each(['missing', 'wrong-repository', 'wrong-path', 'wrong-head', 'changed-file', 'changed-patch', 'legacy-dirty', 'legacy-corrupt-bundle', 'partial-original'])(
     'retains an actionable historical obligation for %s preservation evidence', async failure => {
       const { release, saved } = await historicalArchive();

@@ -827,8 +827,17 @@ export async function recordRecoveredCheckoutPreservations(appId, expected, obse
       return diagnosedRow ? retirementObligations.filter(release => sameRetirementCheckout(release, diagnosedRow)) : [row];
     });
     const historical = retirementObligations.find(row => row.preservationEvidence);
+    // Recovery proves preservation, not repository convergence. Retire the old
+    // diagnosis and let the next sweep establish the aggregate completion state.
+    const diagnosis = historical
+      ? { status: 'incomplete', reason: 'historical-preservation-unresolved', nextAction: historical.preservationEvidence.nextAction }
+      : outcome.reason === 'historical-preservation-unresolved'
+        ? { status: 'incomplete', reason: remaining.length ? 'remaining-holds' : 'preservation-recovered',
+          nextAction: remaining.length ? 'Resolve the remaining holds, then run branch reconciliation again.'
+            : 'Historical preservation verified; run branch reconciliation again to confirm repository completion.' }
+        : {};
     record.branchReconcileOutcome = { ...outcome, retirementObligations, recoveredPreservations, remaining, updatedAt: now,
-      ...(historical ? { status: 'incomplete', reason: 'historical-preservation-unresolved', nextAction: historical.preservationEvidence.nextAction } : {}),
+      ...diagnosis,
     };
     return { result: record.branchReconcileOutcome, changed: true };
   });
