@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, mkdir, rm, readFile, writeFile, stat } from 'fs/promises'
 import { createHash } from 'crypto'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { pinPlatform } from '../lib/testHelper.js'
+import { EventEmitter } from 'events'
 
 // startPersistentService / getServiceStatus shell out via promisify(execFile).
 // Route every exec call through a per-test impl so the homebrew service flow can
@@ -667,6 +668,64 @@ describe('ollamaManager.isBootstrapConflictError', () => {
   })
 })
 
+
+// A controllable `ollama create` child: tests drive its output and exit, and
+// record the signals PortOS sends it.
+function makeFakeChild() {
+  const child = new EventEmitter()
+  child.stdout = new EventEmitter()
+  child.stderr = new EventEmitter()
+  child.pid = 424242
+  child.exitCode = null
+  child.signalCode = null
+  child.signals = []
+  child.onSignal = () => {}
+  child.kill = (signal) => { child.signals.push(signal); child.onSignal(signal); return true }
+  child.exit = (code, signal = null) => {
+    child.exitCode = code
+    child.signalCode = signal
+    child.emit('close', code, signal)
+  }
+  return child
+}
+
+// Route `spawn('ollama', ['create', …])` to a fake child handed to `onCreate`.
+async function scriptCreate(onCreate) {
+  const { spawn } = await import('../lib/childProcess.js')
+  const children = []
+  spawn.mockReset().mockImplementation((cmd, args) => {
+    const child = makeFakeChild()
+    children.push(child)
+    onCreate(child, cmd, args)
+    return child
+  })
+  return children
+}
+
+// Fake timers drive the watchdog while real fs I/O (staging, blob-store
+// probe, lsof bookkeeping) completes on the thread pool between steps, so each
+// step yields a few real milliseconds before advancing fake time.
+const realSetTimeout = globalThis.setTimeout
+const ioPause = () => new Promise((resolve) => realSetTimeout(resolve, 2))
+
+async function advanceUntil(predicate, { stepMs = 15_000, maxSteps = 500 } = {}) {
+  for (let i = 0; i < maxSteps; i++) {
+    await ioPause()
+    if (predicate()) return
+    await vi.advanceTimersByTimeAsync(stepMs)
+  }
+  throw new Error('condition never reached')
+}
+
+// Step the watchdog one check interval at a time so each blob-store probe
+// settles before the next idle check.
+async function advanceBy(ms, stepMs = 15_000) {
+  for (let elapsed = 0; elapsed < ms; elapsed += stepMs) {
+    await ioPause()
+    await vi.advanceTimersByTimeAsync(stepMs)
+  }
+}
+
 describe('ollamaManager curated Hugging Face Safetensors import', () => {
   const spec = {
     modelId: 'example/qwen-mlx:4bit',
@@ -706,18 +765,18 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
     let createCall
     execMock.impl = (cmd, args, _opts, cb) => {
       if (cmd === 'ollama' && args.join(' ') === '--version') return cb(null, { stdout: 'ollama 0.31.0', stderr: '' })
-      if (cmd === 'ollama' && args[0] === 'create') {
-        createCall = { cmd, args }
-        readFile(args[3], 'utf8').then((modelfile) => {
-          createCall.modelfile = modelfile
-          cb(null, { stdout: '', stderr: '' })
-        }, cb)
-        return undefined
-      }
       return cb(new Error(`unexpected exec: ${cmd} ${args.join(' ')}`))
     }
     const onProgress = vi.fn()
     const { importModelFromHfSafetensors } = await loadManager()
+    await scriptCreate((child, cmd, args) => {
+      createCall = { cmd, args }
+      readFile(args[3], 'utf8').then((modelfile) => {
+        createCall.modelfile = modelfile
+        child.stderr.emit('data', Buffer.from('gathering model components\n'))
+        child.exit(0)
+      })
+    })
 
     const result = await importModelFromHfSafetensors(spec, onProgress)
 
@@ -761,6 +820,260 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
 
     await expect(importModelFromHfSafetensors(spec)).resolves.toMatchObject({
       success: false, error: expect.stringMatching(/Hugging Face checkpoint download.*interrupted.*connection.*retry/i)
+    })
+  })
+
+  describe('supervised ollama create', () => {
+    const files = { config: Buffer.from('{"model_type":"qwen3_8"}'), weights: Buffer.from('example safetensors bytes') }
+    let restorePlatform
+    let modelsDir
+    let lsof
+    let downloads
+    let metadataFetches
+    let stagingRoots
+
+    // Each test imports its own model id so retained staging from a parallel
+    // worker can never be picked up.
+    const specFor = (name) => ({ ...spec, modelId: `example/${name}:4bit` })
+
+    beforeEach(async () => {
+      restorePlatform = pinPlatform('linux')
+      modelsDir = await mkdtemp(join(tmpdir(), 'portos-ollama-models-'))
+      vi.stubEnv('OLLAMA_MODELS', modelsDir)
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+      hfTokenMock.token = 'hf_example_token'
+      downloads = 0
+      metadataFetches = 0
+      stagingRoots = new Set()
+      vi.stubGlobal('fetch', vi.fn(async (url) => {
+        const href = String(url)
+        if (href.endsWith('/api/version')) return versionResponse()
+        if (href.includes('/api/models/example/Qwen-MLX')) {
+          metadataFetches++
+          return Response.json({ siblings: [
+            { rfilename: '4-bit/config.json', size: files.config.length },
+            { rfilename: '4-bit/model.safetensors', lfs: { size: files.weights.length } }
+          ] })
+        }
+        if (href.includes('/resolve/main/4-bit/')) {
+          downloads++
+          return new Response(href.endsWith('config.json') ? files.config : files.weights)
+        }
+        throw new Error(`unexpected fetch: ${href}`)
+      }))
+      // `lsof` answers for the staged files; `holders` are the other PIDs it reports.
+      lsof = { available: true, holders: [], calls: 0 }
+      execMock.impl = (cmd, args, _opts, cb) => {
+        if (cmd === 'ollama' && args.join(' ') === '--version') return cb(null, { stdout: 'ollama 0.31.0', stderr: '' })
+        if (cmd === 'lsof') {
+          lsof.calls++
+          if (!lsof.available) return cb(Object.assign(new Error('spawn lsof ENOENT'), { code: 'ENOENT' }))
+          const [canary, ...staged] = args.slice(args.indexOf('--') + 1)
+          const lines = [`p${process.pid}`, `n${canary}`, ...lsof.holders.flatMap((pid) => [`p${pid}`, `n${staged[0]}`])]
+          return cb(Object.assign(new Error('lsof exit 1'), { code: 1, stdout: `${lines.join('\n')}\n` }))
+        }
+        return cb(new Error(`unexpected exec: ${cmd} ${args.join(' ')}`))
+      }
+    })
+
+    afterEach(async () => {
+      vi.useRealTimers()
+      vi.unstubAllEnvs()
+      restorePlatform()
+      await rm(modelsDir, { recursive: true, force: true })
+      for (const root of stagingRoots) await rm(root, { recursive: true, force: true })
+    })
+
+    const stagingOf = (args) => {
+      const root = dirname(args[3])
+      stagingRoots.add(root)
+      return root
+    }
+
+    it('lets a conversion that keeps reporting progress outlive the idle limit', async () => {
+      const { importModelFromHfSafetensors } = await loadManager()
+      let child
+      await scriptCreate((c, _cmd, args) => { child = c; stagingOf(args) })
+
+      const pending = importModelFromHfSafetensors(specFor('progressing'))
+      await advanceUntil(() => child, { stepMs: 0 })
+      // 40 minutes of wall time, a new progress line every 5 — four times the idle limit.
+      for (let minute = 5; minute <= 40; minute += 5) {
+        child.stderr.emit('data', Buffer.from(`\u280b copying file sha256:abc ${minute * 2}% 120 MB/s 3m10s\r`))
+        child.stderr.emit('data', Buffer.from('\n'))
+        await advanceBy(5 * 60_000)
+      }
+      child.exit(0)
+      const result = await pending
+
+      expect(result).toEqual({ success: true, modelId: 'example/progressing:4bit' })
+      expect(child.signals).toEqual([])
+    })
+
+    it('stops a silent create, escalates past an ignored SIGTERM, and removes staging once nothing holds it', async () => {
+      const { importModelFromHfSafetensors } = await loadManager()
+      let child
+      let root
+      await scriptCreate((c, _cmd, args) => {
+        child = c
+        root = stagingOf(args)
+        // Ignores SIGTERM; only SIGKILL ends it.
+        c.onSignal = (signal) => { if (signal === 'SIGKILL') queueMicrotask(() => c.exit(null, 'SIGKILL')) }
+      })
+      // A spinner that redraws forever is not progress.
+      const onProgress = vi.fn()
+
+      let settled = 0
+      const pending = importModelFromHfSafetensors(specFor('silent'), onProgress).finally(() => { settled++ })
+      await advanceUntil(() => child, { stepMs: 0 })
+      const spin = setInterval(() => child.stderr.emit('data', Buffer.from('\u280b converting model\r')), 1_000)
+      await advanceUntil(() => child.signals.includes('SIGTERM'))
+      clearInterval(spin)
+      await advanceUntil(() => settled > 0, { stepMs: 5_000 })
+      const result = await pending
+
+      expect(child.signals).toEqual(['SIGTERM', 'SIGKILL'])
+      expect(result).toMatchObject({ success: false, code: 'OLLAMA_IMPORT_STALLED', error: expect.stringMatching(/stopped reporting progress/) })
+      expect(result.stagingRetained).toBeUndefined()
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(settled).toBe(1)
+    })
+
+    it('keeps the staged checkpoint when the stopped CLI never exits, and a retry reuses it without downloading', async () => {
+      const modelSpec = specFor('unkillable')
+      let { importModelFromHfSafetensors } = await loadManager()
+      let child
+      let root
+      await scriptCreate((c, _cmd, args) => { child = c; root = stagingOf(args) })
+
+      const pending = importModelFromHfSafetensors(modelSpec)
+      await advanceUntil(() => child, { stepMs: 0 })
+      let result
+      pending.then((r) => { result = r })
+      await advanceUntil(() => result)
+
+      expect(child.signals).toEqual(['SIGTERM', 'SIGKILL'])
+      expect(result).toMatchObject({ success: false, code: 'OLLAMA_IMPORT_HELD', stagingRetained: true })
+      expect(lsof.calls).toBe(0) // an owned child that outlived SIGKILL is never probed as "free"
+      const marker = JSON.parse(await readFile(join(root, 'portos-import.json'), 'utf8'))
+      expect(marker).toMatchObject({ modelId: modelSpec.modelId, phase: 'retained' })
+      expect(downloads).toBe(2)
+
+      // After a restart, a retry on a host where ownership still cannot be
+      // probed reuses the retained checkpoint: reading it is non-destructive.
+      vi.useRealTimers()
+      lsof.available = false
+      ;({ importModelFromHfSafetensors } = await loadManager())
+      let retryRoot
+      await scriptCreate((c, _cmd, args) => { retryRoot = stagingOf(args); queueMicrotask(() => c.exit(0)) })
+      const retried = await importModelFromHfSafetensors(modelSpec)
+
+      expect(retried).toEqual({ success: true, modelId: modelSpec.modelId })
+      expect(retryRoot).toBe(root)
+      expect(downloads).toBe(2)
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+
+    it('re-downloads instead of reusing retained staging staged from a different source', async () => {
+      const modelSpec = specFor('moved-source')
+      const stale = await mkdtemp(join(tmpdir(), 'portos-ollama-hf-import-'))
+      stagingRoots.add(stale)
+      await mkdir(join(stale, 'model'), { recursive: true })
+      // Same file names and byte sizes as the current recipe, different repo.
+      await writeFile(join(stale, 'model', 'config.json'), files.config)
+      await writeFile(join(stale, 'model', 'model.safetensors'), files.weights)
+      const at = new Date().toISOString()
+      await writeFile(join(stale, 'portos-import.json'), JSON.stringify({
+        modelId: modelSpec.modelId, repo: 'example/Other-MLX', subdir: '4-bit', phase: 'retained', createdAt: at, retainedAt: at
+      }))
+      const { importModelFromHfSafetensors } = await loadManager()
+      let createdFrom
+      await scriptCreate((c, _cmd, args) => { createdFrom = stagingOf(args); queueMicrotask(() => c.exit(0)) })
+
+      let result
+      importModelFromHfSafetensors(modelSpec).then((r) => { result = r })
+      await advanceUntil(() => result, { stepMs: 0 })
+
+      expect(result).toEqual({ success: true, modelId: modelSpec.modelId })
+      expect(downloads).toBe(2)
+      expect(createdFrom).not.toBe(stale)
+      await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+
+    it('rejects a second import of the same model before any Hugging Face request', async () => {
+      const modelSpec = specFor('duplicate')
+      const { importModelFromHfSafetensors } = await loadManager()
+      let child
+      await scriptCreate((c, _cmd, args) => { child = c; stagingOf(args) })
+
+      let first
+      importModelFromHfSafetensors(modelSpec).then((r) => { first = r })
+      await advanceUntil(() => child, { stepMs: 0 })
+      const fetchesBefore = globalThis.fetch.mock.calls.length
+
+      const second = await importModelFromHfSafetensors(modelSpec)
+
+      expect(second).toMatchObject({ success: false, code: 'OLLAMA_IMPORT_IN_PROGRESS' })
+      expect(globalThis.fetch.mock.calls.length).toBe(fetchesBefore)
+      expect(metadataFetches).toBe(1)
+      child.exit(0)
+      await advanceUntil(() => first, { stepMs: 0 })
+      expect(first).toEqual({ success: true, modelId: modelSpec.modelId })
+    })
+
+    it('reclaims week-old retained staging for other models before importing, once nothing holds it', async () => {
+      const day = 24 * 60 * 60_000
+      const stage = async (modelId, retainedAgoMs) => {
+        const root = await mkdtemp(join(tmpdir(), 'portos-ollama-hf-import-'))
+        stagingRoots.add(root)
+        const at = new Date(Date.now() - retainedAgoMs).toISOString()
+        await writeFile(join(root, 'portos-import.json'), JSON.stringify({ modelId, phase: 'retained', createdAt: at, retainedAt: at }))
+        return root
+      }
+      const abandoned = await stage('example/abandoned:4bit', 8 * day)
+      const recent = await stage('example/recent:4bit', 1 * day)
+      const { importModelFromHfSafetensors } = await loadManager()
+      await scriptCreate((c, _cmd, args) => { stagingOf(args); queueMicrotask(() => c.exit(0)) })
+
+      let result
+      importModelFromHfSafetensors(specFor('fresh')).then((r) => { result = r })
+      await advanceUntil(() => result, { stepMs: 0 })
+
+      expect(result).toEqual({ success: true, modelId: 'example/fresh:4bit' })
+      await expect(stat(abandoned)).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(stat(recent)).resolves.toBeTruthy()
+    })
+
+    it('retains staging another process still reads, and refuses to stack a second create on it', async () => {
+      const modelSpec = specFor('daemon-held')
+      const { importModelFromHfSafetensors } = await loadManager()
+      let root
+      const children = await scriptCreate((c, _cmd, args) => {
+        root = stagingOf(args)
+        queueMicrotask(() => {
+          c.stderr.emit('data', Buffer.from('Error: something went wrong in the daemon\n'))
+          c.exit(1)
+        })
+      })
+      lsof.holders = [31337]
+
+      let result
+      importModelFromHfSafetensors(modelSpec).then((r) => { result = r })
+      await advanceUntil(() => result)
+
+      expect(result).toMatchObject({
+        success: false, code: 'OLLAMA_IMPORT_HELD', stagingRetained: true,
+        error: expect.stringMatching(/something went wrong in the daemon.*still open in process 31337.*Retry/s)
+      })
+      expect(lsof.calls).toBe(4) // bounded settle window, then retain
+      await expect(stat(join(root, 'model', 'model.safetensors'))).resolves.toBeTruthy()
+
+      let retried
+      importModelFromHfSafetensors(modelSpec).then((r) => { retried = r })
+      await advanceUntil(() => retried)
+      expect(retried).toMatchObject({ success: false, code: 'OLLAMA_IMPORT_HELD', error: expect.stringMatching(/still running/) })
+      expect(children).toHaveLength(1)
+      expect(downloads).toBe(2)
     })
   })
 
