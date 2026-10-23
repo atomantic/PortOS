@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 const spawnMock = vi.fn();
-vi.mock('child_process', () => ({ spawn: (...args) => spawnMock(...args) }));
+vi.mock('../lib/childProcess.js', () => ({ spawn: (...args) => spawnMock(...args) }));
 vi.mock('./github.js', () => ({ execGh: vi.fn() }));
 
 import { execGh } from './github.js';
@@ -126,6 +126,18 @@ describe('startForgeScopeRefresh', () => {
     await settle(first.jobId);
   });
 
+  it('refuses to adopt a refresh for a different account or insufficient scopes', async () => {
+    execGh.mockResolvedValue('owner-acct');
+    const first = await startForgeScopeRefresh({ host: 'github.com', scopes: ['workflow'], expectedAccount: 'owner-acct' });
+
+    await expect(startForgeScopeRefresh({ host: 'github.com', scopes: ['workflow'], expectedAccount: 'other-acct' }))
+      .rejects.toMatchObject({ code: 'FORGE_REFRESH_IN_PROGRESS' });
+    await expect(startForgeScopeRefresh({ host: 'github.com', scopes: ['workflow', 'gist'], expectedAccount: 'owner-acct' }))
+      .rejects.toMatchObject({ code: 'FORGE_REFRESH_IN_PROGRESS' });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    await settle(first.jobId);
+  });
+
   it('refuses a scope outside the closed set before spawning anything', async () => {
     await expect(startForgeScopeRefresh({ host: 'ghe.example.com', scopes: ['admin:org'] }))
       .rejects.toMatchObject({ status: 400, code: 'FORGE_SCOPE_NOT_REFRESHABLE' });
@@ -142,6 +154,35 @@ describe('startForgeScopeRefresh', () => {
     } finally {
       delete process.env.GH_ENTERPRISE_TOKEN;
     }
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the active account cannot be verified and releases the host reservation', async () => {
+    execGh.mockRejectedValue(new Error('network unavailable'));
+
+    await expect(startForgeScopeRefresh({ host: 'github.com', scopes: ['workflow'], expectedAccount: 'owner-acct' }))
+      .rejects.toMatchObject({ status: 409, code: 'FORGE_ACCOUNT_UNVERIFIED' });
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    execGh.mockResolvedValue('owner-acct');
+    const { jobId, adopted } = await startForgeScopeRefresh({ host: 'github.com', scopes: ['workflow'], expectedAccount: 'owner-acct' });
+    expect(adopted).toBe(false);
+    await settle(jobId);
+  });
+
+  it('does not hand an adopting request a job whose account check later fails', async () => {
+    let resolveLogin;
+    execGh.mockImplementation(() => new Promise((resolve) => { resolveLogin = resolve; }));
+    const options = { host: 'github.com', scopes: ['workflow'], expectedAccount: 'owner-acct' };
+    const first = startForgeScopeRefresh(options);
+    const second = startForgeScopeRefresh(options);
+    const outcomes = Promise.allSettled([first, second]);
+
+    resolveLogin('someone-else');
+    expect(await outcomes).toEqual([
+      expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ code: 'FORGE_ACCOUNT_NOT_ACTIVE' }) }),
+      expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ code: 'FORGE_ACCOUNT_NOT_ACTIVE' }) }),
+    ]);
     expect(spawnMock).not.toHaveBeenCalled();
   });
 

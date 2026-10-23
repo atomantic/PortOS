@@ -19,7 +19,7 @@
  * one would leave the merge failing, so that mismatch refuses up front.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { randomUUID } from 'crypto';
 import { execGh } from './github.js';
 import { REFRESHABLE_FORGE_SCOPES, forgeScopeRefreshCommand, isForgePersonalTokenRefusal } from '../lib/forgeAccessErrors.js';
@@ -142,30 +142,45 @@ export async function startForgeScopeRefresh({ host, scopes, expectedAccount = n
   }
 
   const running = jobs.get(jobIdByHost.get(host));
-  if (running && !running.settled) return { jobId: running.id, host, scopes: running.scopes, adopted: true };
+  if (running && !running.settled) {
+    if ((running.expectedAccount || '').toLowerCase() !== (expectedAccount || '').toLowerCase()
+      || scopes.some((scope) => !running.scopes.includes(scope))) {
+      throw new ServerError(`A different token refresh is already in progress on ${host}. Finish or cancel it before starting this one.`, {
+        status: 409, code: 'FORGE_REFRESH_IN_PROGRESS',
+      });
+    }
+    // A reservation is not a usable job until its account check has succeeded.
+    await running.ready;
+    return { jobId: running.id, host, scopes: running.scopes, adopted: true };
+  }
 
   // Reserve the host before the first await so two requests cannot both start a flow.
-  const job = { id: randomUUID(), host, scopes, clients: [], lastPayload: null, settled: false, canceled: false, child: null, timer: null, deviceCode: null };
+  const job = { id: randomUUID(), host, scopes, expectedAccount, clients: [], lastPayload: null, settled: false, canceled: false, child: null, timer: null, deviceCode: null };
   jobs.set(job.id, job);
   jobIdByHost.set(host, job.id);
 
-  const active = expectedAccount ? await activeLogin(host) : null;
-  if (expectedAccount && active && active.toLowerCase() !== expectedAccount.toLowerCase()) {
-    jobs.delete(job.id);
-    if (jobIdByHost.get(host) === job.id) jobIdByHost.delete(host);
-    throw new ServerError(
-      `PortOS merges as ${expectedAccount} on ${host}, but gh's active account there is ${active}, and gh can only refresh the active one. `
-      + `Run gh auth switch -h ${host} -u ${expectedAccount}, then try again.`,
-      { status: 409, code: 'FORGE_ACCOUNT_NOT_ACTIVE', context: { host, expectedAccount, active } },
-    );
-  }
-  // Cancelled while the account check was in flight: never spawn.
-  if (job.canceled) {
-    finish(job, { type: 'canceled' });
-    return { jobId: job.id, host, scopes, adopted: false };
-  }
-
-  spawnRefresh(job);
+  job.ready = (async () => {
+    const active = expectedAccount ? await activeLogin(host) : null;
+    if (expectedAccount && !active) {
+      throw new ServerError(`Could not verify gh's active account on ${host}. Check gh auth status -h ${host}, then try again.`, {
+        status: 409, code: 'FORGE_ACCOUNT_UNVERIFIED',
+      });
+    }
+    if (expectedAccount && active.toLowerCase() !== expectedAccount.toLowerCase()) {
+      throw new ServerError(
+        `PortOS merges as ${expectedAccount} on ${host}, but gh's active account there is ${active}, and gh can only refresh the active one. `
+        + `Run gh auth switch -h ${host} -u ${expectedAccount}, then try again.`,
+        { status: 409, code: 'FORGE_ACCOUNT_NOT_ACTIVE', context: { host, expectedAccount, active } },
+      );
+    }
+    // Cancelled while the account check was in flight: never spawn.
+    if (job.canceled) return finish(job, { type: 'canceled' });
+    spawnRefresh(job);
+  })().catch((error) => {
+    finish(job, { type: 'error', error: error.message });
+    throw error;
+  });
+  await job.ready;
   return { jobId: job.id, host, scopes, adopted: false };
 }
 
