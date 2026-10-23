@@ -206,7 +206,7 @@ async function generateVideoPrepared({
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] grok: ${prompt.slice(0, 60)}…`);
+  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] grok`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Spawning grok…');

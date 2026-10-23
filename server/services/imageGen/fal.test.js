@@ -188,13 +188,22 @@ describe('imageGen/fal — generateImage', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('fails without writing anything or sending a cancel when fal.ai reports ERROR', async () => {
-    const { calls } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro', statuses: [{ status: 'ERROR', error: 'content policy' }] });
-    const job = await fal.generateImage({ prompt: 'x' });
-    const event = await waitForTerminal(job.jobId);
-    expect(event).toMatchObject({ type: 'failed', mode: 'fal', error: expect.stringContaining('content policy') });
-    expect(calls.some((c) => c.url.endsWith('/cancel'))).toBe(false);
-    expect(existsSync(join(FAKE_IMAGES_DIR, `${job.jobId}.png`))).toBe(false);
+  it('keeps provider failure details in the job response and out of logs, with no output or cancel', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const prompt = 'Example portrait for alice@example.com';
+    const error = `content policy: input=${prompt}; reference=https://example.com/private?token=example-secret`;
+    const { calls } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro', statuses: [{ status: 'ERROR', error }] });
+    try {
+      const job = await fal.generateImage({ prompt });
+      const event = await waitForTerminal(job.jobId);
+      expect(event).toMatchObject({ type: 'failed', mode: 'fal', error: expect.stringContaining(error) });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(job.jobId.slice(0, 8)));
+      expect(log.mock.calls.flat().join('\n')).not.toMatch(/alice@example\.com|Example portrait|example-secret|example\.com/);
+      expect(calls.some((c) => c.url.endsWith('/cancel'))).toBe(false);
+      expect(existsSync(join(FAKE_IMAGES_DIR, `${job.jobId}.png`))).toBe(false);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('cancel(jobId) stops polling, cancels the billed remote request once, and lands nothing in the gallery', async () => {

@@ -162,7 +162,9 @@ export const createJobFailureFinalizer = ({
     if (slotOwner == null || activeSlots.get(jobId) === slotOwner) activeSlots.delete(jobId);
     job.status = 'error';
     activeJobs.delete(jobId);
-    console.error(`❌ ${label} failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
+    // Provider errors can echo private prompts and input URLs. Keep the details
+    // on the job channel; operational logs need only the backend and job id.
+    console.error(`❌ ${label} failed [${jobId.slice(0, 8)}]`);
     dispatchTerminalEvent(
       jobId,
       () => broadcastSse(job, { type: 'error', error: reason }),

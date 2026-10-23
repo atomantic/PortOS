@@ -280,7 +280,7 @@ async function generateVideoPrepared({
   jobs.set(jobId, job);
 
   const costNote = meta.estimatedCostUsd != null ? ` ~$${meta.estimatedCostUsd.toFixed(2)}` : ' cost unknown';
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] fal (${modelId}${meta.resolution ? ` ${meta.resolution}` : ''}${costNote}): ${(prompt || '(source audio)').slice(0, 60)}…`);
+  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] fal (${modelId}${meta.resolution ? ` ${meta.resolution}` : ''}${costNote})`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to fal.ai…');

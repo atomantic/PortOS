@@ -292,7 +292,7 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
       docRequest('R1', 'https://ex.com/a', ''),
       docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
       docRequest('R2', 'https://ex.com/b', ''),
-      // R2 redirected before stalling: the refusal must name where it ended up.
+      // Preserve redirect identity in the capture, independently of diagnostics.
       {
         method: 'Network.requestWillBeSent',
         params: {
@@ -419,19 +419,18 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       docRequest('R1', 'http://127.0.0.1/x'),
       docResponse('R1', 'http://127.0.0.1/x', '127.0.0.1'),
     ], allow, 'http://127.0.0.1/x');
-    expect(reason).toMatch(/disallowed address 127\.0\.0\.1/);
+    expect(reason).toBe('Chrome connected to a disallowed address');
   });
 
-  it('refuses an in-flight top-level navigation (started, no response), naming its URL', () => {
+  it('refuses an in-flight top-level navigation without exposing its URL', () => {
     const reason = ssrfPinRefusalReason([
       docRequest('R1', 'https://ex.com/a'),
       docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
-      docRequest('R2', 'https://evil.example/x'),
+      docRequest('R2', 'https://example.org/private-record?token=example-secret#private-fragment'),
     ], allow, 'https://ex.com/a');
     expect(reason).toMatch(/still in flight/);
-    // Which navigation was unpinned is the whole diagnostic value — the capture
-    // window is gone by the time anyone reads the error.
-    expect(reason).toContain('https://evil.example/x');
+    expect(reason).toContain('1 pending');
+    expect(reason).not.toMatch(/example\.org|private-record|example-secret|private-fragment/);
   });
 
   // The Stacker News regression: a single-page app supersedes its own in-flight
@@ -448,7 +447,7 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
 
     const reason = ssrfPinRefusalReason([...canceled, docRequest('R3', 'https://ex.com/c')], allow, 'https://ex.com/a');
     expect(reason).toMatch(/still in flight/);
-    expect(reason).toContain('https://ex.com/c');
+    expect(reason).toContain('1 pending');
     expect(reason).not.toContain('https://ex.com/b');
   });
 
@@ -460,7 +459,7 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       docResponse('R1', 'http://127.0.0.1/x', '127.0.0.1'),
       loadingFailed('R1', 'net::ERR_CONNECTION_RESET'),
     ], allow, 'http://127.0.0.1/x');
-    expect(reason).toMatch(/disallowed address 127\.0\.0\.1/);
+    expect(reason).toBe('Chrome connected to a disallowed address');
   });
 
   // The relaxation is scoped to CANCELED loads. A connection-level failure means
@@ -475,7 +474,8 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       loadingFailed('R2', 'net::ERR_CONNECTION_RESET'),
     ], allow, 'https://ex.com/a');
     expect(reason).toMatch(/still in flight/);
-    expect(reason).toContain('https://rebind.example/x');
+    expect(reason).toContain('1 pending');
+    expect(reason).not.toContain('https://rebind.example/x');
   });
 
   it('refuses when no main-frame document response was observed', () => {
@@ -483,11 +483,13 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
   });
 
   it('refuses a main document with a missing/empty remote IP (unverifiable)', () => {
+    const url = 'https://example.com/private-record?token=example-secret#private-fragment';
     const reason = ssrfPinRefusalReason([
-      docRequest('R1', 'https://ex.com/a'),
-      docResponse('R1', 'https://ex.com/a', ''),
-    ], allow, 'https://ex.com/a');
+      docRequest('R1', url),
+      docResponse('R1', url, ''),
+    ], allow, url);
     expect(reason).toMatch(/unverifiable address/);
+    expect(reason).not.toMatch(/example\.com|private-record|example-secret|private-fragment/);
     // The refusal names the cause so the next occurrence is diagnosable.
     expect(reason).toMatch(/no remoteIPAddress; fromServiceWorker=false, fromDiskCache=false, fromPrefetchCache=false, serviceWorkerResponseSource=none/);
   });
@@ -574,7 +576,7 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       docResponse('R1', 'https://pwa.example/app', '', { fromDiskCache: true }),
       { method: 'Network.responseReceived', params: { requestId: 'R3', type: 'XHR', response: { url: 'https://pwa.example/latest/meta-data', remoteIPAddress: '169.254.169.254', status: 200 } } },
     ], allow, 'https://pwa.example/');
-    expect(reason).toMatch(/disallowed address 169\.254\.169\.254/);
+    expect(reason).toBe('Chrome connected to a disallowed address');
   });
 
   it('refuses a SUB-RESOURCE / fetch that dialed a blocked IP (rebind after page load)', () => {
@@ -585,7 +587,7 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
       { method: 'Network.responseReceived', params: { requestId: 'R2', type: 'XHR', response: { url: 'https://ex.com/latest/meta-data', remoteIPAddress: '169.254.169.254', status: 200 } } },
     ], allow, 'https://ex.com/a');
-    expect(reason).toMatch(/disallowed address 169\.254\.169\.254/);
+    expect(reason).toBe('Chrome connected to a disallowed address');
   });
 
   it('ignores sub-resources with an empty remote IP (data:/blob:/cache — no connection)', () => {
@@ -617,7 +619,7 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
       { method: 'Network.webSocketCreated', params: { requestId: 'W1', url: 'ws://localhost:9222/devtools' } },
     ], hostAllow, 'https://ex.com/a');
-    expect(reason).toMatch(/WebSocket to a disallowed host localhost/);
+    expect(reason).toBe('page opened a WebSocket to a disallowed host');
   });
 
   it('allows a WebSocket to a normal public host', () => {
@@ -660,7 +662,7 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
   // Minimal CDP: PUT /json/new hands out a blank tab, /json/close/<id> is
   // recorded, and the socket answers Page.navigate with a frameId + a pinned
   // main-frame Document response, then Runtime.evaluate with `evalValue`.
-  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34' } = {}) {
+  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34', navigateError = null } = {}) {
     const opened = [];
     const closed = [];
     let port = 0;
@@ -687,6 +689,10 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString());
         if (msg.method === 'Page.navigate') {
+          if (navigateError) {
+            ws.send(JSON.stringify({ id: msg.id, error: { message: navigateError } }));
+            return;
+          }
           const url = msg.params.url;
           ws.send(JSON.stringify({ id: msg.id, result: { frameId: 'F1' } }));
           ws.send(JSON.stringify({
@@ -736,6 +742,28 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
     await fake?.stop();
     fake = null;
     await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it('keeps private destinations out of unpinned navigation logs', async () => {
+    fake = await startFakeCdp();
+    const service = await importServicePointedAtFake();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const page = await service.navigateToUrl('https://example.com/private-record?token=example-secret');
+      expect(page.id).toBe('tab-1');
+      expect(log.mock.calls.flat().join('\n')).not.toMatch(/example\.com|private-record|example-secret/);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('does not promote CDP error payloads into thrown errors and closes the failed tab', async () => {
+    const url = 'https://example.com/private-record?token=example-secret#private-fragment';
+    fake = await startFakeCdp({ navigateError: `Cannot navigate to ${url}` });
+    const service = await importServicePointedAtFake();
+    await expect(service.navigateToUrlPinned(url, { verifyRemoteIp: () => true }))
+      .rejects.toThrow('refusing to ingest: CDP rejected navigation');
+    expect(fake.closed).toEqual(['tab-1']);
   });
 
   it('tears down the tab it read from when evaluateExpression was supplied', async () => {
