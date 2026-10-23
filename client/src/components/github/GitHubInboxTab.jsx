@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
-  Bell, BellOff, Bot, Check, CheckCheck, CheckCircle2, CircleDot, CircleX, ExternalLink, GitCommitHorizontal, GitPullRequest,
+  Bell, BellOff, Bot, Check, CheckCheck, CheckCircle2, CircleDot, CircleX, ExternalLink, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft,
   Inbox, Layers, ListPlus, Mail, MailX, MessagesSquare, RefreshCw, Rocket, ShieldAlert, Tag,
 } from 'lucide-react';
 import Pill from '../ui/Pill';
@@ -10,7 +10,7 @@ import GitHubThreadDrawer from './GitHubThreadDrawer';
 import GitHubDeploymentReview from './GitHubDeploymentReview';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
 import GitHubPullRequestActions from './GitHubPullRequestActions';
-import { AGENT_REFUSED_LABELS, DECISION_ACTIONS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
+import { AGENT_REFUSED_LABELS, DECISION_ACTIONS, DECISION_VIEW, REASON_WHY, TONE_EDGE, TRUST_VIEW, subjectStatusChip } from './githubTriageLabels';
 import socket from '../../services/socket';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -81,9 +81,30 @@ const KIND_VIEW = {
   WorkflowRun: { icon: Rocket, label: 'Workflow run', className: 'text-port-warning' },
 };
 const SECURITY_KIND = { icon: ShieldAlert, label: 'Security alert', className: 'text-port-error' };
-const kindOf = (notification) => (notification.reason === 'security_alert'
-  ? SECURITY_KIND
-  : KIND_VIEW[notification.subjectType] || { icon: Bell, label: notification.subjectType || 'Notification', className: 'text-gray-400' });
+// A PR or issue's icon and color follow its state, as on GitHub: green open,
+// gray draft, purple merged or resolved, red closed.
+const STATE_KIND = {
+  PullRequest: {
+    merged: { icon: GitMerge, label: 'Merged pull request', className: 'text-purple-400' },
+    closed: { icon: GitPullRequestClosed, label: 'Closed pull request', className: 'text-port-error' },
+    draft: { icon: GitPullRequestDraft, label: 'Draft pull request', className: 'text-gray-400' },
+    open: { icon: GitPullRequest, label: 'Open pull request', className: 'text-port-success' },
+  },
+  Issue: {
+    merged: { icon: CheckCircle2, label: 'Resolved issue', className: 'text-purple-400' },
+    closed: { icon: CheckCircle2, label: 'Closed issue', className: 'text-purple-400' },
+    open: { icon: CircleDot, label: 'Open issue', className: 'text-port-success' },
+  },
+};
+const kindOf = (notification) => {
+  if (notification.reason === 'security_alert') return SECURITY_KIND;
+  const status = notification.subjectStatus;
+  const byState = STATE_KIND[notification.subjectType];
+  if (byState && status?.state) {
+    return byState[status.state === 'open' && status.draft ? 'draft' : status.state] || byState.open;
+  }
+  return KIND_VIEW[notification.subjectType] || { icon: Bell, label: notification.subjectType || 'Notification', className: 'text-gray-400' };
+};
 
 // Summary tiles double as the view picker. Counts come from the server for
 // every view at once; tone follows meaning, and every tile also has a label.
@@ -177,6 +198,8 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
   const trust = TRUST_VIEW[notification.trust];
   const decision = DECISION_VIEW[notification.decision];
   const kind = kindOf(notification);
+  const why = REASON_WHY[notification.reason];
+  const statusChip = subjectStatusChip(notification.subjectType, notification.subjectStatus);
   // Every open row offers the button; a refused lane disables it with its reason.
   const agent = handled ? null : notification.agent;
   const canResolve = Boolean(agent) && !agent.refused;
@@ -194,7 +217,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
     ...(notification.ruleKind ? [{ id: 'add-rule', label: 'Add automation rule…', icon: ListPlus, to: automationRuleLink(notification) }] : []),
   ];
   return (
-    <article className="flex min-w-0 gap-3 px-3 py-3 @3xl/page:px-4">
+    <article className={`flex min-w-0 gap-3 border-l-4 px-3 py-3 @3xl/page:px-4 ${TONE_EDGE[handled ? 'muted' : why?.tone] || TONE_EDGE.muted}`}>
       <span className="relative mt-0.5 shrink-0">
         <kind.icon size={18} className={kind.className} aria-label={kind.label} role="img" />
         {notification.unread && <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-port-accent ring-2 ring-port-card" aria-label="Unread" />}
@@ -208,11 +231,13 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
             {notification.title}
           </Link>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-400">
-            <span className="text-gray-300">{REASON_LABELS[notification.reason] || notification.reason}</span>
+            <Pill tone={why?.tone || 'muted'} size="xs">{REASON_LABELS[notification.reason] || notification.reason}</Pill>
+            {statusChip && <Pill tone={statusChip.tone} size="xs">{statusChip.label}</Pill>}
             {notification.repoFullName && <span className="min-w-0 truncate font-mono">{notification.repoFullName}</span>}
             <span className="shrink-0">· {timeAgo(notification.updatedAt)}</span>
             {accountLabel && <span className="shrink-0">· {accountLabel}</span>}
           </div>
+          {why && <p className="mt-1 text-xs text-gray-400">{why.text}</p>}
           {notification.deployment && (
             <p className="mt-1 min-w-0 break-words text-xs text-gray-300">
               <span className="text-white">{notification.deployment.name}</span>

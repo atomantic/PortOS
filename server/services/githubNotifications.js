@@ -337,6 +337,15 @@ const deploymentView = (account, row) => {
   return htmlUrl ? { runId: run.id, name: run.name, displayTitle: run.displayTitle, headBranch: run.headBranch, htmlUrl } : null;
 };
 
+// The thread's own state, so a row says what it is now: open, draft, merged,
+// closed, and for an open PR GitHub's merge readiness (clean, blocked, ...).
+// Null mergeState: GitHub had not computed it yet, or the thread is no PR.
+const subjectStatusView = (row) => {
+  const evidence = row.evidence || {};
+  if (!evidence.subjectState) return null;
+  return { state: evidence.subjectState, draft: evidence.subjectDraft === true, mergeState: evidence.mergeState || null };
+};
+
 const toApi = (row, accountsById) => {
   const account = accountsById.get(row.account_id);
   const login = account?.login?.toLowerCase();
@@ -359,6 +368,7 @@ const toApi = (row, accountsById) => {
     trust: row.trust || null,
     suspect: row.suspect === true,
     rule: row.evidence?.rule || null,
+    subjectStatus: subjectStatusView(row),
     signals: Array.isArray(row.evidence?.signals) ? row.evidence.signals : [],
     // The automation-rule kind, so a row can prefill Add automation rule (#13192).
     ruleKind: threadAgentKind(row),
