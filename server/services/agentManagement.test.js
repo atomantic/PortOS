@@ -799,6 +799,13 @@ describe('handleOrphanedTask — persisted outcome shapes and guard precedence (
     vi.useRealTimers();
   });
 
+  it('does not rescue commits or requeue a task owned by repository cleanup after restart', async () => {
+    await run(taskWith({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-dead' }));
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+  });
+
   it('requeues a genuine orphan: charges a retry, stamps the orphan breadcrumb, clears interruptedByRestart', async () => {
     resolveTaskResumePatch.mockResolvedValueOnce({ resumeBranch: 'branch-a' });
     await run(taskWith({ keep: 'x', orphanRetryCount: 1, totalSpawnCount: 2, interruptedByRestart: true }));

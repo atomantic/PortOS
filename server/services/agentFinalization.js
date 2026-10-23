@@ -1,5 +1,5 @@
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
-import { retryHoldMetadata } from '../lib/taskRetryHold.js';
+import { retryHoldMetadata, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
@@ -1257,8 +1257,12 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     );
   }
 
+  const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
+  const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
+    && (agent.metadata?.isWorktree === true || isTruthyMeta(agent.metadata?.claimPicksOwnBranch)));
+  const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
   const recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
-    ? resolveUndeliveredTaskUpdate(task, (!executionSuccess || validationPassed === false || (!agent.metadata?.isWorktree && !isTruthyMeta(agent.metadata?.claimPicksOwnBranch))) && taskOutcome.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome, agent.id) : null;
+    ? resolveUndeliveredTaskUpdate(task, recoveryOutcome, agent.id) : null;
   if (recoveryUpdate) {
     const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user');
     if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);

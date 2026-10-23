@@ -397,6 +397,22 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
+  it('retains an already persisted cleanup handoff when its run is recovered after a crash', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'cleanup-restart-'));
+    const taskOutcome = { status: 'incomplete', reason: 'Only preservation remains.', recovery: { mode: 'cleanup' } };
+    const task = { ...TASK, metadata: { ...TASK.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } };
+    persistedAgent.metadata = { workspacePath, isWorktree: true };
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ taskOutcome }));
+      await retireDeadAgent({ agent: persistedAgent, task, success: false, exitCode: 1, duration: 1000 });
+      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
+        metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), TASK.taskType);
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
+  });
+
   it('stops repeated delivery recovery at the existing budget with concrete choices', async () => {
     const taskOutcome = { status: 'incomplete', reason: 'Validation remains red.' };
     await finalizeAgent({ agentId: 'agent-example', task: { ...TASK, metadata: { ...TASK.metadata, failureCount: MAX_TASK_RETRIES - 1 } },

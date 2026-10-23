@@ -2472,6 +2472,16 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
     // CLI provider — so the reaper must leave it alone no matter how old it gets.
     // Flipping it to `completed` with `resolution: 'auto-expired'` would report
     // work nobody dropped as done, and federate that to every peer (#6193).
+    it.each(['task-approval', 'task-recovery-exhausted'])('preserves the checkout and human decision for stale %s', async blockedCategory => {
+      await addTask({ description: 'delivery decision', id: 'task-decision', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-decision', { metadata: { existingBranch: 'fix/retained', resumedFromAgentId: 'agent-old', resumeWorktreePath: '/example/retained' } }, 'user', { now: NOW });
+      await updateTask('task-decision', { status: 'blocked', metadata: { blockedCategory, blockedAt: daysAgo(90) } }, 'user', { now: NOW });
+      expect((await sweepResolvedFailureTasks({ now: NOW })).reaped).toBe(0);
+      const retained = await getTaskById('task-decision');
+      expect(retained.status).toBe('blocked');
+      expect(retained.metadata).toMatchObject({ existingBranch: 'fix/retained', resumedFromAgentId: 'agent-old', resumeWorktreePath: '/example/retained' });
+    });
+
     it('never auto-expires a provider-config block, however stale', async () => {
       await addTask({ description: 'api-only provider pinned', id: 'task-pc-old', priority: 'HIGH' }, 'user', { now: NOW });
       await updateTask('task-pc-old', { status: 'blocked', metadata: { blockedCategory: 'provider-config', blockedAt: daysAgo(90) } }, 'user', { now: NOW });

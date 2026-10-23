@@ -288,7 +288,7 @@ export async function completeAgent(agentId, result = {}) {
     let completedCheckouts;
     if (agent.metadata?.claimPicksOwnBranch || agent.metadata?.isWorktree) {
       completedCheckouts = [];
-      if (result.success === true) {
+      if (result.success === true || result.cleanupPending === true) {
         const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
         completedCheckouts = await captureCompletedCheckouts(agent, { success: true }).catch(() => []);
       }

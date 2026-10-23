@@ -36,7 +36,7 @@ import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTermin
 // for handleOrphanedTask. Importing them from their own leaf modules is what
 // lets that edge be a plain static import instead of a dynamic-import dodge.
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
-import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
+import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld, clearedRetryHoldMetadata, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { REQUEUED_AT_KEY, LAST_SPAWNED_AT_KEY } from '../lib/taskRequeue.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -1490,6 +1490,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
     return;
   }
 
+  if (isDeliveryCleanupHeld(task.metadata)) return;
   const ctx = { taskId, agentId, task, agentMetadata, agentStartedAt };
   const guard = classifyOrphanGuard(task, agentMetadata);
   if (guard) return ORPHAN_GUARD_HANDLERS[guard](ctx);
