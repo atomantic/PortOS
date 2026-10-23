@@ -19,9 +19,8 @@
  * generic repositories retain their existing merge-on-green fallback.
  * The immediate merge is the one step that advances the default branch, so it
  * runs under this install's repository merge admission (`cosMergeAdmission.js`)
- * like every other final merge: while a claim holds the lease the PR is left
- * open and handed to the local pending-merge queue, which takes admission at
- * its own later attempt. Reads never write. A v1 file or historical
+ * like every other final merge. A busy lease leaves the PR recoverable for
+ * a later admitted attempt. Reads never write. A v1 file or historical
  * `quality-snapshot.json` is explicit legacy input. Before publication, live
  * review ownership and non-snapshot branch changes defer replacement; the push
  * lease pins only the exact head this invocation inspected.
@@ -461,7 +460,7 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
     // If validation is interrupted, preserve the published checkout by default.
     retainWorktree = true;
     const queued = await mergeSnapshotPr(app, pr, deps, git, defaultBranch, { worktreePath, expectedHeadSha: hash });
-    retainWorktree = queued.deferred === true && queued.guard?.required === true;
+    retainWorktree = queued.guardManaged === true;
     console.log(`📊 Published quality snapshot for app ${app.id}: ${count} measurements → ${hash} (${pr.url})`);
     return {
       published: true, hash, path: APP_QUALITY_SNAPSHOT_FILENAME,
@@ -559,6 +558,7 @@ const mergeOutcomeFields = outcome => ({
   queuedMerge: outcome.queued === true,
   ...(outcome.deferred === true ? { deferredMerge: true } : {}),
   ...(outcome.guard ? { mergeGuard: outcome.guard } : {}),
+  ...(outcome.retainedCheckouts?.length ? { retainedMergeCheckouts: outcome.retainedCheckouts } : {}),
 });
 
 /**
@@ -568,10 +568,8 @@ const mergeOutcomeFields = outcome => ({
  *
  * The immediate attempt needs this install's repository merge admission. When
  * another owner holds it (or ownership cannot be verified) the merge is
- * deferred: GitHub hands the PR to the local pending-merge queue, which takes
- * admission at its own later attempt; GitLab's only queue is the forge's
- * auto-merge, which cannot honor a local lease, so the MR stays open for the
- * next publish cycle instead.
+ * deferred. Only generic GitHub repositories use the local pending-merge
+ * queue. Guard-capable PRs and GitLab admission refusals stay open for retry.
  *
  * @returns {{merged: boolean, queued: boolean, deferred?: boolean}} — merged
  *   and queued are never both true.
@@ -595,24 +593,33 @@ async function mergeSnapshotPr(app, pr, deps, git, defaultBranch, checkout = {})
 }
 
 async function guardedSnapshotMerge(app, pr, deps, git, guards, evidence, existingPath) {
-  const deferred = () => ({ merged: false, queued: false, deferred: true, guard: evidence });
+  const deferred = () => ({ merged: false, queued: false, deferred: true, guard: evidence, guardManaged: true });
   const run = async path => {
     evidence.worktreePath = path;
     try {
+      const current = await git.execGit(['rev-parse', '--verify', 'HEAD^{commit}'], path);
+      if (current.exitCode !== 0 || !/^[a-f0-9]{40}$/i.test(current.stdout?.trim() || '')) {
+        throw new Error('snapshot-checkout-head-unreadable');
+      }
+      evidence.checkoutHead = current.stdout.trim();
+      await guards.recordSnapshotMergeEvidence(pr, evidence, deps, { status: 'preparing' });
       if (evidence.reason) throw new Error(evidence.reason);
-      if (!existingPath) await addSnapshotWorktree(app, deps, path, evidence.headSha);
       await guards.validateSnapshotMerge(app, pr, evidence, git, deps);
       const attempt = await withSnapshotMergeAdmission(app, deps, async () => {
         await guards.verifySnapshotMergeInputs(app, pr, evidence, git, deps);
         return tryImmediateMerge(app, pr, deps, git, evidence.headSha);
       });
-      if (attempt.result) return { merged: true, queued: false };
+      if (attempt.result) {
+        const retire = deps.retireSnapshotMergeCheckouts || guards.retireSnapshotMergeCheckouts;
+        const retainedCheckouts = await retire(app, pr, deps).catch(() => [path]);
+        return { merged: true, queued: false, guardManaged: true, retainedCheckouts };
+      }
       evidence.reason = attempt.reason || 'snapshot-merge-deferred';
     } catch (error) {
-      evidence.reason = error.message;
+      evidence.reason = error.stdout !== undefined || error.stderr !== undefined ? 'snapshot-merge-guards-failed' : error.message;
       console.log(`⏳ Quality snapshot merge retained for app ${app.id}: ${evidence.reason}`);
       await guards.recordSnapshotMergeEvidence(pr, evidence, deps, {
-        status: 'deferred', stdout: error.stdout, stderr: error.stderr,
+        status: 'deferred', error: error.message, stdout: error.stdout, stderr: error.stderr,
       });
       return deferred();
     }
@@ -623,10 +630,14 @@ async function guardedSnapshotMerge(app, pr, deps, git, guards, evidence, existi
   if (evidence.reason) return deferred();
   const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
   return withCheckoutPublication(app.repoPath, async () => {
-    const path = await (deps.mkdtemp || mkdtemp)(join(tmpdir(), 'portos-quality-'));
-    const result = await run(path);
-    if (result.merged) await cleanupSnapshotWorktree(app, git, path, deps.rm || rm);
-    return result;
+    const retained = await guards.retainedSnapshotMergeCheckouts(app, pr, deps);
+    const matching = retained.find(tree => tree.head === evidence.headSha);
+    const path = matching?.path || await (deps.mkdtemp || mkdtemp)(join(tmpdir(), 'portos-quality-'));
+    if (!matching) await addSnapshotWorktree(app, deps, path, evidence.headSha);
+    return run(path);
+  }).catch(error => {
+    evidence.reason = error.message;
+    return deferred();
   });
 }
 

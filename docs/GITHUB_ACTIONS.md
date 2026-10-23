@@ -195,7 +195,12 @@ the GitHub merge to that head. New and reused snapshot PRs use detached checkout
 Failed guards, moved/unreadable inputs, or refused merges retain the PR, checkout,
 and `.cache/quality-snapshot-merge.json` evidence for a later publish cycle;
 they do not enter the generic pending-merge queue. Guard-capable GitLab MRs stay
-open until a supported pinned validation path is available. Repositories without
+open until a supported pinned validation path is available. Retained checkouts
+are located through Git's durable worktree inventory and reused for the same head
+on retry. After a verified merge, every retained attempt for that PR is archived
+and verified through checkout preservation before retirement; changed ownership,
+locks, or archive failures retain the checkout and report the remaining paths.
+Repositories without
 this capability retain their existing snapshot merge behavior; arbitrary scripts
 are never executed as a substitute.
 

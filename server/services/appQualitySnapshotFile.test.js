@@ -896,6 +896,8 @@ const guardedPublication = (reused = false) => {
   const base = 'b'.repeat(40);
   const live = { head, base, state: 'OPEN', manifest: { scripts: { 'pregate:merged': 'node scripts/pregate.js --guards-only' } } };
   const events = [];
+  const trees = [];
+  const evidence = new Map();
   const deps = testDeps({
     git: gitDouble({
       execGit: vi.fn(async args => {
@@ -926,15 +928,22 @@ const guardedPublication = (reused = false) => {
       state: live.state, isDraft: false, isCrossRepository: false, headRefOid: live.head,
       headRefName: QUALITY_SNAPSHOT_BRANCH, baseRefName: 'main',
     })),
+    addWorktree: vi.fn(async () => { trees.push({ path: worktreePath, head, detached: true }); }),
     linkWorktreeDependencies: vi.fn(async () => {}),
-    writeMergeEvidence: vi.fn(async () => {}),
+    writeMergeEvidence: vi.fn(async (path, record) => { evidence.set(path, structuredClone(record)); }),
+    readMergeEvidence: vi.fn(async path => {
+      if (!evidence.has(path)) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+      return JSON.stringify(evidence.get(path));
+    }),
+    listSnapshotMergeWorktrees: vi.fn(async () => [...trees]),
+    retireSnapshotMergeCheckouts: vi.fn(async () => { trees.length = 0; evidence.clear(); return []; }),
     execSnapshotMergeGuards: vi.fn(async () => { events.push('guards'); return { stdout: 'guards passed', stderr: '' }; }),
     withMergeAdmission: vi.fn(async (_origin, work) => {
       events.push('admission');
       return { admitted: true, result: await work() };
     }),
   });
-  return { deps, live, events, head, base };
+  return { deps, live, events, head, base, evidence, trees };
 };
 
 // These publisher-boundary regressions uniquely cover exact input validation
@@ -951,7 +960,7 @@ it.each([false, true])('validates the snapshot before admission and pins the hea
   expect(deps.execGh).toHaveBeenCalledWith(expect.any(Array), undefined,
     { cwd: app.repoPath, env: { EXAMPLE_FORGE_ACCOUNT: 'selected' } });
   expect(deps.queuePendingMerge).not.toHaveBeenCalled();
-  expect(deps.rm).toHaveBeenCalledWith(worktreePath, { recursive: true, force: true });
+  expect(deps.retireSnapshotMergeCheckouts).toHaveBeenCalledTimes(1);
   expect(deps.addWorktree).toHaveBeenCalledTimes(1);
   expect(deps.addWorktree.mock.calls[0][0]).toEqual(
     ['worktree', 'add', '--detach', worktreePath, reused ? head : 'origin/main']);
@@ -965,7 +974,7 @@ it.each([false, true])('retains failed guard evidence without admission or a que
   deps.execSnapshotMergeGuards.mockRejectedValue(Object.assign(new Error('guards failed'), { stdout: 'hostControlRoutes.test.js failed' }));
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
     published: true, merged: false, queuedMerge: false, deferredMerge: true,
-    mergeGuard: { headSha: head, baseSha: base, worktreePath, reason: 'guards failed' },
+    mergeGuard: { headSha: head, baseSha: base, worktreePath, reason: 'snapshot-merge-guards-failed' },
   });
   expect(deps.withMergeAdmission).not.toHaveBeenCalled();
   expect(deps.git.mergePR).not.toHaveBeenCalled();
@@ -1011,7 +1020,23 @@ it.each(['admission', 'merge'])('keeps guarded %s refusals retryable without que
   expect(deps.rm).not.toHaveBeenCalled();
   deps.withMergeAdmission.mockImplementation(async (_origin, work) => ({ admitted: true, result: await work() }));
   deps.git.mergePR.mockResolvedValue({ success: true });
+  __resetQualitySnapshotPublishState();
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ merged: true });
+  expect(deps.addWorktree).toHaveBeenCalledTimes(1);
+});
+
+it('preserves a retained checkout that acquired a lock before retry', async () => {
+  const { deps, trees } = guardedPublication(true);
+  deps.execSnapshotMergeGuards.mockRejectedValue(new Error('guard refused'));
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ deferredMerge: true });
+  trees[0].locked = true;
+  __resetQualitySnapshotPublishState();
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
+    merged: false, deferredMerge: true, mergeGuard: { reason: 'retained-snapshot-checkout-changed' },
+  });
+  expect(deps.addWorktree).toHaveBeenCalledTimes(1);
+  expect(deps.retireSnapshotMergeCheckouts).not.toHaveBeenCalled();
+  expect(deps.git.mergePR).not.toHaveBeenCalled();
 });
 
 it('leaves a guard-capable GitLab MR open instead of falling through to an unpinned merge', async () => {

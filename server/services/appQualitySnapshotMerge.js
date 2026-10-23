@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { atomicWrite, execFileAsync } from '../lib/fileCore.js';
 
 const GUARD_COMMAND = 'node scripts/pregate.js --guards-only';
@@ -88,6 +89,52 @@ export async function validateSnapshotMerge(app, pr, evidence, git, deps) {
   }
   await recordSnapshotMergeEvidence(pr, evidence, deps,
     { status: 'passed', stdout: output.stdout, stderr: output.stderr });
+}
+
+/** Git's durable checkout inventory plus our evidence survives publisher restarts. */
+export async function retainedSnapshotMergeCheckouts(app, pr, deps) {
+  const list = deps.listSnapshotMergeWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+  const read = deps.readMergeEvidence || readFile;
+  const retained = [];
+  for (const tree of await list(app.repoPath)) {
+    if (!basename(tree.path).startsWith('portos-quality-')) continue;
+    const body = await read(join(tree.path, '.cache', 'quality-snapshot-merge.json'), 'utf8')
+      .catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (body === null) continue;
+    const record = JSON.parse(body);
+    if (record.prUrl !== pr.url) continue;
+    if (record.checkoutHead !== tree.head || !tree.detached || tree.branch || tree.locked) {
+      throw new Error('retained-snapshot-checkout-changed');
+    }
+    retained.push(tree);
+  }
+  return retained;
+}
+
+/** Archive all attempts, including superseded heads, before verified retirement. */
+export async function retireSnapshotMergeCheckouts(app, pr, deps) {
+  const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
+  const { forceRemoveWorktreeDir } = await import('./worktreeManager.js');
+  const { retireWithUnlockedArchive } = await import('./cosClaimOwnershipState.js');
+  const checkOwner = deps.checkSnapshotPublicationOwnership
+    || (await import('./cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
+  const held = [];
+  for (const tree of await retainedSnapshotMergeCheckouts(app, pr, deps)) {
+    const ownership = async () => (await checkOwner({ appId: app.id, branch: 'portos/quality-snapshot', prUrl: pr.url }))?.admitted === true;
+    const result = await retireWithUnlockedArchive({
+      busy: () => ({ removed: false }),
+      admit: async () => await ownership()
+        ? { fence: { repoPath: app.repoPath, path: tree.path, branch: null } }
+        : { result: { removed: false } },
+      archive: async () => ({ archive: await preserveMergedCheckout(app.repoPath, tree, null,
+        deps.snapshotArchiveCosDir ? { cosDir: deps.snapshotArchiveCosDir } : {}) }),
+      finish: async (_admitted, archive) => forceRemoveWorktreeDir(app.repoPath, tree.path, {
+        verifyRemoval: async holder => await ownership() ? archive.verify(holder) : 'snapshot-owner-changed',
+      }),
+    }).catch(() => ({ removed: false }));
+    if (!result.removed) held.push(tree.path);
+  }
+  return held;
 }
 
 /** Called only inside admission. A moving base needs new guards, not a rebase. */
