@@ -135,6 +135,27 @@ describe('analyzeEpisodeGraph', () => {
     expect(connectedCodes).not.toContain(GRAPH_ISSUE_CODES.DISCONNECTED_DECISION);
   });
 
+  it('measures audience-connection depth in dramatic scenes, not split shots', () => {
+    // Two dramatic scenes split into 4 shots each; the connected shot is node 8 (dramatic depth 2).
+    const nodes = Array.from({ length: 10 }, (_, index) => ({
+      id: `n${index}`,
+      title: `Shot ${index}`,
+      playbackMode: 'cut',
+      audienceConnection: index === 8 ? 'connected' : 'disconnected',
+      isEnding: index === 9,
+      shot: { dramaticSceneId: index < 4 ? 'sceneA' : index < 8 ? 'sceneB' : 'sceneC' },
+      transitions: index === 9 ? [] : [tr(`t${index}`, `n${index + 1}`, 'Continue')],
+    }));
+    const { issues } = analyzeEpisodeGraph({ startNodeId: 'n0', nodes }, {
+      participationMode: 'helper', requireAudienceIntroduction: true,
+    });
+    expect(issues.map((issue) => issue.code)).not.toContain(GRAPH_ISSUE_CODES.LATE_AUDIENCE_CONNECTION);
+    for (const node of nodes) delete node.shot;
+    expect(analyzeEpisodeGraph({ startNodeId: 'n0', nodes }, {
+      participationMode: 'helper', requireAudienceIntroduction: true,
+    }).issues.map((issue) => issue.code)).toContain(GRAPH_ISSUE_CODES.LATE_AUDIENCE_CONNECTION);
+  });
+
   it('warns when a helper audience is not connected until after the opening sequence', () => {
     const nodes = Array.from({ length: 6 }, (_, index) => ({
       id: `n${index}`,

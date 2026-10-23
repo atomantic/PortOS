@@ -70,6 +70,32 @@ export function computeGraphLayers(episode) {
 }
 
 /**
+ * Depth measured in dramatic scenes: a transition between two shots of the same
+ * `shot.dramaticSceneId` adds no depth, matching `fableLoomOutline.js`, so a
+ * shot split never makes the audience introduction look narratively later.
+ */
+function computeDramaticDepths(episode, depthById) {
+  const nodes = asArray(episode?.nodes);
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const groupOf = (id) => byId.get(id)?.shot?.dramaticSceneId || id;
+  const dramatic = new Map();
+  if (!depthById.has(episode?.startNodeId)) return dramatic;
+  dramatic.set(episode.startNodeId, 0);
+  const queue = [episode.startNodeId];
+  for (let i = 0; i < queue.length; i += 1) {
+    const id = queue[i];
+    for (const tr of asArray(byId.get(id)?.transitions)) {
+      const target = tr?.targetNodeId;
+      if (byId.has(target) && !dramatic.has(target)) {
+        dramatic.set(target, dramatic.get(id) + (groupOf(id) === groupOf(target) ? 0 : 1));
+        queue.push(target);
+      }
+    }
+  }
+  return dramatic;
+}
+
+/**
  * Deterministic structural validation of one episode graph. Returns
  * `{ issues, stats }`; `issues` entries are
  * `{ code, severity: 'error'|'warning', message, nodeId?, transitionId? }`.
@@ -111,13 +137,14 @@ export function analyzeEpisodeGraph(episode, {
         'The audience is never invited into the story through its communication medium.',
       );
     } else {
-      const firstDepth = Math.min(...connected.map((node) => depthById.get(node.id)));
+      const dramaticDepth = computeDramaticDepths(episode, depthById);
+      const firstDepth = Math.min(...connected.map((node) => dramaticDepth.get(node.id)));
       if (firstDepth > 3) {
         push(
           GRAPH_ISSUE_CODES.LATE_AUDIENCE_CONNECTION,
           'warning',
           'The audience communication channel is not activated until late in the opening sequence.',
-          { nodeId: connected.find((node) => depthById.get(node.id) === firstDepth)?.id },
+          { nodeId: connected.find((node) => dramaticDepth.get(node.id) === firstDepth)?.id },
         );
       }
     }
