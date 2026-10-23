@@ -405,22 +405,24 @@ describe.skipIf(!runDb)('eraseEvents — user-driven source erasure (#12987)', (
     const rows = [
       mk({ source: ERASE_SOURCE, dedupeKey: 'e-1', happenedAt: '2026-01-01T10:00:00Z' }),
       mk({ source: ERASE_SOURCE, dedupeKey: 'e-2', happenedAt: '2026-03-01T10:00:00Z' }),
+      mk({ source: ERASE_SOURCE, kind: 'message.sent', dedupeKey: 'e-3', happenedAt: '2026-01-02T10:00:00Z' }),
+      mk({ source: ERASE_SOURCE, dedupeKey: 'e-4', happenedAt: '2025-12-01T10:00:00Z' }),
       mk({ source: KEEP_SOURCE, dedupeKey: 'k-1' }),
     ];
     await recordEvents(rows);
 
     expect(await eraseEvents({})).toEqual({ deleted: 0 });
-    expect((await listSourceCounts()).find((s) => s.source === ERASE_SOURCE).eventCount).toBe(2);
+    expect((await listSourceCounts()).find((s) => s.source === ERASE_SOURCE).eventCount).toBe(4);
 
-    const ranged = await eraseEvents({ source: ERASE_SOURCE, to: '2026-02-01T00:00:00Z' });
+    const ranged = await eraseEvents({ source: ERASE_SOURCE, kind: 'message.received', from: '2026-01-01T00:00:00Z', to: '2026-02-01T00:00:00Z' });
     expect(ranged.deleted).toBe(1);
-    expect(await listEvents({ source: ERASE_SOURCE })).toHaveLength(1);
+    expect(await listEvents({ source: ERASE_SOURCE })).toHaveLength(3);
 
     const all = await eraseEvents({ source: ERASE_SOURCE });
-    expect(all.deleted).toBe(1);
+    expect(all.deleted).toBe(3);
     expect(await listEvents({ source: KEEP_SOURCE })).toHaveLength(1);
 
-    const again = await recordEvents(rows.slice(0, 2));
-    expect(again.recorded).toBe(2);
+    const again = await recordEvents(rows.slice(0, 4));
+    expect(again.recorded).toBe(4);
   });
 });

@@ -10,6 +10,7 @@ import { formatCount, formatDateNumeric } from '../../utils/formatters';
 // export restores the rows. `onChanged` lets the page refresh the day view.
 export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
   const [sources, setSources] = useState([]);
+  const [visible, setVisible] = useState(false);
   const [target, setTarget] = useState(null);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -22,7 +23,11 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
     let active = true;
     const current = ++generation.current;
     api.getTimelineSources({ silent: true }).then((r) => {
-      if (active && generation.current === current) { setSources(r?.sources || []); setError(null); }
+      if (active && generation.current === current) {
+        setSources(r?.sources || []);
+        if (r?.sources?.length) setVisible(true);
+        setError(null);
+      }
     }).catch((err) => { if (active && generation.current === current) setError(err.message || 'Could not load imported data.'); });
     return () => { active = false; };
   }, [reloadKey]);
@@ -52,13 +57,14 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
     onChanged?.();
   };
 
-  if (sources.length === 0 && !error) return null;
+  if (!visible && !error) return null;
 
   return (
     <div className="rounded border border-port-border bg-port-card p-3 text-xs">
       <div className="mb-2 font-medium text-gray-300">Manage imported data</div>
       {error && <p role="alert" className="mb-2 text-port-error">{error}</p>}
       <div role="list" tabIndex={-1}>
+        {sources.length === 0 && <p className="text-gray-400">No imported events.</p>}
         {sources.map((s) => (
           <CollapsibleListItem key={s.source} removing={removing === s.source} onExited={() => finishRemoval(s.source)}>
             <div role="listitem">

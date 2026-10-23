@@ -31,6 +31,15 @@ it('keeps the confirmed source fixed during deletion and ignores a pre-delete co
   await waitFor(() => expect(screen.queryByText('browser')).not.toBeInTheDocument());
   expect(screen.getByText('discord')).toBeInTheDocument();
   expect(onChanged).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'discord' } });
+  const confirm = screen.getByRole('button', { name: 'Confirm delete' });
+  confirm.focus();
+  fireEvent.click(confirm);
+  await act(async () => { finishDelete({ deleted: 2 }); });
+  await screen.findByText('No imported events.');
+  expect(screen.getByRole('list')).toHaveFocus();
+
 });
 
 it('retains the row and confirmation and shows a refused deletion', async () => {

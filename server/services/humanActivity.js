@@ -545,9 +545,9 @@ export async function eraseEvents({ source, kind, from, to } = {}) {
   await ensureReady();
   const params = [String(source)];
   const clauses = ['source = $1'];
-  if (kind) { params.push(String(kind)); clauses.push(`kind = ${params.length}`); }
-  if (from) { params.push(new Date(from).toISOString()); clauses.push(`happened_at >= ${params.length}`); }
-  if (to) { params.push(new Date(to).toISOString()); clauses.push(`happened_at < ${params.length}`); }
+  if (kind) { params.push(String(kind)); clauses.push(`kind = $${params.length}`); }
+  if (from) { params.push(new Date(from).toISOString()); clauses.push(`happened_at >= $${params.length}`); }
+  if (to) { params.push(new Date(to).toISOString()); clauses.push(`happened_at < $${params.length}`); }
   const result = await query(
     `DELETE FROM human_activity_events WHERE ${clauses.join(' AND ')}`,
     params,
