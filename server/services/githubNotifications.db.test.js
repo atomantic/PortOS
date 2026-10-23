@@ -54,7 +54,7 @@ const { refreshOpenPullRequestStatus, retriageOpenThreads } = await import('./gi
 const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
 const { cosEvents } = await import('./cos/cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
-const { AGENT_RULE_ACTIONS, AGENT_RULE_KINDS, KIND_SQL, TRIAGE_RULES_VERSION, autopilotHandoff, threadAgentKind, pullRequestAutomationFilter, pullRequestAutomationRule } = await import('../lib/githubNotificationTriage.js');
+const { AGENT_RULE_ACTIONS, AGENT_RULE_KINDS, KIND_SQL, REASON_KIND_SQL, REASON_RULE_KINDS, matchReasonRule, reasonRuledFilter, threadReasonKind, TRIAGE_RULES_VERSION, autopilotHandoff, threadAgentKind, pullRequestAutomationFilter, pullRequestAutomationRule } = await import('../lib/githubNotificationTriage.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -1434,6 +1434,54 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
             const js = Boolean(autopilotHandoff({ account: autopilot, row }));
             if (js !== sqlIds.has(row.thread_id)) disagreements.push(`${ruleKind}/${action}/${repo} on ${row.thread_id} (${threadAgentKind(row)}): js=${js} sql=${!js}`);
             if (Boolean(pullRequestAutomationRule(autopilot, row)) !== prSqlIds.has(row.thread_id)) disagreements.push(`PR action scope ${ruleKind}/${action}/${repo} on ${row.thread_id}`);
+          }
+        }
+      }
+    }
+    expect(disagreements).toEqual([]);
+    await query('DELETE FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[])', [account.id, ids]);
+  });
+
+  it('keeps the reason-kind SQL and the Autopilot exclusion in step with the JS planner for every reason kind × action', async () => {
+    const evidence = { repoManaged: true, repoOwned: true, metadataMissing: false, commenter: null, commenterTrust: null, rule: 'default' };
+    const shapes = ['comment', 'subscribed', 'manual', 'state_change', 'assign', 'author', 'mention'].flatMap((reason) => ['Issue', 'PullRequest', 'Discussion']
+      .flatMap((subject_type) => ['acme/app', 'acme/quiet', 'watched/app'].map((repo) => ({ reason, subject_type, repo }))));
+    const rows = [];
+    for (const [n, shape] of shapes.entries()) {
+      const row = { account_id: account.id, thread_id: `reason-parity-${n}`, repo_full_name: shape.repo, repo_owner: shape.repo.split('/')[0], reason: shape.reason, subject_type: shape.subject_type,
+        subject_api_url: `https://api.github.com/repos/${shape.repo}/${shape.subject_type === 'Issue' ? 'issues' : 'pulls'}/${n}`, state: 'open', suspect: false, decision: 'needs-you', trust: 'outside', evidence };
+      await query(
+        `INSERT INTO github_notifications (account_id, thread_id, repo_full_name, repo_owner, reason, subject_type, subject_api_url, gh_updated_at, state, decision, trust, suspect, evidence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'open', $8, $9, FALSE, $10::jsonb)`,
+        [row.account_id, row.thread_id, row.repo_full_name, row.repo_owner, row.reason, row.subject_type, row.subject_api_url, row.decision, row.trust, JSON.stringify(evidence)],
+      );
+      rows.push(row);
+    }
+    const ids = rows.map((row) => row.thread_id);
+    const { rows: kinds } = await query(`SELECT thread_id, ${REASON_KIND_SQL} AS kind FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[])`, [account.id, ids]);
+    const sqlKind = new Map(kinds.map((entry) => [entry.thread_id, entry.kind]));
+    for (const row of rows) expect(sqlKind.get(row.thread_id), row.thread_id).toBe(threadReasonKind(row) ?? '');
+    const disagreements = [];
+    for (const reasonKind of REASON_RULE_KINDS) {
+      for (const action of ['done', 'mute', 'leave']) {
+        for (const repo of ['*', 'acme/app', 'ACME/*', 'other/*']) {
+          const agentRules = [
+            { id: 'parity', kind: reasonKind, repo, action },
+            { id: 'issues', kind: 'issue-activity', repo: '*', action: 'agent' },
+            { id: 'prs', kind: 'pull-request', repo: '*', action: 'agent' },
+            { id: 'other', kind: 'other', repo: '*', action: 'agent' },
+            ...(repo.endsWith('/*') ? [{ id: 'exception', kind: reasonKind, repo: 'acme/quiet', action: action === 'leave' ? 'done' : 'leave' }] : []),
+          ];
+          const autopilot = { ...account, mode: 'autopilot', agentRules };
+          const filter = candidateFilter(agentRules, 3);
+          const { rows: selected } = await query(`SELECT thread_id FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[]) AND ${filter.sql}`, [account.id, ids, ...filter.params]);
+          const sqlIds = new Set(selected.map((entry) => entry.thread_id));
+          const ruled = reasonRuledFilter(agentRules, 3);
+          const { rows: ruledRows } = await query(`SELECT thread_id FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[]) AND ${ruled.sql}`, [account.id, ids, ...ruled.params]);
+          const ruledIds = new Set(ruledRows.map((entry) => entry.thread_id));
+          for (const row of rows) {
+            if (Boolean(autopilotHandoff({ account: autopilot, row })) !== sqlIds.has(row.thread_id)) disagreements.push(`candidates ${reasonKind}/${action}/${repo} on ${row.thread_id}`);
+            if (Boolean(matchReasonRule(agentRules, row)) !== ruledIds.has(row.thread_id)) disagreements.push(`ruled ${reasonKind}/${action}/${repo} on ${row.thread_id}`);
           }
         }
       }

@@ -16,7 +16,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
 import {
-  AGENT_RULE_KINDS, ASSIST_VERDICTS, KIND_SQL, PINNED_TRIAGE_RULES, agentRuleScopeSql, assistAction, decisionFromVerdict, ruleAction, ruleActionScope, selectNotificationProvider, pullRequestAutomationFilter,
+  AGENT_RULE_KINDS, ASSIST_VERDICTS, KIND_SQL, PINNED_TRIAGE_RULES, REASON_KIND_SQL, REASON_RULE_KINDS, reasonRuledFilter, agentRuleScopeSql, assistAction, decisionFromVerdict, ruleAction, ruleActionScope, selectNotificationProvider, pullRequestAutomationFilter,
 } from '../lib/githubNotificationTriage.js';
 import { resolveUntrustedContentPolicy } from '../lib/untrustedContent.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -148,12 +148,15 @@ export async function assistAccountNotifications(account, env, { act }) {
   // Rows a done/mute automation rule (or the built-in CI rule) covers, scoped
   // exactly as `ruleAction` matches them, so a repo whose rule leaves its
   // threads never takes a slot. Pinned decisions are never a rule's to change.
-  const scopes = AGENT_RULE_KINDS.map((kind) => ruleActionScope(account, kind));
-  const ruleSql = AGENT_RULE_KINDS.map((kind, index) => {
-    const n = 4 + index * 3;
-    return `(${KIND_SQL} = '${kind}' AND ${agentRuleScopeSql(n)})`;
-  }).join(' OR ');
-  const prActions = pullRequestAutomationFilter(account.mode === 'autopilot' ? account.agentRules : [], 4 + scopes.length * 3);
+  // A reason-kind rule wins over the subject kind's, so the subject clauses
+  // skip rows one covers; the reason clauses are the done/mute ones.
+  const scopes = [...AGENT_RULE_KINDS, ...REASON_RULE_KINDS].map((kind) => ruleActionScope(account, kind));
+  const clause = (expr, kind, index) => `(${expr} = '${kind}' AND ${agentRuleScopeSql(4 + index * 3)})`;
+  const reasonRuled = reasonRuledFilter(account.agentRules, 4 + scopes.length * 3);
+  const subjectSql = AGENT_RULE_KINDS.map((kind, index) => clause(KIND_SQL, kind, index)).join(' OR ');
+  const reasonSql = REASON_RULE_KINDS.map((kind, index) => clause(REASON_KIND_SQL, kind, AGENT_RULE_KINDS.length + index)).join(' OR ');
+  const ruleSql = `((${subjectSql}) AND NOT ${reasonRuled.sql}) OR ${reasonSql}`;
+  const prActions = pullRequestAutomationFilter(account.mode === 'autopilot' ? account.agentRules : [], 4 + scopes.length * 3 + reasonRuled.params.length);
   const { rows } = await query(
     `SELECT thread_id, decision, trust, suspect, state, reason, subject_type, repo_full_name, evidence, evidence->>'rule' AS rule FROM github_notifications
      WHERE account_id = $1 AND state = 'open' AND NOT suspect AND NOT (evidence ? 'assisted')
@@ -162,7 +165,7 @@ export async function assistAccountNotifications(account, env, { act }) {
        AND (decision = ANY($2::text[])
          OR (reason <> 'security_alert' AND NOT (COALESCE(evidence->>'rule', '') = ANY($3::text[])) AND (${ruleSql})))
      ORDER BY gh_updated_at DESC LIMIT ${MAX_ACTIONS_PER_RUN}`,
-    [account.id, ACTIONABLE_DECISIONS, PINNED_TRIAGE_RULES, ...scopes.flatMap(({ all, except, only }) => [all, except, only]), ...prActions.params],
+    [account.id, ACTIONABLE_DECISIONS, PINNED_TRIAGE_RULES, ...scopes.flatMap(({ all, except, only }) => [all, except, only]), ...reasonRuled.params, ...prActions.params],
   );
   let acted = 0;
   for (const row of rows) {

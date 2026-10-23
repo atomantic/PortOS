@@ -26,7 +26,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { advisoryIdFromUrl } from '../lib/githubNotificationParse.js';
 import {
-  agentHandoff, agentRuleScope, agentRuleScopeSql as inScope, agentRunPin, APP_FREE_AGENT_LANES as APP_FREE_LANES, autopilotHandoff, FINISHED_DECISIONS, GENERIC_AGENT_LANE, GENERIC_RULE_KINDS, KIND_SQL,
+  agentHandoff, agentRuleScope, agentRuleScopeSql as inScope, agentRunPin, APP_FREE_AGENT_LANES as APP_FREE_LANES, autopilotHandoff, FINISHED_DECISIONS, GENERIC_AGENT_LANE, GENERIC_RULE_KINDS, KIND_SQL, reasonRuledFilter,
 } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { managedAppsByRepoKey, threadDiscussionVouched } from './githubNotificationTriage.js';
@@ -69,8 +69,10 @@ function candidateFilter(rules, first = 2) {
     AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(at(2))})
   OR (${KIND_SQL} = 'security-alert' AND decision = 'surface-high' AND ${inScope(at(3))})
   OR (COALESCE(decision, '') NOT IN (${sqlList([...FINISHED_DECISIONS, 'handed-off'])}) AND ${NOT_FINISHED_SQL} AND (${genericSql})))`;
-  const params = [...scopes, ...generic].flatMap(({ all, except, only }) => [all, except, only]);
-  return { sql, params };
+  // A reason rule (done, mute or leave) keeps a thread from every lane, as `autopilotHandoff` does.
+  const reasonRuled = reasonRuledFilter(rules, first + (scopes.length + generic.length) * 3);
+  const params = [...scopes, ...generic].flatMap(({ all, except, only }) => [all, except, only]).concat(reasonRuled.params);
+  return { sql: `(${sql} AND NOT ${reasonRuled.sql})`, params };
 }
 
 /**
