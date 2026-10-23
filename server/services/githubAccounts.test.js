@@ -61,6 +61,23 @@ describe('GitHub accounts API', () => {
     expect(after.body[0].implicit).toBeUndefined();
   });
 
+  it('persists owner automation scopes through the account API and refuses malformed or duplicate scopes', async () => {
+    const agentRules = [
+      { id: 'all', kind: 'review-request', repo: '*', action: 'leave' },
+      { id: 'org', kind: 'review-request', repo: 'Acme/*', action: 'agent', model: 'example-model' },
+      { id: 'repo', kind: 'review-request', repo: 'acme/quiet', action: 'leave' },
+    ];
+    const updated = await request(app).put('/api/github/accounts/github-com').send({ agentRules });
+    expect(updated.status).toBe(200);
+    expect(updated.body.agentRules).toEqual(agentRules);
+    expect((await request(app).get('/api/github/accounts')).body[0].agentRules).toEqual(agentRules);
+    for (const repo of ['*/app', 'acme/pre*', 'acme/*/extra', 'acme/']) {
+      expect((await request(app).put('/api/github/accounts/github-com').send({ agentRules: [{ ...agentRules[1], repo }] })).status, repo).toBe(400);
+    }
+    expect((await request(app).put('/api/github/accounts/github-com').send({ agentRules: [...agentRules, { ...agentRules[1], id: 'duplicate', repo: 'acme/*' }] })).status).toBe(400);
+    expect((await request(app).get('/api/github/accounts')).body[0].agentRules).toEqual(agentRules);
+  });
+
   it('defaults Enterprise hosts to private trust, normalizes the host, and refuses duplicates', async () => {
     const created = await request(app).post('/api/github/accounts').send({ host: 'HTTPS://GitHub.Example.com/', login: 'alice' });
     expect(created.status).toBe(201);

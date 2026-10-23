@@ -1156,7 +1156,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const rows = [];
     let n = 0;
     for (const [kind, shapes] of Object.entries(fixtures)) {
-      for (const shape of shapes) {
+      for (const shape of shapes.flatMap((shape) => ['acme/app', 'acme/quiet', 'watched/app'].map((repo) => ({ ...shape, repo_full_name: repo, repo_owner: repo.split('/')[0] })))) {
         n += 1;
         const row = {
           account_id: account.id, thread_id: `parity-${n}`, repo_full_name: 'acme/app', repo_owner: 'acme', state: 'open', suspect: false,
@@ -1181,8 +1181,15 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const disagreements = [];
     for (const ruleKind of AGENT_RULE_KINDS) {
       for (const action of [...AGENT_RULE_ACTIONS, null]) {
-        for (const repo of ['*', 'acme/app']) {
-          const agentRules = action ? [{ id: 'parity', kind: ruleKind, repo, action }] : [];
+        for (const repo of ['*', 'acme/app', 'ACME/*', 'other/*']) {
+          const agentRules = action ? [
+            { id: 'parity', kind: ruleKind, repo, action },
+            // Contradictory defaults and repo exceptions exercise precedence in SQL.
+            ...(repo.endsWith('/*') ? [
+              { id: 'fallback', kind: ruleKind, repo: '*', action: action === 'agent' ? 'leave' : 'agent' },
+              { id: 'exception', kind: ruleKind, repo: 'acme/quiet', action: action === 'agent' ? 'leave' : 'agent' },
+            ] : []),
+          ] : [];
           const autopilot = { ...account, mode: 'autopilot', agentRules };
           const filter = candidateFilter(agentRules, 3);
           const { rows: selected } = await query(

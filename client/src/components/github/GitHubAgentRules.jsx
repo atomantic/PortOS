@@ -8,11 +8,13 @@ import { describeAgentPin } from './GitHubAgentPinForm';
 
 const ALL_REPOS = '*';
 const OTHER_REPO = '__other__';
-const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+const OTHER_OWNER = '__owner__';
+const OWNER_RE = /^[A-Za-z0-9_.-]{1,100}$/;
+const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100})$/;
 
 const newRuleId = () => `rule-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-const repoLabel = (repo) => (repo === ALL_REPOS ? 'All repos' : repo);
+const repoLabel = (repo) => (repo === ALL_REPOS ? 'All repos' : repo.endsWith('/*') ? `${repo.slice(0, -2)} (all repos)` : repo);
 
 const actionLabel = (action) => RULE_ACTIONS.find((option) => option.value === action)?.label || action;
 
@@ -22,16 +24,21 @@ function pinLabel(rule, providers) {
 }
 
 // Open threads a rule for this kind and repo would match now, from the
-// server's per-kind counts: a repo rule covers its repo, the All repos rule
-// every repo without its own rule. Done and mute never touch threads a pinned
+// server's per-kind counts: repo > owner > all. Done and mute never touch threads a pinned
 // triage rule decided, so they count only `actionable`.
 function ruleMatchCount({ openByKind, rules, editingId, kind, repo, action }) {
   if (!Array.isArray(openByKind)) return null;
   const metric = action === 'done' || action === 'mute' ? 'actionable' : 'total';
   const ofKind = openByKind.filter((entry) => entry.kind === kind);
-  if (repo !== ALL_REPOS) return ofKind.filter((entry) => entry.repo === repo.toLowerCase()).reduce((sum, entry) => sum + entry[metric], 0);
-  const own = new Set(rules.filter((rule) => rule.kind === kind && rule.id !== editingId && rule.repo !== ALL_REPOS).map((rule) => rule.repo.toLowerCase()));
-  return ofKind.filter((entry) => !own.has(entry.repo)).reduce((sum, entry) => sum + entry[metric], 0);
+  const scope = repo.toLowerCase();
+  const other = rules.filter((rule) => rule.kind === kind && rule.id !== editingId).map((rule) => rule.repo.toLowerCase());
+  return ofKind.filter((entry) => {
+    const name = entry.repo.toLowerCase();
+    const owner = `${name.split('/')[0]}/*`;
+    if (scope === ALL_REPOS) return !other.includes(name) && !other.includes(owner);
+    if (scope.endsWith('/*')) return owner === scope && !other.includes(name);
+    return name === scope;
+  }).reduce((sum, entry) => sum + entry[metric], 0);
 }
 
 // Whether a run of this account now would carry out the rule's action.
@@ -41,17 +48,19 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
   const formId = useId();
   const picker = useRunWithPicker({ preselectDefaults: false, seed: rule });
   const [kind, setKind] = useState(rule?.kind || AGENT_RULE_KINDS[0].value);
-  const knownRepo = !rule || rule.repo === ALL_REPOS || repos.includes(rule.repo);
-  const [repoChoice, setRepoChoice] = useState(rule ? (knownRepo ? rule.repo : OTHER_REPO) : ALL_REPOS);
-  const [otherRepo, setOtherRepo] = useState(knownRepo ? '' : rule?.repo || '');
+  const owners = [...new Set(repos.map((name) => name.split('/')[0].toLowerCase()))].sort();
+  const ownerRule = rule?.repo?.endsWith('/*');
+  const knownRepo = !rule || rule.repo === ALL_REPOS || repos.includes(rule.repo) || (ownerRule && owners.includes(rule.repo.slice(0, -2).toLowerCase()));
+  const [repoChoice, setRepoChoice] = useState(rule ? (knownRepo ? (ownerRule ? rule.repo.toLowerCase() : rule.repo) : ownerRule ? OTHER_OWNER : OTHER_REPO) : ALL_REPOS);
+  const [otherRepo, setOtherRepo] = useState(knownRepo ? '' : ownerRule ? rule.repo.slice(0, -2) : rule?.repo || '');
   const [chosenAction, setAction] = useState(rule ? ruleActionOf(rule) : 'agent');
   const [applyNow, setApplyNow] = useState(false);
   const options = actionsForKind(kind);
   // A kind that cannot take the chosen action falls back to its first one.
   const action = options.some((option) => option.value === chosenAction) ? chosenAction : options[0].value;
 
-  const repo = repoChoice === OTHER_REPO ? otherRepo.trim() : repoChoice;
-  const repoValid = repo === ALL_REPOS || REPO_RE.test(repo);
+  const repo = repoChoice === OTHER_REPO ? otherRepo.trim() : repoChoice === OTHER_OWNER ? `${otherRepo.trim()}/*` : repoChoice;
+  const repoValid = repoChoice === OTHER_OWNER ? OWNER_RE.test(otherRepo.trim()) : repo === ALL_REPOS || REPO_RE.test(repo);
   const clash = takenKeys.has(`${kind}#${repo.toLowerCase()}`);
   const matches = repoValid ? ruleMatchCount({ openByKind: account.openByKind, rules, editingId: rule?.id, kind, repo, action }) : null;
   const canApplyNow = matches > 0 && actsNow(account.mode, action);
@@ -81,6 +90,10 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
           <span className="block">In</span>
           <select id={`${formId}-repo`} value={repoChoice} onChange={(event) => setRepoChoice(event.target.value)} className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 text-sm text-white">
             <option value={ALL_REPOS}>All repos</option>
+            <optgroup label="Accounts and organizations">
+              {owners.map((owner) => <option key={owner} value={`${owner}/*`}>{owner} (all repos)</option>)}
+              <option value={OTHER_OWNER}>Another account or organization…</option>
+            </optgroup>
             {repos.map((name) => <option key={name} value={name}>{name}</option>)}
             <option value={OTHER_REPO}>Another repo…</option>
           </select>
@@ -92,10 +105,10 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
           </select>
         </label>
       </div>
-      {repoChoice === OTHER_REPO && (
+      {(repoChoice === OTHER_REPO || repoChoice === OTHER_OWNER) && (
         <label htmlFor={`${formId}-other`} className="block space-y-1 text-xs text-gray-400">
-          <span className="block">Repo (owner/name)</span>
-          <input id={`${formId}-other`} value={otherRepo} onChange={(event) => setOtherRepo(event.target.value)} placeholder="owner/repo" autoComplete="off" className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 font-mono text-sm text-white" />
+          <span className="block">{repoChoice === OTHER_OWNER ? 'Account or organization name' : 'Repo (owner/name)'}</span>
+          <input id={`${formId}-other`} value={otherRepo} onChange={(event) => setOtherRepo(event.target.value)} placeholder={repoChoice === OTHER_OWNER ? 'owner' : 'owner/repo'} autoComplete="off" className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 font-mono text-sm text-white" />
         </label>
       )}
       {action === 'agent' && (
@@ -129,9 +142,9 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
 
 /**
  * One account's automation rules: for each kind of notification, in one repo
- * or all of them, whether Assist and Autopilot mark it done, mute it, leave it,
+ * an account/organization or all repos, whether Assist and Autopilot mark it done, mute it, leave it,
  * or (Autopilot) start a CoS agent and on which provider, model and effort. A
- * repo's own rule wins over its All repos rule. `prefill` ({ kind, repo }) opens
+ * repo's own rule wins over its owner rule, then All repos. `prefill` ({ kind, repo }) opens
  * a new rule from an inbox row; `onApplyNow` runs the account's check at once.
  */
 export default function GitHubAgentRules({ account, onSave, saving, prefill = null, onPrefillDone, onApplyNow }) {
@@ -170,6 +183,7 @@ export default function GitHubAgentRules({ account, onSave, saving, prefill = nu
           </button>
         )}
       </div>
+      <p className="text-xs text-gray-500">Scope rules to an account or organization to cover its repos, including future ones. Specific repo rules override account or organization rules, which override All repos.</p>
       {account.mode !== 'autopilot' && rules.length > 0 && (
         <p className="text-xs text-port-warning">
           {account.mode === 'assist'

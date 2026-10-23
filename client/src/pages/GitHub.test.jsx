@@ -794,6 +794,46 @@ describe('GitHub automations tab', () => {
     expect(screen.queryByRole('form', { name: 'New automation rule' })).toBeNull();
   });
 
+  it('saves and edits owner rules while counting only threads without a repo override', async () => {
+    mock.getGitHubAutomations.mockResolvedValue({
+      ...OVERVIEW,
+      accounts: [{ ...OVERVIEW.accounts[0], mode: 'autopilot',
+        agentRules: [{ id: 'quiet', kind: 'review-request', repo: 'octocat/quiet', action: 'leave' }],
+        repos: ['octocat/hello', 'octocat/quiet', 'watched/app'],
+        openByKind: [
+          { kind: 'review-request', repo: 'octocat/hello', total: 2, actionable: 2 },
+          { kind: 'review-request', repo: 'octocat/future', total: 3, actionable: 3 },
+          { kind: 'review-request', repo: 'octocat/quiet', total: 4, actionable: 4 },
+          { kind: 'review-request', repo: 'watched/app', total: 8, actionable: 8 },
+        ],
+      }],
+    });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+    const addOwnerRule = await screen.findByRole('button', { name: /Add rule/ });
+    await act(async () => fireEvent.click(addOwnerRule));
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: 'octocat/*' } });
+    expect(screen.getByText('Matches 5 open threads now.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', {
+      agentRules: [expect.objectContaining({ id: 'quiet' }), expect.objectContaining({ kind: 'review-request', repo: 'octocat/*', action: 'agent' })],
+    }));
+    const editOwnerRule = await screen.findByRole('button', { name: 'Edit Review requests rule for octocat (all repos)' });
+    await act(async () => fireEvent.click(editOwnerRule));
+    expect(screen.getByLabelText('In').value).toBe('octocat/*');
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: '__owner__' } });
+    fireEvent.change(screen.getByLabelText('Account or organization name'), { target: { value: 'new-org' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenLastCalledWith('github-com', {
+      agentRules: [expect.objectContaining({ id: 'quiet' }), expect.objectContaining({ repo: 'new-org/*', action: 'agent' })],
+    }));
+    const editCustomOwnerRule = await screen.findByRole('button', { name: 'Edit Review requests rule for new-org (all repos)' });
+    await act(async () => fireEvent.click(editCustomOwnerRule));
+    expect(screen.getByLabelText('Account or organization name').value).toBe('new-org');
+    fireEvent.change(screen.getByLabelText('Account or organization name'), { target: { value: 'bad/name' } });
+    expect(screen.getByRole('button', { name: 'Save rule' }).disabled).toBe(true);
+  });
+
   it('adds an agent rule for review requests in one repo and refuses a duplicate', async () => {
     mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
     mock.getGitHubAutomations.mockResolvedValue({

@@ -251,7 +251,7 @@ const AGENT_ONLY_RULE_KINDS = new Set(['security-alert']);
 // before #13192 (their own lanes), so they never start a generic run.
 export const GENERIC_RULE_KINDS = Object.freeze(['ci-activity', 'own-pr', 'mention', 'release', 'other']);
 const GENERIC_KIND_SET = new Set(GENERIC_RULE_KINDS);
-const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
+const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100}))$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
 const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
 const REVIEW_TRUST = new Set(['yours', 'trusted']);
@@ -336,13 +336,17 @@ function matchAgentRule(rules, kind, repo) {
   if (!kind) return null;
   const valid = validRules(rules, kind);
   const name = String(repo || '').toLowerCase();
-  return (name && valid.find((rule) => rule.repo.toLowerCase() === name)) || valid.find((rule) => rule.repo === '*') || null;
+  const owner = name.includes('/') ? `${name.split('/')[0]}/*` : null;
+  return (name && valid.find((rule) => rule.repo.toLowerCase() === name))
+    || (owner && valid.find((rule) => rule.repo.toLowerCase() === owner))
+    || valid.find((rule) => rule.repo === '*') || null;
 }
 
 /**
  * Which repos a kind of thread gets one of `actions` in, for a candidate
- * query: every repo except `except` when `all`, else only the `only` repos
- * (lowercase). The `*` rule sets the default; a kind with no `*` rule is in
+ * query: `only` allows and `except` denies lowercase repo or owner/* scopes.
+ * Exact repos win over owners, then `all` is the fallback. The `*` rule sets
+ * the default; a kind with no `*` rule is in
  * unless `optIn`. Mirrors `matchAgentRule`, so a row a rule keeps out never
  * takes a slot in the run.
  */
@@ -351,8 +355,16 @@ export function agentRuleScope(rules, kind, { optIn = false, actions = ['agent']
   const star = valid.find((rule) => rule.repo === '*');
   const all = star ? actions.includes(star.action) : !optIn;
   const repos = (inScope) => valid.filter((rule) => rule.repo !== '*' && actions.includes(rule.action) === inScope).map((rule) => rule.repo.toLowerCase());
-  return all ? { all, except: repos(false), only: [] } : { all, except: [], only: repos(true) };
+  return { all, except: repos(false), only: repos(true) };
 }
+
+/** SQL mirror of rule precedence; parameters are `all`, `except`, `only`. */
+export const agentRuleScopeSql = (n) => `(CASE
+  WHEN lower(repo_full_name) = ANY($${n + 2}::text[]) THEN TRUE
+  WHEN lower(repo_full_name) = ANY($${n + 1}::text[]) THEN FALSE
+  WHEN (split_part(lower(repo_full_name), '/', 1) || '/*') = ANY($${n + 2}::text[]) THEN TRUE
+  WHEN (split_part(lower(repo_full_name), '/', 1) || '/*') = ANY($${n + 1}::text[]) THEN FALSE
+  ELSE $${n}::boolean END)`;
 
 /** `agentRuleScope` over the account's rules plus the built-in defaults, for Assist's done/mute rules. */
 export const ruleActionScope = (account, kind) => (AGENT_ONLY_RULE_KINDS.has(kind)
