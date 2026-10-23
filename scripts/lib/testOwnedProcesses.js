@@ -7,18 +7,18 @@ const ownershipKeys = new Set(['PORTOS_TEST_TEMP_ROOT', 'TMPDIR', 'VITEST', 'NOD
 
 function legacyBrowserProcesses(pids, exec) {
   try {
-    const output = exec('ps', [...(pids ? ['-p', pids.join(',')] : ['-A']), '-ww', '-o', 'pid=,ppid=,uid=,lstart=,args='], {
+    const output = exec('ps', [...(pids ? ['-p', pids.join(',')] : ['-A']), '-ww', '-o', 'pid=,ppid=,uid=,stat=,lstart=,args='], {
       encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' },
     });
     return output.split('\n').flatMap(line => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
+      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
       if (!match || Number(match[3]) !== process.getuid()) return [];
       // Compatibility only: this is the pre-existing browser flag rule. Flat
       // ps text is never used to infer generic argv or environment ownership.
-      const profile = /(?:^|\s)--user-data-dir=(\S+)/.exec(match[5])?.[1];
-      return [{ pid: Number(match[1]), ppid: Number(match[2]), start: `legacy:${match[4]}`,
-        args: profile ? [`--user-data-dir=${profile}`] : [], env: {} }];
+      const profile = /(?:^|\s)--user-data-dir=(\S+)/.exec(match[6])?.[1];
+      return [{ pid: Number(match[1]), ppid: Number(match[2]), start: `legacy:${match[5]}`, terminal: match[4].startsWith('Z'),
+        args: profile ? [`--user-data-dir=${profile}`] : [], env: {}, ownershipComplete: Boolean(profile) }];
     });
   } catch { return null; }
 }
@@ -28,11 +28,11 @@ function linuxIdentity(pid) {
   if (statSync(path).uid !== process.getuid()) return null;
   const stat = readFileSync(join(path, 'stat'), 'utf8');
   const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-  if (fields[0] === 'Z') return null;
-  return { pid, ppid: Number(fields[1]), start: fields[19] };
+  return { pid, ppid: Number(fields[1]), start: fields[19], terminal: fields[0] === 'Z' };
 }
 
 function linuxProcess(pid) {
+  const unavailable = () => probeTestPid(pid) === false ? null : { pid, ownershipComplete: false };
   try {
     const before = linuxIdentity(pid);
     if (!before) return null;
@@ -50,8 +50,8 @@ function linuxProcess(pid) {
       metadata = { args, env };
     } catch { /* retain ancestry without claiming ownership */ }
     const after = linuxIdentity(pid);
-    return after?.start === before.start && after.ppid === before.ppid ? { ...before, ...metadata } : null;
-  } catch { return null; }
+    return after?.start === before.start && after.ppid === before.ppid ? { ...before, ...metadata } : unavailable();
+  } catch { return unavailable(); }
 }
 
 // The Darwin reader uses the existing system Python, with no installation or
@@ -99,21 +99,45 @@ export function testProcessRoot({ args = [], env = {} }, parent, prefix) {
 }
 
 export function processAncestors(records, pid = process.pid) {
-  const parents = new Map(records.map(record => [record.pid, record.ppid]));
-  if (!parents.has(pid)) return null;
+  const parents = new Map();
+  for (const record of records || []) {
+    // An incomplete identity row has a pid and no parent. It is a gap in the
+    // chain, not a parent link, and must not void every other owned process.
+    if (Number.isSafeInteger(record?.pid) && Number.isSafeInteger(record.ppid) && record.ppid >= 1) {
+      parents.set(record.pid, record.ppid);
+    }
+  }
+  if (!Number.isSafeInteger(pid) || pid < 1 || !parents.has(pid)) return null;
   const ancestors = new Set([1, pid, process.ppid]);
   const visited = new Set();
   while (pid > 1) {
     if (visited.has(pid)) return null;
     visited.add(pid);
-    // Readers may omit an ancestor owned by another uid. Keep every known
-    // ancestor excluded without requiring visibility all the way to init.
+    // Readers may omit an ancestor owned by another uid, or return it without
+    // a parent. Keep every known ancestor excluded without requiring init.
     if (!parents.has(pid)) return ancestors;
     const parent = parents.get(pid);
-    if (!Number.isSafeInteger(parent) || parent < 1 || parent === pid) return null;
+    if (parent === pid) return null;
     if (parent === 1) return ancestors;
     ancestors.add(parent);
     pid = parent;
   }
   return ancestors;
+}
+
+/** A missing inventory row is not proof of exit: readers can lose permission. */
+export function probeTestPid(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code === 'ESRCH' ? false : null; }
+}
+
+export function testProcessSettlement(record, records, probe = probeTestPid) {
+  const current = Array.isArray(records) ? records.find(item => item.pid === record.pid) : null;
+  if (!current) return probe(record.pid) === false ? 'terminated' : 'unknown';
+  if (typeof current.start !== 'string' || !current.start) return 'unknown';
+  if (current.terminal === true) return 'terminated';
+  // A fallback reader uses a different identity encoding; that is not PID reuse.
+  if (current.start.startsWith('legacy:') !== record.start.startsWith('legacy:')) return 'unknown';
+  if (current.start !== record.start) return 'terminated';
+  return 'running';
 }
