@@ -32,6 +32,8 @@ const RECONCILE_FLOW_GUIDANCE = 'Follow the branch reconciliation task above for
 
 const CHECKOUT_RECOVERY_GUIDANCE = 'Follow the app checkout recovery task above in the actual configured checkout. You own verified backups, backup refs, preservation branches and PRs, configured reviews, current-head required CI and merge gates, stash accounting, and final checkout verification against the latest origin default branch. Preserve active work and retain backups when blocked. Publish every unique change on a named branch with an open or merged PR; never push preservation work directly to the default branch. Existing commits may be preserved and published without making a new commit. PortOS performs no implicit commit, push, or worktree merge-back for this task. Report verified outcomes and PR URLs, or INCOMPLETE with retained work and the first unverified checkpoint; keep private paths and data out of public artifacts.';
 
+const EXTERNAL_REPOSITORY_GUIDANCE = 'Deliver only the external repository work explicitly authorized by the task, in a scratch clone outside the PortOS checkout. You may edit code, commit, push and open a PR there only as the task directs; merge only when the task explicitly authorizes it and its required checks pass. Never edit, commit, push or open a PR from the PortOS checkout. PortOS will not publish or merge this work for you. A verified no-action result (such as zero open alerts) needs no commit or PR. The absence of an existing bot PR does not block creating an authorized fix PR. Report checked evidence, PR links and any unresolved work or blocker; do not claim completion while required work remains.';
+
 const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release.';
 
 /**
@@ -131,6 +133,7 @@ export function buildCompletionGuidelineBullet({
   const bullets = {
     [COMPLETION_MODES.TOOL_FREE]: () => TOOL_FREE_REASONING_BULLET,
     [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => REASONING_ONLY_BULLET,
+    [COMPLETION_MODES.EXTERNAL_REPOSITORY]: () => EXTERNAL_REPOSITORY_GUIDANCE,
     [COMPLETION_MODES.ACTION_OUTPUT]: () => '**This task produces no code output.** Its result is the API request or command your instructions describe (a PortOS endpoint call, a filed tracker issue, …) — do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a PR. Write the completion sentinel (see the Completion section) and stop.',
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => REASONING_ONLY_BULLET,
     [COMPLETION_MODES.CLAIM_FLOW]: () => '**This is a self-managed claim flow.** Follow the claim prompt above through its phase-specific worktree, PR/MR, review, merge or human-handoff, and cleanup steps. Do NOT stop after committing or hand the lifecycle back to PortOS.',
@@ -169,7 +172,7 @@ export function buildCompletionGuidelineBullet({
 }
 
 
-// The modes whose contract forbids a commit outright, so the trailing
+// The modes whose contract owns or forbids commits, so the trailing
 // commit-target bullet ("your PR should contain only…" / "commit directly to
 // the current branch") has nothing to say. Without the tool-free and read-only
 // entries a no-worktree run of either shape was pointed at the checkout's own
@@ -178,6 +181,7 @@ const NO_COMMIT_TARGET_MODES = new Set([
   COMPLETION_MODES.TOOL_FREE,
   COMPLETION_MODES.SENTINEL_PAYLOAD,
   COMPLETION_MODES.ACTION_OUTPUT,
+  COMPLETION_MODES.EXTERNAL_REPOSITORY,
   COMPLETION_MODES.DISCARD_WORKTREE,
   COMPLETION_MODES.CLAIM_FLOW,
   COMPLETION_MODES.RECONCILE_FLOW,
@@ -228,6 +232,10 @@ export function buildFallbackCompletionInstructions({
     [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => ({
       step4: 'Write your result to the completion sentinel in the payload format your task describes (see the Completion section above) — do NOT commit, push, or open a PR',
       gitHygiene: DISCARD_WORKTREE_HYGIENE,
+    }),
+    [COMPLETION_MODES.EXTERNAL_REPOSITORY]: () => ({
+      step4: EXTERNAL_REPOSITORY_GUIDANCE,
+      gitHygiene: `- ${EXTERNAL_REPOSITORY_GUIDANCE}`,
     }),
     [COMPLETION_MODES.ACTION_OUTPUT]: () => ({
       step4: 'Deliver your result the way the task describes (the API call or command it names) — do NOT commit, push, or open a PR; this task changes no code',
@@ -450,6 +458,15 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
   return sentinelCompletionSection(
     notice,
     `Your task is complete once that request succeeds. Then write a short summary, including any structured report required by your task, to \`${sentinelPath}\` and stop.`
+  );
+}
+
+export function buildExternalRepositoryCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+  const notice = `## Completion (External Repository)\n${EXTERNAL_REPOSITORY_GUIDANCE}`;
+  if (!isTui || !sentinelPath) return notice;
+  return sentinelCompletionSection(
+    notice,
+    `After verifying the outcome or identifying a blocker, write a summary with evidence, PR links and remaining work to \`${sentinelPath}\` and stop.`
   );
 }
 

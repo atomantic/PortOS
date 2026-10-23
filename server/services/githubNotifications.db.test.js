@@ -1033,7 +1033,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const tasks = vi.mocked(addTask).mock.calls.map(([task]) => task);
     expect(tasks).toHaveLength(2);
     const repoTask = tasks.find((task) => task.metadata.githubSecurityFix.repo);
-    expect(repoTask).toMatchObject({ useWorktree: false, openPR: false, noCodeOutput: true, metadata: { githubSecurityFix: { repo: `${account.login}/tool` } } });
+    expect(repoTask).toMatchObject({ useWorktree: false, openPR: false, metadata: { externalRepositoryOutput: true, githubSecurityFix: { repo: `${account.login}/tool` } } });
     expect(repoTask.description.split('\n')[0]).toBe(`Fix the open security alerts in github.com/${account.login}/tool`);
     expect(repoTask.description).toContain(`gh repo clone ${account.login}/tool`);
     const advisoryTask = tasks.find((task) => !task.metadata.githubSecurityFix.repo);

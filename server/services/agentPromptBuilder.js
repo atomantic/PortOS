@@ -11,9 +11,9 @@ import { join } from 'path';
 import { stat } from 'fs/promises';
 import { getMemorySection } from './memoryRetriever.js';
 import { getToolsSummaryForPrompt } from './tools.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { isTruthyMeta, isFalsyMeta } from '../lib/metadataFlags.js';
 import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
-import { PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
 import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
@@ -43,6 +43,7 @@ import { COMPLETION_MODES, resolveCompletionMode } from '../lib/agentCompletionM
 import {
   DISCARD_WORKTREE_NOTE,
   buildActionOutputCompletionSection,
+  buildExternalRepositoryCompletionSection,
   buildAuditOutputCompletionSection,
   buildClaimFlowCompletionSection,
   buildMergeAdmissionSection,
@@ -498,7 +499,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // CD tasks are recognized without a metadata migration.
   const {
     willOpenPR, claimFlow, portosMergesBranch, prCompletion, simplifyEnabled, isReadOnly,
-    discardWorktree, noCodeOutput, toolFreeReasoning, sentinelPayloadOutput, noChangeSuccess,
+    discardWorktree, noCodeOutput, externalRepositoryOutput, toolFreeReasoning, sentinelPayloadOutput, noChangeSuccess,
     isReviewLoopFollowUp, isWorktreeOnExistingBranch,
   } = resolveTaskMetadataFlags(task, worktreeInfo);
   const whenDone = task.metadata?.whenDone === 'commit-push' ? 'commit-push' : 'leave-uncommitted';
@@ -558,7 +559,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // none re-derives it. See lib/agentCompletionMode.js for the rule order.
   const completionMode = resolveCompletionMode({
     taskHookType: resolveTaskHookType(task),
-    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
+    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, externalRepositoryOutput, discardWorktree, claimFlow,
     isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands, portosMergesBranch,
     worktreeInfo, willOpenPR, slashdoCommand: task.metadata?.slashdoCommand,
   });
@@ -612,6 +613,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.TOOL_FREE]: () => buildToolFreeReasoningCompletionSection(),
     [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => buildProgrammaticOutputCompletionSection(sentinelPath),
     [COMPLETION_MODES.ACTION_OUTPUT]: () => buildActionOutputCompletionSection({ isTui, sentinelPath }),
+    [COMPLETION_MODES.EXTERNAL_REPOSITORY]: () => buildExternalRepositoryCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => buildProgrammaticOutputCompletionSection(sentinelPath),
     [COMPLETION_MODES.CLAIM_FLOW]: () => buildClaimFlowCompletionSection({
       isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
@@ -665,6 +667,24 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   }));
 }
 
+// Older queued inbox tasks carry noCodeOutput and JSON-string provenance from
+// TASKS.md. Recognize only their known external-code lanes, never prompt text.
+function hasExternalRepositoryOutput(meta, worktreeInfo) {
+  if (worktreeInfo || !isFalsyMeta(meta?.useWorktree) || !isFalsyMeta(meta?.openPR)) return false;
+  if (meta?.externalRepositoryOutput != null) return isTruthyMeta(meta.externalRepositoryOutput);
+  const record = value => typeof value === 'string' ? safeJSONParse(value, null) : value;
+  const security = record(meta?.githubSecurityFix);
+  if (security?.host && (security.repo || security.advisories?.length)) return true;
+  const notification = record(meta?.githubNotificationResolve);
+  // Legacy PR records omitted the trust that distinguished own-pr from other;
+  // only a persisted kind can authorize code delivery for those threads.
+  return !!(notification?.host && notification.repo && (
+    notification.kind != null
+      ? ['own-pr', 'ci', 'issue'].includes(notification.kind)
+      : notification.reason === 'ci_activity' || notification.subjectType === 'CheckSuite' || notification.subjectType === 'Issue'
+  ));
+}
+
 /**
  * The task-metadata flags both prompt paths (`buildAgentPrompt`'s API path and
  * `buildLightContextSections`) derive before resolving the completion mode.
@@ -692,6 +712,7 @@ function resolveTaskMetadataFlags(task, worktreeInfo) {
     isReadOnly: isTruthyMeta(meta?.readOnly),
     discardWorktree: isTruthyMeta(meta?.discardWorktree),
     noCodeOutput: isTruthyMeta(meta?.noCodeOutput) || !!meta?.creativeDirector,
+    externalRepositoryOutput: hasExternalRepositoryOutput(meta, worktreeInfo),
     toolFreeReasoning,
     sentinelPayloadOutput: isPublicReviewRestrictedProfile(meta?.executionProfile) && !toolFreeReasoning,
     noChangeSuccess: permitsNoChangeCompletion(task),
@@ -751,7 +772,7 @@ function buildSimplifySection({
     ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
     : SIMPLIFY_INLINE_REVIEW;
   // Discard tasks don't commit, so the simplify-before-commit step is moot.
-  const simplifySection = ![COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW, COMPLETION_MODES.CHECKOUT_RECOVERY].includes(mode) && simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
+  const simplifySection = ![COMPLETION_MODES.ACTION_OUTPUT, COMPLETION_MODES.EXTERNAL_REPOSITORY, COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW, COMPLETION_MODES.CHECKOUT_RECOVERY].includes(mode) && simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
 ## Simplify Step
 After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : portosMergesBranch ? 'commit your changes (do NOT push — PortOS merges this branch back into the source checkout after you exit; a pushed copy would only be left behind on origin)' : 'commit and push using `/do:push`'}.
 ` : '';
@@ -996,7 +1017,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   task = reconcileSplitContext(task);
   const {
     willOpenPR, claimFlow, portosMergesBranch, prCompletion, simplifyEnabled, isReadOnly,
-    discardWorktree, noCodeOutput, toolFreeReasoning, sentinelPayloadOutput, noChangeSuccess,
+    discardWorktree, noCodeOutput, externalRepositoryOutput, toolFreeReasoning, sentinelPayloadOutput, noChangeSuccess,
     isReviewLoopFollowUp, isWorktreeOnExistingBranch,
   } = resolveTaskMetadataFlags(task, worktreeInfo);
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
@@ -1026,7 +1047,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // subscription-quota job can run.
   const completionMode = resolveCompletionMode({
     taskHookType: resolveTaskHookType(task),
-    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
+    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, externalRepositoryOutput, discardWorktree, claimFlow,
     isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands: canTypeSlash,
     portosMergesBranch, worktreeInfo, willOpenPR, slashdoCommand: task.metadata?.slashdoCommand,
   });
@@ -1169,6 +1190,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     // the sentinel payload, not an API action.
     [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => contractSections.push(buildProgrammaticOutputCompletionSection(lightSentinelPath())),
     [COMPLETION_MODES.ACTION_OUTPUT]: () => contractSections.push(buildActionOutputCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
+    [COMPLETION_MODES.EXTERNAL_REPOSITORY]: () => contractSections.push(buildExternalRepositoryCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     // Reasoning-only task: the sentinel payload (shape set by the task-type
     // output hook) is the sole output; the worktree is discarded on exit.
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => contractSections.push(buildProgrammaticOutputCompletionSection(lightSentinelPath())),
