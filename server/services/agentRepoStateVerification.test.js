@@ -21,6 +21,7 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+vi.mock('./agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async () => ({})) }));
 vi.mock('./repoCleanupRecovery.js', () => ({ inspectOrQueueCompletedReview: vi.fn(async () => ({ disposition: 'held', reason: 'delivery-ci-or-review-pending' })) }));
 vi.mock('./repoCleanupObservation.js', async original => ({ ...await original(), readCheckoutPathPresence: vi.fn(async () => false), readLocalBranchPresence: vi.fn(async () => false) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/repo', isGithub: true })) }));
@@ -80,6 +81,7 @@ import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { verifyAgentRepoState, sweepRepoStateVerifications, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
+import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
 import { recordBranchReconcileOutcome } from './taskSchedule.js';
 import { findMissingCheckoutPreservation, prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
@@ -147,6 +149,7 @@ beforeEach(() => {
   inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'delivery-ci-or-review-pending' });
   readBranchCompletionPolicies.mockResolvedValue([]);
   getTaskById.mockResolvedValue(null);
+  updateTask.mockResolvedValue({ status: 'completed' });
   recordBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [{ ...RELEASE, createdAt: CREATED_AT }] });
   prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: review() });
   retireInventoriedCheckout.mockResolvedValue({ ok: true, archiveDir: '/private/archive', branchDeleted: true });
@@ -171,6 +174,27 @@ beforeEach(() => {
 });
 
 describe('verifyAgentRepoState — clean runs', () => {
+  it('transfers unsupported cleanup verification back to bounded recovery', async () => {
+    updateTask.mockResolvedValueOnce({ status: 'in_progress' });
+    const state = { ...agentState({ isPersistentWorktree: true, repoStateVerification: { status: 'pending' } }),
+      result: { success: false, cleanupPending: true } };
+    expect(await run({ success: false, agentState: state })).toMatchObject({ skipReason: 'cleanup-transferred-to-recovery' });
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'in_progress',
+      metadata: expect.objectContaining({ failureCount: 1, retryPendingCleanup: 'agent-1' }) }), 'user', expect.any(Object));
+    expect(releaseRetryHold).toHaveBeenCalledOnce();
+    expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'completed', reasons: ['cleanup-transferred-to-recovery'] }));
+  });
+
+  it('ignores the exact cleanup task itself while preserving a different pending owner', async () => {
+    const own = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
+      existingBranch: BRANCH, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
+    const state = { ...agentState(), result: { success: false, cleanupPending: true } };
+    queuedTasks([own]);
+    expect((await run({ success: false, agentState: state, task: own })).skipReason).not.toBe('follow-up-pending');
+    queuedTasks([own, { ...own, id: 'other-task' }]);
+    expect(await run({ success: false, agentState: state, task: own })).toMatchObject({ skipReason: 'follow-up-pending' });
+  });
+
   it('settles only the cleanup handoff owned by this run after archive and integration proof', async () => {
     const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
       startedAt: CREATED_AT, capturedAt: CREATED_AT };

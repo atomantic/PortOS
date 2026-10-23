@@ -1728,6 +1728,16 @@ describe('cosTaskStore.updateTask', () => {
   // The pointer is spent once a task is done or parked for a human: a PERPETUAL
   // task id gets re-queued for unrelated work later, and a stale existingBranch
   // would attach that fresh run to a long-merged branch.
+  it('invalidates a completed run cleanup handoff before an explicit retry starts', async () => {
+    await addTask({ description: 'cleanup handoff', id: 'task-cleanup-retry' }, 'user');
+    await updateTask('task-cleanup-retry', { status: 'in_progress', metadata: {
+      deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-old',
+    } }, 'user');
+    const retried = await updateTask('task-cleanup-retry', { status: 'pending' }, 'user');
+    expect(retried.metadata.deliveryRecovery).toBeUndefined();
+    expect(retried.metadata.deliveryRecoveryAgentId).toBeUndefined();
+  });
+
   it('drops the resume pointer on a terminal status', async () => {
     await addTask({ description: 'res', id: 'task-res' }, 'user');
     await updateTask('task-res', {

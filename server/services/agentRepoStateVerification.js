@@ -82,7 +82,7 @@ const PENDING_OWNER_STATUSES = new Set(['pending', 'in_progress', 'blocked', 'ch
  * @param {object|null} app - the managed app record (carries `pendingMergePrs`)
  * @returns {Promise<boolean>}
  */
-async function branchHasPendingOwner(branchName, app) {
+async function branchHasPendingOwner(branchName, app, cleanupOwner = null) {
   // `resolveTaskTargetBranch` is the canonical "which branch does this task own"
   // reader — matching `reviewLoopPRBranch` by hand here would miss a retry holding
   // the same branch through `existingBranch`.
@@ -94,7 +94,9 @@ async function branchHasPendingOwner(branchName, app) {
   const tasks = await readAllTasksFlat().catch(() => null);
   if (!tasks) return null;
   const claimedByTask = tasks.some(t =>
-    PENDING_OWNER_STATUSES.has(t.status) && resolveTaskTargetBranch(t.metadata) === branchName
+    !(cleanupOwner && t.id === cleanupOwner.taskId && t.metadata?.deliveryRecovery === 'cleanup'
+      && t.metadata.deliveryRecoveryAgentId === cleanupOwner.agentId)
+    && PENDING_OWNER_STATUSES.has(t.status) && resolveTaskTargetBranch(t.metadata) === branchName
   );
   if (claimedByTask) return true;
 
@@ -253,6 +255,26 @@ export async function verifyAgentRepoState(input) {
   if (verificationRuns.has(input.agentId)) return verificationRuns.get(input.agentId);
   const cleanupPending = input.agentState?.result?.cleanupPending === true;
   const run = verifyRunBranches({ ...input, success: input.success || cleanupPending }).then(async result => {
+    const outcomes = result.branches || [result];
+    const unsupported = outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
+      REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE,
+      'retirement-app-unavailable', 'retirement-policy-not-legacy-completed'].includes(item.skipReason)
+      || (item.skipReason === 'cleanup-delivery-unverified' && item.observed?.prState === 'OPEN'));
+    if (cleanupPending && unsupported) {
+      const { resolveUndeliveredTaskUpdate } = await import('./agentErrorAnalysis.js');
+      const outcome = { status: 'incomplete', reason: `Cleanup verification cannot run (${unsupported.skipReason}). ${input.task.metadata?.taskOutcome?.reason || ''}`.trim() };
+      const planned = resolveUndeliveredTaskUpdate(input.task, outcome, input.agentId);
+      const saved = await updateTask(input.task.id, planned, input.task.taskType || 'user', { expectedStatus: 'in_progress',
+        expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: input.agentId } });
+      if (saved?.status !== planned.status || saved?.error || saved?.statusChanged) return { ...result, skipReason: 'cleanup-transfer-unverified' };
+      if (planned.metadata.retryPendingCleanup) {
+        const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
+        await releaseRetryHold({ agentId: input.agentId, task: input.task, success: false, agentMetadata: input.agentState.metadata });
+      }
+      const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+      await recordRepoStateVerification(input.agentId, { status: 'completed', reasons: ['cleanup-transferred-to-recovery'] });
+      return { ...result, skipReason: 'cleanup-transferred-to-recovery' };
+    }
     if (cleanupPending && result.verified) {
       const updated = await updateTask(input.task.id, { status: 'completed', metadata: {
         deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined,
@@ -423,7 +445,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   const worktreePath = isTruthyMeta(metadata.claimPicksOwnBranch) ? metadata.workspacePath : metadata.workspacePath || join(PATHS.worktrees, agentId);
   const { record, blockWith } = branchLedger(agentId, { branch: branchName, path: worktreePath });
   const enabled = repoStateVerificationEnabled(app);
-  const owned = enabled ? await branchHasPendingOwner(branchName, app).catch(() => null) : false;
+  const owned = enabled ? await branchHasPendingOwner(branchName, app, agentState?.result?.cleanupPending === true ? { taskId: task.id, agentId } : null).catch(() => null) : false;
   if (owned === null) return blockWith('ownership-unreadable', { skipReason: REPO_STATE_SKIPS.GATE_UNREADABLE });
   if (owned) await record('pending', 'existing-completion-owner');
 

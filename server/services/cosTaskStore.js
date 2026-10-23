@@ -735,6 +735,9 @@ async function preparePauseRelease(taskId, updates) {
  * than each re-testing `updates.status !== 'in_progress'`.
  */
 const TRANSITION_METADATA_CLEARS = Object.freeze([
+  // An explicit retry or new cycle cancels the old cleanup coordinator.
+  ['isRequeue', ['deliveryRecovery', 'deliveryRecoveryAgentId']],
+  ['isRevive', ['deliveryRecovery', 'deliveryRecoveryAgentId']],
   // Leaving `blocked` by any door — a dedupe revive, an autopilot re-dispatch, an
   // orphan-cooldown expiry, or a human unblocking it from the task list. Clearing
   // only in `resumeAgent` left every one of those paths running a task that still

@@ -1271,6 +1271,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     success: effectiveSuccess,
     executionSuccess,
     cleanupPending: recoveryUpdate?.metadata?.deliveryRecoveryAgentId === agent.id,
+    cleanupDeliveryVerified: savedCleanup,
     taskOutcome,
     validationPassed,
     exitCode,
