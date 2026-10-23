@@ -29,7 +29,8 @@ const MAX_THREADS_PER_RUN = 60;
 // version 3 leaves a bot's comment on your own PR to the PR workflow; version
 // 4 finishes a review request on a merged or closed PR; version 5 matches a
 // deployment approval to its waiting run; version 6 trusts GitHub's own bots
-// and, where the account opts in, everyone on an Enterprise instance. A thread
+// and, where the account opts in, everyone on an Enterprise instance; version
+// 7 rates the latest commenter on threads triaged before commenters were. A thread
 // handed off keeps its hand-off; one whose hand-off was refused (a Private
 // account without agents) is re-decided like any other. One an Assist model sorted is not
 // read again, except your own PR: the rule table decides those, so a verdict
@@ -39,7 +40,8 @@ const REDECIDE_SQL = `(state = 'open' AND decision IS DISTINCT FROM 'handed-off'
     OR (decision = 'suggest-mark-read' AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')
     OR (reason = 'review_requested' AND evidence->>'subjectState' IN ('merged', 'closed'))
     OR reason = 'approval_requested'
-    OR trust = 'outside'))`;
+    OR trust = 'outside'
+    OR (latest_comment_api_url IS NOT NULL AND NOT (evidence ? 'commenterTrust'))))`;
 // A deployment waiting on you is re-checked every sync: approving or rejecting
 // it on GitHub does not touch the notification thread.
 const WAITING_DEPLOYMENT_SQL = "(state = 'open' AND evidence->>'rule' = 'deployment-approval')";

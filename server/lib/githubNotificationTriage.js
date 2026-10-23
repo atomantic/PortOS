@@ -36,7 +36,7 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 6;
+export const TRIAGE_RULES_VERSION = 7;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. They stay in the inbox (it
@@ -245,6 +245,13 @@ const REVIEW_TRUST = new Set(['yours', 'trusted']);
 // Mirrored in CANDIDATE_SQL (githubNotificationAutopilot.js).
 const FINISHED_SUBJECT_STATES = new Set(['merged', 'closed']);
 
+// Issue activity goes to the screened issue watcher only when something on it
+// is unvouched: an outside author, or a commenter rated anything but you or
+// trusted. A commenter recorded before triage rated commenters (#13213) has no
+// rating and fails closed into the screened lane. Mirrored in CANDIDATE_SQL.
+const issueNeedsScreening = (row, evidence) => row.trust === 'outside'
+  || (Boolean(evidence.commenter) && !VOUCHED_TRUST.has(evidence.commenterTrust));
+
 function threadAgentKind(row) {
   if (row?.reason === 'security_alert') return 'security-alert';
   if (row?.reason === 'review_requested' && row.subject_type === 'PullRequest') return 'review-request';
@@ -324,7 +331,7 @@ export function agentHandoff({ account, row }) {
     // needs a managed app (`needsApp` below refuses it otherwise).
     if (pullNumber > 0 && REVIEW_TRUST.has(row.trust)) plan = { lane: 'do-review', pullNumber, repo: row.repo_full_name, optIn: true };
     else if (pullNumber > 0 && row.decision === 'suggest-untrusted-review') plan = { lane: 'pr-reviewer', pullNumber };
-  } else if (kind === 'issue-activity' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
+  } else if (kind === 'issue-activity' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && issueNeedsScreening(row, evidence)) {
     plan = { lane: 'issue-watcher' };
   } else if (kind === 'security-alert' && row.decision === 'surface-high') {
     // A managed app's own dependency lane reads the repo's Dependabot alerts and

@@ -197,6 +197,19 @@ describe('autopilotHandoff', () => {
     expect(autopilotHandoff({ account, row: issue })).toEqual({ lane: 'issue-watcher' });
   });
 
+  it('screens an issue only when its author or rated commenter is unvouched (#13213)', () => {
+    const vouched = { ...issue, repo_full_name: 'acme/app', trust: 'trusted', evidence: { repoManaged: false, commenter: 'teammate', commenterTrust: 'trusted' } };
+    // Outside an app, a vouched issue gets the generic lane instead of a refused issue watcher.
+    expect(agentHandoff({ account, row: vouched })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
+    expect(agentHandoff({ account, row: { ...vouched, evidence: { ...vouched.evidence, commenterTrust: 'outside' } } }))
+      .toEqual({ lane: 'issue-watcher', refused: 'no-managed-app' });
+    // A commenter triaged before commenters were rated fails closed into the screened lane.
+    expect(agentHandoff({ account, row: { ...vouched, evidence: { repoManaged: false, commenter: 'teammate' } } }))
+      .toEqual({ lane: 'issue-watcher', refused: 'no-managed-app' });
+    // In an app, Autopilot no longer sends a vouched issue to the issue watcher.
+    expect(autopilotHandoff({ account, row: { ...vouched, evidence: { ...vouched.evidence, repoManaged: true } } })).toBeNull();
+  });
+
   it('hands a security alert to dependency updates, and the same lanes to Resolve with agent in any mode', () => {
     const alert = { ...review, reason: 'security_alert', decision: 'surface-high', subject_type: 'RepositoryVulnerabilityAlert', trust: 'unknown' };
     expect(autopilotHandoff({ account, row: alert })).toEqual({ lane: 'dependency-updates' });

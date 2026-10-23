@@ -44,7 +44,8 @@ const inScope = (n) => `(($${n}::boolean AND NOT (lower(repo_full_name) = ANY($$
 const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest' AND COALESCE(evidence->>'subjectState', '') NOT IN ('merged', 'closed') AND (
       (decision = 'suggest-untrusted-review' AND COALESCE(trust, '') NOT IN ('yours', 'trusted') AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(2)})
       OR (decision IN ('suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface') AND trust IN ('yours', 'trusted') AND ${inScope(5)})))
-  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface') AND (trust = 'outside' OR evidence->>'commenter' IS NOT NULL)
+  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface') AND (trust = 'outside'
+    OR (evidence->>'commenter' IS NOT NULL AND COALESCE(evidence->>'commenterTrust', '') NOT IN ('yours', 'trusted')))
     AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(8)})
   OR (reason = 'security_alert' AND decision = 'surface-high' AND ${inScope(11)}))`;
 const scopeParams = ({ all, except, only }) => [all, except, only];
@@ -121,8 +122,12 @@ async function recordHandoff(account, row, handoff, actor = 'automation') {
  * thread is tried once per activity: a refusal is recorded with its reason and
  * the thread stays with you until new activity re-triages it.
  */
-export async function autopilotAccountNotifications(account) {
-  if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };
+/**
+ * The threads an Autopilot run considers, newest first: the SQL mirror of
+ * `autopilotHandoff`, so each must agree with it on every row (the DB suite
+ * checks the two against each other).
+ */
+export async function listAutopilotCandidates(account) {
   const rules = account.agentRules;
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
@@ -136,6 +141,12 @@ export async function autopilotAccountNotifications(account) {
       ...scopeParams(agentRuleScope(rules, 'security-alert')),
     ],
   );
+  return rows;
+}
+
+export async function autopilotAccountNotifications(account) {
+  if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };
+  const rows = await listAutopilotCandidates(account);
   const plans = rows.map((row) => ({ row, plan: withRunPin(account, autopilotHandoff({ account, row })) })).filter((entry) => entry.plan);
   if (!plans.length) return { handedOff: 0, agentRuns: 0 };
   const apps = await managedAppsByRepoKey();

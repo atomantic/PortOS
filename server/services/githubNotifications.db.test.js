@@ -43,7 +43,9 @@ const { triggerOnDemandTask } = await import('./taskSchedule.js');
 const { addNotification } = await import('./notifications.js');
 const { addTask } = await import('./cosTaskStore.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
-const { createAccount, updateAccount } = await import('./githubAccounts.js');
+const { createAccount, updateAccount, getAccount: getAccountById } = await import('./githubAccounts.js');
+const { listAutopilotCandidates } = await import('./githubNotificationAutopilot.js');
+const { autopilotHandoff } = await import('../lib/githubNotificationTriage.js');
 const {
   syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, getAutomationsOverview, setNotificationCadence,
@@ -837,6 +839,54 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await resolveWithAgent(account.id, '1601')).toMatchObject({ decision: 'handed-off' });
     await expect(resolveWithAgent(account.id, '1602')).rejects.toMatchObject({ code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
     expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts the issue watcher only for an unvouched issue, and re-rates legacy commenters once (#13213)', async () => {
+    await updateAccount(account.id, { mode: 'autopilot' });
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(triggerOnDemandTask).mockReset().mockImplementation(async (taskType) => ({ id: `demand-${taskType}` }));
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+    const issue = (id, commentId) => thread(id, {
+      owner: 'acme', repo: 'app', reason: 'subscribed', type: 'Issue', url: `https://api.github.com/repos/acme/app/issues/${id}`,
+      commentUrl: commentId ? `https://api.github.com/repos/acme/app/issues/comments/${commentId}` : null,
+    });
+    const forge = {
+      'repos/acme/app/issues/2401': { author: 'teammate', association: 'MEMBER', state: 'open', merged: false },
+      'repos/acme/app/issues/2402': { author: 'teammate', association: 'MEMBER', state: 'open', merged: false },
+      'repos/acme/app/issues/2403': { author: 'teammate', association: 'MEMBER', state: 'open', merged: false },
+      'repos/acme/app/issues/comments/91': { author: 'colleague', association: 'MEMBER', mentions: 0 },
+      'repos/acme/app/issues/comments/92': { author: 'visitor', association: 'NONE', mentions: 0 },
+      'repos/acme/app/collaborators/teammate/permission': { user: { login: 'teammate' }, permission: 'write' },
+      'repos/acme/app/collaborators/colleague/permission': { user: { login: 'colleague' }, permission: 'write' },
+      'repos/acme/app/collaborators/visitor/permission': { user: { login: 'visitor' }, permission: 'read' },
+    };
+    mockGh(() => listing([issue('2401', 91), issue('2402', 92), issue('2403')]), forge);
+    await updateAccount(account.id, { mode: 'observe' });
+    await syncAccountNotifications(account.id);
+    // Autopilot's SQL prefilter agrees with its planner on every open row.
+    const autopilotAccount = { ...(await getAccountById(account.id)), mode: 'autopilot' };
+    const rows = (await query("SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open'", [account.id])).rows;
+    const candidates = new Set((await listAutopilotCandidates(autopilotAccount)).map((row) => row.thread_id));
+    for (const row of rows) expect([row.thread_id, candidates.has(row.thread_id)]).toEqual([row.thread_id, Boolean(autopilotHandoff({ account: autopilotAccount, row }))]);
+    await updateAccount(account.id, { mode: 'autopilot' });
+    await syncAccountNotifications(account.id);
+    // Only the issue with an outside commenter reaches the screened lane.
+    expect(vi.mocked(triggerOnDemandTask).mock.calls.map(([type]) => type)).toEqual(['issue-watcher']);
+    expect((await getNotification(account.id, '2402')).evidence.handoff).toMatchObject({ lane: 'issue-watcher' });
+    expect((await getNotification(account.id, '2401')).evidence.handoff).toBeUndefined();
+
+    // A row triaged before commenters were rated is re-rated once; one with no comment is not.
+    await query(
+      `UPDATE github_notifications SET evidence = (evidence - 'commenterTrust') || '{"rulesVersion":6}'::jsonb
+       WHERE account_id = $1 AND thread_id IN ('2401', '2403')`,
+      [account.id],
+    );
+    await syncAccountNotifications(account.id);
+    expect((await getNotification(account.id, '2401')).evidence).toMatchObject({ commenterTrust: 'trusted', rulesVersion: 7 });
+    expect((await getNotification(account.id, '2403')).evidence.rulesVersion).toBe(6);
+    expect(triggerOnDemandTask).toHaveBeenCalledTimes(1);
+    vi.mocked(getAllApps).mockResolvedValue([]);
+    await updateAccount(account.id, { mode: 'observe' });
   });
 
   it('gives a security alert outside your apps one security fix task per repo, and one for global advisories', async () => {
