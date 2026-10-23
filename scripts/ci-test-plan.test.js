@@ -410,6 +410,78 @@ it('resolves local client imports of present untracked modules and still fails c
   }
 });
 
+it('shares source reads within one collection and observes edits and unreadable sources in the next', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-snapshot-'));
+  const planner = new URL('./ci-test-plan.js', import.meta.url).href;
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, body) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  };
+  const leaf = 'server/lib/first.js';
+  const second = 'server/lib/second.js';
+  const bridge = 'server/lib/bridge.js';
+  const browser = BROWSER_SUITES[0];
+  const db = 'server/routes/decks.db.test.js';
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write(second, 'export const value = 2;\n');
+    write(bridge, "export { value } from './first.js';\n");
+    for (const entry of ['client/src/consumer.js', browser, db, 'server/lib/consumer.test.js']) {
+      const relative = posix.relative(posix.dirname(entry), bridge);
+      write(entry, `import '${relative.startsWith('.') ? relative : `./${relative}`}';\n`);
+    }
+    git('add', '--all');
+
+    // A subprocess observes actual disk reads without changing Vitest's own fs.
+    // This catches repeated reads across client, DB, browser and reach scans,
+    // while the same process also proves no snapshot survives the next call.
+    const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { join } from 'node:path';
+      const original = fs.readFileSync;
+      const reads = new Map();
+      fs.readFileSync = function(path, ...args) {
+        reads.set(String(path), (reads.get(String(path)) ?? 0) + 1);
+        return original.call(this, path, ...args);
+      };
+      syncBuiltinESMExports();
+      const fixtureRoot = ${JSON.stringify(root)};
+      const { collectPlanInputs } = await import(${JSON.stringify(planner)});
+      const collect = () => collectPlanInputs({ baseSha: 'HEAD', changedFiles: [${JSON.stringify(leaf)}], cwd: fixtureRoot });
+      const first = collect();
+      const bridgeReads = reads.get(join(fixtureRoot, ${JSON.stringify(bridge)}));
+      fs.writeFileSync(${JSON.stringify(bridge)}, "export { value } from './second.js';\\n");
+      const edited = collect();
+      fs.unlinkSync(${JSON.stringify(bridge)});
+      fs.mkdirSync(${JSON.stringify(bridge)});
+      const warn = console.warn;
+      console.warn = () => {};
+      const unreadable = collect();
+      console.warn = warn;
+      console.log(JSON.stringify({ first, edited, unreadable, bridgeReads }));
+    `], { cwd: root, encoding: 'utf8' }));
+    expect(result.bridgeReads).toBe(1);
+    for (const [inputs, present, absent] of [[result.first, leaf, second], [result.edited, second, leaf]]) {
+      expect(inputs.clientDependencies).toContain(present);
+      expect(inputs.clientDependencies).not.toContain(absent);
+      expect(inputs.dbDependencies).toContain(present);
+      expect(inputs.dbDependencies).not.toContain(absent);
+      expect(inputs.browserDependencies[browser]).toContain(present);
+      expect(inputs.browserDependencies[browser]).not.toContain(absent);
+    }
+    expect(result.first.serverReach.selected).toBeGreaterThan(0);
+    expect(result.edited.serverReach.selected).toBe(0);
+    expect(result.unreadable.clientDependencies).toBeNull();
+    expect(result.unreadable.dbDependencies).toBeNull();
+    expect(result.unreadable.browserDependencies[browser]).toBeNull();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('requests DB verification for every suite in the real canonical inventory without widening the matrix', () => {
   const cwd = fileURLToPath(new URL('../', import.meta.url));
   const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd });

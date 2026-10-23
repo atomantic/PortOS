@@ -155,15 +155,18 @@ export function formatReachSummary(report, { limit = 3 } = {}) {
   return `dynamic-aware fan-out ${report.selected} suite(s): ${shown.join(', ')}${more}`;
 }
 
-/** Tracked (plus given untracked) module files and a disk reader rooted at `cwd`. */
-export function measureRepoImportReach({ cwd, files, sources, isTest = serverRunnerTestPredicate() }) {
+/**
+ * Tracked (plus given untracked) module files. A collection may supply its own
+ * `readText(repoRelativePath)` snapshot; otherwise read directly under `cwd`.
+ */
+export function measureRepoImportReach({ cwd, files, sources, isTest = serverRunnerTestPredicate(), readText }) {
   const paths = files ?? execFileSync('git', ['ls-files', '-z'], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
     .split('\0').filter(Boolean);
   const modules = paths.filter((rel) => MODULE_SOURCE_RE.test(rel) && !rel.includes('node_modules/'));
-  const graph = buildImportGraph(modules, (rel) => {
+  const graph = buildImportGraph(modules, readText ?? ((rel) => {
     const abs = join(cwd, ...rel.split('/'));
     return existsSync(abs) ? readFileSync(abs, 'utf8') : null;
-  });
+  }));
   return importReachReport(graph, sources.filter((source) => graph.has(source)), isTest);
 }
 
