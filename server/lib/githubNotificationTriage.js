@@ -36,7 +36,7 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 4;
+export const TRIAGE_RULES_VERSION = 5;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. They stay in the inbox (it
@@ -91,16 +91,23 @@ export function parseCiBranch(title) {
 
 /**
  * One decision from the fixed rule table (reason × source). First match wins:
- * suspect, security alert, invitation, your own PR in a managed repo,
+ * suspect, security alert, deployment approval, invitation, your own PR in a managed repo,
  * finished thread, CI, review request, mention elsewhere, then Needs you.
  *
  * `commenterTrust` is the latest commenter's trust when it differs from the
  * subject author. Activity on your own PR goes to the PR workflow that opened
  * and drives it, unless someone outside commented: that waits for you.
  */
-export function decideThread({ reason, subjectType, subjectState, subjectMerged = false, trust, commenterTrust = null, suspect = false, repoOwned = false, repoManaged = false, ciBranch = null, defaultBranch = null }) {
+export function decideThread({ reason, subjectType, subjectState, subjectMerged = false, trust, commenterTrust = null, suspect = false, repoOwned = false, repoManaged = false, ciBranch = null, defaultBranch = null, deploymentWaiting = null }) {
   if (suspect) return { decision: 'suspect', rule: 'spam-signal' };
   if (reason === 'security_alert') return { decision: 'surface-high', rule: 'security-alert' };
+  // `deploymentWaiting` is null when the forge could not be asked: a
+  // deployment that may still be blocked on you is never assumed finished.
+  if (reason === 'approval_requested' && subjectType === 'WorkflowRun') {
+    return deploymentWaiting === false
+      ? { decision: 'suggest-mark-read', rule: 'finished-thread' }
+      : { decision: 'surface-high', rule: 'deployment-approval' };
+  }
   if (reason === 'invitation') return { decision: 'surface', rule: 'invitation-never-accepted' };
   if (reason === 'author' && subjectType === 'PullRequest' && trust === 'yours' && repoManaged && commenterTrust !== 'outside') {
     return { decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' };
@@ -121,6 +128,32 @@ export function decideThread({ reason, subjectType, subjectState, subjectMerged 
   return { decision: 'needs-you', rule: 'default' };
 }
 
+/**
+ * The waiting run a deployment-approval thread is about. GitHub gives the
+ * thread no subject url; its `updated_at` is the run's at the request. A run
+ * re-requested later is still the one waiting across that time. `undefined`
+ * when the runs could not be read.
+ */
+export function matchWaitingRun(runs, threadUpdatedAt) {
+  if (!Array.isArray(runs)) return undefined;
+  const at = new Date(threadUpdatedAt).getTime();
+  const time = (value) => Date.parse(value || '');
+  const valid = runs.filter((entry) => Number.isInteger(entry?.id) && entry.id > 0);
+  return valid.find((entry) => time(entry.updatedAt) === at)
+    || valid.filter((entry) => time(entry.createdAt) <= at && at <= time(entry.updatedAt))
+      .sort((a, b) => time(b.createdAt) - time(a.createdAt))[0]
+    || null;
+}
+
+/** The run fields the inbox shows, bounded; display only, never trust. */
+export const workflowRunEvidence = (entry) => ({
+  id: entry.id,
+  name: typeof entry.name === 'string' ? entry.name.slice(0, 200) : null,
+  displayTitle: typeof entry.displayTitle === 'string' ? entry.displayTitle.slice(0, 300) : null,
+  headBranch: typeof entry.headBranch === 'string' ? entry.headBranch.slice(0, 255) : null,
+  event: typeof entry.event === 'string' ? entry.event.slice(0, 50) : null,
+});
+
 // What a model may answer for a thread the rule table left undecided. Any
 // other output fails the response schema and the thread stays with you.
 export const ASSIST_VERDICTS = Object.freeze(['surface', 'done', 'suggest-mute']);
@@ -134,7 +167,7 @@ export function decisionFromVerdict(verdict) {
 // A learned rule replays the operator's own choice for a repo, reason and
 // actor; it never overrides a spam signal, a security alert or an invitation.
 const LEARNED_DECISIONS = Object.freeze(['surface', 'suggest-done', 'suggest-mute']);
-const PINNED_RULES = new Set(['spam-signal', 'security-alert', 'invitation-never-accepted']);
+const PINNED_RULES = new Set(['spam-signal', 'security-alert', 'invitation-never-accepted', 'deployment-approval']);
 const ACTION_LESSONS = Object.freeze({ done: 'suggest-done', unsubscribe: 'suggest-done', mute: 'suggest-mute', reopen: 'surface', resubscribe: 'surface' });
 
 /** The decision an operator action teaches, or null when it teaches nothing (a plain read). */

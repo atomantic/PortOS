@@ -12,7 +12,7 @@
  */
 import { query, withTransaction } from '../lib/db.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
-import { applyLearnedRule, computeThreadTrust, decideThread, parseCiBranch, spamSignals, TRIAGE_RULES_VERSION } from '../lib/githubNotificationTriage.js';
+import { applyLearnedRule, computeThreadTrust, decideThread, matchWaitingRun, parseCiBranch, spamSignals, TRIAGE_RULES_VERSION, workflowRunEvidence } from '../lib/githubNotificationTriage.js';
 import { parseGitRemoteUrl, readOriginRemoteUrl } from '../lib/gitRemote.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -27,15 +27,21 @@ const MAX_THREADS_PER_RUN = 60;
 // Open threads a rules-version bump re-decides without new activity: version 2
 // changed your own PRs and finished threads (now marked done, not just read);
 // version 3 leaves a bot's comment on your own PR to the PR workflow; version
-// 4 finishes a review request on a merged or closed PR. A thread
-// handed off keeps its hand-off; one whose hand-off was refused (a Private
-// account without agents) is re-decided like any other. One an Assist model sorted is not
+// 4 finishes a review request on a merged or closed PR; version 5 matches a
+// deployment approval to its waiting run. A thread handed off keeps its
+// hand-off; one whose hand-off was refused (a Private account without agents)
+// is re-decided like any other. One an Assist model sorted is not
 // read again, except your own PR: the rule table decides those, so a verdict
 // from before the rule existed must not keep one in front of you.
 const REDECIDE_SQL = `(state = 'open' AND decision IS DISTINCT FROM 'handed-off'
   AND ((reason = 'author' AND subject_type = 'PullRequest' AND trust = 'yours')
     OR (decision = 'suggest-mark-read' AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')
-    OR (reason = 'review_requested' AND evidence->>'subjectState' IN ('merged', 'closed'))))`;
+    OR (reason = 'review_requested' AND evidence->>'subjectState' IN ('merged', 'closed'))
+    OR reason = 'approval_requested'))`;
+// A deployment waiting on you is re-checked every sync: approving or rejecting
+// it on GitHub does not touch the notification thread.
+const WAITING_DEPLOYMENT_SQL = "(state = 'open' AND evidence->>'rule' = 'deployment-approval')";
+const WAITING_RUNS_JQ = '[.workflow_runs[] | {id, name, displayTitle: .display_title, headBranch: .head_branch, event, actor: .actor.login, createdAt: .created_at, updatedAt: .updated_at}]';
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
@@ -81,6 +87,9 @@ function createReader(account, env) {
       runGh: (args) => execGh(args, GH_TIMEOUT_MS, { env }), host, repoFullName: repo, currentUser: null,
     })),
     viewer: () => once('viewer', () => run(['user', '--jq', '.login']).then((out) => loginOrNull(out.trim())).catch(() => null)),
+    // null when the forge could not be read, so a failure is never "none waiting".
+    waitingRuns: (repo) => once(`w:${repo}`, () => json(`repos/${repo}/actions/runs?status=waiting&per_page=50`, WAITING_RUNS_JQ)
+      .then((runs) => (Array.isArray(runs) ? runs : null))),
   };
 }
 
@@ -115,9 +124,12 @@ async function triageThread(row, ctx) {
   const comment = commentPath && commentPath !== subjectPath ? await reader.comment(commentPath) : null;
   const subjectAuthor = loginOrNull(subject?.author);
   const commenter = loginOrNull(comment?.author);
-  // Trust attaches to the subject's author; a later commenter can only add
-  // suspicion, never lift an outside PR into the trusted lane.
-  const actorLogin = subjectAuthor || commenter;
+  const isDeployment = row.reason === 'approval_requested' && row.subject_type === 'WorkflowRun';
+  const waitingRun = isDeployment && repo ? matchWaitingRun(await reader.waitingRuns(repo), row.gh_updated_at) : undefined;
+  // Trust attaches to the subject's author (for a deployment, whoever started
+  // the run); a later commenter can only add suspicion, never lift an outside
+  // PR into the trusted lane.
+  const actorLogin = subjectAuthor || loginOrNull(waitingRun?.actor) || commenter;
 
   const trustOf = async (login) => {
     const isOwn = ownLogins.some((own) => own.toLowerCase() === login.toLowerCase());
@@ -179,6 +191,7 @@ async function triageThread(row, ctx) {
     repoManaged,
     ciBranch,
     defaultBranch,
+    deploymentWaiting: waitingRun === undefined ? null : Boolean(waitingRun),
   });
   const { decision, rule } = applyLearnedRule(tabled, learnedRules.get(learnedRuleKey(row.repo_full_name, row.reason, actorLogin)));
   return {
@@ -194,7 +207,8 @@ async function triageThread(row, ctx) {
       repoManaged,
       subjectState: subject ? (subject.merged === true ? 'merged' : subject.state || null) : null,
       ciBranch,
-      metadataMissing: Boolean(subjectPath && !subject),
+      metadataMissing: Boolean(subjectPath && !subject) || (isDeployment && waitingRun === undefined),
+      ...(waitingRun ? { workflowRun: workflowRunEvidence(waitingRun) } : {}),
       rulesVersion: TRIAGE_RULES_VERSION,
     },
   };
@@ -231,7 +245,7 @@ async function foldCiDuplicates(client, accountId) {
 export async function triageAccountNotifications(account, env, { now = Date.now() } = {}) {
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND (triaged_for IS NULL OR triaged_for < gh_updated_at
-       OR (${REDECIDE_SQL} AND COALESCE((evidence->>'rulesVersion')::int, 0) < $2))
+       OR (${REDECIDE_SQL} AND COALESCE((evidence->>'rulesVersion')::int, 0) < $2) OR ${WAITING_DEPLOYMENT_SQL})
      ORDER BY gh_updated_at DESC LIMIT ${MAX_THREADS_PER_RUN}`,
     [account.id, TRIAGE_RULES_VERSION],
   );

@@ -1095,6 +1095,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // create/edit pick the `gh` identity, mode, trust and allowed providers.
   'POST /api/github/notifications/:accountId/:threadId',
   'POST /api/github/notifications/clear-finished',
+  // Approving a deployment can ship to production (#13198).
+  'POST /api/github/notifications/:accountId/:threadId/deployment',
   'POST /api/github/audit/:accountId/apply',
   'POST /api/github/audit-changes/:id/undo',
   'POST /api/github/automations/activity/:id/undo',

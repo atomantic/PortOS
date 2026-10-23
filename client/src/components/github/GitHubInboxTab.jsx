@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   Bell, BellOff, Bot, Check, CheckCheck, CheckCircle2, CircleDot, CircleX, ExternalLink, GitCommitHorizontal, GitPullRequest,
-  Inbox, Layers, Mail, MailX, MessagesSquare, RefreshCw, ShieldAlert, Tag,
+  Inbox, Layers, Mail, MailX, MessagesSquare, RefreshCw, Rocket, ShieldAlert, Tag,
 } from 'lucide-react';
 import Pill from '../ui/Pill';
 import OverflowMenu from '../ui/OverflowMenu';
 import GitHubThreadDrawer from './GitHubThreadDrawer';
+import GitHubDeploymentReview from './GitHubDeploymentReview';
 import { AGENT_REFUSED_LABELS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
 import socket from '../../services/socket';
 import LoadFailedState from '../ui/LoadFailedState';
@@ -24,6 +25,7 @@ import {
 
 // GitHub's `reason` vocabulary, phrased for a glance.
 const REASON_LABELS = {
+  approval_requested: 'Deploy approval',
   assign: 'Assigned',
   author: 'You opened',
   ci_activity: 'CI',
@@ -75,6 +77,7 @@ const KIND_VIEW = {
   Discussion: { icon: MessagesSquare, label: 'Discussion', className: 'text-gray-300' },
   Commit: { icon: GitCommitHorizontal, label: 'Commit', className: 'text-gray-300' },
   RepositoryInvitation: { icon: Mail, label: 'Invitation', className: 'text-gray-300' },
+  WorkflowRun: { icon: Rocket, label: 'Workflow run', className: 'text-port-warning' },
 };
 const SECURITY_KIND = { icon: ShieldAlert, label: 'Security alert', className: 'text-port-error' };
 const kindOf = (notification) => (notification.reason === 'security_alert'
@@ -146,7 +149,8 @@ function RepoFilter({ repos, repo, onSelect, total }) {
   );
 }
 
-function NotificationRow({ notification, accountLabel, busy, onAction }) {
+function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated }) {
+  const [reviewing, setReviewing] = useState(false);
   const handled = notification.state !== 'open';
   const trust = TRUST_VIEW[notification.trust];
   const decision = DECISION_VIEW[notification.decision];
@@ -175,6 +179,13 @@ function NotificationRow({ notification, accountLabel, busy, onAction }) {
             <span className="shrink-0">· {timeAgo(notification.updatedAt)}</span>
             {accountLabel && <span className="shrink-0">· {accountLabel}</span>}
           </div>
+          {notification.deployment && (
+            <p className="mt-1 min-w-0 break-words text-xs text-gray-300">
+              <span className="text-white">{notification.deployment.name}</span>
+              {notification.deployment.headBranch && <> on <span className="font-mono">{notification.deployment.headBranch}</span></>}
+              {notification.deployment.displayTitle && <> · {notification.deployment.displayTitle}</>}
+            </p>
+          )}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {decision && <Pill tone={decision.tone}>{decision.label}</Pill>}
             {notification.yourRepo && <Pill tone="accent">Your repo</Pill>}
@@ -183,11 +194,28 @@ function NotificationRow({ notification, accountLabel, busy, onAction }) {
             {notification.readOnGithub && <Pill tone="muted">Read on GitHub</Pill>}
             {handled && <Pill tone="muted">{STATE_LABELS[notification.state] || notification.state}</Pill>}
           </div>
+          {reviewing && (
+            <GitHubDeploymentReview
+              notification={notification}
+              onCancel={() => setReviewing(false)}
+              onReviewed={(updated) => { setReviewing(false); onUpdated(notification, updated); }}
+            />
+          )}
           {!handled && notification.agent?.refused && (
             <p className="mt-1 text-xs text-gray-500">{AGENT_REFUSED_LABELS[notification.agent.refused] || notification.agent.refused}</p>
           )}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          {!handled && notification.deployment && !reviewing && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setReviewing(true)}
+              className="inline-flex min-h-[36px] items-center gap-1 rounded-lg bg-port-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            >
+              <Rocket size={13} aria-hidden="true" /> Review deployment
+            </button>
+          )}
           {canResolve && (
             <button
               type="button"
@@ -292,7 +320,11 @@ export default function GitHubInboxTab() {
       ? resolveGitHubNotificationWithAgent(row.accountId, row.threadId)
       : applyGitHubNotificationAction(row.accountId, row.threadId, action)).catch(() => null);
     setBusyKey(null);
-    if (!updated) return;
+    if (updated) applyUpdate(row, updated);
+  };
+
+  const applyUpdate = (row, updated) => {
+    const key = keyOf(row);
     if (belongsInView(updated, view)) {
       setData((prev) => ({ ...prev, notifications: prev.notifications.map((entry) => (keyOf(entry) === key ? updated : entry)) }));
     } else {
@@ -429,6 +461,7 @@ export default function GitHubInboxTab() {
                       accountLabel={labelFor(notification.accountId)}
                       busy={busyKey === key || removing.has(key)}
                       onAction={handleAction}
+                      onUpdated={applyUpdate}
                     />
                   </CollapsibleListItem>
                 );
