@@ -1,9 +1,9 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { delimiter, join } from 'path';
+import { delimiter, dirname, join, relative } from 'path';
 import { stripVTControlCharacters } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,6 +27,8 @@ import { vitestShardSlice } from './lib/testMemoRunner.js';
 import { guardInputSnapshot } from './lib/pregateReport.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { staticImportClosure } from '../server/lib/staticImportGraph.js';
+import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
@@ -223,17 +225,45 @@ describe('test memo through the real runner', () => {
   }, 120_000);
 });
 
-it.each(['files', 'full'])('validates the guard proof before the actual %s Vitest selection with the persistent memo off', (mode) => {
-  const fixture = mkdtempSync(join(tmpdir(), 'portos-early-guards-'));
+// Guard admission hashes tree/index/status/refs. Keep synthetic proofs off
+// the shared checkout, where other real suites may create source fixtures.
+async function createRunnerSandbox(files) {
+  const sandbox = await makeGitSandbox({ prefix: 'portos-runner-proof-' });
+  const { scratch, repo } = sandbox;
+  try {
+    const sourceRoot = join(import.meta.dirname, '..');
+    for (const source of staticImportClosure(join(sourceRoot, 'scripts/run-ci-tests.js')).files) {
+      const destination = join(repo, relative(sourceRoot, source));
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(source, destination);
+    }
+    writeFileSync(join(repo, 'package.json'), '{"type":"module"}');
+    for (const path of files) {
+      mkdirSync(dirname(join(repo, path)), { recursive: true });
+      writeFileSync(join(repo, path), '// synthetic runner selection fixture\n');
+    }
+    const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+    git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
+    git('add', '--all');
+    git('commit', '-qm', 'runner selection fixture');
+    return sandbox;
+  } catch (error) {
+    await destroyGitSandbox(scratch);
+    throw error;
+  }
+}
+
+it.each(['files', 'full'])('validates the guard proof before the actual %s Vitest selection with the persistent memo off', async (mode) => {
+  const guard = 'server/lib/index.test.js';
+  const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, 'scripts/example.test.js']);
   try {
     installFakeNpm(fixture, 'if (process.env.PORTOS_PREGATE_GUARDS) throw new Error("Guard proof leaked to test process");\n' + REPORTING_NPM);
-    const guard = 'server/lib/index.test.js';
-    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
-      encoding: 'utf8', timeout: 120000,
+    const result = spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+      cwd: root, encoding: 'utf8', timeout: 120000,
       env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
         CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify([guard, 'scripts/example.test.js']),
         CI_TEST_SOURCES: '["scripts/lib/directInvocation.js"]',
-        PORTOS_PREGATE_GUARDS: JSON.stringify({ files: [guard], snapshot: mode === 'files' ? guardInputSnapshot(join(import.meta.dirname, '..')) : 'stale' }),
+        PORTOS_PREGATE_GUARDS: JSON.stringify({ files: [guard], snapshot: mode === 'files' ? guardInputSnapshot(root) : 'stale' }),
         PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
     });
     expect(result.status, result.stderr).toBe(0);
@@ -244,30 +274,31 @@ it.each(['files', 'full'])('validates the guard proof before the actual %s Vites
     else expect(selection.include).toContain('lib/index.test.js');
     expect(selection.include).toContain('../scripts/example.test.js');
   } finally {
-    rmSync(fixture, { recursive: true, force: true });
+    await destroyGitSandbox(fixture);
   }
 });
 
-it('keeps explicit browser selectors with their owner after structural guard reuse', () => {
-  const fixture = mkdtempSync(join(tmpdir(), 'portos-browser-owner-'));
+it('keeps explicit browser selectors with their owner after structural guard reuse', async () => {
   const guard = 'server/lib/index.test.js';
   const browser = 'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js';
   const ordinary = 'scripts/example.test.js';
-  const root = join(import.meta.dirname, '..');
-  const run = ({ owner, files, reuse = false }) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
-    encoding: 'utf8', timeout: 10000,
+  const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, browser, ordinary]);
+  const run = ({ owner, files, proof }) => spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+    cwd: root, encoding: 'utf8', timeout: 10000,
     env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
       CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: '[]',
-      PORTOS_CI_BROWSER_OWNER: owner,
-      PORTOS_PREGATE_GUARDS: reuse ? JSON.stringify({ files: [guard], snapshot: guardInputSnapshot(root) }) : '',
+      CI: 'true', PORTOS_CI_BROWSER_OWNER: owner, PORTOS_BROWSER_TEST_PROFILE: undefined,
+      PORTOS_PREGATE_GUARDS: proof ? JSON.stringify({ files: [guard], snapshot: proof }) : '',
       PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
   });
   try {
     expect(BROWSER_SUITES).toContain(browser);
     installFakeNpm(fixture, REPORTING_NPM);
+    const proof = guardInputSnapshot(root);
+    expect(proof).toEqual(expect.any(String));
     // The failing pregate boundary: the guard is already proven and the only
     // remaining explicit selector belongs to the separate browser stage.
-    const unitOnly = run({ owner: 'unit', files: [guard, browser], reuse: true });
+    const unitOnly = run({ owner: 'unit', files: [guard, browser], proof });
     expect(unitOnly.error).toBeUndefined();
     expect(unitOnly.status, unitOnly.stderr).toBe(0);
     expect(unitOnly.stdout).toContain('Reused 1 structural guards');
@@ -286,8 +317,16 @@ it('keeps explicit browser selectors with their owner after structural guard reu
     const local = run({ owner: '', files: [browser] });
     expect(local.status, local.stderr).toBe(0);
     expect(selectionOf(local)).toEqual([toWorkspacePath('server', browser)]);
+
+    // Control: a real on-disk change invalidates the same proof and runs the
+    // guard, preserving production's exact-input admission under CI=true.
+    writeFileSync(join(root, 'initial.txt'), 'changed after proof');
+    const changed = run({ owner: 'unit', files: [guard, browser], proof });
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(changed.stdout).not.toContain('Reused');
+    expect(selectionOf(changed)).toEqual([toWorkspacePath('server', guard)]);
   } finally {
-    rmSync(fixture, { recursive: true, force: true });
+    await destroyGitSandbox(fixture);
   }
 });
 
