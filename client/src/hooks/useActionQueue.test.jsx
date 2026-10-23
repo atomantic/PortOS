@@ -38,16 +38,20 @@ it('shares event-driven reads, reconciles reconnect/re-show, and stops on unmoun
   expect(mocks.getReviewQueue).toHaveBeenCalledTimes(2);
   await settle(() => mocks.handlers.get('connect')());
   expect(mocks.getReviewQueue).toHaveBeenCalledTimes(3);
+  mocks.getReviewQueue.mockResolvedValue(snapshot('GitHub changed'));
+  await settle(() => mocks.handlers.get('github:notifications:changed')());
+  expect(screen.getByTestId('first')).toHaveTextContent('GitHub changed');
+  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(4);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
   await settle(() => document.dispatchEvent(new Event('visibilitychange')));
-  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(3);
+  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(4);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   await settle(() => document.dispatchEvent(new Event('visibilitychange')));
-  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(4);
+  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(5);
   view.unmount();
   expect(mocks.handlers.size).toBe(0);
   await settle(() => document.dispatchEvent(new Event('visibilitychange')));
-  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(4);
+  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(5);
 });
 it('reconciles invalidation during a pending shared read instead of publishing stale data', async () => {
   let resolve;

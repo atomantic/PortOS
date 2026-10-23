@@ -129,8 +129,8 @@ async function verifyHeldArchive(repoPath, dir, release) {
   // Bundle verify/list-heads validate headers, not packed object integrity. Prove
   // the complete closure without borrowing any object from the live repository.
   const scratch = await mkdtemp(join(tmpdir(), 'portos-retirement-proof-'));
-  // Git recognizes /dev/null on Windows too; Node's device-namespace spelling
-  // is not a portable Git configuration path.
+  // Git's null path also works on Windows; Node's device-namespace spelling
+  // (\\.\nul) is not the Git configuration-file contract.
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' };
   const prove = args => execGit(['--no-optional-locks', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], scratch,
@@ -218,7 +218,11 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
       if (!await historicalCheckoutAbsent(release, trees).catch(() => false)) continue;
       const evidence = [];
       let proof = null;
-      for (const candidate of candidates) {
+      const scopedCandidates = Object.hasOwn(release, 'preservationReceipt')
+        ? candidates.filter(candidate => release.preservationReceipt?.status === 'preserved'
+          && JSON.stringify(release.preservationReceipt.incarnation) === JSON.stringify(release.checkoutIncarnation)
+          && candidate.dir === release.preservationReceipt.archiveDir) : candidates;
+      for (const candidate of scopedCandidates) {
         try {
           proof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release)
             : await (await import('./initializedCheckoutRecovery.js')).verifyMissingInitializedCheckoutPreservation({ appId, repoPath, release, archiveDir: candidate.dir });
@@ -612,6 +616,63 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
   return heads;
 }
 
+/** Supersession is a content verdict, never a substitute for full preservation.
+ * Persist the original generation before archiving, then its exact preservation
+ * receipt before the caller can remove anything under the retirement fence.
+ */
+export async function preserveSupersededCheckout({ appId, repoPath, tree, defaultBranch, cosDir }) {
+  const [{ getAppById }, schedule] = await Promise.all([import('./apps.js'), import('./taskSchedule.js')]);
+  const app = appId && await getAppById(appId);
+  if (!app?.repoPath || resolve(app.repoPath) !== resolve(repoPath)) throw new Error('retirement-receipt-scope-unavailable');
+  if (!tree?.path || !tree.branch || tree.locked) throw new Error('retirement-checkout-unavailable');
+  const release = { path: tree.path, branch: shortBranch(tree.branch), head: tree.head, locked: false, lockReason: null };
+  const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+  const target = { repoPath, branch: release.branch, path: release.path, head: release.head };
+  const identity = await readCompletedCheckoutIdentity(target);
+  if (!identity) throw new Error('checkout-incarnation-unavailable');
+  const identityCurrent = async () => JSON.stringify(await readCompletedCheckoutIdentity(target)) === JSON.stringify(identity);
+  const pending = await schedule.recordBranchReconcileOutcome(appId, {
+    status: 'incomplete', reason: 'retirement-receipt-unverified',
+    retirementObligations: [{ ...release, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }],
+    nextAction: 'Require complete preservation and an exact retirement receipt for the superseded checkout.',
+  });
+  const obligation = pending?.retirementObligations?.find(row => sameRelease(row, release));
+  if (!Number.isFinite(Date.parse(obligation?.createdAt))) throw new Error('retirement-obligation-unavailable');
+  if (JSON.stringify(obligation.checkoutIncarnation) !== JSON.stringify(identity.incarnation)) throw new Error('retirement-checkout-generation-unverified');
+  // Invalidate any earlier attempt's prepared receipt without dropping its
+  // obligation. A crash must never let an older snapshot stand in for this one.
+  await schedule.recordHeldCheckoutPreservation(appId, { ...release, createdAt: obligation.createdAt, archiveDir: null, incarnation: identity.incarnation });
+  const archive = await preserveMergedCheckout(repoPath, tree, defaultBranch, { cosDir });
+  if (!await identityCurrent()) throw new Error('checkout-incarnation-changed');
+  await schedule.recordHeldCheckoutPreservation(appId, { ...release, createdAt: obligation.createdAt, archiveDir: archive.archiveDir, incarnation: identity.incarnation });
+  const receiptCurrent = async () => {
+    const currentApp = await getAppById(appId);
+    if (!currentApp?.repoPath || resolve(currentApp.repoPath) !== resolve(repoPath)) return false;
+    const current = await schedule.getBranchReconcileOutcome(appId);
+    return current?.retirementObligations?.some(row => sameRelease(row, release)
+      && row.createdAt === obligation.createdAt && row.preservationReceipt?.status === 'preserved'
+      && row.preservationReceipt.archiveDir === archive.archiveDir
+      && JSON.stringify(row.preservationReceipt.incarnation) === JSON.stringify(identity.incarnation)
+      && JSON.stringify(row.checkoutIncarnation) === JSON.stringify(identity.incarnation)) === true;
+  };
+  if (!await receiptCurrent()) throw new Error('retirement-preservation-receipt-unverified');
+  return {
+    archiveDir: archive.archiveDir,
+    verify: async holder => !await receiptCurrent() ? 'retirement-preservation-receipt-changed'
+      : !await identityCurrent() ? 'checkout-incarnation-changed' : archive.verify(holder),
+    async recordRetirement() {
+      if (!await receiptCurrent()) throw new Error('retirement-preservation-receipt-changed');
+      const ref = await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repoPath, { ignoreExitCode: true });
+      if (ref.exitCode !== 1 || !await historicalCheckoutAbsent(release, await listWorktrees(repoPath))) throw new Error('retirement-checkout-recreated');
+      const outcome = await schedule.recordHeldCheckoutRetirement(appId, { ...release, branchDeleted: true, archiveDir: archive.archiveDir });
+      if (!outcome?.retired?.some(row => sameRelease(row, release) && row.branchDeleted === true
+        && row.archiveDir === archive.archiveDir && Date.parse(row.retiredAt) >= Date.parse(obligation.createdAt))) {
+        throw new Error('retirement-receipt-unverified');
+      }
+    },
+  };
+}
+
 async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release, review, missingRoot = null }) {
   const [snapshot, administration] = await archiveSnapshots(tree, repoPath, missingRoot);
   const recoveryHeads = await recoveryObjectHeads(administration, { repoPath, tree, missingRoot });
@@ -926,13 +987,13 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   if (!outcome?.remaining?.some?.(entry => sameRelease(entry, release))) return { ok: false, reason: 'release-not-in-inventory' };
   const inventoryCurrent = async () => (await taskSchedule.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
   const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null });
-  // The row was stale: something else already removed the checkout. That is the
-  // outcome the operator asked for, so settle the row instead of refusing it.
+  // A missing original cannot be archived retroactively. Retain its exact
+  // identity for provenance recovery rather than equating absence with success.
   if (!result.ok && result.reason === 'checkout-not-found') {
     const gone = await findGoneInventoryRows(app.repoPath, [release]).catch(() => []);
     if (gone.length) {
-      await taskSchedule.dropInventoryRows(appId, gone);
-      return { ok: true, alreadyRetired: true };
+      await taskSchedule.recordMissingInventoryRows(appId, gone);
+      return { ok: false, reason: 'retirement-provenance-unverified' };
     }
   }
   if (result.ok) {

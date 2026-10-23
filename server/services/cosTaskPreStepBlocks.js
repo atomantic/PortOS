@@ -466,6 +466,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     finishAbandoned: metadata.finishAbandoned
   };
   const result = await reconcile(app.repoPath, {
+    appId: app.id,
     cleanup: actions.cleanupMerged !== false,
     // A fresh SUPERSEDED verdict is terminal: nothing else retires the branch,
     // so holding it only re-reports it. Backup-first, behind the same owner gates.

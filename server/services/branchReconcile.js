@@ -1225,7 +1225,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
  * @returns {Promise<{reaped:string[], held:object[], skipped:{branch:string,reason:string,retryAt?:string}[]}>}
  *   `held` is the live entries the reap could not take, for the caller to report.
  */
-export async function reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds, claimOwners, cosDir } = {}) {
+export async function reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds, claimOwners, cosDir, appId = null } = {}) {
   const reaped = [];
   const held = [];
   const skipped = [];
@@ -1256,13 +1256,23 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
       // `prepare` copies them into the backup before anything is removed.
       requireCleanWorktree: false,
       // A worktree outside the managed roots is reachable here and nowhere else —
-      // the verdict and the backup are the proof the location gate asks for, and
+      // the verdict, complete archive and receipt supply the preservation proof, and
       // the idle floor covers a process still in the tree. See the constant.
       unmanagedIdleMs: SUPERSEDED_UNMANAGED_IDLE_MS,
       prepare: async () => {
         const backup = await backupSupersededBranch(repoPath, b, { defaultBranch, ...(cosDir ? { cosDir } : {}) })
           .catch((err) => ({ error: err.message }));
-        if (!backup?.error) return backup;
+        if (!backup?.error) {
+          // No checkout is being removed. The scoped ref receiver still archives
+          // branch configuration, reflogs and complete objects before deletion.
+          if (!b.worktreePath) return backup;
+          const tree = (await listWorktrees(repoPath)).find(holder => holder.path === b.worktreePath);
+          if (!tree || tree.head !== b.tip || tree.branch !== `refs/heads/${b.branch}`) return { error: 'worktree-holder-changed' };
+          const { preserveSupersededCheckout } = await import('./heldCheckoutRecovery.js');
+          const preservation = await preserveSupersededCheckout({ appId, repoPath, tree, defaultBranch, cosDir })
+            .catch(error => ({ error: error.message }));
+          return preservation.error ? { error: preservation.error } : { ...backup, preservation };
+        }
         console.error(`❌ branch-reconcile: backup failed for ${b.branch}, not reaping: ${backup.error}`);
         return { error: `backup-failed: ${backup.error}` };
       },
@@ -1366,7 +1376,7 @@ async function retireBranch(repoPath, b, opts) {
     archive: async ({ gated }) => {
       const prepared = gated.prepare ? await gated.prepare() : null;
       if (prepared?.error) return { result: { ok: false, reason: prepared.error } };
-      if (!gated.archiveTree) return { archive: { prepared } };
+      if (!gated.archiveTree) return { archive: { prepared, preservation: prepared?.preservation || null } };
       const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
       return preserveMergedCheckout(repoPath, gated.archiveTree, gated.mergeTarget).then(preservation => ({ archive: { prepared, preservation } }),
         error => ({ result: { ok: false, reason: 'archive-failed', detail: error.message } }));
@@ -1386,6 +1396,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   const readPolicyHold = (tip = expectedHead) => readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
+  if (prepare && expectedHead !== b.tip) return stop({ ok: false, reason: 'branch-head-changed' });
   const policyHold = await readPolicyHold();
   if (policyHold) return stop({ ok: false, reason: policyHold });
   let archiveTree = null;
@@ -1559,8 +1570,12 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
   }
   const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
   const deleted = await deleteCompletedLocalBranch(repoPath, b.branch, expectedHead);
-  return deleted ? { ok: true, prepared, ...(preservation && { archiveDir: preservation.archiveDir }) }
-    : { ok: false, reason: 'branch-ref-changed-or-delete-failed' };
+  if (!deleted) return { ok: false, reason: 'branch-ref-changed-or-delete-failed' };
+  if (prepared?.preservation) {
+    const recorded = await prepared.preservation.recordRetirement().then(() => true, () => false);
+    if (!recorded) return { ok: false, reason: 'retirement-receipt-unverified', archiveDir: preservation.archiveDir };
+  }
+  return { ok: true, prepared, ...(preservation && { archiveDir: preservation.archiveDir }) };
 }
 
 /**
@@ -1758,7 +1773,7 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
  *   failed mid-cycle. Either way an empty `inFlight` says nothing about the repo
  *   and the caller must retry rather than park on it (#3358).
  */
-export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = false, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null, pendingMergeBranches = undefined } = {}) {
+export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = false, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null, pendingMergeBranches = undefined, appId = null } = {}) {
   if (claimOwners === undefined) claimOwners = { agents: await readClaimOwnershipAgents(), readAgents: readClaimOwnershipAgents };
   // Worktree cleanup is the first reconcile step, before any forge probe. It
   // only removes a tree after proving both that it is completely clean and
@@ -1850,7 +1865,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   // the branch merged. Retain it by default; an explicit caller opt-in uses the
   // backup-first retirement path and the same owner/holder gates as merged work.
   const supersededReap = reapSuperseded
-    ? await reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds, claimOwners })
+    ? await reapSupersededBranches(repoPath, defaultBranch, superseded, { activeAgentIds, claimOwners, appId })
     : { reaped: [], held: superseded, skipped: superseded.map((b) => ({ branch: b.branch, reason: 'reap-superseded-disabled' })) };
   // Every WIP entry carries its `liveOwnerReason`, so a caller that needs the
   // "held by a live owner" subset (to report "the only branches left belong to

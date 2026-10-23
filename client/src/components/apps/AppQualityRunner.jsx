@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import ProviderModelSelector from '../ProviderModelSelector';
-import MaintenanceRunStatus from '../cos/tabs/schedule/MaintenanceRunStatus';
+import MaintenanceRunStatus, { maintenanceRunProgress } from '../cos/tabs/schedule/MaintenanceRunStatus';
 import useProviderModels from '../../hooks/useProviderModels';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { formatCount } from '../../utils/formatters';
@@ -155,6 +155,46 @@ export default function AppQualityRunner({ app, children }) {
       {run.status === 'running' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={() => stop(run.id)}>Stop remaining checks</button>}
     </div>)}
   </section>;
-  const activeRuns = runs.filter(run => run.status === 'running').length;
-  return children ? children(controls, activeRuns) : controls;
+  const status = <QualityRunStatus runs={runs} categories={categories} loading={loading} loadError={loadError}
+    error={error} busy={busy} onStop={stop} onRetry={loadRuns} />;
+  return children ? children(controls, status) : controls;
+}
+
+function QualityRunStatus({ runs, categories, loading, loadError, error, busy, onStop, onRetry }) {
+  const batches = runs.filter(run => run.status === 'running').map(run => {
+    const { done, total, step } = maintenanceRunProgress(run);
+    const active = ['running', 'in_progress'].includes(run.active?.status) ? 1 : 0;
+    const pending = Math.max(0, total - done - active);
+    const state = active ? 'Active' : run.active?.status === 'blocked' ? 'Blocked' : run.active ? 'Queued' : 'Waiting';
+    const label = categories.find(category => category.id === step)?.label || step || 'Quality checks';
+    return { run, done, total, active, pending, state, label };
+  });
+  const active = batches.reduce((sum, batch) => sum + batch.active, 0);
+  const pending = batches.reduce((sum, batch) => sum + batch.pending, 0);
+  return <section aria-label="Checks in flight" className="basis-full min-w-0 w-full border-t border-port-border pt-3 space-y-2 text-xs">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h4 className="font-medium">Checks in flight</h4>
+      {batches.length > 0 && <p role="status" className="tabular-nums">{formatCount(active)} active · {formatCount(pending)} pending</p>}
+    </div>
+    {(loading || loadError) && <p role="status">
+      {loadError ? 'Runner status is unavailable.' : 'Loading runner status…'}{' '}
+      <button type="button" className="text-port-accent min-h-[44px] px-2" onClick={onRetry}>Retry</button>
+    </p>}
+    {error && <p role="alert" className="text-port-error">{error}</p>}
+    {!loading && !loadError && batches.length === 0 && <p className="text-gray-400">No checks in flight.</p>}
+    {batches.length > 0 && <>
+      <ul className="space-y-2" aria-label="Check batches">
+        {batches.map(({ run, done, total, pending: remaining, state, label }) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <div className="flex-1 min-w-0 basis-48 space-y-1">
+            <p className="break-words"><span className="font-medium">{label}</span> · {state} · {formatCount(done)}/{formatCount(total)} complete · {formatCount(remaining)} pending</p>
+            {run.reason && <p className="text-gray-400 break-words">{run.reason}</p>}
+            {run.active?.agentId && <Link className="text-port-accent underline" to={`/cos/agents/${encodeURIComponent(run.active.agentId)}`}>View active agent</Link>}
+          </div>
+          <button type="button" disabled={busy} onClick={() => onStop(run.id)}
+            className="min-h-[44px] rounded border border-port-border px-3 text-port-accent hover:border-port-accent disabled:opacity-50">Stop remaining checks</button>
+        </li>)}
+      </ul>
+      <p className="text-gray-400">Stopping prevents later checks. Work already queued or running can still finish.</p>
+    </>}
+  </section>;
 }

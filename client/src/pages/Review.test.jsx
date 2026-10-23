@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 // A CoS action body is arbitrary agent-authored markdown — thousands of words,
 // its own heading outline, and raw technical payloads. This is the shape that
@@ -105,7 +105,13 @@ vi.mock('../services/api', () => ({
   promoteAskReviewQueueItem: vi.fn(() => Promise.resolve({})),
   getCosAgent: vi.fn(),
   submitCosAgentFeedback: vi.fn(),
-  normalizeBrainScanReportPath: vi.fn((p) => p)
+  normalizeBrainScanReportPath: vi.fn((p) => p),
+  applyGitHubNotificationAction: vi.fn(),
+  resolveGitHubNotificationWithAgent: vi.fn(),
+  actOnGitHubNotificationPullRequest: vi.fn(),
+  getGitHubDeploymentReview: vi.fn(),
+  reviewGitHubDeployment: vi.fn(),
+  getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
 }));
 
 vi.mock('../services/socket', () => ({
@@ -155,6 +161,88 @@ beforeEach(() => {
 });
 
 const actionQueueBody = () => document.getElementById(`review-item-body-action-queue-${ITEM.id}`);
+
+const GITHUB_NOTIFICATION = {
+  accountId: 'example-account', accountLabel: 'Example account', threadId: '42',
+  title: 'Example GitHub review', repoFullName: 'acme/app', subjectType: 'PullRequest',
+  reason: 'review_requested', state: 'open', unread: true, readOnGithub: false,
+  updatedAt: '2026-10-20T12:00:00.000Z', ruleKind: 'review-requested',
+  agent: { refused: null, pin: null }, htmlUrl: 'https://github.com/acme/app/pull/42',
+};
+const githubQueue = (notification = GITHUB_NOTIFICATION) => ({
+  items: [{
+    id: 'github:example-account/42', source: 'github', sourceLabel: 'GitHub alerts', required: true,
+    title: notification.title, revision: notification.updatedAt, operations: [],
+    drillTo: '/devtools/github/inbox/example-account/42', githubNotification: notification,
+  }], sources: { github: { label: 'GitHub alerts', total: 1 } }, partial: false,
+});
+
+describe('GitHub alerts in central Actions', () => {
+  beforeEach(() => api.getReviewQueue.mockReset().mockResolvedValue({ items: [], sources: {}, partial: false }));
+  afterEach(() => api.getReviewQueue.mockReset().mockResolvedValue({ items: [], sources: {}, partial: false }));
+  it('uses the inbox controls and clears a handled alert immediately while the queue refresh is pending', async () => {
+    api.getReviewQueue.mockResolvedValueOnce(githubQueue()).mockImplementationOnce(() => new Promise(() => {}));
+    api.applyGitHubNotificationAction.mockResolvedValue({ ...GITHUB_NOTIFICATION, state: 'done', unread: false });
+    render(<Review />);
+    const title = await screen.findByRole('link', { name: GITHUB_NOTIFICATION.title });
+    expect(title).toHaveAttribute('href', '/review/github%3Aexample-account%2F42?view=today');
+    expect(screen.getByText('GitHub alerts')).toBeInTheDocument();
+    expect(screen.getByText(/1 required/)).toBeInTheDocument();
+    const card = title.closest('article');
+    expect(within(card).getByRole('link', { name: 'Open' })).toHaveAttribute('href', GITHUB_NOTIFICATION.htmlUrl);
+    fireEvent.click(within(card).getByRole('button', { name: /More actions/ }));
+    expect(screen.getByRole('menuitem', { name: 'Mute' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Unsubscribe' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Add automation rule/ })).toHaveAttribute('href', expect.stringContaining('/devtools/github/automations?'));
+    fireEvent.click(within(card).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: GITHUB_NOTIFICATION.title })).not.toBeInTheDocument());
+    expect(api.applyGitHubNotificationAction).toHaveBeenCalledWith('example-account', '42', 'done');
+    expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+  });
+
+  it('keeps failed actions visible and preserves the server refusal for suspicious alerts', async () => {
+    api.getReviewQueue.mockResolvedValueOnce(githubQueue({ ...GITHUB_NOTIFICATION, suspect: true, agent: { refused: 'suspect' } }));
+    api.applyGitHubNotificationAction.mockRejectedValueOnce(new Error('Unavailable'));
+    render(<Review />);
+    await screen.findByRole('link', { name: GITHUB_NOTIFICATION.title });
+    expect(screen.getByRole('button', { name: 'Resolve with agent' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(api.applyGitHubNotificationAction).toHaveBeenCalled());
+    expect(screen.getByRole('link', { name: GITHUB_NOTIFICATION.title })).toBeInTheDocument();
+  });
+
+  it('offers PR review and merge controls and applies their response in place', async () => {
+    const notification = { ...GITHUB_NOTIFICATION,
+      pullRequest: { number: 42, mergeEligible: true, doReviewEligible: true, reviewEligible: false },
+    };
+    api.getReviewQueue.mockResolvedValueOnce(githubQueue(notification)).mockImplementationOnce(() => new Promise(() => {}));
+    api.actOnGitHubNotificationPullRequest.mockResolvedValue({ merged: true,
+      notification: { ...notification, pullRequest: null, decision: 'suggest-mark-read' },
+    });
+    render(<Review />);
+    expect(await screen.findByRole('button', { name: 'Do:Review' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve with agent' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge #42' }));
+    await waitFor(() => expect(api.actOnGitHubNotificationPullRequest).toHaveBeenCalledWith('example-account', '42',
+      { action: 'merge', method: 'merge', deleteBranch: false }, { silent: true }));
+    expect(await screen.findByRole('button', { name: 'Mark done' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Merge' })).not.toBeInTheDocument();
+  });
+
+  it('offers the full deployment review from a notification deep link', async () => {
+    routerState.actionId = 'github:example-account/42';
+    const notification = { ...GITHUB_NOTIFICATION, deployment: { name: 'Example deployment', runId: 12 } };
+    api.getReviewQueue.mockResolvedValueOnce(githubQueue(notification));
+    api.getGitHubDeploymentReview.mockResolvedValue({ environments: [{ environmentId: 7, name: 'Staging', canApprove: true, reviewers: [] }] });
+    api.reviewGitHubDeployment.mockResolvedValue({ ...notification, state: 'done', unread: false });
+    render(<Review />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review deployment' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve and deploy' }));
+    await waitFor(() => expect(api.reviewGitHubDeployment).toHaveBeenCalledWith('example-account', '42', { state: 'approved', environmentIds: [7] }));
+    expect(routerState.navigate).toHaveBeenCalledWith('/review?view=today', { replace: true });
+  });
+});
 
 // Wait for the toggle that controls one specific element. `findAllByRole`
 // alone is not enough: a forceToggle card renders its toggle on the first
