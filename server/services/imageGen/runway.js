@@ -194,7 +194,7 @@ async function runRunway(job, jobId, {
     const referenceImages = [];
     for (const ref of references) referenceImages.push({ uri: await encodeInputImage(ref.path), ...(family.referenceTags ? { tag: ref.tag } : {}) });
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    entry.taskId = await submitRunwayTask({ apiKey, endpoint: 'text_to_image', body: { ...request.body, ...(referenceImages.length ? { referenceImages } : {}) } });
+    entry.taskId = await submitRunwayTask({ apiKey, endpoint: 'text_to_image', body: { ...request.body, ...(referenceImages.length ? { referenceImages } : {}) }, signal: entry.controller.signal });
     // THROTTLED waits on this accepted task. A failed/moderated task is terminal, never resubmitted.
     const polled = await awaitRunwayTask({
       entry, apiKey, deadline, timeoutMs: RUNWAY_IMAGE_TIMEOUT_MS, verbatimFailure: true,

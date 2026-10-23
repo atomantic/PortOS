@@ -279,7 +279,7 @@ async function runRunwayVideo(job, jobId, {
     const build = special ? buildRunwaySpecialVideoRequest : buildRunwayVideoRequest;
     const { body, endpoint } = build({ ...requestSpec, videoUri, characterVideoUri, imageUri: frame?.dataUri ?? null, endImageUri: endFrame?.dataUri ?? null });
     if (entry.aborted) return finishFailure('Canceled');
-    entry.taskId = await submitRunwayTask({ apiKey, endpoint, body });
+    entry.taskId = await submitRunwayTask({ apiKey, endpoint, body, signal: entry.controller.signal });
 
     const polled = await awaitRunwayTask({
       entry, apiKey, deadline, timeoutMs: RUNWAY_RENDER_TIMEOUT_MS,

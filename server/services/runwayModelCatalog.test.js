@@ -98,4 +98,11 @@ describe('Runway public catalog cache', () => {
     expect(restarted.current()).toMatchObject({ bundled: false });
     expect(fetchSchema).toHaveBeenCalledTimes(1);
   });
+
+  it("makes overlapping readiness callers wait for the same disk load", async () => {
+    const { cache, options } = await setup();
+    await cache.get();
+    const restarted = _createRunwayModelCatalog(options);
+    await Promise.all([restarted.ready(), restarted.ready().then(() => expect(restarted.current().bundled).toBe(false))]);
+  });
 });

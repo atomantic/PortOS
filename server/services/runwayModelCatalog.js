@@ -71,7 +71,7 @@ export function _createRunwayModelCatalog({
   cachePath = join(PATHS.installRoot, '.cache', 'runway-model-catalog.json'), now = Date.now,
 } = {}) {
   let cached = null;
-  let loaded = false;
+  let loading = null;
   let pending = null;
   let pendingForced = false;
   let retryAt = 0;
@@ -82,9 +82,9 @@ export function _createRunwayModelCatalog({
     stale: !cached || now() - cached.fetchedAt >= TTL || !!error,
     bundled: !cached, error,
   });
-  async function read() {
-    if (loaded) return;
-    loaded = true;
+  // One shared promise: an overlapping caller waits for the disk load instead of seeing the bundled list.
+  const read = () => (loading ||= load());
+  async function load() {
     const disk = await readFile(cachePath, 'utf8').then(JSON.parse).catch(() => null);
     if (disk?.version === VERSION && Number.isFinite(disk.fetchedAt) && disk.fetchedAt <= now()
       && Object.keys(fallback).every((key) => Array.isArray(disk.catalog?.available?.[key])
