@@ -293,7 +293,7 @@ async function generateImagePrepared({
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
-  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] fal (${endpointId}): ${prompt.slice(0, 60)}…`);
+  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] fal (${endpointId})`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
   broadcastSse(job, { type: 'status', message: 'Submitting to fal.ai…' });

@@ -20,7 +20,7 @@
  * accepted one doesn't launch a real browser.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { EventEmitter } from 'node:events';
 import { request } from '../lib/testHelper.js';
@@ -57,6 +57,32 @@ const navigate = (url) => request(makeApp()).post('/api/browser/navigate').send(
 beforeEach(() => {
   vi.clearAllMocks();
   lookup.mockResolvedValue({ address: '93.184.216.34', family: 4 });
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+describe('POST /api/browser/navigate — private navigation data', () => {
+  it('keeps destinations and caller headers out of logs while navigating the exact URL', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const url = 'https://example.com/private-record?access_token=example-secret#example-fragment';
+    const r = await request(makeApp()).post('/api/browser/navigate')
+      .set('Referer', 'https://example.org/private-referrer?code=example-code')
+      .set('Origin', 'https://example.org')
+      .send({ url });
+    expect(r.status).toBe(200);
+    expect(navigateToUrlPinned).toHaveBeenCalledWith(url, expect.any(Object));
+    expect(log.mock.calls.flat().join('\n')).not.toMatch(/example\.(com|org)|private-record|example-secret|example-fragment|example-code/);
+  });
+
+  it('does not log an unvalidated navigation body or referrer', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const r = await request(makeApp()).post('/api/browser/navigate')
+      .set('Referer', 'https://example.org/?code=example-code')
+      .send({ url: 'example-private-invalid-input' });
+    expect(r.status).toBe(400);
+    expect(navigateToUrlPinned).not.toHaveBeenCalled();
+    expect(log.mock.calls.flat().join('\n')).not.toMatch(/example-private-invalid-input|example-code|example\.org/);
+  });
 });
 
 describe('POST /api/browser/navigate — SSRF guard', () => {

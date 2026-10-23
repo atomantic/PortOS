@@ -129,7 +129,7 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
   };
 
   const generationId = randomUUID();
-  console.log(`🎨 Generating image [${generationId.slice(0, 8)}] external→${baseUrl}: ${prompt.slice(0, 60)}... (${payload.width}x${payload.height}, ${payload.steps} steps)`);
+  console.log(`🎨 Generating image [${generationId.slice(0, 8)}] external (${payload.width}x${payload.height}, ${payload.steps} steps)`);
   imageGenEvents.emit('started', { generationId, totalSteps: payload.steps });
   activeJob = {
     generationId, prompt, negativePrompt,
