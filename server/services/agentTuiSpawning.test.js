@@ -1634,6 +1634,33 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(1);
   });
 
+  it('codex folder access: waits for a split Trust and continue choice before answering once', async () => {
+    runSpawn();
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from(
+      `${PASTE_OFF}Folder access\n/workspace/example\nTrustthisfolder?\n`
+      + 'Codexcanread,edit,andrunfileshere,subjecttoyourpermissionsettings.\n'
+      + '› 1. Trust and cont',
+    ));
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(vi.mocked(shellService.writeToSession).mock.calls.some(([, data]) => data === '\r')).toBe(false);
+    expect(pasteCount()).toBe(0);
+
+    await capturedOnData(Buffer.from('inue\n2.Quit\nenter continue · esc quit\n'));
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(vi.mocked(shellService.writeToSession).mock.calls.filter(([, data]) => data === '\r')).toHaveLength(1);
+    expect(pasteCount()).toBe(0);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+    await capturedOnData(Buffer.from(CODEX_COMPOSER));
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
   it('tui-not-ready: claude that never shows an input prompt finalizes failure without pasting', async () => {
     let resolveComplete;
     const completeDone = new Promise((r) => { resolveComplete = r; });
