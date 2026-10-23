@@ -19,7 +19,7 @@ import {
 } from './lib/testMemoRunner.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
 import { guardInputSnapshot } from './lib/pregateReport.js';
-import { TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
+import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -433,8 +433,13 @@ async function main() {
   delete process.env.PORTOS_PREGATE_GUARDS;
   const mode = process.env.CI_TEST_MODE || 'full';
   const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
-  const repoFiles = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
+  // Explicit planner selectors must respect the same browser ownership as
+  // workspace discovery and Vitest; guard reuse may leave only these suites.
+  const browserExcludes = new Set(scope === 'server'
+    ? browserOwnerExcludes().map(path => `server/${path}`) : []);
+  const profileFiles = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
     ? browserTestProfileFiles(process.env.PORTOS_BROWSER_TEST_PROFILE, inputFiles) : inputFiles;
+  const repoFiles = profileFiles.filter(path => !browserExcludes.has(path));
   const repoSources = JSON.parse(process.env.CI_TEST_SOURCES || '[]');
   const selectedFiles = repoFiles.map((path) => toRunnerPath(workspace, path));
 
