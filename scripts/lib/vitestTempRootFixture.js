@@ -207,9 +207,11 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
  * a restart ("Restarting due to config changes"), and hand the restarted run's
  * observations to `inspect`. The fixture test records `{ root, owner }` into a
  * numbered marker per run, so readiness is event-driven and bounded by
- * WATCH_READY_MS. The process tree is always killed before returning.
+ * WATCH_READY_MS. Caller cancellation stops readiness; returning waits for the
+ * killed watcher to close. FIXTURE_CLOSE_UNCONFIRMED means retain the host.
  */
-export async function runWatchConfigRestart(host, workspace, inspect) {
+export async function runWatchConfigRestart(host, workspace, inspect, { signal } = {}) {
+  if (signal?.aborted) throw fixtureAborted(signal);
   const marks = join(host, 'marks');
   mkdirSync(marks);
   const { args, options } = createVitestTempFixture(host, workspace, `
@@ -237,10 +239,21 @@ export async function runWatchConfigRestart(host, workspace, inspect) {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  // Register before any signal: removal of the host must follow process AND
+  // pipe settlement, not merely the synchronous kill request.
+  const abort = new AbortController();
+  let closed = false;
+  let spawnError;
+  const completion = new Promise(resolve => {
+    child.once('close', () => { closed = true; resolve(); });
+  });
+  child.once('error', error => { spawnError = error; abort.abort(error); });
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
-  const abort = new AbortController();
+  const onAbort = () => abort.abort(signal.reason);
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
   const timer = setTimeout(() => abort.abort(new Error('watch fixture readiness timed out')), WATCH_READY_MS);
   child.once('exit', () => abort.abort(new Error('watch fixture exited before readiness')));
   const readMark = async (n) => {
@@ -248,6 +261,7 @@ export async function runWatchConfigRestart(host, workspace, inspect) {
     await waitForFixtureReady(file, { signal: abort.signal });
     return JSON.parse(readFileSync(file, 'utf8'));
   };
+  let failure;
   try {
     const first = await readMark(1);
     // run-1 is written from inside the first test, possibly before the watcher has
@@ -267,10 +281,28 @@ export async function runWatchConfigRestart(host, workspace, inspect) {
     }
     return await inspect({ first, restarted, pid: child.pid });
   } catch (error) {
-    error.message += `\n${output}`;
-    throw error;
+    failure = spawnError ?? error;
+    failure.message += `\n${output}`;
+    throw failure;
   } finally {
     clearTimeout(timer);
-    killProcessTree(child);
+    signal?.removeEventListener('abort', onAbort);
+    killProcessTree(child, { sweepGroup: true });
+    if (!closed) {
+      let closeTimer;
+      try {
+        await Promise.race([completion, new Promise((_, reject) => {
+          closeTimer = setTimeout(() => reject(new Error('watch fixture process close unconfirmed')), 2000);
+        })]);
+      } catch (error) {
+        const cleanupError = failure
+          ? new AggregateError([failure, error], 'watch fixture failed and process close is unconfirmed', { cause: failure })
+          : error;
+        cleanupError.code = 'FIXTURE_CLOSE_UNCONFIRMED';
+        throw cleanupError;
+      } finally {
+        clearTimeout(closeTimer);
+      }
+    }
   }
 }

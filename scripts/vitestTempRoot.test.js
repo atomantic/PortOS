@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,7 +6,12 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createVitestTempFixture, runWatchConfigRestart } from './lib/vitestTempRootFixture.js';
 import { STALE_ROOT_AGE_MS, killTestBrowsersUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { ownTestBodies, recordTempRootOwner } from '../server/lib/mockPathsDataRoot.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
+
+// Vitest can cancel a wrapper before its async body reaches finally.
+const owned = ownTestBodies(it);
+afterAll(() => owned.drain());
 
 describe('real workspace runner temp lifecycle', () => {
   const workspace = 'server';
@@ -14,6 +19,7 @@ describe('real workspace runner temp lifecycle', () => {
     for (const outcome of ['success', 'failure', 'leak']) {
       it(`${workspace} removes framework scratch on ${outcome}, preserving host artifacts`, () => {
         const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+        recordTempRootOwner(host);
         try {
           // Even nanoid-looking pre-existing directories belong to the host.
           const untouched = 'A'.repeat(21);
@@ -38,6 +44,7 @@ describe('real workspace runner temp lifecycle', () => {
   it.each(['source-owned', 'outside-repo'])('retains composition provenance after a passing %s worker ends, without changing the global leak failure', mode => {
     const repo = fileURLToPath(new URL('../', import.meta.url));
     const host = mkdtempSync(mode === 'source-owned' ? join(repo, 'server/test/fixtures/provenance-worker-') : join(tmpdir(), 'vrt-'));
+    recordTempRootOwner(host);
     try {
       const { args, options } = createVitestTempFixture(host, 'server', `
         const { channel } = await import('node:diagnostics_channel');
@@ -69,6 +76,7 @@ describe('real workspace runner temp lifecycle', () => {
 
   it('reuses config ownership on reimport and reclaims it after interruption, preserving a live owner', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+    recordTempRootOwner(host);
     let child;
     try {
       const live = join(host, 'pvt-live');
@@ -110,8 +118,10 @@ describe('real workspace runner temp lifecycle', () => {
       rmSync(host, { recursive: true, force: true });
     }
   }, 20000);
-  it('server watch-config restart re-stamps the live owner so a later sweep keeps the root', async () => {
+  owned.it('server watch-config restart re-stamps the live owner so a later sweep keeps the root', async ({ signal }) => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+    recordTempRootOwner(host);
+    let cleanupConfirmed = true;
     try {
       await runWatchConfigRestart(host, 'server', ({ first, restarted, pid }) => {
         // The restart reused the pathname and the main process re-stamped it.
@@ -124,9 +134,13 @@ describe('real workspace runner temp lifecycle', () => {
         sweepStaleRunRoots(host);
         expect(existsSync(first.root)).toBe(true);
         rmSync(mkdtempSync(join(first.root, 'after-sweep-')), { recursive: true });
-      });
+      }, { signal });
+    } catch (error) {
+      if (error.code === 'FIXTURE_CLOSE_UNCONFIRMED') cleanupConfirmed = false;
+      // Cancellation is expected, but failed process settlement is still fatal.
+      if (!signal.aborted || error.name !== 'AbortError') throw error;
     } finally {
-      rmSync(host, { recursive: true, force: true });
+      if (cleanupConfirmed) rmSync(host, { recursive: true, force: true });
     }
   }, 150000); // must exceed the fixture's readiness bound (WATCH_READY_MS)
 });
@@ -151,6 +165,7 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
 
   it('stops a browser left by a dead run and keeps one a live run still owns', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+    recordTempRootOwner(host);
     const pids = [];
     try {
       const dead = join(host, 'pvt-dead');
@@ -182,6 +197,7 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
 
   it('stops a browser whose run root was already removed', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+    recordTempRootOwner(host);
     let pid;
     try {
       ({ pid } = orphanBrowser(join(host, 'pvt-removed', 'profile')));
