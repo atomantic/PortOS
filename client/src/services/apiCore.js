@@ -60,7 +60,10 @@ export function request(endpoint, options = {}) {
 // the entry clears on settle so later calls (e.g. after a socket push) refetch.
 // Each caller gets its own clone so one consumer's mutation can't leak into another.
 const inflightReads = new Map();
-export function singleFlightRead(key, start) {
+// Options that change error handling are part of the key, so a silent caller never
+// joins (or starts) a flight whose failure toasts, and vice versa.
+export function singleFlightRead(endpoint, start, options = {}) {
+  const key = `${endpoint}|silent:${!!options.silent}|hco:${!!options.hostControlOptional}`;
   let pending = inflightReads.get(key);
   if (!pending) {
     pending = start().finally(() => inflightReads.delete(key));

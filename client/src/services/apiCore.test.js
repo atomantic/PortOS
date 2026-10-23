@@ -163,13 +163,21 @@ it('streams Blob uploads with a browser boundary and retains legacy JSON callers
 describe('shell bootstrap reads are single-flight', () => {
   it('shares one request across concurrent consumers, then refetches after settle', async () => {
     global.fetch.mockImplementation(async () => makeResponse({ status: 200, ok: true, json: { n: 1 } }));
-    const [a, b] = await Promise.all([getSettings(), getSettings({ silent: true })]);
+    const [a, b] = await Promise.all([getSettings({ silent: true }), getSettings({ silent: true })]);
     await Promise.all([getVoiceConfig(), getVoiceConfig(), getCapabilities(), getCapabilities()]);
     expect(global.fetch.mock.calls.map(([url]) => url)).toEqual(['/api/settings', '/api/voice/config', '/api/capabilities']);
     expect(a).toEqual({ n: 1 });
     expect(a).not.toBe(b);
     await getSettings();
     expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps silent and non-silent callers on separate flights so error handling is not inherited', async () => {
+    global.fetch.mockImplementation(async () => makeResponse({ status: 500, json: { error: 'boom' } }));
+    const results = await Promise.allSettled([getSettings(), getSettings({ silent: true }), getSettings({ silent: true })]);
+    expect(results.every((r) => r.status === 'rejected')).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(toast.error).toHaveBeenCalledTimes(1);
   });
 
   it('does not cache a failure', async () => {
