@@ -22,6 +22,8 @@ const mock = vi.hoisted(() => ({
   applyGitHubNotificationAction: vi.fn(),
   resolveGitHubNotificationWithAgent: vi.fn(),
   clearFinishedGitHubNotifications: vi.fn(),
+  getGitHubDeploymentReview: vi.fn(),
+  reviewGitHubDeployment: vi.fn(),
   getGitHubNotification: vi.fn(),
   getGitHubAutomations: vi.fn(),
   setGitHubNotificationCadence: vi.fn(),
@@ -419,6 +421,30 @@ describe('GitHub inbox tab', () => {
     expect(await screen.findByText('Deploy approval')).toBeTruthy();
     expect(screen.getByText('Deploy (prod)')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open' }).getAttribute('href')).toBe(runUrl);
+  });
+
+  it('approves a waiting deployment from its row, only for environments you can approve', async () => {
+    const deployment = { runId: 4242, name: 'Deploy (prod)', headBranch: 'main', displayTitle: 'Example change', htmlUrl: 'https://github.com/octocat/hello/actions/runs/4242' };
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, reason: 'approval_requested', subjectType: 'WorkflowRun', decision: 'surface-high', htmlUrl: deployment.htmlUrl, deployment }],
+      sync: {},
+    });
+    mock.getGitHubDeploymentReview.mockResolvedValue({
+      runId: 4242,
+      environments: [
+        { environmentId: 11, name: 'prod', canApprove: true, waitTimer: 0, reviewers: ['octocat'] },
+        { environmentId: 12, name: 'prod-eu', canApprove: false, waitTimer: 0, reviewers: ['release-team'] },
+      ],
+    });
+    mock.reviewGitHubDeployment.mockResolvedValue({ ...NOTIFICATION, state: 'done' });
+    renderTab('inbox');
+    fireEvent.click(await screen.findByRole('button', { name: 'Review deployment' }));
+    expect((await screen.findByLabelText(/^prod$/)).checked).toBe(true);
+    expect(screen.getByLabelText(/prod-eu/).disabled).toBe(true);
+    expect(screen.getByText(/only release-team can approve/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and deploy' }));
+    await waitFor(() => expect(mock.reviewGitHubDeployment).toHaveBeenCalledWith('github-com', '101', { state: 'approved', environmentIds: [11] }));
+    expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
   });
 
   it('marks a thread done and takes it out of the inbox', async () => {

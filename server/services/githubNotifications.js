@@ -70,7 +70,7 @@ const listingCursor = (stored) => (typeof stored === 'string' && stored.startsWi
 
 const isNotModified = (error) => /\bHTTP 304\b/.test(String(error?.ghStderr || error?.message || ''));
 
-async function requireAccountEnv(account) {
+export async function requireAccountEnv(account) {
   if (!account.enabled) {
     throw new ServerError(`${account.label} is turned off`, { status: 409, code: 'GITHUB_ACCOUNT_DISABLED' });
   }

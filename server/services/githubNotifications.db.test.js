@@ -48,6 +48,7 @@ const {
   syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
+const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
 
 let dbReady = false;
@@ -405,6 +406,40 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await getNotification(account.id, '2101')).toMatchObject({ decision: 'suggest-mark-read', state: 'done' });
     expect(actions).toEqual([['DELETE', 'notifications/threads/2101']]);
     await updateAccount(account.id, { mode: 'observe' });
+  });
+
+  it('approves only environments still waiting on you, then marks the deployment done', async () => {
+    const login = account.login;
+    const requestedAt = '2026-10-01T10:00:00Z';
+    const pendingPath = `repos/${login}/hello/actions/runs/4242/pending_deployments`;
+    const forge = {
+      [`repos/${login}/hello/actions/runs?status=waiting&per_page=50`]: [{ id: 4242, name: 'Deploy (prod)', headBranch: 'main', actor: login, createdAt: '2026-10-01T09:00:00Z', updatedAt: requestedAt }],
+      [pendingPath]: [
+        { environmentId: 11, name: 'prod', canApprove: true, waitTimer: 0, reviewers: [login] },
+        { environmentId: 12, name: 'prod-eu', canApprove: false, waitTimer: 0, reviewers: ['release-team'] },
+      ],
+    };
+    const actions = mockGh(() => listing([
+      thread('2201', { owner: login, reason: 'approval_requested', type: 'WorkflowRun', url: null, updatedAt: requestedAt }),
+    ]), forge);
+    await syncAccountNotifications(account.id);
+
+    expect((await getDeploymentReview(account.id, '2201')).environments.map((entry) => [entry.environmentId, entry.canApprove])).toEqual([[11, true], [12, false]]);
+    // An environment someone else must approve is refused before anything is sent.
+    await expect(reviewDeployment(account.id, '2201', { state: 'approved', environmentIds: [11, 12] })).rejects.toMatchObject({ code: 'GITHUB_DEPLOYMENT_NOT_PENDING' });
+    expect(actions).toEqual([]);
+
+    const reviewed = await reviewDeployment(account.id, '2201', { state: 'approved', environmentIds: [11], comment: 'Ship it' });
+    const post = vi.mocked(execGh).mock.calls.map(([args]) => args).find((args) => args.includes('POST'));
+    expect(post).toEqual(expect.arrayContaining([pendingPath, 'environment_ids[]=11', 'state=approved', 'comment=Ship it']));
+    expect(post).not.toContain('environment_ids[]=12');
+    expect(actions).toEqual([['POST', pendingPath], ['DELETE', 'notifications/threads/2201']]);
+    expect(reviewed).toMatchObject({ state: 'done' });
+    expect(reviewed.events.map((event) => event.kind)).toEqual(expect.arrayContaining(['deployment-approved', 'done']));
+    // A thread that is not a waiting deployment has nothing to approve.
+    await expect(getDeploymentReview(account.id, '2201')).resolves.toMatchObject({ runId: 4242 });
+    await query(`UPDATE github_notifications SET evidence = evidence - 'workflowRun' WHERE account_id = $1 AND thread_id = '2201'`, [account.id]);
+    await expect(reviewDeployment(account.id, '2201', { state: 'rejected', environmentIds: [11] })).rejects.toMatchObject({ code: 'GITHUB_NOTIFICATION_NOT_DEPLOYMENT' });
   });
 
   it('sorts undecided threads only in Assist, acts only on trusted ones, and undoes into a learned rule', async () => {

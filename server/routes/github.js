@@ -1,12 +1,13 @@
 import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
-  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
+  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
   githubNotificationCadenceSchema, githubAuditApplySchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
 import * as githubNotifications from '../services/githubNotifications.js';
 import * as githubAudit from '../services/githubNotificationAudit.js';
+import * as githubDeployment from '../services/githubNotificationDeployment.js';
 import { requestHasHostControl } from '../services/authGate.js';
 
 const router = express.Router();
@@ -187,6 +188,21 @@ router.post('/notifications/:accountId/:threadId', asyncHandler(async (req, res)
  */
 router.post('/notifications/:accountId/:threadId/agent', asyncHandler(async (req, res) => {
   res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req)));
+}));
+
+/**
+ * GET /api/github/notifications/:accountId/:threadId/deployment — the environments a waiting run needs you to approve
+ */
+router.get('/notifications/:accountId/:threadId/deployment', asyncHandler(async (req, res) => {
+  res.json(await githubDeployment.getDeploymentReview(req.params.accountId, threadIdParam(req)));
+}));
+
+/**
+ * POST /api/github/notifications/:accountId/:threadId/deployment — approve or reject those environments
+ */
+router.post('/notifications/:accountId/:threadId/deployment', asyncHandler(async (req, res) => {
+  const body = validateRequest(githubDeploymentReviewSchema, req.body ?? {});
+  res.json(await githubDeployment.reviewDeployment(req.params.accountId, threadIdParam(req), body));
 }));
 
 /**
