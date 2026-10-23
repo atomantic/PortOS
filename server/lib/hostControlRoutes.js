@@ -1092,6 +1092,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // account with `gh`; the schedule arms a CoS System task; account
   // create/edit pick the `gh` identity, mode, trust and allowed providers.
   'POST /api/github/notifications/:accountId/:threadId',
+  'POST /api/github/notifications/clear-finished',
   'POST /api/github/audit/:accountId/apply',
   'POST /api/github/audit-changes/:id/undo',
   'POST /api/github/automations/activity/:id/undo',

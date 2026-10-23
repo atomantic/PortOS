@@ -23,7 +23,7 @@ import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccou
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
-import { agentHandoff, HANDLED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
+import { agentHandoff, FINISHED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -277,13 +277,14 @@ export async function syncAllNotifications(options = {}) {
   return results;
 }
 
-// A thread with nothing left for you (something else has it, or it is closed
-// or merged) is Handled while it is still open on GitHub.
-const HANDLED_SQL = `decision IN (${HANDLED_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
+// The inbox mirrors GitHub's: every open thread is in it until marked done,
+// whatever its decision says (a pill on the row). Finished threads are those
+// the inbox can clear in one tap.
+const FINISHED_SQL = `decision IN (${FINISHED_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
 const VIEW_FILTERS = {
-  'needs-you': `state = 'open' AND NOT suspect AND (decision IS NULL OR NOT ${HANDLED_SQL})`,
+  'needs-you': "state = 'open' AND NOT suspect",
   suspect: "state = 'open' AND suspect",
-  handled: `(state <> 'open' OR (NOT suspect AND ${HANDLED_SQL}))`,
+  handled: "state <> 'open'",
   all: 'TRUE',
 };
 
@@ -335,7 +336,8 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
     // Every view's size for the inbox's summary, plus the open threads an agent has.
     query(
       `SELECT ${NOTIFICATION_VIEWS.map((name) => `COUNT(*) FILTER (WHERE ${VIEW_FILTERS[name]})::int AS "${name}"`).join(', ')},
-         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off')::int AS "with-agents"
+         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off')::int AS "with-agents",
+         COUNT(*) FILTER (WHERE state = 'open' AND NOT suspect AND ${FINISHED_SQL})::int AS finished
        FROM github_notifications WHERE account_id = ANY($1::text[])`,
       [ids],
     ),
@@ -377,7 +379,7 @@ async function learnFromOperator(client, row, action) {
  * actions teach learned rules (unless `learn: false`, for a bulk audit change);
  * an automation's carry the decision behind it.
  */
-export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator' } = {}) {
+export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator', emit = true } = {}) {
   const spec = ACTION_SPECS[action];
   const account = await getAccount(accountId);
   const existing = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
@@ -409,8 +411,39 @@ export async function applyNotificationAction(accountId, threadId, action, { act
     );
     return result.rows[0];
   });
-  githubNotificationEvents.emit('changed', { accountId: account.id });
+  if (emit) githubNotificationEvents.emit('changed', { accountId: account.id });
   return toApi(row, new Map([[account.id, account]]));
+}
+
+/**
+ * Mark every open finished thread done on GitHub (one account, or all), as
+ * the operator but without teaching learned rules: the decision already says
+ * nothing is left. One failed thread is counted, never stops the rest.
+ */
+export async function clearFinishedNotifications({ accountId = null } = {}) {
+  const accounts = (await listAccounts()).filter(isActive).filter((account) => !accountId || account.id === accountId);
+  let cleared = 0;
+  let failed = 0;
+  for (const account of accounts) {
+    const { rows } = await query(
+      `SELECT thread_id, decision FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect AND ${FINISHED_SQL}
+       ORDER BY gh_updated_at DESC`,
+      [account.id],
+    );
+    for (const row of rows) {
+      const ok = await applyNotificationAction(account.id, row.thread_id, 'done', { learn: false, emit: false, detail: { decision: row.decision, bulk: 'finished' } })
+        .then(() => true)
+        .catch((error) => {
+          console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
+          return false;
+        });
+      if (ok) cleared += 1;
+      else failed += 1;
+    }
+    if (rows.length) githubNotificationEvents.emit('changed', { accountId: account.id });
+  }
+  console.log(`🧹 Marked ${cleared} finished GitHub notification(s) done${failed ? `, ${failed} failed` : ''}`);
+  return { cleared, failed };
 }
 
 // An automation action can be undone while the thread is still where it left

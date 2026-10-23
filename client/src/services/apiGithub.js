@@ -39,6 +39,8 @@ export const getGitHubNotifications = ({ accountId, view } = {}, options = {}) =
 };
 export const syncGitHubNotifications = (accountId = null, options = {}) =>
   request('/github/notifications/sync', { method: 'POST', body: JSON.stringify(accountId ? { accountId } : {}), ...options });
+export const clearFinishedGitHubNotifications = (accountId = null, options = {}) =>
+  request('/github/notifications/clear-finished', { method: 'POST', body: JSON.stringify(accountId ? { accountId } : {}), ...options });
 export const applyGitHubNotificationAction = (accountId, threadId, action, options = {}) =>
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}`, {
     method: 'POST', body: JSON.stringify({ action }), ...options,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
-  Bell, BellOff, Bot, Check, CheckCircle2, CircleDot, CircleX, ExternalLink, GitCommitHorizontal, GitPullRequest,
+  Bell, BellOff, Bot, Check, CheckCheck, CheckCircle2, CircleDot, CircleX, ExternalLink, GitCommitHorizontal, GitPullRequest,
   Inbox, Layers, Mail, MailX, MessagesSquare, RefreshCw, ShieldAlert, Tag,
 } from 'lucide-react';
 import Pill from '../ui/Pill';
@@ -14,6 +14,7 @@ import PageSkeleton from '../ui/PageSkeleton';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
 import { formatCount, timeAgo } from '../../utils/formatters';
 import {
+  clearFinishedGitHubNotifications,
   getGitHubAccounts,
   getGitHubNotifications,
   syncGitHubNotifications,
@@ -53,16 +54,13 @@ const MORE_ACTIONS = [
   { action: 'unsubscribe', label: 'Unsubscribe', icon: MailX },
 ];
 
-// Mirrors HANDLED_DECISIONS in server/lib/githubNotificationTriage.js:
-// nothing is left for you on these threads, so they sit under Handled.
-const HANDLED_DECISIONS = new Set(['handled-by-pr-workflow', 'duplicate', 'handed-off', 'suggest-mark-read']);
-const nothingLeft = (row) => !row.suspect && HANDLED_DECISIONS.has(row.decision);
-
-// Whether a row still belongs in the view after an action moved it.
+// Whether a row still belongs in the view after an action moved it. Mirrors
+// VIEW_FILTERS in server/services/githubNotifications.js: the inbox holds every
+// open thread, as GitHub's does, whatever its decision.
 const VIEW_MATCHERS = {
-  'needs-you': (row) => row.state === 'open' && !row.suspect && !nothingLeft(row),
+  'needs-you': (row) => row.state === 'open' && !row.suspect,
   suspect: (row) => row.state === 'open' && row.suspect,
-  handled: (row) => row.state !== 'open' || nothingLeft(row),
+  handled: (row) => row.state !== 'open',
   all: () => true,
 };
 const belongsInView = (row, view) => VIEW_MATCHERS[view](row);
@@ -85,7 +83,7 @@ const kindOf = (notification) => (notification.reason === 'security_alert'
 // Summary tiles double as the view picker. Counts come from the server for
 // every view at once; tone follows meaning, and every tile also has a label.
 const TILES = [
-  { id: 'needs-you', label: 'Needs you', icon: Inbox, iconClass: 'text-port-accent' },
+  { id: 'needs-you', label: 'Inbox', icon: Inbox, iconClass: 'text-port-accent' },
   { id: 'suspect', label: 'Suspect', icon: ShieldAlert, iconClass: 'text-port-warning' },
   { id: 'handled', label: 'Handled', icon: CheckCircle2, iconClass: 'text-port-success' },
   { id: 'all', label: 'All', icon: Layers, iconClass: 'text-gray-400' },
@@ -237,6 +235,7 @@ export default function GitHubInboxTab() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [busyKey, setBusyKey] = useState(null);
+  const [clearing, setClearing] = useState(false);
   const [removing, setRemoving] = useState(() => new Set());
   const [syncTick, setSyncTick] = useState(0);
   const requestRef = useRef(0);
@@ -299,6 +298,13 @@ export default function GitHubInboxTab() {
     }
   };
 
+  // The server's changed event re-reads the list once the batch is done.
+  const clearFinished = async () => {
+    setClearing(true);
+    await clearFinishedGitHubNotifications(accountId).catch(() => null);
+    setClearing(false);
+  };
+
   const dropRow = (key) => {
     setData((prev) => ({ ...prev, notifications: prev.notifications.filter((entry) => keyOf(entry) !== key) }));
     setRemoving((prev) => {
@@ -354,11 +360,26 @@ export default function GitHubInboxTab() {
       </div>
 
       <SummaryTiles view={view} counts={data.counts} onSelect={setView} />
-      {data.counts?.['with-agents'] > 0 && (
-        <p className="flex items-center gap-1.5 text-xs text-gray-400">
-          <Bot size={13} className="text-port-accent" aria-hidden="true" />
-          {formatCount(data.counts['with-agents'])} with an agent now
-        </p>
+      {(data.counts?.['with-agents'] > 0 || (view === 'needs-you' && data.counts?.finished > 0)) && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {data.counts['with-agents'] > 0 && (
+            <p className="flex items-center gap-1.5 text-xs text-gray-400">
+              <Bot size={13} className="text-port-accent" aria-hidden="true" />
+              {formatCount(data.counts['with-agents'])} with an agent now
+            </p>
+          )}
+          {view === 'needs-you' && data.counts.finished > 0 && (
+            <button
+              type="button"
+              onClick={clearFinished}
+              disabled={clearing}
+              className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-200 hover:border-gray-500 disabled:opacity-60"
+            >
+              <CheckCheck size={13} aria-hidden="true" />
+              {clearing ? 'Marking done…' : `Mark ${formatCount(data.counts.finished)} finished done`}
+            </button>
+          )}
+        </div>
       )}
 
       {syncErrors.map(([id, state]) => (
@@ -393,7 +414,7 @@ export default function GitHubInboxTab() {
         >
           {shown.length === 0 ? (
             <p className="p-6 text-center text-sm text-gray-400">
-              {{ 'needs-you': 'Nothing needs you right now.', suspect: 'Nothing suspicious.' }[view] || 'No notifications here.'}
+              {{ 'needs-you': 'Your inbox is clear.', suspect: 'Nothing suspicious.' }[view] || 'No notifications here.'}
             </p>
           ) : (
             <div className="min-w-0 divide-y divide-port-border">

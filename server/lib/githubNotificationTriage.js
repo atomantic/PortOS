@@ -36,12 +36,12 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 3;
+export const TRIAGE_RULES_VERSION = 4;
 
-// Decisions that leave nothing for you: something else has the thread, or it
-// is already closed or merged. They sit under Handled instead of Needs you,
-// even in Observe before anything acts on GitHub.
-export const HANDLED_DECISIONS = Object.freeze(['handled-by-pr-workflow', 'duplicate', 'handed-off', 'suggest-mark-read']);
+// Open threads with nothing left for you: closed or merged, folded into a
+// newer CI notice, or owned by a PR workflow. They stay in the inbox (it
+// mirrors GitHub's) until marked done, which the inbox can do in one tap.
+export const FINISHED_DECISIONS = Object.freeze(['handled-by-pr-workflow', 'duplicate', 'suggest-mark-read']);
 
 const NEW_ACCOUNT_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -106,7 +106,7 @@ export function decideThread({ reason, subjectType, subjectState, subjectMerged 
     return { decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' };
   }
   const finished = subjectMerged === true || subjectState === 'closed';
-  if (finished && reason !== 'review_requested') return { decision: 'suggest-mark-read', rule: 'finished-thread' };
+  if (finished) return { decision: 'suggest-mark-read', rule: 'finished-thread' };
   if (reason === 'ci_activity' || subjectType === 'CheckSuite') {
     if (ciBranch && defaultBranch && ciBranch === defaultBranch) return { decision: 'surface', rule: 'ci-default-branch' };
     if (repoManaged && ciBranch) return { decision: 'handled-by-pr-workflow', rule: 'ci-watched-by-pr-workflow' };
@@ -159,8 +159,9 @@ export function applyLearnedRule(result, learned) {
  */
 export function assistAction({ decision, rule, trust, suspect = false, state = 'open' }) {
   if (suspect || state !== 'open') return null;
-  // A closed or merged thread has nothing left to do, so it is done, not just read.
-  if (decision === 'suggest-mark-read') return 'done';
+  // A closed or merged thread has nothing left to do, so it is done, not just
+  // read; a folded CI repeat leaves its newest notice open.
+  if (decision === 'suggest-mark-read' || decision === 'duplicate') return 'done';
   if (trust === 'outside') return null;
   const vouched = trust === 'yours' || trust === 'trusted' || rule === 'learned';
   if (decision === 'handled-by-pr-workflow') return 'done';
@@ -200,6 +201,8 @@ const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
 const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
 const REVIEW_TRUST = new Set(['yours', 'trusted']);
+// Mirrored in CANDIDATE_SQL (githubNotificationAutopilot.js).
+const FINISHED_SUBJECT_STATES = new Set(['merged', 'closed']);
 
 function threadAgentKind(row) {
   if (row?.reason === 'security_alert') return 'security-alert';
@@ -269,7 +272,7 @@ export function agentHandoff({ account, row }) {
   const kind = threadAgentKind(row);
   const rule = matchAgentRule(account?.agentRules, kind, row.repo_full_name);
   let plan = null;
-  if (kind === 'review-request' && REVIEW_DECISIONS.has(row.decision)) {
+  if (kind === 'review-request' && REVIEW_DECISIONS.has(row.decision) && !FINISHED_SUBJECT_STATES.has(evidence.subjectState)) {
     const pullNumber = Number(PULL_PATH_RE.exec(String(row.subject_api_url || ''))?.[1]);
     // Only a PR by you or a trusted author goes to a plain /do:review run; an
     // outside PR goes to pr-reviewer, which screens untrusted content first and
