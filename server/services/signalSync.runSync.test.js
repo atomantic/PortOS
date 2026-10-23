@@ -10,11 +10,14 @@ import { decryptSqlcipherDatabase, deriveSqlcipherKeys, sqlcipherPageHmac,
 
 const mocks = vi.hoisted(() => ({
   root: '', snapshots: [], recordEvents: vi.fn(), autoLogTouchpoints: vi.fn(),
+  readFile: vi.fn(), execFile: vi.fn(),
 }));
-vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
-  ...await importOriginal(),
-  dataPath: (...parts) => join(mocks.root, ...parts),
-}));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  mocks.readFile.mockImplementation(actual.tryReadFile);
+  return { ...actual, tryReadFile: mocks.readFile, dataPath: (...parts) => join(mocks.root, ...parts) };
+});
+vi.mock('../lib/childProcess.js', () => ({ execFile: mocks.execFile }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, mkdtemp: async (...args) => {
@@ -23,7 +26,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     return path;
   } };
 });
-vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ signal: { enabled: true } })) }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
 vi.mock('./humanActivity.js', async (importOriginal) => ({
   ...await importOriginal(), recordEvents: mocks.recordEvents,
@@ -31,6 +34,8 @@ vi.mock('./humanActivity.js', async (importOriginal) => ({
 vi.mock('./tribe.js', () => ({ autoLogTouchpoints: mocks.autoLogTouchpoints }));
 
 import { checkSetup, runSync, readSyncState } from './signalSync.js';
+import { getSettings } from './settings.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const KEY = 'ab'.repeat(32); // invented fixture key; never reads the keychain
 const BODY = 'x'.repeat(512);
@@ -86,6 +91,9 @@ function encrypt(plain) {
 }
 
 beforeEach(() => {
+  getSettings.mockResolvedValue({ signal: { enabled: true } });
+  mocks.readFile.mockClear();
+  mocks.execFile.mockReset().mockImplementation((...args) => args.at(-1)(new Error('Unexpected keychain access')));
   mocks.root = createTempDataRoot('signal-auth-test-');
   mocks.snapshots = [];
   mkdirSync(join(mocks.root, 'sql'));
@@ -111,6 +119,22 @@ function expectSnapshotsRemoved() {
 }
 
 describe('Signal authenticated snapshot ingestion', () => {
+  it.each([{}, { signal: { enabled: false } }])('refuses disabled sync and setup before any Signal file or keychain access (%j)', async (settings) => {
+    getSettings.mockResolvedValue(settings);
+    vi.stubEnv('SIGNAL_KEYCHAIN_PASSWORD', '');
+    writeFileSync(join(mocks.root, 'config.json'), JSON.stringify({ encryptedKey: 'fixture-wrapped-key' }));
+
+    const refusal = await runSync().catch((error) => error);
+    expect(refusal).toBeInstanceOf(ServerError);
+    expect(refusal).toMatchObject({ status: 409, code: 'SIGNAL_DISABLED' });
+    expect(await checkSetup()).toEqual({ enabled: false });
+    expect(mocks.readFile).not.toHaveBeenCalled();
+    expect(mocks.execFile).not.toHaveBeenCalled();
+    expect(mocks.snapshots).toEqual([]);
+    expect(mocks.recordEvents).not.toHaveBeenCalled();
+    expect(mocks.autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+
   it('accepts a multipage database and does not reingest messages on replay', async () => {
     expect(plaintext.length).toBeGreaterThan(SQLCIPHER_PAGE_SIZE);
     expect(await checkSetup()).toMatchObject({ ok: true, messageCount: 1 });
