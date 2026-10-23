@@ -46,7 +46,7 @@ once per event:
 |-------|-----------|
 | PR into `main` | Impact-scoped plan (only the surfaces the diff touches) |
 | Push/merge to `main` | **Nothing** — no push trigger; the PR gate already passed |
-| PR `main` → `release` | **Full suite**, forced regardless of the diff |
+| PR candidate → `release` | **Full suite**, forced regardless of the diff |
 | Push/merge to `release` | Reuses the release PR's green gate; full suite only if it cannot be verified |
 | Scheduled 09:17 and 21:17 UTC | Full suite — the `main`-branch health signal; a red run names the merges since the last green one |
 | `workflow_dispatch` | Full suite |
@@ -58,7 +58,7 @@ A release therefore pays for one full run (on its PR), not three.
 | Branch | Purpose |
 |--------|---------|
 | `main` | Active development |
-| `release` | Merge `main` into `release` to trigger releases |
+| `release` | Merge the frozen candidate into `release` to trigger releases |
 
 ## CI Workflow (`ci.yml`)
 
@@ -623,7 +623,7 @@ The selected work is split across parallel jobs:
   more often than any other; split, each finishes in about the time of its own
   steps.
 - **Windows server tests** — the same server selection, but only on full CI
-  (the `main` → `release` PR, nightly, release, workflow dispatch) or when a
+  (the candidate → `release` PR, nightly, release, workflow dispatch) or when a
   Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
   `bufferedSpawn`, `cos-runner`, shell/PM2, etc.). Docs-only and ordinary
   Linux-faithful PRs skip this job. `pinPlatform('win32')` tests still run on
@@ -700,7 +700,7 @@ The selected work is split across parallel jobs:
 
 Pull requests run the browser suites' smoke profile, which skips the
 `[fidelity]` grading cases. Those cases run in hosted CI on the nightly
-schedule, on the `main` -> `release` pull request and on dispatched full runs,
+schedule, on the candidate → `release` pull request and on dispatched full runs,
 so a fidelity regression shows up there rather than blocking the PR that
 caused it. The `[local-performance]` playback case runs only locally.
 
@@ -809,7 +809,7 @@ Windows-risk scoped PR already gets.
 Windows runs the baseline. Likewise only the pipeline scripts the Windows job executes
 (`ci-base-sha`, `run-ci-tests`, and `lib/githubOutput` which the runner imports) escalate it;
 `ci-test-plan`, `run-ci-lint`, `scan-diff-hidden-content` and `verify-ci-status` run on Linux jobs
-only. The nightly run and the `main` → `release` PR keep the complete matrix as the net.
+only. The nightly run and the candidate → `release` PR keep the complete matrix as the net.
 
 **Dependency manifests decide per package.** The planner's 32-PR sample in
 October 2026 traced every full plan to a lockfile/manifest change (4),
@@ -869,13 +869,13 @@ Three properties keep that safe, each pinned by `scripts/ci-test-plan.test.js`:
   tests selected" and exits 0 for an empty `files` list, so a downgrade that
   resolved to no tracked contract tests would be a green job that ran nothing.
   The planner falls back to the full suite instead.
-- **Force-full keeps the discovery net.** Nightly, the `main` → `release` PR,
+- **Force-full keeps the discovery net.** Nightly, the candidate → `release` PR,
   release, and an explicit full-CI request still run the complete Windows
   matrix. `ci.yml` has no push trigger, so those are the whole net for a Windows
   regression on a surface nobody has tagged yet (`staticImportGraph` in #5909,
   `voice/fineTuning` in #6268), and worst-case detection latency for a
   downgraded PR is the next nightly — always before a release, because the
-  `main` → `release` PR is force-full. That is not a new exposure: it is the
+  candidate → `release` PR is force-full. That is not a new exposure: it is the
   same net every PR touching no `WINDOWS_RISK_RULES` file already relies on,
   which is most of them. This change widens that population by 24 runs in 250.
 
@@ -1071,7 +1071,7 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 There is **no push trigger on `main`**. A merge commit on `main` re-tests a
 tree whose PR gate is already green, so the run was pure duplication; the
 nightly full run is what catches a semantic conflict between two independently
-green PRs, and the `main` → `release` PR catches it before a release ships.
+green PRs, and the candidate → `release` PR catches it before a release ships.
 
 A red scheduled run cannot point at a PR, so the gate's last step
 (`scripts/ci-nightly-report.js`, scheduled runs only) writes the suspect list to the run
@@ -1296,7 +1296,10 @@ Triggers on push to `release` branch. Steps:
    older unnamed notes.
 7. If a pattern changelog file (`.changelog/v{major}.{minor}.x.md`) was used,
    archives it on `main` (renames `.x.md` to the exact version).
-8. If the archive step ran, fast-forwards `release` to match `main`.
+8. An archive advances only `main`; `release` remains pinned to the verified tree.
+
+Capture and resume candidates using [the release procedure](VERSIONING.md#creating-a-release).
+Concurrent development merges do not change the candidate or its CI inputs.
 
 ### Reusing the release PR's CI run
 
@@ -1312,9 +1315,9 @@ gate. Two independent conditions must hold, because each alone is forgeable:
    green too, so it cannot distinguish "the full suite passed on this tree"
    from "some subset of it did".
 
-The ordinary release merge satisfies this — `release` is strictly behind
-`main`, so the merge commit's tree equals the `main` tip it merged, and that
-tip is exactly the SHA the release PR ran full CI on.
+The ordinary release merge satisfies this when the frozen candidate contains
+the captured `release` base: the merge commit's tree equals the candidate head
+that full CI validated. The current `main` tip is irrelevant.
 
 Everything else fails closed and runs the complete suite again: a direct push to
 `release`, a hotfix committed on `release` that changes the merge tree, a

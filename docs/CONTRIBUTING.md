@@ -84,7 +84,7 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 1. Work on `main` branch (or feature branches merged to `main`)
 2. PRs to `main` trigger CI tests
-3. Push `main` to `release` branch to trigger GitHub Release workflow
+3. Follow the [frozen candidate procedure](./VERSIONING.md#creating-a-release): capture `main` at kickoff, validate an isolated candidate, then merge it into `release` to publish
 4. Before pushing, follow [Regular Development](./VERSIONING.md#regular-development): verify your branch/upstream and working-tree state, preserve unrelated work, and explicitly fetch the intended base for comparison (the tracking branch may differ); integrate it only for conflicts, enforced branch policy, or evidenced integration risk. Run `npm run pregate` after any rebase and before every push. See [AGENTS.md's Git Workflow](../AGENTS.md#git-workflow) for the full contract.
 
 Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
@@ -194,7 +194,7 @@ so write commit subjects/bodies for a human release-note reader (see Commit
 Messages below). See [`.changelog/README.md`](../.changelog/README.md) for
 details.
 
-> **Note:** Some older code or automation notes may still reference a `dev` branch workflow. The `main`→`release` workflow described here is the current source of truth.
+> **Note:** Some older code or automation notes may still reference a `dev` branch workflow. The frozen-candidate→`release` workflow described here is the current source of truth.
 
 ### Line Endings on Windows
 

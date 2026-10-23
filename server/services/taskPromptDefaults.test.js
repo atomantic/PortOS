@@ -467,8 +467,6 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // claim-issue-jira: the handoff contract changed after the token swap.
     // A later change made the PR-side wait human-length (FORGE_REVIEWER_WAIT_NOTE).
     ['claim-issue-jira', [") and address the findings — push fixes, capped at 3 rounds per reviewer. " + FORGE_REVIEWER_WAIT_NOTE, "), poll every 5–15s, and address the findings — push fixes, capped at 3 rounds per reviewer."], ["After the reviewers finish, preserve the exact worktree, local `claim/<KEY>` branch and open MR/PR for the intentional human handoff. Do not invoke merged retirement while it remains unmerged.", "After the reviewers finish, run the worktree-only cleanup so the source checkout is left clean:\n   ```bash\n   cd {repoPath}\n   git worktree remove \"${WORKTREE}\"\n   ```\n   Leave the local `claim/<KEY>` branch and the open MR/PR in place."]],
-    // do-release v20 split Step 2's "Red CI" bullet to recognize a maintainer-admission hold.
-    ['do-release', [/- A failing step that only says the run is[^\n]*\n- Red CI from the bump itself: check out the branch/, '- Red CI: check out the branch']],
     ['issue-reconcile'],
     ['jira-status-report'],
     ['user-action-review'],
@@ -625,7 +623,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(9);
   });
 
-  // The hold bullet itself is pinned by the pre-token reconstruction case above.
+  // Preserve recognition of the actual retired release bodies without retaining
+  // obsolete instructions as literals or reconstructing them from today's prompt.
+  it('upgrades pre-cutoff release defaults across installs', () => {
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS['do-release']).toEqual(expect.arrayContaining([
+      'dcb1b0c84712f7824afd9c44cb4208da', // pre-token default
+      '3061f2041d25fd80d60189f68ac5c3e0', // v20, before frozen candidates
+    ]));
+  });
+
   it('do-release v20 separates a held bot-PR CI run from a bump that broke CI', () => {
     expect(DEFAULT_TASK_PROMPTS['do-release']).toContain('Red CI from the bump itself');
     expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(20);
@@ -910,14 +916,19 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('inconclusive review does not itself stop the release');
     // The operator's toggles are rendered at dispatch.
     expect(current).toContain('{releaseOptions}');
-    // v15: in-flight work and dependency PRs land first, respecting live owners.
-    expect(current).toContain('Finish in-flight work first');
+    // The cutoff precedes every potentially long task. Open-work options can
+    // add only specific fixes, never refresh the release from a moving branch.
+    expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(21);
+    expect(current.indexOf('Freeze or recover the release candidate')).toBeLessThan(current.indexOf('Reconcile missing releases'));
+    expect(current).toContain('RELEASE_CUT_SHA');
+    expect(current).toContain("never recapture today's development tip");
+    expect(current).toContain('Never use the development branch as the release PR head');
+    expect(current).toContain('Development-branch movement alone does not restart validation');
+    expect(current).toContain('cherry-pick only its exact reviewed fix commit');
+    expect(current).toContain('Do not trigger branch reconciliation');
+    expect(current).not.toContain('merge the updated `<DEV_BRANCH>` into');
+    expect(current).not.toContain('Every other trusted item is yours to finish');
     expect(current).toContain('/api/cos/agents?active=1');
-    // Scoped to the app being released, never the install's other repos.
-    expect(current).toContain('"taskType":"branch-reconcile","appId":"{appId}"');
-    expect(current).toContain('Do not wait for the triggered agent');
-    // External contributors' PRs stay behind the review/admission flow, and the
-    // sweep targets the development branch, not the release branch.
     expect(current).toContain('Only trusted work is yours');
     expect(current).toContain('--base <DEV_BRANCH>');
     expect(current).toContain('Merge dependency updates');

@@ -181,8 +181,8 @@ export function resolveIssueExcludeLabelsBlock(extraLabels = []) {
 // OFF forbids. Keyed by the same list the sanitizer allowlists, so an option
 // cannot be settable yet silently absent from the prompt.
 const RELEASE_OPTION_LINES = {
-  finishInFlight: ['Finish in-flight work', 'Step 1 runs: finish open PRs and lingering branches no live agent owns before releasing.', 'Step 1 is skipped: do not merge, close, or rebase other open PRs or branches (dependency-bot PRs follow the Merge dependency updates option).'],
-  mergeDependencyUpdates: ['Merge dependency updates', 'Step 2 runs: merge open dependency-bot PRs, fixing any that break the build.', 'Step 2 is skipped: leave dependency-bot PRs untouched.'],
+  finishInFlight: ['Finish in-flight work', 'Step 1 runs only for evidenced candidate-gating fixes; unrelated open PRs and branches wait for the next release.', 'Step 1 is skipped: do not merge, close, or rebase other open PRs or branches (dependency-bot PRs follow the Merge dependency updates option).'],
+  mergeDependencyUpdates: ['Merge dependency updates', 'Step 2 runs only for dependency updates required to fix the frozen candidate; other bot PRs wait for the next release.', 'Step 2 is skipped: leave dependency-bot PRs untouched.'],
   resolveBlockers: ['Resolve blockers', 'Step 4 runs: fix failing tests, red CI, and blocking bugs yourself or through a sub-agent.', 'Step 4 is skipped: report each blocker with its evidence and stop without fixing it.'],
   autoDecide: ['Make decisions', 'Make routine design and preference decisions yourself and list them for operator review.', 'Stop at the first design or preference decision and report the question.'],
 };
@@ -192,11 +192,12 @@ const RELEASE_OPTION_LINES = {
  * (global → per-app) metadata. Each option is ON unless explicitly `false`.
  */
 function resolveReleaseOptionsBlock(metadata = {}) {
-  return RELEASE_OPTION_KEYS.map((key) => {
+  const options = RELEASE_OPTION_KEYS.map((key) => {
     const [label, on, off] = RELEASE_OPTION_LINES[key];
     const enabled = metadata?.[key] !== false;
     return `- **${label}: ${enabled ? 'ON' : 'OFF'}** — ${enabled ? on : off}`;
   }).join('\n');
+  return `${options}\n\nRelease cutoff: before any release work, recover the existing candidate's recorded cutoff or pin the development commit at kickoff in an isolated candidate branch. Follow the project's documented release procedure. Only preparation and evidenced candidate-gating fixes may advance it; later development merges and unrelated open issues/PRs wait for the next release. Never pull, rebase, or merge the live development branch into the candidate. These limits apply even when an option is ON and override broader backlog-sweep instructions in a customized prompt.`;
 }
 
 /**

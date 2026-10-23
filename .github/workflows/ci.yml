@@ -4,7 +4,7 @@ on:
   # No push trigger. Every change reaches `main` through a pull request whose
   # own CI gate must be green, so re-running the suite on the merge commit only
   # repeats work. The nightly schedule below is the main-branch health signal,
-  # and the main -> release pull request runs the complete suite before a
+  # and the candidate -> release pull request runs the complete suite before a
   # release ships.
   pull_request:
     branches: [main, release]
@@ -1456,7 +1456,7 @@ jobs:
     # the trigger was Windows-irrelevant (see the FULL_TRIGGER_RULES
     # windowsEscalates flag in the impact planner) — publishing the gate for
     # one of those would vouch for Windows coverage that did not run. Every
-    # force-full path — nightly, the main -> release PR, release, an explicit
+    # force-full path — nightly, the candidate -> release PR, release, an explicit
     # full-CI request — keeps windows_mode == 'full', so the release
     # optimization is unaffected.
     if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full' && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)
