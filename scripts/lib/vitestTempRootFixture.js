@@ -222,7 +222,8 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
  * killed watcher to close. FIXTURE_CLOSE_UNCONFIRMED means retain the host.
  */
 export async function runWatchConfigRestart(host, workspace, inspect, { signal } = {}) {
-  if (signal?.aborted) throw fixtureAborted(signal);
+  const callerCancellation = () => Object.assign(fixtureAborted(signal, 'watch fixture cancelled by caller'), { code: 'FIXTURE_CALLER_CANCELLED' });
+  if (signal?.aborted) throw callerCancellation();
   const marks = join(host, 'marks');
   mkdirSync(marks);
   const { args, options } = createVitestTempFixture(host, workspace, `
@@ -262,7 +263,7 @@ export async function runWatchConfigRestart(host, workspace, inspect, { signal }
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
-  const onAbort = () => abort.abort(signal.reason);
+  const onAbort = () => abort.abort(callerCancellation());
   signal?.addEventListener('abort', onAbort, { once: true });
   if (signal?.aborted) onAbort();
   const timer = setTimeout(() => abort.abort(new Error('watch fixture readiness timed out')), WATCH_READY_MS);
@@ -292,7 +293,11 @@ export async function runWatchConfigRestart(host, workspace, inspect, { signal }
     }
     return await inspect({ first, restarted, pid: child.pid });
   } catch (error) {
-    failure = spawnError ?? error;
+    // Readiness wraps this controller's reason in AbortError. Recover that
+    // exact reason so a later caller cancellation cannot relabel an earlier
+    // timeout or premature exit as an expected cancellation.
+    failure = spawnError ?? (error.name === 'AbortError' && error.cause === abort.signal.reason
+      ? abort.signal.reason : error);
     failure.message += `\n${output}`;
     throw failure;
   } finally {

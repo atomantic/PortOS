@@ -138,7 +138,7 @@ describe('real workspace runner temp lifecycle', () => {
     } catch (error) {
       if (error.code === 'FIXTURE_CLOSE_UNCONFIRMED') cleanupConfirmed = false;
       // Cancellation is expected, but failed process settlement is still fatal.
-      if (!signal.aborted || error.name !== 'AbortError') throw error;
+      if (error.code !== 'FIXTURE_CALLER_CANCELLED') throw error;
     } finally {
       if (cleanupConfirmed) rmSync(host, { recursive: true, force: true });
     }

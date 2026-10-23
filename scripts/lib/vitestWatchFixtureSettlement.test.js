@@ -65,6 +65,21 @@ describe('watch fixture process settlement', () => {
     await expect(result).resolves.toMatchObject({ name: 'AbortError' });
   });
 
+  it('preserves premature exit when caller cancellation arrives during settlement', async () => {
+    const child = fixture({ ready: false });
+    const controller = new AbortController();
+    const pending = runWatchConfigRestart(host, 'server', () => {}, { signal: controller.signal });
+    const result = pending.catch(error => error);
+    child.emit('exit', 1, null);
+    await tick();
+    controller.abort();
+    child.emit('close', 1, null);
+    const error = await result;
+    expect(error.message).toContain('watch fixture exited before readiness');
+    expect(error.code).not.toBe('FIXTURE_CALLER_CANCELLED');
+    expect(error.name).toBe('Error');
+  });
+
   it('keeps a nested run close watchdog failure distinct from confirmed cancellation', async () => {
     fixture({ ready: false });
     vi.useFakeTimers();
