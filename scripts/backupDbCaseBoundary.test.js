@@ -1,9 +1,19 @@
-import { expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, expect, it as vitestIt } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createVitestTempFixture } from './lib/vitestTempRootFixture.js';
+import { ownTestBodies } from '../server/lib/mockPathsDataRoot.js';
+import { createVitestTempFixture, runFixtureToCompletion } from './lib/vitestTempRootFixture.js';
+
+// Async nested run: a synchronous spawn clock fails with ETIMEDOUT under
+// full-suite load (#13149). The outer budget adds headroom so it is never tighter.
+const RUN_CEILING_MS = 120000;
+
+// A fail-fast failure in another file cancels this body while it awaits the nested
+// run; own it so teardown waits for its `finally` to remove the host (#12924).
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+afterAll(() => owned.drain());
 
 const ownTestBodiesUrl = new URL('../server/lib/mockPathsDataRoot.js', import.meta.url).href;
 
@@ -15,12 +25,13 @@ const ownTestBodiesUrl = new URL('../server/lib/mockPathsDataRoot.js', import.me
 // timed-out body is held at that gap deterministically: it resumes only when
 // the next case's body releases it, or on a fallback timer when that body is
 // (correctly) still gated.
-it('keeps a timed-out case between restores from overlapping the next case', () => {
+it('keeps a timed-out case between restores from overlapping the next case', async ({ signal }) => {
   const host = mkdtempSync(join(tmpdir(), 'restore-boundary-'));
   try {
     const fixture = join(host, 'fixture');
     const resultsPath = join(fixture, 'results.json');
-    const { args, options } = createVitestTempFixture(host, 'server', '');
+    const fixtureRun = createVitestTempFixture(host, 'server', '');
+    const { args, options } = fixtureRun;
     writeFileSync(join(fixture, 'boundary.test.js'), `
       import { afterAll, beforeEach, describe, it as vitestIt } from 'vitest';
       import { writeFileSync } from 'node:fs';
@@ -76,9 +87,10 @@ it('keeps a timed-out case between restores from overlapping the next case', () 
     // CI's github-actions reporter repeats each failure as an annotation; the
     // fixture's own default-reporter output is what the assertions count.
     delete options.env.GITHUB_ACTIONS;
-    const result = spawnSync(process.execPath, args, options);
-    const output = `${result.stdout}\n${result.stderr}`;
-    expect(result.error).toBeUndefined();
+    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS, { signal });
+    if (signal.aborted) return;
+    const output = `${result.stdout}\n${result.stderr}\nlifecycle phases: results=${existsSync(resultsPath)}`;
+    expect(result.error, output).toBeUndefined();
     expect(result.status, output).toBe(1);
     expect(output.match(/Test timed out in 50ms/g), output).toHaveLength(2);
     const results = JSON.parse(readFileSync(resultsPath, 'utf8'));
@@ -89,4 +101,4 @@ it('keeps a timed-out case between restores from overlapping the next case', () 
   } finally {
     rmSync(host, { recursive: true, force: true });
   }
-}, 25000);
+}, RUN_CEILING_MS + 15000);

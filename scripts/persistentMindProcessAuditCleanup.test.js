@@ -1,21 +1,32 @@
-import { expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { afterAll, expect, it as vitestIt } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createVitestTempFixture, fixtureReadyFailureSource } from './lib/vitestTempRootFixture.js';
+import { ownTestBodies } from '../server/lib/mockPathsDataRoot.js';
+import { createVitestTempFixture, fixtureReadyFailureSource, runFixtureToCompletion } from './lib/vitestTempRootFixture.js';
+
+// Async nested run: a synchronous spawn clock fails with ETIMEDOUT under
+// full-suite load (#13149). The outer budget adds headroom so it is never tighter.
+const RUN_CEILING_MS = 120000;
+
+// A fail-fast failure in another file cancels this body while it awaits the nested
+// run; own it so teardown waits for its `finally` to remove the host (#12924).
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+afterAll(() => owned.drain());
 
 // Pins the regression uniquely: a different worker's --bail=1 failure cancels a
 // process-audit test while its body still owns fixture writes (an archived job
 // and a ledger write) into the shared root that the suite's afterAll removes.
-it('drains process-audit fixture writes after another worker triggers fail-fast', () => {
+it('drains process-audit fixture writes after another worker triggers fail-fast', async ({ signal }) => {
   const host = mkdtempSync(join(tmpdir(), 'pa-cancel-'));
   try {
     const fixture = join(host, 'fixture');
     const ready = join(fixture, 'ready');
     const finished = join(fixture, 'finished');
-    const { args, options } = createVitestTempFixture(host, 'server', '');
+    const fixtureRun = createVitestTempFixture(host, 'server', '');
+    const { args, options } = fixtureRun;
     const sourcePath = fileURLToPath(new URL('../server/services/persistentMindProcessAudit.test.js', import.meta.url));
     const header = "it('holds an ambiguous create durably instead of publishing twice', async () => {";
     const source = readFileSync(sourcePath, 'utf8')
@@ -35,7 +46,8 @@ it('drains process-audit fixture writes after another worker triggers fail-fast'
     const workerIndex = args.indexOf('--maxWorkers');
     args[workerIndex + 1] = '2';
     args.push('--bail=1');
-    const result = spawnSync(process.execPath, args, options);
+    const result = await runFixtureToCompletion(fixtureRun, RUN_CEILING_MS, { signal });
+    if (signal.aborted) return;
     const output = `${result.stdout}\n${result.stderr}`;
     const diagnostics = [
       `Child error: ${result.error?.stack ?? 'none'}; code: ${result.error?.code ?? 'none'}`,
@@ -52,4 +64,4 @@ it('drains process-audit fixture writes after another worker triggers fail-fast'
   } finally {
     rmSync(host, { recursive: true, force: true });
   }
-}, 25000);
+}, RUN_CEILING_MS + 15000);
