@@ -8,6 +8,7 @@ import VideoStartTrimControl from './VideoStartTrimControl';
 import PromptRefineModal from './PromptRefineModal';
 import { PromptFromMediaModal } from './PromptFromMedia';
 import AddToCollectionMenu from './AddToCollectionMenu';
+import SharingDownloadButton from './SharingDownloadButton';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import FilmLookEditor from './FilmLookEditor.jsx';
 import MediaImage from '../MediaImage';
@@ -1039,8 +1040,7 @@ function SettingsPane({
             onTrim={(startSec) => onTrimStart(item, startSec)} />
         )}
         {isVideo && item.id && item.previewUrl && (
-          <a href={`/api/video-gen/history/${encodeURIComponent(item.id)}/sharing-download`} download
-            className="min-h-[44px] flex items-center px-2 rounded bg-port-border text-white">Download for sharing</a>
+          <SharingDownloadButton itemId={item.id} />
         )}
         <AddToCollectionMenu item={item} size="md" />
         <PinToMoodBoardMenu item={item} size="md" />

@@ -835,7 +835,9 @@ function lockedShotIds(project) {
   return Object.keys(shots).filter((id) => (clips[id] ?? shots[id]) === 'locked');
 }
 
-export async function planMusicVideoRender(project, { draft = false } = {}) {
+// `decode: false` plans for a read-only caller without host control: the
+// performance-take review skips its ffmpeg decode of the song master.
+export async function planMusicVideoRender(project, { draft = false, decode = true } = {}) {
   assertMusicVideoMediaSelections(project);
   assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
@@ -844,8 +846,8 @@ export async function planMusicVideoRender(project, { draft = false } = {}) {
   const audioPath = await resolveMasterAudioPath(project);
   // #8977/#9266: refuse a performance take whose scene was re-timed or whose
   // sung window changed in the current master. A draft shows a cutaway instead.
-  if (draft) project = await withDraftPerformanceFallbacks(project, audioPath);
-  await assertCurrentPerformanceTakes(project, audioPath);
+  if (draft) project = await withDraftPerformanceFallbacks(project, audioPath, { decode });
+  await assertCurrentPerformanceTakes(project, audioPath, { decode });
   // #8985: a composed render cuts still and card sections into the same
   // timebase as the footage; plain concat renders footage only, as before.
   const composed = project.composition?.mode === 'composed';

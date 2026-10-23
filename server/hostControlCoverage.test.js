@@ -1466,7 +1466,8 @@ const TOOLKIT_INJECTED = 'Toolkit factory route (lib/aiToolkit/routes and their 
 const TOOL_CATALOG = 'Lists a catalog whose entries carry executors (agent, voice and creative tools, MCP tool adapters, mind recipes); the handler returns metadata, and the executors run only through the gated tool dispatch.';
 const JOB_TABLE = "Reads media-job queue state or a job record; the traced encoders and generators sit in the queue's runtime table and run only from the queue worker after a gated enqueue.";
 const ACTIVE_WORK_READ = 'Reports in-flight work by reading the in-memory state of the runner, backup and media-job modules, loaded lazily, plus GPU telemetry; starts none of it.';
-const STORED_MEDIA = 'Runs ffmpeg or ffprobe over media PortOS already stored (a generation history item, the song master, a music-library track, a sprite run) to probe it, decode it or write a derived cache file; the caller supplies no path or argument.';
+const STORED_MEDIA_PROBE = 'Runs ffprobe over media PortOS already stored (a generation history item) to read its stream facts; no decode or encode, and the caller supplies no path or argument.';
+const MUSIC_VIDEO_PLAN_READ = "Plans the render to report shot, look or cleanup state; the plan's performance-take review decodes the song master with ffmpeg only for a caller with host control (`requestHasHostControl`, #13156), and anyone else gets the plan with that take unchecked.";
 const MOLTBOOK_READ = 'Reads from the Moltbook API with the stored agent key; a response that demands verification is answered with the account\'s configured model and screened by the local abuse classifier, as on every Moltbook call.';
 const PEER_PAYLOAD = 'Peer endpoint in PEER_API_SURFACE that builds its payload from stored records; the executors the trace reaches come from whole-module namespace imports of the stores it reads.';
 const PEER_ADMIN_READ = 'Describes peer-administration state from stored grants and catalog reviews; the installer and execution adapters the trace reaches run only from the handler-gated execution and catalog-review writes.';
@@ -1518,7 +1519,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/git/submodules/status', FORGE_READ],
   ['GET /api/github/accounts/:id/status', FORGE_READ],
   ['GET /api/harnesses', PROVIDER_STATUS],
-  ['GET /api/html-composition/beats', STORED_MEDIA],
+  ['GET /api/html-composition/beats', 'Measures the beat grid of an existing Music-library track (the caller picks the track, never a path); the ffmpeg decode runs once per file modification time and every later read serves the cached grid (#13156).'],
   ['GET /api/image-gen/status', RUNTIME_STATUS],
   ['GET /api/image-to-3d/targets', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
   ['GET /api/image-to-3d/targets/:targetId/install', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
@@ -1548,13 +1549,13 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/models/performance/task-benchmark', TOOLKIT_INJECTED],
   ['GET /api/music-video', JOB_TABLE],
   ['GET /api/music-video/:id', JOB_TABLE],
-  ['GET /api/music-video/:id/film-looks', STORED_MEDIA],
+  ['GET /api/music-video/:id/film-looks', MUSIC_VIDEO_PLAN_READ],
   ['GET /api/music-video/:id/media-pool/library', 'Searches stored media for the pool; the trace reaches the local image backend whole through a namespace import, while the handler reads only its gallery records.'],
   ['GET /api/music-video/:id/media-pool/search', 'Searches stored media for the pool; the trace reaches the local image backend whole through a namespace import, while the handler reads only its gallery records.'],
   ['GET /api/music-video/:id/publish/drafts', 'Checks whether each publish draft the operator opened through the gated prepare route is still a tab in the managed browser (a CDP target lookup); opens, fills or submits nothing.'],
-  ['GET /api/music-video/:id/render-cleanup', STORED_MEDIA],
-  ['GET /api/music-video/:id/shot-renders', STORED_MEDIA],
-  ['GET /api/music-video/:id/shot-renders/:name', STORED_MEDIA],
+  ['GET /api/music-video/:id/render-cleanup', MUSIC_VIDEO_PLAN_READ],
+  ['GET /api/music-video/:id/shot-renders', MUSIC_VIDEO_PLAN_READ],
+  ['GET /api/music-video/:id/shot-renders/:name', 'Streams an already-rendered shot segment file by its content-hash name; the ffmpeg the trace reaches through the shot-segment module renders only from the gated shot-render routes (#13156).'],
   ['GET /api/music/supercollider/status', RUNTIME_STATUS],
   ['GET /api/palette/manifest', TOOL_CATALOG],
   ['GET /api/peer-administration/catalog-review', PEER_ADMIN_READ],
@@ -1595,7 +1596,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/runs/:id/prompt', TOOLKIT_INJECTED],
   ['GET /api/settings/ai-assignments', FORGE_READ],
   ['GET /api/settings/media-share-candidates', 'Reports which local media generators this install offers peers, from readiness probes and the media-job queue\'s in-memory state; the encoders in the queue\'s runtime table run only from its worker.'],
-  ['GET /api/sprites/:id/walk/runs/:runId/source-frames', STORED_MEDIA],
+  ['GET /api/sprites/:id/walk/runs/:runId/source-frames', 'Lists the raw frames already on disk for a walk run; the ffmpeg re-extraction the trace reaches runs only for `extract: true`, which only the gated POST .../source-frames/extract passes (#13156).'],
   ['GET /api/system/activity', ACTIVE_WORK_READ],
   ['GET /api/system/health/details', JOB_TABLE],
   ['GET /api/system/processing', ACTIVE_WORK_READ],
@@ -1605,9 +1606,8 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/usage/claude-code', PROVIDER_USAGE],
   ['GET /api/usage/providers', PROVIDER_USAGE],
   ['GET /api/video-gen/active', JOB_TABLE],
-  ['GET /api/video-gen/history/:id', STORED_MEDIA],
-  ['GET /api/video-gen/history/:id/sharing-download', STORED_MEDIA],
-  ['GET /api/video-gen/upscale/:id/plan', STORED_MEDIA],
+  ['GET /api/video-gen/history/:id', STORED_MEDIA_PROBE],
+  ['GET /api/video-gen/upscale/:id/plan', STORED_MEDIA_PROBE],
   ['GET /api/voice/facetime/status', RUNTIME_STATUS],
   ['GET /api/voice/public/voices', 'Lists TTS voices from the configured engines\' catalogs; the synthesize functions in the engine table run only from the speak and synthesis routes.'],
   ['GET /api/voice/qwen3/status', RUNTIME_STATUS],

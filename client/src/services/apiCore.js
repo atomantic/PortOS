@@ -119,6 +119,9 @@ async function performRequest(endpoint, options = {}) {
   if (responseType === 'text') {
     return response.text();
   }
+  if (responseType === 'blob') {
+    return response.blob();
+  }
 
   return response.json();
 }

@@ -135,11 +135,11 @@ export async function cleanupSupersededFinals(projectId, { replacementId = null,
   return reserved ? retire() : withRenderCleanupReservation(projectId, retire);
 }
 
-export async function getRenderCleanup(projectId) {
+export async function getRenderCleanup(projectId, options) {
   const [history, pending] = await Promise.all([loadHistory(), readPending()]);
   const { finals } = await finalInventory(projectId, history, pending);
   const { getSegmentCleanup } = await import('./shotSegments.js');
-  return { finals, segments: await getSegmentCleanup(projectId) };
+  return { finals, segments: await getSegmentCleanup(projectId, options) };
 }
 
 export async function cleanupRenders(projectId, { unusedLooks = false } = {}) {

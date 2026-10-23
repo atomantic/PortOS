@@ -682,3 +682,9 @@ export const requestMediaModelSupport = (input, options = {}) => request('/image
 export const updateVideoPoster = (id, atSec, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/poster`, {
   method: 'PATCH', body: JSON.stringify({ atSec }), ...options,
 });
+
+// Re-encodes the video with its poster as the first frame on every request, so
+// the server refuses a caller without host control (HOST_CONTROL_FORBIDDEN).
+export const downloadVideoSharingCopy = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/sharing-download`, {
+  responseType: 'blob', silent: true, hostControlOptional: true, ...options,
+});
