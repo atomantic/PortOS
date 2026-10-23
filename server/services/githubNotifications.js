@@ -298,15 +298,14 @@ export async function syncAllNotifications(options = {}) {
   return results;
 }
 
-// The inbox mirrors GitHub's: every open thread is in it until marked done,
-// whatever its decision says (a pill on the row). Finished threads are those
-// the inbox can clear in one tap.
+// The inbox holds unread open threads, whatever their decision. The operator
+// can clear finished or read threads in one tap without teaching a rule.
 const FINISHED_SQL = `decision IN (${FINISHED_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
+const CLEARABLE_SQL = `state = 'open' AND NOT suspect AND (${FINISHED_SQL} OR NOT unread)`;
 const VIEW_FILTERS = {
-  // Read on the GitHub website without PortOS reading it: the operator handled it there (#13171).
-  'needs-you': "state = 'open' AND read_on_github_at IS NULL AND NOT suspect",
-  suspect: "state = 'open' AND read_on_github_at IS NULL AND suspect",
-  handled: "(state <> 'open' OR read_on_github_at IS NOT NULL)",
+  'needs-you': "state = 'open' AND unread AND read_on_github_at IS NULL AND NOT suspect",
+  suspect: "state = 'open' AND unread AND read_on_github_at IS NULL AND suspect",
+  handled: "(state <> 'open' OR NOT unread OR read_on_github_at IS NOT NULL)",
   all: 'TRUE',
 };
 
@@ -384,7 +383,8 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
     query(
       `SELECT ${NOTIFICATION_VIEWS.map((name) => `COUNT(*) FILTER (WHERE ${VIEW_FILTERS[name]})::int AS "${name}"`).join(', ')},
          COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off')::int AS "with-agents",
-         COUNT(*) FILTER (WHERE state = 'open' AND NOT suspect AND ${FINISHED_SQL})::int AS finished
+         COUNT(*) FILTER (WHERE state = 'open' AND NOT suspect AND ${FINISHED_SQL})::int AS finished,
+         COUNT(*) FILTER (WHERE ${CLEARABLE_SQL})::int AS clearable
        FROM github_notifications WHERE account_id = ANY($1::text[])`,
       [ids],
     ),
@@ -466,9 +466,10 @@ export async function applyNotificationAction(accountId, threadId, action, { act
 const ACCOUNT_FAILURES = new Set(['GITHUB_ACCOUNT_DISABLED', 'GITHUB_ACCOUNT_UNAVAILABLE']);
 
 /**
- * Mark every open finished thread done on GitHub (one account, or all), as
- * the operator but without teaching learned rules: the decision already says
- * nothing is left. One failed thread is counted, never stops the rest.
+ * Mark every open non-suspect finished or read thread done on GitHub (one
+ * account, or all), as the operator but without teaching learned rules:
+ * reading a thread does not decide how future threads should be handled.
+ * One failed thread is counted, never stops the rest.
  */
 export async function clearFinishedNotifications({ accountId = null } = {}) {
   const accounts = (await listAccounts()).filter(isActive).filter((account) => !accountId || account.id === accountId);
@@ -476,7 +477,7 @@ export async function clearFinishedNotifications({ accountId = null } = {}) {
   let failed = 0;
   for (const account of accounts) {
     const { rows } = await query(
-      `SELECT thread_id, decision FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect AND ${FINISHED_SQL}
+      `SELECT thread_id, decision FROM github_notifications WHERE account_id = $1 AND ${CLEARABLE_SQL}
        ORDER BY gh_updated_at DESC`,
       [account.id],
     );
@@ -489,7 +490,7 @@ export async function clearFinishedNotifications({ accountId = null } = {}) {
       }
       // An account gh cannot act as fails every thread the same way.
       if (ACCOUNT_FAILURES.has(error.code)) {
-        console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
+        console.error(`❌ Could not mark finished or read GitHub notifications done for ${account.host}: ${error.message}`);
         failed += rows.length - index;
         break;
       }
@@ -498,7 +499,7 @@ export async function clearFinishedNotifications({ accountId = null } = {}) {
     }
     if (rows.length) githubNotificationEvents.emit('changed', { accountId: account.id });
   }
-  console.log(`🧹 Marked ${cleared} finished GitHub notification(s) done${failed ? `, ${failed} failed` : ''}`);
+  console.log(`🧹 Marked ${cleared} finished or read GitHub notification(s) done${failed ? `, ${failed} failed` : ''}`);
   return { cleared, failed };
 }
 

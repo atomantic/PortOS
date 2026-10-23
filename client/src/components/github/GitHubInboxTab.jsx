@@ -58,13 +58,12 @@ const MORE_ACTIONS = [
 ];
 
 // Whether a row still belongs in the view after an action moved it. Mirrors
-// VIEW_FILTERS in server/services/githubNotifications.js: the inbox holds every
-// open thread GitHub still has unread or PortOS has not seen read there,
-// whatever its decision.
+// VIEW_FILTERS in server/services/githubNotifications.js: the inbox holds
+// unread open threads, whatever their decision.
 const VIEW_MATCHERS = {
-  'needs-you': (row) => row.state === 'open' && !row.readOnGithub && !row.suspect,
-  suspect: (row) => row.state === 'open' && !row.readOnGithub && row.suspect,
-  handled: (row) => row.state !== 'open' || row.readOnGithub,
+  'needs-you': (row) => row.state === 'open' && row.unread && !row.readOnGithub && !row.suspect,
+  suspect: (row) => row.state === 'open' && row.unread && !row.readOnGithub && row.suspect,
+  handled: (row) => row.state !== 'open' || !row.unread || row.readOnGithub,
   all: () => true,
 };
 const belongsInView = (row, view) => VIEW_MATCHERS[view](row);
@@ -235,7 +234,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
             {notification.yourRepo && <Pill tone="accent">Your repo</Pill>}
             {notification.repoPrivate && <Pill tone="muted">Private</Pill>}
             {trust && <Pill tone={trust.tone}>{trust.label}</Pill>}
-            {notification.readOnGithub && <Pill tone="muted">Read on GitHub</Pill>}
+            {notification.state === 'open' && !notification.unread && <Pill tone="muted">{notification.readOnGithub ? 'Read on GitHub' : 'Read'}</Pill>}
             {handled && <Pill tone="muted">{STATE_LABELS[notification.state] || notification.state}</Pill>}
             {!handled && notification.agentFailed && (
               <Link to={agentFailedLink(notification.agentFailed)} className="rounded hover:underline">
@@ -461,7 +460,7 @@ export default function GitHubInboxTab() {
       </div>
 
       <SummaryTiles view={view} counts={data.counts} onSelect={setView} />
-      {(data.counts?.['with-agents'] > 0 || (view === 'needs-you' && data.counts?.finished > 0)) && (
+      {(data.counts?.['with-agents'] > 0 || (view === 'needs-you' && data.counts?.clearable > 0)) && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           {data.counts['with-agents'] > 0 && (
             <p className="flex items-center gap-1.5 text-xs text-gray-400">
@@ -469,7 +468,7 @@ export default function GitHubInboxTab() {
               {formatCount(data.counts['with-agents'])} with an agent now
             </p>
           )}
-          {view === 'needs-you' && data.counts.finished > 0 && (
+          {view === 'needs-you' && data.counts.clearable > 0 && (
             <button
               type="button"
               onClick={clearFinished}
@@ -477,7 +476,7 @@ export default function GitHubInboxTab() {
               className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-200 hover:border-gray-500 disabled:opacity-60"
             >
               <CheckCheck size={13} aria-hidden="true" />
-              {clearing ? 'Marking done…' : `Mark ${formatCount(data.counts.finished)} finished done`}
+              {clearing ? 'Marking done…' : `Mark ${formatCount(data.counts.clearable)} finished or read done`}
             </button>
           )}
         </div>

@@ -218,7 +218,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await ids()).toEqual(['151', '152']);
   });
 
-  it('moves a thread read on GitHub to Handled without a gh write, keeps a PortOS read in Needs you, and brings it back on new activity', async () => {
+  it('moves a thread read on GitHub to Handled without a gh write, moves a PortOS read to Handled, and brings it back on new activity', async () => {
     let inbox = [thread('161'), thread('162'), thread('163')];
     const actions = mockGh((args) => githubListing(args, inbox));
     await syncAccountNotifications(account.id);
@@ -229,13 +229,16 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     // all=true listing as read, whose cursor does not move); 162 is read
     // through PortOS.
     await applyNotificationAction(account.id, '162', 'read');
+    expect(await view('needs-you')).toEqual(['161', '163']);
+    expect(await view('handled')).toEqual(['162']);
     actions.length = 0;
     inbox = [{ ...inbox[0], unread: false }, { ...inbox[1], unread: false }, { ...inbox[2], unread: false }];
     await syncAccountNotifications(account.id);
-    expect(await view('needs-you')).toEqual(['162']);
-    expect(await view('handled')).toEqual(['161', '163']);
-    expect((await listNotifications({ accountId: account.id, view: 'handled' })).notifications[0]).toMatchObject({ readOnGithub: true, state: 'open' });
+    expect(await view('needs-you')).toEqual([]);
+    expect(await view('handled')).toEqual(['161', '162', '163']);
+    expect((await listNotifications({ accountId: account.id, view: 'handled' })).notifications.find((row) => row.threadId === '161')).toMatchObject({ readOnGithub: true, state: 'open' });
     expect(actions).toEqual([]);
+    expect((await listNotifications({ accountId: account.id })).counts).toMatchObject({ 'needs-you': 0, clearable: 3 });
 
     inbox = [thread('161', { updatedAt: '2026-10-02T10:00:00Z' })];
     await syncAccountNotifications(account.id);
@@ -371,10 +374,24 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     // there, until it is marked done, which one tap does for every finished thread.
     const inbox = await listNotifications({ accountId: account.id });
     expect(inbox.notifications.map((row) => row.threadId)).toEqual(['702', '701']);
-    expect(inbox.counts).toMatchObject({ 'needs-you': 2, finished: 1 });
+    expect(inbox.counts).toMatchObject({ 'needs-you': 2, finished: 1, clearable: 1 });
     expect(await clearFinishedNotifications({ accountId: account.id })).toEqual({ cleared: 1, failed: 0 });
     expect(actions).toEqual([['DELETE', 'notifications/threads/701']]);
     expect((await listNotifications({ accountId: account.id })).notifications.map((row) => row.threadId)).toEqual(['702']);
+  });
+
+  it('clears read threads from either source in one tap without learning or clearing suspect threads', async () => {
+    mockGh((args) => githubListing(args, [thread('711'), thread('712'), thread('713')]));
+    await syncAccountNotifications(account.id);
+    await applyNotificationAction(account.id, '711', 'read');
+    await query(`UPDATE github_notifications SET unread = FALSE, read_on_github_at = NOW(),
+      suspect = (thread_id = '713') WHERE account_id = $1 AND thread_id IN ('712', '713')`, [account.id]);
+    const actions = mockGh(() => listing([]));
+    expect((await listNotifications({ accountId: account.id })).counts).toMatchObject({ 'needs-you': 0, clearable: 2 });
+    expect(await clearFinishedNotifications({ accountId: account.id })).toEqual({ cleared: 2, failed: 0 });
+    expect(actions.sort()).toEqual([['DELETE', 'notifications/threads/711'], ['DELETE', 'notifications/threads/712']]);
+    expect((await getNotification(account.id, '713')).state).toBe('open');
+    expect((await query('SELECT * FROM github_notification_rules WHERE account_id = $1', [account.id])).rows).toEqual([]);
   });
 
   it('links a deployment approval to its waiting run, keeps it in front of you, and clears it once the run stops waiting', async () => {

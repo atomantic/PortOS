@@ -514,10 +514,24 @@ describe('GitHub inbox tab', () => {
     expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
   });
 
-  it('marks every finished thread done in one tap', async () => {
+  it('labels handled read threads with where they were read', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [
+        { ...NOTIFICATION, unread: false },
+        { ...NOTIFICATION, threadId: '102', title: 'Read elsewhere', unread: false, readOnGithub: true },
+      ],
+      counts: { 'needs-you': 0, handled: 2 }, sync: {},
+    });
+    await renderInbox();
+    fireEvent.click(screen.getByRole('button', { name: /Handled/ }));
+    expect(await screen.findByText('Read')).toBeTruthy();
+    expect(screen.getByText('Read on GitHub')).toBeTruthy();
+  });
+
+  it('marks every finished or read thread done in one tap', async () => {
     mock.getGitHubNotifications.mockResolvedValue({
       notifications: [NOTIFICATION, { ...NOTIFICATION, threadId: '102', title: 'Folded CI notice', decision: 'duplicate' }],
-      counts: { 'needs-you': 2, suspect: 0, handled: 0, all: 2, finished: 1 },
+      counts: { 'needs-you': 2, suspect: 0, handled: 0, all: 2, finished: 1, clearable: 3 },
       sync: {},
     });
     mock.clearFinishedGitHubNotifications.mockResolvedValue({ cleared: 1, failed: 0 });
@@ -526,7 +540,7 @@ describe('GitHub inbox tab', () => {
     expect(await screen.findByText('Folded CI notice')).toBeTruthy();
     // Its suggestion is the action itself.
     expect(screen.getAllByRole('button', { name: 'Mark done' }).length).toBe(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Mark 1 finished done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark 3 finished or read done' }));
     await waitFor(() => expect(mock.clearFinishedGitHubNotifications).toHaveBeenCalledWith(null));
   });
 
