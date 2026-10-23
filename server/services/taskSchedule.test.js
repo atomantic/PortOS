@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
+vi.mock('./branchReconcileInventoryPrune.js', async importOriginal => ({
+  ...await importOriginal(), findGoneInventoryRows: vi.fn(async () => []),
+}));
+import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
+
 vi.mock('./cosEvents.js', () => ({
   cosEvents: { emit: vi.fn() },
   emitLog: vi.fn()
@@ -146,6 +151,7 @@ import {
   getPerpetualDrainState,
   recordPerpetualDispatch,
   recordBranchReconcileOutcome,
+  getBranchReconcileOutcome,
   recordInitializedRetirementRecovery,
   recordHeldCheckoutRetirement,
   applyOnDemandRunResets,
@@ -2551,6 +2557,24 @@ describe('taskSchedule', () => {
   })
 
   describe('getScheduleStatus', () => {
+    it('keeps missing preservation obligations while marking their checkout unavailable only in the response', async () => {
+      const row = { branch: 'fix/example', path: '/example/gone', head: 'abc', locked: false, reason: 'retirement-receipt-unverified' };
+      const outcome = { status: 'incomplete', remaining: [row], retirementObligations: [row] };
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', enabled: true } }, executions: {
+        'task:branch-reconcile': { perApp: { 'app-1': { branchReconcileOutcome: outcome } } },
+      } });
+      getAppById.mockResolvedValue({ id: 'app-1', repoPath: '/example' });
+      findGoneInventoryRows.mockResolvedValueOnce([row]);
+      const status = await getScheduleStatus();
+      expect(status.tasks['branch-reconcile'].reconcileOutcomes['app-1']).toMatchObject({
+        status: 'incomplete', remaining: [{ ...row, checkoutMissing: true }], retirementObligations: [row],
+      });
+      expect(await getBranchReconcileOutcome('app-1')).toEqual(outcome);
+      findGoneInventoryRows.mockRejectedValueOnce(new Error('inventory unavailable'));
+      const unknown = await getScheduleStatus();
+      expect(unknown.tasks['branch-reconcile'].reconcileOutcomes['app-1'].remaining).toEqual([row]);
+    });
+
     beforeEach(() => {
       loadState.mockResolvedValue({ config: { improvementEnabled: true } })
     })

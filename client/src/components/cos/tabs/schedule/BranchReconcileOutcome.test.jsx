@@ -93,3 +93,10 @@ describe('BranchReconcileOutcome checkout retirement', () => {
     expect(screen.getByRole('button', { name: 'Yes, archive and retire' })).toBeDisabled();
   });
 });
+
+ it('explains missing historical checkouts without offering retirement or claiming completion', () => {
+  render(<BranchReconcileOutcome outcomes={{ 'app-1': { status: 'incomplete', remaining: [{ ...held, checkoutMissing: true, reason: 'retirement-receipt-unverified' }] } }} apps={[{ id: 'app-1', name: 'Example App' }]} />);
+  expect(screen.getByText(/Example App · Incomplete · 1 remaining · missing checkout evidence/)).toBeTruthy();
+  expect(screen.getByText(/historical preservation obligation, not an extra worktree/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Archive and retire checkout…' })).toBeNull();
+});

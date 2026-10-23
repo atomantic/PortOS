@@ -9,7 +9,7 @@ import { execGit } from '../lib/execGit.js';
 import { pathExists } from '../lib/fileCore.js';
 
 // Rows that bind a retirement-receipt obligation are evidence, not display data.
-const isObligationRow = row => ['retirement-review-pending', 'retirement-receipt-unverified'].includes(row?.reason);
+export const isObligationRow = row => ['retirement-review-pending', 'retirement-receipt-unverified'].includes(row?.reason);
 
 async function registeredPaths(repoPath) {
   const { stdout } = await execGit(['worktree', 'list', '--porcelain'], repoPath);
@@ -24,14 +24,15 @@ async function registeredPaths(repoPath) {
  *
  * @param {string} repoPath
  * @param {object[]} rows
+ * @param {{ includeObligations?: boolean }} [options] Include missing originals for display only; never prune these obligations.
  * @returns {Promise<object[]>}
  */
-export async function findGoneInventoryRows(repoPath, rows) {
+export async function findGoneInventoryRows(repoPath, rows, { includeObligations = false } = {}) {
   if (!Array.isArray(rows) || !rows.length) return [];
   const registered = await registeredPaths(repoPath);
   const gone = [];
   for (const row of rows) {
-    if (isObligationRow(row)) continue;
+    if (!includeObligations && isObligationRow(row)) continue;
     if (typeof row?.path === 'string' && row.path) {
       if (!registered.has(row.path) && !await pathExists(row.path)) gone.push(row);
     } else if (typeof row?.branch === 'string' && row.branch) {

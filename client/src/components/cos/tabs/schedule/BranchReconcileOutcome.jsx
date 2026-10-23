@@ -6,7 +6,7 @@ const STATUS_LABELS = { drained: 'No remaining work in last scan', incomplete: '
 
 // Only a post-cleanup inventory row carries the exact checkout identity a
 // scoped release must name; branch-only holds have nothing to release.
-const isInventoriedCheckout = entry => Boolean(entry.path && entry.head && typeof entry.locked === 'boolean');
+const isInventoriedCheckout = entry => Boolean(!entry.checkoutMissing && entry.path && entry.head && typeof entry.locked === 'boolean');
 const checkoutKey = (appId, entry) => `${appId}\0${entry.path}\0${entry.head}`;
 const NONE = new Set();
 
@@ -104,6 +104,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
               {apps?.find(app => app.id === appId)?.name || (appId === 'null' ? 'Repository' : appId)}
               {' · '}{STATUS_LABELS[outcome.status] || 'Outcome unavailable'}
               {remaining && ` · ${formatCount(remaining.length)} remaining`}
+              {remaining?.some(entry => entry.checkoutMissing) && ' · missing checkout evidence'}
             </summary>
             <div className="mt-2 space-y-2 text-gray-400">
               <p>{outcome.observedAt ? `Last inventory: ${formatDateTime(outcome.observedAt)}` : 'No readable inventory yet.'}</p>
@@ -115,6 +116,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
                   <li key={`${entry.path || entry.branch || entry.issue || entry.reason}:${index}`} className="break-words border-t border-port-border pt-2">
                     <p className="text-gray-300">{entry.branch || (entry.detached ? 'Detached checkout' : entry.issue ? `Issue #${entry.issue}` : 'Repository scan')}: {entry.reason}</p>
                     {entry.path && <p className="break-all">{entry.path}</p>}
+                    {entry.checkoutMissing && <p>Checkout no longer exists. This is a historical preservation obligation, not an extra worktree. Its archive receipt must be recovered or investigated before it can be cleared.</p>}
                     {entry.head && <p className="break-all">HEAD: {entry.head}</p>}
                     {entry.locked && <p>Lock: {entry.lockReason || 'No reason recorded'}</p>}
                     {entry.managed === false && <p>Outside managed worktree roots</p>}
@@ -122,7 +124,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
                   </li>
                 ))}
               </ul>
-              {(remaining || []).some(entry => entry.path) && (
+              {(remaining || []).some(isInventoriedCheckout) && (
                 <p>Retiring a checkout is a scoped release of the exact row shown. It needs merged work, no live owner or manual handoff, and a verified archive of unique tracked, untracked and ignored content. Lock age, an absent process, and lock text never release a checkout on their own.</p>
               )}
               {Array.isArray(outcome.retired) && outcome.retired.length > 0 && (
