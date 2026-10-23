@@ -5,12 +5,18 @@
  * Replaces the shots, so it refuses while any shot is locked; a shot whose
  * span is unchanged keeps its frames and clips (replaceScenes). Runs only on
  * the user's tap; no model call.
+ *
+ * After the fit, a shot whose panel was edited shows it (storyboardShotPanel)
+ * and waits: Update copies the panel's action to the shot's intent, so even a
+ * locked shot only changes on that tap. Use as panel art sends the shot's
+ * still back to its panel as the selected take.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { localImageFilename } from '../../lib/localImageFilename.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
-import { fitStoryboardToSong, storyboardFitSong } from '../../lib/storyboardFit.js';
-import { getStoryboard } from './index.js';
+import { fitStoryboardToSong, storyboardFitSong, storyboardPanelRev, storyboardShotPanel } from '../../lib/storyboardFit.js';
+import { addPanelTake, getStoryboard, selectPanelTake } from './index.js';
 
 export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, starts = {} } = {}) {
   const [{ getProject, mutateProjectRecord }, { replaceScenes }, { shotLocks }] = await Promise.all([
@@ -48,4 +54,40 @@ export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, sta
   });
   console.log(`🎬 Fit storyboard ${board.id} to music video ${projectId}: ${outcome.scenes.length} shot(s), replaced ${outcome.replaced}`);
   return { project: outcome.project, shots: outcome.scenes.length, replaced: outcome.replaced };
+}
+
+/** A fitted shot, its project and its panel on the linked board; 409 when the panel is gone. */
+async function shotAndPanel(projectId, sceneId) {
+  const { getProject } = await import('../musicVideo/projects.js');
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });
+  const scene = (project.scenes || []).find((s) => s.sceneId === sceneId);
+  if (!scene) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  if (!scene.panelId) throw new ServerError('This shot was not fitted from a storyboard panel.', { status: 409, code: 'NO_PANEL' });
+  const board = project.storyboardId ? await getStoryboard(project.storyboardId).catch(() => null) : null;
+  const found = board && storyboardShotPanel(board, scene);
+  if (!found || found.state === 'missing') {
+    throw new ServerError("This shot's storyboard panel is gone; unlink it from the panel.", { status: 409, code: 'PANEL_MISSING' });
+  }
+  return { project, scene, board, panel: found.panel };
+}
+
+/** Update: the shot takes its panel's action as its intent and records the panel as seen. */
+export async function updateShotFromPanel(projectId, sceneId) {
+  const { panel } = await shotAndPanel(projectId, sceneId);
+  const { updateScene } = await import('../musicVideo/projects.js');
+  const scene = await updateScene(projectId, sceneId, { visualIntent: panel.action.trim() || null, panelRev: storyboardPanelRev(panel) });
+  return { scene };
+}
+
+/** Use as panel art: the shot's still becomes its panel's selected take (reselected when already there). */
+export async function sendShotStillToPanel(projectId, sceneId) {
+  const { scene, board, panel } = await shotAndPanel(projectId, sceneId);
+  const image = localImageFilename(scene.referenceImageId);
+  if (!image) throw new ServerError('This shot has no still in the gallery yet.', { status: 409, code: 'NO_STILL' });
+  const existing = panel.takes.find((take) => take.source === 'gallery' && take.image === image);
+  if (existing) return { board: await selectPanelTake(board.id, panel.id, existing.id) };
+  const { board: next } = await addPanelTake(board.id, panel.id, { source: 'gallery', image });
+  console.log(`🎬 Shot ${sceneId} still → storyboard ${board.id} panel ${panel.id}`);
+  return { board: next };
 }

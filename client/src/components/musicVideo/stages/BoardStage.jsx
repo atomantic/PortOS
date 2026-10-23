@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen, X } from 'lucide-react';
 import ContactSheetButton from '../ContactSheetButton.jsx';
@@ -17,6 +17,8 @@ import { SHOT_EFFECT_OPTIONS, shotEffectCounts, shotEffectLabel, shotEffects, sh
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
 import { formatTimecode } from '../../../utils/formatters.js';
+import { getStoryboard } from '../../../services/api';
+import { storyboardShotPanel } from '../../../../../server/lib/storyboardFit.js';
 
 const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage']];
 const MEDIA_ICONS = { clip: Film, image: ImageIcon, code: Code2, card: Type };
@@ -36,6 +38,20 @@ function SceneMediaBadges({ scene, layered }) {
 }
 
 const LOCK_BADGED = ['locked', 'still', 'changed'];
+const PANEL_NOTICES = { changed: 'Storyboard changed', missing: 'Storyboard panel deleted' };
+
+/** The video's linked storyboard, read when Shots opens (null when none is linked or it is gone). */
+function useLinkedStoryboard(storyboardId) {
+  const [board, setBoard] = useState(null);
+  useEffect(() => {
+    setBoard(null);
+    if (!storyboardId) return undefined;
+    let active = true;
+    getStoryboard(storyboardId, { silent: true }).then((next) => { if (active) setBoard(next); }).catch(() => {});
+    return () => { active = false; };
+  }, [storyboardId]);
+  return [board, setBoard];
+}
 
 /**
  * Top-left mark on a Board thumbnail: locked, a video shot with only its still
@@ -62,6 +78,9 @@ function SceneLockBadge({ sceneId, state }) {
 export default function BoardStage({ board }) {
   const { project, locked, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
+  const [storyboard, setStoryboard] = useLinkedStoryboard(project.storyboardId);
+  // Until the board is read, a fitted shot shows no panel state rather than a false "deleted".
+  const panelOf = (scene) => (storyboard ? storyboardShotPanel(storyboard, scene) : null);
   const lockValue = useContext(ShotLockContext);
   const shotLocks = Object.fromEntries(Object.entries(lockValue?.locks || {}).map(([id, still]) => [id, overallShotLock(still, lockValue.clips?.[id])]));
   const [searchParams, setSearchParams] = useSearchParams();
@@ -230,6 +249,7 @@ export default function BoardStage({ board }) {
               {formatTimecode(scene.startSec)}–{formatTimecode(scene.endSec)}
             </span>
             {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}
+            {PANEL_NOTICES[panelOf(scene)?.state] && <span className="block text-xs text-port-warning">{PANEL_NOTICES[panelOf(scene).state]}</span>}
           </button>)}
           {scenes.length > 0 && filter === 'all' && (
             <EndingThumbnail project={project} open={endingOpen} onOpen={endingOpen ? closeEnding : openEnding} />
@@ -244,6 +264,9 @@ export default function BoardStage({ board }) {
               key={scene.sceneId}
               scene={scene}
               project={project}
+              storyboardId={project.storyboardId || null}
+              storyboardShot={panelOf(scene)}
+              onStoryboardBoard={setStoryboard}
               expanded={activeSceneId === scene.sceneId}
               onToggleExpand={toggleInspector}
               stepShot={stepShot}

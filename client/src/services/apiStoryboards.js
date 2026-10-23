@@ -83,3 +83,10 @@ export const makeStoryboardFromMusicVideo = (projectId, options) =>
 // → { project, shots, replaced }. 409 when the board changed since the preview or a shot is locked.
 export const fitMusicVideoToStoryboard = (projectId, input, options) =>
   request(`/storyboards/fit-music-video/${enc(projectId)}`, { ...json('POST', input), ...options });
+
+// A fitted shot and its panel: Update → { scene } (the panel's action as the shot's intent);
+// panel art → { board } (the shot's still as the panel's selected take).
+export const updateShotFromStoryboardPanel = (projectId, sceneId, options) =>
+  request(`/storyboards/music-video/${enc(projectId)}/shots/${enc(sceneId)}/update-from-panel`, { method: 'POST', ...options });
+export const sendShotStillToStoryboardPanel = (projectId, sceneId, options) =>
+  request(`/storyboards/music-video/${enc(projectId)}/shots/${enc(sceneId)}/panel-art`, { method: 'POST', ...options });

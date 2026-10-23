@@ -5,6 +5,7 @@ import SceneStartFrame from './SceneStartFrame.jsx';
 import SceneClipTiming from './SceneClipTiming.jsx';
 import SceneRejectUnused from './SceneRejectUnused.jsx';
 import ShotFinalRender from './ShotFinalRender.jsx';
+import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
@@ -124,6 +125,7 @@ export default function SceneCard({
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
+  storyboardId = null, storyboardShot = null, onStoryboardBoard = null,
 }) {
   const detailsRef = useRef(null);
 
@@ -566,6 +568,8 @@ export default function SceneCard({
         {codeShot && shotSettings}
         {/* This shot's piece of the composed final render: cached or not, Render shot, its film look. */}
         {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} fieldId={fieldId} />}
+        <ShotStoryboardPanel projectId={project?.id} storyboardId={storyboardId} scene={scene} linked={storyboardShot}
+          onSceneUpdated={onEditLocal} onUnlink={() => applyPatch({ panelId: null, panelRev: null })} onBoard={onStoryboardBoard} />
         {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (
           <details className="group/direction rounded border border-port-border">
             <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
