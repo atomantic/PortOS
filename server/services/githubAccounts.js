@@ -48,6 +48,7 @@ const storedAccountSchema = z.object({
   mode: z.enum(GITHUB_ACCOUNT_MODES),
   auditReport: z.boolean().optional(),
   allowAgents: z.boolean().optional(),
+  trustInstanceUsers: z.boolean().optional(),
   agentRules: z.array(z.object({}).passthrough()).optional(),
   enabled: z.boolean(),
   createdAt: z.string(),
@@ -65,6 +66,7 @@ const implicitAccount = () => ({
   mode: 'observe',
   auditReport: false,
   allowAgents: false,
+  trustInstanceUsers: false,
   agentRules: [],
   enabled: true,
   createdAt: null,
@@ -99,6 +101,13 @@ const materialize = (account) => {
 };
 
 const sameIdentity = (a, b) => a.host === b.host && (a.login || '').toLowerCase() === (b.login || '').toLowerCase();
+
+// github.com is the public internet: its users are never trusted wholesale.
+function assertInstanceTrustAllowed(account) {
+  if (account.trustInstanceUsers === true && account.host === GITHUB_DOT_COM) {
+    throw new ServerError('Only an Enterprise host can trust everyone on its instance', { status: 400, code: 'GITHUB_INSTANCE_TRUST_NOT_ALLOWED' });
+  }
+}
 
 function assertUniqueIdentity(accounts, candidate) {
   const clash = accounts.find((account) => account.id !== candidate.id && sameIdentity(account, candidate));
@@ -136,12 +145,14 @@ export function createAccount(input) {
       mode: data.mode || 'observe',
       auditReport: data.auditReport ?? false,
       allowAgents: data.allowAgents ?? false,
+      trustInstanceUsers: data.trustInstanceUsers ?? false,
       agentRules: data.agentRules ?? [],
       enabled: data.enabled ?? true,
       createdAt: now,
       updatedAt: now,
     };
     assertUniqueIdentity(accounts, account);
+    assertInstanceTrustAllowed(account);
     await saveStore([...accounts, account]);
     console.log(`🔐 Added GitHub account for ${account.host} (${account.trust})`);
     return account;
@@ -157,6 +168,7 @@ export function updateAccount(id, input) {
     const updated = { ...accounts[index], ...data, updatedAt: new Date().toISOString() };
     if (data.label === '') updated.label = updated.login ? `${updated.login} @ ${updated.host}` : updated.host;
     assertUniqueIdentity(accounts, updated);
+    assertInstanceTrustAllowed(updated);
     accounts[index] = updated;
     await saveStore(accounts);
     return updated;
