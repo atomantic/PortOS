@@ -1695,7 +1695,8 @@ export async function finalizeAgent({
   const reportedTaskOutcome = !terminatedByUser && !isPrivateSecurityTask(task)
     ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
-  if (deliveryHeld && reportedTaskOutcome.recovery?.mode !== 'cleanup') {
+  if (deliveryHeld && reportedTaskOutcome.recovery?.mode !== 'cleanup'
+    && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent) {
     reportedSuccess = false;
     error = reportedTaskOutcome.reason;
     reportedErrorAnalysis = { category: `task-${reportedTaskOutcome.status}`, message: error,
@@ -1939,8 +1940,10 @@ export async function finalizeAgent({
   } : verdict;
   const cleanupOwner = taskOutcome?.recovery?.mode === 'cleanup' ? await getAgentRecord(agentId) : null;
   const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || isTruthyMeta(cleanupOwner?.metadata?.claimPicksOwnBranch);
+  const terminalFailure = !verdict.success && (verdict.errorAnalysis?.actionable || verdict.errorAnalysis?.permanent)
+    && !(verdict.source === 'reported' && verdict.errorAnalysis?.category === `task-${reportedTaskOutcome?.status}`);
   const taskUpdate = (deliveryHeld || (verdict.success && outcomeHeld)) && !terminatedByUser
-    && !executionInterruption && !isPrivateSecurityTask(task) && hookResult?.outcome?.accepted !== false
+    && !terminalFailure && !executionInterruption && !isPrivateSecurityTask(task) && hookResult?.outcome?.accepted !== false
     ? resolveUndeliveredTaskUpdate(preHookTask, (!executionSuccess || !verdict.success || validationPassed === false || !cleanupEligible) && taskOutcome.recovery?.mode === 'cleanup'
       ? { ...taskOutcome, recovery: undefined } : taskOutcome, agentId)
     : await resolveFinalTaskUpdate({ task, preHookTask, hookMetadata, verdict, terminatedByUser, agentId });

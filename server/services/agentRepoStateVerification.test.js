@@ -148,7 +148,7 @@ beforeEach(() => {
   findMissingCheckoutPreservation.mockResolvedValue(null);
   inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'delivery-ci-or-review-pending' });
   readBranchCompletionPolicies.mockResolvedValue([]);
-  updateTask.mockResolvedValue({ status: 'completed' });
+  updateTask.mockReset().mockResolvedValue({ status: 'completed' });
   getTaskById.mockResolvedValue({ ...task(), status: 'in_progress', metadata: { ...task().metadata,
     deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } });
   recordBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [{ ...RELEASE, createdAt: CREATED_AT }] });
@@ -182,6 +182,20 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
     expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', { status: 'completed', reasons: ['cleanup-owner-changed'] });
+  });
+
+  it('transfers a cleanup handoff that cannot retire a human leave-open branch', async () => {
+    updateTask.mockResolvedValueOnce({ status: 'in_progress' });
+    const pending = { ...task({ prCompletion: 'leave-open' }), status: 'in_progress', metadata: {
+      ...task({ prCompletion: 'leave-open' }).metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1',
+    } };
+    getTaskById.mockResolvedValue(pending);
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    const state = { ...agentState(), result: { cleanupPending: true } };
+    expect(await run({ success: false, agentState: state, task: pending })).toMatchObject({ skipReason: 'cleanup-transferred-to-recovery' });
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(releaseRetryHold).toHaveBeenCalledOnce();
   });
 
   it('transfers unsupported cleanup verification back to bounded recovery', async () => {
