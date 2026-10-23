@@ -725,7 +725,7 @@ describe('conflictJournal — RESTORABLE_FIELDS parity with the wire shape', () 
   });
   const COMMON = ['id', 'createdAt', 'updatedAt', 'deleted', 'deletedAt'];
   const STRUCTURAL_FIELDS = {
-    storyboard: [...COMMON, 'plotLlm'], // plotLlm: per-user provider pick
+    storyboard: [...COMMON, 'plotLlm', 'source'], // plotLlm: per-user provider pick; source: set when the board is made, never edited
     deck: [...COMMON, 'kind', 'cards'], // kind mints the roster; cards restore with the deck row
   };
 
