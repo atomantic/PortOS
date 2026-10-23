@@ -1558,6 +1558,21 @@ async function downloadHfImportFile({ repo, remotePath, destination, headers, pr
  * @param {(p: { status: string, percent: number|null, completed?: number, total?: number, importing?: boolean }) => void} [onProgress]
  */
 async function importModelFromHfSafetensors(spec, onProgress) {
+  const { modelId } = spec
+  // One import per model at a time: a second would mistake the first's live
+  // staging for one left behind. Checked before any network round-trip.
+  if (activeImports.has(modelId)) {
+    return { success: false, error: `${modelId} is already being imported.`, modelId, code: 'OLLAMA_IMPORT_IN_PROGRESS' }
+  }
+  activeImports.add(modelId)
+  try {
+    return await prepareSafetensorsImport(spec, onProgress)
+  } finally {
+    activeImports.delete(modelId)
+  }
+}
+
+async function prepareSafetensorsImport(spec, onProgress) {
   const { modelId, repo, subdir, minVersion = '0.19.0' } = spec
   if (!(await checkOllamaAvailable())) {
     return { success: false, error: 'Ollama not available', modelId }
@@ -1607,20 +1622,10 @@ async function importModelFromHfSafetensors(spec, onProgress) {
     return { success: false, error: `The ${subdir} checkpoint is incomplete or unavailable on Hugging Face.`, modelId }
   }
 
-  // One import per model at a time: a second would mistake the first's live
-  // staging for one left behind.
-  if (activeImports.has(modelId)) {
-    return { success: false, error: `${modelId} is already being imported.`, modelId, code: 'OLLAMA_IMPORT_IN_PROGRESS' }
-  }
-  activeImports.add(modelId)
-  try {
-    // Resolve-not-throw, like every other failure here. A staging write that
-    // throws leaves its marker behind; the next attempt reuses or retires it.
-    return await runSafetensorsImport({ modelId, repo, subdir, files, headers, onProgress })
-      .catch((err) => ({ success: false, error: err.message, modelId }))
-  } finally {
-    activeImports.delete(modelId)
-  }
+  // Resolve-not-throw, like every other failure here. A staging write that
+  // throws leaves its marker behind; the next attempt reuses or retires it.
+  return runSafetensorsImport({ modelId, repo, subdir, files, headers, onProgress })
+    .catch((err) => ({ success: false, error: err.message, modelId }))
 }
 
 const heldImportResult = (modelId, error, reason) => ({
@@ -1641,7 +1646,10 @@ async function runSafetensorsImport({ modelId, repo, subdir, files, headers, onP
     .catch((err) => console.error(`❌ Safetensors staging sweep failed: ${err.message}`))
   const retained = await findImportStaging(modelId)
   if (retained) {
-    const complete = await stagedFilesComplete(join(retained.tempRoot, 'model'), files)
+    // Equal file sizes alone could pass a checkpoint from another repo or
+    // subdir off as this one; a marker that cannot name its source is retired.
+    const sameSource = retained.marker.repo === repo && retained.marker.subdir === subdir
+    const complete = sameSource && await stagedFilesComplete(join(retained.tempRoot, 'model'), files)
     if (complete) {
       // Reusing is non-destructive, but stacking a second create on one the
       // daemon is still running is not; wait only for a holder we can see.
@@ -1658,7 +1666,7 @@ async function runSafetensorsImport({ modelId, repo, subdir, files, headers, onP
     } else {
       const release = await awaitStagingRelease(retained.tempRoot, { attempts: 1 })
       if (!release.free) {
-        return heldImportResult(modelId, `A previous import of ${modelId} left an incomplete checkpoint.`, release.reason)
+        return heldImportResult(modelId, `A previous import of ${modelId} left a checkpoint it cannot reuse.`, release.reason)
       }
       await removeImportStaging(retained.tempRoot)
     }

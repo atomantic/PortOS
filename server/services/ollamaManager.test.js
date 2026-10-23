@@ -829,6 +829,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
     let modelsDir
     let lsof
     let downloads
+    let metadataFetches
     let stagingRoots
 
     // Each test imports its own model id so retained staging from a parallel
@@ -842,11 +843,13 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
       hfTokenMock.token = 'hf_example_token'
       downloads = 0
+      metadataFetches = 0
       stagingRoots = new Set()
       vi.stubGlobal('fetch', vi.fn(async (url) => {
         const href = String(url)
         if (href.endsWith('/api/version')) return versionResponse()
         if (href.includes('/api/models/example/Qwen-MLX')) {
+          metadataFetches++
           return Response.json({ siblings: [
             { rfilename: '4-bit/config.json', size: files.config.length },
             { rfilename: '4-bit/model.safetensors', lfs: { size: files.weights.length } }
@@ -969,6 +972,53 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       expect(retryRoot).toBe(root)
       expect(downloads).toBe(2)
       await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+
+    it('re-downloads instead of reusing retained staging staged from a different source', async () => {
+      const modelSpec = specFor('moved-source')
+      const stale = await mkdtemp(join(tmpdir(), 'portos-ollama-hf-import-'))
+      stagingRoots.add(stale)
+      await mkdir(join(stale, 'model'), { recursive: true })
+      // Same file names and byte sizes as the current recipe, different repo.
+      await writeFile(join(stale, 'model', 'config.json'), files.config)
+      await writeFile(join(stale, 'model', 'model.safetensors'), files.weights)
+      const at = new Date().toISOString()
+      await writeFile(join(stale, 'portos-import.json'), JSON.stringify({
+        modelId: modelSpec.modelId, repo: 'example/Other-MLX', subdir: '4-bit', phase: 'retained', createdAt: at, retainedAt: at
+      }))
+      const { importModelFromHfSafetensors } = await loadManager()
+      let createdFrom
+      await scriptCreate((c, _cmd, args) => { createdFrom = stagingOf(args); queueMicrotask(() => c.exit(0)) })
+
+      let result
+      importModelFromHfSafetensors(modelSpec).then((r) => { result = r })
+      await advanceUntil(() => result, { stepMs: 0 })
+
+      expect(result).toEqual({ success: true, modelId: modelSpec.modelId })
+      expect(downloads).toBe(2)
+      expect(createdFrom).not.toBe(stale)
+      await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+
+    it('rejects a second import of the same model before any Hugging Face request', async () => {
+      const modelSpec = specFor('duplicate')
+      const { importModelFromHfSafetensors } = await loadManager()
+      let child
+      await scriptCreate((c, _cmd, args) => { child = c; stagingOf(args) })
+
+      let first
+      importModelFromHfSafetensors(modelSpec).then((r) => { first = r })
+      await advanceUntil(() => child, { stepMs: 0 })
+      const fetchesBefore = globalThis.fetch.mock.calls.length
+
+      const second = await importModelFromHfSafetensors(modelSpec)
+
+      expect(second).toMatchObject({ success: false, code: 'OLLAMA_IMPORT_IN_PROGRESS' })
+      expect(globalThis.fetch.mock.calls.length).toBe(fetchesBefore)
+      expect(metadataFetches).toBe(1)
+      child.exit(0)
+      await advanceUntil(() => first, { stepMs: 0 })
+      expect(first).toEqual({ success: true, modelId: modelSpec.modelId })
     })
 
     it('reclaims week-old retained staging for other models before importing, once nothing holds it', async () => {
