@@ -473,7 +473,7 @@ describe('timeline erase routes (#12987)', () => {
     expect(listed.status).toBe(200);
     expect(listed.body.sources).toEqual(sources);
     for (const { source } of listed.body.sources) {
-      const erased = await request(app).delete('/api/timeline/events').query({ source });
+      const erased = await request(app).delete(`/api/timeline/events?${new URLSearchParams({ source })}`);
       expect(erased.status).toBe(200);
       expect(humanActivity.eraseEvents).toHaveBeenLastCalledWith({ source });
     }
