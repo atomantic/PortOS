@@ -451,6 +451,27 @@ describe('GitHub inbox tab', () => {
     expect(screen.getByRole('button', { name: 'Merge #7' })).toBeTruthy();
   });
 
+  it('links reviews to their owning task queues through completion and preflight handoff', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [
+      { ...NOTIFICATION, pullRequest: { number: 7, doReviewEligible: true },
+        pullRequestAction: { action: 'do-review', taskId: 'user-review', at: 'review-start' } },
+      { ...NOTIFICATION, threadId: '102', title: 'Outside change', pullRequest: { number: 8, reviewEligible: true },
+        pullRequestAction: { action: 'untrusted-review', taskId: 'review-preflight', at: 'preflight-start' } },
+    ], sync: {} });
+    await renderInbox();
+
+    act(() => {
+      socket.emit('cos:tasks:changed', { task: { id: 'user-review', status: 'completed' } });
+      socket.emit('cos:tasks:changed', { task: { id: 'review-preflight', status: 'completed',
+        metadata: { preflightResultTaskId: 'system-review' } } });
+    });
+
+    expect(screen.getByRole('link', { name: 'Review: Completed — view' }))
+      .toHaveAttribute('href', '/cos/tasks?task=user-review&source=user');
+    expect(screen.getByRole('link', { name: 'Review: Active — view' }))
+      .toHaveAttribute('href', '/cos/tasks?task=system-review&source=internal');
+  });
+
   it('opens by default, syncs on arrival, and links only to the stored GitHub page', async () => {
     await renderInbox('');
     expect(await screen.findByText('Example change')).toBeTruthy();

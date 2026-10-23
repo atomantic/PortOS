@@ -781,8 +781,10 @@ export default function PullRequestsTab({ appId, appName }) {
                       // shown — the old link went unconditionally to the Agents
                       // page, so "Queued — view" landed on a page with nothing on
                       // it until an agent actually spawned.
+                      // Do:Review queues user tasks; the scheduled review and
+                      // merge follow-up are system tasks.
                       const taskHref = action?.taskId
-                        ? `/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=internal`
+                        ? `/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=${kind === 'doReview' ? 'user' : 'internal'}`
                         : null;
                       if (actionStatus === 'failed') {
                         return (

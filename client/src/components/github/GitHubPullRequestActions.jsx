@@ -49,7 +49,7 @@ export default function GitHubPullRequestActions({ notification, onUpdated }) {
   return (
     <div className="flex max-w-full min-w-0 flex-wrap items-center gap-1.5">
       {current && !current.merged && (
-        current.taskId ? <Link className="text-xs text-port-accent hover:underline" to={`/cos/tasks?task=${encodeURIComponent(current.taskId)}&source=internal`}>Review: {ACTION_STATUS_LABEL[current.status] || 'View task'}</Link>
+        current.taskId ? <Link className="text-xs text-port-accent hover:underline" to={`/cos/tasks?task=${encodeURIComponent(current.taskId)}&source=${current.action === 'do-review' ? 'user' : 'internal'}`}>Review: {ACTION_STATUS_LABEL[current.status] || 'View task'}</Link>
           : current.appId ? <Link className="text-xs text-port-accent hover:underline" to={`/apps/${encodeURIComponent(current.appId)}/pull-requests`}>Review requested — view PRs</Link> : null
       )}
         {['do-review', 'untrusted-review'].filter(action => pr[action === 'do-review' ? 'doReviewEligible' : 'reviewEligible']).map(action => (
