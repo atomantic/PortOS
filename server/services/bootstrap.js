@@ -41,7 +41,7 @@ import { verifyCollectionVersions } from '../lib/collectionStore.js';
 import { startIdleReaper, stopIdleReaper } from '../lib/managedDaemon.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { conflictJournalStore } from '../lib/conflictJournal.js';
-import { markHostShuttingDown, writeHostShutdownMarker } from '../lib/hostShutdown.js';
+import { isHostShuttingDown, markHostShuttingDown, writeHostShutdownMarker } from '../lib/hostShutdown.js';
 import { signalDetachedGroups } from '../lib/credentialBootstrap.js';
 import { createHttpDrain } from '../lib/httpDrain.js';
 import { createEventLoopLagProbe } from '../lib/eventLoopLagProbe.js';
@@ -447,7 +447,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Explicit call (not a module-level side effect) so test imports of cos.js
   // don't spin up its event listeners and timers. The spawner gate itself lives
   // in bootstrapSequence.js.
-  initCosAfterSpawner({ spawnerReady, initCos: () => cos.init() });
+  initCosAfterSpawner({ spawnerReady, initCos: () => cos.init(), isStopping: isHostShuttingDown });
 
   // Restore only an installed, opted-in world, then its bridge, resident
   // presence, and pending design. No install, download, or AI provider call.
@@ -968,6 +968,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
  */
 export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) =>
   runPostRouteSequence(gateStepsForSmokeBoot({
+    isStopping: isHostShuttingDown,
     startBackgroundServices: () => startBackgroundServices({ spawnerReady, io, httpsEnabled, port }),
 
     // Instance identity + sync log come up before requests are accepted, so a
@@ -1036,6 +1037,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     loadSeriesCoverBackfill: async () => (await import('../scripts/backfillSeriesCoverImages.js')).backfillSeriesCoverImages,
 
     startListening: () => httpServer.listen(port, host, () => runPostListenSequence(gateStepsForSmokeBoot({
+      isStopping: isHostShuttingDown,
       announceListening: () => announceListening({ io, httpServer, localHttpServer, httpsEnabled, port }),
       // Process-level safety net, wired with the io instance so unhandled
       // failures also surface in the UI.
@@ -1175,24 +1177,6 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       const line = describeSlowShutdown(timing.end(), settledMs);
       if (line) console.log(line);
     };
-    await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
-      .catch((err) => logBootstrapFailure('❌ Tailcat forward shutdown failed', err));
-    await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())
-      .catch((err) => logBootstrapFailure('❌ Tailcat serve shutdown failed', err));
-    // Disarm the idle reaper before anything awaits: a sweep that fires mid
-    // -shutdown would `pm2 stop` a model server the user never asked to lose,
-    // and PortOS is about to stop being the thing that could restart it.
-    stopIdleReaper();
-    timing.mark('modelHost');
-    await import('./fleetLlmHost.js').then(({ stopFleetLlmHost }) => stopFleetLlmHost())
-      .catch((err) => logBootstrapFailure('❌ Dedicated model host shutdown failed', err));
-    // Same reasoning for the hosted-session sweeper: a tick mid-shutdown would
-    // emit into a namespace we are about to close.
-    stopHostedSessionSweep();
-    // And the Beeper transport: an open WebSocket is a live handle that would
-    // hold the event loop past the last server close, and a reconnect firing
-    // mid-shutdown would emit into a socket namespace we are about to close.
-    stopBeeperSocket();
     // Diagnostic context for the shutdown trigger. ppid tells us whether the
     // signal came from PM2 (parent is the PM2 god process), a TTY (parent is
     // the user's shell), or some external orchestrator. pm_* env vars are set
@@ -1237,6 +1221,24 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       writeHostShutdownMarker({ agentIds: [...activeAgents.keys(), ...dispatchingAgentIds], signal })
         .then(() => finish(), (err) => finishWithError('⚠️ Host-shutdown marker failed', err)));
     markerWritten.then(recordSettled('marker'));
+
+    // No teardown await may delay the hard deadline, recovery snapshot, or
+    // disarming timers that could launch work while shutdown is suspended.
+    stopIdleReaper();
+    stopHostedSessionSweep();
+    stopBeeperSocket();
+    await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
+      .catch((err) => logBootstrapFailure('❌ Tailcat forward shutdown failed', err));
+    await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())
+      .catch((err) => logBootstrapFailure('❌ Tailcat serve shutdown failed', err));
+    timing.mark('modelHost');
+    // Usage persistence is best effort; a stalled ledger write must leave
+    // time for the media queue and DB to settle inside the shutdown ceiling.
+    await withGrace('Dedicated model host', 1000, ({ finish, finishWithError }) =>
+      import('./fleetLlmHost.js').then(({ stopFleetLlmHost }) => stopFleetLlmHost()).then(
+        () => finish(),
+        (err) => finishWithError('❌ Dedicated model host shutdown failed', err),
+      ));
 
     // Reach every child spawned into its own process group — agent runs, CLI
     // runs and vision calls alike. A credential-bootstrap-wrapped child is

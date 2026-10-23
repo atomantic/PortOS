@@ -223,6 +223,17 @@ describe('runPreRouteSequence — pre-route boot order', () => {
 });
 
 describe('initCosAfterSpawner', () => {
+  it('does not start CoS when shutdown interrupts spawner initialization', async () => {
+    const spawner = deferred();
+    const initCos = vi.fn();
+    let stopping = false;
+    const done = initCosAfterSpawner({ spawnerReady: spawner.promise, initCos, isStopping: () => stopping });
+    stopping = true;
+    spawner.resolve();
+    await done;
+    expect(initCos).not.toHaveBeenCalled();
+  });
+
   it('waits for the spawner before CoS init, so task:ready listeners exist', async () => {
     const spawner = deferred();
     const initCos = vi.fn(() => Promise.resolve());
@@ -839,6 +850,26 @@ describe('runPostRouteSequence — post-route boot order', () => {
     expect(recorder.calls).toContain('startListening');
   });
 
+  it.each(['ensureSelf', 'runDatabasePhase', 'loadSeriesCoverBackfill'])('stops the boot chain when shutdown interrupts %s', async (stepName) => {
+    const recorder = createRecorder();
+    const gate = deferred();
+    let stopping = false;
+    const deps = buildDeps(recorder, {
+      [stepName]: recorder.step(stepName, () => gate.promise),
+      isStopping: () => stopping,
+    });
+    const done = runPostRouteSequence(deps);
+    await flush();
+    expect(recorder.calls).toContain(stepName);
+    stopping = true;
+    const callsAtShutdown = [...recorder.calls];
+    gate.resolve(recorder.step('backfillSeriesCoverImages'));
+    await done;
+    expect(recorder.calls).toEqual(callsAtShutdown);
+    expect(deps.startListening).not.toHaveBeenCalled();
+    expect(deps.onFatal).not.toHaveBeenCalled();
+  });
+
   it('is fatal when an awaited step rejects, and never opens the listener', async () => {
     const recorder = createRecorder();
     const deps = buildDeps(recorder, {
@@ -917,6 +948,20 @@ describe('runPostListenSequence — inside the listen callback', () => {
     gate.resolve();
     await done;
     expect(recorder.calls).toContain('startPolling');
+  });
+
+  it('keeps peer sync and scheduling disarmed when shutdown interrupts the origin backfill', async () => {
+    const recorder = createRecorder();
+    const gate = deferred();
+    let stopping = false;
+    const done = runPostListenSequence(buildDeps(recorder, {
+      backfillOriginInstanceId: recorder.step('backfillOriginInstanceId', () => gate.promise),
+      isStopping: () => stopping,
+    }));
+    stopping = true;
+    gate.resolve();
+    await done;
+    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'backfillOriginInstanceId']);
   });
 
   it('starts peer sync even when the brain relay sweep fails', async () => {
