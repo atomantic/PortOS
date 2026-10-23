@@ -202,3 +202,26 @@ it('deduplicates starts and preserves the last draft when canceled during a prov
   expect((await getLoom(loom.id)).episodes).toEqual(loom.episodes);
   expect((await getEpisodeShotRun(loom.id, ep)).progress.rounds).toEqual([{ sceneId: groups[0].sceneId, rounds: 1, completed: false }]);
 });
+
+it('repairs cross-scene consistency findings within the remaining rounds and keeps the rejected verdict', async () => {
+  const { loom, ep, groups } = await setup();
+  const checkpoint = {};
+  let consistencyCalls = 0;
+  runStagedLLM.mockImplementation(async (stage, variables) => {
+    const source = JSON.parse(variables.source);
+    if (stage === 'fableloom-plan-shots') {
+      const group = structuredClone(groups.find(candidate => candidate.sceneId === source.scenes[0].id));
+      if (consistencyCalls) group.shots[0].action += ' The lamp remains at screen right.';
+      return { content: { groups: [group] } };
+    }
+    if (!('prose' in source.scenes[0])) {
+      consistencyCalls += 1;
+      return { content: { summary: 'Cross-scene check.', risks: consistencyCalls === 1 ? ['Preserve the lamp placement between scenes.'] : [] } };
+    }
+    return { content: { summary: 'Scene checked.', risks: [] } };
+  });
+  await expect(runEpisodeShotAutopilot(loom.id, ep, { checkpoint })).resolves.toMatchObject({ attempt: 2 });
+  expect(checkpoint.consistency).toHaveLength(2);
+  expect(checkpoint.consistency[0].review.risks).toEqual(['Preserve the lamp placement between scenes.']);
+  expect(checkpoint.scenes[groups[0].sceneId].rounds[0].feedback).toContain('lamp');
+});

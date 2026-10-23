@@ -64,7 +64,7 @@ function compile(loom, episode, groups) {
   return { groups: parsed, proposed, validation: { issues, stats: { ...timing.stats, ready: !issues.length } } };
 }
 
-export async function applyEpisodeShots(id, episodeId, { sourceFingerprint, groups }) {
+export async function applyEpisodeShots(id, episodeId, { sourceFingerprint, groups }, { isCanceled = () => false } = {}) {
   const { loom, episode } = await requireSource(id, episodeId);
   if (fingerprint(loom, episode) !== sourceFingerprint) throw new ServerError('The episode changed. Preview a fresh shot plan before applying.', { status: 409, code: 'SHOT_PLAN_STALE' });
   const { proposed, validation } = compile(loom, episode, groups);
@@ -72,6 +72,7 @@ export async function applyEpisodeShots(id, episodeId, { sourceFingerprint, grou
   const updated = await mutateLoom(id, (current) => {
     const target = findEpisode(current, episodeId);
     if (fingerprint(current, target) !== sourceFingerprint) throw new ServerError('The episode changed during shot planning.', { status: 409, code: 'SHOT_PLAN_STALE' });
+    if (isCanceled()) throw new ServerError('Shot planning canceled; completed steps preserved.', { status: 409, code: 'SHOT_PLAN_CANCELED' });
     Object.assign(target, proposed, { updatedAt: new Date().toISOString() });
     current.productionStatus.editorialApprovedAt = null;
     current.productionStatus.editorialApprovalSource = null;
@@ -130,7 +131,7 @@ export async function runEpisodeShotAutopilot(id, episodeId, {
     const state = checkpoint.scenes[node.id] ||= { rounds: [] };
     const { id: sceneId, title, prose, playbackMode, shot, imagePrompt, videoPrompt,
       cameraMovement, image: referenceImage, visualCanon, protagonistPresence, challengePhase } = node;
-    const source = JSON.stringify({ ...context, scenes: [{ id: sceneId, title, prose, playbackMode, shot, imagePrompt, videoPrompt,
+    const source = JSON.stringify({ ...context, scope: 'Only scenes are in scope for this call; sceneDigest supplies context, not additional source scenes to plan or review.', scenes: [{ id: sceneId, title, prose, playbackMode, shot, imagePrompt, videoPrompt,
       cameraMovement, referenceImage, visualCanon, protagonistPresence, challengePhase,
       visibleCharacterIds: (visualCanon?.characterAppearances || []).map((appearance) => appearance.characterId),
       transitions: context.sceneDigest.find((scene) => scene.id === node.id).transitions }] });
@@ -181,7 +182,7 @@ export async function runEpisodeShotAutopilot(id, episodeId, {
   const planHash = createHash('sha256').update(JSON.stringify(compiled.groups)).digest('hex');
   let review = checkpoint.consistency.findLast((entry) => entry.planHash === planHash)?.review;
   if (!review) {
-    const result = await execute('fableloom-review-shots', { source: JSON.stringify({ ...context, scenes: context.sceneDigest }), shots: JSON.stringify(compiled.groups) }, checkpoint.consistency.length + 1, null);
+    const result = await execute('fableloom-review-shots', { source: JSON.stringify({ ...context, scope: 'Whole-plan consistency check. Each group already passed review against its full dramatic source; check the combined plan and graph without requesting the teleplay.', scenes: context.sceneDigest }), shots: JSON.stringify(compiled.groups) }, checkpoint.consistency.length + 1, null);
     review = result.content;
     checkpoint.consistency.push({ planHash, review });
     await persist();
@@ -202,7 +203,7 @@ export async function runEpisodeShotAutopilot(id, episodeId, {
   }
   const result = { sourceFingerprint, groups: compiled.groups, validation: compiled.validation, review, attempt: Math.max(...Object.values(checkpoint.scenes).map((scene) => scene.rounds.length)) };
   checkCanceled();
-  const applied = apply ? await applyEpisodeShots(id, episodeId, result) : {};
+  const applied = apply ? await applyEpisodeShots(id, episodeId, result, { isCanceled }) : {};
   status?.complete(apply ? 'Timed shots applied' : 'Shot plan ready to preview', { shellReady: false });
   return { ...result, ...applied };
 }
