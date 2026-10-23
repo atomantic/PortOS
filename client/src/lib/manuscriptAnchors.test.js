@@ -1,5 +1,7 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { locateFind, locateFindSpan, locateAnchors, buildHighlightSegments } from './manuscriptAnchors.js';
+import { locateFind as sharedLocateFind, locateFindSpan as sharedLocateFindSpan } from '../../../server/lib/manuscriptLocate.js';
 
 describe('locateFind', () => {
   it('returns the only occurrence when unique', () => {
@@ -96,9 +98,6 @@ describe('buildHighlightSegments', () => {
     expect(segs[0]).toEqual({ text: 'ab', commentIds: ['x'], topSeverity: 'low' });
   });
 });
-// @vitest-environment node
-
-import { locateFind as sharedLocateFind, locateFindSpan as sharedLocateFindSpan } from '../../../server/lib/manuscriptLocate.js';
 
 describe('locator parity with the server accept path', () => {
   it('client preview re-exports the shared server locator', () => {
