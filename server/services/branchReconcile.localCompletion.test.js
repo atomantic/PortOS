@@ -56,6 +56,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('machine-local reconciliation completion
   it('persists a drained local outcome with visible peer-only inventory, but retains a real local checkout hold', async () => {
     const remoteBefore = (await execGit(['ls-remote', '--heads', 'origin'], local)).stdout;
     const peerBefore = (await execGit(['rev-parse', 'HEAD'], peer)).stdout;
+    // Upgrade the prior reporting format only after a fresh local/remote scan.
+    await schedule.recordBranchReconcileOutcome(app.id, { status: 'incomplete',
+      remaining: [{ branch: 'feature/peer-only', reason: 'remote-branch-held' }] });
     expect(await run()).toEqual({ skip: true });
     expect(await outcome()).toMatchObject({
       status: 'drained', remaining: [], nextAction: null,

@@ -110,6 +110,17 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
               <p>{outcome.observedAt ? `Last inventory: ${formatDateTime(outcome.observedAt)}` : 'No readable inventory yet.'}</p>
               {outcome.reason && <p className="break-words">Reason: {outcome.reason}</p>}
               {outcome.nextAction && <p>{outcome.nextAction}</p>}
+              {outcome.remoteInventory?.reported?.length > 0 && (
+                <details>
+                  <summary className="cursor-pointer">Remote-only inventory · {formatCount(outcome.remoteInventory.reported.length)} informational</summary>
+                  <p>Local cleanup status covers this machine’s branches and checkouts. Remote-only refs may belong to another instance.</p>
+                  <ul className="max-h-48 overflow-y-auto">
+                    {outcome.remoteInventory.reported.map((entry, index) => <li key={index} className="break-all">
+                      {typeof entry === 'string' ? entry : `${entry.branch}: ${entry.reason}`}
+                    </li>)}
+                  </ul>
+                </details>
+              )}
               {!remaining && <p>Remaining work is unknown.</p>}
               <ul className="space-y-2 max-h-64 overflow-y-auto">
                 {(remaining || []).map((entry, index) => (
