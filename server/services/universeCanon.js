@@ -823,6 +823,51 @@ export async function removeCanonEntry(universeId, kind, entryId) {
 }
 
 /**
+ * Deliberately remove ONE reference image from a canon entry's `imageRefs[]`.
+ * PATCH can't express this: `preserveImageRefsById` treats any shorter list as
+ * a stale round-trip and restores it, so removal gets its own mutator-form
+ * write (which bypasses that guard and still projects to the catalog row).
+ * Also clears `primaryImageRef` when it pointed at the file and drops
+ * identity-pack assets using it, so nothing dangles. The image file itself
+ * stays in the gallery. Returns `{ universe, entry }`.
+ */
+export async function removeCanonEntryImageRef(universeId, kind, entryId, filename) {
+  assertCanonKind(kind);
+  const field = BIBLE_FIELD[kind];
+  let entryFound = false;
+  let refFound = false;
+  const updated = await updateUniverse(universeId, (cur) => {
+    entryFound = false;
+    refFound = false;
+    const list = Array.isArray(cur[field]) ? cur[field] : [];
+    const target = list.find((e) => e.id === entryId);
+    if (!target) return null;
+    entryFound = true;
+    const refs = Array.isArray(target.imageRefs) ? target.imageRefs : [];
+    if (!refs.includes(filename)) return null;
+    refFound = true;
+    const next = { ...target, imageRefs: refs.filter((f) => f !== filename) };
+    if (target.primaryImageRef === filename) next.primaryImageRef = null;
+    if (Array.isArray(target.identityPack?.assets)) {
+      next.identityPack = {
+        ...target.identityPack,
+        assets: target.identityPack.assets.filter((a) => a?.imageRef !== filename),
+      };
+    }
+    return { [field]: list.map((e) => (e === target ? next : e)) };
+  });
+  if (!entryFound) {
+    throw new ServerError(`Canon ${kind} ${entryId} not found in universe`, { status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' });
+  }
+  if (!refFound) {
+    throw new ServerError(`Image ${filename} is not attached to ${kind} ${entryId}`, { status: 404, code: 'UNIVERSE_CANON_IMAGE_REF_NOT_FOUND' });
+  }
+  console.log(`🗑️ Removed image ref ${filename} from canon ${kind} ${entryId} in universe ${shortId(universeId)}`);
+  const entry = (updated[field] || []).find((e) => e.id === entryId) || null;
+  return { universe: updated, entry };
+}
+
+/**
  * Strip a filename from every `imageRefs[]` across every universe's
  * characters/places/objects, and from every top-level `styleReferences[]`
  * entry. Mirror of the series-side purge so the image-delete route can clean

@@ -55,6 +55,9 @@ const applyCanonImageCorrectionMock = vi.fn(async (_universeId, kind, entryId, b
   universe: { id: _universeId },
   entry: { id: entryId, [kind === 'character' ? 'physicalDescription' : 'description']: body.description, primaryImageRef: body.imageFilename },
 }));
+const removeCanonEntryImageRefMock = vi.fn(async (universeId, kind, entryId) => ({
+  universe: { id: universeId }, entry: { id: entryId, imageRefs: [] },
+}));
 const removeCanonEntryMock = vi.fn(async (universeId, kind, entryId) => ({
   universe: { id: universeId, characters: [], places: [], objects: [] },
   entry: { id: entryId, name: 'Alex', imageRefs: ['alex.png'], ingredientId: 'ing-alex' },
@@ -65,6 +68,7 @@ vi.mock('../../services/universeCanon.js', async () => {
     ...actual,
     applyCanonImageCorrection: (...args) => applyCanonImageCorrectionMock(...args),
     removeCanonEntry: (...args) => removeCanonEntryMock(...args),
+    removeCanonEntryImageRef: (...args) => removeCanonEntryImageRefMock(...args),
   };
 });
 const expandEntityFromImagesMock = vi.fn(async () => ({ fields: { pronouns: 'she/her' }, updatedFields: ['pronouns'], llm: { provider: 'mock', model: null } }));
@@ -1597,6 +1601,24 @@ describe('universe-builder routes', () => {
         .delete('/api/universe-builder/uni-1/canon/monster/chr-1');
       expect(res.status).toBe(400);
       expect(removeCanonEntryMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /:id/canon/:kind/:entryId/image-refs/:filename', () => {
+    it('routes to the service with the decoded filename', async () => {
+      removeCanonEntryImageRefMock.mockClear();
+      const res = await request(buildApp())
+        .delete('/api/universe-builder/uni-1/canon/character/chr-1/image-refs/alex%20a.png');
+      expect(res.status).toBe(200);
+      expect(removeCanonEntryImageRefMock).toHaveBeenCalledWith('uni-1', 'character', 'chr-1', 'alex a.png');
+    });
+
+    it('rejects an unknown kind before invoking the service', async () => {
+      removeCanonEntryImageRefMock.mockClear();
+      const res = await request(buildApp())
+        .delete('/api/universe-builder/uni-1/canon/monster/chr-1/image-refs/a.png');
+      expect(res.status).toBe(400);
+      expect(removeCanonEntryImageRefMock).not.toHaveBeenCalled();
     });
   });
 
