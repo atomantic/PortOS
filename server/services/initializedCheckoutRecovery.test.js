@@ -166,6 +166,7 @@ beforeEach(async () => {
     }
     if (fixture.failArchive && input.command === 'verify') throw new Error('archive-changed');
     return { ok: true, placement: fixture.placement, fingerprint: fixture.snapshot.fingerprint,
+      ...(input.command === 'verify' && input.mode === 'standalone' ? { verified: true, standalone: true } : {}),
       ...(input.metadataRecovery && !alreadyRestored ? {
         postMoveObservation: { file: `${input.part}-post-move.json`, sha256: fixture.metadataToken, digest: fixture.metadataToken },
       } : {}),
@@ -961,6 +962,24 @@ describe('initialized checkout transaction', () => {
       head: release.head, branchDeleted: true, archiveDir: join(root, input.transactionId) });
     expect(fixture.cut).toBeNull();
     expect((await fixture.service.status(input)).phase).toBe('retired');
+  });
+  it('binds missing-original recovery to the historical journal generation and native standalone proof', async () => {
+    const createdAt = new Date(Date.now() - 1000).toISOString();
+    const input = await quarantinedReview();
+    await fixture.service.retireBranch(input);
+    const archiveDir = join(root, input.transactionId);
+    await writeFile(join(archiveDir, 'manifest.json'), JSON.stringify({ facts: { repoPath: '/fixture/repo', release } }));
+    const request = { appId: 'app', repoPath: '/fixture/repo', archiveDir, release: { ...release, createdAt } };
+    fixture.deps.native.mockClear(); fixture.deps.deleteRef.mockClear();
+    expect(await fixture.service.verifyMissingPreservation(request)).toMatchObject({ archiveDir, kind: 'initialized', evidenceDigest: 'e'.repeat(64) });
+    expect(fixture.deps.native.mock.calls.map(([value]) => value.command)).toEqual(['verify']);
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    await expect(fixture.service.verifyMissingPreservation({ ...request, release: { ...request.release, head: 'f'.repeat(40) } }))
+      .rejects.toThrow('archive-identity-mismatch');
+    await expect(fixture.service.verifyMissingPreservation({ ...request, release: { ...release, createdAt: new Date(Date.now() + 1000).toISOString() } }))
+      .rejects.toThrow('archive-generation-mismatch');
+    fixture.failArchive = true;
+    await expect(fixture.service.verifyMissingPreservation(request)).rejects.toThrow('archive-changed');
   });
   it('invalidates branch finalization when the default advances or a holder appears', async () => {
     const input = await quarantinedReview();

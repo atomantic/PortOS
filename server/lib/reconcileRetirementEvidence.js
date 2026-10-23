@@ -2,9 +2,15 @@
 export const sameRetirementCheckout = (left, right) => left.branch === right.branch && left.path === right.path && left.head === right.head;
 
 export const hasRetirementReceipt = (outcome, release) => Number.isFinite(Date.parse(release.createdAt))
-  && outcome?.retired?.some(row => sameRetirementCheckout(row, release) && row.branchDeleted === true
+  && (outcome?.retired?.some(row => sameRetirementCheckout(row, release) && row.branchDeleted === true
     && typeof row.archiveDir === 'string' && row.archiveDir.length > 0
-    && Date.parse(row.retiredAt) >= Date.parse(release.createdAt)) === true;
+    && Date.parse(row.retiredAt) >= Date.parse(release.createdAt)) === true
+    || outcome?.recoveredPreservations?.some(row => sameRetirementCheckout(row, release)
+      && row.obligationCreatedAt === release.createdAt && row.verified === true
+      && typeof row.archiveDir === 'string' && row.archiveDir.length > 0
+      && /^[a-f0-9]{64}$/.test(row.evidenceDigest || '')
+      && Date.parse(row.archivedAt) >= Date.parse(release.createdAt)
+      && Date.parse(row.verifiedAt) >= Date.parse(row.archivedAt)) === true);
 
 export function unresolvedRetirements(outcome, additional = []) {
   const rows = [...(outcome?.retirementObligations || []), ...(outcome?.remaining || []), ...additional];
@@ -26,8 +32,9 @@ export function retainRetirementObligations(outcome, additional, now) {
   return pending.map(row => {
     const previous = existing.find(entry => sameRetirementCheckout(entry, row));
     if (Number.isFinite(Date.parse(previous?.createdAt))) return { ...row, createdAt: previous.createdAt };
-    const earlier = (outcome?.retired || []).filter(entry => sameRetirementCheckout(entry, row))
-      .map(entry => Date.parse(entry.retiredAt)).filter(Number.isFinite);
+    const earlier = [...(outcome?.retired || []), ...(outcome?.recoveredPreservations || [])]
+      .filter(entry => sameRetirementCheckout(entry, row))
+      .map(entry => Date.parse(entry.verifiedAt || entry.retiredAt)).filter(Number.isFinite);
     return { ...row, createdAt: new Date(Math.max(Date.parse(now), ...earlier.map(time => time + 1))).toISOString() };
   });
 }

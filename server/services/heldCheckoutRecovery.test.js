@@ -20,13 +20,14 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
     // Pauses an archive mid-write, after its first snapshot and before its re-read.
     if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
+    if (injected.onEvidence && args[0] === 'bundle' && args[1] === 'verify') await injected.onEvidence();
     if (args.includes('credential.helper=!gh auth git-credential') && args.includes('fetch')) {
       injected.fetches.push({ args, options });
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
@@ -49,7 +50,7 @@ vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
 }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout, recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
 const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
 
@@ -61,7 +62,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async () => {
-    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null });
+    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -103,6 +104,84 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners, ...opts });
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
+
+  async function historicalArchive() {
+    const path = join(external, 'historical');
+    const branch = 'feature/historical';
+    await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
+    await writeFile(join(path, 'initial.txt'), 'staged historical work\n');
+    await execGit(['add', 'initial.txt'], path);
+    await writeFile(join(path, 'private.txt'), 'synthetic private bytes');
+    const release = { path, branch, head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim(), locked: false, lockReason: null };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
+    const saved = await preserveMergedCheckout(repo, { ...release, branch: `refs/heads/${branch}` }, 'main', { cosDir: PATHS.cos });
+    await execGit(['worktree', 'remove', '--force', path], repo);
+    return { release, saved };
+  }
+
+  it('recovers complete preservation through the schedule boundary with only the primary checkout, without claiming branch deletion', async () => {
+    const { release, saved } = await historicalArchive();
+    const before = (await execGit(['show-ref'], repo)).stdout;
+    const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
+    expect(outcome.retirementObligations).toEqual([]);
+    expect(outcome.remaining).toEqual([]);
+    expect(outcome.recoveredPreservations).toEqual([expect.objectContaining({ path: release.path, branch: release.branch, head: release.head,
+      archiveDir: saved.archiveDir, verified: true,
+      evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })]);
+    expect(outcome.retired).toBeUndefined();
+    expect(outcome.recoveredPreservations[0]).not.toHaveProperty('branchDeleted');
+    expect(existsSync(release.path)).toBe(false);
+    expect((await execGit(['show-ref'], repo)).stdout).toBe(before);
+    // A new generation with the same branch/path/head cannot reuse the archive.
+    const recreated = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...release, reason: 'retirement-review-pending' }] });
+    expect(recreated.retirementObligations).toHaveLength(1);
+    expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
+  });
+
+  it.each(['missing', 'wrong-repository', 'wrong-path', 'wrong-head', 'changed-file', 'changed-patch', 'legacy-dirty', 'partial-original'])(
+    'retains an actionable historical obligation for %s preservation evidence', async failure => {
+      const { release, saved } = await historicalArchive();
+      const manifestPath = join(saved.archiveDir, 'manifest.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      if (failure === 'missing') await rm(saved.archiveDir, { recursive: true, force: true });
+      if (failure === 'wrong-repository') manifest.repoPath = join(scratch, 'other-repo');
+      if (failure === 'wrong-path') manifest.path = join(external, 'other-checkout');
+      if (failure === 'wrong-head') manifest.head = 'f'.repeat(40);
+      if (failure === 'changed-file') await writeFile(join(saved.archiveDir, 'files', 'private.txt'), 'changed archive bytes');
+      if (failure === 'changed-patch') await writeFile(join(saved.archiveDir, 'index.diff'), 'changed patch bytes');
+      if (failure === 'legacy-dirty') delete manifest.patchHashes;
+      if (failure === 'partial-original') manifest.captured.missingCheckout = true;
+      if (failure !== 'missing') await writeFile(manifestPath, JSON.stringify(manifest));
+      const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
+      expect(outcome.retirementObligations).toEqual([expect.objectContaining({ ...release,
+        preservationEvidence: expect.objectContaining({ status: 'unresolved', nextAction: expect.stringContaining('backup') }),
+      })]);
+      expect(outcome).toMatchObject({ status: 'incomplete', reason: 'historical-preservation-unresolved', recoveredPreservations: [] });
+      expect(outcome.remaining).toEqual(outcome.retirementObligations);
+      expect(existsSync(release.path)).toBe(false);
+    });
+
+  it.each(['recreated-path', 'new-holder', 'inventory-change', 'repository-change'])(
+    'does not settle historical evidence after a concurrent %s', async change => {
+      const { release } = await historicalArchive();
+      const outcome = await getBranchReconcileOutcome('app-1');
+      injected.onEvidence = async () => {
+        injected.onEvidence = null;
+        if (change === 'recreated-path') await mkdir(release.path);
+        if (change === 'new-holder') await execGit(['worktree', 'add', join(external, 'new-holder'), release.branch], repo);
+        if (change === 'repository-change') injected.app.repoPath = join(scratch, 'changed-repo');
+        if (change === 'inventory-change') {
+          const current = injected.schedule.executions['task:branch-reconcile'].perApp['app-1'];
+          current.branchReconcileOutcome = { ...current.branchReconcileOutcome, observedAt: 'changed-inventory' };
+        }
+      };
+      await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome });
+      const current = await getBranchReconcileOutcome('app-1');
+      expect(current.retirementObligations).toHaveLength(1);
+      expect(current.recoveredPreservations).toBeUndefined();
+      if (change === 'inventory-change') expect(current.observedAt).toBe('changed-inventory');
+    });
 
   it('preserves ignored evidence before unattended cleanup and refuses later byte or head changes', async () => {
     const path = join(external, 'merged');

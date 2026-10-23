@@ -770,7 +770,7 @@ export async function isPerpetualParkActive(taskType, appId = null) {
 
 /** Persist the latest deterministic sweep evidence independently of agent success. */
 export async function recordBranchReconcileOutcome(appId, { status, reason, remaining, nextAction, retirementObligations: additionalObligations = [] }) {
-  return updateSchedule(async (schedule) => {
+  const outcome = await updateSchedule(async (schedule) => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const now = new Date().toISOString();
     const previous = record.branchReconcileOutcome;
@@ -785,6 +785,50 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
       ...previous, status, reason, nextAction, updatedAt: now, retirementObligations,
       remaining: retained.length ? [...(current || []), ...retained] : current,
       observedAt: remaining === undefined ? record.branchReconcileOutcome?.observedAt ?? null : now,
+    };
+    return { result: record.branchReconcileOutcome, changed: true };
+  });
+  if (!appId || !unresolvedRetirements(outcome).length) return outcome;
+  const app = await getAppById(appId).catch(() => null);
+  if (!app?.repoPath) return outcome;
+  // Keep the expensive archive verifier off ordinary live-checkout writes.
+  const missing = await findGoneInventoryRows(app.repoPath, unresolvedRetirements(outcome), { includeObligations: true }).catch(() => []);
+  if (!missing.length) return outcome;
+  const { recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
+  return recoverMissingCheckoutPreservations({ appId, repoPath: app.repoPath, outcome });
+}
+
+/** Compare the whole observed inventory and its generation inside the schedule
+ * writer. A verifier result never authorizes a newer/recreated checkout.
+ */
+export async function recordRecoveredCheckoutPreservations(appId, expected, observations, stillAbsent) {
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const outcome = record.branchReconcileOutcome;
+    if (JSON.stringify(outcome) !== JSON.stringify(expected) || !await stillAbsent()) return { result: outcome, changed: false };
+    const now = new Date().toISOString();
+    const recoveredPreservations = [...(outcome.recoveredPreservations || [])];
+    const diagnosed = unresolvedRetirements(outcome).map(release => {
+      const observation = observations.find(row => sameRetirementCheckout(row.release, release) && row.release.createdAt === release.createdAt);
+      if (!observation) return release;
+      const accepted = observation.proof && recoveredPreservations.length < 1000;
+      const { recheck: _recheck, ...proof } = observation.proof || {};
+      if (accepted) recoveredPreservations.push({
+        branch: release.branch, path: release.path, head: release.head,
+        obligationCreatedAt: release.createdAt, ...proof, verified: true, verifiedAt: now,
+      });
+      return { ...release, preservationEvidence: { status: 'unresolved',
+        reason: observation.proof && !accepted ? 'preservation-receipt-budget-exceeded' : observation.reason,
+        checkedAt: now, archives: observation.evidence, nextAction: observation.nextAction } };
+    });
+    const retirementObligations = unresolvedRetirements({ retirementObligations: diagnosed, recoveredPreservations });
+    const remaining = (outcome.remaining || []).flatMap(row => {
+      const diagnosedRow = diagnosed.find(release => sameRetirementCheckout(row, release) && row.createdAt === release.createdAt);
+      return diagnosedRow ? retirementObligations.filter(release => sameRetirementCheckout(release, diagnosedRow)) : [row];
+    });
+    const historical = retirementObligations.find(row => row.preservationEvidence);
+    record.branchReconcileOutcome = { ...outcome, retirementObligations, recoveredPreservations, remaining, updatedAt: now,
+      ...(historical ? { status: 'incomplete', reason: 'historical-preservation-unresolved', nextAction: historical.preservationEvidence.nextAction } : {}),
     };
     return { result: record.branchReconcileOutcome, changed: true };
   });
