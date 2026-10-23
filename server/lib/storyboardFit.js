@@ -77,11 +77,22 @@ export function storyboardShotPanel(board, scene) {
     for (const panel of beat.panels) {
       number += 1;
       if (panel.id === scene.panelId) {
-        return { state: storyboardPanelRev(panel) === scene.panelRev ? 'current' : 'changed', panel, beat, beatIndex, number };
+        const artChanged = storyboardPanelArt(panel) !== (scene.panelArt ?? null);
+        const changed = artChanged || storyboardPanelRev(panel) !== scene.panelRev;
+        return { state: changed ? 'changed' : 'current', artChanged, panel, beat, beatIndex, number };
       }
     }
   }
-  return { state: 'missing', panel: null, beat: null, beatIndex: null, number: null };
+  return { state: 'missing', artChanged: false, panel: null, beat: null, beatIndex: null, number: null };
+}
+
+/**
+ * A panel's selected art as a gallery image, the shot's frame reference (a
+ * composition guide, never its start frame). A sketch take has no gallery file
+ * and gives none.
+ */
+export function storyboardPanelArt(panel) {
+  return panel?.takes?.find((take) => take.id === panel.selectedTakeId)?.image || null;
 }
 
 const roleMatches = (role, label) => {
@@ -181,6 +192,7 @@ export function fitStoryboardToSong(board, song, { starts = {}, minShotSec = STO
         beatId: beat.id,
         panelId: panel?.id || null,
         panelRev: panel ? storyboardPanelRev(panel) : null,
+        panelArt: storyboardPanelArt(panel),
         label: `${title.slice(0, LABEL_MAX - suffix.length)}${suffix}`,
         sectionIndex,
         sectionLabel,

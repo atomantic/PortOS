@@ -31,7 +31,7 @@ describe('ShotStoryboardPanel', () => {
     expect(screen.getByRole('link', { name: /Arrival · panel 1/ }).getAttribute('href')).toBe('/storyboards/sb-1/panel/panel-1');
     expect(screen.getByText(`Storyboard changed: ${panel.action}`)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Update/ }));
-    await waitFor(() => expect(onSceneUpdated).toHaveBeenCalledWith('mvs-1', { visualIntent: panel.action, panelRev: 'new' }));
+    await waitFor(() => expect(onSceneUpdated).toHaveBeenCalledWith('mvs-1', { visualIntent: panel.action, panelRev: 'new', panelArt: null }));
 
     fireEvent.click(screen.getByRole('button', { name: /Use as panel art/ }));
     await waitFor(() => expect(onBoard).toHaveBeenCalledWith(board));

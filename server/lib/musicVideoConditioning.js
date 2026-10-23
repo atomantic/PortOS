@@ -96,17 +96,29 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
  */
 export function musicVideoConditioningReferences(project, scene, castMedia = null) {
   const guides = musicVideoCastGuideReferences(project, scene, castMedia);
+  const panel = musicVideoPanelArtReferences(scene);
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
-    const choices = [...guides, ...musicVideoReferenceChoices(project)];
+    const choices = [...guides, ...panel, ...musicVideoReferenceChoices(project)];
     return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
   }
   const automatic = automaticConditioningReferences(project, scene);
-  if (!guides.length) return automatic;
-  const chosen = [...guides, ...automatic];
-  return chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i)
-    .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  const chosen = guides.length ? [...guides, ...automatic] : automatic;
+  const unique = chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i);
+  if (!panel.length) return unique.slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  // The storyboard panel keeps a slot; identities fill the rest.
+  return [...unique.filter((ref) => ref.imageId !== panel[0].imageId).slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES - 1), ...panel];
+}
+
+/**
+ * A shot fitted from a storyboard panel conditions on the panel's art as a
+ * composition guide (never its start frame), as a chip the References row
+ * shows and can drop.
+ */
+export function musicVideoPanelArtReferences(scene) {
+  if (typeof scene?.panelArt !== 'string' || !SENDABLE_REFERENCE_FILE.test(scene.panelArt)) return [];
+  return [{ id: `mvr-panel-${scene.panelId || 'art'}`.slice(0, 128), imageId: scene.panelArt, role: 'mood', label: 'Storyboard panel', panelArt: true }];
 }
 
 function automaticConditioningReferences(project, scene) {
