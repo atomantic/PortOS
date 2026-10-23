@@ -5,7 +5,7 @@ import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
 import { VITEST_WATCH_OPTIONS } from '../scripts/lib/vitestWatch.js';
 import { CLIENT_TEST_EXCLUDE, CLIENT_TEST_INCLUDE } from '../scripts/lib/workspaceTests.js';
 
-import { applyRunnerSelection, vitestCiPool, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
+import { applyRunnerSelection, vitestCaptureProjects, vitestCiPool, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
 import { TEST_TIMEOUT_MS } from './src/test/timeouts.js';
 
 const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
@@ -70,5 +70,13 @@ const config = defineConfig({
 
 // The CI runner's explicit selection (closure-related files, minus the ones
 // the test memo already verified) arrives as a file, not as CLI selectors.
-config.test = applyRunnerSelection(config.test, vitestRunnerSelection());
+const runnerSelection = vitestRunnerSelection();
+config.test = applyRunnerSelection(config.test, runnerSelection);
+// Real nested runners retain the client budget, but get quiet startup after
+// parallel DOM/scanner work. The root still owns one shared run temp root.
+config.test.projects = vitestCaptureProjects(config.test, {
+  cacheDir: config.cacheDir,
+  selection: runnerSelection,
+  exclusiveTests: ['src/test/workspaceCaches.test.js'],
+}).map(project => ({ ...project, plugins: config.plugins, resolve: config.resolve, server: config.server }));
 export default config;

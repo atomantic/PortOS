@@ -130,6 +130,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
       ['cutover', 'services/databaseMaintenanceCutover.test.js'],
       ['assembly', 'services/creativeDirector/videoAssembly.test.js'],
       ['process-audit-cleanup', '../scripts/persistentMindProcessAuditCleanup.test.js'],
+      ['workspace-caches', '../scripts/workspaceCaches.test.js'],
     ]) {
       put(path, `${common}test('${name}', async ({ task }) => {
         expect(task.file.projectName).toBe('capture');
@@ -153,7 +154,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const events = readFileSync(join(fixture, 'events'), 'utf8').trim().split('\n');
     expect(events.slice(0, 2).sort()).toEqual(['unit-a', 'unit-b']);
-    expect(events.slice(2).sort()).toEqual(['assembly', 'cutover', 'film-look', 'html', 'music', 'process-audit-cleanup', 'suno']);
+    expect(events.slice(2).sort()).toEqual(['assembly', 'cutover', 'film-look', 'html', 'music', 'process-audit-cleanup', 'suno', 'workspace-caches']);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -182,6 +183,16 @@ describe('vitestRunnerSelection', () => {
     expect(capture.test.include).toEqual([EXCLUSIVE_CAPTURE_TESTS[0]]);
     expect(parallel.test.exclude).toContain(EXCLUSIVE_CAPTURE_TESTS[0]);
     expect(vitestCaptureProjects({ include: ['**/*.test.js'], exclude: [] })[1].test.include.length).toBeGreaterThan(1);
+    // Client-owned process fixtures use the same ordering without importing
+    // the server's exclusive file list or widening a scoped/memo selection.
+    for (const selection of [{ include: null, exclude: [] }, { include: ['src/unit.test.js'], exclude: [] }]) {
+      const projects = vitestCaptureProjects({ include: ['src/**/*.test.js'], exclude: selection.exclude }, {
+        selection, exclusiveTests: ['src/test/workspaceCaches.test.js'],
+      });
+      expect(projects[0].test.exclude).toEqual(['src/test/workspaceCaches.test.js']);
+      expect(projects[1].test.include).toEqual(selection.include === null ? ['src/test/workspaceCaches.test.js'] : []);
+      expect(projects[1].test.fileParallelism).toBe(false);
+    }
   });
 
   it('refuses a selection it cannot read rather than widening to the whole suite', () => {
