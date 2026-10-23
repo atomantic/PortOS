@@ -1011,6 +1011,13 @@ export const githubNotificationsClearSchema = z.object({
   accountId: z.string().trim().min(1).max(100).optional(),
 }).strict();
 
+// Deployment approval from the inbox (#13198): operator only.
+export const githubDeploymentReviewSchema = z.object({
+  state: z.enum(['approved', 'rejected']),
+  environmentIds: z.array(z.number().int().positive()).min(1).max(20),
+  comment: z.string().trim().max(1000).optional(),
+}).strict();
+
 export const githubNotificationActionSchema = z.object({
   action: z.enum(['read', 'done', 'reopen', 'mute', 'unsubscribe', 'resubscribe']),
 }).strict();
