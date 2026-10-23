@@ -75,7 +75,8 @@ export async function recoverMaintenanceTransaction(reason, { data = PATHS.data,
   // Interrupted writes may never have flushed their data. A directory fsync
   // preserves names, not those bytes; retain the original fence on flush failure.
   for (const { name } of pending) {
-    const fd = io.openSync(join(directory, name), 'r');
+    // Windows FlushFileBuffers requires write access; r+ never truncates evidence.
+    const fd = io.openSync(join(directory, name), 'r+');
     try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
     io.renameSync(join(directory, name), join(archiveDir, name));
   }
