@@ -138,9 +138,10 @@ export async function queueNotificationResolveTask({ account, row, origin = 'use
     // PortOS worktree, and a clean PortOS tree is success.
     useWorktree: false,
     openPR: false,
-    noCodeOutput: true,
+    noCodeOutput: ['review', 'other'].includes(resolveKind(row)),
     worktreeChangesExpected: false,
     metadata: {
+      externalRepositoryOutput: ['own-pr', 'ci', 'issue'].includes(resolveKind(row)),
       githubNotificationResolve: {
         accountId: account.id, threadId: row.thread_id, host: account.host, repo, subjectType: row.subject_type, reason: row.reason, origin,
       },

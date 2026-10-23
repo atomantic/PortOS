@@ -57,6 +57,8 @@ export const COMPLETION_MODES = Object.freeze({
   SENTINEL_PAYLOAD: 'sentinel-payload',
   /** Deliverable is an API call or command performed during the run. */
   ACTION_OUTPUT: 'action-output',
+  /** Task owns scoped code delivery in an external scratch repository. */
+  EXTERNAL_REPOSITORY: 'external-repository',
   /** Reasoning-only worktree, thrown away on exit; sentinel is the output. */
   DISCARD_WORKTREE: 'discard-worktree',
   /** Self-managed claim flow — it owns its own PR/review/merge/cleanup. */
@@ -111,6 +113,7 @@ export const COMPLETION_MODES = Object.freeze({
 const COMPLETION_MODE_RULES = Object.freeze([
   [COMPLETION_MODES.TOOL_FREE, (f) => f.toolFreeReasoning],
   [COMPLETION_MODES.SENTINEL_PAYLOAD, (f) => f.sentinelPayloadOutput],
+  [COMPLETION_MODES.EXTERNAL_REPOSITORY, (f) => f.externalRepositoryOutput && !f.isReadOnly && !f.discardWorktree],
   [COMPLETION_MODES.ACTION_OUTPUT, (f) => f.noCodeOutput],
   [COMPLETION_MODES.DISCARD_WORKTREE, (f) => f.discardWorktree],
   [COMPLETION_MODES.CLAIM_FLOW, (f) => f.claimFlow],
@@ -132,6 +135,7 @@ const COMPLETION_MODE_RULES = Object.freeze([
  * @param {Object} flags
  * @param {boolean} [flags.toolFreeReasoning]
  * @param {boolean} [flags.sentinelPayloadOutput]
+ * @param {boolean} [flags.externalRepositoryOutput]
  * @param {boolean} [flags.noCodeOutput]
  * @param {boolean} [flags.discardWorktree]
  * @param {boolean} [flags.claimFlow]

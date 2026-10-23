@@ -47,7 +47,7 @@ function buildPrompt({ host, login, repo, advisories }) {
   const steps = [
     `Find the repositories these advisories affect: list your repositories with \`${gh} "user/repos?affiliation=owner&per_page=100" --paginate --jq '.[] | select(.archived | not) | .full_name'\`, then for each one \`${gh} "repos/<repo>/dependabot/alerts?state=open&per_page=100" --jq '[.[] | select(${select})] | length'\`. Skip a repo whose alerts are not readable. If none is affected, stop and report that.`,
     'For each affected repository, in turn:',
-    ...SCRATCH_STEPS('<repo>').map((step) => `   - ${step}`),
+    ...SCRATCH_STEPS(host === 'github.com' ? '<repo>' : `${host}/<repo>`).map((step) => `   - ${step}`),
   ];
   return [
     `Fix security advisories ${ids} across your ${host} repositories`,
@@ -79,9 +79,8 @@ export async function queueSecurityFixTask({ account, repo = null, advisories = 
     // clone during the run: no PortOS worktree, and a clean PortOS tree is success.
     useWorktree: false,
     openPR: false,
-    noCodeOutput: true,
     worktreeChangesExpected: false,
-    metadata: { githubSecurityFix: { host: account.host, repo, advisories: ids, origin } },
+    metadata: { externalRepositoryOutput: true, githubSecurityFix: { host: account.host, repo, advisories: ids, origin } },
   }, 'user');
   if (!task?.id) return { error: 'The task could not be queued' };
   return task.duplicate ? { duplicate: true, taskId: task.id } : { taskId: task.id };

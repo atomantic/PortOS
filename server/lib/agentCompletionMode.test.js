@@ -76,6 +76,7 @@ describe('resolveCompletionMode', () => {
       resolveCompletionMode({ toolFreeReasoning: true }),
       resolveCompletionMode({ sentinelPayloadOutput: true }),
       resolveCompletionMode({ noCodeOutput: true }),
+      resolveCompletionMode({ externalRepositoryOutput: true }),
       resolveCompletionMode({ discardWorktree: true }),
       resolveCompletionMode({ claimFlow: true }),
       resolveCompletionMode({ isReadOnly: true }),
