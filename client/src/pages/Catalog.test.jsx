@@ -286,7 +286,7 @@ describe('Catalog page', () => {
     });
     renderCatalog();
     const img = await screen.findByAltText('Echo Saint');
-    expect(img.getAttribute('src')).toBe('/data/images/hero.png');
+    expect(img.getAttribute('src')).toBe('/data/image-thumbnails/hero.webp');
   });
 
   it('multi-selects ingredients and remixes them into Story Builder with a generic state payload', async () => {

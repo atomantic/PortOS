@@ -82,7 +82,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Reality universe as fiction.
   // v13 = durable character sheet request identities (#11669). Older peers
   // must not strip supersession state during an unrelated canon edit.
-  universes: 13,
+  // v14 = canon entries gained optional `forms[]` (alternate ages, eras and
+  // looks/styles beside the canonical present-story form). A <=v13 peer would
+  // sanitize them away and LWW the loss back.
+  universes: 14,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -444,7 +447,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v12 = `catalog_ingredient_media.library` (Casting reference library:
   // variant age/era/wardrobe, tags, render-guide flag). A ≤v11 receiver would
   // drop it and whole-row LWW it back, so live transfers need equal versions.
-  catalog: 12,
+  // v13 = bible payloads gained optional `forms[]` (alternate ages/looks) and
+  // media `library.variant.formId`. A <=v12 peer's sanitizer and library
+  // normalizer would strip both and whole-row LWW the loss back.
+  catalog: 13,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
