@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  agentHandoff, agentRuleScope, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
+  agentHandoff, agentRuleScope, ciActivityAction, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
   selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
@@ -250,5 +250,19 @@ describe('autopilotHandoff', () => {
     const rules = [{ id: 'r', kind: 'review-request', repo: 'acme/app', agent: true, provider: 'p1' }];
     const enterprise = { ...account, trust: 'private', allowAgents: true, agentRules: rules };
     expect(agentHandoff({ account: enterprise, row: { ...review, repo_full_name: 'acme/app' } })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, pin: { provider: 'p1' }, rule: { id: 'r', agent: true } });
+  });
+});
+
+describe('ciActivityAction', () => {
+  const ci = { reason: 'ci_activity', subject_type: 'CheckSuite', repo_full_name: 'acme/app' };
+  it('marks CI notices done by default and lets a repo or * rule override it', () => {
+    expect(ciActivityAction({ account: { agentRules: [] }, row: ci })).toBe('done');
+    const rules = [{ id: 'a', kind: 'ci-activity', repo: '*', action: 'leave' }, { id: 'b', kind: 'ci-activity', repo: 'acme/app', action: 'mute' }];
+    expect(ciActivityAction({ account: { agentRules: rules }, row: ci })).toBe('mute');
+    expect(ciActivityAction({ account: { agentRules: rules }, row: { ...ci, repo_full_name: 'acme/other' } })).toBe('leave');
+  });
+  it('ignores non-CI threads and malformed rules', () => {
+    expect(ciActivityAction({ account: {}, row: { reason: 'mention', subject_type: 'Issue' } })).toBeNull();
+    expect(ciActivityAction({ account: { agentRules: [{ kind: 'ci-activity', repo: '*', action: 'nuke' }] }, row: ci })).toBe('done');
   });
 });

@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { query, withTransaction } from '../lib/db.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
-import { ASSIST_VERDICTS, assistAction, decisionFromVerdict, selectNotificationProvider } from '../lib/githubNotificationTriage.js';
+import { ASSIST_VERDICTS, assistAction, ciActivityAction, decisionFromVerdict, selectNotificationProvider } from '../lib/githubNotificationTriage.js';
 import { resolveUntrustedContentPolicy } from '../lib/untrustedContent.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { execGh } from './github.js';
@@ -128,14 +128,18 @@ export async function assistAccountNotifications(account, env, { act }) {
   if (!ASSIST_MODES.has(account.mode)) return { sorted: 0, acted: 0 };
   const sorted = await sortUndecided(account, env);
   const { rows } = await query(
-    `SELECT thread_id, decision, trust, suspect, state, evidence->>'rule' AS rule FROM github_notifications
-     WHERE account_id = $1 AND state = 'open' AND NOT suspect AND decision = ANY($2::text[]) AND NOT (evidence ? 'assisted')
+    `SELECT thread_id, decision, trust, suspect, state, reason, subject_type, repo_full_name, evidence->>'rule' AS rule FROM github_notifications
+     WHERE account_id = $1 AND state = 'open' AND NOT suspect AND NOT (evidence ? 'assisted')
+       AND (decision = ANY($2::text[]) OR reason = 'ci_activity' OR subject_type = 'CheckSuite')
      ORDER BY gh_updated_at DESC LIMIT ${MAX_ACTIONS_PER_RUN}`,
     [account.id, ACTIONABLE_DECISIONS],
   );
   let acted = 0;
   for (const row of rows) {
-    const action = assistAction(row);
+    // A CI rule is the operator's own choice, so it needs no trusted actor;
+    // `leave` falls back to the fixed table (a closed run is still done).
+    const ciAction = ciActivityAction({ account, row });
+    const action = (ciAction && ciAction !== 'leave' ? ciAction : null) || (ACTIONABLE_DECISIONS.includes(row.decision) ? assistAction(row) : null);
     if (!action) continue;
     const ok = await act(row.thread_id, action, { decision: row.decision, rule: row.rule })
       .then(() => true)
