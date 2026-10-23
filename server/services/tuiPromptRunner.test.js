@@ -766,7 +766,22 @@ describe('executeTuiRun', () => {
       await promise;
     });
 
-    it('confirms the Codex directory-trust gate before its idle path can paste', async () => {
+    it.each([
+      {
+        version: 'legacy',
+        dialog: 'You are in /workspace/example\n'
+          + 'Do you trust the contents of this directory? Working with untrusted contents comes with'
+          + ' higher risk of prompt injection.\n'
+          + '› 1. Yes, continue\n2. No, quit\nPress enter to continue\n',
+        answer: '\r',
+      },
+      {
+        version: '0.162.1 with Quit highlighted',
+        dialog: 'Folder access\n/workspace/example\nTrustthisfolder?\n'
+          + '1. Trust and continue\n› 2.Quit\nenter continue · esc quit\n',
+        answer: '\x1b[A\r',
+      },
+    ])('confirms the Codex $version trust gate before its idle path can paste', async ({ dialog, answer }) => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
       });
@@ -778,16 +793,11 @@ describe('executeTuiRun', () => {
       await flushAsync();
 
       const pty = ptyInstances[0];
-      pty.emitData(
-        'You are in /tmp/portos-cd-cwd/agent-abc\n'
-        + 'Do you trust the contents of this directory? Working with untrusted contents comes with'
-        + ' higher risk of prompt injection.\n'
-        + '› 1. Yes, continue\n2. No, quit\nPress enter to continue\n',
-      );
+      pty.emitData(dialog);
       // Past the idle threshold — the window the prompt used to be pasted in.
       await vi.advanceTimersByTimeAsync(2000);
 
-      expect(pty.write).toHaveBeenCalledWith('\r');
+      expect(pty.write).toHaveBeenCalledWith(answer);
       expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
 
       pty.emitData('OpenAI Codex ready\n');
