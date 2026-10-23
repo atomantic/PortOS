@@ -80,6 +80,13 @@ vi.mock('../services/fableLoom/index.js', () => ({
   reviewEpisodeContinuity: vi.fn(async () => ({ id: 'example-record' })),
 }));
 
+vi.mock('../services/fableLoom/shotRuns.js', () => ({
+  planEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
+  startEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
+  getEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
+  cancelEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
+}));
+import * as shotRuns from '../services/fableLoom/shotRuns.js';
 import * as fableLoom from '../services/fableLoom/index.js';
 import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
@@ -99,7 +106,8 @@ const operations = [
   [`${loom}/playtest`, picker, fableLoom.reviewFableLoomPlaythroughs],
   [`${loom}/editorial/autopilot/start`, picker, fableLoom.startFableLoomEditorialAutopilot, 202],
   [`${episode}/weave`, picker, fableLoom.weaveEpisode],
-  [`${episode}/shots/plan`, picker, fableLoom.runEpisodeShotAutopilot],
+  [`${episode}/shots/plan`, picker, shotRuns.planEpisodeShotRun],
+  [`${episode}/shots/start`, picker, shotRuns.startEpisodeShotRun, 202],
   [`${episode}/outline/generate`, picker, fableLoom.generateEpisodeOutline],
   [`${episode}/outline/review`, picker, fableLoom.reviewEpisodeOutline],
   [`${node}/branch`, picker, fableLoom.branchNode],
@@ -127,7 +135,7 @@ const call = (app, [path, body], headers = {}, method = 'post') => {
   return pending.send(body);
 };
 const expectNoEffects = () => {
-  for (const effect of Object.values(fableLoom)) expect(effect).not.toHaveBeenCalled();
+  for (const effect of [...Object.values(fableLoom), ...Object.values(shotRuns)]) expect(effect).not.toHaveBeenCalled();
 };
 
 beforeEach(() => {
@@ -201,6 +209,8 @@ describe('FableLoom agent workflow authority (#10668)', () => {
       ['post', `${loom}/episodes`, { title: 'Example episode' }, fableLoom.addEpisode, 201],
       ['patch', node, { prose: 'Example prose' }, fableLoom.updateNode],
       ['post', `${episode}/outline/validate`, {}, fableLoom.validateEpisodeOutline],
+      ['post', `${episode}/shots/cancel`, {}, shotRuns.cancelEpisodeShotRun],
+      ['get', `${episode}/shots/status`, {}, shotRuns.getEpisodeShotRun],
       ['post', `${episode}/production/plan`, {}, fableLoom.planEpisodeProduction],
       ['post', `${episode}/continuity/review`, {}, fableLoom.reviewEpisodeContinuity],
       ['post', `${episode}/production/batch/example-run/cancel`, {}, fableLoom.cancelEpisodeProductionBatch],
