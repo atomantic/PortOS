@@ -1010,6 +1010,14 @@ describe('codeReview helpers', () => {
       expect(result.coverage.diffSha256).toMatch(/^[a-f0-9]{64}$/)
     })
 
+    it('retains provider quota health reporting through an incomplete batch aggregate', async () => {
+      global.fetch = vi.fn().mockResolvedValue(mockTextResponse('quota exceeded', { ok: false, status: 429 }))
+      const result = await runLocalCodeReview({ backend: 'lmstudio', model: 'quota-model', diff: fileDiff('a.js', 100) })
+      expect(result).toMatchObject({ ok: false, code: 'REVIEW_BATCH_FAILED' })
+      expect(await reportReviewerFailure('provider:example', result)).toBe(true)
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:example']).toMatchObject({ reason: 'quota' })
+    })
+
     it('identifies a single-file context refusal without treating it as provider health or a clean verdict', async () => {
       global.fetch = vi.fn().mockResolvedValue(mockTextResponse('Prompt is too long /private/local/path', { ok: false, status: 400 }))
       const result = await runLocalCodeReview({ ...batchOptions, diff: fileDiff('a.js') })

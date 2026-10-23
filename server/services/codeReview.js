@@ -106,7 +106,8 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   const isExplicitUnavailable = explicitReason === 'unavailable'
 
   // Input limits are not provider health, quota, or configuration failures.
-  if (['REVIEW_CONTEXT_CAPACITY', 'REVIEW_BUDGET_EXHAUSTED', 'REVIEW_INCOMPLETE', 'REVIEW_BATCH_FAILED'].includes(code)) return false
+  if (['REVIEW_CONTEXT_CAPACITY', 'REVIEW_BUDGET_EXHAUSTED', 'REVIEW_INCOMPLETE', 'REVIEW_BATCH_FAILED'].includes(code)
+      && !isQuota && !isConfigFault && !isExplicitUnavailable) return false
 
   const isProvider = isProviderReviewer(reviewer)
 
