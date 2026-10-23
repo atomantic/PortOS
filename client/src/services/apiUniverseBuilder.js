@@ -464,6 +464,14 @@ export const removeUniverseCanonEntry = (universeId, kind, entryId, options = {}
     ...options,
   }));
 
+// Remove one reference image from a canon entry's imageRefs[] (PATCH can't:
+// the server restores shorter lists as stale). Returns `{ universe, entry }`.
+export const removeUniverseCanonImageRef = (universeId, kind, entryId, filename, options = {}) =>
+  trackUniverseWrite(universeId, request(`/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/image-refs/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+    ...options,
+  }));
+
 // Bulk lock/unlock every canon entry of a single kind. Returns
 // `{ universe, kind, locked, changed, total }`.
 export const setUniverseCanonLockAll = (universeId, kind, locked, options = {}) =>

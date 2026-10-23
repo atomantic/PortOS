@@ -182,6 +182,19 @@ router.delete('/:id/canon/:kind/:entryId', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Remove ONE reference image from a canon entry. PATCH can't do this: the
+// stale-write guard (`preserveImageRefsById`) restores any shorter imageRefs
+// list. The image file stays in the gallery.
+const imageRefParamsSchema = lockParamsSchema.extend({
+  filename: z.string().trim().min(1).max(512),
+});
+router.delete('/:id/canon/:kind/:entryId/image-refs/:filename', asyncHandler(async (req, res) => {
+  const { kind, filename } = validateRequest(imageRefParamsSchema, req.params);
+  const result = await canonSvc.removeCanonEntryImageRef(req.params.id, kind, req.params.entryId, filename)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
 // Bulk lock/unlock every canon entry of a single kind. Powers the
 // "Lock all / Unlock all" buttons in the Universe Builder canon section.
 router.patch('/:id/canon/:kind/lock-all', asyncHandler(async (req, res) => {
