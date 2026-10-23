@@ -1270,8 +1270,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   await completeAgent(agent.id, {
     success: effectiveSuccess,
     executionSuccess,
-    cleanupPending: recoveryUpdate?.metadata?.deliveryRecoveryAgentId === agent.id,
-    cleanupDeliveryVerified: savedCleanup,
+    ...(recoveryUpdate?.metadata?.deliveryRecoveryAgentId === agent.id ? { cleanupPending: true } : {}),
+    ...(savedCleanup ? { cleanupDeliveryVerified: true } : {}),
     taskOutcome,
     validationPassed,
     exitCode,
@@ -1963,7 +1963,7 @@ export async function finalizeAgent({
   // failure.
   await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
-  }), executionSuccess, taskOutcome, cleanupPending: taskUpdate.metadata?.deliveryRecoveryAgentId === agentId });
+  }), executionSuccess, taskOutcome, ...(taskUpdate.metadata?.deliveryRecoveryAgentId === agentId ? { cleanupPending: true } : {}) });
 
   if (runId) {
     // Every failed verdict overrides exit-code/commit rescue in run tracking,
