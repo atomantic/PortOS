@@ -12,6 +12,7 @@
  * has to fit inside the agent's `curl` step.
  */
 
+import { CODE_REVIEW_BATCH_BYTES, CODE_REVIEW_MAX_BATCHES, runCodeReviewBatches, isReviewContextCapacityFailure, reviewContextCapacityFailure } from '../lib/codeReviewBatches.js'
 import { effortLevelsForProvider } from '../lib/providerModels.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
@@ -102,6 +103,9 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   const isMalformed = explicitReason === 'malformed' || code === 'MALFORMED_REVIEW'
   const isQuota = explicitReason === 'quota' || (!isTimeoutFailure(message) && isReviewerQuotaFailure(result))
   const isExplicitUnavailable = explicitReason === 'unavailable'
+
+  // Input limits are not provider health, quota, or configuration failures.
+  if (['REVIEW_CONTEXT_CAPACITY', 'REVIEW_BUDGET_EXHAUSTED', 'REVIEW_INCOMPLETE', 'REVIEW_BATCH_FAILED'].includes(code)) return false
 
   const isProvider = isProviderReviewer(reviewer)
 
@@ -958,20 +962,24 @@ function reviewMessages({ messages, userMessage, systemPromptFor }, workspace) {
     : messages
 }
 
-// Resolve the exact record the user selected. Never fall back to the active
-// provider, another account, or a replacement model for a pinned reviewer.
-async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, cwd: reviewCwd, isolateFromCheckout = false, allowUnconfined = false }) {
+async function loadReviewProvider(backend) {
   const { getProviderById } = await import('./providers.js')
   const { getAIToolkitInstance } = await import('../lib/aiToolkitState.js')
   const providerId = backend.slice('provider:'.length)
   // The auth-independent claim bridge has no server bootstrap. Use the same
   // provider-store reader there without starting a server or creating runners.
-  let provider = getAIToolkitInstance()
+  return getAIToolkitInstance()
     ? await getProviderById(providerId)
     : await import('../lib/aiToolkit/providers.js').then(async ({ createProviderService }) => {
       const { PATHS } = await import('../lib/paths.js')
       return createProviderService({ dataDir: PATHS.data }).getProviderById(providerId)
     })
+}
+
+// Resolve the exact record the user selected. Never fall back to the active
+// provider, another account, or a replacement model for a pinned reviewer.
+async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, cwd: reviewCwd, isolateFromCheckout = false, allowUnconfined = false, providerSnapshot = null }) {
+  let provider = providerSnapshot || await loadReviewProvider(backend)
   const transport = await resolveProviderReviewTransport(provider, { allowUnconfined })
   // A missing/disabled record is refused here, but an unsupported HARNESS is
   // refused at the branch below instead — a pinned effort the provider's model
@@ -1028,6 +1036,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
         error: 'The headless reviewer required command permission. Use a compatible non-interactive review transport or supported tool-free vendor configuration.',
       }
     }
+    if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model, effort }
     if (result.partial) {
       const errorMsg = result.stderr?.trim() || result.text?.trim() || 'Reviewer exited before completing its response.'
       return {
@@ -1051,6 +1060,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       }
     }
   }
+  if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model, effort }
   if (result.error || !result.text?.trim()) {
     const errorText = result.error || result.stderr || result.text || 'Reviewer returned no content.'
     return {
@@ -1069,9 +1079,9 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
   return { ok: true, backend, model, effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
 }
 
-async function runReviewerCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, baseUrl: requestedBaseUrl = null, cwd, isolateFromCheckout = false, allowUnconfined = false, diffSizeBytes = null }) {
+async function runReviewerCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, baseUrl: requestedBaseUrl = null, cwd, isolateFromCheckout = false, allowUnconfined = false, diffSizeBytes = null, providerSnapshot = null }) {
   if (isProviderReviewer(backend)) {
-    const result = await runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit, cwd, isolateFromCheckout, allowUnconfined })
+    const result = await runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit, cwd, isolateFromCheckout, allowUnconfined, providerSnapshot })
     if (result.ok || !Number.isFinite(diffSizeBytes) || !isTimeoutFailure(result.error)) return result
     return {
       ...result,
@@ -1199,18 +1209,54 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
  *   no such mode never receives it: it runs in a scratch directory instead.
  * @param {boolean} [opts.toolFree] - Run a CLI reviewer in a scratch cwd
  *   instead of `opts.cwd`, whatever its mode.
+ * @param {string} [opts.headSha] - Caller-supplied exact candidate SHA. Coverage
+ *   always includes the immutable diff SHA-256, even for legacy callers without a SHA.
+ * @param {number} [opts.maxBatchBytes] - Whole-file input bound, at most 128 KiB.
+ * @param {number} [opts.maxBatches] - Provider-call budget within this one review
+ *   round, at most 64. All batches share timeoutMs; reviewer rounds and optional
+ *   policy are still enforced by the review-loop caller.
  * @param {string} [opts.kind] - `claim-review` always uses a scratch cwd;
  *   enforced vendor isolation is preferred but is not a transport requirement.
  */
-export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, toolFree = false, kind = null } = {}) {
+export async function runLocalCodeReview(options = {}) {
+  const { backend, model, diff, effort, timeoutMs, headSha = null, maxBatchBytes = CODE_REVIEW_BATCH_BYTES, maxBatches = CODE_REVIEW_MAX_BATCHES } = options
+  if (!Number.isSafeInteger(maxBatchBytes) || maxBatchBytes < 1024 || maxBatchBytes > CODE_REVIEW_BATCH_BYTES
+      || !Number.isSafeInteger(maxBatches) || maxBatches < 1 || maxBatches > CODE_REVIEW_MAX_BATCHES
+      || (headSha !== null && !/^[a-f0-9]{40,64}$/.test(headSha))) {
+    return { ok: false, error: 'Invalid review batching limits or candidate revision.' }
+  }
+  if (typeof diff !== 'string' || !diff.trim() || !isToolFreeReviewer(backend)) return runSingleCodeReview(options)
+  if (Buffer.byteLength(diff) <= maxBatchBytes) {
+    const result = await runSingleCodeReview(options)
+    if (result.code !== 'REVIEW_CONTEXT_CAPACITY') return result
+    // A refusal on a smaller diff is explicit; do not spend another review round.
+    return runCodeReviewBatches({ diff, headSha, budgetMs: effectiveLocalCodeReviewTimeout(timeoutMs, diff), maxBatchBytes, maxBatches: 1, runBatch: async () => result })
+  }
+  const providerSnapshot = isProviderReviewer(backend) ? await loadReviewProvider(backend) : null
+  let selectedModel = model || providerSnapshot?.defaultModel
+  const selectedEffort = effort ?? providerSnapshot?.effort ?? null
+  const budgetMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs
+    : providerSnapshot && (await resolveProviderReviewTransport(providerSnapshot, { allowUnconfined: true })).transport === 'api' ? getRemoteCodeReviewTimeoutMs(providerSnapshot) : getLocalCodeReviewTimeoutMs(diff)
+  const result = await runCodeReviewBatches({ diff, headSha, budgetMs, maxBatchBytes, maxBatches,
+    runBatch: async (batch, remainingMs) => {
+      const result = await runSingleCodeReview({ ...options, model: selectedModel, effort: selectedEffort, diff: batch,
+        timeoutMs: remainingMs, toolFree: true, providerSnapshot })
+      selectedModel ||= result.model
+      return result
+    },
+  })
+  return { backend, model: selectedModel, effort: selectedEffort, ...result }
+}
+
+async function runSingleCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, toolFree = false, kind = null, providerSnapshot = null } = {}) {
   if (!isToolFreeReviewer(backend)) {
     return { ok: false, error: `Unsupported reviewer backend: ${backend}` }
   }
   // No model pre-check here: an unpinned model is resolved from what the backend
   // is serving inside `runReviewerCompletion`, and a second copy of the
   // guard would reject the recoverable case before that ever ran.
-  const trimmedDiff = typeof diff === 'string' ? diff.trim() : ''
-  if (!trimmedDiff) {
+  const trimmedDiff = typeof diff === 'string' ? diff : ''
+  if (!trimmedDiff.trim()) {
     return { ok: false, error: 'Empty diff — nothing to review.' }
   }
 
@@ -1235,9 +1281,11 @@ export async function runLocalCodeReview({ backend, model, diff, effort = null, 
     cwd,
     isolateFromCheckout: kind === 'claim-review' || toolFree,
     allowUnconfined: true,
+    providerSnapshot,
     systemPromptFor: buildCodeReviewSystemPrompt,
     userMessage: { role: 'user', content: `Review this PR diff:\n\n${fence}diff\n${trimmedDiff}\n${fence}` },
   })
+  if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model, effort }
   if (!result.ok) return result
   const { verdict, reason } = normalizeCodeReviewVerdict(result.content)
   if (!verdict) return {

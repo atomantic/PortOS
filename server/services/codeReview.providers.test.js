@@ -77,6 +77,27 @@ describe('configured provider reviewers', () => {
     expect(resolveReviewerConfig({ reviewerModels: {} }, defaults, defaults.reviewers).reviewerModels).toEqual({});
   });
 
+  it.each([false, true])('batches an exact candidate with one frozen provider configuration and shared budget (optional=%s)', async optional => {
+    const config = resolveReviewerConfig({}, pickCodeReviewDefaults({ codeReview: {
+      reviewers: [backend], optionalReviewers: optional ? [backend] : [], reviewerMaxRounds: { [backend]: 1 },
+    } }), [backend]);
+    const section = name => `diff --git a/${name} b/${name}\n+${'x'.repeat(700)}\n`;
+    const original = { ...provider, timeout: 456789 };
+    getProviderById.mockResolvedValueOnce(original).mockResolvedValue({ ...provider, defaultModel: 'replacement', endpoint: 'https://replacement.example' });
+    const result = await runLocalCodeReview({ backend, maxBatchBytes: 1024, diff: section('a.js') + section('b.js'), headSha: 'b'.repeat(40) });
+    expect(result).toMatchObject({ ok: true, model: 'default-coder', coverage: { headSha: 'b'.repeat(40), complete: true, calls: 2, budgetMs: 456789 } });
+    expect(getProviderById).toHaveBeenCalledTimes(1);
+    expect(callProviderAISimple).toHaveBeenCalledTimes(2);
+    for (const [usedProvider, model, , options] of callProviderAISimple.mock.calls) {
+      expect(usedProvider).toMatchObject({ endpoint: original.endpoint, fallbackProvider: null });
+      expect(usedProvider.timeout).toBeLessThanOrEqual(original.timeout);
+      expect(model).toBe('default-coder');
+      expect(options).toMatchObject({ allowModelRecovery: false });
+    }
+    expect(config.optionalReviewers).toEqual(optional ? [backend] : []);
+    expect(config.reviewerMaxRounds[backend]).toBe(1);
+  });
+
   it.each([false, true])('keeps malformed verdicts inconclusive for required/optional provider policy (optional=%s)', async optional => {
     const config = resolveReviewerConfig({}, pickCodeReviewDefaults({ codeReview: {
       reviewers: [backend], optionalReviewers: optional ? [backend] : [],

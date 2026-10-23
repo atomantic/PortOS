@@ -978,3 +978,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `runwayCatalogSnapshot.js` | Shared Runway model catalog capabilities and cached model selection. |
 
 | `runwaySpecialVideoModels.js` | Aleph 2 video-edit and Act-Two character-performance capabilities, schema compatibility and request validation. |
+
+| `codeReviewBatches.js` | File-boundary code-review batching with byte-exact diff hashes, candidate revision, reviewed/remaining file identifiers, bounded calls and one shared wall-clock budget. Preserves validated findings when coverage is incomplete and classifies explicit context-capacity refusals without retaining vendor event streams. |
