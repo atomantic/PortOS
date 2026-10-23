@@ -569,7 +569,7 @@ export default function SceneCard({
         {/* This shot's piece of the composed final render: cached or not, Render shot, its film look. */}
         {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} fieldId={fieldId} />}
         <ShotStoryboardPanel projectId={project?.id} storyboardId={storyboardId} scene={scene} linked={storyboardShot}
-          onSceneUpdated={onEditLocal} onUnlink={() => applyPatch({ panelId: null, panelRev: null })} onBoard={onStoryboardBoard} />
+          onSceneUpdated={onEditLocal} onUnlink={() => applyPatch({ panelId: null, panelRev: null, panelArt: null })} onBoard={onStoryboardBoard} />
         {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (
           <details className="group/direction rounded border border-port-border">
             <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">

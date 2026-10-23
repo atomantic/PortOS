@@ -1557,6 +1557,7 @@ export const musicVideoProductionProofSchema = z.object({
 const scenePanelFields = {
   panelId: z.string().regex(/^panel-[A-Za-z0-9-]{1,80}$/, 'Invalid panel id').nullable().optional(),
   panelRev: z.string().regex(/^[0-9a-z]{1,16}$/, 'Invalid panel revision').nullable().optional(),
+  panelArt: z.string().regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'Panel art must be a gallery image').nullable().optional(),
 };
 
 export const musicVideoSceneCreateSchema = z.object({

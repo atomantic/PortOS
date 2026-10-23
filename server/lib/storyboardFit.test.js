@@ -75,6 +75,11 @@ describe('fitStoryboardToSong', () => {
     const edited = { beats: board.beats.map((b) => ({ ...b, panels: b.panels.map((p) => (p.id === 'panel-b1' ? { ...p, action: 'New' } : p)) })) };
     expect(storyboardShotPanel(edited, shot).state).toBe('changed');
     expect(storyboardShotPanel({ beats: [] }, shot).state).toBe('missing');
+    // New panel art reads as changed too, since the art is the shot's frame reference.
+    const art = { beats: board.beats.map((b) => ({ ...b, panels: b.panels.map((p) => (p.id === 'panel-b1'
+      ? { ...p, takes: [{ id: 'take-1', source: 'gallery', image: 'b1.png' }], selectedTakeId: 'take-1' } : p)) })) };
+    expect(storyboardShotPanel(art, shot)).toMatchObject({ state: 'changed', artChanged: true });
+    expect(storyboardShotPanel(art, fitStoryboardToSong(art, song()).shots[1])).toMatchObject({ state: 'current', artChanged: false });
     expect(storyboardShotPanel(board, { sceneId: 'mvs-hand' })).toBeNull();
   });
 

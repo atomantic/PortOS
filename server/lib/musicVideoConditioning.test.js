@@ -63,4 +63,15 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
     expect(ids(musicVideoConditioningReferences(project(authored), scene, castMedia))).toEqual(['set.png', 'child.png']);
     expect(ids(musicVideoConditioningReferences(project(authored), scene))).toEqual(['set.png']);
   });
+
+  // Uniquely catches a fitted shot's storyboard panel losing its slot to identities, or an explicit pick ignoring it.
+  it('keeps a slot for a fitted shot\'s storyboard panel art, after the identities', () => {
+    const scene = { characterVariant: { ingredientId: CAST_ID, age: 7 }, panelId: 'panel-1', panelArt: 'panel.png' };
+    const refs = musicVideoConditioningReferences(project(authored), scene, castMedia);
+    expect(ids(refs)).toEqual(['child.png', 'teen.png', 'adult.png', 'panel.png']);
+    expect(refs[3]).toMatchObject({ id: 'mvr-panel-panel-1', label: 'Storyboard panel' });
+    expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['set'] }))).toEqual(['set.png']);
+    expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['mvr-panel-panel-1'] }))).toEqual(['panel.png']);
+    expect(ids(musicVideoConditioningReferences(project(authored), { panelId: 'panel-1', panelArt: 'sketch.gif' }))).toEqual(['lead.png', 'set.png']);
+  });
 });

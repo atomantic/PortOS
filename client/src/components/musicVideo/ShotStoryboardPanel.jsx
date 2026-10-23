@@ -9,8 +9,8 @@ const imageName = (ref) => (typeof ref === 'string' ? ref.split(/[?#]/)[0].split
 
 /**
  * A fitted shot's storyboard panel: which panel it came from, a notice when the
- * panel was edited since (Update copies its action to the shot's intent; a locked
- * shot changes only then) or deleted (Unlink), and Use as panel art, which sends
+ * panel was edited since (Update copies its action to the shot's intent and its
+ * art to the shot's frame reference; a locked shot changes only then) or deleted (Unlink), and Use as panel art, which sends
  * the shot's still back to the panel as its selected take.
  */
 export default function ShotStoryboardPanel({ projectId, storyboardId, scene, linked, onSceneUpdated, onUnlink, onBoard }) {
@@ -28,10 +28,11 @@ export default function ShotStoryboardPanel({ projectId, storyboardId, scene, li
   };
   const update = async () => {
     const res = await run('update', () => updateShotFromStoryboardPanel(projectId, scene.sceneId, { silent: true }));
-    if (res?.scene) onSceneUpdated(scene.sceneId, { visualIntent: res.scene.visualIntent, panelRev: res.scene.panelRev });
+    if (res?.scene) onSceneUpdated(scene.sceneId, { visualIntent: res.scene.visualIntent, panelRev: res.scene.panelRev, panelArt: res.scene.panelArt ?? null });
   };
   const sendArt = async () => {
     const res = await run('art', () => sendShotStillToStoryboardPanel(projectId, scene.sceneId, { silent: true }));
+    if (res?.scene) onSceneUpdated(scene.sceneId, { panelArt: res.scene.panelArt ?? null });
     if (res?.board) onBoard(res.board);
   };
   const still = imageName(scene.referenceImageId);
@@ -62,7 +63,9 @@ export default function ShotStoryboardPanel({ projectId, storyboardId, scene, li
       </div>
       {state === 'changed' && (
         <div className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 p-1.5">
-          <p className="min-w-0 flex-1 break-words text-port-warning">Storyboard changed: {panel.action || 'the panel has no action now'}</p>
+          <p className="min-w-0 flex-1 break-words text-port-warning">
+            Storyboard changed: {panel.action || 'the panel has no action now'}{linked.artChanged ? ' (new panel art)' : ''}
+          </p>
           <button type="button" onClick={update} disabled={!!busy} className={actionButton}>
             {busy === 'update' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />} Update
           </button>

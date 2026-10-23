@@ -7,15 +7,16 @@
  * the user's tap; no model call.
  *
  * After the fit, a shot whose panel was edited shows it (storyboardShotPanel)
- * and waits: Update copies the panel's action to the shot's intent, so even a
- * locked shot only changes on that tap. Use as panel art sends the shot's
- * still back to its panel as the selected take.
+ * and waits: Update copies the panel's action to the shot's intent and its art
+ * to the shot's frame reference, so even a locked shot only changes on that
+ * tap. Use as panel art sends the shot's still back to its panel as the
+ * selected take.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
-import { fitStoryboardToSong, storyboardFitSong, storyboardPanelRev, storyboardShotPanel } from '../../lib/storyboardFit.js';
+import { fitStoryboardToSong, storyboardFitSong, storyboardPanelArt, storyboardPanelRev, storyboardShotPanel } from '../../lib/storyboardFit.js';
 import { addPanelTake, getStoryboard, selectPanelTake } from './index.js';
 
 export async function fitMusicVideoToStoryboard(projectId, { boardUpdatedAt, starts = {} } = {}) {
@@ -72,11 +73,13 @@ async function shotAndPanel(projectId, sceneId) {
   return { project, scene, board, panel: found.panel };
 }
 
-/** Update: the shot takes its panel's action as its intent and records the panel as seen. */
+/** Update: the shot takes its panel's action as its intent and its art as its frame reference. */
 export async function updateShotFromPanel(projectId, sceneId) {
   const { panel } = await shotAndPanel(projectId, sceneId);
   const { updateScene } = await import('../musicVideo/projects.js');
-  const scene = await updateScene(projectId, sceneId, { visualIntent: panel.action.trim() || null, panelRev: storyboardPanelRev(panel) });
+  const scene = await updateScene(projectId, sceneId, {
+    visualIntent: panel.action.trim() || null, panelRev: storyboardPanelRev(panel), panelArt: storyboardPanelArt(panel),
+  });
   return { scene };
 }
 
@@ -86,8 +89,11 @@ export async function sendShotStillToPanel(projectId, sceneId) {
   const image = localImageFilename(scene.referenceImageId);
   if (!image) throw new ServerError('This shot has no still in the gallery yet.', { status: 409, code: 'NO_STILL' });
   const existing = panel.takes.find((take) => take.source === 'gallery' && take.image === image);
-  if (existing) return { board: await selectPanelTake(board.id, panel.id, existing.id) };
-  const { board: next } = await addPanelTake(board.id, panel.id, { source: 'gallery', image });
+  const next = existing ? await selectPanelTake(board.id, panel.id, existing.id)
+    : (await addPanelTake(board.id, panel.id, { source: 'gallery', image })).board;
+  // The panel's art is now this still, so the shot's reference follows and it does not read as changed.
+  const { updateScene } = await import('../musicVideo/projects.js');
+  const updated = await updateScene(projectId, sceneId, { panelArt: image });
   console.log(`🎬 Shot ${sceneId} still → storyboard ${board.id} panel ${panel.id}`);
-  return { board: next };
+  return { board: next, scene: updated };
 }

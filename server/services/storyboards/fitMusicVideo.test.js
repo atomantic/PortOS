@@ -100,6 +100,8 @@ describe('fit a music video to its storyboard', () => {
     expect(art.status).toBe(200);
     const panel = art.body.board.beats[0].panels.find((p) => p.id === panelId);
     expect(panel.takes.find((take) => take.id === panel.selectedTakeId)).toMatchObject({ source: 'gallery', image: 'still-a.png' });
+    // The panel's art is now the shot's own still, so the shot keeps it as its frame reference and reads as current.
+    expect(art.body.scene.panelArt).toBe('still-a.png');
     // Sending it again reselects the same take rather than adding another.
     const again = await request(app).post(`/api/storyboards/music-video/${project.id}/shots/${first.sceneId}/panel-art`);
     expect(again.body.board.beats[0].panels.find((p) => p.id === panelId).takes).toHaveLength(1);
