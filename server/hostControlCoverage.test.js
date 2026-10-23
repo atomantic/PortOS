@@ -1518,6 +1518,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/git/:appId', FORGE_READ],
   ['GET /api/git/submodules/status', FORGE_READ],
   ['GET /api/github/accounts/:id/status', FORGE_READ],
+  ['GET /api/github/notifications/:accountId/:threadId/deployment', FORGE_READ],
   ['GET /api/harnesses', PROVIDER_STATUS],
   ['GET /api/html-composition/beats', 'Measures the beat grid of an existing Music-library track (the caller picks the track, never a path); the ffmpeg decode runs once per file modification time and every later read serves the cached grid (#13156).'],
   ['GET /api/image-gen/status', RUNTIME_STATUS],
