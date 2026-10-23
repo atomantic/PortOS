@@ -374,9 +374,9 @@ function defaultBaseRef() {
 }
 
 /** Validate committed merge inputs without registering a worktree or writing to the caller's Git state. */
-export async function withMergedPregateTree(repoRoot, mergedWith, run) {
+async function withMergedPregateTree(repoRoot, mergedWith, run) {
   const readGit = (args, cwd = repoRoot) => execFileSync('git', args, {
-    cwd, encoding: 'utf8', env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
   if (readGit(['status', '--porcelain=v1', '--untracked-files=all'])) {
     throw new Error('--merged-with requires a clean committed checkout; commit the intended changes first.');
@@ -762,7 +762,6 @@ async function main() {
       ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
         .map(stage => ({ ...stage, env: { ...stage.env, PORTOS_TEST_MEMO: 'off' } }))
       : stages };
-
   };
 
   if (options.planOnly) {
