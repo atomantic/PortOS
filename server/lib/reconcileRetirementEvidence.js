@@ -1,6 +1,9 @@
 /** Exact checkout obligations survive scans until fresh service preservation evidence. */
 export const sameRetirementCheckout = (left, right) => left.branch === right.branch && left.path === right.path && left.head === right.head;
 
+export const isRetirementObligation = row => ['retirement-review-pending', 'retirement-receipt-unverified',
+  'retirement-provenance-unverified'].includes(row?.reason);
+
 export const hasRetirementReceipt = (outcome, release) => Number.isFinite(Date.parse(release.createdAt))
   && (outcome?.retired?.some(row => sameRetirementCheckout(row, release) && row.branchDeleted === true
     && typeof row.archiveDir === 'string' && row.archiveDir.length > 0
@@ -16,9 +19,13 @@ export function unresolvedRetirements(outcome, additional = []) {
   const rows = [...(outcome?.retirementObligations || []), ...(outcome?.remaining || []), ...additional];
   const obligations = [];
   for (const row of rows) {
-    if (!['retirement-review-pending', 'retirement-receipt-unverified'].includes(row.reason)
-      || hasRetirementReceipt(outcome, row) || obligations.some(previous => sameRetirementCheckout(previous, row))) continue;
-    obligations.push({ ...row, reason: 'retirement-receipt-unverified' });
+    if (!isRetirementObligation(row) || hasRetirementReceipt(outcome, row)) continue;
+    const previous = obligations.find(entry => sameRetirementCheckout(entry, row));
+    if (previous) {
+      if (row.reason === 'retirement-provenance-unverified') previous.reason = row.reason;
+      continue;
+    }
+    obligations.push({ ...row, reason: row.reason === 'retirement-provenance-unverified' ? row.reason : 'retirement-receipt-unverified' });
   }
   return obligations;
 }

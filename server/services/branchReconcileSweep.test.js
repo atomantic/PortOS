@@ -20,6 +20,7 @@ vi.mock('./branchReconcile.js', async (importOriginal) => ({
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn(async () => []) }));
 vi.mock('./agentState.js', async (importOriginal) => ({ ...await importOriginal(), getActiveAgentIds: () => new Set() }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
+vi.mock('./apps.js', () => ({ getAppById: vi.fn(async () => null) }));
 
 import { reconcile } from './branchReconcile.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';

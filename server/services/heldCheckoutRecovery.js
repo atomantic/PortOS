@@ -985,13 +985,13 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   if (!outcome?.remaining?.some?.(entry => sameRelease(entry, release))) return { ok: false, reason: 'release-not-in-inventory' };
   const inventoryCurrent = async () => (await taskSchedule.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
   const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null });
-  // The row was stale: something else already removed the checkout. That is the
-  // outcome the operator asked for, so settle the row instead of refusing it.
+  // A missing original cannot be archived retroactively. Retain its exact
+  // identity for provenance recovery rather than equating absence with success.
   if (!result.ok && result.reason === 'checkout-not-found') {
     const gone = await findGoneInventoryRows(app.repoPath, [release]).catch(() => []);
     if (gone.length) {
-      await taskSchedule.dropInventoryRows(appId, gone);
-      return { ok: true, alreadyRetired: true };
+      await taskSchedule.recordMissingInventoryRows(appId, gone);
+      return { ok: false, reason: 'retirement-provenance-unverified' };
     }
   }
   if (result.ok) {
