@@ -840,7 +840,7 @@ async function hasEmptyDependencyInventories(workspacePath) {
   const host = githubApiHost(origin.host.toLowerCase());
   const { resolveForgeForRepo } = await import('./git.js');
   const forge = await resolveForgeForRepo(workspacePath);
-  if (forge.cli !== 'gh' || forge.host !== host || forge.owner !== origin.owner) return false;
+  if (forge.cli !== 'gh' || githubApiHost(forge.host?.toLowerCase()) !== host || forge.owner !== origin.owner) return false;
   const { execGh } = await import('./github.js');
   const inventories = await Promise.all([
     'dependabot/alerts',
