@@ -45,6 +45,7 @@ describe('CatalogReferenceLibrary', () => {
 
   it('imports mood board items with age inference', async () => {
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[]} />);
+    fireEvent.click(screen.getByText('Add from mood board', { selector: 'summary' }));
     fireEvent.change(screen.getByLabelText('Mood board id'), { target: { value: 'mb-1' } });
     fireEvent.change(screen.getByLabelText('Mood board item ids'), { target: { value: 'a, b' } });
     fireEvent.click(screen.getByRole('button', { name: /add from mood board/i }));
@@ -75,6 +76,20 @@ describe('CatalogReferenceLibrary', () => {
     fireEvent.click(screen.getByLabelText('Guides only'));
     expect(screen.getAllByTestId('library-row')).toHaveLength(1);
     expect(screen.getByRole('img')).toHaveAttribute('src', '/data/image-thumbnails/seven.webp');
+  });
+
+  it('shows one visual while retaining independently stored portrait and reference metadata', async () => {
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={[
+      { kind: 'portrait', mediaKey: 'shared.png', library: { tags: ['portrait-tag'] } },
+      { kind: 'reference', mediaKey: 'shared.png', library: { guide: true, variant: { age: 17 }, tags: ['reference-tag'] } },
+    ]} />);
+    expect(screen.getAllByRole('img')).toHaveLength(1);
+    const reference = screen.getByRole('group', { name: 'reference details for shared.png' });
+    expect(within(reference).getByText(/Age 17/)).toHaveTextContent('reference-tag');
+    expect(screen.getByRole('group', { name: 'portrait details for shared.png' })).toHaveTextContent('portrait-tag');
+    fireEvent.click(within(reference).getByRole('button', { name: 'Guide' }));
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'shared.png', kind: 'reference', guide: false }, { silent: true }));
   });
 
   it('preserves per-attachment read-only provenance and counts guides outside this tab', () => {

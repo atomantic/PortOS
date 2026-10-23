@@ -19,10 +19,7 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
   const [boardId, setBoardId] = useState('');
   const [itemIds, setItemIds] = useState('');
 
-  const rows = useMemo(() => {
-    const portraits = new Set(media.filter((m) => !m.deleted && m.kind === 'portrait').map((m) => m.mediaKey));
-    return media.filter((m) => !m.deleted && LIBRARY_KINDS.has(m.kind) && !(m.kind === 'reference' && portraits.has(m.mediaKey)));
-  }, [media]);
+  const rows = useMemo(() => media.filter((m) => !m.deleted && LIBRARY_KINDS.has(m.kind)), [media]);
   // Sheets and looks in other tabs still consume the character-wide guide limit.
   const guideCount = guideMedia.filter((m) => !m.deleted && LIBRARY_KINDS.has(m.kind) && m.library?.guide === true).length;
   const ages = [...new Set(rows.map((m) => m.library?.variant?.age).filter(Number.isInteger))].sort((a, b) => a - b);
@@ -33,6 +30,14 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     && (!filter.era || eraFor(m) === filter.era)
     && (!filter.tag || (m.library?.tags || []).includes(filter.tag))
     && (!filter.guides || m.library?.guide === true));
+
+  // One visual can have both portrait and reference attachments with independent metadata.
+  const groups = new Map();
+  for (const m of visible) {
+    const key = `${m.kind === 'video' ? 'video' : 'image'}:${m.mediaKey}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  }
 
   const save = async (m, patch) => {
     setError('');
@@ -105,73 +110,79 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
       {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
       {visible.length === 0 ? <p className="text-sm text-gray-400">{rows.length ? 'No references match. Change the filters to see more.' : 'No references yet. Add an image or video to start your library.'}</p> : (
         <ul className="grid items-start grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] gap-3">
-          {visible.map((m) => {
-            const key = `${m.kind}:${m.mediaKey}`;
-            const lib = m.library || {};
-            const isGuide = lib.guide === true;
-            const editable = !readOnly && !m.readOnly;
-            const title = lib.variant?.label || m.caption || m.mediaKey;
-            const summary = [forms.find((f) => f.id === lib.variant?.formId)?.label || 'Canonical',
-              Number.isInteger(lib.variant?.age) ? `Age ${lib.variant.age}` : '', eraFor(m), ...(lib.tags || [])].filter(Boolean).join(' · ');
+          {[...groups].map(([groupKey, attachments]) => {
+            const tile = attachments.find((m) => m.kind === 'portrait') || attachments[0];
+            const tileEditable = !readOnly && !tile.readOnly;
             return (
-              <li key={key} data-testid="library-row" className="min-w-0 rounded-lg border border-port-border bg-port-bg">
-                <CatalogMediaTile m={m} missing={missingMedia.has(m.mediaKey)} contain
-                  isPortrait={m.kind === 'portrait'} onSetPortrait={editable ? onSetPortrait : undefined}
-                  onDetach={editable ? onDetach : undefined} armedDetach={armedDetach} onArmDetach={setArmedDetach} />
-                <div className="min-w-0 space-y-2 p-3">
-                  <div className="flex min-w-0 items-start gap-2">
-                    {m.kind === 'portrait' && <Star size={14} aria-label="Primary" className="mt-0.5 shrink-0 text-port-warning" />}
-                    <h4 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{title}</h4>
-                    <span className="shrink-0 text-xs text-gray-500">{m.kind}</span>
-                  </div>
-                  <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{summary}</p>
-                  {m.kind !== 'video' && (editable ? (
-                    <button type="button" disabled={!!busyKey || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
-                      title={!isGuide && guideCount >= MAX_CAST_GUIDES ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
-                      onClick={() => save(m, { guide: !isGuide })}
-                      className={`flex min-h-11 w-full items-center justify-center gap-2 rounded border px-3 text-sm disabled:opacity-40 ${isGuide ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-gray-300 hover:border-port-accent'}`}>
-                      <Compass size={16} aria-hidden="true" /> {busyKey === key ? 'Saving…' : isGuide ? 'Guide' : 'Make guide'}
-                    </button>
-                  ) : isGuide && <p className="text-xs text-port-accent">Render guide</p>)}
-                  {editable && (
-                    <details>
-                      <summary className="flex min-h-11 cursor-pointer items-center text-xs text-port-accent">Edit reference details</summary>
-                      <fieldset disabled={!!busyKey} className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,7rem),1fr))] gap-2 text-xs disabled:opacity-50">
-                        {forms.length > 0 && (
-                          <label htmlFor={`${id}-${key}-form`} className="min-w-0 space-y-1"><span>Age or look</span>
-                            <select id={`${id}-${key}-form`} aria-label={`Age or look for ${m.mediaKey}`} value={lib.variant?.formId || ''} className={fieldClass}
-                              onChange={(e) => save(m, { variant: { ...(lib.variant || {}), formId: e.target.value || undefined } })}>
-                              <option value="">Canonical</option>
-                              {forms.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
-                            </select>
-                          </label>
-                        )}
-                        <label htmlFor={`${id}-${key}-age`} className="min-w-0 space-y-1"><span>Age</span>
-                          <input id={`${id}-${key}-age`} aria-label={`Age for ${m.mediaKey}`} type="number" min="0" max="150" defaultValue={lib.variant?.age ?? ''} className={fieldClass}
-                            onBlur={(e) => {
-                              if (!e.target.validity.valid) return;
-                              const age = e.target.value === '' ? undefined : Number(e.target.value);
-                              if (age !== lib.variant?.age) save(m, { variant: { ...(lib.variant || {}), age } });
-                            }} />
-                        </label>
-                        <label htmlFor={`${id}-${key}-era`} className="min-w-0 space-y-1"><span>Era</span>
-                          <select id={`${id}-${key}-era`} aria-label={`Era for ${m.mediaKey}`} value={lib.variant?.era || ''} className={fieldClass}
-                            onChange={(e) => save(m, { variant: { ...(lib.variant || {}), era: e.target.value || undefined } })}>
-                            <option value="">From age</option>
-                            {ERAS.map((era) => <option key={era} value={era}>{era}</option>)}
-                          </select>
-                        </label>
-                        <label htmlFor={`${id}-${key}-tags`} className="col-span-full min-w-0 space-y-1"><span>Tags (comma separated)</span>
-                          <input id={`${id}-${key}-tags`} aria-label={`Tags for ${m.mediaKey}`} defaultValue={(lib.tags || []).join(', ')} placeholder="e.g. studio, winter" className={fieldClass}
-                            onBlur={(e) => {
-                              const next = e.target.value.split(',').map((tag) => tag.trim()).filter(Boolean);
-                              if (next.join(',') !== (lib.tags || []).join(',')) save(m, { tags: next });
-                            }} />
-                        </label>
-                      </fieldset>
-                    </details>
-                  )}
-                </div>
+              <li key={groupKey} data-testid="library-row" className="min-w-0 rounded-lg border border-port-border bg-port-bg">
+                <CatalogMediaTile m={tile} missing={missingMedia.has(tile.mediaKey)} contain
+                  isPortrait={tile.kind === 'portrait'} onSetPortrait={tileEditable ? onSetPortrait : undefined}
+                  onDetach={tileEditable ? onDetach : undefined} armedDetach={armedDetach} onArmDetach={setArmedDetach} />
+                {attachments.map((m) => {
+                  const key = `${m.kind}:${m.mediaKey}`;
+                  const lib = m.library || {};
+                  const isGuide = lib.guide === true;
+                  const editable = !readOnly && !m.readOnly;
+                  const title = lib.variant?.label || m.caption || m.mediaKey;
+                  const summary = [forms.find((f) => f.id === lib.variant?.formId)?.label || 'Canonical',
+                    Number.isInteger(lib.variant?.age) ? `Age ${lib.variant.age}` : '', eraFor(m), ...(lib.tags || [])].filter(Boolean).join(' · ');
+                  return (
+                    <div key={key} role="group" aria-label={`${m.kind} details for ${m.mediaKey}`} className="min-w-0 space-y-2 border-t border-port-border p-3">
+                      <div className="flex min-w-0 items-start gap-2">
+                        {m.kind === 'portrait' && <Star size={14} aria-label="Primary" className="mt-0.5 shrink-0 text-port-warning" />}
+                        <h4 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{title}</h4>
+                        <span className="shrink-0 text-xs text-gray-500">{m.kind}</span>
+                      </div>
+                      <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{summary}</p>
+                      {m.kind !== 'video' && (editable ? (
+                        <button type="button" disabled={!!busyKey || (!isGuide && guideCount >= MAX_CAST_GUIDES)} aria-pressed={isGuide}
+                          title={!isGuide && guideCount >= MAX_CAST_GUIDES ? `At most ${MAX_CAST_GUIDES} render guides` : 'Use as a render guide'}
+                          onClick={() => save(m, { guide: !isGuide })}
+                          className={`flex min-h-11 w-full items-center justify-center gap-2 rounded border px-3 text-sm disabled:opacity-40 ${isGuide ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-gray-300 hover:border-port-accent'}`}>
+                          <Compass size={16} aria-hidden="true" /> {busyKey === key ? 'Saving…' : isGuide ? 'Guide' : 'Make guide'}
+                        </button>
+                      ) : isGuide && <p className="text-xs text-port-accent">Render guide</p>)}
+                      {editable && (
+                        <details>
+                          <summary className="flex min-h-11 cursor-pointer items-center text-xs text-port-accent">Edit reference details</summary>
+                          <fieldset disabled={!!busyKey} className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,7rem),1fr))] gap-2 text-xs disabled:opacity-50">
+                            {forms.length > 0 && (
+                              <label htmlFor={`${id}-${key}-form`} className="min-w-0 space-y-1"><span>Age or look</span>
+                                <select id={`${id}-${key}-form`} aria-label={`Age or look for ${m.mediaKey}`} value={lib.variant?.formId || ''} className={fieldClass}
+                                  onChange={(e) => save(m, { variant: { ...(lib.variant || {}), formId: e.target.value || undefined } })}>
+                                  <option value="">Canonical</option>
+                                  {forms.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+                                </select>
+                              </label>
+                            )}
+                            <label htmlFor={`${id}-${key}-age`} className="min-w-0 space-y-1"><span>Age</span>
+                              <input id={`${id}-${key}-age`} aria-label={`Age for ${m.mediaKey}`} type="number" min="0" max="150" defaultValue={lib.variant?.age ?? ''} className={fieldClass}
+                                onBlur={(e) => {
+                                  if (!e.target.validity.valid) return;
+                                  const age = e.target.value === '' ? undefined : Number(e.target.value);
+                                  if (age !== lib.variant?.age) save(m, { variant: { ...(lib.variant || {}), age } });
+                                }} />
+                            </label>
+                            <label htmlFor={`${id}-${key}-era`} className="min-w-0 space-y-1"><span>Era</span>
+                              <select id={`${id}-${key}-era`} aria-label={`Era for ${m.mediaKey}`} value={lib.variant?.era || ''} className={fieldClass}
+                                onChange={(e) => save(m, { variant: { ...(lib.variant || {}), era: e.target.value || undefined } })}>
+                                <option value="">From age</option>
+                                {ERAS.map((era) => <option key={era} value={era}>{era}</option>)}
+                              </select>
+                            </label>
+                            <label htmlFor={`${id}-${key}-tags`} className="col-span-full min-w-0 space-y-1"><span>Tags (comma separated)</span>
+                              <input id={`${id}-${key}-tags`} aria-label={`Tags for ${m.mediaKey}`} defaultValue={(lib.tags || []).join(', ')} placeholder="e.g. studio, winter" className={fieldClass}
+                                onBlur={(e) => {
+                                  const next = e.target.value.split(',').map((tag) => tag.trim()).filter(Boolean);
+                                  if (next.join(',') !== (lib.tags || []).join(',')) save(m, { tags: next });
+                                }} />
+                            </label>
+                          </fieldset>
+                        </details>
+                      )}
+                    </div>
+                  );
+                })}
               </li>
             );
           })}
