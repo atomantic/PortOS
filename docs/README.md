@@ -113,3 +113,5 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 - [Peer push authentication](./PEER_PUSH_AUTH.md)
 
 - [Tool-free model delegation](SANDBOX_DELEGATION.md) — approved API workers, context packets, and advisory fidelity evaluation for Persistent Mind.
+
+- [Runway model catalog](RUNWAY_MODELS.md) — supported operations, public schema source, caching, refresh and workflow limits.

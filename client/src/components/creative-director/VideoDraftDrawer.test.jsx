@@ -1,4 +1,5 @@
 vi.mock('../../services/apiTracks.js', () => ({ listTracks: vi.fn(async () => []) }));
+vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../services/apiMusic.js', () => ({ listMusicEngines: vi.fn(() => Promise.resolve({ engines: [] })) }));
 vi.mock('../../services/apiUniverseBuilder.js', () => ({ listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../../services/apiPipeline.js', () => ({ listPipelineSeriesNames: vi.fn(() => Promise.resolve([])) }));

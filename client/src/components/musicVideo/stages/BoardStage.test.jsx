@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 import BoardStage from './BoardStage.jsx';
 import { ShotLockContext } from '../ShotLock.jsx';
 
+vi.mock('../../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
 vi.mock('../BeatTimeline.jsx', () => ({ default: () => null }));
 vi.mock('../ContactSheetButton.jsx', () => ({ default: () => null }));

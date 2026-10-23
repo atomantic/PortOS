@@ -18,7 +18,7 @@ import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } fro
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
 import { IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
-import { RUNWAY_IMAGE_MODEL_IDS } from './runwayImageModels.js';
+import { RUNWAY_IMAGE_MODEL_IDS, RUNWAY_IMAGE_RESOLUTIONS } from './runwayImageModels.js';
 import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
@@ -2292,7 +2292,7 @@ export const videoModelTermsSchema = z.object({
 export const imageGenRunwaySettingsSchema = z.object({
   enabled: z.boolean().optional(),
   model: z.preprocess((v) => v === '' ? undefined : v, z.enum(RUNWAY_IMAGE_MODEL_IDS).optional()),
-  resolution: z.enum(['720p', '1080p']).optional(),
+  resolution: z.enum(RUNWAY_IMAGE_RESOLUTIONS).optional(),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
 });

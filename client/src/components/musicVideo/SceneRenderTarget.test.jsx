@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 import { render, screen, within } from '@testing-library/react';
 import SceneRenderTarget, { lastRenderTarget, rememberRenderTarget, renderTargetOptions, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import { FAL_IMAGE_VIDEO_MODELS, falVideoResolutions } from '../../lib/falVideoModels.js';

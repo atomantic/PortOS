@@ -1,3 +1,4 @@
+import { getRunwayModelCatalog } from '../services/runwayModelCatalog.js';
 import { assertCatalogIdentityWritable } from '../services/catalogDB/identityAccess.js';
 /**
  * Image Generation Routes — works against the external SD API, local mflux,
@@ -63,6 +64,13 @@ import { promptAdditionsSchema } from '../lib/modelInput.js';
 
 const router = Router();
 
+router.get('/runway-models', asyncHandler(async (_req, res) => {
+  res.json(await getRunwayModelCatalog());
+}));
+router.post('/runway-models/refresh', asyncHandler(async (_req, res) => {
+  res.json(await getRunwayModelCatalog({ refresh: true }));
+}));
+
 const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method });
 
 // Event-only pointer: job id in `target`, never the generation prompt (#5596).
@@ -100,9 +108,9 @@ async function enqueueLoggedImage(req, job) {
 
 // Shared validation limits. MAX_REFERENCE_IMAGES must stay in sync with the
 // number of `referenceImageN` upload field names below.
-const MAX_PROMPT_LENGTH = 8000;
+const MAX_PROMPT_LENGTH = 32000;
 const MAX_LORAS = 8;
-const MAX_REFERENCE_IMAGES = 10;
+const MAX_REFERENCE_IMAGES = 16;
 const updatePromptSchema = z.object({ prompt: z.string().max(MAX_PROMPT_LENGTH) });
 const galleryImageFilenameSchema = (label) => z.string().max(256)
   .regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, `${label} must be a basename ending in png/jpg/jpeg/webp`);
