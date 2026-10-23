@@ -70,7 +70,8 @@ function fingerprint(file, data, io) {
   try {
     const path = join(io.realpathSync(data), ...parts);
     if (io.realpathSync(path) !== resolve(path)) refuse('Evidence symlinks are not accepted.');
-    fd = io.openSync(path, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    // A replaced file may be a FIFO; never block while owning the journal.
+    fd = io.openSync(path, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
     const before = io.fstatSync(fd);
     if (!before.isFile() || before.size > MAX_EVIDENCE_BYTES) refuse('Evidence must be regular files, at most 16 MiB in total. Preserve larger artifacts and use bounded owning-service evidence.');
     const raw = io.readFileSync(fd);
@@ -124,15 +125,22 @@ export function reconcileOutputPublication(input, { confirmDisposition = false, 
     if (!isDeepStrictEqual(evidence, request.evidence)) refuse('Evidence changed since inspection.');
   };
   const readReceipt = () => {
-    let receipt;
-    try { receipt = parse(receiptSchema, JSON.parse(io.readFileSync(receiptPath, 'utf8'))); }
-    catch { refuse('No valid matching receipt exists. Preserve existing evidence and diagnose the reservation; a missing owner cannot create a receipt.'); }
-    if (!isDeepStrictEqual(receipt.request, request)) refuse('The existing receipt binds different evidence, reason, hold, or operation.');
-    // A receipt-first interrupted write may have linked the file before directory fsync.
-    const fd = io.openSync(receiptPath, 'r+');
-    try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
-    syncDirectory(gate.directory, io);
-    return receipt;
+    let fd, receipt;
+    try {
+      try {
+        fd = io.openSync(receiptPath, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+        const stat = io.fstatSync(fd);
+        if (!stat.isFile() || stat.size > 256 * 1024) refuse('The receipt must be a bounded regular file.');
+        const raw = io.readFileSync(fd);
+        if (raw.length !== stat.size) refuse('The receipt changed while being read.');
+        receipt = parse(receiptSchema, JSON.parse(raw.toString('utf8')));
+      } catch { refuse('No valid matching receipt exists. Preserve existing evidence and diagnose the reservation; a missing owner cannot create a receipt.'); }
+      if (!isDeepStrictEqual(receipt.request, request)) refuse('The existing receipt binds different evidence, reason, hold, or operation.');
+      // A receipt-first interrupted write may have linked the file before directory fsync.
+      io.fsyncSync(fd);
+      syncDirectory(gate.directory, io);
+      return receipt;
+    } finally { if (fd !== undefined) io.closeSync(fd); }
   };
   try { return gate.reconcilePublicationRefusal({ hold: request.hold, expected: request.operation,
     replay: () => { verify(); return { ...readReceipt(), replayed: true }; },

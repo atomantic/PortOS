@@ -125,6 +125,38 @@ it.each(['changed', 'missing', 'empty'])('refuses %s evidence and explains the n
   expect(fs.existsSync(receiptPath(request))).toBe(false);
 });
 
+it.skipIf(process.platform === 'win32')('refuses FIFO evidence and receipts without blocking inspection or reconciliation', () => {
+  const state = readState();
+  state.operations[0].pid = 2147483647; // Synthetic PID outside the supported hosts' process-id range.
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  const request = inspect();
+  fs.writeFileSync(requestPath, JSON.stringify(request));
+  const path = join(data, spec.files[1].path);
+  const original = fs.readFileSync(path);
+  fs.unlinkSync(path);
+  expect(spawnSync('mkfifo', [path]).status).toBe(0);
+  const script = fileURLToPath(new URL('./reconcile-output-publication.mjs', import.meta.url));
+  for (const args of [['inspect', operationId, specPath], ['reconcile', requestPath, '--confirm-disposition']]) {
+    const result = spawnSync(process.execPath, [script, ...args, '--install-root', root],
+      { env: process.env, encoding: 'utf8', timeout: 5000 });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('Evidence must be regular files');
+    expect(gate.status().state).toBe('draining');
+    expect(gate.operations()).toEqual(state.operations);
+  }
+  fs.unlinkSync(path);
+  fs.writeFileSync(path, original);
+  expect(spawnSync('mkfifo', [receiptPath(request)]).status).toBe(0);
+  const result = spawnSync(process.execPath, [script, 'reconcile', requestPath, '--confirm-disposition', '--install-root', root],
+    { env: process.env, encoding: 'utf8', timeout: 5000 });
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(1);
+  expect(result.stdout).toContain('No valid matching receipt');
+  expect(gate.status().state).toBe('draining');
+  expect(gate.operations()).toEqual(state.operations);
+});
+
 it.each(['absent', 'duplicate', 'journal', 'unbound'])('rejects insufficient %s evidence before mutation', mode => {
   if (mode === 'absent') spec.files = [];
   if (mode === 'duplicate') spec.files[1].path = spec.files[0].path;
