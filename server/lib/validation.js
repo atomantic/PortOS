@@ -983,6 +983,17 @@ export const githubAgentRulesSchema = z.array(githubAgentRuleSchema).max(200).su
   });
 });
 
+// The provider/model/effort an agent run starts from (#13191): the account's
+// defaults, or the operator's choice for one Resolve with agent run. null or
+// '' = Auto (CoS chooses).
+const githubAgentPinFields = {
+  provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
+  model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
+  effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
+};
+export const githubAgentDefaultsSchema = z.object(githubAgentPinFields).strict();
+export const githubNotificationAgentRunSchema = z.object(githubAgentPinFields).strict();
+
 export const githubAccountCreateSchema = z.object({
   label: z.string().trim().max(80).optional(),
   host: z.string().trim().toLowerCase()
@@ -1001,6 +1012,7 @@ export const githubAccountCreateSchema = z.object({
   // Enterprise hosts only: every human on the instance counts as trusted (#13203).
   trustInstanceUsers: z.boolean().optional(),
   agentRules: githubAgentRulesSchema.optional(),
+  agentDefaults: githubAgentDefaultsSchema.nullable().optional(),
   enabled: z.boolean().optional(),
 }).strict();
 

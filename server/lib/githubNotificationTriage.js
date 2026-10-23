@@ -36,7 +36,7 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 6;
+export const TRIAGE_RULES_VERSION = 7;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. They stay in the inbox (it
@@ -312,13 +312,13 @@ const rulePin = (rule) => {
 };
 
 /**
- * Which lane an agent may resolve a thread in, or null when no lane fits. A
- * plan with `refused` names why it cannot go: a Private account's threads go
- * only once the operator sets `allowAgents` on it (the lanes use their own
- * providers, which its allow-list cannot bind, so the operator accepts that), and
- * the per-app lanes need the repo to be a PortOS managed app. Suspect and closed
- * threads never qualify. The pull number comes from the subject's API url and
- * the link from the stored html url, never from a title or body.
+ * Which lane an agent may resolve a thread in, or null for a closed or suspect
+ * thread. A plan with `refused` names why it cannot go: a Private account's
+ * threads go only once the operator sets `allowAgents` on it (the lanes use
+ * their own providers, which its allow-list cannot bind, so the operator
+ * accepts that), and the per-app lanes need the repo to be a PortOS managed
+ * app. The pull number comes from the subject's API url and the link from the
+ * stored html url, never from a title or body.
  *
  * Lanes: an outside PR's review request in a managed app goes to
  * `pr-reviewer`; a review request for a PR by you or a trusted author goes to
@@ -326,7 +326,11 @@ const rulePin = (rule) => {
  * (`do-review`, opt-in for Autopilot through an agent rule); outside issue
  * activity to `issue-watcher`; a security alert to the app's
  * `dependency-updates`, or, in a repo of yours with no app or a global
- * advisory, a one-off `security-fix` run in a scratch clone. The account's
+ * advisory, a one-off `security-fix` run in a scratch clone. Any other open
+ * thread goes to the generic `notification-resolve` run, refused unless its
+ * author and latest commenter are you or trusted (or it is CI in a repo of
+ * yours), so outside text reaches only the screened lanes; the tap re-checks
+ * every commenter (threadDiscussionVouched). The account's
  * matching agent rule (`matchAgentRule`) adds its provider/model/effort pin.
  * Used by Autopilot and the inbox's Resolve with agent button.
  */
@@ -343,7 +347,8 @@ export function agentHandoff({ account, row }) {
     // needs a managed app (`needsApp` below refuses it otherwise).
     if (pullNumber > 0 && REVIEW_TRUST.has(row.trust)) plan = { lane: 'do-review', pullNumber, repo: row.repo_full_name, optIn: true };
     else if (pullNumber > 0 && row.decision === 'suggest-untrusted-review') plan = { lane: 'pr-reviewer', pullNumber };
-  } else if (kind === 'issue-activity' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
+  } else if (kind === 'issue-activity' && HANDOFF_ISSUE_DECISIONS.has(row.decision)
+    && (row.trust === 'outside' || (evidence.commenter && !['yours', 'trusted'].includes(evidence.commenterTrust)))) {
     plan = { lane: 'issue-watcher' };
   } else if (kind === 'security-alert' && row.decision === 'surface-high') {
     // A managed app's own dependency lane reads the repo's Dependabot alerts and
@@ -353,14 +358,80 @@ export function agentHandoff({ account, row }) {
       ? { lane: 'security-fix', repo: row.repo_full_name || null }
       : { lane: 'dependency-updates' };
   }
-  if (!plan) return null;
+  // A thread a specific lane took keeps that lane, refusal included: whatever
+  // made it pick a screened lane never reaches the generic one instead.
+  if (!plan) plan = genericHandoff(row, evidence);
   const pin = rulePin(rule);
   if (pin) plan.pin = pin;
   if (rule) plan.rule = { id: rule.id || null, agent: rule.agent };
+  if (plan.refused) return plan;
   if (account?.trust === 'private' && account.allowAgents !== true) return { ...plan, refused: 'private-account' };
-  const needsApp = plan.lane !== 'security-fix' && plan.lane !== 'do-review';
+  const needsApp = !APP_FREE_AGENT_LANES.has(plan.lane);
   if (needsApp && evidence.repoManaged !== true) return { ...plan, refused: 'no-managed-app' };
   return plan;
+}
+
+/** The lane for any thread no specific lane fits (#13191): a one-off CoS task in a scratch clone. */
+export const GENERIC_AGENT_LANE = 'notification-resolve';
+/** Lanes that run without a managed app: a scratch clone, or `gh` in PR mode. */
+export const APP_FREE_AGENT_LANES = Object.freeze(new Set(['security-fix', 'do-review', GENERIC_AGENT_LANE]));
+const GENERIC_REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+const VOUCHED_TRUST = new Set(['yours', 'trusted']);
+// Subjects with no human author: CI runs in a repo of yours. A release is not
+// one: a managed app's repo can be someone else's upstream, so its notes are not
+// vouched for, nor is a subject whose author could not be read.
+const NO_ACTOR_SUBJECTS = new Set(['CheckSuite', 'WorkflowRun']);
+
+function genericRefusal(row, evidence) {
+  // An agent already has it; a generic run that failed restores the old
+  // decision (githubNotificationResolveTask.js), so a retry is allowed.
+  if (row.decision === 'handed-off') return 'handed-off';
+  if (FINISHED_DECISIONS.includes(row.decision) || FINISHED_SUBJECT_STATES.has(evidence.subjectState)) return 'finished';
+  // Approving a deployment ships code: operator only (githubNotificationDeployment.js).
+  if (row.reason === 'approval_requested' || evidence.rule === 'deployment-approval') return 'deployment-approval';
+  // An agent with `gh` could accept it; invitations are never accepted automatically.
+  if (row.reason === 'invitation') return 'invitation';
+  // Security alerts have their own lanes; one they refused stays refused.
+  if (row.reason === 'security_alert') return 'security-alert';
+  if (!GENERIC_REPO_RE.test(row.repo_full_name || '')) return 'no-repo';
+  const authorVouched = VOUCHED_TRUST.has(row.trust)
+    || (row.trust === 'unknown' && evidence.repoOwned === true && evidence.metadataMissing !== true
+      && (row.reason === 'ci_activity' || NO_ACTOR_SUBJECTS.has(row.subject_type)));
+  if (!authorVouched) return 'outside-content';
+  // Triage before #13191 did not record the latest commenter's trust; a thread
+  // with a comment it did not record waits for new activity to re-check it.
+  const hasComment = Boolean(row.latest_comment_api_url) && row.latest_comment_api_url !== row.subject_api_url;
+  if (!Object.hasOwn(evidence, 'commenterTrust')) return hasComment || evidence.commenter ? 'comment-unchecked' : null;
+  // An unreadable latest comment is recorded as outside with no commenter.
+  if (evidence.commenterTrust !== null && !VOUCHED_TRUST.has(evidence.commenterTrust)) return 'outside-content';
+  if (evidence.commenter && !VOUCHED_TRUST.has(evidence.commenterTrust)) return 'outside-content';
+  return null;
+}
+
+function genericHandoff(row, evidence) {
+  const plan = { lane: GENERIC_AGENT_LANE, repo: row.repo_full_name || null };
+  const refused = genericRefusal(row, evidence);
+  return refused ? { ...plan, refused } : plan;
+}
+
+/**
+ * The provider/model/effort a run uses: the first of the per-run choice, the
+ * agent rule's pin and the account's defaults that is set, taken whole so one
+ * source's model never pairs with another's provider. A per-run choice of
+ * `{}` (Auto everywhere) is set, and leaves the choice to CoS.
+ */
+export function agentRunPin({ perRun, rulePin: rule, defaults } = {}) {
+  const pick = (source) => {
+    const pin = {};
+    for (const key of ['provider', 'model', 'effort']) if (typeof source?.[key] === 'string' && source[key]) pin[key] = source[key];
+    return pin;
+  };
+  if (perRun && typeof perRun === 'object') return pick(perRun);
+  for (const source of [rule, defaults]) {
+    const pin = pick(source);
+    if (Object.keys(pin).length) return pin;
+  }
+  return {};
 }
 
 /**
@@ -372,6 +443,9 @@ export function autopilotHandoff({ account, row }) {
   if (account?.mode !== 'autopilot') return null;
   const plan = agentHandoff({ account, row });
   if (!plan || plan.rule?.agent === false) return null;
+  // The generic lane is on-tap only: an agent rule for it (#13192) is the only
+  // way Autopilot may start one, and the review/issue/alert rules do not count.
+  if (plan.lane === GENERIC_AGENT_LANE) return null;
   if (plan.optIn && plan.rule?.agent !== true) return null;
   return plan;
 }

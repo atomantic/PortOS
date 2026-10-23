@@ -130,6 +130,7 @@ export async function assistAccountNotifications(account, env, { act }) {
   const { rows } = await query(
     `SELECT thread_id, decision, trust, suspect, state, reason, subject_type, repo_full_name, evidence->>'rule' AS rule FROM github_notifications
      WHERE account_id = $1 AND state = 'open' AND NOT suspect AND NOT (evidence ? 'assisted')
+       AND decision IS DISTINCT FROM 'handed-off'
        AND (decision = ANY($2::text[]) OR reason = 'ci_activity' OR subject_type = 'CheckSuite')
      ORDER BY gh_updated_at DESC LIMIT ${MAX_ACTIONS_PER_RUN}`,
     [account.id, ACTIONABLE_DECISIONS],

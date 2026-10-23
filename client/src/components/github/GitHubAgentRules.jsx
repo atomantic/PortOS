@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId, useState } from 'react';
 import { Bot, Pencil, Plus, X } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
 import { AGENT_RULE_KINDS, CI_RULE_ACTIONS } from './githubTriageLabels';
+import { describeAgentPin } from './GitHubAgentPinForm';
 
 const ALL_REPOS = '*';
 const OTHER_REPO = '__other__';
@@ -16,14 +17,12 @@ const ciActionLabel = (action) => CI_RULE_ACTIONS.find((option) => option.value 
 
 function pinLabel(rule, providers) {
   if (rule.kind === 'ci-activity') return ciActionLabel(rule.action);
-  if (!rule.agent) return "Don't start an agent";
-  const provider = rule.provider ? providers.find((entry) => entry.id === rule.provider)?.name || rule.provider : 'Auto provider';
-  return ['Start an agent', provider, rule.model, rule.effort ? `${rule.effort} effort` : null].filter(Boolean).join(' · ');
+  return rule.agent ? `Start an agent · ${describeAgentPin(rule, providers)}` : "Don't start an agent";
 }
 
 function RuleForm({ rule, repos, takenKeys, onCancel, onSubmit, saving }) {
   const formId = useId();
-  const picker = useRunWithPicker({ preselectDefaults: false });
+  const picker = useRunWithPicker({ preselectDefaults: false, seed: rule });
   const [kind, setKind] = useState(rule?.kind || AGENT_RULE_KINDS[0].value);
   const knownRepo = !rule || rule.repo === ALL_REPOS || repos.includes(rule.repo);
   const [repoChoice, setRepoChoice] = useState(rule ? (knownRepo ? rule.repo : OTHER_REPO) : ALL_REPOS);
@@ -31,16 +30,6 @@ function RuleForm({ rule, repos, takenKeys, onCancel, onSubmit, saving }) {
   const [agent, setAgent] = useState(rule ? rule.agent !== false : true);
   const [ciAction, setCiAction] = useState(rule?.action || 'done');
   const isCi = kind === 'ci-activity';
-  const seeded = useRef(false);
-  const { loading, setSelectedProviderId, setSelectedModel, setEffort } = picker;
-  useEffect(() => {
-    // Seed the picker once its catalog has loaded, so a saved pin is not lost.
-    if (!rule || seeded.current || loading) return;
-    seeded.current = true;
-    if (rule.provider) setSelectedProviderId(rule.provider);
-    if (rule.model) setSelectedModel(rule.model);
-    if (rule.effort) setEffort(rule.effort);
-  }, [rule, loading, setSelectedProviderId, setSelectedModel, setEffort]);
 
   const repo = repoChoice === OTHER_REPO ? otherRepo.trim() : repoChoice;
   const repoValid = repo === ALL_REPOS || REPO_RE.test(repo);

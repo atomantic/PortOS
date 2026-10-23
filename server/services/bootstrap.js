@@ -98,6 +98,7 @@ import { startAutoUpdateScheduler } from './autoUpdateScheduler.js';
 import { startPrivacyRecheckScheduler } from './privacyRecheckScheduler.js';
 import { startQuotaBurnScheduler } from './quotaBurnRunner.js';
 import { startMaintenanceRunScheduler } from './maintenanceRun.js';
+import { startNotificationResolveListener } from './githubNotificationResolveTask.js';
 import { startSeriesAutopilotScheduler } from './seriesAutopilotScheduler.js';
 import { startCommissionScheduler } from './creativeCommissions/scheduler.js';
 import { startBeeperScheduler } from './beeperScheduler.js';
@@ -546,6 +547,9 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Manual maintenance runs (Schedule tab → "Run maintenance now"): arms a
   // listener and a slow sweep; dispatches only for a run the user started.
   startMaintenanceRunScheduler();
+  // GitHub inbox Resolve with agent (#13191): marks a thread done when the
+  // agent run the operator started on it succeeds. Starts no agent itself.
+  startNotificationResolveListener();
   // Initialize Series Autopilot scheduler — OFF by default; registers a cron per
   // series only when the user configured + enabled one via Settings → Series
   // Autopilot. Each scheduled run still passes through the cos autonomy gate +

@@ -9,8 +9,11 @@
  * task (githubSecurityFixTask.js). Any other review request goes to a
  * review-only `/do:review` run (prDoReviewTask.js) once an agent rule switches
  * review requests on for its repo. The account's agent rules also switch a kind
- * off for a repo, and pin each run's provider/model/effort. The inbox's Resolve
- * with agent button hands one thread off the same way on a tap, in any mode.
+ * off for a repo, and pin each run's provider/model/effort (else the account's
+ * agent defaults). The inbox's Resolve with agent button hands one thread off
+ * the same way on a tap, in any mode; a thread no specific lane fits goes on a
+ * tap to a generic `notification-resolve` run (githubNotificationResolveTask.js),
+ * which Autopilot never starts on its own.
  *
  * Nothing here reads thread text: each hand-off queues the lane's own run,
  * which re-screens its input with its own guards. The on-demand origin is
@@ -20,9 +23,11 @@
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { advisoryIdFromUrl } from '../lib/githubNotificationParse.js';
-import { agentHandoff, agentRuleScope, autopilotHandoff } from '../lib/githubNotificationTriage.js';
+import { agentHandoff, agentRuleScope, agentRunPin, APP_FREE_AGENT_LANES as APP_FREE_LANES, autopilotHandoff, GENERIC_AGENT_LANE } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
-import { managedAppsByRepoKey } from './githubNotificationTriage.js';
+import { managedAppsByRepoKey, threadDiscussionVouched } from './githubNotificationTriage.js';
+import { requireAccountEnv } from './githubNotifications.js';
+import { queueNotificationResolveTask } from './githubNotificationResolveTask.js';
 import { queueSecurityFixTask } from './githubSecurityFixTask.js';
 import { spawnPrDoReviewTask } from './prDoReviewTask.js';
 import { queueTargetedPrReview, readActiveTasks, readPendingOnDemandRequests, ACTIVE_TASK_STATUSES } from './prReviewerTargetedRun.js';
@@ -36,16 +41,14 @@ const MAX_HANDOFFS_PER_RUN = 50;
 // an older eligible thread is never starved by newer ones the rules would
 // reject. `inScope(n)` reads one `agentRuleScope` as parameters $n..$n+2.
 const inScope = (n) => `(($${n}::boolean AND NOT (lower(repo_full_name) = ANY($${n + 1}::text[]))) OR lower(repo_full_name) = ANY($${n + 2}::text[]))`;
-const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest' AND COALESCE(evidence->>'subjectState', '') NOT IN ('merged', 'closed') AND (
+export const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest' AND COALESCE(evidence->>'subjectState', '') NOT IN ('merged', 'closed') AND (
       (decision = 'suggest-untrusted-review' AND COALESCE(trust, '') NOT IN ('yours', 'trusted') AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(2)})
       OR (decision IN ('suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface') AND trust IN ('yours', 'trusted') AND ${inScope(5)})))
-  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface') AND (trust = 'outside' OR evidence->>'commenter' IS NOT NULL)
+  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface')
+    AND (trust = 'outside' OR (evidence->>'commenter' IS NOT NULL AND COALESCE(evidence->>'commenterTrust', '') NOT IN ('yours', 'trusted')))
     AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(8)})
   OR (reason = 'security_alert' AND decision = 'surface-high' AND ${inScope(11)}))`;
 const scopeParams = ({ all, except, only }) => [all, except, only];
-
-// Lanes that run without a managed app: a scratch clone, or `gh` in PR mode.
-const APP_FREE_LANES = new Set(['security-fix', 'do-review']);
 
 /**
  * Queue the app's run of a whole-app lane unless one is already queued or
@@ -72,6 +75,7 @@ async function queueLane(plan, app, origin, { account, rows, immediate = false }
     const advisories = plan.repo ? [] : rows.map((row) => advisoryIdFromUrl(row.subject_api_url, account.host)).filter(Boolean);
     return queueSecurityFixTask({ account, repo: plan.repo || null, advisories, origin, ...pin });
   }
+  if (plan.lane === GENERIC_AGENT_LANE) return queueNotificationResolveTask({ account, row: rows[0], origin, ...pin });
   if (plan.lane === 'do-review') {
     // The stored html url is rebuilt from GitHub's own API url on the account's host.
     const url = rows[0]?.html_url || '';
@@ -83,6 +87,14 @@ async function queueLane(plan, app, origin, { account, rows, immediate = false }
   if (plan.lane !== 'pr-reviewer' || !plan.pullNumber) return queueAppLane(plan.lane, app, origin, pin);
   return queueTargetedPrReview(app, plan.pullNumber, { origin, ...pin })
     .then((queued) => (queued.duplicate ? { duplicate: true, taskId: queued.reviewAction?.taskId || null } : { requestId: queued.request.id }));
+}
+
+// The rule's pin, else the account's agent defaults (#13191), else CoS's own choice.
+function withRunPin(account, plan, perRun) {
+  if (!plan) return plan;
+  const { pin: rulePin, ...rest } = plan;
+  const pin = agentRunPin({ perRun, rulePin, defaults: account.agentDefaults });
+  return Object.keys(pin).length ? { ...rest, pin } : rest;
 }
 
 async function recordHandoff(account, row, handoff, actor = 'automation') {
@@ -125,7 +137,7 @@ export async function autopilotAccountNotifications(account) {
       ...scopeParams(agentRuleScope(rules, 'security-alert')),
     ],
   );
-  const plans = rows.map((row) => ({ row, plan: autopilotHandoff({ account, row }) })).filter((entry) => entry.plan);
+  const plans = rows.map((row) => ({ row, plan: withRunPin(account, autopilotHandoff({ account, row })) })).filter((entry) => entry.plan);
   if (!plans.length) return { handedOff: 0, agentRuns: 0 };
   const apps = await managedAppsByRepoKey();
   const batches = new Map();
@@ -193,21 +205,35 @@ export async function autopilotAccountNotifications(account) {
 const REFUSED_MESSAGES = {
   'private-account': 'Private accounts never hand threads to an agent: the agents use their own AI providers',
   'no-managed-app': 'No PortOS app manages this repo, so no agent can work on it',
+  'outside-content': 'Outside content goes only to the screened Untrusted:Review and issue watcher lanes',
+  'comment-unchecked': 'The latest comment has not been checked yet; new activity re-checks it',
+  'deployment-approval': 'Only you can approve or reject a deployment',
+  invitation: 'Only you can accept or decline an invitation',
+  'security-alert': 'Security alerts go only to their dependency update or security fix agents',
+  finished: 'Nothing is left to do on this thread',
+  'handed-off': 'An agent already has this thread',
+  'no-repo': 'This notification names no repository for an agent to work in',
 };
 
 /**
  * The inbox's Resolve with agent tap: hand one thread to its lane now, in any
- * mode, under the same rules as Autopilot. A refusal or a lane that will not
- * take it is an error for the tap and leaves the thread as it was.
+ * mode, under the same rules as Autopilot, on the operator's per-run
+ * provider/model/effort when given. A refusal or a lane that will not take it
+ * is an error for the tap and leaves the thread as it was.
  */
-export async function handOffThread(account, threadId) {
+export async function handOffThread(account, threadId, perRun) {
   const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
   if (!row) throw new ServerError('Notification not found', { status: 404, code: 'GITHUB_NOTIFICATION_NOT_FOUND' });
-  const plan = agentHandoff({ account, row });
+  if (row.state === 'open' && row.suspect) throw new ServerError('Suspect threads never go to an agent', { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+  const plan = withRunPin(account, agentHandoff({ account, row }), perRun);
   if (!plan) throw new ServerError('No agent handles this kind of notification', { status: 409, code: 'GITHUB_NOTIFICATION_NO_LANE' });
-  if (plan.refused) throw new ServerError(REFUSED_MESSAGES[plan.refused], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+  if (plan.refused) throw new ServerError(REFUSED_MESSAGES[plan.refused] || 'No agent may take this thread', { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
   const app = (await managedAppsByRepoKey()).get(`${account.host}/${row.repo_full_name}`.toLowerCase()) || null;
   if (!APP_FREE_LANES.has(plan.lane) && !app) throw new ServerError(REFUSED_MESSAGES['no-managed-app'], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+  // The generic run reads the whole thread, not just the latest comment triage rated.
+  if (plan.lane === GENERIC_AGENT_LANE && !(await threadDiscussionVouched(account, await requireAccountEnv(account), row))) {
+    throw new ServerError(REFUSED_MESSAGES['outside-content'], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+  }
   const queued = await queueLane(plan, app, ON_DEMAND_ORIGINS.USER, { account, rows: [row], immediate: true });
   if (queued.error) throw new ServerError(String(queued.error), { status: 409, code: 'GITHUB_NOTIFICATION_LANE_UNAVAILABLE' });
   await recordHandoff(account, row, {
@@ -216,6 +242,8 @@ export async function handOffThread(account, threadId) {
     appName: app?.name || null,
     ...(plan.pullNumber ? { pullNumber: plan.pullNumber } : {}),
     ...(plan.pin ? { pin: plan.pin } : {}),
+    // A failed generic run restores it (githubNotificationResolveTask.js).
+    previousDecision: row.decision || null,
     ...queued,
     at: new Date().toISOString(),
   }, 'operator');

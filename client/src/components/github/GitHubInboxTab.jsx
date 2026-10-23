@@ -8,6 +8,7 @@ import Pill from '../ui/Pill';
 import OverflowMenu from '../ui/OverflowMenu';
 import GitHubThreadDrawer from './GitHubThreadDrawer';
 import GitHubDeploymentReview from './GitHubDeploymentReview';
+import GitHubAgentPinForm from './GitHubAgentPinForm';
 import { AGENT_REFUSED_LABELS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
 import socket from '../../services/socket';
 import LoadFailedState from '../ui/LoadFailedState';
@@ -149,13 +150,24 @@ function RepoFilter({ repos, repo, onSelect, total }) {
   );
 }
 
+// Where an agent run's failure can be read: its agent, else its CoS task.
+const agentFailedLink = ({ agentId, taskId }) => (agentId
+  ? `/cos/agents/${encodeURIComponent(agentId)}`
+  : `/cos/tasks?task=${encodeURIComponent(taskId)}&source=user`);
+
 function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated }) {
   const [reviewing, setReviewing] = useState(false);
+  const [picking, setPicking] = useState(false);
   const handled = notification.state !== 'open';
   const trust = TRUST_VIEW[notification.trust];
   const decision = DECISION_VIEW[notification.decision];
   const kind = kindOf(notification);
-  const canResolve = !handled && notification.agent && !notification.agent.refused;
+  // Every open row offers the button; a refused lane disables it with its reason.
+  const agent = handled ? null : notification.agent;
+  const canResolve = Boolean(agent) && !agent.refused;
+  const startAgent = async (pin) => {
+    if (await onAction(notification, 'agent', pin)) setPicking(false);
+  };
   const overflow = handled ? [] : MORE_ACTIONS.map(({ action, label, icon }) => ({
     id: action, label, icon, disabled: busy, onSelect: () => onAction(notification, action),
   }));
@@ -193,6 +205,11 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
             {trust && <Pill tone={trust.tone}>{trust.label}</Pill>}
             {notification.readOnGithub && <Pill tone="muted">Read on GitHub</Pill>}
             {handled && <Pill tone="muted">{STATE_LABELS[notification.state] || notification.state}</Pill>}
+            {!handled && notification.agentFailed && (
+              <Link to={agentFailedLink(notification.agentFailed)} className="rounded hover:underline">
+                <Pill tone="error">Agent failed</Pill>
+              </Link>
+            )}
           </div>
           {reviewing && (
             <GitHubDeploymentReview
@@ -201,8 +218,20 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
               onReviewed={(updated) => { setReviewing(false); onUpdated(notification, updated); }}
             />
           )}
-          {!handled && notification.agent?.refused && (
-            <p className="mt-1 text-xs text-gray-500">{AGENT_REFUSED_LABELS[notification.agent.refused] || notification.agent.refused}</p>
+          {picking && canResolve && (
+            <GitHubAgentPinForm
+              pin={agent.pin}
+              label={`Agent for ${notification.title}`}
+              submitLabel={busy ? 'Starting…' : 'Start agent'}
+              busy={busy}
+              onSubmit={startAgent}
+              onCancel={() => setPicking(false)}
+            />
+          )}
+          {agent?.refused && (
+            <p id={`agent-refused-${notification.accountId}-${notification.threadId}`} className="mt-1 text-xs text-gray-500">
+              {AGENT_REFUSED_LABELS[agent.refused] || agent.refused}
+            </p>
           )}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -216,12 +245,15 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
               <Rocket size={13} aria-hidden="true" /> Review deployment
             </button>
           )}
-          {canResolve && (
+          {agent && !picking && (
             <button
               type="button"
-              disabled={busy}
-              onClick={() => onAction(notification, 'agent')}
-              className="inline-flex min-h-[36px] items-center gap-1 rounded-lg bg-port-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+              disabled={busy || !canResolve}
+              onClick={() => setPicking(true)}
+              aria-describedby={agent.refused ? `agent-refused-${notification.accountId}-${notification.threadId}` : undefined}
+              className={`inline-flex min-h-[36px] items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-50 ${canResolve
+                ? 'bg-port-accent text-white'
+                : 'border border-port-border text-gray-400'}`}
             >
               <Bot size={13} aria-hidden="true" /> Resolve with agent
             </button>
@@ -313,14 +345,17 @@ export default function GitHubInboxTab() {
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
-  const handleAction = async (row, action) => {
+  // Resolves true once the server took the action. `run` is the agent picker's
+  // provider/model/effort for Resolve with agent.
+  const handleAction = async (row, action, run) => {
     const key = keyOf(row);
     setBusyKey(key);
     const updated = await (action === 'agent'
-      ? resolveGitHubNotificationWithAgent(row.accountId, row.threadId)
+      ? resolveGitHubNotificationWithAgent(row.accountId, row.threadId, run)
       : applyGitHubNotificationAction(row.accountId, row.threadId, action)).catch(() => null);
     setBusyKey(null);
     if (updated) applyUpdate(row, updated);
+    return Boolean(updated);
   };
 
   const applyUpdate = (row, updated) => {

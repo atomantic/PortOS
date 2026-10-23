@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useProviderModels from './useProviderModels.js';
 import { enabledProcessProviderFilter } from '../utils/providers.js';
 
@@ -8,7 +8,9 @@ import { enabledProcessProviderFilter } from '../utils/providers.js';
  * app-detail surfaces (Issues, Pull Requests, SlashDoRunDrawer, LaunchVideoPanel).
  *
  * Owns the provider/model catalog fetch, effort state, and the provider-change
- * effort reset rule (clearing effort when the provider changes).
+ * effort reset rule (clearing effort when the provider changes). `seed` (a saved
+ * `{ provider, model, effort }`) is applied once, after the catalog has loaded,
+ * so a stored pin is not lost to the catalog's own initial selection.
  *
  * @returns {{
  *   selectorProps: Object,      - All props to spread onto ProviderModelSelector
@@ -21,7 +23,7 @@ import { enabledProcessProviderFilter } from '../utils/providers.js';
  *   setEffort: Function,
  * }}
  */
-export default function useRunWithPicker({ preselectDefaults = true } = {}) {
+export default function useRunWithPicker({ preselectDefaults = true, seed = null } = {}) {
   const {
     providers,
     selectedProviderId,
@@ -39,6 +41,14 @@ export default function useRunWithPicker({ preselectDefaults = true } = {}) {
   });
 
   const [effort, setEffort] = useState('');
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (!seed || seeded.current || loading) return;
+    seeded.current = true;
+    if (seed.provider) setSelectedProviderId(seed.provider);
+    if (seed.model) setSelectedModel(seed.model);
+    if (seed.effort) setEffort(seed.effort);
+  }, [seed, loading, setSelectedProviderId, setSelectedModel]);
 
   const selectorProps = {
     providers,

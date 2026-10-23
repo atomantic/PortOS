@@ -2,7 +2,7 @@ import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
   githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
-  githubNotificationCadenceSchema, githubAuditApplySchema } from '../lib/validation.js';
+  githubNotificationCadenceSchema, githubAuditApplySchema, githubNotificationAgentRunSchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
 import * as githubNotifications from '../services/githubNotifications.js';
@@ -191,10 +191,14 @@ router.post('/notifications/:accountId/:threadId', asyncHandler(async (req, res)
 }));
 
 /**
- * POST /api/github/notifications/:accountId/:threadId/agent — Resolve with agent: queue the thread's lane now
+ * POST /api/github/notifications/:accountId/:threadId/agent — Resolve with agent: queue the thread's lane now.
+ * An optional `{ provider, model, effort }` body picks this run's agent; a key
+ * sent as null means Auto, and no keys at all means the rule pin or account defaults.
  */
 router.post('/notifications/:accountId/:threadId/agent', asyncHandler(async (req, res) => {
-  res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req)));
+  const body = validateRequest(githubNotificationAgentRunSchema, req.body ?? {});
+  const perRun = Object.keys(body).length ? body : undefined;
+  res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req), perRun));
 }));
 
 /**

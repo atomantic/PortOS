@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  agentHandoff, agentRuleScope, ciActivityAction, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
+  agentHandoff, agentRuleScope, agentRunPin, ciActivityAction, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
   selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
@@ -208,9 +208,9 @@ describe('autopilotHandoff', () => {
     expect(autopilotHandoff({ account, row: { ...review, evidence: { repoManaged: false, repoOwned: true } } })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, refused: 'no-managed-app' });
     expect(autopilotHandoff({ account, row: { ...review, suspect: true } })).toBeNull();
     expect(autopilotHandoff({ account, row: { ...issue, state: 'done' } })).toBeNull();
-    // Nor a review request on a PR that is already merged or closed.
-    expect(agentHandoff({ account, row: { ...review, evidence: { repoManaged: true, subjectState: 'merged' } } })).toBeNull();
-    expect(agentHandoff({ account, row: { ...review, evidence: { repoManaged: true, subjectState: 'closed' } } })).toBeNull();
+    // Nor a review request on a PR that is already merged or closed, by any lane.
+    expect(agentHandoff({ account, row: { ...review, evidence: { repoManaged: true, subjectState: 'merged' } } })).toMatchObject({ lane: 'notification-resolve', refused: 'finished' });
+    expect(agentHandoff({ account, row: { ...review, evidence: { repoManaged: true, subjectState: 'closed' } } })).toMatchObject({ lane: 'notification-resolve', refused: 'finished' });
     // An issue from you or a collaborator with no outside comment stays with you.
     expect(autopilotHandoff({ account, row: { ...issue, trust: 'trusted' } })).toBeNull();
   });
@@ -277,5 +277,128 @@ describe('ciActivityAction', () => {
   it('ignores non-CI threads and malformed rules', () => {
     expect(ciActivityAction({ account: {}, row: { reason: 'mention', subject_type: 'Issue' } })).toBeNull();
     expect(ciActivityAction({ account: { agentRules: [{ kind: 'ci-activity', repo: '*', action: 'nuke' }] }, row: ci })).toBe('done');
+  });
+});
+
+describe('generic notification-resolve lane (#13191)', () => {
+  const account = { mode: 'observe', trust: 'public' };
+  const vouched = { repoOwned: true, metadataMissing: false, commenter: null, commenterTrust: null };
+  const ci = {
+    state: 'open', suspect: false, trust: 'unknown', reason: 'ci_activity', decision: 'surface', subject_type: 'CheckSuite',
+    repo_full_name: 'acme/app', subject_api_url: null, latest_comment_api_url: null, evidence: { ...vouched, rule: 'ci-default-branch' },
+  };
+  const ownPr = {
+    ...ci, trust: 'yours', reason: 'comment', decision: 'needs-you', subject_type: 'PullRequest',
+    subject_api_url: 'https://api.github.com/repos/acme/app/pulls/9', latest_comment_api_url: 'https://api.github.com/repos/acme/app/issues/comments/5',
+    evidence: { ...vouched, rule: 'default', commenter: 'teammate', commenterTrust: 'trusted' },
+  };
+
+  it('takes a CI failure in a repo of yours and a thread you or trusted people wrote', () => {
+    expect(agentHandoff({ account, row: ci })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
+    expect(agentHandoff({ account, row: ownPr })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
+  });
+
+  it('refuses outside content that no screened lane takes, including a trusted author with an outside commenter', () => {
+    expect(agentHandoff({ account, row: { ...ownPr, trust: 'outside' } })).toMatchObject({ refused: 'outside-content' });
+    expect(agentHandoff({ account, row: { ...ownPr, evidence: { ...ownPr.evidence, commenter: 'visitor', commenterTrust: 'outside' } } }))
+      .toMatchObject({ lane: 'notification-resolve', refused: 'outside-content' });
+    // A latest comment triage could not read is outside, with no commenter named.
+    expect(agentHandoff({ account, row: { ...ownPr, evidence: { ...ownPr.evidence, commenter: null, commenterTrust: 'outside' } } }))
+      .toMatchObject({ refused: 'outside-content' });
+    // A commenter triage named but did not rate (no subject author to compare) is not vouched for.
+    expect(agentHandoff({ account, row: { ...ownPr, evidence: { ...ownPr.evidence, commenter: 'visitor', commenterTrust: null } } }))
+      .toMatchObject({ refused: 'outside-content' });
+    // A bot commenter is not vouched for.
+    expect(agentHandoff({ account, row: { ...ownPr, evidence: { ...ownPr.evidence, commenter: 'ci-app[bot]', commenterTrust: 'unknown' } } }))
+      .toMatchObject({ refused: 'outside-content' });
+  });
+
+  it('vouches for an actorless thread only when it is CI in a repo of yours that triage could read', () => {
+    expect(agentHandoff({ account, row: { ...ci, evidence: { ...ci.evidence, repoOwned: false } } })).toMatchObject({ refused: 'outside-content' });
+    expect(agentHandoff({ account, row: { ...ci, evidence: { ...ci.evidence, metadataMissing: true } } })).toMatchObject({ refused: 'outside-content' });
+    // An issue whose author could not be read has trust unknown too.
+    expect(agentHandoff({ account, row: { ...ci, reason: 'subscribed', subject_type: 'Issue', decision: 'needs-you' } })).toMatchObject({ refused: 'outside-content' });
+    // A release's notes come from whoever maintains the repo, which may not be you.
+    expect(agentHandoff({ account, row: { ...ci, reason: 'subscribed', subject_type: 'Release', decision: 'needs-you' } })).toMatchObject({ refused: 'outside-content' });
+  });
+
+  it('never falls through from a screened lane it refused', () => {
+    // Trusted issue author, outside commenter, no managed app: issue-watcher's refusal stands.
+    const issue = { ...ownPr, subject_type: 'Issue', trust: 'trusted', evidence: { ...ownPr.evidence, commenter: 'visitor', commenterTrust: 'outside', repoManaged: false } };
+    expect(agentHandoff({ account, row: issue })).toEqual({ lane: 'issue-watcher', refused: 'no-managed-app' });
+    const review = { ...ownPr, trust: 'outside', reason: 'review_requested', decision: 'suggest-untrusted-review', evidence: { ...vouched, repoManaged: false } };
+    expect(agentHandoff({ account, row: review })).toEqual({ lane: 'pr-reviewer', pullNumber: 9, refused: 'no-managed-app' });
+    expect(agentHandoff({ account: { ...account, trust: 'private' }, row: { ...issue, evidence: { ...issue.evidence, repoManaged: true } } }))
+      .toEqual({ lane: 'issue-watcher', refused: 'private-account' });
+    expect(agentHandoff({ account: { ...account, trust: 'private' }, row: ci })).toMatchObject({ lane: 'notification-resolve', refused: 'private-account' });
+    expect(agentHandoff({ account: { ...account, trust: 'private', allowAgents: true }, row: ci })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
+  });
+
+  it('sends a vouched issue outside a managed app to the generic lane, and unvouched to issue-watcher (#13213)', () => {
+    const vouchedIssue = {
+      ...ownPr,
+      subject_type: 'Issue',
+      trust: 'trusted',
+      evidence: { ...ownPr.evidence, commenter: 'teammate', commenterTrust: 'trusted', repoManaged: false },
+    };
+    expect(agentHandoff({ account, row: vouchedIssue })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
+
+    const outsideCommenterIssue = {
+      ...vouchedIssue,
+      evidence: { ...vouchedIssue.evidence, commenter: 'visitor', commenterTrust: 'outside' },
+    };
+    expect(agentHandoff({ account, row: outsideCommenterIssue })).toEqual({ lane: 'issue-watcher', refused: 'no-managed-app' });
+
+    const legacyCommentedIssue = {
+      ...vouchedIssue,
+      evidence: { ...vouchedIssue.evidence, commenter: 'teammate', commenterTrust: undefined },
+    };
+    expect(agentHandoff({ account, row: legacyCommentedIssue })).toEqual({ lane: 'issue-watcher', refused: 'no-managed-app' });
+
+    const managedVouchedIssue = {
+      ...vouchedIssue,
+      evidence: { ...vouchedIssue.evidence, repoManaged: true },
+    };
+    const autopilotAccount = { ...account, mode: 'autopilot' };
+    expect(autopilotHandoff({ account: autopilotAccount, row: managedVouchedIssue })).toBeNull();
+  });
+
+  it('keeps deployment approvals, invitations, security alerts and suspect threads from it', () => {
+    const deployment = { ...ci, trust: 'yours', reason: 'approval_requested', subject_type: 'WorkflowRun', decision: 'surface-high', evidence: { ...vouched, rule: 'deployment-approval' } };
+    expect(agentHandoff({ account, row: deployment })).toMatchObject({ lane: 'notification-resolve', refused: 'deployment-approval' });
+    expect(agentHandoff({ account, row: { ...deployment, decision: 'needs-you', evidence: { ...vouched, rule: 'learned' } } })).toMatchObject({ refused: 'deployment-approval' });
+    expect(agentHandoff({ account, row: { ...ci, reason: 'invitation', subject_type: 'RepositoryInvitation' } })).toMatchObject({ refused: 'invitation' });
+    // An alert already with its dependency lane does not also get a generic run.
+    expect(agentHandoff({ account, row: { ...ci, reason: 'security_alert', decision: 'handed-off' } })).toMatchObject({ refused: 'handed-off' });
+    expect(agentHandoff({ account, row: { ...ci, reason: 'security_alert', decision: 'surface' } })).toMatchObject({ refused: 'security-alert' });
+    expect(agentHandoff({ account, row: { ...ci, decision: 'duplicate' } })).toMatchObject({ refused: 'finished' });
+    expect(agentHandoff({ account, row: { ...ci, suspect: true } })).toBeNull();
+  });
+
+  it('waits for new activity on a commented thread triaged before commenter trust was recorded', () => {
+    const { commenterTrust: _unused, ...legacy } = ownPr.evidence;
+    expect(agentHandoff({ account, row: { ...ownPr, evidence: { ...legacy, commenter: null } } })).toMatchObject({ refused: 'comment-unchecked' });
+    const { commenterTrust: _none, ...legacyCi } = ci.evidence;
+    expect(agentHandoff({ account, row: { ...ci, evidence: legacyCi } })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
+  });
+
+  it('is on-tap only: Autopilot never starts it, whatever rules match the thread', () => {
+    const issue = { ...ownPr, subject_type: 'Issue', evidence: { ...ownPr.evidence, commenter: null, commenterTrust: null } };
+    const rules = [{ id: 'r', kind: 'issue-activity', repo: '*', agent: true, model: 'wide' }];
+    const autopilot = { ...account, mode: 'autopilot', agentRules: rules };
+    expect(agentHandoff({ account: autopilot, row: issue })).toMatchObject({ lane: 'notification-resolve', pin: { model: 'wide' } });
+    expect(autopilotHandoff({ account: autopilot, row: issue })).toBeNull();
+    expect(autopilotHandoff({ account: { ...autopilot, agentRules: [] }, row: ci })).toBeNull();
+  });
+
+  it('picks the run pin whole: per-run, else the rule pin, else the account defaults', () => {
+    const rulePin = { provider: 'rule-p', model: 'rule-m' };
+    const defaults = { provider: 'acct-p', effort: 'low' };
+    expect(agentRunPin({ perRun: { provider: 'run-p', model: null }, rulePin, defaults })).toEqual({ provider: 'run-p' });
+    // Auto everywhere for one run overrides the rule and the defaults.
+    expect(agentRunPin({ perRun: { provider: null, model: null, effort: null }, rulePin, defaults })).toEqual({});
+    expect(agentRunPin({ rulePin, defaults })).toEqual(rulePin);
+    expect(agentRunPin({ rulePin: null, defaults })).toEqual(defaults);
+    expect(agentRunPin({ defaults: { provider: 7 } })).toEqual({});
   });
 });

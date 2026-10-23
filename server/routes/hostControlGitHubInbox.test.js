@@ -63,6 +63,7 @@ const { default: githubRoutes } = await import('./github.js');
 // [method, path, body, the service the request must not reach when refused]
 const writes = [
   ['post', '/api/github/notifications/example-account/123', { action: 'unsubscribe' }, inbox.applyNotificationAction],
+  ['post', '/api/github/notifications/example-account/123/agent', { provider: 'example-provider', effort: 'high' }, inbox.resolveWithAgent],
   ['post', '/api/github/audit/example-account/apply', { suggestionId: 'unwatch:example/repo' }, audit.applyAuditSuggestion],
   ['post', '/api/github/audit-changes/7/undo', {}, audit.undoAuditChange],
   ['post', '/api/github/automations/activity/7/undo', {}, inbox.undoAutomationAction],
@@ -146,5 +147,19 @@ describe('GitHub inbox writes require operator authority (#12952)', () => {
     const agent = await createSession({ label: 'agent' });
     await send(appFor(), ['post', '/api/github/notifications/sync', {}], { Authorization: `Bearer ${agent.token}` });
     expect(inbox.syncAllNotifications).toHaveBeenLastCalledWith({ automate: true });
+  });
+});
+
+describe('Resolve with agent run choice (#13191)', () => {
+  it('passes a validated per-run provider/model/effort, null as Auto, and no keys as "use the defaults"', async () => {
+    const app = appFor('127.0.0.1');
+    const path = '/api/github/notifications/example-account/123/agent';
+    expect((await send(app, ['post', path, { provider: 'example-provider', title: 'injected' }])).status).toBe(400);
+    expect((await send(app, ['post', path, { effort: 'ludicrous' }])).status).toBe(400);
+    expect(inbox.resolveWithAgent).not.toHaveBeenCalled();
+    await send(app, ['post', path, {}]);
+    expect(inbox.resolveWithAgent).toHaveBeenLastCalledWith('example-account', '123', undefined);
+    await send(app, ['post', path, { provider: null, model: '', effort: 'high' }]);
+    expect(inbox.resolveWithAgent).toHaveBeenLastCalledWith('example-account', '123', { provider: null, model: null, effort: 'high' });
   });
 });
