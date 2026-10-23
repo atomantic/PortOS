@@ -8,7 +8,7 @@ import { PULL_REQUEST_ACTIONS } from '../../lib/pullRequestActions.js';
 import { readGithubPullRequest } from './appPullRequests.js';
 import { mergeGithubPullRequest, pullRequestMergeReadiness } from './appPullRequestMerge.js';
 import { managedAppsByRepoKey } from './githubNotificationTriage.js';
-import { requireAccountEnv } from './githubNotifications.js';
+import { applyNotificationAction, requireAccountEnv } from './githubNotifications.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { githubReviewAccountSelector } from './githubAccounts.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
@@ -95,6 +95,13 @@ export async function actOnNotificationPullRequest(account, threadId, options, {
       }
     }
     await recordAction(account, row, action, { ...result, appId: app?.id || null, number: target.number, automatic });
+    // A merged PR leaves nothing to do on its thread. The merge already happened, so
+    // a failed mark-done must not fail the action: the row keeps `suggest-mark-read`
+    // and the operator's Mark done button still works.
+    if (result.merged) {
+      await applyNotificationAction(account.id, row.thread_id, 'done', { actor: automatic ? 'automation' : 'operator', learn: false })
+        .catch(err => console.warn(`⚠️ Merged PR #${target.number} but could not mark its notification done: ${err.message}`));
+    }
     return result;
   });
 }
