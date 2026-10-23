@@ -22,7 +22,7 @@
  * full recheck cadence on a blip.
  */
 
-import { claimIssueNumber, collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers } from '../lib/issueClaimEvidence.js';
+import { claimIssueNumber, collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers, githubClaimPrArgs, githubPrRowsFromPages } from '../lib/issueClaimEvidence.js';
 import { runCliBounded } from '../lib/runCliBounded.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -154,9 +154,6 @@ async function resolveGitlabNamespace(repoPath) {
   return segments.join('/');
 }
 
-// gh pr list defaults to 30; match the issue listing cap
-const IN_FLIGHT_PR_LIMIT = 500;
-
 /**
  * Collect the set of issue numbers currently in flight, evidenced by an open
  * `claim/issue-<num>` / `cos/.../issue-<num>/...` / `next/issue-<num>` (slashdo
@@ -172,7 +169,7 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.
   const prListCall = forge === 'gitlab'
     ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath, env)
-    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'number,headRefName,body,commits', '--limit', String(IN_FLIGHT_PR_LIMIT)], repoPath, env);
+    : runCli('gh', githubClaimPrArgs(), repoPath, env);
   const [branchRes, prRes] = await Promise.all([
     runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
     prListCall
@@ -185,13 +182,13 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   try { changes = JSON.parse(prRes.stdout); } catch { changes = null; }
   const changeNumbers = forge === 'gitlab'
     ? collectGitlabMrIssueNumbers(changes)
-    : await collectGithubPrIssueNumbers(changes, async number => {
+    : await collectGithubPrIssueNumbers(githubPrRowsFromPages(changes), async number => {
       const res = await runCli('gh', await withGithubHost([
         'api', '--paginate', '--slurp', `repos/{owner}/{repo}/pulls/${number}/commits?per_page=100`
       ], repoPath), repoPath, env);
       if (res.code !== 0) return null;
       try { return JSON.parse(res.stdout); } catch { return null; }
-    }, IN_FLIGHT_PR_LIMIT);
+    });
   if (!changeNumbers) {
     return { error: `${forge === 'gitlab' ? 'glab' : 'gh'}-unavailable`, detail: 'Open change evidence is malformed or incomplete' };
   }

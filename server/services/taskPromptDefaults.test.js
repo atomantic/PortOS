@@ -1014,7 +1014,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(github).toContain('GH_HOST="github.com"');
     expect(github).toContain('self-assignment without a branch this run created');
     expect(github).toContain('It has no assignees.');
-    expect(github).toContain('headRefName,body,commits');
+    expect(github).toContain('--json number,headRefName,body');
     expect(github).toContain('`Closes #N`');
     expect(github).toContain('`[issue-N]` / `(#N)`');
     expect(github).toContain('Only a continuation of this same run may resume');

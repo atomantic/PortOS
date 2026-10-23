@@ -414,9 +414,16 @@ describe('listAppIssues — the list must match the tracker a claim would use', 
   });
 });
 
+const prPages = rows => JSON.stringify([{ data: { repository: { pullRequests: {
+  nodes: rows.map((pr, index) => ({ ...pr, number: pr.number || index + 1, commits: {
+    nodes: (pr.commits || []).map(commit => ({ commit: { message: `${commit.messageHeadline || ''}\n${commit.messageBody || ''}` } })),
+    pageInfo: { hasNextPage: (pr.commits || []).length >= 100 },
+  } })), pageInfo: { hasNextPage: false, endCursor: null },
+} } } }]);
+
 describe('prepareAppIssueClaim', () => {
   const issue = (labels = [], extra = {}) => JSON.stringify({ labels, assignees: [], state: 'OPEN', ...extra });
-  const prs = (...rows) => JSON.stringify(rows);
+  const prs = (...rows) => prPages(rows);
 
   it('removes only invitations present on GitHub after verifying eligibility', async () => {
     execGh.mockResolvedValueOnce(issue([{ name: 'Help Wanted' }, { name: 'good first issue' }, { name: 'bug' }]))
@@ -424,7 +431,7 @@ describe('prepareAppIssueClaim', () => {
     await prepareAppIssueClaim(APP, '42', 'github');
     expect(execGh.mock.calls.map(([args]) => args)).toEqual([
       ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'],
-      ['pr', 'list', '--repo', 'github.com/acme/widget', '--state', 'open', '--limit', '500', '--json', 'number,headRefName,body,commits'],
+      expect.arrayContaining(['api', 'graphql', '--paginate', '--slurp', '-F', 'owner=acme', 'repo=widget', '--hostname', 'github.com']),
       ['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--remove-label', 'Help Wanted', '--remove-label', 'good first issue'],
       ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'],
     ]);

@@ -75,15 +75,27 @@ function fakeHangingChild(stderr) {
   return child;
 }
 
+const prPages = rows => JSON.stringify([{ data: { repository: { pullRequests: {
+  nodes: rows.map((pr, index) => ({ ...pr, number: pr.number || index + 1, commits: {
+    nodes: (pr.commits || []).map(commit => ({ commit: { message: `${commit.messageHeadline || ''}\n${commit.messageBody || ''}` } })),
+    pageInfo: { hasNextPage: (pr.commits || []).length >= 100 },
+  } })), pageInfo: { hasNextPage: false, endCursor: null },
+} } } }]);
+
+function fakePrChild(rows) {
+  return fakeChild(prPages(typeof rows === 'string' ? JSON.parse(rows) : rows));
+}
+
 // Route spawn calls to canned output by command + first arg.
 function routeSpawn(routes) {
   spawn.mockImplementation((cmd, args = []) => {
-    const key = `${cmd} ${args[0] || ''}`;
+    const key = cmd === 'gh' && args[0] === 'api' && args.includes('graphql') ? 'gh pr' : `${cmd} ${args[0] || ''}`;
     const r = routes[key] ?? (key === 'gh api' ? { stdout: 'alice\n' } : key === 'glab mr' ? { stdout: '[]' } : undefined);
     let stdout = r?.stdout ?? '';
     if (key === 'gh pr' && !stdout.startsWith('[') && !stdout.startsWith('{')) {
       stdout = JSON.stringify(stdout.split('\n').filter(Boolean).map(headRefName => ({ headRefName, body: '', commits: [] })));
     }
+    if (key === 'gh pr' && stdout.startsWith('[')) stdout = prPages(JSON.parse(stdout));
     return fakeChild(stdout, r?.code ?? 0, r?.stderr ?? '');
   });
 }
@@ -461,7 +473,7 @@ describe('perpetualWork', () => {
           number: 3, title: 'retry my claim', assignees: [{ login: 'alice' }], labels: []
         }]));
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
-        if (cmd === 'gh' && args[0] === 'pr') return fakeChild('[]');
+        if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
         if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
@@ -477,7 +489,7 @@ describe('perpetualWork', () => {
           { number: 3, title: 'retry my claim', assignees: [{ login: 'alice' }], labels: [] }
         ]));
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
-        if (cmd === 'gh' && args[0] === 'pr') return fakeChild('[]');
+        if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
         if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
@@ -485,7 +497,7 @@ describe('perpetualWork', () => {
       expect(out).toMatchObject({ actionable: false, reason: 'no-actionable-issues', skipCauses: { assigned: 1 } });
     });
 
-    it('lists open PRs with an explicit limit and excludes PR-backed issues beyond the first 30', async () => {
+    it('paginates open PRs and excludes PR-backed issues beyond the first 30', async () => {
       const prRefs = Array.from({ length: 40 }, (_, i) => `claim/issue-${i + 100}`).join('\n');
       routeSpawn({
         'gh issue': { stdout: JSON.stringify([
@@ -498,8 +510,9 @@ describe('perpetualWork', () => {
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
       expect(out.sample).toEqual([500]);
       expect(out.inFlightCount).toBe(1);
-      const prCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args[0] === 'pr');
-      expect(prCall[1]).toEqual(expect.arrayContaining(['--limit', '500']));
+      const prCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args.includes('graphql'));
+      expect(prCall[1]).toEqual(expect.arrayContaining(['--paginate', '--slurp']));
+      expect(prCall[1].find(arg => arg.startsWith('query='))).not.toContain('authors');
     });
 
     it('excludes arbitrary PR branches by closing trailer and head commit references', async () => {
@@ -534,6 +547,15 @@ describe('perpetualWork', () => {
         expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ actionable: false, transient: true, reason: 'gh-unavailable' });
       }
     );
+
+    it('refuses an incomplete paginated GraphQL response', async () => {
+      routeSpawn({ 'gh issue': { stdout: JSON.stringify([{ number: 7, title: 'work', labels: [], assignees: [] }]) } });
+      const routed = spawn.getMockImplementation();
+      spawn.mockImplementation((cmd, args, options) => cmd === 'gh' && args.includes('graphql')
+        ? fakeChild(JSON.stringify([{ data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: true } } } } }]))
+        : routed(cmd, args, options));
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ actionable: false, transient: true });
+    });
 
     it('stays transient instead of under-counting in-flight work when gh pr list fails', async () => {
       routeSpawn({
@@ -625,7 +647,7 @@ describe('perpetualWork', () => {
           return fakeChild(JSON.stringify([{ number: 5, title: 'x', assignees: [], labels: [] }]));
         }
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
-        if (cmd === 'gh' && args[0] === 'pr') return fakeChild('[]');
+        if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
         if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
@@ -764,6 +786,7 @@ describe('perpetualWork', () => {
       const routeCollaborators = ({ me = 'alice', collaborators = 'bob\ncarol\n', collabCode = 0, issuesByAuthor = {} } = {}) => {
         spawn.mockImplementation((cmd, args = []) => {
           if (cmd === 'gh' && args[0] === 'api' && args.includes('user')) return fakeChild(`${me}\n`);
+          if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
           if (cmd === 'gh' && args[0] === 'api') return fakeChild(collabCode === 0 ? collaborators : '', collabCode);
           if (cmd === 'gh' && args[0] === 'issue') {
             const authorIdx = args.indexOf('--author');
@@ -771,7 +794,7 @@ describe('perpetualWork', () => {
             return fakeChild(JSON.stringify(issuesByAuthor[args[authorIdx + 1]] || []));
           }
           if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
-          if (cmd === 'gh' && args[0] === 'pr') return fakeChild('[]');
+          if (cmd === 'gh' && args[0] === 'api' && args.includes('graphql')) return fakePrChild([]);
           return fakeChild('');
         });
       };

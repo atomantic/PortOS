@@ -23,7 +23,7 @@
  * without guessing, since the classifier is the only thing that knows.
  */
 
-import { collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers } from '../lib/issueClaimEvidence.js';
+import { collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers, githubClaimPrArgs, githubPrRowsFromPages } from '../lib/issueClaimEvidence.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -330,12 +330,11 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   };
   const labels = await readLabels();
   const rawChanges = tracker === 'github'
-    ? await execGh(['pr', 'list', '--repo', target.repoSpec, '--state', 'open',
-      '--limit', '500', '--json', 'number,headRefName,body,commits'], undefined, { cwd, env })
+    ? await execGh([...githubClaimPrArgs(target.fullName), '--hostname', target.apiHost], undefined, { cwd, env })
     : await execGlab(withGlabJson(['mr', 'list', '--per-page', '100']), app.repoPath, undefined, { rejectOnError: true });
   const changes = safeJSONParse(rawChanges, null);
   const changeNumbers = tracker === 'github'
-    ? await collectGithubPrIssueNumbers(changes, async number => {
+    ? await collectGithubPrIssueNumbers(githubPrRowsFromPages(changes), async number => {
       const raw = await execGh(['api', '--hostname', target.apiHost, '--paginate', '--slurp',
         `repos/${target.fullName}/pulls/${number}/commits?per_page=100`], undefined, { cwd, env }).catch(() => null);
       return safeJSONParse(raw, null);
