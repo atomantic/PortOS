@@ -34,6 +34,7 @@ const {
   getFleetQuotaEntries,
   getFleetClaudeCodeModels,
   getFleetRollingCost,
+  getFleetMonthlyUsage,
   forgetInstanceUsage,
   PEER_USAGE_FILE,
 } = await import('./peerUsage.js');
@@ -571,6 +572,72 @@ describe('fleet rolling 30-day cost', () => {
     const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
     expect(series.instanceCount).toBe(1);
     expect(series.points.at(-1).cost).toBeCloseTo(dayCost(localUsage, '2026-08-30'), 2);
+  });
+});
+
+describe('fleet calendar-month usage', () => {
+  it('includes local and peer transcripts and ledgers without counting overlapping Claude sessions twice', async () => {
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    localUsage = usageFixture({ day: '2026-09-10' });
+    const day = localUsage.dailyActivity['2026-09-10'];
+    day.byProvider = { 'claude-code': day.byProvider.anthropic };
+    localUsage.dailyActivity['2026-09-11'] = structuredClone(day);
+    const counts = (input, output) => ({ messages: 2, input, output, cacheRead: 100, cacheWrite: 20 });
+    await atomicWrite(TRANSCRIPT_USAGE_FILE, {
+      days: { '2026-09-10': { 'claude-opus-5': counts(2000, 4000) }, '2026-09-11': { 'claude-opus-5': counts(1, 1) } },
+      updatedAt: '2026-09-30T00:00:00Z',
+    });
+    const peerUsage = usageFixture({ day: '2026-09-12', tokensOut: 4000 });
+    const peerDay = peerUsage.dailyActivity['2026-09-12'];
+    peerDay.byProvider = { 'codex-cli': peerDay.byProvider.anthropic };
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({
+      usage: buildUsageDigest(peerUsage),
+      claudeCode: { days: { '2026-09-12': { 'claude-opus-5': counts(7000, 8000) } }, updatedAt: '2026-09-30T00:00:00Z' },
+    }) } });
+
+    const now = new Date('2026-09-30T23:59:59Z');
+    const monthly = await getFleetMonthlyUsage({ now });
+    const rolling = await getFleetRollingCost({ now });
+    expect(monthly.instanceCount).toBe(2);
+    expect(monthly.series.map((row) => row.key).sort()).toEqual(['claude', 'codex']);
+    expect(monthly.history).toHaveLength(1);
+    expect(monthly.history[0]).toMatchObject({ month: '2026-09', tokens: 6120 + 1500 + 4500 + 15120, partial: true });
+    expect(monthly.history[0].estimatedCost).toBe(rolling.points.at(-1).cost);
+    expect(monthly.history[0].values.reduce((sum, cost) => sum + cost, 0)).toBeCloseTo(monthly.history[0].estimatedCost, 2);
+  });
+
+  it('preserves rolled-up months, cache tokens, empty months and the twelve-month limit', async () => {
+    localUsage = usageFixture({ day: '2025-06-01' });
+    localUsage.dailyActivity['2025-06-01'] = { byProvider: { example: { tokensIn: 10, tokensOut: 20, cacheReadTokens: 30, cacheWriteTokens: 40, source: 'measured' } } };
+    localUsage.monthlyActivity = { '2025-04': { tokensIn: 1000000, tokens: 2000000 } };
+    const monthly = await getFleetMonthlyUsage({ now: new Date('2025-06-30T23:59:59Z') });
+    expect(monthly.history).toEqual([
+      { month: '2025-04', estimatedCost: 33, values: [33], tokens: 3000000, partial: false },
+      { month: '2025-05', estimatedCost: 0, values: [0], tokens: 0, partial: false },
+      { month: '2025-06', estimatedCost: 0, values: [0], tokens: 100, partial: true },
+    ]);
+    const later = await getFleetMonthlyUsage({ now: new Date('2026-06-01T00:00:00Z') });
+    expect(later.history).toHaveLength(12);
+    expect(later.history[0].month).toBe('2025-07');
+    expect(later.history.at(-1).month).toBe('2026-06');
+  });
+
+  it('folds smaller providers into Other while retaining free-provider tokens', async () => {
+    localUsage = usageFixture({ day: '2026-09-01' });
+    const bucket = localUsage.dailyActivity['2026-09-01'];
+    bucket.byProvider = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`example-${i}`, { tokensOut: (i + 1) * 1000000 }]));
+    bucket.byProvider.ollama = { tokensOut: 5000000 };
+    bucket.tokens = 26000000;
+    const monthly = await getFleetMonthlyUsage({ now: new Date('2026-09-30T00:00:00Z'), providers: [{ id: 'ollama', type: 'ollama' }] });
+    expect(monthly.series).toHaveLength(5);
+    expect(monthly.series.at(-1)).toEqual({ key: 'other', label: 'Other' });
+    expect(monthly.history[0]).toMatchObject({ estimatedCost: 315, tokens: 26000000 });
+    expect(monthly.history[0].values.reduce((sum, cost) => sum + cost, 0)).toBe(315);
+  });
+
+  it('returns empty history before any usage is recorded', async () => {
+    localUsage = { dailyActivity: {}, monthlyActivity: {}, lastUpdated: null };
+    expect(await getFleetMonthlyUsage()).toEqual({ instanceCount: 1, series: [], history: [] });
   });
 });
 

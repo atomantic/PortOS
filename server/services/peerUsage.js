@@ -516,6 +516,16 @@ const addInto = (target, source, scale = 1) => {
   for (const [key, cost] of Object.entries(source)) target[key] = (target[key] || 0) + cost * scale;
 };
 
+const reportTokens = (row) => row.tokensIn + row.tokensOut + row.cacheReadTokens + row.cacheWriteTokens;
+
+function dailyUsage(report, labels) {
+  return {
+    costs: costByGroup(report, labels),
+    tokens: reportTokens(report.totals),
+    claudeTokens: report.providers.reduce((sum, row) => sum + ((row.family || familyForProviderId(row.id)) === 'claude' ? reportTokens(row) : 0), 0),
+  };
+}
+
 /**
  * Estimated API cost per day for one instance over `span`, split by plan, each
  * day priced on its own through the same `buildUsageReport` as the cost report
@@ -529,7 +539,7 @@ const addInto = (target, source, scale = 1) => {
  * Claude Code use outside PortOS also comes from the instance's transcript
  * history (see `withTranscriptClaude`).
  */
-function instanceDailyCosts({ daily = {}, monthly = {}, transcript = {} }, span, providers, labels) {
+function instanceDailyUsage({ daily = {}, monthly = {}, transcript = {} }, span, providers, labels) {
   const missingDays = new Map();
   for (const day of span) {
     const month = day.slice(0, 7);
@@ -543,15 +553,23 @@ function instanceDailyCosts({ daily = {}, monthly = {}, transcript = {} }, span,
     const [y, m] = month.split('-').map(Number);
     const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
     const rolledDays = daysInMonth - Object.keys(daily).filter((d) => d.startsWith(`${month}-`)).length;
-    const share = {};
-    addInto(share, costByGroup(report, labels), 1 / Math.max(rolledDays, count));
-    monthShare.set(month, share);
+    const divisor = Math.max(rolledDays, count);
+    const usage = dailyUsage(report, labels);
+    const costs = {};
+    addInto(costs, usage.costs, 1 / divisor);
+    monthShare.set(month, { costs, tokens: usage.tokens / divisor, claudeTokens: usage.claudeTokens / divisor });
   }
   return span.map((day) => {
-    const costs = daily[day]
-      ? costByGroup(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers }), labels)
-      : { ...(monthShare.get(day.slice(0, 7)) || {}) };
-    return withTranscriptClaude(costs, transcript?.[day] && summarizeTranscriptDays({ [day]: transcript[day] }).totals.estimatedCost, labels);
+    const usage = daily[day]
+      ? dailyUsage(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers }), labels)
+      : monthShare.get(day.slice(0, 7)) || { costs: {}, tokens: 0, claudeTokens: 0 };
+    const transcriptTotals = transcript[day] && summarizeTranscriptDays({ [day]: transcript[day] }).totals;
+    return {
+      costs: withTranscriptClaude({ ...usage.costs }, transcriptTotals?.estimatedCost, labels),
+      // Transcript sessions overlap the Claude ledger; reconcile tokens by the
+      // same per-day maximum as cost, retaining every other provider's tokens.
+      tokens: usage.tokens + Math.max(0, (transcriptTotals?.total || 0) - usage.claudeTokens),
+    };
   });
 }
 
@@ -580,23 +598,14 @@ function earliestDay(sources) {
   return earliest;
 }
 
-let rollingMemo = null;
-
-/**
- * Rolling 30-day estimated API cost summed across EVERY known instance, one
- * point per UTC day over `range` (see ROLLING_COST_RANGES). API-billed
- * instances count here: this is total spend at API rates, not the
- * subscription-covered subset the Across Instances total reports. Peers are as
- * fresh as their last sync.
- */
-export async function getFleetRollingCost({ providers = [], range = '3m', now = new Date() } = {}) {
+async function usageHistorySources() {
   const { self, peers } = await entriesWithSelf();
   const local = getUsage();
   // An unreadable transcript store charts PortOS runs only rather than failing.
   const localTranscript = await readLocalTranscriptUsage().catch(() => null);
   // This machine always reads its live maps; with no minted identity yet it
   // still has its own history to chart.
-  const sources = [
+  return [
     {
       id: self?.instanceId ?? 'local',
       stamp: [local?.lastUpdated, localTranscript?.updatedAt],
@@ -612,6 +621,74 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
       transcript: e.claudeCode?.days,
     })),
   ];
+}
+
+function stackCosts(rows, labels) {
+  const totals = {};
+  for (const costs of rows) addInto(totals, costs);
+  const ranked = Object.keys(totals).sort((x, y) => totals[y] - totals[x]);
+  const kept = ranked.length > MAX_COST_GROUPS ? ranked.slice(0, MAX_COST_GROUPS - 1) : ranked;
+  const groupOf = new Map(ranked.map((key) => [key, kept.includes(key) ? key : OTHER_GROUP]));
+  const series = kept.map((key) => ({ key, label: labels.get(key) }));
+  if (kept.length < ranked.length) series.push({ key: OTHER_GROUP, label: 'Other' });
+  const slot = new Map(series.map((g, i) => [g.key, i]));
+  const values = rows.map((costs) => {
+    const row = new Array(series.length).fill(0);
+    for (const [key, cost] of Object.entries(costs)) row[slot.get(groupOf.get(key))] += cost;
+    return row;
+  });
+  return { series, values };
+}
+
+/** Calendar months over the same fleet, ledger and transcript sources as rolling cost. */
+export async function getFleetMonthlyUsage({ providers = [], now = new Date() } = {}) {
+  const sources = await usageHistorySources();
+  const first = earliestDay(sources);
+  if (!first) return { instanceCount: sources.length, series: [], history: [] };
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1)).getTime();
+  const today = utcDay(now.getTime());
+  const span = Array.from({ length: Math.floor((dayMs(today) - start) / DAY_MS) + 1 }, (_, i) => utcDay(start + i * DAY_MS));
+  const months = new Map();
+  for (const day of span) {
+    if (day < first) continue;
+    const month = day.slice(0, 7);
+    if (!months.has(month)) months.set(month, { month, costs: {}, tokens: 0 });
+  }
+  const labels = new Map();
+  for (const source of sources) {
+    instanceDailyUsage(source, span, providers, labels).forEach((usage, i) => {
+      const month = months.get(span[i].slice(0, 7));
+      if (!month) return;
+      addInto(month.costs, usage.costs);
+      month.tokens += usage.tokens;
+    });
+  }
+  const rows = [...months.values()];
+  const { series, values } = stackCosts(rows.map((row) => row.costs), labels);
+  const history = rows.map((row, i) => {
+    const costs = values[i].map(roundCents);
+    return {
+      month: row.month,
+      estimatedCost: roundCents(costs.reduce((sum, cost) => sum + cost, 0)),
+      values: costs,
+      tokens: Math.round(row.tokens),
+      partial: row.month === today.slice(0, 7) || first > `${row.month}-01`,
+    };
+  });
+  return { instanceCount: sources.length, series, history };
+}
+
+let rollingMemo = null;
+
+/**
+ * Rolling 30-day estimated API cost summed across EVERY known instance, one
+ * point per UTC day over `range` (see ROLLING_COST_RANGES). API-billed
+ * instances count here: this is total spend at API rates, not the
+ * subscription-covered subset the Across Instances total reports. Peers are as
+ * fresh as their last sync.
+ */
+export async function getFleetRollingCost({ providers = [], range = '3m', now = new Date() } = {}) {
+  const sources = await usageHistorySources();
 
   const todayMs = dayMs(utcDay(now.getTime()));
   const rangeId = Object.hasOwn(ROLLING_COST_RANGES, range) ? range : '3m';
@@ -628,24 +705,11 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
   const labels = new Map();
   const perDay = span.map(() => ({}));
   for (const source of sources) {
-    instanceDailyCosts(source, span, providers, labels).forEach((costs, i) => addInto(perDay[i], costs));
+    instanceDailyUsage(source, span, providers, labels).forEach(({ costs }, i) => addInto(perDay[i], costs));
   }
 
-  const totals = {};
-  for (const costs of perDay) addInto(totals, costs);
-  const ranked = Object.keys(totals).sort((x, y) => totals[y] - totals[x]);
-  const kept = ranked.length > MAX_COST_GROUPS ? ranked.slice(0, MAX_COST_GROUPS - 1) : ranked;
-  const groupOf = new Map(ranked.map((key) => [key, kept.includes(key) ? key : OTHER_GROUP]));
-  const series = kept.map((key) => ({ key, label: labels.get(key) }));
-  if (kept.length < ranked.length) series.push({ key: OTHER_GROUP, label: 'Other' });
-  const slot = new Map(series.map((g, i) => [g.key, i]));
-
   // Per-day cost in series order, then a trailing-window sum per slot.
-  const daily = perDay.map((costs) => {
-    const row = new Array(series.length).fill(0);
-    for (const [key, cost] of Object.entries(costs)) row[slot.get(groupOf.get(key))] += cost;
-    return row;
-  });
+  const { series, values: daily } = stackCosts(perDay, labels);
   const running = new Array(series.length).fill(0);
   const points = [];
   for (let i = 0; i < span.length; i++) {
