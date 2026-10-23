@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
-const state = vi.hoisted(() => ({ jobs: [], enqueued: [], stitch: null }));
+const state = vi.hoisted(() => ({ jobs: [], enqueued: [], stitch: null, admission: null }));
 
 vi.mock('../mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(({ kind }) => state.jobs.filter((j) => j.kind === kind)),
   enqueueJob: vi.fn(async (job) => {
     state.enqueued.push(job);
+    await state.admission?.();
     return { jobId: `job-${state.enqueued.length}`, position: 1, status: 'queued' };
   }),
 }));
@@ -19,11 +20,30 @@ const { videoGenEvents } = await import('./events.js');
 beforeEach(() => {
   state.jobs = [];
   state.enqueued = [];
+  state.admission = null;
   state.stitch = async (ids, { id }) => ({ id, stitchedFrom: ids });
   videoGenEvents.removeAllListeners();
 });
 
 describe('enqueueStitch', () => {
+  it('coalesces overlapping admissions before queue persistence completes', async () => {
+    let release;
+    state.admission = () => new Promise(resolve => { release = resolve; });
+    const first = enqueueStitch(['a', 'b']);
+    const duplicate = enqueueStitch(['a', 'b']);
+    expect(state.enqueued).toHaveLength(1);
+    release();
+    await expect(first).resolves.toMatchObject({ jobId: 'job-1' });
+    await expect(duplicate).resolves.toMatchObject({ jobId: 'job-1', deduplicated: true });
+  });
+
+  it('does not retain a rejected admission as a live job', async () => {
+    state.admission = async () => { throw new Error('Could not save queue'); };
+    await expect(enqueueStitch(['a', 'b'])).rejects.toThrow('Could not save queue');
+    state.admission = null;
+    await expect(enqueueStitch(['a', 'b'])).resolves.toMatchObject({ jobId: 'job-2' });
+  });
+
   it('returns the live job for the same ordered ids instead of queueing a second encode', async () => {
     state.jobs = [{ id: 'live', kind: STITCH_JOB_KIND, status: 'running', position: 1, params: { stitchKey: 'a,b' } }];
     await expect(enqueueStitch(['a', 'b'])).resolves.toMatchObject({ jobId: 'live', deduplicated: true });

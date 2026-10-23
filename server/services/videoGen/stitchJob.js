@@ -17,6 +17,7 @@ export const STITCH_JOB_KIND = 'video-stitch';
 
 // jobId → { abort } for the in-flight worker run.
 const activeStitches = new Map();
+const pendingAdmissions = new Map();
 
 const stitchKey = (videoIds) => videoIds.join(',');
 
@@ -26,10 +27,12 @@ const stitchKey = (videoIds) => videoIds.join(',');
  */
 export async function enqueueStitch(videoIds) {
   const key = stitchKey(videoIds);
+  const pending = pendingAdmissions.get(key);
+  if (pending) return { ...await pending, deduplicated: true };
   const live = listJobs({ kind: STITCH_JOB_KIND })
     .find((j) => (j.status === 'queued' || j.status === 'running') && j.params?.stitchKey === key);
   if (live) return { jobId: live.id, position: live.position, status: live.status, deduplicated: true };
-  return enqueueJob({
+  const admission = enqueueJob({
     kind: STITCH_JOB_KIND,
     params: {
       videoIds,
@@ -37,6 +40,8 @@ export async function enqueueStitch(videoIds) {
       prompt: `Stitch ${videoIds.length} videos`,
     },
   });
+  pendingAdmissions.set(key, admission);
+  return admission.finally(() => pendingAdmissions.delete(key));
 }
 
 // Called by mediaJobQueue's cancelJob and its idle watchdog.

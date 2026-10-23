@@ -24,6 +24,8 @@ import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import socket from '../services/socket';
+import useMounted from '../hooks/useMounted';
+import { getMediaJob } from '../services/apiMediaJobs';
 import {
   deleteVideoHistoryItem, stitchVideos, deleteImage,
 } from '../services/api';
@@ -46,6 +48,7 @@ export default function MediaHistory() {
   // terminal event rather than the enqueue response (#13000). The button frees
   // at enqueue: a repeat POST of the same ids returns the live job server-side.
   const stitchJobsRef = useRef(new Set());
+  const mounted = useMounted();
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, updateAnnotation: saveAnnotation, getCardProps } = useMediaAnnotations();
   const [annotationSaves, setAnnotationSaves] = useState(0);
@@ -76,32 +79,45 @@ export default function MediaHistory() {
   }, []);
   const handleSelectCard = useCallback((item) => toggleSelect(item.id), [toggleSelect]);
 
+  const settleStitch = useCallback((id, error = null) => {
+    if (!stitchJobsRef.current.delete(id)) return false;
+    if (error) toast.error(error);
+    else toast.success('Stitched videos');
+    return true;
+  }, []);
+
   useEffect(() => {
-    const settle = (event, onSettled) => {
-      if (!stitchJobsRef.current.delete(event?.generationId)) return;
-      onSettled();
-    };
-    const onCompleted = (event) => settle(event, () => { toast.success('Stitched videos'); refresh(); });
-    const onFailed = (event) => settle(event, () => toast.error(event.error || 'Stitch failed'));
+    const onCompleted = (event) => settleStitch(event?.generationId);
+    const onFailed = (event) => settleStitch(event?.generationId, event.error || 'Stitch failed');
     socket.on('video-gen:completed', onCompleted);
     socket.on('video-gen:failed', onFailed);
     return () => {
       socket.off('video-gen:completed', onCompleted);
       socket.off('video-gen:failed', onFailed);
     };
-  }, [refresh]);
+  }, [settleStitch]);
 
   const handleStitch = async () => {
     if (selected.length < 2) return;
     setStitching(true);
     try {
       const { job } = await stitchVideos(selected, { silent: true });
+      if (!mounted.current) return;
       stitchJobsRef.current.add(job.jobId);
       setStitching(false);
       toast('Stitch queued — it lands in history when it finishes');
       setStitchMode(false);
       setSelected([]);
+      // Subscribe before this one-shot read: a terminal event can beat the POST
+      // acknowledgement, or arrive during the read. The id set settles once.
+      const current = await getMediaJob(job.jobId).catch(() => null);
+      if (!mounted.current) return;
+      if (current?.status === 'completed' && settleStitch(job.jobId)) refresh();
+      else if (current?.status === 'failed' || current?.status === 'canceled') {
+        settleStitch(job.jobId, current.error || (current.status === 'canceled' ? 'Stitch canceled' : 'Stitch failed'));
+      }
     } catch (err) {
+      if (!mounted.current) return;
       setStitching(false);
       toast.error(err.message || 'Stitch failed');
     }

@@ -1,3 +1,5 @@
+const jobsApi = vi.hoisted(() => ({ getMediaJob: vi.fn() }));
+vi.mock('../services/apiMediaJobs', () => jobsApi);
 const batchApi = vi.hoisted(() => ({ importGalleryFile: vi.fn(), assignImportedMedia: vi.fn() }));
 vi.mock('../services/apiMedia', () => batchApi);
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +23,7 @@ import MediaHistory from './MediaHistory';
 let rows;
 beforeEach(() => {
   vi.resetAllMocks();
+  jobsApi.getMediaJob.mockResolvedValue({ status: 'queued' });
   saveAnnotation.mockResolvedValue({ ok: true });
   rows = Array.from({ length: 61 }, (_, n) => ({ kind: 'image', data: { filename: `${n}.png`, prompt: `Picture ${n}`, createdAt: '2026-01-01' } }));
   fetchPage.mockImplementation(async ({ limit = 60, offset = 0, q = '', filename }) => {
@@ -147,6 +150,25 @@ it('imports a mixed batch from History and inserts both returned records', async
 });
 
 describe('stitch job', () => {
+  it('recovers a terminal result that arrived before enqueue acknowledgement and settles only once', async () => {
+    rows = ['a', 'b'].map(id => ({ kind: 'video', data: { id, filename: `${id}.mp4`, prompt: `Clip ${id}`, createdAt: '2026-01-01' } }));
+    let acknowledge;
+    stitchVideos.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+    jobsApi.getMediaJob.mockResolvedValueOnce({ status: 'completed' });
+    open();
+    await screen.findByText('Clip a');
+    fireEvent.click(screen.getByRole('button', { name: 'Stitch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick a.mp4' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick b.mp4' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stitch 2' }));
+    await act(async () => socketHandlers.get('video-gen:completed')({ generationId: 'fast-job' }));
+    expect(toast.success).not.toHaveBeenCalled();
+    await act(async () => { acknowledge({ job: { jobId: 'fast-job', status: 'queued' } }); });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    await act(async () => socketHandlers.get('video-gen:completed')({ generationId: 'fast-job' }));
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
   it('toasts success only when the job settles, and surfaces an enqueue failure', async () => {
     rows = ['a', 'b'].map(id => ({ kind: 'video', data: { id, filename: `${id}.mp4`, prompt: `Clip ${id}`, createdAt: '2026-01-01' } }));
     stitchVideos.mockResolvedValueOnce({ ok: true, job: { jobId: 'job-1', status: 'queued' } });
