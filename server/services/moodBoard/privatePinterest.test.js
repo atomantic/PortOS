@@ -75,14 +75,60 @@ describe('importPrivatePinterestBoard', () => {
     expect(store.appendImportedItems.mock.calls[0][1][0]).toMatchObject({ source: firstPin.source });
   });
 
-  it.each(['https://www.pinterest.com/pin/123/', 'https://example.com/example/board/'])
-    ('rejects a non-board share destination before opening the browser: %s', async (destination) => {
+  it.each(['https://www.pinterest.com/example-user/', 'https://example.com/example/board/', 'https://www.pinterest.com/pin/invalid/'])
+    ('rejects an unsupported share destination before opening the browser: %s', async (destination) => {
       resolvePublicUrl.mockResolvedValue(destination);
       await expect(importPrivatePinterestBoard('mb-example', { url: 'https://pin.it/example' }))
         .rejects.toMatchObject({ status: 400, code: 'INVALID_PINTEREST_URL' });
       expect(browser.navigateToUrlPinned).not.toHaveBeenCalled();
       expect(store.appendImportedItems).not.toHaveBeenCalled();
     });
+
+  it.each([
+    'https://www.pinterest.com/pin/9999999999999999999/?tracking=example',
+    'https://pin.it/example-pin',
+    'http://pinterest.co.uk/pin/9999999999999999999/',
+  ])('imports only the requested single Pin without changing the linked board: %s', async (url) => {
+    resolvePublicUrl.mockResolvedValue(firstPin.source);
+    store.getBoard.mockResolvedValue({ id: 'mb-example', items: [], pinterest: { boardUrl: BOARD_URL } });
+    browser.getHealthStatus.mockResolvedValue({ connected: true });
+    browser.navigateToUrlPinned.mockResolvedValue({ url: firstPin.source, evalResult: { expectedCount: 1, pins: [firstPin] } });
+
+    expect(await importPrivatePinterestBoard('mb-example', { url })).toMatchObject({ added: 1, found: 1, skipped: 0 });
+    expect(browser.navigateToUrlPinned).toHaveBeenCalledWith(firstPin.source, expect.objectContaining({ evaluateExpression: expect.any(String) }));
+    expect(store.appendImportedItems).toHaveBeenCalledWith('mb-example', [{ imageUrl: '/data/images/pinterest-example.jpg', source: firstPin.source }]);
+  });
+
+  it('deduplicates a single Pin before downloading its image', async () => {
+    store.getBoard.mockResolvedValue({ id: 'mb-example', items: [{ source: firstPin.source }] });
+    browser.getHealthStatus.mockResolvedValue({ connected: true });
+    browser.navigateToUrlPinned.mockResolvedValue({ url: firstPin.source, evalResult: { expectedCount: 1, pins: [firstPin] } });
+
+    expect(await importPrivatePinterestBoard('mb-example', { url: firstPin.source })).toMatchObject({ added: 0, found: 1, skipped: 1 });
+    expect(downloadPinImage).not.toHaveBeenCalled();
+    expect(store.appendImportedItems).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Pin page redirected to a different Pin before downloading', async () => {
+    browser.getHealthStatus.mockResolvedValue({ connected: true });
+    browser.navigateToUrlPinned.mockResolvedValue({ url: secondPin.source, evalResult: { expectedCount: 1, pins: [firstPin] } });
+    await expect(importPrivatePinterestBoard('mb-example', { url: firstPin.source }))
+      .rejects.toMatchObject({ code: 'PINTEREST_BOARD_REDIRECTED' });
+    expect(downloadPinImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [],
+    [secondPin],
+    [{ ...firstPin, imageUrl: 'https://example.com/unrelated.jpg' }],
+  ])('refuses missing or unrelated single-Pin media: %j', async (pins) => {
+    browser.getHealthStatus.mockResolvedValue({ connected: true });
+    browser.navigateToUrlPinned.mockResolvedValue({ url: firstPin.source, evalResult: { expectedCount: 1, pins } });
+    await expect(importPrivatePinterestBoard('mb-example', { url: firstPin.source }))
+      .rejects.toMatchObject({ code: 'PINTEREST_PIN_UNAVAILABLE' });
+    expect(downloadPinImage).not.toHaveBeenCalled();
+    expect(store.appendImportedItems).not.toHaveBeenCalled();
+  });
 
   it('reads the requested board through pinned CDP and appends re-hosted, source-deduped images', async () => {
     store.getBoard.mockResolvedValue({
