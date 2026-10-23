@@ -836,16 +836,18 @@ async function hasEmptyDependencyInventories(workspacePath) {
   const { getOriginInfo } = await import('../lib/gitRemote.js');
   const origin = await getOriginInfo(workspacePath);
   if (!origin.host || !origin.owner || !origin.repo) return false;
+  const { githubApiHost } = await import('../lib/workTracker.js');
+  const host = githubApiHost(origin.host.toLowerCase());
   const { resolveForgeForRepo } = await import('./git.js');
   const forge = await resolveForgeForRepo(workspacePath);
-  if (forge.cli !== 'gh' || forge.host !== origin.host || forge.owner !== origin.owner) return false;
+  if (forge.cli !== 'gh' || forge.host !== host || forge.owner !== origin.owner) return false;
   const { execGh } = await import('./github.js');
   const inventories = await Promise.all([
     'dependabot/alerts',
     'pulls',
   ].map(async resource => {
     const raw = await execGh([
-      'api', '--hostname', origin.host, '--paginate', '--slurp',
+      'api', '--hostname', host, '--paginate', '--slurp',
       `repos/${origin.owner}/${origin.repo}/${resource}?state=open&per_page=100`,
     ], 30_000, { cwd: workspacePath, env: forge.env });
     const pages = safeJSONParse(raw, null);

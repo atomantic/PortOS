@@ -61,8 +61,8 @@ issue preloads):
 
 | | |
 |---|---|
-| `GH_TOKEN` | minted for that account, so `gh pr create`, `git push`, and issue-list probes act as it |
-| `GIT_AUTHOR_*` / `GIT_COMMITTER_*` | `<id>+<login>@users.noreply.github.com`, the address GitHub attributes back to the account |
+| `GH_TOKEN` / `GH_ENTERPRISE_TOKEN` | minted for that account on the repository's host; public GitHub and Enterprise Cloud (`*.ghe.com`) use `GH_TOKEN`, Enterprise Server uses `GH_ENTERPRISE_TOKEN` |
+| `GIT_AUTHOR_*` / `GIT_COMMITTER_*` | public GitHub uses `<id>+<login>@users.noreply.github.com`; Enterprise hosts use the account email returned by their API, leaving commit identity unchanged when no email is exposed |
 
 Without the probe pin, those checks inherit the install's ambient `GH_TOKEN` or
 active `gh` user, so a private repo under another logged-in account fails the
@@ -85,13 +85,14 @@ account that should push — so most personal repos need no configuration at all
 Set the field when it is not: an organization repo, a bot account, or any repo
 whose owner login differs from the account you push with.
 
-A pinned account is never second-guessed. If `gh` has no token for it, the run
-gets no pinned forge credential — `resolveForgeTokenEnv` overlays nothing, and
-`buildSafeEnv` strips the ambient `GH_TOKEN` from agent shells — rather than
-silently falling back to a different account's token. (PortOS's own
-`resolveForgeForRepo` probes still inherit the ambient environment when no
-token is minted; the no-fallback guarantee covers the credential handed to the
-run, not every ambient lookup PortOS performs itself.)
+A pinned account is never second-guessed. If `gh` has no token for it on the
+repository's host, credential resolution refuses agent launches and PortOS-owned
+forge operations with `409 FORGE_ACCOUNT_UNAVAILABLE`. If the agent-spawn lookup
+exceeds its budget while the pin is present or still unresolved, it refuses the
+launch with `503 FORGE_AUTH_TIMEOUT`. Neither path silently falls back to a
+different account's token. Check `gh auth status -h <host>` and authenticate the
+pinned account on that host before retrying. Unpinned repositories retain their
+ambient-auth fallback.
 
 ## Related
 
