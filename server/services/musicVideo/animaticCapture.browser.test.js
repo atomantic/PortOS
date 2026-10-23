@@ -8,6 +8,7 @@ import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
 import { createTestPhaseDiagnostics } from '../../test/testPhaseDiagnostics.js';
+import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { filmLookPreset } from '../../lib/filmLook.js';
@@ -33,70 +34,92 @@ const chartRgb = (x, y, frame) => {
   return y < 200 ? [gray, gray, gray] : frame % 2 ? [230, 40, 190] : [frame * 2, 255 - frame * 2, frame];
 };
 const errors = [];
-afterAll(async () => {
-  await fixture?.close();
-  if (server) await new Promise((done) => server.close(done));
+const setup = createOwnedFixtureSetup({ cleanup: async () => {
+  // A failed browser close must not leave the HTTP listener open.
+  const outcomes = await Promise.allSettled([fixture?.close(), server && new Promise((done, reject) => server.close(error => error ? reject(error) : done()))]);
+  const failures = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
+  if (failures.length) throw new AggregateError(failures, 'Animatic fixture cleanup failed');
   if (dir) await rm(dir, { recursive: true, force: true });
-});
+} });
+afterAll(() => setup.close());
 
 describe.skipIf(!canRun)('saved storyboard pixels in a real browser', () => {
-  beforeAll(async () => {
-    ffmpegVersion = execFileSync(ffmpeg, ['-version'], { encoding: 'utf8' }).split('\n')[0];
-    dir = await mkdtemp(join(tmpdir(), 'portos-animatic-capture-'));
-    await symlink(join(client, 'node_modules'), join(dir, 'node_modules'), 'dir');
-    const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import toast,{Toaster}from ${JSON.stringify(join(client, 'src/components/ui/Toast.jsx'))};
+  beforeAll(() => setup.run(async phase => {
+    ffmpegVersion = await phase('ffmpeg-version', timeout => execFileSync(ffmpeg, ['-version'], { timeout, killSignal: 'SIGKILL', encoding: 'utf8' }).split('\n')[0]);
+    await phase('workspace', async () => {
+      dir = await mkdtemp(join(tmpdir(), 'portos-animatic-capture-'));
+      await symlink(join(client, 'node_modules'), join(dir, 'node_modules'), 'dir');
+      const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import toast,{Toaster}from ${JSON.stringify(join(client, 'src/components/ui/Toast.jsx'))};
 window.uploads=[];window.captureErrors=[];const report=toast.error;toast.error=(message,...args)=>{window.captureErrors.push(message);return report(message,...args)};const realFetch=window.fetch;window.fetch=async(url,options)=>{if(url==='/api/image-gen/upload'){window.uploads.push(Array.from(new Uint8Array(await options.body.get('file').arrayBuffer())));return Response.json({filename:'synthetic.png'});}return realFetch(url,options)};
 window.gateCaptureOnce=()=>{const decode=Image.prototype.decode;window.captureDecodePending=false;let release;const pending=new Promise(done=>{release=done});window.releaseCapture=release;Image.prototype.decode=function(){Image.prototype.decode=decode;window.captureDecodePending=true;return pending.then(()=>decode.call(this))}};
 function App(){const[state,setState]=useState(null);window.show=(project,t)=>{window.captureErrors=[];setState({project,seek:{t,n:(window.seq=(window.seq||0)+1)}})};return <><main style={{width:642}}>{state&&<Animatic project={state.project} audioUrl='/song.wav' seekRequest={state.seek}/>}</main><Toaster/></>};createRoot(document.getElementById('root')).render(<App/>);`;
-    await writeFile(join(dir, 'entry.jsx'), `import ${JSON.stringify(join(client, 'src/index.css'))};\n${entry}`);
-    await writeFile(join(dir, 'index.html'), '<html><head></head><body style="margin:0"><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
-    const { build } = await import(bundlers[0]);
-    const { default: react } = await import(bundlers[1]);
-    const { default: tailwind } = await import(bundlers[2]);
-    await build({ configFile: false, root: dir, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(dir, 'dist'), emptyOutDir: true }, logLevel: 'warn' });
-    const grid = '<svg width="1200" height="400" xmlns="http://www.w3.org/2000/svg"><rect width="1200" height="400" fill="#164080"/><rect width="200" height="400" fill="#ff3010"/><rect x="400" width="200" height="400" fill="#20dd50"/><rect x="1000" width="200" height="400" fill="#f5cf10"/><circle cx="650" cy="100" r="50" fill="white"/></svg>';
-    await sharp(Buffer.from(grid)).png().toFile(join(dir, 'grid.png'));
-    await sharp({ create: { width: 200, height: 400, channels: 3, background: '#ff00ff' } }).png().toFile(join(dir, 'end.png'));
-    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=cyan:s=120x240:r=24:d=4', '-c:v', 'libvpx', join(dir, 'clip.webm')]);
+      await writeFile(join(dir, 'entry.jsx'), `import ${JSON.stringify(join(client, 'src/index.css'))};\n${entry}`);
+      await writeFile(join(dir, 'index.html'), '<html><head></head><body style="margin:0"><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
+    });
+    await phase('bundle', async () => {
+      const { build } = await import(bundlers[0]);
+      const { default: react } = await import(bundlers[1]);
+      const { default: tailwind } = await import(bundlers[2]);
+      await build({ configFile: false, root: dir, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(dir, 'dist'), emptyOutDir: true }, logLevel: 'warn' });
+    });
+    await phase('still-images', async () => {
+      const grid = '<svg width="1200" height="400" xmlns="http://www.w3.org/2000/svg"><rect width="1200" height="400" fill="#164080"/><rect width="200" height="400" fill="#ff3010"/><rect x="400" width="200" height="400" fill="#20dd50"/><rect x="1000" width="200" height="400" fill="#f5cf10"/><circle cx="650" cy="100" r="50" fill="white"/></svg>';
+      await sharp(Buffer.from(grid)).png().toFile(join(dir, 'grid.png'));
+      await sharp({ create: { width: 200, height: 400, channels: 3, background: '#ff00ff' } }).png().toFile(join(dir, 'end.png'));
+    });
+    // Tiny fixtures use one codec thread; host-wide defaults can dominate setup.
+    await phase('clip-encode', timeout => execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=cyan:s=120x240:r=24:d=4', '-c:v', 'libvpx', '-threads', '1', join(dir, 'clip.webm')], { timeout, killSignal: 'SIGKILL' }));
     // RGB chart -> explicit limited-range YUV matrix, never a metadata-only retag.
-    const frames = Buffer.alloc(480 * 240 * 3 * 96);
-    for (let f = 0; f < 96; f++) for (let y = 0; y < 240; y++) for (let x = 0; x < 480; x++) {
-      const rgb = chartRgb(x, y, f);
-      const offset = ((f * 240 + y) * 480 + x) * 3;
-      for (let c = 0; c < 3; c++) frames[offset + c] = rgb[c];
-    }
+    const frames = await phase('chart-rgb', () => {
+      const frames = Buffer.alloc(480 * 240 * 3 * 96);
+      for (let f = 0; f < 96; f++) for (let y = 0; y < 240; y++) for (let x = 0; x < 480; x++) {
+        const rgb = chartRgb(x, y, f);
+        const offset = ((f * 240 + y) * 480 + x) * 3;
+        for (let c = 0; c < 3; c++) frames[offset + c] = rgb[c];
+      }
+      return frames;
+    });
     for (const matrix of ['smpte170m', 'bt709']) {
       const path = join(dir, `${matrix}.webm`);
-      execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', '480x240', '-framerate', '24', '-i', 'pipe:0',
+      await phase(`${matrix}-encode`, timeout => execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', '480x240', '-framerate', '24', '-i', 'pipe:0',
         '-vf', `scale=out_color_matrix=${matrix}:out_range=tv,format=yuv420p`, '-colorspace', matrix, '-color_primaries', matrix, '-color_trc', matrix, '-color_range', 'tv',
-        '-c:v', 'libvpx-vp9', '-crf', '4', '-b:v', '2M', path], { input: frames });
+        '-c:v', 'libvpx-vp9', '-threads', '1', '-crf', '4', '-b:v', '2M', path], { timeout, killSignal: 'SIGKILL', input: frames }));
       // Retain RGB as diagnostic evidence. CPU/GPU browser conversion need not
       // match FFmpeg RGB; raw decoded YUV independently verifies the source.
-      const rgb = execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-vf', `scale=in_color_matrix=${matrix}:in_range=tv:out_range=pc,format=rgb24`,
-        '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { maxBuffer: frames.length + 1024 });
+      const rgb = await phase(`${matrix}-rgb-decode`, timeout => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-vf', `scale=in_color_matrix=${matrix}:in_range=tv:out_range=pc,format=rgb24`,
+        '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { timeout, killSignal: 'SIGKILL', maxBuffer: frames.length + 1024 }));
       colorReferences.set(matrix, rgb);
-      colorYuvReferences.set(matrix, execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-f', 'rawvideo', '-pix_fmt', 'yuv420p', 'pipe:1'],
-        { maxBuffer: frames.length + 1024 }));
+      colorYuvReferences.set(matrix, await phase(`${matrix}-yuv-decode`, timeout => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-f', 'rawvideo', '-pix_fmt', 'yuv420p', 'pipe:1'],
+        { timeout, killSignal: 'SIGKILL', maxBuffer: frames.length + 1024 })));
     }
-    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=8', join(dir, 'song.wav')]);
-    const app = express();
-    app.get('/data/images/:id', (req, res) => res.sendFile(join(dir, req.params.id)));
-    app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: colorReferences.has(req.params.id) ? `${req.params.id}.webm` : 'clip.webm', fps: 24, numFrames: 96, width: 120, height: 240 }));
-    app.get('/api/music-video/:id/stats-outro', (req, res) => res.json({ stats: { shots: 2, stills: { made: 3, kept: 1 }, clips: { made: 2, kept: 1 }, floorImages: [] } }));
-    app.get('/api/music-video/:id/lyrics/overlay/preview', async (req, res, next) => {
-      try { res.json(await buildLyricPlaythroughPreview(lyricProject, { overlay: true })); }
-      catch (error) { next(error); }
+    await phase('audio-encode', timeout => execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=8', join(dir, 'song.wav')], { timeout, killSignal: 'SIGKILL' }));
+    await phase('http-server', async () => {
+      const app = express();
+      app.get('/data/images/:id', (req, res) => res.sendFile(join(dir, req.params.id)));
+      app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: colorReferences.has(req.params.id) ? `${req.params.id}.webm` : 'clip.webm', fps: 24, numFrames: 96, width: 120, height: 240 }));
+      app.get('/api/music-video/:id/stats-outro', (req, res) => res.json({ stats: { shots: 2, stills: { made: 3, kept: 1 }, clips: { made: 2, kept: 1 }, floorImages: [] } }));
+      app.get('/api/music-video/:id/lyrics/overlay/preview', async (req, res, next) => {
+        try { res.json(await buildLyricPlaythroughPreview(lyricProject, { overlay: true })); }
+        catch (error) { next(error); }
+      });
+      app.get('/data/videos/:name', (req, res) => res.sendFile(join(dir, req.params.name)));
+      app.get('/song.wav', (req, res) => res.sendFile(join(dir, 'song.wav')));
+      app.use(express.static(join(dir, 'dist')));
+      await new Promise((done, reject) => {
+        server = app.listen(0, '127.0.0.1', done);
+        server.once('error', reject);
+      });
     });
-    app.get('/data/videos/:name', (req, res) => res.sendFile(join(dir, req.params.name)));
-    app.get('/song.wav', (req, res) => res.sendFile(join(dir, 'song.wav')));
-    app.use(express.static(join(dir, 'dist')));
-    server = await new Promise((done) => { const listener = app.listen(0, '127.0.0.1', () => done(listener)); });
-    fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } });
-    page = await fixture.browser.newPage({ viewport: { width: 1000, height: 800 } });
-    page.on('pageerror', (error) => errors.push(error.message));
-    await page.goto(`http://127.0.0.1:${server.address().port}`);
-    await page.waitForFunction(() => typeof window.show === 'function');
-  }, 30000);
+    await phase('browser-acquire', async () => {
+      fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } });
+    });
+    await phase('page-acquire', async () => {
+      page = await fixture.browser.newPage({ viewport: { width: 1000, height: 800 } });
+      page.on('pageerror', (error) => errors.push(error.message));
+    });
+    await phase('navigation', () => page.goto(`http://127.0.0.1:${server.address().port}`));
+    await phase('readiness', () => page.waitForFunction(() => typeof window.show === 'function'));
+  }), 30000);
 
   let phase;
   beforeEach(({ onTestFailed }) => { phase = createTestPhaseDiagnostics(onTestFailed); });
