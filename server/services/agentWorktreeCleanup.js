@@ -229,8 +229,9 @@ async function probeWorktreePr(context, success) {
       .catch(err => ({ ok: false, category: 'forge-unreachable', message: err.message }));
   }
   const { findPullRequestForBranch } = await import('./github.js');
-  const { env } = await git.resolveForgeForRepo(worktreePath).catch(() => ({ env: null }));
-  return findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: env || null })
+  const forge = await git.resolveForgeForRepo(worktreePath).catch(() => null);
+  if (!forge) return { status: 'unavailable' };
+  return findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: forge.env || null })
     .catch(() => ({ status: 'unavailable' }));
 }
 

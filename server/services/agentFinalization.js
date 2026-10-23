@@ -606,7 +606,11 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
   // used. Dropping it would query as whatever ambient account `gh` happens to be
   // on, which on a multi-login host may not even see the PR — reading as
   // "no PR" for a run that opened one.
-  const { cli, env } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh', env: null }));
+  const forge = await resolveForgeForRepo(workspacePath).catch(() => null);
+  if (!forge) return prObservation(PR_OBSERVATION.FORGE_UNAVAILABLE, {
+    branch, message: 'Could not resolve the repository forge account', inconclusive: true,
+  });
+  const { cli, env } = forge;
   const draft = task?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT;
   const found = cli === 'glab'
     ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath, ...(draft ? [{ includeDraft: true }] : []))

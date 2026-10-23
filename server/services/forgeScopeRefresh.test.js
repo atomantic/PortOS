@@ -157,6 +157,18 @@ describe('startForgeScopeRefresh', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('refreshes the pinned enterprise keyring account despite an unrelated ambient token', async () => {
+    vi.stubEnv('GH_ENTERPRISE_TOKEN', 'ambient-token');
+    execGh.mockResolvedValue('owner-acct');
+    const { jobId } = await startForgeScopeRefresh({ host: 'ghe.example.com', scopes: ['workflow'], expectedAccount: 'owner-acct' });
+    expect(execGh).toHaveBeenCalledWith(
+      ['api', 'user', '--hostname', 'ghe.example.com', '--jq', '.login'],
+      expect.any(Number), expect.objectContaining({ env: expect.not.objectContaining({ GH_ENTERPRISE_TOKEN: 'ambient-token' }) }),
+    );
+    await settle(jobId);
+    vi.unstubAllEnvs();
+  });
+
   it('refuses when the active account cannot be verified and releases the host reservation', async () => {
     execGh.mockRejectedValue(new Error('network unavailable'));
 

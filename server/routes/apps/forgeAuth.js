@@ -49,7 +49,11 @@ router.post('/:id/forge-auth/refresh', loadApp, asyncHandler(async (req, res) =>
 
   // The account merges actually authenticate as (an owner-match or the app's
   // pin) — `gh auth refresh` only reaches the host's active one.
-  const resolved = await resolveForgeForRepo(app.repoPath, { forgeAccount: app.forgeAccount }).catch(() => null);
+  const resolved = await resolveForgeForRepo(app.repoPath, { forgeAccount: app.forgeAccount });
+
+  if (resolved.host !== host) throw new ServerError("This app's forge host changed during account resolution. Retry the refresh.", {
+    status: 409, code: 'FORGE_REFRESH_HOST_CHANGED',
+  });
 
   const job = await startForgeScopeRefresh({ host, scopes, expectedAccount: resolved?.account || null });
   res.status(job.adopted ? 200 : 202).json(job);

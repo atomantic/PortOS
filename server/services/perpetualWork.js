@@ -415,13 +415,11 @@ const MAX_COLLABORATOR_AUTHOR_QUERIES = 25;
 async function resolveGithubDetectorEnv(repoPath, env) {
   if (env) return env;
   const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
-  const overlay = await resolveForgeTokenEnv(repoPath).catch(() => ({}));
-  if (!overlay?.GH_TOKEN) return undefined;
-  const merged = { ...process.env, ...overlay };
-  delete merged.GITHUB_TOKEN;
-  delete merged.GH_ENTERPRISE_TOKEN;
-  delete merged.GITHUB_ENTERPRISE_TOKEN;
-  return merged;
+  const overlay = await resolveForgeTokenEnv(repoPath);
+  if (!overlay?.GH_TOKEN && !overlay?.GH_ENTERPRISE_TOKEN) return undefined;
+  const merged = { ...process.env };
+  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete merged[key];
+  return { ...merged, ...overlay };
 }
 
 // Per-forge config for the shared issue detector. Each entry captures only what

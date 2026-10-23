@@ -37,7 +37,7 @@ describe('app forge-auth routes', () => {
       tracker: 'github',
       target: { forge: 'github', repoSpec: 'ghe.example.com/acme/widget', webHost: 'ghe.example.com', apiHost: 'ghe.example.com' },
     });
-    resolveForgeForRepo.mockResolvedValue({ account: null });
+    resolveForgeForRepo.mockResolvedValue({ host: 'ghe.example.com', account: null });
     startForgeScopeRefresh.mockResolvedValue({ jobId: JOB_ID, host: 'ghe.example.com', scopes: ['workflow'], adopted: false });
   });
 
@@ -51,11 +51,28 @@ describe('app forge-auth routes', () => {
   });
 
   it('hands the account merges authenticate as to the service so a non-active account is caught', async () => {
-    resolveForgeForRepo.mockResolvedValue({ account: 'owner-acct' });
+    resolveForgeForRepo.mockResolvedValue({ host: 'ghe.example.com', account: 'owner-acct' });
 
     await request(app).post('/api/apps/app-001/forge-auth/refresh').send({ scopes: ['workflow'] });
 
     expect(startForgeScopeRefresh).toHaveBeenCalledWith(expect.objectContaining({ expectedAccount: 'owner-acct' }));
+  });
+
+  it('refuses a changed origin instead of refreshing an account on another host', async () => {
+    resolveForgeForRepo.mockResolvedValue({ host: 'github.com', account: 'owner-acct' });
+    const response = await request(app).post('/api/apps/app-001/forge-auth/refresh').send({ scopes: ['workflow'] });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('FORGE_REFRESH_HOST_CHANGED');
+    expect(startForgeScopeRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not refresh the active account when the configured pin is unavailable', async () => {
+    const error = Object.assign(new Error('Pinned account unavailable'), { status: 409, code: 'FORGE_ACCOUNT_UNAVAILABLE' });
+    resolveForgeForRepo.mockRejectedValue(error);
+    const response = await request(app).post('/api/apps/app-001/forge-auth/refresh').send({ scopes: ['workflow'] });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('FORGE_ACCOUNT_UNAVAILABLE');
+    expect(startForgeScopeRefresh).not.toHaveBeenCalled();
   });
 
   it('refuses GitLab, where glab has no scope refresh', async () => {

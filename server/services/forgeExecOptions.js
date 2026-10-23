@@ -8,6 +8,7 @@
  * living INSIDE it could only be tested against a re-implementation of itself.
  * Here, a suite mocks whichever of the two layers it is not exercising.
  */
+import { ServerError } from '../lib/errorHandler.js';
 import { resolveForgeForRepo } from './forgeAuth.js';
 
 /**
@@ -23,8 +24,8 @@ import { resolveForgeForRepo } from './forgeAuth.js';
  * `resolveForgeForRepo` already owner-matches against the locally logged-in
  * accounts; the explicit pin then covers the rest.
  *
- * Never throws: an unresolvable repo degrades to the ambient env, which is
- * exactly the behavior every caller had before threading this through.
+ * An unresolvable origin keeps the ambient env. Credential failures propagate:
+ * an unavailable pin must never turn into execution as the active account.
  * `customEnv` is null when nothing was overlaid, so a caller can pass the
  * overlay to `ensureForgeReachable` only when there is one.
  *
@@ -34,8 +35,11 @@ import { resolveForgeForRepo } from './forgeAuth.js';
  * @returns {Promise<{cwd: string|undefined, env: object, customEnv: object|null}>}
  */
 export async function resolveForgeExecOptions(repoPath, { forgeAccount = null } = {}) {
+  if (!repoPath && forgeAccount) throw new ServerError('The pinned GitHub account requires a repository path.', {
+    status: 409, code: 'FORGE_ACCOUNT_UNAVAILABLE',
+  });
   const forgeAuth = repoPath
-    ? await resolveForgeForRepo(repoPath, { forgeAccount }).catch(() => null)
+    ? await resolveForgeForRepo(repoPath, { forgeAccount })
     : null;
   const customEnv = forgeAuth?.env && forgeAuth.env !== process.env ? forgeAuth.env : null;
   return { cwd: repoPath || undefined, env: customEnv || process.env, customEnv };
