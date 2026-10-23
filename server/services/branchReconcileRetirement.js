@@ -38,8 +38,10 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
       else held.push({ ...release, reason: outcome.reason || outcome.branchRetainedReason || 'retirement-receipt-unverified' });
       continue;
     }
+    let failureReason = 'retirement-pr-lookup-unavailable';
     try {
       const prUrl = await readPr(app, branch.branch, release.head);
+      failureReason = 'retirement-review-unavailable';
       const prepared = await prepare({ appId: app.id, release, prUrl });
       if (!prepared.ok) { held.push({ ...release, reason: prepared.reason }); continue; }
       // The preview's policy gate requires completed successful legacy review
@@ -55,6 +57,9 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
         && prepared.review.comparison?.disposition === 'integrated'
         && prepared.review.comparison.difference === '') {
         const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;
+        // The service may have archived/removed the checkout before rejecting.
+        // Preserve an exact receipt obligation, not a retryable preview failure.
+        failureReason = 'retirement-receipt-unverified';
         const result = await retire({ appId: app.id, release,
           review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, { beforeMutation: assertAutomaticRetirementAllowed });
         if (result.ok && result.archiveDir && result.branchDeleted === true) retired.push(release);
@@ -64,8 +69,8 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
       candidates.push({ ...branch, state: 'REVIEW_RETIREMENT', retirement: { release, prUrl, digest: prepared.review.digest,
         cognition: retirementCognitiveIdentity(prepared.review, release, prUrl) } });
     } catch (error) {
-      const reason = ['retirement-pr-ambiguous', 'retirement-forge-unsupported', 'daemon-stopped', 'automatic-retirement-disabled'].includes(error.message)
-        ? error.message : 'retirement-review-unavailable';
+      const reason = ['retirement-pr-ambiguous', 'retirement-forge-unsupported', 'retirement-forge-unavailable', 'daemon-stopped', 'automatic-retirement-disabled'].includes(error.message)
+        ? error.message : failureReason;
       held.push({ ...release, reason });
     }
   }
