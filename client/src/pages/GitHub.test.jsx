@@ -406,6 +406,21 @@ describe('GitHub inbox tab', () => {
     expect(mock.getGitHubRepos).not.toHaveBeenCalled();
   });
 
+  it('links a deployment approval to the run waiting on you', async () => {
+    const runUrl = 'https://github.com/octocat/hello/actions/runs/4242';
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{
+        ...NOTIFICATION, reason: 'approval_requested', subjectType: 'WorkflowRun', title: 'Someone requested your review to deploy to an environment',
+        decision: 'surface-high', htmlUrl: runUrl, deployment: { runId: 4242, name: 'Deploy (prod)', headBranch: 'main', displayTitle: 'Example change', htmlUrl: runUrl },
+      }],
+      sync: {},
+    });
+    renderTab('inbox');
+    expect(await screen.findByText('Deploy approval')).toBeTruthy();
+    expect(screen.getByText('Deploy (prod)')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open' }).getAttribute('href')).toBe(runUrl);
+  });
+
   it('marks a thread done and takes it out of the inbox', async () => {
     mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, state: 'done', unread: false });
     renderTab('inbox');

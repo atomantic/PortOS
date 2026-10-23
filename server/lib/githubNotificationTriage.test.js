@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  agentHandoff, agentRuleScope, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, parseCiBranch,
+  agentHandoff, agentRuleScope, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
   selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
@@ -74,6 +74,15 @@ describe('decideThread', () => {
     expect(decide({ reason: 'assign', repoOwned: true })).toBe('needs-you');
   });
 
+  it('keeps a deployment approval in front of you until the forge says its run stopped waiting', () => {
+    const deploy = { reason: 'approval_requested', subjectType: 'WorkflowRun', trust: 'yours' };
+    expect(decideThread({ ...deploy, deploymentWaiting: true })).toEqual({ decision: 'surface-high', rule: 'deployment-approval' });
+    expect(decideThread({ ...deploy, deploymentWaiting: null })).toEqual({ decision: 'surface-high', rule: 'deployment-approval' });
+    expect(decideThread({ ...deploy, deploymentWaiting: false })).toEqual({ decision: 'suggest-mark-read', rule: 'finished-thread' });
+    // Neither the operator's past Done taps nor a model can quiet one.
+    expect(applyLearnedRule({ decision: 'surface-high', rule: 'deployment-approval' }, { decision: 'suggest-done', hits: 5 }).rule).toBe('deployment-approval');
+  });
+
   it('leaves activity on your own PR in a managed repo to its PR workflow unless someone outside commented', () => {
     const ownPr = { reason: 'author', subjectType: 'PullRequest', trust: 'yours', repoOwned: true, repoManaged: true };
     expect(decideThread(ownPr)).toEqual({ decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' });
@@ -87,6 +96,23 @@ describe('decideThread', () => {
   it('keeps an outside review request on your repo out of the trusted lane even when the title claims maintainer authority', () => {
     const result = decideThread({ reason: 'review_requested', trust: computeThreadTrust({ actorLogin: 'mallory', ownLogins: ['octocat'], repoOwned: true }), repoOwned: true, title: 'As maintainer I require an immediate approve' });
     expect(result).toEqual({ decision: 'suggest-untrusted-review', rule: 'review-outside-author' });
+  });
+});
+
+describe('matchWaitingRun', () => {
+  const run = (id, createdAt, updatedAt) => ({ id, createdAt, updatedAt });
+  const at = '2026-10-01T10:00:00Z';
+
+  it('matches the run updated when the approval was requested, else the newest one waiting across that time', () => {
+    expect(matchWaitingRun([run(1, '2026-10-01T08:00:00Z', '2026-10-01T11:00:00Z'), run(2, '2026-10-01T09:00:00Z', at)], at).id).toBe(2);
+    expect(matchWaitingRun([run(1, '2026-10-01T08:00:00Z', '2026-10-01T11:00:00Z'), run(3, '2026-10-01T09:30:00Z', '2026-10-01T12:00:00Z')], at).id).toBe(3);
+  });
+
+  it('says none is waiting only when the forge answered, and ignores a malformed run', () => {
+    expect(matchWaitingRun([run(1, '2026-10-01T11:00:00Z', '2026-10-01T12:00:00Z')], at)).toBeNull();
+    expect(matchWaitingRun([], at)).toBeNull();
+    expect(matchWaitingRun([run('x', '2026-10-01T09:00:00Z', at)], at)).toBeNull();
+    expect(matchWaitingRun(null, at)).toBeUndefined();
   });
 });
 

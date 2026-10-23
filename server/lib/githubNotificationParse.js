@@ -88,6 +88,13 @@ function notificationHtmlUrl({ subjectApiUrl, repoFullName }, host) {
   return SUBJECT_PATHS[kind] ? `${repoUrl}/${SUBJECT_PATHS[kind]}/${id}` : repoUrl;
 }
 
+/** The page of a workflow run on the account's own host, or null for a malformed repo or id. */
+export function workflowRunHtmlUrl(repoFullName, runId, host) {
+  const [owner, repo] = String(repoFullName || '').split('/');
+  if (!REPO_PART_RE.test(owner || '') || !REPO_PART_RE.test(repo || '') || !Number.isInteger(runId) || runId <= 0) return null;
+  return `https://${webHostFor(host)}/${owner}/${repo}/actions/runs/${runId}`;
+}
+
 const rawThreadSchema = z.object({
   id: z.string().regex(THREAD_ID_RE),
   unread: z.boolean(),

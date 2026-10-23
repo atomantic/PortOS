@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   Bell, BellOff, Bot, Check, CheckCheck, CheckCircle2, CircleDot, CircleX, ExternalLink, GitCommitHorizontal, GitPullRequest,
-  Inbox, Layers, Mail, MailX, MessagesSquare, RefreshCw, ShieldAlert, Tag,
+  Inbox, Layers, Mail, MailX, MessagesSquare, RefreshCw, Rocket, ShieldAlert, Tag,
 } from 'lucide-react';
 import Pill from '../ui/Pill';
 import OverflowMenu from '../ui/OverflowMenu';
@@ -24,6 +24,7 @@ import {
 
 // GitHub's `reason` vocabulary, phrased for a glance.
 const REASON_LABELS = {
+  approval_requested: 'Deploy approval',
   assign: 'Assigned',
   author: 'You opened',
   ci_activity: 'CI',
@@ -75,6 +76,7 @@ const KIND_VIEW = {
   Discussion: { icon: MessagesSquare, label: 'Discussion', className: 'text-gray-300' },
   Commit: { icon: GitCommitHorizontal, label: 'Commit', className: 'text-gray-300' },
   RepositoryInvitation: { icon: Mail, label: 'Invitation', className: 'text-gray-300' },
+  WorkflowRun: { icon: Rocket, label: 'Workflow run', className: 'text-port-warning' },
 };
 const SECURITY_KIND = { icon: ShieldAlert, label: 'Security alert', className: 'text-port-error' };
 const kindOf = (notification) => (notification.reason === 'security_alert'
@@ -175,6 +177,13 @@ function NotificationRow({ notification, accountLabel, busy, onAction }) {
             <span className="shrink-0">· {timeAgo(notification.updatedAt)}</span>
             {accountLabel && <span className="shrink-0">· {accountLabel}</span>}
           </div>
+          {notification.deployment && (
+            <p className="mt-1 min-w-0 break-words text-xs text-gray-300">
+              <span className="text-white">{notification.deployment.name}</span>
+              {notification.deployment.headBranch && <> on <span className="font-mono">{notification.deployment.headBranch}</span></>}
+              {notification.deployment.displayTitle && <> · {notification.deployment.displayTitle}</>}
+            </p>
+          )}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {decision && <Pill tone={decision.tone}>{decision.label}</Pill>}
             {notification.yourRepo && <Pill tone="accent">Your repo</Pill>}

@@ -372,6 +372,41 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect((await listNotifications({ accountId: account.id })).notifications.map((row) => row.threadId)).toEqual(['702']);
   });
 
+  it('links a deployment approval to its waiting run, keeps it in front of you, and clears it once the run stops waiting', async () => {
+    await updateAccount(account.id, { mode: 'assist' });
+    const login = account.login;
+    const requestedAt = '2026-10-01T10:00:00Z';
+    const runsPath = `repos/${login}/hello/actions/runs?status=waiting&per_page=50`;
+    const waiting = (updatedAt) => [{ id: 4242, name: 'Deploy (prod)', displayTitle: 'Example change', headBranch: 'main', event: 'push', actor: login, createdAt: '2026-10-01T09:00:00Z', updatedAt }];
+    // A run waiting elsewhere in time is not this thread's.
+    const forge = { [runsPath]: [{ ...waiting(requestedAt)[0], id: 77, createdAt: '2026-09-01T09:00:00Z', updatedAt: '2026-09-01T10:00:00Z' }, ...waiting(requestedAt)] };
+    const actions = mockGh(() => listing([
+      thread('2101', { owner: login, reason: 'approval_requested', type: 'WorkflowRun', url: null, updatedAt: requestedAt, title: 'Someone requested your review to deploy to an environment' }),
+    ]), forge);
+
+    await syncAccountNotifications(account.id);
+    const [row] = (await listNotifications({ accountId: account.id })).notifications;
+    expect(row).toMatchObject({
+      decision: 'surface-high',
+      rule: 'deployment-approval',
+      htmlUrl: `https://github.com/${login}/hello/actions/runs/4242`,
+      deployment: { runId: 4242, name: 'Deploy (prod)', headBranch: 'main' },
+    });
+    expect(actions).toEqual([]);
+
+    // An unreadable run list never counts as "no longer waiting".
+    delete forge[runsPath];
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '2101')).toMatchObject({ decision: 'surface-high', state: 'open' });
+
+    // Approved on GitHub: the run leaves the waiting list and the thread is finished.
+    forge[runsPath] = [];
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '2101')).toMatchObject({ decision: 'suggest-mark-read', state: 'done' });
+    expect(actions).toEqual([['DELETE', 'notifications/threads/2101']]);
+    await updateAccount(account.id, { mode: 'observe' });
+  });
+
   it('sorts undecided threads only in Assist, acts only on trusted ones, and undoes into a learned rule', async () => {
     const login = account.login;
     const pr = (author, state = 'open', merged = false) => ({ author, association: 'NONE', state, merged });

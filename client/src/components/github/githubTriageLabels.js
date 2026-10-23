@@ -24,6 +24,7 @@ export const TRUST_VIEW = {
 export const RULE_LABELS = {
   'spam-signal': 'A spam check matched, so nothing will act on it automatically',
   'security-alert': 'Security alerts always surface first',
+  'deployment-approval': 'A deployment is waiting for your approval',
   'invitation-never-accepted': 'Invitations surface and are never accepted automatically',
   'finished-thread': 'The issue or pull request is already closed or merged',
   'ci-default-branch': 'CI failed on the default branch',

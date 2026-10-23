@@ -17,6 +17,7 @@ import {
   parseGhIncludeOutput,
   pollIntervalSeconds,
   toNotificationRecord,
+  workflowRunHtmlUrl,
 } from '../lib/githubNotificationParse.js';
 import { execGh } from './github.js';
 import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccounts.js';
@@ -315,9 +316,17 @@ const agentView = (account, row) => {
   return plan ? { lane: plan.lane, refused: plan.refused || null, pin: plan.pin || null } : null;
 };
 
+// A deployment approval's thread has no subject url; triage found its run.
+const deploymentView = (account, row) => {
+  const run = row.evidence?.workflowRun;
+  const htmlUrl = account && run ? workflowRunHtmlUrl(row.repo_full_name, run.id, account.host) : null;
+  return htmlUrl ? { runId: run.id, name: run.name, displayTitle: run.displayTitle, headBranch: run.headBranch, htmlUrl } : null;
+};
+
 const toApi = (row, accountsById) => {
   const account = accountsById.get(row.account_id);
   const login = account?.login?.toLowerCase();
+  const deployment = row.state === 'open' ? deploymentView(account, row) : null;
   return {
     accountId: row.account_id,
     threadId: row.thread_id,
@@ -327,7 +336,8 @@ const toApi = (row, accountsById) => {
     reason: row.reason,
     subjectType: row.subject_type,
     title: row.subject_title,
-    htmlUrl: row.html_url,
+    htmlUrl: deployment?.htmlUrl || row.html_url,
+    deployment,
     unread: row.unread,
     readOnGithub: Boolean(row.read_on_github_at) && row.state === 'open',
     state: row.state,
