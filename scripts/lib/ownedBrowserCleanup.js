@@ -51,6 +51,7 @@ export const reapOwnedBrowser = async (server, budgetMs, { requireProfileRemoval
   const pipes = () => [...new Set([...(child?.stdio ?? []), child?.stdout, child?.stderr])].filter(Boolean);
   const phases = [];
   const settlement = { close: 'not-started', kill: 'not-started' };
+  let directKill = 'not-needed';
   let closeObserved = false;
   const onClose = () => { closeObserved = true; };
   // Node emits exit before close if a helper retains inherited pipes. Release
@@ -65,7 +66,7 @@ export const reapOwnedBrowser = async (server, budgetMs, { requireProfileRemoval
     const destroyed = streams.filter(pipe => pipe.destroyed === true).length;
     return `owner=${child ? 'retained' : 'missing'} exit=${exitStatus() === null ? 'unconfirmed' : 'confirmed'}`
       + ` childClose=${closeObserved ? 'observed' : 'unobserved'} pipes=${streams.length}/${destroyed}-destroyed/${closed}-closed`
-      + ` closePromise=${settlement.close} killPromise=${settlement.kill} profile=${profileState()}`;
+      + ` closePromise=${settlement.close} killPromise=${settlement.kill} profile=${profileState()} directKill=${directKill}`;
   };
   const run = async (phase, ms) => {
     const started = Date.now();
@@ -79,8 +80,21 @@ export const reapOwnedBrowser = async (server, budgetMs, { requireProfileRemoval
       settlement[phase] = 'rejected';
       return 'failed'; // Provider errors can contain profile paths and host identifiers.
     });
+    // Playwright signals a process group and swallows dispatch errors before
+    // waiting for cleanup. If that path has not established exit halfway
+    // through its share, signal only the retained ChildProcess handle. Never
+    // search for PIDs or infer success from either signal's return value.
+    let fallback;
+    if (phase === 'kill' && typeof child?.kill === 'function') {
+      fallback = setTimeout(() => {
+        if (exitStatus() !== null || settlement.kill !== 'pending') return;
+        try { directKill = child.kill('SIGKILL') ? 'sent' : 'refused'; }
+        catch { directKill = 'failed'; }
+      }, Math.floor(ms / 2));
+    }
     const failure = await browserCleanupDeadline(work, ms, () => timeoutError(ms))
-      .catch(() => `stalled after ${ms}ms`);
+      .catch(() => `stalled after ${ms}ms`)
+      .finally(() => clearTimeout(fallback));
     phases.push(`${phase} elapsed=${Date.now() - started}ms ${snapshot()}`);
     return failure;
   };
