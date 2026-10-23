@@ -360,7 +360,7 @@ const quoteWindowsArg = (arg) => {
  * (The supervisor's own launch of the job passes `-NoNewWindow` for the same
  * reason; `-WindowStyle Hidden` would NOT set `CreateNoWindow`.)
  */
-async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd }) {
+async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd, observeLauncher }) {
   const supervisorPath = join(controlDir, 'supervisor.ps1');
   // Independent files — write them together rather than serializing two
   // round-trips in front of every launch.
@@ -380,6 +380,7 @@ async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd }) {
     `$diagnosticFile = ${quoteForShell(join(controlDir, 'launcher-bootstrap.log'), 'powershell')};`,
     WINDOWS_BOOTSTRAP_DIAGNOSTIC,
     'try {',
+    `if (!(Test-Path -LiteralPath ${quoteForShell(controlDir, 'powershell')}) -or (Test-Path -LiteralPath ${quoteForShell(join(controlDir, 'launch-cancelled'), 'powershell')})) { Write-BootstrapStage 'cancelled'; exit 1 };`,
     "Write-BootstrapStage 'starting-supervisor';",
     '$psi = New-Object System.Diagnostics.ProcessStartInfo;',
     "$psi.FileName = 'powershell';",
@@ -390,7 +391,7 @@ async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd }) {
     "Write-BootstrapStage 'supervisor-started';",
     "} catch { try { Write-BootstrapStage 'failed' $_.Exception.HResult } catch { }; exit 1 }",
   ].join(' ');
-  return spawn('powershell', [
+  const launcher = spawn('powershell', [
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', startSupervisor,
   ], {
     // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). The supervisor
@@ -399,6 +400,9 @@ async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd }) {
     cwd,
     stdio: 'ignore',
   });
+  // Install terminal observers before returning across this async boundary.
+  observeLauncher(launcher);
+  return launcher;
 }
 
 // Read a bounded projection even if a corrupt control file contains arbitrary
@@ -729,8 +733,30 @@ async function spawnDetachedWithReservation(bin, args, {
   }
   let launcherSpawnError = null;
   let launcherExit = null;
+  let launcherClosed = false;
+  let launcherSpawned = false;
+  let launcherStartedAt;
+  const launcherTimeline = [];
+  const recordLauncherStage = (stage) => {
+    launcherTimeline.push(`${stage}@${Math.max(0, Date.now() - launcherStartedAt)}ms`);
+  };
+  const observeLauncher = (child) => {
+    launcherStartedAt = Date.now();
+    recordLauncherStage('spawn-returned');
+    child.once('spawn', () => { launcherSpawned = true; recordLauncherStage('spawned'); });
+    child.on('error', (err) => {
+      if (launcherSpawnError) return;
+      launcherSpawnError = err;
+      recordLauncherStage('spawn-error');
+    });
+    child.once('exit', (code) => {
+      launcherExit = Number.isInteger(code) ? code : 'signal';
+      recordLauncherStage('exited');
+    });
+    child.once('close', () => { launcherClosed = true; recordLauncherStage('closed'); });
+  };
   const launcher = isWindows
-    ? await launchWindowsSupervisor({ controlDir, bin, args, env, cwd })
+    ? await launchWindowsSupervisor({ controlDir, bin, args, env, cwd, observeLauncher })
       .catch((err) => { launcherSpawnError = err; return null; })
     : spawn('sh', ['-c', LAUNCHER, 'sh', controlDir, bin, ...args], {
       // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
@@ -744,8 +770,7 @@ async function spawnDetachedWithReservation(bin, args, {
       console.error('❌ Could not persist detached launcher group evidence');
     }
   }
-  launcher?.on('error', (err) => { launcherSpawnError = err; });
-  launcher?.on('exit', (code) => { launcherExit = Number.isInteger(code) ? code : 'signal'; });
+  if (!isWindows && launcher) observeLauncher(launcher);
   launcher?.unref();
 
   // Tail the on-disk log files and watch for the supervisor's exit sentinel,
@@ -787,8 +812,13 @@ async function spawnDetachedWithReservation(bin, args, {
         launchError = new Error('Windows supervisor exited before recording a PID');
         return;
       }
+      if (isWindows && launcherClosed && launcherExit !== 0) {
+        launchError = new Error('Windows launcher closed before recording a PID');
+        return;
+      }
       await sleep(pollMs);
     }
+    if (isWindows) recordLauncherStage('pid-timeout');
     // No PID. If the supervisor still recorded an exit status, the job ran and
     // exited (e.g. a non-existent bin → 127); route that through 'close'.
     // Otherwise it's a hard launch failure.
@@ -811,10 +841,16 @@ async function spawnDetachedWithReservation(bin, args, {
   // launcher remains evidence even if it later errors or its publication fails.
   if (!isWindows && launchError && !launcher?.pid) markAbandoned(writer);
 
+  let failureCleanupAllowed = true;
   if (isWindows && launchError) {
     // Persist cancellation before returning or scheduling cleanup. A supervisor
     // still cold-starting must not launch an orphan after this failed handoff.
-    await writeFile(join(controlDir, 'launch-cancelled'), '1').catch(() => {});
+    const cancellationWritten = await writeFile(join(controlDir, 'launch-cancelled'), '1').then(() => true, () => false);
+    // A launcher exit does not prove its detached supervisor/job stopped. Keep
+    // the cancellation marker and evidence until reconciliation can confirm it.
+    // Only a failed native spawn with no process identity proves no child exists.
+    failureCleanupAllowed = Boolean(launcherSpawnError && !launcher?.pid && !launcherSpawned);
+    const cleanupState = failureCleanupAllowed ? 'not-started' : 'unconfirmed';
     const launcherResult = launcherSpawnError
       ? (['ENOENT', 'EACCES', 'EPERM', 'EAGAIN', 'ENOMEM'].includes(launcherSpawnError.code)
         ? launcherSpawnError.code : 'spawn-error')
@@ -824,14 +860,14 @@ async function spawnDetachedWithReservation(bin, args, {
       readBootstrapDiagnostic(controlDir, 'launcher-bootstrap.log'),
       readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log'),
     ]);
-    launchError = new Error(`detached spawn failed to acquire PID within ${pidTimeoutMs}ms; launcher=${launcherResult}; launcher-stage=${launcherStage}; supervisor-stage=${supervisorStage}`);
+    launchError = new Error(`detached spawn failed to acquire PID within ${pidTimeoutMs}ms; launcher=${launcherResult}; launcher-lifecycle=${launcherTimeline.join('>') || 'not-spawned'}; launcher-stage=${launcherStage}; supervisor-stage=${supervisorStage}; cancellation=${cancellationWritten ? 'written' : 'unconfirmed'}; cleanup=${cleanupState}`);
   }
 
   // Kick off tailing (or the launch-failure path) AFTER returning, so the
   // caller's synchronous event listeners are wired first.
   setImmediate(() => {
     if (launchError) {
-      if (cleanup) rm(controlDir, { recursive: true, force: true }).catch(() => {});
+      if (cleanup && failureCleanupAllowed) rm(controlDir, { recursive: true, force: true }).catch(() => {});
       handle.emit('error', launchError);
       return;
     }

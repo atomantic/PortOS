@@ -13,6 +13,7 @@ import * as childProcess from './childProcess.js';
 import { promisify } from 'util';
 import { pathToFileURL } from 'url';
 import { pinPlatform } from './testHelper.js';
+import { quoteForShell } from './shellCd.js';
 import { killProcessTree } from './bufferedSpawn.js';
 import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning, __detachedSpawnTesting } from './detachedSpawn.js';
 import { isProcessAlive } from '../test/processAlive.js';
@@ -249,6 +250,104 @@ describe('spawnDetached', () => {
       restorePlatform();
     }
   });
+
+  it('observes a failed Windows launcher before the asynchronous launch helper returns', async () => {
+    const controlDir = await tmpControlDir();
+    const restorePlatform = pinPlatform('win32');
+    const launcher = new EventEmitter();
+    launcher.unref = () => {};
+    // A fallback listener keeps a broken implementation from crashing Vitest;
+    // the caller must still receive this error without waiting for a PID.
+    launcher.on('error', () => {});
+    const spawnMock = vi.spyOn(childProcess, 'spawn').mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        launcher.emit('error', Object.assign(new Error('private spawn details'), { code: 'EACCES' }));
+        launcher.emit('close', -13, null);
+      });
+      return launcher;
+    });
+    try {
+      const handle = await spawnDetached('example-command', [], { controlDir, pidTimeoutMs: 0 });
+      const error = await onClose(handle).catch((err) => err);
+      expect(error.message).toContain('launcher=EACCES');
+      expect(error.message).toMatch(/launcher-lifecycle=spawn-returned@\d+ms>spawn-error@\d+ms>closed@\d+ms/);
+      expect(error.message).toContain('cleanup=not-started');
+      expect(error.message).not.toContain('private');
+    } finally {
+      spawnMock.mockRestore();
+      restorePlatform();
+    }
+  });
+
+  it('retains cancellation and owns late events when the Windows launcher is pending at the PID deadline', async () => {
+    const controlDir = await tmpControlDir();
+    const restorePlatform = pinPlatform('win32');
+    const launcher = new EventEmitter();
+    launcher.pid = 12345;
+    launcher.unref = () => {};
+    const spawnMock = vi.spyOn(childProcess, 'spawn').mockReturnValueOnce(launcher);
+    try {
+      // A zero deadline deterministically expires before bootstrap; no sleep or
+      // host load is needed to leave the launcher pending.
+      const handle = await spawnDetached('example-command', [], { controlDir, cleanup: true, pidTimeoutMs: 0 });
+      const error = await onClose(handle).catch((err) => err);
+      expect(error.message).toContain('launcher=pending');
+      expect(error.message).toMatch(/launcher-lifecycle=spawn-returned@\d+ms>pid-timeout@\d+ms;/);
+      expect(error.message).toContain('launcher-stage=unavailable');
+      expect(error.message).toContain('cancellation=written; cleanup=unconfirmed');
+      expect(await readFile(join(controlDir, 'launch-cancelled'), 'utf8')).toBe('1');
+      // A late native error remains owned after the caller has received failure.
+      expect(() => launcher.emit('error', new Error('late private details'))).not.toThrow();
+      launcher.emit('close', 1, null);
+      expect(await stat(controlDir)).toBeTruthy();
+    } finally {
+      spawnMock.mockRestore();
+      restorePlatform();
+    }
+  });
+
+  it.skipIf(IS_POSIX)('refuses a real Windows launcher released after the PID deadline', async () => {
+    const controlDir = await tmpControlDir();
+    const nativeSpawn = childProcess.spawn;
+    const releaseFile = join(controlDir, 'release-launcher');
+    let launcher;
+    let launcherClosed;
+    const spawnMock = vi.spyOn(childProcess, 'spawn').mockImplementationOnce((bin, args, options) => {
+      const delayedArgs = [...args];
+      delayedArgs[delayedArgs.length - 1] = `while (!(Test-Path -LiteralPath ${quoteForShell(releaseFile, 'powershell')})) { Start-Sleep -Milliseconds 20 }; ${args.at(-1)}`;
+      launcher = nativeSpawn(bin, delayedArgs, options);
+      launcherClosed = onClose(launcher).catch((error) => ({ error }));
+      return launcher;
+    });
+    let watchdog;
+    try {
+      // Hold PowerShell before its first production bootstrap statement until
+      // the failed handoff has durably published cancellation.
+      const handle = await spawnDetached(process.execPath, ['-e', 'process.stdout.write("unexpected-job");'], {
+        controlDir, cleanup: true, pidTimeoutMs: 0,
+      });
+      const error = await onClose(handle).catch((err) => err);
+      expect(error.message).toContain('cleanup=unconfirmed');
+      await writeFile(releaseFile, '1');
+      const result = await Promise.race([
+        launcherClosed,
+        new Promise((_, reject) => {
+          watchdog = setTimeout(() => reject(new Error('Cancelled Windows launcher did not close')), 10000);
+        }),
+      ]);
+      if (result.error) throw result.error;
+      expect(result.code).toBe(1);
+      expect(await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'launcher-bootstrap.log')).toMatch(/^cancelled /);
+      expect(await stat(join(controlDir, 'supervisor-bootstrap.log')).catch(() => null)).toBeNull();
+      expect(await stat(join(controlDir, 'pid')).catch(() => null)).toBeNull();
+      expect(await readStdoutLog(controlDir)).toBe('');
+    } finally {
+      clearTimeout(watchdog);
+      // ChildProcess.kill uses the held native handle, never a recycled PID.
+      if (launcher && launcher.exitCode === null) launcher.kill();
+      spawnMock.mockRestore();
+    }
+  }, 15000);
 
   it('propagates a non-zero exit code', async () => {
     const controlDir = await tmpControlDir();
