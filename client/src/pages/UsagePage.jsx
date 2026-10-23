@@ -14,6 +14,7 @@ import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import ClaudeCodeModelTokensCard from '../components/usage/ClaudeCodeModelTokensCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
+import MonthlyUsageCard from '../components/usage/MonthlyUsageCard';
 import RollingCostCard from '../components/usage/RollingCostCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
@@ -664,6 +665,7 @@ function InternalUsageMetrics() {
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
       {/* Trailing 30 days across every instance — independent of the range below. */}
       <RollingCostCard />
+      <MonthlyUsageCard history={usage.monthlyHistory} />
       {reportControls}
 
       <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
