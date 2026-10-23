@@ -94,8 +94,8 @@ describe('CatalogReferenceLibrary', () => {
 
   it('preserves per-attachment read-only provenance and counts guides outside this tab', () => {
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1"
-      media={[{ ...media[0], readOnly: true }, media[1]]}
-      guideMedia={[...media, ...[1, 2, 3].map((n) => ({ kind: 'reference', mediaKey: `sheet-${n}.png`, library: { guide: true } }))]} />);
+      referenceMedia={media.slice(0, 2)}
+      media={[{ ...media[0], readOnly: true }, ...media.slice(1), ...[1, 2, 3].map((n) => ({ kind: 'reference', mediaKey: `sheet-${n}.png`, library: { guide: true } }))]} />);
     expect(within(screen.getAllByTestId('library-row')[0]).queryByText('Edit reference details')).toBeNull();
     expect(screen.getByRole('button', { name: /make guide/i })).toBeDisabled();
     expect(screen.getByTestId('guide-count')).toHaveTextContent('4/4');

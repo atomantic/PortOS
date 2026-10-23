@@ -10,10 +10,10 @@ const LIBRARY_KINDS = new Set(['portrait', 'reference', 'video']);
 const eraFor = (m) => m.library?.variant?.era
   || (Number.isInteger(m.library?.variant?.age) ? (m.library.variant.age < 13 ? 'child' : m.library.variant.age < 20 ? 'teen' : m.library.variant.age < 65 ? 'adult' : 'elder') : '');
 
-export default function CatalogReferenceLibrary({ ingredientId, media = [], forms = [], readOnly = false, onChanged, guideMedia = media, missingMedia = new Set(), onSetPortrait, onDetach }) {
+export default function CatalogReferenceLibrary({ ingredientId, media = [], forms = [], readOnly = false, onChanged, referenceMedia = media, missingMedia = new Set(), onSetPortrait, onDetach }) {
   const id = useId();
   const [armedDetach, setArmedDetach] = useState(null);
-  const [filter, setFilter] = useState({ form: '', age: '', era: '', tag: '', guides: false });
+  const [filter, setFilter] = useState({ form: '', age: '', era: '', tag: '', guides: false, allMedia: false });
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [boardId, setBoardId] = useState('');
@@ -21,11 +21,13 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
 
   const rows = useMemo(() => media.filter((m) => !m.deleted && LIBRARY_KINDS.has(m.kind)), [media]);
   // Sheets and looks in other tabs still consume the character-wide guide limit.
-  const guideCount = guideMedia.filter((m) => !m.deleted && LIBRARY_KINDS.has(m.kind) && m.library?.guide === true).length;
+  const guideCount = media.filter((m) => !m.deleted && LIBRARY_KINDS.has(m.kind) && m.library?.guide === true).length;
   const ages = [...new Set(rows.map((m) => m.library?.variant?.age).filter(Number.isInteger))].sort((a, b) => a - b);
   const tags = [...new Set(rows.flatMap((m) => m.library?.tags || []))].sort();
   const formKey = (m) => m.library?.variant?.formId || 'canonical';
-  const visible = rows.filter((m) => (!filter.form || formKey(m) === filter.form)
+  const referenceKeys = new Set(referenceMedia.map((m) => `${m.kind}:${m.mediaKey}`));
+  const visible = rows.filter((m) => (filter.allMedia || referenceKeys.has(`${m.kind}:${m.mediaKey}`))
+    && (!filter.form || formKey(m) === filter.form)
     && (filter.age === '' || m.library?.variant?.age === Number(filter.age))
     && (!filter.era || eraFor(m) === filter.era)
     && (!filter.tag || (m.library?.tags || []).includes(filter.tag))
@@ -71,9 +73,17 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], form
     <section aria-label="Reference library" className="min-w-0 space-y-3">
       <header className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <h3 className="font-semibold">Reference library</h3>
-        <span data-testid="guide-count" className="text-gray-400">{formatCount(guideCount)}/{MAX_CAST_GUIDES} render guides</span>
+        <span data-testid="guide-count" className="text-gray-400">{formatCount(guideCount)}/{MAX_CAST_GUIDES} render guides (all media)</span>
       </header>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] items-end gap-2 text-xs">
+        {referenceMedia !== media && (
+          <label htmlFor={`${id}-scope`} className="min-w-0 space-y-1"><span>Media scope</span>
+            <select id={`${id}-scope`} value={filter.allMedia ? 'all' : 'references'} onChange={(e) => setFilter({ ...filter, allMedia: e.target.value === 'all' })} className={fieldClass}>
+              <option value="references">References</option>
+              <option value="all">All character media</option>
+            </select>
+          </label>
+        )}
         {forms.length > 0 && (
           <label htmlFor={`${id}-form`} className="min-w-0 space-y-1"><span>Age or look</span>
             <select id={`${id}-form`} aria-label="Filter by age or look" value={filter.form} onChange={(e) => setFilter({ ...filter, form: e.target.value })} className={fieldClass}>

@@ -1057,6 +1057,10 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(screen.queryByAltText('Winter reference')).not.toBeInTheDocument();
     expect(screen.getByAltText('Studio portrait')).toBeInTheDocument();
     expect(screen.queryByAltText('Sheet in its own tab')).not.toBeInTheDocument();
+    fireEvent.change(within(library).getByLabelText('Filter by age'), { target: { value: '' } });
+    fireEvent.change(within(library).getByLabelText('Media scope'), { target: { value: 'all' } });
+    expect(screen.getByAltText('Sheet in its own tab')).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'reference details for sheet.png' })).getByRole('button', { name: 'Guide' })).toBeEnabled();
   });
 
   it('keeps archive-only reference media visible on References without using it as a profile cover', async () => {

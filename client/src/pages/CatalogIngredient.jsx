@@ -886,7 +886,7 @@ function IngredientEditor() {
         {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
           <MediaPanel
             readOnly={identityReadOnly}
-            referenceLibrary={record.type === 'character' ? { ingredientId: record.id, forms: formsOf(record.payload), guideMedia: media, onChanged: refreshMedia } : null}
+            referenceLibrary={record.type === 'character' ? { ingredientId: record.id, forms: formsOf(record.payload), media: media.map(protectMedia), onChanged: refreshMedia } : null}
             media={(tabs ? media.filter(isReferenceTabRow) : media).map(protectMedia)}
             canonImageRefs={[payload.primaryImageRef, ...(Array.isArray(payload.imageRefs) ? payload.imageRefs : [])].filter((ref) =>
               !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref))}
@@ -1588,7 +1588,7 @@ function MediaPanel({ readOnly = false, referenceLibrary = null, media, canonIma
           : 'Drag a gallery image or a file here to attach it (image, audio, or video).'}
       </div>}
 
-      {referenceLibrary && <CatalogReferenceLibrary {...referenceLibrary} media={list} readOnly={readOnly}
+      {referenceLibrary && <CatalogReferenceLibrary {...referenceLibrary} referenceMedia={list} readOnly={readOnly}
         missingMedia={missingMedia} onSetPortrait={onSetPortrait} onDetach={onDetach} />}
 
       {!referenceLibrary && portrait && (
