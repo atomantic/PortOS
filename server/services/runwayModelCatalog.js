@@ -111,6 +111,8 @@ export function _createRunwayModelCatalog({
   }
   return {
     current: present,
+    /** Loads the persisted cache only; never fetches documentation. */
+    ready: read,
     async get({ refresh: force = false } = {}) {
       if (pending) {
         if (force && !pendingForced) return pending.then(() => this.get({ refresh: true }));
@@ -130,7 +132,8 @@ const catalog = _createRunwayModelCatalog();
 export const getRunwayModelCatalog = (options) => catalog.get(options);
 
 /** Refreshed removals/schema changes fail before a paid submission. No catalog lookup per render. */
-export function assertRunwayCatalogModel(endpoint, modelId) {
+export async function assertRunwayCatalogModel(endpoint, modelId) {
+  await catalog.ready(); // a restart must not submit from the bundled list before the persisted refresh loads
   const current = catalog.current();
   if (current.available[endpoint] && !current.available[endpoint].includes(modelId)) {
     throw Object.assign(new Error(`Runway ${modelId} is unavailable for ${endpoint}; refresh the model catalog or choose another model`), { status: 400, code: 'RUNWAY_MODEL_UNAVAILABLE' });

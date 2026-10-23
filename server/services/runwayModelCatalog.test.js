@@ -88,4 +88,14 @@ describe('Runway public catalog cache', () => {
     expect(updated.available.character_performance).toEqual([]);
     expect(updated.unsupported.map((r) => r.id)).toEqual(expect.arrayContaining(['gen4_image', 'future_image']));
   });
+
+  it("loads the persisted catalog before a submission check without fetching documentation", async () => {
+    const { cache, options, fetchSchema } = await setup();
+    await cache.get();
+    const restarted = _createRunwayModelCatalog(options);
+    expect(restarted.current().bundled).toBe(true);
+    await restarted.ready();
+    expect(restarted.current()).toMatchObject({ bundled: false });
+    expect(fetchSchema).toHaveBeenCalledTimes(1);
+  });
 });
