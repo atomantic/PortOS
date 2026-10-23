@@ -343,7 +343,8 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       }));
     });
 
-    it('declines the diff-only judgement after independent empty inventories, without inventing a ship verdict or follow-up', async () => {
+    it('declines the diff-only judgement after empty inventories on the canonical SSH host, without inventing a verdict or follow-up', async () => {
+      execGit.mockResolvedValue({ stdout: 'git@SSH.GITHUB.COM:example/project.git', exitCode: 0 });
       runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({
         verdict: 'fix-first', missing: ['Security inventory and bot PR resolution'],
         unrequested: ['The audit note'], evidence: 'Only an audit note is visible.',
