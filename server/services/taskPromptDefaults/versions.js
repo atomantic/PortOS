@@ -115,8 +115,8 @@ export const PROMPT_VERSIONS = {
 // Epic decomposition reads only the owner's own comments, never the public
 // thread, resolving the account itself so a pinned epic still finds them.
 // A forge reviewer (`@login`) may be a person: wait up to 4 hours per round and iterate with them.
-PROMPT_VERSIONS['claim-issue'] = 46;
-PROMPT_VERSIONS['claim-issue-gitlab'] = 40;
+PROMPT_VERSIONS['claim-issue'] = 47; // Fresh claims reject same-login assignment and PR body/commit evidence.
+PROMPT_VERSIONS['claim-issue-gitlab'] = 41; // Same-login assignment is not run ownership.
 // Accepted review findings require resolution regardless of severity.
 PROMPT_VERSIONS['claim-issue-jira'] = 27; // v25: API calls target {portosApiUrl}, expanded at spawn to the loopback origin (#12405).
 

@@ -22,6 +22,7 @@
  * full recheck cadence on a blip.
  */
 
+import { claimIssueNumber, githubPrIssueNumbers, completeGithubPrEvidence } from '../lib/issueClaimEvidence.js';
 import { runCliBounded } from '../lib/runCliBounded.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -110,10 +111,7 @@ function runCli(cmd, args, cwd, env) {
  * Reuses extractSlugFromRef so the ref-matching rules stay in one place.
  */
 export function issueNumberFromRef(ref) {
-  const slug = extractSlugFromRef(ref);
-  if (!slug) return null;
-  const m = /^issue-(\d+)$/.exec(slug);
-  return m ? Number(m[1]) : null;
+  return claimIssueNumber(ref);
 }
 
 /**
@@ -174,7 +172,7 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.
   const prListCall = forge === 'gitlab'
     ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath, env)
-    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName', '--limit', String(IN_FLIGHT_PR_LIMIT), '-q', '.[].headRefName'], repoPath, env);
+    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName,body,commits', '--limit', String(IN_FLIGHT_PR_LIMIT)], repoPath, env);
   const [branchRes, prRes] = await Promise.all([
     runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
     prListCall
@@ -193,7 +191,14 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
       }
     }
   } else {
-    refs.push(...(prRes.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean));
+    let prs;
+    try { prs = JSON.parse(prRes.stdout); } catch { prs = null; }
+    if (!completeGithubPrEvidence(prs, IN_FLIGHT_PR_LIMIT)) {
+      return { error: 'gh-unavailable', detail: 'Open PR evidence is malformed or incomplete' };
+    }
+    for (const pr of prs) {
+      for (const number of githubPrIssueNumbers(pr)) nums.add(number);
+    }
   }
   for (const ref of refs) {
     const n = issueNumberFromRef(ref);
@@ -225,19 +230,12 @@ export function titleMarksEpic(title) {
 // title conventions above. `labels` is the caller's already-lowercased list.
 const isEpicIssue = (title, labels) => labels.includes(EPIC_LABEL) || titleMarksEpic(title);
 
-const normalizeLogin = (value) => (value == null ? '' : String(value)).trim().toLowerCase();
-
-const assigneeLogin = (assignee) => normalizeLogin(
-  typeof assignee === 'string' ? assignee : assignee?.login || assignee?.username
-);
-
 /**
  * Decide whether a single forge issue (as returned by `gh`/`glab` issue list)
  * is autonomously claimable. Mirrors the claim-issue prompt's Phase 1 step 4
- * predicate: no in-flight claim ref, no assignee belonging to another
- * account, no blocking label, and — for an epic — not already decomposed. An
- * issue assigned to the current authenticated account remains claimable so a
- * previous self-claim can be retried. Exported for direct unit testing.
+ * predicate: no in-flight claim/PR evidence, no assignee, no blocking label,
+ * and — for an epic — not already decomposed. A scheduled dispatch is a fresh
+ * run, so sharing a login never proves ownership of an earlier claim.
  *
  * An UNdecomposed epic counts as actionable: the claim agent's Phase 1b splits
  * it into per-slice issues (and then claims the first slice), which is real work
@@ -254,8 +252,8 @@ const assigneeLogin = (assignee) => normalizeLogin(
  * `NON_ACTIONABLE_ISSUE_LABELS`, never replacing it: the base set is
  * structural (in-progress/blocked/etc.), not user-configurable.
  */
-export function isActionableIssue(issue, inFlight = new Set(), excludeLabels = null, currentLogin = null) {
-  return issueSkipCause(issue, inFlight, excludeLabels, currentLogin) === null;
+export function isActionableIssue(issue, inFlight = new Set(), excludeLabels = null) {
+  return issueSkipCause(issue, inFlight, excludeLabels) === null;
 }
 
 /**
@@ -272,15 +270,11 @@ export function isActionableIssue(issue, inFlight = new Set(), excludeLabels = n
  * detector tests exercise it behaviorally through `skipCauses`, and the
  * dead-exports guard keeps it honest about that.
  */
-function issueSkipCause(issue, inFlight = new Set(), excludeLabels = null, currentLogin = null) {
+function issueSkipCause(issue, inFlight = new Set(), excludeLabels = null) {
   if (!issue || typeof issue.number !== 'number') return 'malformed';
   if (inFlight.has(issue.number)) return 'in-flight';
   const assignees = Array.isArray(issue.assignees) ? issue.assignees : [];
-  const normalizedCurrentLogin = normalizeLogin(currentLogin);
-  const hasOtherAssignee = assignees.length > 0 && (
-    !normalizedCurrentLogin || !assignees.some((assignee) => assigneeLogin(assignee) === normalizedCurrentLogin)
-  );
-  if (hasOtherAssignee) return 'assigned';
+  if (assignees.length > 0) return 'assigned';
   const labels = (Array.isArray(issue.labels) ? issue.labels : [])
     .map((l) => (typeof l === 'string' ? l : l?.name) || '')
     .map((s) => s.toLowerCase());
@@ -470,8 +464,7 @@ const FORGE_ISSUE_CONFIG = {
     },
     // `--self` mode: gh natively understands the `@me` token for `--author`, so
     // no author-filter lookup is needed — the API resolves it to the authenticated
-    // user. `selfLoginArgs` still resolves that account when assigned issues need
-    // the self-assignee retry check (and seeds collaborator mode).
+    // user. `selfLoginArgs` resolves that account for collaborator mode.
     resolveSelf: async () => ({ author: '@me' }),
     // `collaborators` mode: you + everyone with repo access. `{owner}`/`{repo}`
     // are gh's own placeholders, resolved from the checked-out remote. A 403 here
@@ -763,20 +756,12 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     return parked('no-open-issues');
   }
 
-  const hasAssignedIssue = issues.some((issue) => Array.isArray(issue.assignees) && issue.assignees.length > 0);
-  const [inFlightResult, currentLoginResult] = await Promise.all([
-    inFlightIssueNumbers(repoPath, cfg.inFlightForge, resolvedEnv),
-    hasAssignedIssue
-      ? resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, resolvedEnv)
-      : Promise.resolve({ login: null })
-  ]);
+  const inFlightResult = await inFlightIssueNumbers(repoPath, cfg.inFlightForge, resolvedEnv);
   if (inFlightResult.error) {
     console.log(`⏭️ In-flight claim evidence unavailable (${inFlightResult.error}); skipping this dispatch`);
     return forgeTransient(cfg, inFlightResult.error, null, inFlightResult.detail);
   }
   const inFlight = inFlightResult.nums;
-  if (currentLoginResult.error) return forgeTransient(cfg, currentLoginResult.error, null, currentLoginResult.detail);
-  const currentLogin = currentLoginResult.login || null;
   const total = issues.length;
   // How many of the OPEN issues were skipped only because a claim/PR is already
   // in flight for them (stale post-merge branches count here). Surfacing this
@@ -787,7 +772,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   const excludeSet = Array.isArray(issueExcludeLabels) && issueExcludeLabels.length > 0
     ? new Set(issueExcludeLabels.map((l) => String(l).toLowerCase()))
     : null;
-  const actionable = issues.filter((issue) => isActionableIssue(issue, inFlight, excludeSet, currentLogin));
+  const actionable = issues.filter((issue) => isActionableIssue(issue, inFlight, excludeSet));
   const filteredCount = Math.max(0, total - actionable.length - inFlightCount);
   // Per-cause attribution of every skip, so a park on a non-empty queue can say
   // WHY each issue was filtered ("49 needs-input, 17 blocked, …") instead of a
@@ -800,7 +785,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   const skipCauses = Object.create(null);
   if (actionable.length === 0 && total > 0) {
     for (const issue of issues) {
-      const cause = issueSkipCause(issue, inFlight, excludeSet, currentLogin);
+      const cause = issueSkipCause(issue, inFlight, excludeSet);
       if (cause != null) skipCauses[cause] = (skipCauses[cause] || 0) + 1;
     }
   }
