@@ -844,15 +844,19 @@ export async function getRelatedMemories(id, limit = 10) {
     // memories ranking among the nearest neighbours can't under-fill (#12768).
     const linkedIds = related.map(r => r.id);
 
-    const similar = await query(`
+    const readSimilar = (exact = false) => query(`
       SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id,
              1 - (embedding <=> $1) AS similarity
       FROM memories
       WHERE id != $2 AND embedding IS NOT NULL AND status = 'active'
         AND NOT (id = ANY($4::uuid[]))
-      ORDER BY embedding <=> $1
+      ORDER BY ${exact ? '(embedding <=> $1) + 0' : 'embedding <=> $1'}
       LIMIT $3
     `, [embedding, id, remaining, linkedIds]);
+    let similar = await readSimilar();
+    // ANN scans filter after their bounded candidate search. If they under-fill,
+    // an expression sort bypasses the ANN index and scores all eligible rows.
+    if (similar.rows.length < remaining) similar = await readSimilar(true);
 
     for (const row of similar.rows) {
       related.push({
