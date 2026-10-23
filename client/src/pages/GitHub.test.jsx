@@ -449,6 +449,18 @@ describe('GitHub inbox tab', () => {
     mock.getGitHubNotifications.mockResolvedValue({ notifications: [NOTIFICATION], sync: {} });
   });
 
+  it('offers only accounts active on this instance in the inbox filter', async () => {
+    mock.getGitHubAccounts.mockResolvedValue([
+      IMPLICIT,
+      { ...IMPLICIT, id: 'other', label: 'Other active' },
+      { ...IMPLICIT, id: 'disabled', label: 'Disabled mode', mode: 'disabled' },
+      { ...IMPLICIT, id: 'off', label: 'Turned off', enabled: false },
+    ]);
+    await renderInbox();
+    const picker = await screen.findByRole('combobox', { name: 'Account' });
+    expect([...picker.options].map(option => option.value)).toEqual(['', IMPLICIT.id, 'other']);
+  });
+
   it('says why a thread is here and what state its pull request is in', async () => {
     mock.getGitHubNotifications.mockResolvedValue({ notifications: [{ ...NOTIFICATION,
       subjectStatus: { state: 'open', draft: false, mergeState: 'blocked' } }], sync: {} });
@@ -910,7 +922,7 @@ describe('GitHub automations tab', () => {
       agentRules: [expect.objectContaining({ kind: 'ci-activity', repo: 'octocat/hello', action: 'done' })],
     }));
     await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
-    expect(screen.queryByRole('form', { name: 'New automation rule' })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('form', { name: 'New automation rule' })).toBeNull());
   });
 
   it('saves and edits owner rules while counting only threads without a repo override', async () => {

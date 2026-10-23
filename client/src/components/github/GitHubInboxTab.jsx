@@ -173,7 +173,7 @@ export default function GitHubInboxTab() {
     });
   };
 
-  const enabledAccounts = (accounts || []).filter((account) => account.enabled);
+  const enabledAccounts = (accounts || []).filter((account) => account.enabled && account.mode !== 'disabled');
   const labelFor = (id) => (enabledAccounts.length > 1 ? accounts.find((account) => account.id === id)?.label : null);
   const syncErrors = Object.entries(data?.sync || {}).filter(([id, state]) => state.lastError && (!accountId || id === accountId));
   const lastSyncAt = Object.values(data?.sync || {}).map((state) => state.lastSyncAt).filter(Boolean).sort().at(-1);

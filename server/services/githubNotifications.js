@@ -396,9 +396,9 @@ export async function listActionableNotifications({ limit = 100 } = {}) {
 }
 
 export async function listNotifications({ accountId = null, view = 'needs-you' } = {}) {
-  const accounts = await listAccounts();
+  const accounts = (await listAccounts()).filter(isActive);
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
-  const ids = accountId ? [accountId] : accounts.map((account) => account.id);
+  const ids = accounts.filter((account) => !accountId || account.id === accountId).map((account) => account.id);
   const [rows, syncRows, countRows] = await Promise.all([
     query(
       `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${VIEW_FILTERS[view]}

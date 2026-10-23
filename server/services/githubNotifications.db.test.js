@@ -1452,6 +1452,31 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     fetchSpy.mockRestore();
   });
 
+  it.each([{ mode: 'disabled' }, { enabled: false }])('hides cached inbox rows, counts and sync errors for inactive accounts (%j) without deleting them', async (disabled) => {
+    mockGh(() => listing([thread('821')]));
+    await syncAccountNotifications(account.id, { automate: false });
+    await query('UPDATE github_notification_sync SET last_error = $2 WHERE account_id = $1', [account.id, 'Old sync failure']);
+    expect((await listNotifications({ accountId: account.id })).counts.all).toBe(1);
+    await updateAccount(account.id, disabled);
+    vi.mocked(execGh).mockClear();
+
+    for (const view of ['needs-you', 'suspect', 'handled', 'all']) {
+      const scoped = await listNotifications({ accountId: account.id, view });
+      expect(scoped.notifications).toEqual([]);
+      expect(Object.values(scoped.counts).every(count => count === 0)).toBe(true);
+      expect(scoped.sync).toEqual({});
+      const combined = await listNotifications({ view });
+      expect(combined.notifications.some(row => row.accountId === account.id)).toBe(false);
+      expect(combined.sync[account.id]).toBeUndefined();
+    }
+    await updateAccount(account.id, { mode: 'observe', enabled: true });
+    const restored = await listNotifications({ accountId: account.id });
+    expect(restored.notifications.map(row => row.threadId)).toEqual(['821']);
+    expect(restored.counts.all).toBe(1);
+    expect(restored.sync[account.id].lastError).toBe('Old sync failure');
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
   it('never fetches or processes a disabled account, scheduled or manual', async () => {
     mockGh(() => listing([thread('811')]));
     await updateAccount(account.id, { mode: 'disabled' });
