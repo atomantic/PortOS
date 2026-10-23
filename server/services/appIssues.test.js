@@ -424,7 +424,7 @@ describe('prepareAppIssueClaim', () => {
     await prepareAppIssueClaim(APP, '42', 'github');
     expect(execGh.mock.calls.map(([args]) => args)).toEqual([
       ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'],
-      ['pr', 'list', '--repo', 'github.com/acme/widget', '--state', 'open', '--limit', '500', '--json', 'headRefName,body,commits'],
+      ['pr', 'list', '--repo', 'github.com/acme/widget', '--state', 'open', '--limit', '500', '--json', 'number,headRefName,body,commits'],
       ['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--remove-label', 'Help Wanted', '--remove-label', 'good first issue'],
       ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'],
     ]);
@@ -443,6 +443,7 @@ describe('prepareAppIssueClaim', () => {
   it.each([
     { headRefName: 'interactive', body: 'Closes #42', commits: [] },
     { headRefName: 'interactive', body: 'Fixes #42', commits: [] },
+    { headRefName: 'interactive', body: 'Fixes: #42', commits: [] },
     { headRefName: 'interactive', body: '', commits: [{ messageHeadline: 'fix: work [issue-42]' }] },
     { headRefName: 'interactive', body: '', commits: [{ messageHeadline: 'fix: work (#42)' }] },
     { headRefName: 'next/issue-42', body: '', commits: [] },
@@ -460,11 +461,33 @@ describe('prepareAppIssueClaim', () => {
 
   it('uses GitLab and preserves unrelated labels', async () => {
     useGitlabOrigin();
-    execGlab.mockResolvedValueOnce(issue(['help wanted', 'bug']))
-      .mockResolvedValueOnce('').mockResolvedValueOnce(issue(['bug']));
+    execGlab.mockResolvedValueOnce(issue(['help wanted', 'bug'], { state: 'opened' }))
+      .mockResolvedValueOnce('[]').mockResolvedValueOnce('').mockResolvedValueOnce(issue(['bug'], { state: 'opened' }));
     await prepareAppIssueClaim(APP, '42', 'gitlab');
-    expect(execGlab).toHaveBeenNthCalledWith(2, ['issue', 'update', '42', '--unlabel', 'help wanted'], '/repo', undefined, { rejectOnError: true });
+    expect(execGlab).toHaveBeenNthCalledWith(3, ['issue', 'update', '42', '--unlabel', 'help wanted'], '/repo', undefined, { rejectOnError: true });
     expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source_branch: 'claim/issue-42', description: '' },
+    { source_branch: 'interactive', description: 'Closes: #42' },
+  ])('refuses GitLab MR-backed work before mutation: %j', async mr => {
+    useGitlabOrigin();
+    execGlab.mockResolvedValueOnce(issue(['help wanted'], { state: 'opened' })).mockResolvedValueOnce(JSON.stringify([mr]));
+    await expect(prepareAppIssueClaim(APP, '42', 'gitlab')).rejects.toMatchObject({ status: 409, code: 'ISSUE_IN_FLIGHT' });
+    expect(execGlab.mock.calls.some(([args]) => args[1] === 'update')).toBe(false);
+  });
+
+  it('reads all commits on large PRs and finds issue references beyond the first page', async () => {
+    const pr = { number: 23, headRefName: 'large-change', body: '', commits: Array.from({ length: 100 }, () => ({ messageHeadline: 'other work' })) };
+    const firstPage = pr.commits.map(() => ({ commit: { message: 'other work' } }));
+    execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs(pr))
+      .mockResolvedValueOnce(JSON.stringify([firstPage, [{ commit: { message: 'fix: remaining work (#42)' } }]]));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ code: 'ISSUE_IN_FLIGHT' });
+    expect(execGh).toHaveBeenLastCalledWith(
+      ['api', '--hostname', 'github.com', '--paginate', '--slurp', 'repos/acme/widget/pulls/23/commits?per_page=100'],
+      undefined, expect.any(Object),
+    );
   });
 
   it('rejects unreadable state, failed edits, and labels that remain after an edit', async () => {

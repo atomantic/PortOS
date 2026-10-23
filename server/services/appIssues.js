@@ -23,7 +23,7 @@
  * without guessing, since the classifier is the only thing that knows.
  */
 
-import { githubPrIssueNumbers, completeGithubPrEvidence } from '../lib/issueClaimEvidence.js';
+import { collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers } from '../lib/issueClaimEvidence.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -329,16 +329,23 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
     return names.filter(name => CONTRIBUTOR_LABELS.includes(name.toLowerCase()));
   };
   const labels = await readLabels();
-  if (tracker === 'github') {
-    const raw = await execGh(['pr', 'list', '--repo', target.repoSpec, '--state', 'open',
-      '--limit', '500', '--json', 'headRefName,body,commits'], undefined, { cwd, env });
-    const prs = safeJSONParse(raw, null);
-    if (!completeGithubPrEvidence(prs)) {
-      throw new ServerError('Could not read complete open PR claim evidence', { status: 502, code: 'CLAIM_PRS_UNAVAILABLE' });
-    }
-    if (prs.some(pr => githubPrIssueNumbers(pr).has(Number(issueNumber)))) {
-      throw new ServerError('An open PR already covers this issue', { status: 409, code: 'ISSUE_IN_FLIGHT' });
-    }
+  const rawChanges = tracker === 'github'
+    ? await execGh(['pr', 'list', '--repo', target.repoSpec, '--state', 'open',
+      '--limit', '500', '--json', 'number,headRefName,body,commits'], undefined, { cwd, env })
+    : await execGlab(withGlabJson(['mr', 'list', '--per-page', '100']), app.repoPath, undefined, { rejectOnError: true });
+  const changes = safeJSONParse(rawChanges, null);
+  const changeNumbers = tracker === 'github'
+    ? await collectGithubPrIssueNumbers(changes, async number => {
+      const raw = await execGh(['api', '--hostname', target.apiHost, '--paginate', '--slurp',
+        `repos/${target.fullName}/pulls/${number}/commits?per_page=100`], undefined, { cwd, env }).catch(() => null);
+      return safeJSONParse(raw, null);
+    })
+    : collectGitlabMrIssueNumbers(changes);
+  if (!changeNumbers) {
+    throw new ServerError('Could not read complete open PR/MR claim evidence', { status: 502, code: 'CLAIM_PRS_UNAVAILABLE' });
+  }
+  if (changeNumbers.has(Number(issueNumber))) {
+    throw new ServerError('An open PR/MR already covers this issue', { status: 409, code: 'ISSUE_IN_FLIGHT' });
   }
   if (!labels.length) return;
   if (tracker === 'github') {

@@ -25,7 +25,7 @@ const forgeIssueConstraint = (forge, claimantGuard = () => '') => (ref, excludeL
   const labels = excludeLabelsBlock || '`in-progress`, `blocked`, `needs-input`';
   const changeEvidence = forge === 'GitHub'
     ? 'an open PR whose body closes/fixes the issue or whose head commits reference it'
-    : 'an open MR on its claim branch';
+    : 'an open MR on its claim branch or with a closing trailer';
   return `## Target Issue Constraint
 
 The user explicitly selected ${forge} issue #${ref}. Override Phase 1 ("Pick the target issue"): do NOT pick a different issue and do NOT scan for the next eligible one — claim exactly #${ref}, ignore the author filter above. An explicit selection does not override existing claim ownership: any assignee (including this login), an in-progress marker, or ${changeEvidence} means another run is in flight unless this run proves it created the matching claim branch.${claimantGuard(ref)} Still honor the safety checks: if #${ref} is already closed, already carries any of ${labels}, is already on a \`claim/issue-${ref}\` (or \`cos/.../issue-${ref}/...\`) branch, or is stale (Phase 3), exit cleanly rather than forcing it. A continuation of this same run may resume its own recorded branch and PR after verifying the run ownership; matching the forge login or merely finding a branch is never proof. **If #${ref} is a tracking epic, do NOT exit** — run Phase 1b against it: claim the next eligible issue already linked from it, or, when it has none, decompose it into per-slice issues first and then claim the first slice. That is the one case where this run legitimately ships an issue other than #${ref}. Otherwise run Phases 2–7 against #${ref}.`;

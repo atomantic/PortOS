@@ -79,7 +79,7 @@ function fakeHangingChild(stderr) {
 function routeSpawn(routes) {
   spawn.mockImplementation((cmd, args = []) => {
     const key = `${cmd} ${args[0] || ''}`;
-    const r = routes[key] ?? (key === 'gh api' ? { stdout: 'alice\n' } : undefined);
+    const r = routes[key] ?? (key === 'gh api' ? { stdout: 'alice\n' } : key === 'glab mr' ? { stdout: '[]' } : undefined);
     let stdout = r?.stdout ?? '';
     if (key === 'gh pr' && !stdout.startsWith('[') && !stdout.startsWith('{')) {
       stdout = JSON.stringify(stdout.split('\n').filter(Boolean).map(headRefName => ({ headRefName, body: '', commits: [] })));
@@ -462,6 +462,7 @@ describe('perpetualWork', () => {
         }]));
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
         if (cmd === 'gh' && args[0] === 'pr') return fakeChild('[]');
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
@@ -477,6 +478,7 @@ describe('perpetualWork', () => {
         ]));
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
         if (cmd === 'gh' && args[0] === 'pr') return fakeChild('[]');
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
@@ -504,12 +506,23 @@ describe('perpetualWork', () => {
       routeSpawn({
         'gh issue': { stdout: JSON.stringify([7, 8, 9, 70].map(number => ({ number, title: 'work', labels: [], assignees: [] }))) },
         'gh pr': { stdout: JSON.stringify([
-          { headRefName: 'feature/interactive', body: 'Closes #7', commits: [] },
+          { headRefName: 'feature/interactive', body: 'Closes: #7', commits: [] },
           { headRefName: 'fix/combined', body: 'Refs #70', commits: [{ messageHeadline: 'fix: first [issue-8]', messageBody: 'Also fixes a regression (#9)' }] }
         ]) }
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
       expect(out).toMatchObject({ sample: [70], inFlightCount: 3, count: 1 });
+    });
+
+    it('paginates a large PR without parking unrelated issue claims', async () => {
+      const pr = { number: 23, headRefName: 'large', body: '', commits: Array.from({ length: 100 }, () => ({ messageHeadline: 'other work' })) };
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([7, 8].map(number => ({ number, title: 'work', labels: [], assignees: [] }))) },
+        'gh pr': { stdout: JSON.stringify([pr]) },
+        'gh api': { stdout: JSON.stringify([pr.commits.map(() => ({ commit: { message: 'other work' } })), [{ commit: { message: 'fix: work (#7)' } }]]) }
+      });
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ sample: [8], count: 1, inFlightCount: 1 });
+      expect(spawn.mock.calls.some(([cmd, args]) => cmd === 'gh' && args.includes('--paginate') && args.includes('repos/{owner}/{repo}/pulls/23/commits?per_page=100'))).toBe(true);
     });
 
     it.each(['{broken', JSON.stringify([{ headRefName: 'feature', body: '', commits: Array.from({ length: 100 }, () => ({ messageHeadline: 'change' })) }])])(
@@ -613,6 +626,7 @@ describe('perpetualWork', () => {
         }
         if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
         if (cmd === 'gh' && args[0] === 'pr') return fakeChild('[]');
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'owner' });
@@ -964,6 +978,14 @@ describe('perpetualWork', () => {
       expect(out.actionable).toBe(true);
       expect(out.count).toBe(1); // only #10 (#11 blocked label, #12 in-flight MR)
       expect(out.sample).toEqual([10]);
+    });
+
+    it('excludes an unassigned issue closed by an MR description on an arbitrary branch', async () => {
+      routeSpawn({
+        'glab issue': { stdout: JSON.stringify([{ iid: 10, title: 'work', labels: [], assignees: [] }]) },
+        'glab mr': { stdout: JSON.stringify([{ source_branch: 'interactive', description: 'Fixes: #10' }]) },
+      });
+      expect(await detectGitlabIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ actionable: false, inFlightCount: 1 });
     });
 
     it('does not reclaim an issue assigned to the authenticated account', async () => {

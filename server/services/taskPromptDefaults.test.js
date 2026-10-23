@@ -1021,6 +1021,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(github).toContain('--remove-assignee "${ASSIGNEES:-@me}"');
     expect(gitlab).toContain('self-assignment without a branch this run created');
     expect(gitlab).toContain('It has no assignees.');
+    expect(gitlab).toContain('open MR description contains a closing trailer');
     expect(gitlab).toContain('--unassign --unlabel in-progress');
     expect(gitlab).toContain('clears every current assignee');
   });

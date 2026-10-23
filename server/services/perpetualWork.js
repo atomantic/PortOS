@@ -22,7 +22,7 @@
  * full recheck cadence on a blip.
  */
 
-import { claimIssueNumber, githubPrIssueNumbers, completeGithubPrEvidence } from '../lib/issueClaimEvidence.js';
+import { claimIssueNumber, collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers } from '../lib/issueClaimEvidence.js';
 import { runCliBounded } from '../lib/runCliBounded.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -172,7 +172,7 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.
   const prListCall = forge === 'gitlab'
     ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath, env)
-    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName,body,commits', '--limit', String(IN_FLIGHT_PR_LIMIT)], repoPath, env);
+    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'number,headRefName,body,commits', '--limit', String(IN_FLIGHT_PR_LIMIT)], repoPath, env);
   const [branchRes, prRes] = await Promise.all([
     runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
     prListCall
@@ -181,25 +181,21 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
     return { error: `${forge === 'gitlab' ? 'glab' : 'gh'}-unavailable`, detail: redactCliDetail(prRes.stderr) };
   }
   const refs = (branchRes.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
-  if (forge === 'gitlab') {
-    // glab returns MR objects as JSON; the in-flight ref is each MR's source_branch.
-    let mrs = [];
-    try { mrs = JSON.parse(prRes.stdout || '[]'); } catch { mrs = []; }
-    if (Array.isArray(mrs)) {
-      for (const mr of mrs) {
-        if (mr?.source_branch) refs.push(String(mr.source_branch).trim());
-      }
-    }
-  } else {
-    let prs;
-    try { prs = JSON.parse(prRes.stdout); } catch { prs = null; }
-    if (!completeGithubPrEvidence(prs, IN_FLIGHT_PR_LIMIT)) {
-      return { error: 'gh-unavailable', detail: 'Open PR evidence is malformed or incomplete' };
-    }
-    for (const pr of prs) {
-      for (const number of githubPrIssueNumbers(pr)) nums.add(number);
-    }
+  let changes;
+  try { changes = JSON.parse(prRes.stdout); } catch { changes = null; }
+  const changeNumbers = forge === 'gitlab'
+    ? collectGitlabMrIssueNumbers(changes)
+    : await collectGithubPrIssueNumbers(changes, async number => {
+      const res = await runCli('gh', await withGithubHost([
+        'api', '--paginate', '--slurp', `repos/{owner}/{repo}/pulls/${number}/commits?per_page=100`
+      ], repoPath), repoPath, env);
+      if (res.code !== 0) return null;
+      try { return JSON.parse(res.stdout); } catch { return null; }
+    }, IN_FLIGHT_PR_LIMIT);
+  if (!changeNumbers) {
+    return { error: `${forge === 'gitlab' ? 'glab' : 'gh'}-unavailable`, detail: 'Open change evidence is malformed or incomplete' };
   }
+  for (const number of changeNumbers) nums.add(number);
   for (const ref of refs) {
     const n = issueNumberFromRef(ref);
     if (n != null) nums.add(n);
