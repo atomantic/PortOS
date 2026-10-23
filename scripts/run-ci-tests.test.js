@@ -26,6 +26,7 @@ import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.
 import { vitestShardSlice } from './lib/testMemoRunner.js';
 import { guardInputSnapshot } from './lib/pregateReport.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
+import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
@@ -242,6 +243,49 @@ it.each(['files', 'full'])('validates the guard proof before the actual %s Vites
     if (mode === 'files') expect(selection.include).not.toContain('lib/index.test.js');
     else expect(selection.include).toContain('lib/index.test.js');
     expect(selection.include).toContain('../scripts/example.test.js');
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+it('keeps explicit browser selectors with their owner after structural guard reuse', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-browser-owner-'));
+  const guard = 'server/lib/index.test.js';
+  const browser = 'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js';
+  const ordinary = 'scripts/example.test.js';
+  const root = join(import.meta.dirname, '..');
+  const run = ({ owner, files, reuse = false }) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+    encoding: 'utf8', timeout: 10000,
+    env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
+      CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: '[]',
+      PORTOS_CI_BROWSER_OWNER: owner,
+      PORTOS_PREGATE_GUARDS: reuse ? JSON.stringify({ files: [guard], snapshot: guardInputSnapshot(root) }) : '',
+      PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+  });
+  try {
+    expect(BROWSER_SUITES).toContain(browser);
+    installFakeNpm(fixture, REPORTING_NPM);
+    // The failing pregate boundary: the guard is already proven and the only
+    // remaining explicit selector belongs to the separate browser stage.
+    const unitOnly = run({ owner: 'unit', files: [guard, browser], reuse: true });
+    expect(unitOnly.error).toBeUndefined();
+    expect(unitOnly.status, unitOnly.stderr).toBe(0);
+    expect(unitOnly.stdout).toContain('Reused 1 structural guards');
+    expect(unitOnly.stdout).toContain('No server tests left to run');
+    expect(unitOnly.stdout).not.toContain('{"args"');
+
+    // A mixed selection still runs its ordinary contract, and dedicated
+    // browser / local / Windows callers keep explicitly selected coverage.
+    const mixed = run({ owner: 'unit', files: [ordinary, browser] });
+    expect(mixed.status, mixed.stderr).toBe(0);
+    const selectionOf = (result) => JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"'))).selection.include;
+    expect(selectionOf(mixed)).toEqual(['../scripts/example.test.js']);
+    const owned = run({ owner: 'browser', files: [browser] });
+    expect(owned.status, owned.stderr).toBe(0);
+    expect(selectionOf(owned)).toEqual([toWorkspacePath('server', browser)]);
+    const local = run({ owner: '', files: [browser] });
+    expect(local.status, local.stderr).toBe(0);
+    expect(selectionOf(local)).toEqual([toWorkspacePath('server', browser)]);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
