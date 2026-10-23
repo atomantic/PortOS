@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS, atomicWrite, ensureDir } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
-import { ServerError } from '../../lib/errorHandler.js';
+import { ServerError, normalizeError } from '../../lib/errorHandler.js';
 import { getLoom, findEpisode } from './records.js';
 import { runEpisodeShotAutopilot } from './shots.js';
 import { fableLoomRunEvents } from './runEvents.js';
@@ -72,7 +72,10 @@ async function execute(run) {
     await publish(run);
   })).catch(error => queue(async () => {
     run.status = run.cancelRequested ? 'canceled' : 'failed';
-    run.message = error.message;
+    const failure = normalizeError(error);
+    run.message = failure.message;
+    run.errorStatus = failure.status;
+    run.errorCode = failure.code;
     await publish(run);
   })).finally(() => active.delete(key));
 }
@@ -90,6 +93,8 @@ export async function startEpisodeShotRun(loomId, episodeId, { resume = false, .
     run.attempt += 1;
     run.status = 'running';
     run.cancelRequested = false;
+    delete run.errorStatus;
+    delete run.errorCode;
     run.message = resume ? 'Resuming shot planning…' : 'Starting shot planning…';
     await publish(run);
     active.set(key, run);
@@ -129,7 +134,7 @@ export async function planEpisodeShotRun(loomId, episodeId, options = {}, { sign
       if (!runId) { earlyTerminals.set(run.id, run); return; }
       if (run.id !== runId) return;
       if (run.status === 'completed') resolve(run.result);
-      else reject(new ServerError(run.message, { status: 422, code: 'SHOT_RUN_FAILED' }));
+      else reject(new ServerError(run.message, { status: run.errorStatus || 422, code: run.errorCode || 'SHOT_RUN_FAILED' }));
     };
     onAbort = () => reject(new ServerError('The HTTP waiter closed; shot planning continues in the background.', { status: 499, code: 'SHOT_WAITER_CLOSED' }));
     // Subscribe before start, including instant completion or an already-active run.
