@@ -7,7 +7,7 @@ import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
  * into Video Gen.
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -23,6 +23,9 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
+import socket from '../services/socket';
+import useMounted from '../hooks/useMounted';
+import { getMediaJob } from '../services/apiMediaJobs';
 import {
   deleteVideoHistoryItem, stitchVideos, deleteImage,
 } from '../services/api';
@@ -41,6 +44,11 @@ export default function MediaHistory() {
   const [stitchMode, setStitchMode] = useState(false);
   const [selected, setSelected] = useState([]); // video ids
   const [stitching, setStitching] = useState(false);
+  // Stitch job ids still running server-side; the toast waits for the job's own
+  // terminal event rather than the enqueue response (#13000). The button frees
+  // at enqueue: a repeat POST of the same ids returns the live job server-side.
+  const stitchJobsRef = useRef(new Set());
+  const mounted = useMounted();
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, updateAnnotation: saveAnnotation, getCardProps } = useMediaAnnotations();
   const [annotationSaves, setAnnotationSaves] = useState(0);
@@ -71,19 +79,56 @@ export default function MediaHistory() {
   }, []);
   const handleSelectCard = useCallback((item) => toggleSelect(item.id), [toggleSelect]);
 
+  const settleStitch = useCallback((id, error = null) => {
+    if (!stitchJobsRef.current.delete(id)) return false;
+    if (error) toast.error(error);
+    else toast.success('Stitched videos');
+    return true;
+  }, []);
+
+  const recheckStitch = useCallback(async (jobId) => {
+    const current = await getMediaJob(jobId).catch(() => null);
+    if (!mounted.current) return;
+    if (!current?.status && stitchJobsRef.current.delete(jobId)) {
+      toast('Stitch status unknown — check media history');
+    } else if (current?.status === 'completed' && settleStitch(jobId)) refresh();
+    else if (current?.status === 'failed' || current?.status === 'canceled') {
+      settleStitch(jobId, current.error || (current.status === 'canceled' ? 'Stitch canceled' : 'Stitch failed'));
+    }
+  }, [mounted, refresh, settleStitch]);
+
+  useEffect(() => {
+    const onCompleted = (event) => settleStitch(event?.generationId);
+    const onFailed = (event) => settleStitch(event?.generationId, event?.error || 'Stitch failed');
+    const onReconnect = () => { for (const id of stitchJobsRef.current) void recheckStitch(id); };
+    socket.on('video-gen:completed', onCompleted);
+    socket.on('video-gen:failed', onFailed);
+    socket.on('connect', onReconnect);
+    return () => {
+      socket.off('video-gen:completed', onCompleted);
+      socket.off('video-gen:failed', onFailed);
+      socket.off('connect', onReconnect);
+    };
+  }, [recheckStitch, settleStitch]);
+
   const handleStitch = async () => {
     if (selected.length < 2) return;
     setStitching(true);
     try {
-      await stitchVideos(selected, { silent: true });
-      toast.success(`Stitched ${selected.length} videos`);
+      const { job } = await stitchVideos(selected, { silent: true });
+      if (!mounted.current) return;
+      stitchJobsRef.current.add(job.jobId);
+      setStitching(false);
+      toast('Stitch queued — it lands in history when it finishes');
       setStitchMode(false);
       setSelected([]);
-      refresh();
+      // Subscribe before this one-shot read: a terminal event can beat the POST
+      // acknowledgement, or arrive during the read. The id set settles once.
+      await recheckStitch(job.jobId);
     } catch (err) {
-      toast.error(err.message || 'Stitch failed');
-    } finally {
+      if (!mounted.current) return;
       setStitching(false);
+      toast.error(err.message || 'Stitch failed');
     }
   };
 
