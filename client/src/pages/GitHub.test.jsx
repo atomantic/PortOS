@@ -21,6 +21,7 @@ const mock = vi.hoisted(() => ({
   syncGitHubNotifications: vi.fn(),
   applyGitHubNotificationAction: vi.fn(),
   resolveGitHubNotificationWithAgent: vi.fn(),
+  clearFinishedGitHubNotifications: vi.fn(),
   getGitHubNotification: vi.fn(),
   getGitHubAutomations: vi.fn(),
   setGitHubNotificationCadence: vi.fn(),
@@ -405,12 +406,27 @@ describe('GitHub inbox tab', () => {
     expect(mock.getGitHubRepos).not.toHaveBeenCalled();
   });
 
-  it('marks a thread done and takes it out of Needs you', async () => {
+  it('marks a thread done and takes it out of the inbox', async () => {
     mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, state: 'done', unread: false });
     renderTab('inbox');
     fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
     expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '101', 'done');
-    expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+    expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
+  });
+
+  it('marks every finished thread done in one tap', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [NOTIFICATION, { ...NOTIFICATION, threadId: '102', title: 'Folded CI notice', decision: 'duplicate' }],
+      counts: { 'needs-you': 2, suspect: 0, handled: 0, all: 2, finished: 1 },
+      sync: {},
+    });
+    mock.clearFinishedGitHubNotifications.mockResolvedValue({ cleared: 1, failed: 0 });
+    renderTab('inbox');
+    // The inbox mirrors GitHub's, so a folded duplicate is listed with its pill.
+    expect(await screen.findByText('Folded CI notice')).toBeTruthy();
+    expect(screen.getByText('Duplicate')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark 1 finished done' }));
+    await waitFor(() => expect(mock.clearFinishedGitHubNotifications).toHaveBeenCalledWith(null));
   });
 
   it('resolves an actionable thread with an agent in one tap, and says why when it cannot', async () => {
@@ -428,8 +444,9 @@ describe('GitHub inbox tab', () => {
     expect(buttons).toHaveLength(1);
     fireEvent.click(buttons[0]);
     expect(mock.resolveGitHubNotificationWithAgent).toHaveBeenCalledWith('github-com', '101');
-    // A handed-off thread is something else's now, so it leaves Needs you.
-    await waitFor(() => expect(screen.queryByText('Example change')).toBeNull());
+    // A handed-off thread stays in the inbox, as it does on GitHub, with its pill.
+    expect(await screen.findByText('Handed off')).toBeTruthy();
+    expect(screen.getByText('Example change')).toBeTruthy();
   });
 
   it('undoes Done locally and a mute by re-subscribing', async () => {
@@ -577,16 +594,18 @@ describe('GitHub automations tab', () => {
     await waitFor(() => expect(mock.getGitHubAutomations).toHaveBeenCalledTimes(2));
   });
 
-  it('shows agent rules on a Private account only once it allows agents', async () => {
+  it('shows agent rules on a Private account and allows agents, or stops, from its card', async () => {
     const enterprise = { ...OVERVIEW.accounts[0], id: 'ghe', label: 'ghe.example.com', host: 'ghe.example.com', trust: 'private', mode: 'autopilot', agentRules: [], repos: [] };
     mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...enterprise, allowAgents: false }] });
-    const { unmount } = renderTab('automations');
-    expect(await screen.findByText(/only after you allow agents/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Add rule/ })).toBeNull();
-    unmount();
-    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...enterprise, allowAgents: true }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ ...enterprise, id, ...data }));
     renderTab('automations');
     expect(await screen.findByRole('button', { name: /Add rule/ })).toBeTruthy();
+    expect(screen.getByText(/start no agent until you allow agents/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Allow agents on this account' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('ghe', { allowAgents: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop allowing agents' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('ghe', { allowAgents: false }));
+    expect(await screen.findByRole('button', { name: 'Allow agents on this account' })).toBeTruthy();
   });
 
   it('adds an agent rule for review requests in one repo and refuses a duplicate', async () => {

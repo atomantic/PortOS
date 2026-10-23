@@ -60,6 +60,9 @@ describe('decideThread', () => {
     expect(decide({ reason: 'invitation' })).toBe('surface');
     expect(decide({ reason: 'comment', subjectState: 'closed' })).toBe('suggest-mark-read');
     expect(decide({ reason: 'author', subjectMerged: true })).toBe('suggest-mark-read');
+    // A review request on a merged or closed PR has nothing left to review.
+    expect(decide({ reason: 'review_requested', trust: 'trusted', repoOwned: true, subjectMerged: true })).toBe('suggest-mark-read');
+    expect(decide({ reason: 'review_requested', repoOwned: true, subjectState: 'closed' })).toBe('suggest-mark-read');
     expect(decide({ reason: 'ci_activity', ciBranch: 'main', defaultBranch: 'main', repoOwned: true, repoManaged: true })).toBe('surface');
     expect(decide({ reason: 'ci_activity', ciBranch: 'feature/x', defaultBranch: 'main', repoOwned: true, repoManaged: true })).toBe('handled-by-pr-workflow');
     expect(decide({ reason: 'ci_activity', ciBranch: 'feature/x', defaultBranch: 'main', repoOwned: true })).toBe('needs-you');
@@ -112,6 +115,8 @@ describe('Assist inputs', () => {
   it('acts automatically only on non-outside, non-suspect threads, except to finish a closed one', () => {
     expect(assistAction({ decision: 'handled-by-pr-workflow', trust: 'unknown' })).toBe('done');
     expect(assistAction({ decision: 'suggest-mark-read', trust: 'outside' })).toBe('done');
+    // A CI repeat folded into a newer notice for the same branch.
+    expect(assistAction({ decision: 'duplicate', trust: 'unknown' })).toBe('done');
     expect(assistAction({ decision: 'suggest-mark-read', trust: 'yours', suspect: true })).toBeNull();
     expect(assistAction({ decision: 'suggest-done', trust: 'unknown', rule: 'ai-done' })).toBeNull();
     expect(assistAction({ decision: 'suggest-mute', trust: 'trusted' })).toBe('mute');
@@ -164,6 +169,9 @@ describe('autopilotHandoff', () => {
     expect(autopilotHandoff({ account, row: { ...review, evidence: { repoManaged: false, repoOwned: true } } })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, refused: 'no-managed-app' });
     expect(autopilotHandoff({ account, row: { ...review, suspect: true } })).toBeNull();
     expect(autopilotHandoff({ account, row: { ...issue, state: 'done' } })).toBeNull();
+    // Nor a review request on a PR that is already merged or closed.
+    expect(agentHandoff({ account, row: { ...review, evidence: { repoManaged: true, subjectState: 'merged' } } })).toBeNull();
+    expect(agentHandoff({ account, row: { ...review, evidence: { repoManaged: true, subjectState: 'closed' } } })).toBeNull();
     // An issue from you or a collaborator with no outside comment stays with you.
     expect(autopilotHandoff({ account, row: { ...issue, trust: 'trusted' } })).toBeNull();
   });

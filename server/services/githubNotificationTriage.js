@@ -26,13 +26,15 @@ const GH_TIMEOUT_MS = 20_000;
 const MAX_THREADS_PER_RUN = 60;
 // Open threads a rules-version bump re-decides without new activity: version 2
 // changed your own PRs and finished threads (now marked done, not just read);
-// version 3 leaves a bot's comment on your own PR to the PR workflow. A thread
+// version 3 leaves a bot's comment on your own PR to the PR workflow; version
+// 4 finishes a review request on a merged or closed PR. A thread
 // already handed off keeps its hand-off. One an Assist model sorted is not
 // read again, except your own PR: the rule table decides those, so a verdict
 // from before the rule existed must not keep one in front of you.
 const REDECIDE_SQL = `(state = 'open' AND NOT (evidence ? 'handoff')
   AND ((reason = 'author' AND subject_type = 'PullRequest' AND trust = 'yours')
-    OR (decision = 'suggest-mark-read' AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')))`;
+    OR (decision = 'suggest-mark-read' AND COALESCE(evidence->>'rule', '') NOT LIKE 'ai-%')
+    OR (reason = 'review_requested' AND evidence->>'subjectState' IN ('merged', 'closed'))))`;
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 

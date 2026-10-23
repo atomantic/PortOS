@@ -1007,6 +1007,10 @@ export const githubNotificationsSyncSchema = z.object({
   accountId: z.string().trim().min(1).max(100).optional(),
 }).strict();
 
+export const githubNotificationsClearSchema = z.object({
+  accountId: z.string().trim().min(1).max(100).optional(),
+}).strict();
+
 export const githubNotificationActionSchema = z.object({
   action: z.enum(['read', 'done', 'reopen', 'mute', 'unsubscribe', 'resubscribe']),
 }).strict();

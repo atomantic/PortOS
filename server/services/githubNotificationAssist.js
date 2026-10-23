@@ -29,7 +29,7 @@ const MAX_SORTS_PER_RUN = 10;
 const MAX_ACTIONS_PER_RUN = 50;
 // Autopilot includes everything Assist does.
 const ASSIST_MODES = new Set(['assist', 'autopilot']);
-const ACTIONABLE_DECISIONS = ['handled-by-pr-workflow', 'suggest-mark-read', 'suggest-done', 'suggest-mute'];
+const ACTIONABLE_DECISIONS = ['handled-by-pr-workflow', 'suggest-mark-read', 'duplicate', 'suggest-done', 'suggest-mute'];
 // A skipped sort is retried an hour later (a provider added, a timeout), except
 // when the text itself was refused; new activity re-triages either way.
 const RETRY_SKIPPED_MS = 60 * 60 * 1000;

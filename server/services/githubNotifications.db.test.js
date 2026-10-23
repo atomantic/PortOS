@@ -45,7 +45,7 @@ const { addTask } = await import('./cosTaskStore.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const {
-  syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
+  syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
@@ -358,11 +358,17 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
   it('folds repeat default-branch CI notices into the newest one', async () => {
     const login = account.login;
     const ci = (id, updatedAt) => thread(id, { owner: login, reason: 'ci_activity', type: 'CheckSuite', url: null, updatedAt, title: 'CI workflow run failed for main branch' });
-    mockGh(() => listing([ci('701', '2026-10-01T10:00:00Z'), ci('702', '2026-10-01T11:00:00Z')]), { [`repos/${login}/hello`]: 'main' });
+    const actions = mockGh(() => listing([ci('701', '2026-10-01T10:00:00Z'), ci('702', '2026-10-01T11:00:00Z')]), { [`repos/${login}/hello`]: 'main' });
     await syncAccountNotifications(account.id);
     const rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
     expect(rows.map((row) => [row.threadId, row.decision])).toEqual([['702', 'surface'], ['701', 'duplicate']]);
-    // The folded notice is Handled while still open, so red main shows once in Needs you.
+    // The inbox mirrors GitHub's: the folded notice stays in it, still unread
+    // there, until it is marked done, which one tap does for every finished thread.
+    const inbox = await listNotifications({ accountId: account.id });
+    expect(inbox.notifications.map((row) => row.threadId)).toEqual(['702', '701']);
+    expect(inbox.counts).toMatchObject({ 'needs-you': 2, finished: 1 });
+    expect(await clearFinishedNotifications({ accountId: account.id })).toEqual({ cleared: 1, failed: 0 });
+    expect(actions).toEqual([['DELETE', 'notifications/threads/701']]);
     expect((await listNotifications({ accountId: account.id })).notifications.map((row) => row.threadId)).toEqual(['702']);
   });
 
@@ -593,9 +599,12 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       ['pr-reviewer', 'app-acme', { origin: 'github-notification' }],
     ]);
     expect((await getNotification(account.id, '1204')).evidence.handoff).toMatchObject({ lane: 'dependency-updates', requestId: 'demand-dependency-updates', batchSize: 3 });
-    // Your own PR waits for you only when someone outside commented on it.
-    const needsYou = (await listNotifications({ accountId: account.id, view: 'needs-you' })).notifications.map((row) => row.threadId);
-    expect(needsYou.sort()).toEqual(['1202', '1208']);
+    // Your own PR waits for you only when someone outside commented on it;
+    // a handed-off thread stays in the inbox, as it does on GitHub, with its pill.
+    const inbox = (await listNotifications({ accountId: account.id, view: 'needs-you' })).notifications;
+    expect(Object.fromEntries(inbox.map((row) => [row.threadId, row.decision]))).toEqual({
+      1202: 'needs-you', 1203: 'handed-off', 1204: 'handed-off', 1205: 'handed-off', 1206: 'handed-off', 1207: 'handed-off', 1208: 'needs-you',
+    });
     const handled = (await listNotifications({ accountId: account.id, view: 'handled' })).notifications;
     // Autopilot includes Assist, which marks it done on GitHub.
     expect(handled.find((row) => row.threadId === '1201')).toMatchObject({ state: 'done', decision: 'handled-by-pr-workflow', rule: 'own-pr-in-managed-repo' });
@@ -691,7 +700,9 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       thread('1501', { owner: login, repo: 'tool', reason: 'review_requested' }),
       thread('1502', { owner: 'acme', repo: 'app', reason: 'security_alert', type: 'RepositoryVulnerabilityAlert', url: null }),
       thread('1503', { owner: login, repo: 'side', reason: 'review_requested' }),
+      thread('1504', { owner: login, repo: 'tool', reason: 'review_requested' }),
     ]), {
+      [`repos/${login}/tool/pulls/1504`]: { author: 'teammate', association: 'COLLABORATOR', state: 'closed', merged: true },
       [`repos/${login}/side/pulls/1503`]: { author: 'stranger', association: 'NONE', state: 'open', merged: false },
       [`repos/${login}/side/collaborators/stranger/permission`]: { user: { login: 'stranger' }, permission: 'read' },
       [`repos/${login}/tool/pulls/1501`]: { author: 'teammate', association: 'COLLABORATOR', state: 'open', merged: false },
@@ -719,6 +730,18 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const outside = await getNotification(account.id, '1503');
     expect(outside).toMatchObject({ decision: 'suggest-untrusted-review' });
     expect(outside.evidence.handoff).toBeUndefined();
+    expect(addTask).toHaveBeenCalledTimes(1);
+    // A review request on a merged PR is finished: marked done, never reviewed.
+    expect(await getNotification(account.id, '1504')).toMatchObject({ decision: 'suggest-mark-read', state: 'done' });
+    // A row still decided as a review suggestion is not an Autopilot candidate
+    // once its PR is merged (CANDIDATE_SQL mirrors agentHandoff).
+    await query(
+      `UPDATE github_notifications SET state = 'open', decision = 'suggest-review', evidence = evidence - 'assisted'
+       WHERE account_id = $1 AND thread_id = '1504'`,
+      [account.id],
+    );
+    await syncAccountNotifications(account.id);
+    expect((await getNotification(account.id, '1504')).evidence.handoff).toBeUndefined();
     expect(addTask).toHaveBeenCalledTimes(1);
     // A malformed rule is refused at the boundary.
     expect(() => updateAccount(account.id, { agentRules: [{ id: 'x', kind: 'review-request', repo: 'not a repo', agent: true }] })).toThrow('Validation failed');

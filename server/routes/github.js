@@ -1,7 +1,7 @@
 import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
-  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
+  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
   githubNotificationCadenceSchema, githubAuditApplySchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
@@ -149,6 +149,15 @@ router.post('/notifications/sync', asyncHandler(async (req, res) => {
     ? [{ ...(await githubNotifications.syncAccountNotifications(accountId, options)), ok: true }]
     : await githubNotifications.syncAllNotifications(options);
   res.json({ results });
+}));
+
+/**
+ * POST /api/github/notifications/clear-finished — mark every open closed,
+ * merged, folded-duplicate or PR-workflow thread done on GitHub
+ */
+router.post('/notifications/clear-finished', asyncHandler(async (req, res) => {
+  const { accountId } = validateRequest(githubNotificationsClearSchema, req.body ?? {});
+  res.json(await githubNotifications.clearFinishedNotifications({ accountId }));
 }));
 
 const threadIdParam = (req) => {
