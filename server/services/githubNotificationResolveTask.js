@@ -56,7 +56,7 @@ const SUBJECT_WORDS = {
 const cloneTargetFor = (host, repo) => (host === 'github.com' ? repo : `${host}/${repo}`);
 
 /** Which of the fixed instruction sets a thread gets, from forge values only. */
-export function resolveKind(row) {
+function resolveKind(row) {
   if (row.reason === 'ci_activity' || row.subject_type === 'CheckSuite') return 'ci';
   if (row.subject_type === 'PullRequest' && row.reason === 'review_requested') return 'review';
   if (row.subject_type === 'PullRequest' && row.trust === 'yours') return 'own-pr';
@@ -87,7 +87,7 @@ const KIND_STEPS = {
   ],
 };
 
-export function buildResolvePrompt({ host, login, repo, threadId, row, link, apiPath }) {
+function buildResolvePrompt({ host, login, repo, threadId, row, link, apiPath }) {
   const kind = resolveKind(row);
   const subject = SUBJECT_WORDS[row.subject_type] || 'notification';
   const reason = REASON_WORDS[row.reason] || 'other activity';
@@ -193,7 +193,7 @@ async function markFailed(taskId, agentId, error) {
 }
 
 /** `agent:completed`: mark the thread done on success, hand it back on failure. */
-export function onResolveAgentCompleted(agent) {
+function onResolveAgentCompleted(agent) {
   const taskId = agent?.taskId;
   // A relaunch requeues the same task; its continuation reports the outcome.
   if (!taskId || isQueuedContinuation(agent)) return null;
@@ -204,7 +204,7 @@ export function onResolveAgentCompleted(agent) {
 }
 
 /** `agent:error`: a spawn that failed before any agent ran. */
-export function onResolveAgentError(event) {
+function onResolveAgentError(event) {
   if (!event?.taskId) return null;
   return markFailed(event.taskId, event.agentId, event.error)
     .catch((error) => console.error(`❌ GitHub notification follow-up for agent task ${event.taskId} failed: ${error.message}`));

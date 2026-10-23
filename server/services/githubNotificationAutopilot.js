@@ -25,7 +25,8 @@ import { ServerError } from '../lib/errorHandler.js';
 import { advisoryIdFromUrl } from '../lib/githubNotificationParse.js';
 import { agentHandoff, agentRuleScope, agentRunPin, APP_FREE_AGENT_LANES as APP_FREE_LANES, autopilotHandoff, GENERIC_AGENT_LANE } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
-import { managedAppsByRepoKey } from './githubNotificationTriage.js';
+import { managedAppsByRepoKey, threadDiscussionVouched } from './githubNotificationTriage.js';
+import { requireAccountEnv } from './githubNotifications.js';
 import { queueNotificationResolveTask } from './githubNotificationResolveTask.js';
 import { queueSecurityFixTask } from './githubSecurityFixTask.js';
 import { spawnPrDoReviewTask } from './prDoReviewTask.js';
@@ -228,6 +229,10 @@ export async function handOffThread(account, threadId, perRun) {
   if (plan.refused) throw new ServerError(REFUSED_MESSAGES[plan.refused] || 'No agent may take this thread', { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
   const app = (await managedAppsByRepoKey()).get(`${account.host}/${row.repo_full_name}`.toLowerCase()) || null;
   if (!APP_FREE_LANES.has(plan.lane) && !app) throw new ServerError(REFUSED_MESSAGES['no-managed-app'], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+  // The generic run reads the whole thread, not just the latest comment triage rated.
+  if (plan.lane === GENERIC_AGENT_LANE && !(await threadDiscussionVouched(account, await requireAccountEnv(account), row))) {
+    throw new ServerError(REFUSED_MESSAGES['outside-content'], { status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+  }
   const queued = await queueLane(plan, app, ON_DEMAND_ORIGINS.USER, { account, rows: [row], immediate: true });
   if (queued.error) throw new ServerError(String(queued.error), { status: 409, code: 'GITHUB_NOTIFICATION_LANE_UNAVAILABLE' });
   await recordHandoff(account, row, {

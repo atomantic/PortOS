@@ -298,7 +298,8 @@ const rulePin = (rule) => {
  * advisory, a one-off `security-fix` run in a scratch clone. Any other open
  * thread goes to the generic `notification-resolve` run, refused unless its
  * author and latest commenter are you or trusted (or it is CI in a repo of
- * yours), so outside text reaches only the screened lanes. The account's
+ * yours), so outside text reaches only the screened lanes; the tap re-checks
+ * every commenter (threadDiscussionVouched). The account's
  * matching agent rule (`matchAgentRule`) adds its provider/model/effort pin.
  * Used by Autopilot and the inbox's Resolve with agent button.
  */
@@ -344,10 +345,10 @@ export const GENERIC_AGENT_LANE = 'notification-resolve';
 export const APP_FREE_AGENT_LANES = Object.freeze(new Set(['security-fix', 'do-review', GENERIC_AGENT_LANE]));
 const GENERIC_REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const VOUCHED_TRUST = new Set(['yours', 'trusted']);
-// Subjects with no human author: CI results, and a release in a repo of yours,
-// which only someone with write access can publish. An outside repo's release
-// notes, or a subject whose author could not be read, are not vouched for.
-const NO_ACTOR_SUBJECTS = new Set(['CheckSuite', 'WorkflowRun', 'Release']);
+// Subjects with no human author: CI runs in a repo of yours. A release is not
+// one: a managed app's repo can be someone else's upstream, so its notes are not
+// vouched for, nor is a subject whose author could not be read.
+const NO_ACTOR_SUBJECTS = new Set(['CheckSuite', 'WorkflowRun']);
 
 function genericRefusal(row, evidence) {
   // An agent already has it; a generic run that failed restores the old

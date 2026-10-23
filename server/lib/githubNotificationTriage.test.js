@@ -286,12 +286,13 @@ describe('generic notification-resolve lane (#13191)', () => {
       .toMatchObject({ refused: 'outside-content' });
   });
 
-  it('vouches for an actorless thread only when it is CI or a release in a repo of yours that triage could read', () => {
+  it('vouches for an actorless thread only when it is CI in a repo of yours that triage could read', () => {
     expect(agentHandoff({ account, row: { ...ci, evidence: { ...ci.evidence, repoOwned: false } } })).toMatchObject({ refused: 'outside-content' });
     expect(agentHandoff({ account, row: { ...ci, evidence: { ...ci.evidence, metadataMissing: true } } })).toMatchObject({ refused: 'outside-content' });
     // An issue whose author could not be read has trust unknown too.
     expect(agentHandoff({ account, row: { ...ci, reason: 'subscribed', subject_type: 'Issue', decision: 'needs-you' } })).toMatchObject({ refused: 'outside-content' });
-    expect(agentHandoff({ account, row: { ...ci, reason: 'subscribed', subject_type: 'Release', decision: 'needs-you' } })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
+    // A release's notes come from whoever maintains the repo, which may not be you.
+    expect(agentHandoff({ account, row: { ...ci, reason: 'subscribed', subject_type: 'Release', decision: 'needs-you' } })).toMatchObject({ refused: 'outside-content' });
   });
 
   it('never falls through from a screened lane it refused', () => {

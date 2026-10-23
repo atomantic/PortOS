@@ -111,6 +111,52 @@ async function loadLearnedRules(accountId) {
   return new Map(rows.map((rule) => [learnedRuleKey(rule.repo_full_name, rule.reason, rule.actor), { decision: rule.decision, hits: rule.hits }]));
 }
 
+// One actor's trust on a thread's repo, from forge permissions only.
+async function rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwner }, login) {
+  const isOwn = ownLogins.some((own) => own.toLowerCase() === login.toLowerCase());
+  const actorHasWriteAccess = Boolean(!isOwn && repoOwned && repo) && await (await reader.repoTrust(repo)).isTrusted(login);
+  const actorIsOrgMember = Boolean(!isOwn && account.trust === 'private' && repo) && await reader.orgMember(repoOwner, login);
+  return computeThreadTrust({ actorLogin: login, ownLogins, repoOwned, actorHasWriteAccess, actorIsOrgMember, accountTrust: account.trust });
+}
+
+const DISCUSSION_SUBJECT_RE = /^repos\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/(issues|pulls)\/(\d{1,9})$/;
+const VOUCHED_TRUST = new Set(['yours', 'trusted']);
+
+/**
+ * Whether everyone who commented on or reviewed a thread's issue or pull
+ * request is you or trusted, read at the moment of a Resolve with agent tap
+ * (#13191). Triage rates only the latest comment, but an agent told to read
+ * the thread reads all of it, so the generic lane re-checks every author.
+ * Only logins are fetched, never bodies. An unreadable list, a login that is
+ * not one, or a commented subject that is not an issue or pull request is
+ * not vouched for.
+ */
+export async function threadDiscussionVouched(account, env, row) {
+  const repo = REPO_RE.test(row.repo_full_name || '') ? row.repo_full_name : null;
+  const match = DISCUSSION_SUBJECT_RE.exec(repoApiPath(row.subject_api_url, account.host) || '');
+  if (!repo || !match) return !row.latest_comment_api_url;
+  const [, kind, number] = match;
+  const paths = [`repos/${repo}/issues/${number}/comments`];
+  if (kind === 'pulls') paths.push(`repos/${repo}/pulls/${number}/comments`, `repos/${repo}/pulls/${number}/reviews`);
+  const logins = new Set();
+  for (const path of paths) {
+    const out = await execGh(['api', '--hostname', account.host, '--method', 'GET', path, '--paginate', '--jq', '.[].user.login'], GH_TIMEOUT_MS, { env })
+      .catch(() => null);
+    if (out === null) return false;
+    for (const line of out.split('\n').map((entry) => entry.trim()).filter(Boolean)) {
+      if (!loginOrNull(line)) return false;
+      logins.add(line);
+    }
+  }
+  if (!logins.size) return true;
+  const reader = createReader(account, env);
+  const ctx = { account, reader, ownLogins: await ownLoginsFor(account, reader), repo, repoOwned: row.evidence?.repoOwned === true, repoOwner: row.repo_owner };
+  for (const login of logins) {
+    if (!VOUCHED_TRUST.has(await rateActor(ctx, login))) return false;
+  }
+  return true;
+}
+
 async function triageThread(row, ctx) {
   const { account, reader, ownLogins, managedKeys, learnedRules, now } = ctx;
   const repo = REPO_RE.test(row.repo_full_name) ? row.repo_full_name : null;
@@ -131,12 +177,7 @@ async function triageThread(row, ctx) {
   // PR into the trusted lane.
   const actorLogin = subjectAuthor || loginOrNull(waitingRun?.actor) || commenter;
 
-  const trustOf = async (login) => {
-    const isOwn = ownLogins.some((own) => own.toLowerCase() === login.toLowerCase());
-    const actorHasWriteAccess = Boolean(!isOwn && repoOwned && repo) && await (await reader.repoTrust(repo)).isTrusted(login);
-    const actorIsOrgMember = Boolean(!isOwn && account.trust === 'private' && repo) && await reader.orgMember(row.repo_owner, login);
-    return computeThreadTrust({ actorLogin: login, ownLogins, repoOwned, actorHasWriteAccess, actorIsOrgMember, accountTrust: account.trust });
-  };
+  const trustOf = (login) => rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwner: row.repo_owner }, login);
   // Any other thread from this repo counts as history, whatever its age: rows
   // from one sync share a created_at, so an age comparison would see none.
   let priorThreadsInRepo = null;

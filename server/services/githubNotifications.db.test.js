@@ -49,7 +49,8 @@ const {
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
 const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
-const { onResolveAgentCompleted, onResolveAgentError } = await import('./githubNotificationResolveTask.js');
+const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
+const { cosEvents } = await import('./cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
 
 let dbReady = false;
@@ -733,6 +734,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       thread('1503', { owner: login, repo: 'tool', reason: 'approval_requested', type: 'WorkflowRun', url: null, updatedAt: requestedAt }),
       thread('1504', { owner: 'faraway', repo: 'spam', reason: 'mention' }),
       thread('1505', { owner: login, repo: 'tool', reason: 'author', title: 'Example own change' }),
+      thread('1506', { owner: login, repo: 'tool', reason: 'comment', commentUrl: `https://api.github.com/repos/${login}/tool/issues/comments/88` }),
     ]), {
       [`repos/${login}/tool`]: 'main',
       [`repos/${login}/tool/pulls/1502`]: { author: login, association: 'OWNER', state: 'open', merged: false },
@@ -742,6 +744,17 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       'repos/faraway/spam/pulls/1504': { author: 'newcomer', association: 'NONE', state: 'open', merged: false },
       'users/newcomer': new Date(Date.now() - 2 * 86_400_000).toISOString(),
       [`repos/${login}/tool/pulls/1505`]: { author: login, association: 'OWNER', state: 'open', merged: false },
+      // The tap re-reads every commenter's login (never a body) on the thread.
+      [`repos/${login}/tool/issues/1505/comments`]: '',
+      [`repos/${login}/tool/pulls/1505/comments`]: '',
+      [`repos/${login}/tool/pulls/1505/reviews`]: `${login}\n`,
+      // Latest comment by a collaborator, an older one by an outside visitor.
+      [`repos/${login}/tool/pulls/1506`]: { author: login, association: 'OWNER', state: 'open', merged: false },
+      [`repos/${login}/tool/issues/comments/88`]: { author: 'teammate', association: 'MEMBER', mentions: 0 },
+      [`repos/${login}/tool/collaborators/teammate/permission`]: { user: { login: 'teammate' }, permission: 'write' },
+      [`repos/${login}/tool/issues/1506/comments`]: 'visitor\nteammate\n',
+      [`repos/${login}/tool/pulls/1506/comments`]: '',
+      [`repos/${login}/tool/pulls/1506/reviews`]: '',
     });
     await syncAccountNotifications(account.id);
     const all = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
@@ -752,9 +765,11 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(agentOf('1503')).toMatchObject({ lane: 'notification-resolve', refused: 'deployment-approval' });
     expect(agentOf('1504')).toEqual({ lane: null, refused: 'suspect', pin: null });
     expect(agentOf('1505')).toEqual({ lane: 'notification-resolve', refused: null, pin: defaults });
+    // Triage rated only the latest (trusted) commenter; the tap reads them all.
+    expect(agentOf('1506')).toEqual({ lane: 'notification-resolve', refused: null, pin: defaults });
 
     // The client gate is not the only one: each refusal holds at the route's service.
-    for (const id of ['1502', '1503', '1504']) {
+    for (const id of ['1502', '1503', '1504', '1506']) {
       await expect(resolveWithAgent(account.id, id, { provider: 'run-p' })).rejects.toMatchObject({ status: 409, code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
     }
     expect(addTask).not.toHaveBeenCalled();
@@ -771,17 +786,21 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await syncAccountNotifications(account.id);
     expect(addTask).toHaveBeenCalledTimes(2);
 
-    // A succeeded run marks its thread done on GitHub and logs the task.
-    await onResolveAgentCompleted({ id: 'agent-1', taskId: 'task-1', result: { success: true } });
+    // A succeeded run marks its thread done on GitHub and logs the task. The
+    // listeners run as CoS delivers its events; awaiting them keeps the order.
+    startNotificationResolveListener();
+    const deliver = (event, payload) => Promise.all(cosEvents.listeners(event).map((listener) => listener(payload)));
+    await deliver('agent:completed', { id: 'agent-1', taskId: 'task-1', result: { success: true } });
     expect(actions).toContainEqual(['DELETE', 'notifications/threads/1501']);
     const resolved = await getNotification(account.id, '1501');
     expect(resolved.state).toBe('done');
     expect(resolved.events[0]).toMatchObject({ actor: 'automation', kind: 'done', detail: { lane: 'notification-resolve', taskId: 'task-1', agentId: 'agent-1' } });
-    // A relaunch's retired run reports nothing; a failed run hands the thread back with its pill.
-    await onResolveAgentCompleted({ id: 'agent-2', taskId: 'task-2', result: { success: false, resumed: true, resumedTaskId: 'task-2' } });
+    // A relaunch's retired run reports nothing; a failed run hands the thread
+    // back with its pill, once even when the spawn error and the completion both report it.
+    await deliver('agent:completed', { id: 'agent-2', taskId: 'task-2', result: { success: false, resumed: true, resumedTaskId: 'task-2' } });
     expect(await getNotification(account.id, '1505')).toMatchObject({ decision: 'handed-off', agentFailed: null });
-    await onResolveAgentError({ taskId: 'task-2', error: 'spawn failed' });
-    await onResolveAgentCompleted({ id: 'agent-2', taskId: 'task-2', result: { success: false } });
+    await deliver('agent:error', { taskId: 'task-2', error: 'spawn failed' });
+    await deliver('agent:completed', { id: 'agent-2', taskId: 'task-2', result: { success: false } });
     const failed = await getNotification(account.id, '1505');
     expect(failed).toMatchObject({ state: 'open', decision: 'needs-you', agentFailed: { taskId: 'task-2' }, agent: { lane: 'notification-resolve', refused: null } });
     expect(failed.events.filter((event) => event.kind === 'agent-failed')).toHaveLength(1);
