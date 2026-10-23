@@ -251,7 +251,7 @@ export default function Timeline() {
         ))}
       </div>
 
-      {loading ? (
+      {loading && !day ? (
         <PageSkeleton header="none" label="Loading timeline" cards={4} sidebar={false} />
       ) : events.length === 0 ? (
         <div className="rounded border border-dashed border-port-border py-12 text-center text-gray-500">

@@ -47,13 +47,31 @@ it('retains the row and confirmation and shows a refused deletion', async () => 
   const onChanged = vi.fn();
   render(<ManageImportedDataPanel onChanged={onChanged} />);
   await screen.findByText('browser');
+  api.getTimelineSources.mockResolvedValueOnce({ sources: [{ source: 'browser', eventCount: 1 }, sources[1]] });
   fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'browser' } });
   fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Deletion unavailable');
   expect(screen.getByRole('textbox')).toHaveValue('browser');
+  expect(screen.getByText(/to delete all 1 events/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Confirm delete' })).toBeEnabled();
   expect(onChanged).not.toHaveBeenCalled();
+});
+
+it('reconciles a lost delete acknowledgement from a fresh read without repeating the mutation', async () => {
+  const onChanged = vi.fn();
+  api.eraseTimelineSource.mockRejectedValueOnce(new Error('Response lost'));
+  render(<ManageImportedDataPanel onChanged={onChanged} />);
+  await screen.findByText('browser');
+  api.getTimelineSources.mockResolvedValueOnce({ sources: [sources[1]] });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'browser' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
+  await waitFor(() => expect(screen.queryByText('browser')).not.toBeInTheDocument());
+  expect(screen.getByText('discord')).toBeInTheDocument();
+  expect(screen.getByRole('alert')).toHaveTextContent('Response lost');
+  expect(api.eraseTimelineSource).toHaveBeenCalledTimes(1);
+  expect(onChanged).toHaveBeenCalledTimes(1);
 });
 
 it('shows a failed source-count read instead of hiding the management panel', async () => {

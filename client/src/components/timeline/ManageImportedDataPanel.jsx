@@ -3,6 +3,7 @@ import { Trash2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
+import useMounted from '../../hooks/useMounted';
 import { formatCount, formatDateNumeric } from '../../utils/formatters';
 
 // Per-source counts with a typed-confirmation erase (#12987). Deleting is
@@ -18,6 +19,7 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
   const [removing, setRemoving] = useState(null);
   const pending = useRef(false);
   const generation = useRef(0);
+  const mounted = useMounted();
 
   useEffect(() => {
     let active = true;
@@ -42,8 +44,27 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
     setBusy(true);
     setError(null);
     const result = await api.eraseTimelineSource(source, { silent: true })
-      .catch((err) => { setError(err.message || 'Could not delete imported data.'); return null; });
+      .catch(async (err) => {
+        if (!mounted.current) return null;
+        setError(err.message || 'Could not delete imported data.');
+        // A lost acknowledgement can follow a committed delete. Re-read once;
+        // never repeat the mutation or turn an unavailable read into absence.
+        const current = ++generation.current;
+        const fresh = await api.getTimelineSources({ silent: true }).catch(() => null);
+        if (!mounted.current || generation.current !== current || !Array.isArray(fresh?.sources)) return null;
+        if (fresh.sources.some(row => row.source === source)) setSources(fresh.sources);
+        else {
+          const next = [...fresh.sources];
+          const index = sources.findIndex(row => row.source === source);
+          if (index !== -1) next.splice(Math.min(index, next.length), 0, sources[index]);
+          setSources(next);
+          setRemoving(source);
+          cancel();
+        }
+        return null;
+      });
     pending.current = false;
+    if (!mounted.current) return;
     setBusy(false);
     if (!result) return;
     toast.success(`Deleted ${formatCount(result.deleted)} ${source} event(s)`);
