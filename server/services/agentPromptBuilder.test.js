@@ -4627,6 +4627,47 @@ describe('TUI reviewLoopFollowUp completion instructions', () => {
   });
 });
 
+describe('PR model attribution', () => {
+  // Both entry points deliberately disable CoS PR provisioning: the claim
+  // prompt owns creation, so gating attribution on openPR loses these runs.
+  it.each([
+    ['scheduled CLI', 'cli', { analysisType: 'claim-issue' }, 'gh'],
+    ['manual TUI', 'tui', { claimFlow: true }, 'gh'],
+    ['scheduled API', 'api', { analysisType: 'claim-issue' }, 'gh'],
+    ['manual GitLab API', 'api', { claimFlow: true, workTracker: 'gitlab' }, 'glab'],
+  ])('labels PRs from %s claims with the dispatched model', async (_name, providerType, metadata, forgeCli) => {
+    const task = makeTask({
+      description: 'Custom claim prompt: implement and open a PR.',
+      metadata: { ...metadata, useWorktree: false, openPR: false },
+    });
+    const worktreeInfo = forgeCli === 'glab' ? { forgeCli } : null;
+    const result = await buildAgentPrompt(task, {}, '/repo', worktreeInfo, {
+      providerType, providerId: 'example-runner', providerModel: 'claude-opus-5',
+    });
+    const prompt = typeof result === 'string' ? result : result.userPrompt;
+    const label = forgeCli === 'glab' ? 'implementer::opus-5' : 'implementer:opus-5';
+    expect(prompt).toContain('## PR Model Attribution');
+    expect(prompt).toContain(`--label ${label}`);
+    expect(prompt).toContain(forgeCli === 'glab' ? `glab label create --name ${label}` : `gh label create ${label}`);
+    expect(prompt).toContain(forgeCli === 'glab' ? 'glab mr create' : 'gh pr create');
+    expect(prompt).toContain(forgeCli === 'glab' ? `glab mr update <mr> --label ${label}` : `gh pr edit <pr> --add-label ${label}`);
+    expect(prompt).toContain('read the PR/MR labels back');
+    expect(prompt).toContain('opening agent must use its own trusted runtime model');
+    expect(prompt).toContain('preserve its original opener attribution');
+    expect(prompt).not.toContain('implementer:example-runner');
+  });
+
+  it('reports unknown attribution instead of calling a provider the model', () => {
+    const prompt = buildLightContextPrompt(
+      makeTask({ metadata: { claimFlow: true, openPR: false } }), '/repo', null,
+      { providerId: 'example-runner' },
+    );
+    expect(prompt).toContain('PortOS did not resolve a model for this run');
+    expect(prompt).toContain('report the missing attribution');
+    expect(prompt).not.toContain('implementer:example-runner');
+  });
+});
+
 // A filing agent cannot reliably name its own model, so PortOS resolves the
 // planner identity from the provider/model the run was actually dispatched with
 // and hands the agent the finished label. The regression this catches is the
