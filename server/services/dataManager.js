@@ -113,6 +113,7 @@ export const CATEGORIES = {
   'db-dumps': { label: 'DB Dumps', description: 'PostgreSQL database backups', archivable: true, deletable: true, purgeScope: 'category' },
   'digital-twin': { label: 'Digital Twin', description: 'Identity, goals, character data', archivable: true, deletable: false },
   'eidoverse': { label: 'Eidoverse Worlds', description: 'Machine-local world history owned by the optional Eidoverse runtime — backed up and not federated', archivable: true, deletable: false },
+  'fableloom-shot-runs': { label: 'FableLoom Shot Runs', description: 'Machine-local shot-planning drafts, reviews and resume checkpoints — regenerating them costs provider calls', archivable: true, deletable: false },
   'fableloom': { label: 'FableLoom', description: 'Branching-narrative records (file mirror of the Postgres store)', archivable: true, deletable: false },
   // Another machine's conditioning images, staged for one federated render and
   // swept on a TTL (#4348). Not archivable for the same reason it is excluded
