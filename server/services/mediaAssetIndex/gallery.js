@@ -121,8 +121,39 @@ export async function listGalleryFacets(diskReader) {
     categories: [...categories], kinds: [...kinds], collections: populated.filter(Boolean) };
 }
 
+const FLAT_PNG_COVER = /^\/data\/images\/([A-Za-z0-9][A-Za-z0-9._-]*)\.png$/i;
+const VIDEO_THUMB_COVER = /^\/data\/video-thumbnails\/([A-Za-z0-9][A-Za-z0-9._-]*)\.[A-Za-z0-9]+$/;
+
+/**
+ * Card-sized cover URL: a flat gallery PNG maps to its lazily built 512px WebP
+ * (`/data/image-thumbnails`) instead of the multi-MB original, and a cover whose
+ * asset is neither local nor peer-hosted becomes null so the card never issues
+ * a request that is certain to fail. Other shapes pass through unchanged.
+ */
+async function projectCovers(summaries) {
+  const { resolveMediaLocations } = await import('../peerHostedMedia.js');
+  const probes = summaries.map(({ cover }) => {
+    const png = FLAT_PNG_COVER.exec(cover || '');
+    if (png) return { kind: 'image', ref: `${png[1]}.png`, url: `/data/image-thumbnails/${png[1]}.webp` };
+    const thumb = VIDEO_THUMB_COVER.exec(cover || '');
+    if (thumb) return { kind: 'video', ref: thumb[1], url: cover };
+    return null;
+  });
+  const located = await resolveMediaLocations(probes.filter(Boolean));
+  let next = 0;
+  return summaries.map((summary, i) => {
+    const probe = probes[i];
+    if (!probe) return summary;
+    return { ...summary, cover: located[next++].location === 'missing' ? null : probe.url };
+  });
+}
+
 /** Collection grid covers and counts, without downloading all image sidecars. */
 export async function listGalleryCollectionSummaries(diskReader) {
+  return projectCovers(await collectionSummaryRows(diskReader));
+}
+
+async function collectionSummaryRows(diskReader) {
   const collections = await (await import('../mediaCollections.js')).listCollections();
   const videoSnapshot = await (await import('../videoGen/history.js')).loadCompactHistory();
   if (!escapeHatch()) {

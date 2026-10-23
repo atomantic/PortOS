@@ -7,6 +7,8 @@ const { listAnnotations, loadHistory, listCollections, getCollection } = vi.hois
 vi.mock('../videoGen/history.js', () => ({ loadHistory, loadCompactHistory: loadHistory }));
 vi.mock('../mediaCollections.js', () => ({ listCollections, getCollection }));
 vi.mock('../mediaAnnotations.js', () => ({ listAnnotations }));
+const { resolveMediaLocations } = vi.hoisted(() => ({ resolveMediaLocations: vi.fn() }));
+vi.mock('../peerHostedMedia.js', () => ({ resolveMediaLocations }));
 
 vi.mock('../../lib/db.js', () => ({ query: vi.fn() }));
 afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
@@ -156,9 +158,28 @@ describe('scoped browsing compatibility', () => {
     expect((await listGalleryPage({ kind: 'all', collectionId: 'col', limit: 1 }, disk)).items).toEqual([{ kind: 'video', data: video }]);
     expect((await listGalleryPage({ kind: 'all', collectionId: 'unsorted', limit: 1 }, disk)).items).toEqual([{ kind: 'image', data: images[1] }]);
     expect(await listGalleryFacets(disk)).toEqual({ universes: [{ id: 'u', name: 'Example' }], categories: ['places'], kinds: ['canon'], collections: [{ id: 'col', name: 'Example collection' }] });
+    resolveMediaLocations.mockImplementation(async items => items.map(() => ({ location: 'local' })));
     const summaries = await listGalleryCollectionSummaries(disk);
-    expect(summaries.find(s => s.id === 'col')).toMatchObject({ total: 2, cover: '/data/images/a.png' });
+    expect(summaries.find(s => s.id === 'col')).toMatchObject({ total: 2, cover: '/data/image-thumbnails/a.webp' });
     expect(summaries.find(s => s.id === 'unsorted')).toMatchObject({ total: 1, counts: { image: 1, video: 0, all: 1 } });
+  });
+});
+
+describe('collection cover projection', () => {
+  it('serves thumbnails and nulls covers whose asset is gone locally and on every peer', async () => {
+    vi.stubEnv('MEMORY_BACKEND', 'file');
+    loadHistory.mockResolvedValue([]);
+    const collections = [
+      { id: 'ok', items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-01-01' }] },
+      { id: 'gone', items: [{ kind: 'image', ref: 'b.png', addedAt: '2026-01-01' }] },
+    ];
+    listCollections.mockResolvedValue(collections);
+    getCollection.mockImplementation(async id => collections.find(c => c.id === id));
+    resolveMediaLocations.mockImplementation(async items => items.map(i => ({ location: i.ref === 'b.png' ? 'missing' : 'local' })));
+    const disk = async () => [{ filename: 'a.png', createdAt: '2026-01-01' }, { filename: 'b.png', createdAt: '2026-01-01' }];
+    const byId = Object.fromEntries((await listGalleryCollectionSummaries(disk)).map(s => [s.id, s.cover]));
+    expect(byId.ok).toBe('/data/image-thumbnails/a.webp');
+    expect(byId.gone).toBeNull();
   });
 });
 
