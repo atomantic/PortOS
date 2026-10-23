@@ -507,6 +507,41 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       verified: true, branchDeleted: state.branchDeleted ?? false, proof };
   };
 
+  const verifyMissingPreservation = async ({ appId, repoPath, release, archiveDir }) => {
+    const directory = location(archiveDir.split(/[\\/]/).at(-1));
+    if (directory !== archiveDir) fail('archive-location-mismatch');
+    const state = await readJournal(directory, { bounded: true });
+    if (state.appId !== appId || state.repoPath !== repoPath || !sameRelease(state.release, release)) fail('archive-identity-mismatch');
+    if (!['branch-retired', 'retired'].includes(state.phase) || state.branchDeleted !== true) fail('archive-retirement-unconfirmed');
+    const archivedAt = state.reservation?.owner?.startedAt;
+    if (!(Date.parse(archivedAt) >= Date.parse(release.createdAt)) || Date.parse(archivedAt) > Date.now()) fail('archive-generation-mismatch');
+    // Every archive mutation takes this execution fence. Keep it until the
+    // schedule writer accepts or refuses the evidence, not just through verify.
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    try {
+      if (hash(await readJournal(directory, { bounded: true })) !== hash(state)) fail('retirement-journal-changed');
+      // The journal locates the manifest; the existing native verifier checks its
+      // digest, every preserved source and the standalone object closure.
+      const manifestPath = join(directory, 'manifest.json');
+      const info = await lstat(manifestPath);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 16 * 1024 * 1024) fail('archive-manifest-invalid');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      if (manifest.facts?.repoPath !== repoPath || !sameRelease(manifest.facts?.release, release)) fail('archive-identity-mismatch');
+      const result = await verifyArchive({ appId, transactionId: state.id, journalDigest: hash(state) });
+      if (result.proof?.verified !== true || result.proof?.standalone !== true) fail('archive-preservation-unverified');
+      if (hash(await readJournal(directory, { bounded: true })) !== hash(state)) fail('retirement-journal-changed');
+      const recheck = async () => {
+        executor.assertHeld();
+        const unchanged = hash(await readJournal(directory, { bounded: true })) === hash(state)
+          && createHash('sha256').update(await readFile(manifestPath)).digest('hex') === state.proof.manifestSha256;
+        executor.assertHeld();
+        return unchanged;
+      };
+      return { repoPath, archiveDir: directory, archivedAt, evidenceDigest: state.proof.manifestSha256, kind: 'initialized', recheck,
+        releaseFence: () => executor.release() };
+    } catch (error) { await executor.release(); throw error; }
+  };
+
   // Explicit recovery restores the exact original inodes. It does not erase
   // archives or auto-finish an interrupted ref deletion on stale forge evidence.
   const restore = (input, { cancelOnly = false } = {}) => fenced(async () => {
@@ -959,7 +994,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   const automatic = async (input, options) => recoverAutomatically(input, options)
     .catch(error => ({ ok: false, reason: error.message, transactionId: input.transactionId, recoveryRequired: true }));
   return { discover, recoverAutomatically: automatic, review, retire, status, restore,
-    cancelPreservation: input => restore(input, { cancelOnly: true }), verifyArchive, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata,
+    cancelPreservation: input => restore(input, { cancelOnly: true }), verifyArchive, verifyMissingPreservation, reviewBranch, retireBranch, reviewMetadataRestore, restoreMetadata,
     reviewRestoredFinalization, finalizeRestored, reviewQuarantineResumption, resumeQuarantine };
 }
 
@@ -970,6 +1005,7 @@ export const initializedCheckoutStatus = recovery.status;
 export const restoreInitializedCheckout = recovery.restore;
 
 export const verifyInitializedCheckoutArchive = recovery.verifyArchive;
+export const verifyMissingInitializedCheckoutPreservation = recovery.verifyMissingPreservation;
 
 export const reviewInitializedCheckoutBranch = recovery.reviewBranch;
 export const retireInitializedCheckoutBranch = recovery.retireBranch;
