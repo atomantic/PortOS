@@ -358,14 +358,24 @@ describe('GitHub accounts tab', () => {
   });
 
   it('preserves provider access across Private, Public, and Private trust edits', async () => {
-    mock.getGitHubAccounts.mockResolvedValue([{ ...IMPLICIT, trust: 'private', allowedProviders: ['cloud-api'] }]);
-    mock.updateGitHubAccount.mockImplementation(async (id, body) => ({ ...IMPLICIT, ...body, id }));
+    let savedAccount = { ...IMPLICIT, trust: 'private', allowedProviders: ['cloud-api'] };
+    mock.getGitHubAccounts.mockImplementation(async () => [savedAccount]);
+    mock.updateGitHubAccount.mockImplementation(async (id, body) => {
+      savedAccount = { ...savedAccount, ...body, id };
+      return savedAccount;
+    });
     renderAccounts();
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByLabelText('Trust'), { target: { value: 'public' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', expect.objectContaining({ trust: 'public', allowedProviders: ['cloud-api'] })));
+    await waitFor(() => expect(screen.getByText('Public')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByLabelText('Trust'), { target: { value: 'private' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', expect.objectContaining({ trust: 'private', allowedProviders: ['cloud-api'] })));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenLastCalledWith('github-com', expect.objectContaining({ trust: 'private', allowedProviders: ['cloud-api'] })));
+    expect(savedAccount.allowedProviders).toEqual(['cloud-api']);
   });
 
   it('lists each account with its trust level and live sign-in state', async () => {
