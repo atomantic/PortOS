@@ -404,6 +404,8 @@ async function withMergedPregateTree(repoRoot, mergedWith, run) {
   try {
     // All new merge objects, refs, index entries and generated files live in this disposable clone.
     readGit(['clone', '--quiet', '--shared', '--no-checkout', '--', repoRoot, scratch]);
+    // Shallow sources cannot share objects, and cloning omits remote-only merge inputs.
+    readGit(['fetch', '--quiet', '--no-tags', '--update-shallow', '--', repoRoot, base, head], scratch);
     let tree;
     try {
       tree = readGit(['merge-tree', '--write-tree', base, head], scratch).split('\n')[0];
