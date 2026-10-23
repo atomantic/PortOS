@@ -16,6 +16,8 @@ describe('test process ownership boundaries', () => {
     const records = [{ pid: 900001, ppid: 900002 }, { pid: 900002, ppid: 900003 }];
     expect(processAncestors(records, 900004)).toBeNull();
     expect(processAncestors(records, 900001)).toEqual(new Set([1, 900001, process.ppid, 900002, 900003]));
+    expect(processAncestors([...records, { pid: 900003, ownershipComplete: false }], 900001))
+      .toEqual(new Set([1, 900001, process.ppid, 900002, 900003]));
     expect(processAncestors([...records, { pid: 900003, ppid: 900001 }], 900001)).toBeNull();
   });
 

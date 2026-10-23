@@ -99,18 +99,25 @@ export function testProcessRoot({ args = [], env = {} }, parent, prefix) {
 }
 
 export function processAncestors(records, pid = process.pid) {
-  const parents = new Map(records.map(record => [record.pid, record.ppid]));
-  if (!parents.has(pid)) return null;
+  const parents = new Map();
+  for (const record of records || []) {
+    // An incomplete identity row has a pid and no parent. It is a gap in the
+    // chain, not a parent link, and must not void every other owned process.
+    if (Number.isSafeInteger(record?.pid) && Number.isSafeInteger(record.ppid) && record.ppid >= 1) {
+      parents.set(record.pid, record.ppid);
+    }
+  }
+  if (!Number.isSafeInteger(pid) || pid < 1 || !parents.has(pid)) return null;
   const ancestors = new Set([1, pid, process.ppid]);
   const visited = new Set();
   while (pid > 1) {
     if (visited.has(pid)) return null;
     visited.add(pid);
-    // Readers may omit an ancestor owned by another uid. Keep every known
-    // ancestor excluded without requiring visibility all the way to init.
+    // Readers may omit an ancestor owned by another uid, or return it without
+    // a parent. Keep every known ancestor excluded without requiring init.
     if (!parents.has(pid)) return ancestors;
     const parent = parents.get(pid);
-    if (!Number.isSafeInteger(parent) || parent < 1 || parent === pid) return null;
+    if (parent === pid) return null;
     if (parent === 1) return ancestors;
     ancestors.add(parent);
     pid = parent;
