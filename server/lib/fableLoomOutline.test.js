@@ -303,3 +303,40 @@ it('measures audience introduction in dramatic scenes after a shot split', () =>
   const nodes = scenes.map((scene, index) => ({ id: scene.key, shot: { dramaticSceneId: index < 4 ? 'opening' : 'invitation' } }));
   expect(analyzeStoryOutline(outline, { ...options, nodes }).issues.some((issue) => issue.code === 'LATE_AUDIENCE_CONNECTION')).toBe(false);
 });
+
+it('uses a same-scene shortcut discovered after a multi-scene detour for audience introduction', () => {
+  const edges = {
+    opening: ['detour-1', 'cut-1'],
+    'detour-1': ['detour-2'],
+    'detour-2': ['detour-3'],
+    'detour-3': ['join'],
+    'cut-1': ['cut-2'],
+    'cut-2': ['cut-3'],
+    'cut-3': ['cut-4'],
+    'cut-4': ['join', 'cut-1'],
+    join: ['invitation'],
+    invitation: [],
+  };
+  const scenes = Object.entries(edges).map(([key, targets]) => ({
+    key,
+    title: key,
+    summary: 'The signal travels through the opening sequence.',
+    playbackMode: 'cut',
+    audienceConnection: key === 'invitation' ? 'connected' : 'disconnected',
+    isEnding: key === 'invitation',
+    transitions: targets.map((targetKey) => ({ targetKey, intent: `Follow ${targetKey}` })),
+  }));
+  const outline = { startKey: 'opening', scenes };
+  const options = { participationMode: 'helper', requireAudienceIntroduction: true };
+  const ungrouped = analyzeStoryOutline(outline, options);
+  expect(ungrouped.issues).toContainEqual(expect.objectContaining({ code: 'LATE_AUDIENCE_CONNECTION' }));
+
+  const nodes = scenes.map(({ key }) => ({
+    id: key,
+    shot: { dramaticSceneId: key.startsWith('detour-') ? key : 'opening' },
+  }));
+  const result = analyzeStoryOutline(outline, { ...options, nodes });
+  expect(result.issues).not.toContainEqual(expect.objectContaining({ code: 'LATE_AUDIENCE_CONNECTION' }));
+  expect(result.stats.maxDepth).toBe(ungrouped.stats.maxDepth);
+  expect(result.stats.reachableCount).toBe(ungrouped.stats.reachableCount);
+});
