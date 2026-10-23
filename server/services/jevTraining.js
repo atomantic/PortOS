@@ -106,7 +106,7 @@ async function runTraining({ repoPath, architecture }) {
   // Deferred because `forgeAuth.js` reaches the git/forge stack this module has
   // no other use for.
   const { resolveForgeForRepo } = await import('./forgeAuth.js');
-  const forge = await resolveForgeForRepo(repoPath).catch(() => null);
+  const forge = await resolveForgeForRepo(repoPath);
   const { buildScopeAdherenceCorpus } = await corpusBuilder();
   const corpus = await buildScopeAdherenceCorpus({ repoPath, env: forge?.env || null });
   if (!corpus.ok) return corpus;

@@ -35,11 +35,11 @@ const DEVICE_URL_RE = /(https?:\/\/[^\s]+\/login\/device)/i;
 const TOKEN_ENV_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
 
 // The variable gh would authenticate with for `host` ahead of the keyring. On
-// github.com an owner-matched account's token is minted from the keyring and
+// any host an owner-matched account's token is minted from the keyring and
 // overrides any ambient GH_TOKEN, so it only counts when no account was resolved.
 const envTokenFor = (host, expectedAccount) => {
-  const names = host === 'github.com' ? ['GH_TOKEN', 'GITHUB_TOKEN'] : ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
-  if (host === 'github.com' && expectedAccount) return null;
+  const names = (host === 'github.com' || host.endsWith('.ghe.com')) ? ['GH_TOKEN', 'GITHUB_TOKEN'] : ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+  if (expectedAccount) return null;
   return names.find((name) => process.env[name]) || null;
 };
 

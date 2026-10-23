@@ -85,6 +85,12 @@ describe('managed app repository topology', () => {
     });
   });
 
+  it('refuses fork sync before any forge operation when the pinned account is unavailable', async () => {
+    mock.resolveForgeForRepo.mockRejectedValue(Object.assign(new Error('Pinned account unavailable'), { code: 'FORGE_ACCOUNT_UNAVAILABLE' }));
+    await expect(syncManagedAppFork(app)).rejects.toMatchObject({ code: 'FORGE_ACCOUNT_UNAVAILABLE' });
+    expect(mock.execGh).not.toHaveBeenCalled();
+  });
+
   it('discovers a canonical upstream from GitHub fork metadata without app-specific constants', async () => {
     const topology = await resolveRepositoryTopology(REPO);
 

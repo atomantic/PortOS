@@ -408,6 +408,14 @@ describe('verifyPrClaim (#3358)', () => {
     expect(getPullRequestStateMock).not.toHaveBeenCalled();
   });
 
+  it('reports unavailable credentials without probing the PR as another account', async () => {
+    onBranch('claim/issue-1');
+    resolveForgeForRepoMock.mockRejectedValueOnce(Object.assign(new Error('Pin unavailable'), { code: 'FORGE_ACCOUNT_UNAVAILABLE' }));
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
+    expect(verdict).toMatchObject({ ok: false, category: FORGE_UNREACHABLE_CATEGORY });
+    expect(findPullRequestForBranchMock).not.toHaveBeenCalled();
+  });
+
   it('fails with forge-unreachable — NOT pr-missing — when we could not ask', async () => {
     onBranch('claim/issue-1');
     findPullRequestForBranchMock.mockResolvedValue({

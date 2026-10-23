@@ -51,7 +51,7 @@ function remoteIdentity(url) {
 
 async function githubRepositoryMetadata(repoPath, origin) {
   if (!origin?.fullName || !isGithubHost(origin.host)) return null;
-  const forge = await resolveForgeForRepo(repoPath).catch(() => null);
+  const forge = await resolveForgeForRepo(repoPath);
   const host = githubApiHost(origin.host);
   const raw = await execGh([
     'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
@@ -130,7 +130,7 @@ async function compareForkWithUpstream(checkout, repoPath) {
   const upstreamOwner = checkout.upstream.owner;
   const originOwner = checkout.origin.owner;
   const basehead = encodeURIComponent(`${upstreamOwner}:${branch}...${originOwner}:${branch}`);
-  const forge = await resolveForgeForRepo(repoPath).catch(() => null);
+  const forge = await resolveForgeForRepo(repoPath);
   const host = githubApiHost(checkout.origin.host);
   const raw = await execGh([
     'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
@@ -335,7 +335,7 @@ export async function syncManagedAppFork(app) {
     );
   }
   const branch = upstream.branch || null;
-  const forge = await resolveForgeForRepo(app.repoPath).catch(() => null);
+  const forge = await resolveForgeForRepo(app.repoPath);
   const args = ['repo', 'sync', origin.fullName, '--source', upstream.fullName];
   if (branch) args.push('--branch', branch);
   const output = await execGh(args, GH_TIMEOUT_MS, {

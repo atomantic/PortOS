@@ -9,9 +9,25 @@ import { realpath } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
 import { execGitSafe } from '../lib/execGit.js';
 import { parseGitRemote, detectForgeCli, pickGhAccountForOwner } from '../lib/gitForge.js';
+import { githubApiHost } from '../lib/workTracker.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { listForgePinnedApps } from './agentAppWorkspace.js';
 
 const DEFAULT_SPAWN_CLI_TIMEOUT_MS = 10000;
+const TOKEN_ENV_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+
+// gh uses the public token family for Enterprise Cloud (*.ghe.com), too.
+const tokenKeyForHost = (host) => host === 'github.com' || host.endsWith('.ghe.com')
+  ? 'GH_TOKEN' : 'GH_ENTERPRISE_TOKEN';
+
+function ghHostEnv(host, token = null) {
+  const env = { ...process.env, GH_HOST: host };
+  // Account discovery must read this host's keyring, never an ambient token
+  // that can make a different account look like the requested login.
+  for (const key of TOKEN_ENV_KEYS) delete env[key];
+  if (token) env[tokenKeyForHost(host)] = token;
+  return env;
+}
 
 function spawnCli(cmd, args, timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal, env = null) {
   const timedOut = { code: -1, stdout: '', stderr: 'timed out' };
@@ -44,19 +60,21 @@ function spawnCli(cmd, args, timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal, e
   });
 }
 
-async function listGhAccounts(timeoutMs, signal) {
-  const { stdout, stderr } = await spawnCli('gh', ['auth', 'status', '-h', 'github.com'], timeoutMs, signal);
+async function listGhAccounts(host, timeoutMs, signal) {
+  const { stdout, stderr } = await spawnCli('gh', ['auth', 'status', '-h', host], timeoutMs, signal, ghHostEnv(host));
   // gh writes status to stderr in older versions, stdout in newer — search both.
   const text = `${stdout}\n${stderr}`;
   const accounts = [];
-  const re = /Logged in to github\.com account (\S+)/g;
+  const re = /Logged in to (\S+) account (\S+)/g;
   let m;
-  while ((m = re.exec(text))) accounts.push(m[1]);
+  while ((m = re.exec(text))) {
+    if (m[1].toLowerCase() === host) accounts.push(m[2]);
+  }
   return accounts;
 }
 
-async function getGhTokenForAccount(login, timeoutMs, signal) {
-  const { code, stdout } = await spawnCli('gh', ['auth', 'token', '-u', login, '-h', 'github.com'], timeoutMs, signal);
+async function getGhTokenForAccount(host, login, timeoutMs, signal) {
+  const { code, stdout } = await spawnCli('gh', ['auth', 'token', '-u', login, '-h', host], timeoutMs, signal, ghHostEnv(host));
   return code === 0 ? stdout.trim() : null;
 }
 
@@ -117,43 +135,33 @@ async function resolveConfiguredAccount(dir) {
 }
 
 /**
- * The git commit identity for a gh account, as GitHub itself attributes it.
- *
- * `<id>+<login>@users.noreply.github.com` is the address GitHub links back to an
- * account, so a commit authored with it shows up under that account — which is
- * the point of pinning an app to a non-default account in the first place. The
- * numeric id is REQUIRED for the link: the legacy `<login>@users.noreply` form
- * predates account renames and no longer attributes reliably, so a probe that
- * cannot read the id returns null rather than a plausible-looking address that
- * silently attributes to nobody.
- *
- * @returns {Promise<{name: string, email: string}|null>}
+ * Public GitHub retains its stable id+login noreply address. Enterprise hosts
+ * define their own addresses; use the authenticated user's returned email or
+ * leave commit identity alone if that API does not expose one.
  */
-async function getGhCommitIdentity(token, timeoutMs, signal) {
-  // Run the probe AS the pinned account. `gh api` otherwise answers for gh's
-  // mutable active user, which is exactly the ambient identity this override
-  // exists to escape — and the mismatch would be invisible, since the wrong
-  // answer is still a well-formed identity.
+async function getGhCommitIdentity(host, token, timeoutMs, signal) {
   const { code, stdout } = await spawnCli(
-    'gh', ['api', 'user', '--hostname', 'github.com', '--jq', '[.id, .login, .name] | @tsv'],
-    timeoutMs, signal, { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token }
+    'gh', ['api', 'user', '--hostname', host, '--jq', '[.id, .login, .name, .email] | @tsv'],
+    timeoutMs, signal, ghHostEnv(host, token)
   );
   if (code !== 0) return null;
-  const [id, login, name] = (stdout || '').trim().split('\t');
+  const [id, login, name, email] = (stdout || '').trim().split('\t');
   if (!id || !login) return null;
-  return { name: name || login, email: `${id}+${login}@users.noreply.github.com` };
+  const commitEmail = host === 'github.com' ? `${id}+${login}@users.noreply.github.com` : email;
+  if (!commitEmail) return null;
+  return { name: name || login, email: commitEmail };
 }
 
 /**
  * Resolve the forge CLI + auth env for a given repo directory.
- * - For GitHub repos: pins `GH_TOKEN` to a specific logged-in gh account, so PR
+ * - For GitHub repos: pins the host-specific token to a specific logged-in gh account, so PR
  *   creation doesn't depend on `hosts.yml`'s mutable `user:` field (avoids the
  *   multi-account "must be a collaborator" failure mode). The account is the
  *   managed app's explicit `forgeAccount` when it has one, and otherwise the
  *   logged-in account whose login matches the repo owner.
  * - For GitLab repos: uses glab as-is. glab is single-user-per-host, so its keyring
  *   already disambiguates by host without the mutable-active-user pitfall.
- * Falls back to ambient env when no match is possible.
+ * Falls back to ambient env only without an explicit pin; unavailable pins fail.
  *
  * `identity` is populated ONLY for an explicitly pinned `forgeAccount` — an
  * owner-match is an inference about which credential to use, not a statement
@@ -167,41 +175,62 @@ async function getGhCommitIdentity(token, timeoutMs, signal) {
  * @returns {Promise<{cli: string, env: object, host: string|null, owner: string|null,
  *                    account: string|null, identity: {name: string, email: string}|null}>}
  */
-export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal, forgeAccount = null } = {}) {
+export function resolveForgeForRepo(dir, opts = {}) {
+  return resolveForgeWithPin(dir, opts);
+}
+
+// A shared pin state lets the bounded child-overlay lookup distinguish an
+// unpinned timeout (ambient is fine) from an unresolved or explicit pin.
+async function resolveForgeWithPin(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal, forgeAccount = null } = {}, pinState = {}) {
+  const explicitPin = (typeof forgeAccount === 'string' && forgeAccount.trim()) ? forgeAccount.trim() : null;
+  pinState.account = explicitPin || await resolveConfiguredAccount(dir);
+  pinState.resolved = true;
+  // The outer budget may expire while the registry or worktree lookup waits.
+  // It already refused the unknown pin; do not start late credential probes.
+  if (signal?.aborted) return { cli: 'gh', env: process.env, host: null, owner: null, account: null, identity: null };
+  return resolveForgeCredentials(dir, { timeoutMs, signal, pinned: pinState.account }).catch((error) => {
+    if (pinState.account) throw error;
+    return { cli: 'gh', env: process.env, host: null, owner: null, account: null, identity: null };
+  });
+}
+
+async function resolveForgeCredentials(dir, { timeoutMs, signal, pinned }) {
   const remote = await execGitSafe(['remote', 'get-url', 'origin'], dir);
   const parsed = parseGitRemote(remote.stdout?.trim());
   if (!parsed) {
+    if (pinned) throw new ServerError('The pinned GitHub account cannot be resolved without a repository origin.', {
+      status: 409, code: 'FORGE_ACCOUNT_UNAVAILABLE',
+    });
     return { cli: 'gh', env: process.env, host: null, owner: null, account: null, identity: null };
   }
 
-  const cli = detectForgeCli(parsed.host);
-  const base = { cli, env: process.env, host: parsed.host, owner: parsed.owner, identity: null };
+  const host = githubApiHost(parsed.host.toLowerCase());
+  const cli = detectForgeCli(host);
+  const base = { cli, env: process.env, host, owner: parsed.owner, identity: null };
   const ambient = { ...base, account: null };
 
   if (cli !== 'gh' || signal?.aborted) return ambient;
 
-  const explicitPin = (typeof forgeAccount === 'string' && forgeAccount.trim()) ? forgeAccount.trim() : null;
-  const pinned = explicitPin || await resolveConfiguredAccount(dir);
-  if (signal?.aborted) return ambient;
-
   // A pinned account skips the `gh auth status` listing entirely: the user named
   // the account, so the only question left is whether a token can be minted for
-  // it — and a pin that gh is not logged into must fail as "no token", not be
+  // it — and a pin that gh is not logged into must refuse execution, not be
   // silently replaced by an owner-match against a different account.
-  const account = pinned || pickGhAccountForOwner(parsed.owner, await listGhAccounts(timeoutMs, signal));
+  const account = pinned || pickGhAccountForOwner(parsed.owner, await listGhAccounts(host, timeoutMs, signal));
   if (signal?.aborted) return ambient;
   if (!account) return ambient;
 
-  const token = await getGhTokenForAccount(account, timeoutMs, signal);
-  if (signal?.aborted || !token) return { ...base, account };
+  const token = await getGhTokenForAccount(host, account, timeoutMs, signal);
+  if (signal?.aborted || !token) {
+    if (pinned) throw new ServerError(`The pinned GitHub account ${account} is unavailable on ${host}. Check gh auth status -h ${host}.`, {
+      status: 409, code: 'FORGE_ACCOUNT_UNAVAILABLE', context: { host, account },
+    });
+    return { ...base, account };
+  }
 
-  const identity = pinned ? await getGhCommitIdentity(token, timeoutMs, signal) : null;
+  const identity = pinned ? await getGhCommitIdentity(host, token, timeoutMs, signal) : null;
   if (signal?.aborted) return { ...base, account };
 
-  const env = { ...process.env, GH_TOKEN: token };
-  delete env.GITHUB_TOKEN;
-  delete env.GH_ENTERPRISE_TOKEN;
-  delete env.GITHUB_ENTERPRISE_TOKEN;
+  const env = ghHostEnv(host, token);
   return { ...base, env, account, identity };
 }
 
@@ -225,13 +254,13 @@ export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_T
  * agent process instead of mutating a repository PortOS does not own, and git
  * gives them precedence over every config level.
  *
- * Returns `{}` when no github.com account and token were resolved, so the child
- * keeps whatever gh auth it would have used. Best-effort and bounded: never
- * throws, and a stalled `gh` probe times out to `{}` so a spawn is never blocked.
+ * Returns `{}` when no host-specific account and token were resolved, so the child
+ * keeps whatever gh auth it would have used. An unavailable explicit pin or a
+ * timed-out pinned lookup refuses the spawn rather than silently using another login.
  * @param {string} dir - Repo (or worktree) root
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs=10000] - Cap on the git+gh probe before giving up
- * @returns {Promise<{ GH_TOKEN?: string, GIT_AUTHOR_NAME?: string, GIT_AUTHOR_EMAIL?: string,
+ * @returns {Promise<{ GH_TOKEN?: string, GH_ENTERPRISE_TOKEN?: string, GH_HOST?: string, GIT_AUTHOR_NAME?: string, GIT_AUTHOR_EMAIL?: string,
  *                     GIT_COMMITTER_NAME?: string, GIT_COMMITTER_EMAIL?: string }>}
  */
 export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccount = null } = {}) {
@@ -241,37 +270,32 @@ export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccoun
   // gh subprocess keeps its own timeout as a second bound for direct callers.
   let timer;
   const controller = new AbortController();
+  const pinState = { resolved: false, account: null };
   const resolved = await Promise.race([
-    resolveForgeForRepo(dir, { timeoutMs, signal: controller.signal, forgeAccount }).catch(() => null),
-    new Promise((r) => {
+    resolveForgeWithPin(dir, { timeoutMs, signal: controller.signal, forgeAccount }, pinState),
+    new Promise((resolve, reject) => {
       timer = setTimeout(() => {
         controller.abort();
-        r(null);
+        // Unknown is not unpinned: a late registry read may reveal a pin.
+        if (pinState.resolved && !pinState.account) return resolve(null);
+        reject(new ServerError('Pinned GitHub account resolution timed out. Retry after checking gh auth status.', {
+          status: 503, code: 'FORGE_AUTH_TIMEOUT',
+        }));
       }, timeoutMs);
       timer.unref?.();
     }),
-  ]);
-  clearTimeout(timer);
-  // Overlay a token ONLY for a genuinely-minted github.com credential. Two gates:
-  //  - host === 'github.com': detectForgeCli defaults an unrecognized/GHES host to
-  //    `gh`, and resolveForgeForRepo's account/token probes are hardcoded to
-  //    `-h github.com`. Without this gate, a Bitbucket/GHES repo whose owner segment
-  //    happens to match a local github.com login would get that github.com token
-  //    injected into every agent — the wrong (or a leaked) credential.
-  //  - env !== process.env: resolveForgeForRepo returns a NEW env object
-  //    (`{ ...process.env, GH_TOKEN }`) ONLY on a successful mint; every other
-  //    branch (no match, token fetch failed) returns the ambient `process.env` by
-  //    reference. Keying on `account` alone would re-emit the ambient GH_TOKEN when
-  //    the account matched but the token fetch failed.
-  const minted = resolved && resolved.host === 'github.com' && resolved.env !== process.env;
-  const token = minted ? resolved.env.GH_TOKEN : null;
+  ]).finally(() => clearTimeout(timer));
+  // Only a successful host-specific keyring lookup creates a new env. The CLI
+  // defaults unknown forges to gh, so neither its name nor an account match is
+  // sufficient evidence that a credential was actually found for this host.
+  const minted = resolved?.host && resolved.env !== process.env;
+  const tokenKey = minted ? tokenKeyForHost(resolved.host) : null;
+  const token = tokenKey ? resolved.env[tokenKey] : null;
   if (!token) return {};
-  // Identity rides the SAME gates as the token — it is only ever populated for a
-  // minted github.com credential on an explicitly pinned account, so an identity
-  // can never be overlaid onto a repo whose token was not.
   const identity = resolved.identity;
   return {
-    GH_TOKEN: token,
+    GH_HOST: resolved.host,
+    [tokenKey]: token,
     ...(identity ? {
       GIT_AUTHOR_NAME: identity.name,
       GIT_AUTHOR_EMAIL: identity.email,

@@ -343,7 +343,8 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       }));
     });
 
-    it('declines the diff-only judgement after independent empty inventories, without inventing a ship verdict or follow-up', async () => {
+    it.each(['github.com', 'SSH.GitHub.COM'])('declines the diff-only judgement after independent empty inventories on %s, without inventing a ship verdict or follow-up', async (host) => {
+      execGit.mockResolvedValue({ stdout: `git@${host}:example/project.git`, exitCode: 0 });
       runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({
         verdict: 'fix-first', missing: ['Security inventory and bot PR resolution'],
         unrequested: ['The audit note'], evidence: 'Only an audit note is visible.',
@@ -379,6 +380,13 @@ describe('finalizeAgent — goal-fidelity gate', () => {
 
     it('does not fall back to ambient credentials when the owner-pinned resolver fails', async () => {
       resolveForgeForRepo.mockRejectedValue(new Error('Credential unavailable'));
+      await finish();
+      expect(execGh).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+    });
+
+    it('keeps mismatched credential hosts on the ordinary review path', async () => {
+      resolveForgeForRepo.mockResolvedValue({ cli: 'gh', host: 'github.example.com', owner: 'example', env: { GH_ENTERPRISE_TOKEN: 'synthetic-token' } });
       await finish();
       expect(execGh).not.toHaveBeenCalled();
       expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
