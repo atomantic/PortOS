@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, FileCode2, GitFork, Film, Globe, Images, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
-import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -24,9 +24,10 @@ import {
   startCodeAnimationGeneration,
   uploadFile,
 } from '../services/api';
+import { uuidv4 } from '../lib/uuid';
 import { copyToClipboard } from '../lib/clipboard';
 import { pluralize } from '../lib/textUtils';
-import { safeReadJsonStorage, safeWriteJsonStorage } from '../lib/safeStorage';
+import { safeReadJsonStorage, safeRemoveStorage, safeWriteJsonStorage } from '../lib/safeStorage';
 import { UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../utils/fileUpload';
 
 const DRAFT_KEY = 'portos.codeAnimation.draft';
@@ -64,8 +65,8 @@ const readBase = (value) => (isRecord(value) && typeof value.jobId === 'string' 
   ? { jobId: value.jobId, title: typeof value.title === 'string' ? value.title : '', durationSeconds: Number.isFinite(value.durationSeconds) ? value.durationSeconds : null }
   : null);
 
-const loadDraft = () => {
-  const stored = safeReadJsonStorage(DRAFT_KEY, null);
+const loadDraft = (key = DRAFT_KEY) => {
+  const stored = safeReadJsonStorage(key, null);
   if (!isRecord(stored)) return DEFAULT_DRAFT;
   const format = isRecord(stored.format) ? stored.format : {};
   const referenceImages = Array.isArray(stored.referenceImages)
@@ -278,7 +279,14 @@ function FastCodeAnimation() {
   const { boards } = styleLists;
   const [libraryTracks, setLibraryTracks] = useState([]);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
-  const [draft, setDraft] = useState(loadDraft);
+  const draftKey = routeParams.draftId ? `${DRAFT_KEY}.${routeParams.draftId}` : DRAFT_KEY;
+  const [loadedDraftKey, setLoadedDraftKey] = useState(draftKey);
+  const [draft, setDraft] = useState(() => loadDraft(draftKey));
+  // Restore a different draft before rendering or persisting its form.
+  if (loadedDraftKey !== draftKey) {
+    setLoadedDraftKey(draftKey);
+    if (routeParams.draftId) setDraft(loadDraft(draftKey));
+  }
   const [uploading, setUploading] = useState(false);
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const [building, setBuilding] = useState(false);
@@ -316,7 +324,9 @@ function FastCodeAnimation() {
   const onStyleGrammarChange = useCallback((styleGrammarId) => setDraft((prev) => ({ ...prev, styleGrammarId })), []);
   const updateFormat = (patch) => setDraft((prev) => ({ ...prev, format: { ...prev.format, ...patch } }));
 
-  useEffect(() => { safeWriteJsonStorage(DRAFT_KEY, draft); }, [draft]);
+  useEffect(() => {
+    if (routeParams.draftId) safeWriteJsonStorage(draftKey, draft);
+  }, [draft, draftKey, routeParams.draftId]);
 
   useEffect(() => {
     getCodeAnimationOptions({ silent: true }).then(setOptions).catch(() => toast.error('Failed to load Code Animation options'));
@@ -347,7 +357,7 @@ function FastCodeAnimation() {
     setJob(null);
     setPreview(null);
     setBuilt(null);
-  }, [jobId]);
+  }, [jobId, routeParams.draftId]);
   const jobResource = useSocketResource(async () => {
     if (!jobId) return null;
     // Only a 404 means the job is gone. Transient failures retain the current
@@ -525,8 +535,9 @@ function FastCodeAnimation() {
     const forked = draftFromJob(job);
     // A soundtrack generated at the old length would not fit the longer cut.
     const audio = forked.audio?.trackId && forked.audio.trackId === job.soundtrack?.trackId ? null : forked.audio;
-    setDraft({ ...forked, audio, base: { jobId: job.id, title: job.title || '', durationSeconds: job.frame?.durationSeconds ?? null } });
-    navigate('/code-animation');
+    const id = uuidv4();
+    safeWriteJsonStorage(`${DRAFT_KEY}.${id}`, { ...forked, audio, base: { jobId: job.id, title: job.title || '', durationSeconds: job.frame?.durationSeconds ?? null } });
+    navigate(`/code-animation/drafts/${id}`);
     toast.success('Forked. Set the new duration and write what happens next, then Generate animation.');
   };
 
@@ -861,8 +872,22 @@ function FastCodeAnimation() {
 
 
 // Route-mounted lanes keep inactive galleries and provider calls idle.
+function NewCodeAnimation() {
+  const [id] = useState(uuidv4);
+  useEffect(() => {
+    // Carry the pre-UUID draft forward without sharing it with future projects.
+    const legacy = safeReadJsonStorage(DRAFT_KEY, null);
+    if (legacy) {
+      const key = `${DRAFT_KEY}.${id}`;
+      safeWriteJsonStorage(key, legacy);
+      if (safeReadJsonStorage(key, null)) safeRemoveStorage(DRAFT_KEY);
+    }
+  }, [id]);
+  return <Navigate to={`/code-animation/drafts/${id}`} replace />;
+}
+
 export default function CodeAnimation() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const mode = pathname.startsWith('/code-animation/production')
     ? 'production'
     : pathname === '/code-animation/gallery' || pathname.startsWith('/code-animation/gallery/') ? 'gallery' : 'fast';
@@ -884,7 +909,7 @@ export default function CodeAnimation() {
     />
     <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
       <div className="mx-auto max-w-7xl">
-        {mode === 'production' ? <ProductionProjects /> : mode === 'gallery' ? <CodeAnimationGallery /> : <FastCodeAnimation />}
+        {mode === 'production' ? <ProductionProjects /> : mode === 'gallery' ? <CodeAnimationGallery /> : pathname === '/code-animation' && !new URLSearchParams(search).get('job') ? <NewCodeAnimation /> : <FastCodeAnimation />}
       </div>
     </div>
   </div>;
