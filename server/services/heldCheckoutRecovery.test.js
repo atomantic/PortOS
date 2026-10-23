@@ -511,14 +511,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it.each(['refs/worktree/unknown', 'logs/HEAD', 'FETCH_HEAD', 'FUTURE_HEAD', 'sequencer/todo', 'index.lock'])(
     'retains unknown or active recovery state in %s', async relative => {
-      const path = join(external, 'unknown-recovery');
-      await execGit(['worktree', 'add', '-b', 'feature/unknown-recovery', path, 'main'], repo);
-      const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
-      const tree = { path, branch: 'refs/heads/feature/unknown-recovery', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+      const nativePath = join(external, 'unknown-recovery');
+      await execGit(['worktree', 'add', '-b', 'feature/unknown-recovery', nativePath, 'main'], repo);
+      const [path, admin, head] = (await execGit(['rev-parse', '--show-toplevel', '--absolute-git-dir', 'HEAD'], nativePath)).stdout.trim().split(/\r?\n/);
+      const tree = { path, branch: 'refs/heads/feature/unknown-recovery', head };
       await mkdir(dirname(join(admin, relative)), { recursive: true });
       const bytes = relative.startsWith('refs/') ? 'ref: HEAD^{tree}\n' : `unrecognized recovery format ${tree.head}\n`;
       await writeFile(join(admin, relative), bytes);
       await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir })).rejects.toThrow();
+      expect(existsSync(nativePath)).toBe(true);
       expect(await registered(path)).toBe(true);
       expect(await readFile(join(admin, relative), 'utf8')).toBe(bytes);
       expect(await archives()).toEqual([]);
