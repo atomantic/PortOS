@@ -336,7 +336,9 @@ router.post('/:id/episodes/:episodeId/shots/cancel', asyncHandler(async (req, re
   res.json(await cancelEpisodeShotRun(req.params.id, req.params.episodeId));
 }));
 router.post('/:id/episodes/:episodeId/shots/plan', asyncHandler(async (req, res) => {
-  res.json(await planEpisodeShotRun(req.params.id, req.params.episodeId, validateRequest(shotRunStartSchema, req.body ?? {})));
+  const controller = new AbortController();
+  res.once('close', () => controller.abort());
+  res.json(await planEpisodeShotRun(req.params.id, req.params.episodeId, validateRequest(shotRunStartSchema, req.body ?? {}), { signal: controller.signal }));
 }));
 router.post('/:id/episodes/:episodeId/shots/apply', asyncHandler(async (req, res) => {
   res.json(await applyEpisodeShots(req.params.id, req.params.episodeId, validateRequest(shotApplySchema, req.body)));

@@ -236,3 +236,26 @@ it('keeps the synchronous compatibility response backed by a durable background 
   expect(result.validation.stats.ready).toBe(true);
   expect((await getEpisodeShotRun(loom.id, ep))).toMatchObject({ status: 'completed', result: { sourceFingerprint: result.sourceFingerprint } });
 });
+
+it('detaches a disconnected compatibility waiter while its durable worker completes', async () => {
+  const { planEpisodeShotRun, getEpisodeShotRun } = await import('./shotRuns.js');
+  const { fableLoomRunEvents } = await import('./runEvents.js');
+  const { loom, ep, groups } = await setup();
+  mockPlan(groups);
+  const implementation = runStagedLLM.getMockImplementation();
+  let finishCall, startedCall;
+  const ready = new Promise(resolve => { startedCall = resolve; });
+  runStagedLLM.mockImplementationOnce(() => new Promise(resolve => { finishCall = resolve; startedCall(); }));
+  const controller = new AbortController();
+  const waiting = planEpisodeShotRun(loom.id, ep, {}, { signal: controller.signal });
+  await ready;
+  controller.abort();
+  await expect(waiting).rejects.toMatchObject({ code: 'SHOT_WAITER_CLOSED' });
+  expect((await getEpisodeShotRun(loom.id, ep)).status).toBe('running');
+  const completed = new Promise(resolve => {
+    const handler = run => { if (run.loomId === loom.id && run.status === 'completed') { fableLoomRunEvents.off('shots', handler); resolve(run); } };
+    fableLoomRunEvents.on('shots', handler);
+  });
+  finishCall(await implementation('fableloom-plan-shots', { source: JSON.stringify({ scenes: [{ id: groups[0].sceneId }] }) }));
+  expect((await completed).result.validation.stats.ready).toBe(true);
+});

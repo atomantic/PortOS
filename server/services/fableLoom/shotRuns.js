@@ -119,23 +119,30 @@ export async function cancelEpisodeShotRun(loomId, episodeId) {
 }
 
 /** Compatibility callers still await a plan, but do not own the worker's lifetime. */
-export async function planEpisodeShotRun(loomId, episodeId, options = {}) {
-  let runId;
-  let resolveResult, rejectResult;
-  const earlyTerminals = new Map();
-  const result = new Promise((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
-  const accept = run => {
-    if (run.loomId !== loomId || run.episodeId !== episodeId || !['completed', 'failed', 'canceled'].includes(run.status)) return;
-    if (!runId) { earlyTerminals.set(run.id, run); return; }
-    if (run.id !== runId) return;
-    if (run.status === 'completed') resolveResult(run.result);
-    else rejectResult(new ServerError(run.message, { status: 422, code: 'SHOT_RUN_FAILED' }));
-  };
-  // Subscribe before start, including an instant completion or an already-active run.
-  fableLoomRunEvents.on('shots', accept);
-  return startEpisodeShotRun(loomId, episodeId, options).then(run => {
-    runId = run.id;
-    accept(earlyTerminals.get(runId) || run);
-    return result;
-  }).finally(() => fableLoomRunEvents.off('shots', accept));
+export async function planEpisodeShotRun(loomId, episodeId, options = {}, { signal } = {}) {
+  let accept, onAbort;
+  const result = new Promise((resolve, reject) => {
+    let runId;
+    const earlyTerminals = new Map();
+    accept = run => {
+      if (run.loomId !== loomId || run.episodeId !== episodeId || !['completed', 'failed', 'canceled'].includes(run.status)) return;
+      if (!runId) { earlyTerminals.set(run.id, run); return; }
+      if (run.id !== runId) return;
+      if (run.status === 'completed') resolve(run.result);
+      else reject(new ServerError(run.message, { status: 422, code: 'SHOT_RUN_FAILED' }));
+    };
+    onAbort = () => reject(new ServerError('The HTTP waiter closed; shot planning continues in the background.', { status: 499, code: 'SHOT_WAITER_CLOSED' }));
+    // Subscribe before start, including instant completion or an already-active run.
+    fableLoomRunEvents.on('shots', accept);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    void startEpisodeShotRun(loomId, episodeId, options).then(run => {
+      runId = run.id;
+      accept(earlyTerminals.get(runId) || run);
+    }).catch(reject);
+  });
+  return result.finally(() => {
+    fableLoomRunEvents.off('shots', accept);
+    signal?.removeEventListener('abort', onAbort);
+  });
 }
