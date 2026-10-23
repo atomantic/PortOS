@@ -565,7 +565,7 @@ describe('Memory version API', () => {
 
 describe('Memory reject API', () => {
   it('treats rejecting an already-deleted memory as success', async () => {
-    const memoryService = await import('../services/memory.js');
+    const memoryService = await import('../services/memoryBackend.js');
     const app = express();
     app.use(express.json());
     app.use('/api/memory', memoryRoutes);
