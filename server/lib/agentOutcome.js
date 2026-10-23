@@ -110,7 +110,12 @@ export function isTaskDeliveryComplete(agent) {
 
 export function resolveTaskOutcome({ reported, success, validationPassed, branchProvenEmpty, noChangeAllowed }) {
   if (reported && ['blocked', 'incomplete'].includes(reported.status)) return reported;
-  if (!success || validationPassed === false) return { status: 'incomplete', reason: 'Delivery checks did not pass.' };
+  if (!success) return { status: 'incomplete', reason: 'Delivery checks did not pass.' };
+  // Legacy learning criteria include commit probes that are not delivery gates
+  // (for example, an audit may save its report without a code change). Keep
+  // those runs unverified unless the agent supplied a delivery contract.
+  if (validationPassed === false) return reported
+    ? { status: 'incomplete', reason: 'Delivery checks did not pass.' } : null;
   if (branchProvenEmpty && noChangeAllowed) return { status: 'no-action-needed', reason: 'The permitted no-change result was verified against the repository.' };
   if (reported?.status === 'no-action-needed' && validationPassed !== true) {
     return { status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' };

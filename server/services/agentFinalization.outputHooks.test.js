@@ -309,14 +309,16 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(recordAuditQuality).not.toHaveBeenCalled();
   });
 
-  it('persists assessment and delivery verdicts without rewriting a clean execution', async () => {
+  it.each([false, true])('preserves legacy learning results while enforcing explicit delivery=%s', async explicit => {
     isProgrammaticIoTaskType.mockImplementation(type => type !== 'security');
     const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security' } };
     recordAuditQuality.mockResolvedValueOnce(false);
     await finalizeAgent({ agentId: 'audit-final', task, success: true, exitCode: 0, duration: 1000,
-      workspacePath: '/missing-audit-worktree', startedAt: Date.now() - 1000, outputBuffer: 'Audit complete' });
+      workspacePath: '/missing-audit-worktree', startedAt: Date.now() - 1000, outputBuffer: 'Audit complete',
+      finalSummary: explicit ? JSON.stringify({ summary: 'Invented audit report.', taskOutcome: { status: 'completed', reason: 'Invented completion claim.' } }) : null });
     expect(completeAgent).toHaveBeenCalledWith('audit-final', expect.objectContaining({
-      success: false, executionSuccess: true, validationPassed: false, taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' }, auditAssessment: { status: 'not-recorded' },
+      success: !explicit, executionSuccess: true, validationPassed: false,
+      taskOutcome: explicit ? { status: 'incomplete', reason: 'Delivery checks did not pass.' } : null, auditAssessment: { status: 'not-recorded' },
     }));
     isProgrammaticIoTaskType.mockReturnValue(true);
   });

@@ -159,7 +159,7 @@ describe('recovered runner audit completion (#11526)', () => {
     if (mode === 'stale primary cwd') runnerAgents.get(run.agentId).workspacePath = run.primaryPath;
     await handleAgentCompletion(run.agentId, 0, true, 1000);
     expect(run.record.metadata.auditFindings).toMatchObject({ status: 'complete', report });
-    expect(run.record.result).toMatchObject({ success: true, auditAssessment: { status: 'recorded' } });
+    expect(run.record.result).toMatchObject({ success: true, executionSuccess: true, taskOutcome: null, auditAssessment: { status: 'recorded' } });
     expect(fixture.quality).toEqual([{ category: 'observability', agentId: run.agentId, report: quality(82) }]);
     expect(fixture.trace.indexOf('findings')).toBeLessThan(fixture.trace.indexOf('quality'));
     expect(fixture.trace.indexOf('quality')).toBeLessThan(fixture.trace.indexOf('complete'));
