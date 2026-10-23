@@ -264,6 +264,18 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 250 * 1024 * 1024;
 const GIT_OUTPUT_BYTES = 64 * 1024 * 1024;
 
+function checkArchiveSize(scope, fileBytes, totalBytes) {
+  if (fileBytes <= MAX_FILE_BYTES && totalBytes <= MAX_TOTAL_BYTES) return;
+  const kind = fileBytes > MAX_FILE_BYTES ? 'file' : 'total';
+  throw Object.assign(new Error('retirement-archive-limit-exceeded'), { archiveLimit: {
+    scope, kind, limitBytes: kind === 'file' ? MAX_FILE_BYTES : MAX_TOTAL_BYTES,
+    observedBytes: Math.min(kind === 'file' ? fileBytes : totalBytes, Number.MAX_SAFE_INTEGER),
+  } });
+}
+
+const archiveLimitRefusal = error => error.message === 'retirement-archive-limit-exceeded'
+  ? { ok: false, reason: error.message, archiveLimit: error.archiveLimit } : null;
+
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
 const zLines = (stdout) => (stdout || '').split('\0').filter(Boolean);
 const git = (args, cwd) => execGit(args, cwd, { maxBuffer: GIT_OUTPUT_BYTES }).then(r => r.stdout || '');
@@ -283,7 +295,9 @@ async function snapshotAdministration(path, missingRoot = null) {
       for (const name of (await readdir(source)).sort()) await visit(join(source, name), rel ? `${rel}/${name}` : name);
       return;
     }
-    if (!info.isFile() || info.size > MAX_FILE_BYTES || (bytes += info.size) > MAX_TOTAL_BYTES) throw new Error('administration cannot be archived');
+    if (!info.isFile()) throw new Error('administration cannot be archived');
+    bytes += info.size;
+    checkArchiveSize('administration', info.size, bytes);
     files.push({ path: rel, source, bytes: info.size, sha256: await sha256File(source) });
   };
   await visit(root, 'gitdir');
@@ -350,7 +364,7 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, unlocked = fals
   return Promise.all([snapshotContent(release.path), snapshotAdministration(release.path)])
     .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl,
       contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
-    .then(review => ({ ok: true, review }), error => ({ ok: false,
+    .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
 }
 
@@ -425,7 +439,7 @@ async function snapshotContent(path) {
   let total = 0;
   const addFile = async (rel, info, extra = {}) => {
     total += info.size;
-    if (info.size > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) throw new Error(`${rel} exceeds the archive size limit`);
+    checkArchiveSize('content', info.size, total);
     files.push({ path: rel, bytes: info.size, sha256: await sha256File(join(path, rel)), ...extra });
   };
   const format = objectFormat.trim() || 'sha1';
@@ -822,7 +836,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
 
   // Every ownership check queues behind the claim-ownership lock with a short
   // budget, so the archive runs between two critical sections (#12682).
-  const refuse = reason => ({ result: { ok: false, reason } });
+  const refuse = (reason, archiveLimit) => ({ result: { ok: false, reason, ...(archiveLimit && { archiveLimit }) } });
   return retireWithUnlockedArchive({
     busy: () => ({ ok: false, reason: 'checkout-retirement-reserved' }),
     admit: async () => {
@@ -836,7 +850,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         : await isAncestor(repoPath, tree.head, defaultBranch);
       if (!merged && !review) return refuse('not-merged-on-recheck');
       const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl }, opts) : null;
-      if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed');
+      if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit);
       if (reviewed?.review.comparison.disposition === 'review-supersession' && review.acceptSuperseded !== true) return refuse('retirement-supersession-not-accepted');
       const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
       if (owner) return refuse(owner);
@@ -846,6 +860,8 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
       const archive = await archiveCheckout({ repoPath, tree, branch, defaultBranch, release, cosDir, review: reviewed?.review })
         .catch(error => ({ error }));
       if (!archive.error) return { archive };
+      const capacityRefusal = archiveLimitRefusal(archive.error);
+      if (capacityRefusal) return { result: capacityRefusal };
       console.error(`❌ held-checkout recovery: archive failed for ${tree.path}, checkout kept: ${archive.error.message}`);
       return { result: { ok: false, reason: 'archive-failed', detail: archive.error.message } };
     },
