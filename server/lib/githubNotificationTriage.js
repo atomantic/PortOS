@@ -282,11 +282,12 @@ const rulePin = (rule) => {
 
 /**
  * Which lane an agent may resolve a thread in, or null for a closed or suspect
- * thread. A plan with `refused` names why it cannot go: a Private account's threads go
- * only once the operator sets `allowAgents` on it (the lanes use their own
- * providers, which its allow-list cannot bind, so the operator accepts that), and
- * the per-app lanes need the repo to be a PortOS managed app. The pull number comes from the subject's API url and
- * the link from the stored html url, never from a title or body.
+ * thread. A plan with `refused` names why it cannot go: a Private account's
+ * threads go only once the operator sets `allowAgents` on it (the lanes use
+ * their own providers, which its allow-list cannot bind, so the operator
+ * accepts that), and the per-app lanes need the repo to be a PortOS managed
+ * app. The pull number comes from the subject's API url and the link from the
+ * stored html url, never from a title or body.
  *
  * Lanes: an outside PR's review request in a managed app goes to
  * `pr-reviewer`; a review request for a PR by you or a trusted author goes to
