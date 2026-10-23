@@ -80,15 +80,20 @@ function computeDramaticDepths(episode, depthById) {
   const groupOf = (id) => byId.get(id)?.shot?.dramaticSceneId || id;
   const dramatic = new Map();
   if (!depthById.has(episode?.startNodeId)) return dramatic;
+  // 0-1 BFS: same-scene hops cost 0 (front of deque), scene changes cost 1 (back);
+  // relax on pop so each node holds its true minimum, not its first-discovered cost.
   dramatic.set(episode.startNodeId, 0);
-  const queue = [episode.startNodeId];
-  for (let i = 0; i < queue.length; i += 1) {
-    const id = queue[i];
+  const deque = [episode.startNodeId];
+  while (deque.length) {
+    const id = deque.shift();
+    const base = dramatic.get(id);
     for (const tr of asArray(byId.get(id)?.transitions)) {
       const target = tr?.targetNodeId;
-      if (byId.has(target) && !dramatic.has(target)) {
-        dramatic.set(target, dramatic.get(id) + (groupOf(id) === groupOf(target) ? 0 : 1));
-        queue.push(target);
+      if (!byId.has(target)) continue;
+      const cost = groupOf(id) === groupOf(target) ? 0 : 1;
+      if (!dramatic.has(target) || base + cost < dramatic.get(target)) {
+        dramatic.set(target, base + cost);
+        if (cost === 0) deque.unshift(target); else deque.push(target);
       }
     }
   }
