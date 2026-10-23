@@ -101,14 +101,14 @@ export default function AppQuality({ app, detail = false }) {
   ];
   const federation = quality?.federation;
   return (
-    <AppQualityRunner key={app.id} app={app}>{(runner, activeRuns) => <section aria-label="App quality" className="space-y-4">
-      <div className="bg-port-card border border-port-border rounded-lg p-4 flex flex-wrap items-center justify-between gap-3">
+    <AppQualityRunner key={app.id} app={app}>{(runner, runStatus) => <section aria-label="App quality" className="space-y-4">
+      <section aria-label="Quality status" className="bg-port-card border border-port-border rounded-lg p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4 min-w-0">
           <div className="text-4xl font-semibold tabular-nums text-white" aria-hidden="true">
             {score ?? '—'}<span className="text-base font-normal text-gray-500">/100</span>
           </div>
           <div className="min-w-0">
-            <h3 className="flex items-center gap-1.5 font-semibold text-white">
+            <h3 className="flex flex-wrap items-center gap-1.5 font-semibold text-white">
               {label}
               <InfoTooltip label="How the quality score works" placement="below" align="start" width={320}>
                 <p>Equal-weight mean of the category scores. Each category score is the confidence-weighted mean of its last five qualifying runs from the last 30 days (broad signal coverage, medium/high confidence, scored); one run’s slice pick no longer swings the figure. Missing, partial, low-confidence and stale runs are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
@@ -126,7 +126,6 @@ export default function AppQuality({ app, detail = false }) {
         <div className="flex flex-wrap items-center gap-2">
           <Link to={panelLink('run')} className="inline-flex items-center gap-1.5 rounded bg-port-accent px-3 py-1.5 text-xs font-medium text-port-bg hover:opacity-90">
             <Play size={14} aria-hidden="true" />Run checks
-            {activeRuns > 0 && <span className="rounded-full bg-port-bg/30 px-1.5">{activeRuns} running</span>}
           </Link>
           <Link to={panelLink('schedule')} className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-bg/60 px-3 py-1.5 text-xs font-medium text-gray-200 hover:border-port-accent hover:text-white">
             <CalendarClock size={14} aria-hidden="true" />Schedule
@@ -139,7 +138,8 @@ export default function AppQuality({ app, detail = false }) {
         {score == null && !quality?.unavailable && <p className="basis-full text-sm text-gray-400">
           {hasAssessments ? 'Saved assessments do not qualify for an overall score yet. See the breakdown for coverage, confidence and age.' : 'No audit assessment saved yet. Run checks to collect one.'}
         </p>}
-      </div>
+        {runStatus}
+      </section>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <AppQualityHistory appId={app.id} categories={quality?.categories} />
         {!!quality?.categories?.length && (
