@@ -130,6 +130,7 @@ export * from './creativeLatitude.js';
 // discovery surface reaches EDITORIAL_CHECKS + the lookup helpers.
 export * as editorial from './editorial/index.js';
 export * from './familySettingsMap.js';
+export * from './fableLoomBoard.js';
 export * from './fableLoomGraph.js';
 export * from './cameraMovements.js';
 export * from './fableLoomCameraMovements.js';
