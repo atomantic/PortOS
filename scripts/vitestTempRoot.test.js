@@ -168,6 +168,9 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
 
       sweepStaleRunRoots(host);
       expect(await gone(orphan.pid)).toBe(true);
+      // The first sweep retains ownership while its asynchronous escalation settles.
+      expect(existsSync(dead)).toBe(true);
+      sweepStaleRunRoots(host);
       expect(existsSync(dead)).toBe(false);
       expect(isProcessAlive(owned.pid)).toBe(true);
 

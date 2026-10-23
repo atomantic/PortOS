@@ -800,6 +800,28 @@ describe('structured failure diagnostics', () => {
   }, 35_000);
 });
 
+// A containment report written after the ordinary reporter snapshot must survive
+// the launcher's nondurable-attempt cleanup, including otherwise green runs.
+it('retains process settlement evidence from a completed launcher attempt', async () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'process-report-launcher-'));
+  let diagnosticsPath;
+  try {
+    installFakeNpm(fixture, `require('node:fs').writeFileSync(process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH,
+      JSON.stringify({ version: 1, total: 1, terminated: 1, unsettled: 0, processes: [] }));`);
+    const { runNpm } = await import('./run-ci-tests.js');
+    const result = await runNpm('server', 'test:ci', [], {
+      env: { ...process.env, PORTOS_CI_DIAGNOSTICS_DIR: '', PATH: `${fixture}${delimiter}${process.env.PATH}` },
+    });
+    diagnosticsPath = result.diagnosticsPath;
+    expect(result.status).toBe(0);
+    expect(diagnosticsPath).toBeTruthy();
+    expect(JSON.parse(readFileSync(join(diagnosticsPath, 'processes.json'), 'utf8'))).toMatchObject({ total: 1, terminated: 1 });
+  } finally {
+    if (diagnosticsPath) rmSync(diagnosticsPath, { recursive: true, force: true });
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 describe('report launcher subprocess lifecycle (#9804)', () => {
   const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
 

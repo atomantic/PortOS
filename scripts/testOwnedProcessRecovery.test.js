@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { observeTestProcesses } from './lib/testProcessAttribution.js';
 import { processAncestors, readTestProcesses, testProcessRoot } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
 
@@ -43,8 +44,8 @@ describe('test process ownership boundaries', () => {
   it.skipIf(process.platform === 'win32')('retains only legacy browser ownership when the optional Darwin reader is unavailable', () => {
     const exec = vi.fn((command) => {
       if (command !== 'ps') throw Error('reader unavailable');
-      return `900001 1 ${process.getuid()} Fri Oct 16 12:00:00 2026 chrome --user-data-dir=/tmp/example/pvt-browser/profile\n`
-        + `900002 1 ${process.getuid()} Fri Oct 16 12:00:00 2026 node /tmp/example/pvt-script/file.js PORTOS_TEST_TEMP_ROOT=/tmp/example/pvt-env NODE_ENV=test\n`;
+      return `900001 1 ${process.getuid()} S Fri Oct 16 12:00:00 2026 chrome --user-data-dir=/tmp/example/pvt-browser/profile\n`
+        + `900002 1 ${process.getuid()} S Fri Oct 16 12:00:00 2026 node /tmp/example/pvt-script/file.js PORTOS_TEST_TEMP_ROOT=/tmp/example/pvt-env NODE_ENV=test\n`;
     });
     const records = readTestProcesses(null, { platform: 'darwin', exec });
     expect(records.map(record => testProcessRoot(record, '/tmp/example', 'pvt-'))).toEqual(['/tmp/example/pvt-browser', null]);
@@ -66,7 +67,7 @@ describe('test process ownership boundaries', () => {
     expect(testProcessRoot({ args: ['chrome', `--user-data-dir=${root}/profile`] }, parent, 'pvt-')).toBe(root);
   });
 
-  it('reports only fixed process categories for successfully stopped owned children', () => {
+  it('waits for terminal birth identity after signaling and distinguishes unconfirmed or unknown settlement', () => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-diagnostics-'));
     const root = join(host, 'pvt-owned');
     mkdirSync(root);
@@ -75,16 +76,26 @@ describe('test process ownership boundaries', () => {
     const child = { pid: 900001, ppid: process.pid, start: 'original',
       args: ['/example/node', '/example/vitest/dist/workers/forks.js', '--secret=fixture-secret'],
       env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
-    const onKilled = vi.fn();
-    const kill = vi.fn();
     try {
-      expect(killTestProcessesUnder(root, { read: () => [...ancestors, child], probe: () => false, kill, onKilled })).toBe(1);
-      expect(kill).toHaveBeenCalledExactlyOnceWith(child.pid, 'SIGKILL');
-      expect(onKilled).toHaveBeenCalledExactlyOnceWith({ kind: 'vitest', parent: 'runner' });
-      kill.mockImplementation(() => { throw Error('already gone'); });
-      onKilled.mockClear();
-      expect(killTestProcessesUnder(root, { read: () => [...ancestors, child], probe: () => false, kill, onKilled })).toBe(0);
-      expect(onKilled).not.toHaveBeenCalled();
+      for (const mode of ['terminal', 'reused', 'unconfirmed', 'unknown', 'signal-failed']) {
+        let time = 0;
+        let signaled = false;
+        const onKilled = vi.fn();
+        const onOutcome = vi.fn();
+        const read = () => !signaled || time === 0 ? [...ancestors, child]
+          : mode === 'unknown' ? null
+            : [...ancestors, { ...child, terminal: mode === 'terminal', start: mode === 'reused' ? 'replacement' : child.start }];
+        const kill = vi.fn(() => { signaled = true; if (mode === 'signal-failed') throw Error('denied'); });
+        const result = killTestProcessesUnder(root, { read, probe: () => false, probePid: () => true, kill, onKilled, onOutcome,
+          now: () => time, wait: ms => { expect(onKilled).not.toHaveBeenCalled(); time += ms; }, settlementMs: 50 });
+        const terminated = ['terminal', 'reused'].includes(mode);
+        expect(result).toBe(terminated ? 1 : 0);
+        expect(kill).toHaveBeenCalledExactlyOnceWith(child.pid, 'SIGKILL');
+        expect(onOutcome).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'vitest', parent: 'runner',
+          signal: mode === 'signal-failed' ? 'failed' : 'delivered',
+          settlement: terminated ? 'terminated' : mode === 'unknown' ? 'unknown' : 'unconfirmed' }));
+        expect(JSON.stringify(onOutcome.mock.calls)).not.toMatch(/fixture-secret|900001|original|example/);
+      }
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
@@ -102,14 +113,16 @@ describe('test process ownership boundaries', () => {
     try {
       sweepStaleRunRoots(host, { read, probe: () => ownerAlive });
       expect(kill).toHaveBeenCalledExactlyOnceWith(target.pid, 'SIGTERM');
+      sweepStaleRunRoots(host, { read: () => null, probe: () => false });
+      expect(existsSync(root)).toBe(true); // unknown settlement cannot erase a prior pending stamp
       target.start = 'reused';
       vi.advanceTimersByTime(2000);
       expect(kill).toHaveBeenCalledTimes(1);
-      mkdirSync(root); writeFileSync(join(root, '.owner.pid'), '999999 0\n');
+      expect(existsSync(root)).toBe(true); writeFileSync(join(root, '.owner.pid'), '999999 0\n');
       target.start = 'next';
       sweepStaleRunRoots(host, { read, probe: () => ownerAlive });
       expect(kill).toHaveBeenCalledTimes(2);
-      mkdirSync(root); writeOwnerFile(root); ownerAlive = true;
+      expect(existsSync(root)).toBe(true); writeOwnerFile(root); ownerAlive = true;
       vi.advanceTimersByTime(2000);
       expect(kill).toHaveBeenCalledTimes(2);
       expect(killTestProcessesUnder(root, { read: () => ancestors, probe: () => true, kill })).toBe(0);
@@ -155,7 +168,10 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       const script = join(dead, 'fixture.sh'); writeFileSync(script, 'echo ready\nread answer\n');
       const argumentOnly = await launch(['/bin/sh', script]);
       const unrelated = await launch([process.execPath, '-e', code], { OTHER: `PORTOS_TEST_TEMP_ROOT=${dead} NODE_ENV=test` });
-      const ownedLive = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: live });
+      const dispose = observeTestProcesses(() => fileURLToPath(import.meta.url), { root: live });
+      let ownedLive;
+      try { ownedLive = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: live }); }
+      finally { dispose(); }
       const inspected = readTestProcesses([environmentOnly.pid, argumentOnly.pid, unrelated.pid]);
       expect(inspected?.map(record => testProcessRoot(record, host, 'pvt-'))).toEqual([dead, dead, null]);
       sweepStaleRunRoots(host);
@@ -165,7 +181,9 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       }, { timeout: 5000 });
       expect(isProcessAlive(unrelated.pid)).toBe(true);
       expect(isProcessAlive(ownedLive.pid)).toBe(true);
-      expect(killTestProcessesUnder(live)).toBe(1);
+      const outcomes = [];
+      expect(killTestProcessesUnder(live, { onOutcome: outcome => outcomes.push(outcome) })).toBe(1);
+      expect(outcomes).toEqual([expect.objectContaining({ suite: 'scripts/testOwnedProcessRecovery.test.js', phase: 'suite-ended', lifecycle: 'spawned', settlement: 'terminated' })]);
       await vi.waitFor(() => expect(isProcessAlive(ownedLive.pid)).toBe(false));
     } finally {
       await Promise.all(children.map(child => new Promise(resolve => {

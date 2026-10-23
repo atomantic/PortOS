@@ -7,17 +7,17 @@ const ownershipKeys = new Set(['PORTOS_TEST_TEMP_ROOT', 'TMPDIR', 'VITEST', 'NOD
 
 function legacyBrowserProcesses(pids, exec) {
   try {
-    const output = exec('ps', [...(pids ? ['-p', pids.join(',')] : ['-A']), '-ww', '-o', 'pid=,ppid=,uid=,lstart=,args='], {
+    const output = exec('ps', [...(pids ? ['-p', pids.join(',')] : ['-A']), '-ww', '-o', 'pid=,ppid=,uid=,stat=,lstart=,args='], {
       encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' },
     });
     return output.split('\n').flatMap(line => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
+      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
       if (!match || Number(match[3]) !== process.getuid()) return [];
       // Compatibility only: this is the pre-existing browser flag rule. Flat
       // ps text is never used to infer generic argv or environment ownership.
-      const profile = /(?:^|\s)--user-data-dir=(\S+)/.exec(match[5])?.[1];
-      return [{ pid: Number(match[1]), ppid: Number(match[2]), start: `legacy:${match[4]}`,
+      const profile = /(?:^|\s)--user-data-dir=(\S+)/.exec(match[6])?.[1];
+      return [{ pid: Number(match[1]), ppid: Number(match[2]), start: `legacy:${match[5]}`, terminal: match[4].startsWith('Z'),
         args: profile ? [`--user-data-dir=${profile}`] : [], env: {} }];
     });
   } catch { return null; }
@@ -28,8 +28,7 @@ function linuxIdentity(pid) {
   if (statSync(path).uid !== process.getuid()) return null;
   const stat = readFileSync(join(path, 'stat'), 'utf8');
   const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-  if (fields[0] === 'Z') return null;
-  return { pid, ppid: Number(fields[1]), start: fields[19] };
+  return { pid, ppid: Number(fields[1]), start: fields[19], terminal: fields[0] === 'Z' };
 }
 
 function linuxProcess(pid) {
@@ -116,4 +115,21 @@ export function processAncestors(records, pid = process.pid) {
     pid = parent;
   }
   return ancestors;
+}
+
+/** A missing inventory row is not proof of exit: readers can lose permission. */
+export function probeTestPid(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code === 'ESRCH' ? false : null; }
+}
+
+export function testProcessSettlement(record, records, probe = probeTestPid) {
+  const current = Array.isArray(records) ? records.find(item => item.pid === record.pid) : null;
+  if (!current) return probe(record.pid) === false ? 'terminated' : 'unknown';
+  if (typeof current.start !== 'string' || !current.start) return 'unknown';
+  if (current.terminal === true) return 'terminated';
+  // A fallback reader uses a different identity encoding; that is not PID reuse.
+  if (current.start.startsWith('legacy:') !== record.start.startsWith('legacy:')) return 'unknown';
+  if (current.start !== record.start) return 'terminated';
+  return 'running';
 }

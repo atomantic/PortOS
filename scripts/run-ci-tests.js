@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'child_process';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
 import { dirname, join } from 'path';
@@ -224,9 +224,11 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
   const reportDir = mkdtempSync(join(hostRoot, 'portos-vitest-'));
   const reportPath = join(reportDir, 'failures.json');
   let cleanupUnverified = false;
+  let processEvidence = false;
   try {
     writeOwnerFile(reportDir);
     const launched = await runNpmWithReport(scope, script, extraArgs, reportPath, env, signal, cancellationTimeoutMs);
+    processEvidence = existsSync(join(reportDir, 'processes.json'));
     cleanupUnverified = launched.cleanupUnverified === true;
     if (cleanupUnverified) {
       console.error(`Test launcher cleanup unverified; diagnostics retained at ${reportDir}`);
@@ -235,6 +237,7 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
     // Per-file outcomes and the run-level verdict feed the test memo; an interrupted run proves nothing.
     const result = {
       ...launched,
+      ...(processEvidence ? { diagnosticsPath: reportDir } : {}),
       fileResults: launched.interrupted ? [] : fileResultsFromReport(reportPath),
       runReport: launched.interrupted ? null : readRunReport(join(reportDir, 'run.json')),
     };
@@ -249,7 +252,7 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
     }
     return result;
   } finally {
-    if (!durable && !cleanupUnverified) rmSync(reportDir, { recursive: true, force: true });
+    if (!durable && !cleanupUnverified && !processEvidence) rmSync(reportDir, { recursive: true, force: true });
   }
 }
 
@@ -277,7 +280,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     // the inherited group, so it can retire npm and Vitest even after this
     // launcher's event loop stopped or the launcher itself was killed.
     const processGroup = process.platform !== 'win32' && env.PORTOS_CI_TEST_SUPERVISED_GROUP !== '1';
-    const childEnv = { ...env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath };
+    const childEnv = { ...env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath, PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH: join(dirname(reportPath), 'processes.json') };
     // Only the workflow launcher owns durable attempts. Nested launcher
     // fixtures must not overwrite or add to the job's failure provenance.
     delete childEnv.PORTOS_CI_DIAGNOSTICS_DIR;

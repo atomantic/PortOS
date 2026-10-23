@@ -18,7 +18,7 @@ def snapshot():
         values = layout.unpack(buf.raw)
         if values[3] != pid or values[5] != os.getuid():
             return None
-        return {'pid': pid, 'ppid': values[4], 'start': f'{values[-2]}:{values[-1]}'}
+        return {'pid': pid, 'ppid': values[4], 'start': f'{values[-2]}:{values[-1]}', 'terminal': values[1] == 5}
 
     requested = json.load(sys.stdin)
     if requested is None:

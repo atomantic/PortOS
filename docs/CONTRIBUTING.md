@@ -89,6 +89,18 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
 
+Test process containment keeps signal delivery separate from verified termination.
+After worker-pool closure, any discovered owned child gets a bounded report in
+`.cache/test-process-diagnostics/`; the CI launcher also retains `processes.json`
+in its attempt diagnostics. Reports contain repository-relative suite names,
+bounded worker IDs and fixed lifecycle/settlement categories, never raw process
+arguments, environments, PIDs or private paths. Suite attribution is captured at
+child construction and matched by a hash of the PID and birth identity. Children
+that bypass the observer (including grandchildren whose parent already exited)
+remain explicitly unattributed. Unknown/unconfirmed settlement retains the run
+root and fails the run; a successful signal alone does not authorize removal.
+Interrupted-run sweeps retain roots while their deferred escalation is pending.
+
 Pregate proves only the stages it runs, and it says which it did not. A scoped
 plan runs every suite CI would run for it, in CI's dependency order and with
 CI's environment: the hidden-content scan, early structural guards, lint,
