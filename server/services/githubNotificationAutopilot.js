@@ -127,7 +127,7 @@ async function recordHandoff(account, row, handoff, actor = 'automation') {
  * `autopilotHandoff`, so each must agree with it on every row (the DB suite
  * checks the two against each other).
  */
-export async function listAutopilotCandidates(account) {
+async function listAutopilotCandidates(account) {
   const rules = account.agentRules;
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
@@ -143,6 +143,9 @@ export async function listAutopilotCandidates(account) {
   );
   return rows;
 }
+
+// The DB suite checks the SQL prefilter against `autopilotHandoff` row by row.
+export const __testing = { listAutopilotCandidates };
 
 export async function autopilotAccountNotifications(account) {
   if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };

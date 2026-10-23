@@ -44,7 +44,7 @@ const { addNotification } = await import('./notifications.js');
 const { addTask } = await import('./cosTaskStore.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount, getAccount: getAccountById } = await import('./githubAccounts.js');
-const { listAutopilotCandidates } = await import('./githubNotificationAutopilot.js');
+const { __testing: { listAutopilotCandidates } } = await import('./githubNotificationAutopilot.js');
 const { autopilotHandoff } = await import('../lib/githubNotificationTriage.js');
 const {
   syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
