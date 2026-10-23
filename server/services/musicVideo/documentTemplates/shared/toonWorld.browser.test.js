@@ -50,11 +50,33 @@ describe.skipIf(!canRun)('toon world headless dish proof', () => {
     expect(results.bloomOverInk).toBe(0);
     expect(results.repeat).toBe(true);
     expect(errors).toEqual([]);
-    console.log(`🎨 Toon dish proof: baseline ${results.baselineMs.toFixed(1)}ms, ink ${results.inkMs.toFixed(1)}ms, ratio ${results.ratio.toFixed(2)}`);
     if (process.env.PORTOS_TOON_PROOF_IMAGE) await page.screenshot({ path: process.env.PORTOS_TOON_PROOF_IMAGE });
+  }, 60000);
+
+  it('keeps ink within twice the completed baseline cost and reports each measured boundary', async () => {
+    const results = await page.evaluate(() => window.costProof());
+    const diagnostics = reportCost('ink', results);
     // SwiftShader (forced above) rasterises the extra full-screen ink pass in software, so CI Linux measures ~1.6x
-    // where a hardware GPU stays near 1.5x. 2x still fails a doubled-cost regression such as a second geometry pass.
-    expect(results.ratio).toBeLessThanOrEqual(2);
+    // where a hardware GPU stays near 1.5x. Retain the original completed-frame budget.
+    expect(results.ratio, diagnostics).toBeLessThanOrEqual(2);
+    for (const sample of results.samples) {
+      expect(sample.scenePasses, diagnostics).toBe(1);
+      expect(sample.screenPasses, diagnostics).toBe(sample.ink ? 1 : 0);
+    }
+    expect(errors).toEqual([]);
+  }, 60000);
+
+  it('rejects actual duplicated renderer work with the same 2x cost budget', async () => {
+    // Execute three complete ink frames before one readback: this is real GPU work,
+    // not multiplied timings or a fabricated slow sample.
+    const results = await page.evaluate(() => window.costProof(3));
+    const diagnostics = reportCost('duplicated-ink', results);
+    for (const sample of results.samples.filter(sample => sample.ink)) {
+      expect(sample.scenePasses, diagnostics).toBe(3);
+      expect(sample.screenPasses, diagnostics).toBe(3);
+    }
+    expect(results.ratio, diagnostics).toBeGreaterThan(2);
+    expect(errors).toEqual([]);
   }, 60000);
 
   it('selects all three explicit palette colors from illumination before receiving shadows', async () => {
@@ -74,6 +96,21 @@ describe.skipIf(!canRun)('toon world headless dish proof', () => {
     expect(errors).toEqual([]);
   });
 });
+
+function reportCost(label, results) {
+  const lines = [`🎨 Toon ${label}: baseline ${results.baselineMs.toFixed(2)}ms, ink ${results.inkMs.toFixed(2)}ms, ratio ${results.ratio.toFixed(3)}`];
+  for (const [index, sample] of results.samples.entries()) {
+    lines.push(`🎨 Toon ${label} sample ${index}: ink=${sample.ink} submit=${sample.submitMs.toFixed(2)}ms readback=${sample.readbackMs.toFixed(2)}ms total=${sample.totalMs.toFixed(2)}ms scene=${sample.scenePasses} screen=${sample.screenPasses} draws=${sample.drawCalls} triangles=${sample.triangles}`);
+  }
+  for (const [index, sample] of results.completionSamples.entries()) {
+    lines.push(`🎨 Toon ${label} completion ${index}: ink=${sample.ink} submit=${sample.submitMs.toFixed(2)}ms finish=${sample.finishMs.toFixed(2)}ms readback=${sample.readbackMs.toFixed(2)}ms`);
+  }
+  // CI silences console methods: retain the summary and attach all bounded
+  // samples to failed assertions so the first failed run remains diagnosable.
+  process.stdout.write(`${lines[0]}\n`);
+  for (const line of lines.slice(1)) console.log(line);
+  return lines.join('\n');
+}
 
 const fixture = `
 import * as THREE from './vendor/three.module.js';
@@ -161,17 +198,46 @@ window.proof=()=>{
   const noInk=draw(), yesInk=draw({ink:true});
   const hiddenChanged=changed(noInk,yesInk,index=>{const x=index%640,y=Math.floor(index/640);return x>260&&x<380&&y>130&&y<230;});
   scene.remove(blocker);
-  // Alternate measured runs, finish the GPU, and use medians after warmup.
+  return {overlaps:kit.warnOverlaps(THREE,dishes),darkInkCount,bloomOverInk,inkChanged,hiddenChanged,flatChanged,views,postChanged,repeat};
+};
+window.costProof=(inkFrames=1)=>{
+  // Keep synchronous readPixels inside the original 15-sample total-cost window.
+  // Submission includes CPU/driver time; readback includes pending GPU work and
+  // scheduling. Neither is a GPU timer or proof of contention by itself.
   for(let i=0;i<4;i++){draw();draw({ink:true});}
-  const a=[],b=[];
-  for(let i=0;i<15;i++){
-    for(const enabled of (i%2?[true,false]:[false,true])){
-      const start=performance.now();post.render(scene,camera,enabled?{ink:true}:{},0);pixels();
-      (enabled?b:a).push(performance.now()-start);
+  const samples=[],completionSamples=[];
+  const originalRender=renderer.render,autoReset=renderer.info.autoReset;
+  let scenePasses=0,screenPasses=0;
+  renderer.render=function(world,view){
+    if(world===scene)scenePasses++;else screenPasses++;
+    return originalRender.call(this,world,view);
+  };
+  renderer.info.autoReset=false;
+  const measure=(enabled,complete=false)=>{
+    scenePasses=0;screenPasses=0;renderer.info.reset();
+    const start=performance.now();
+    for(let pass=0;pass<(enabled?inkFrames:1);pass++)post.render(scene,camera,enabled?{ink:true}:{},0);
+    const submitted=performance.now();
+    if(complete)renderer.getContext().finish();
+    const finished=complete?performance.now():submitted;
+    pixels();
+    const end=performance.now();
+    return {ink:enabled,submitMs:submitted-start,finishMs:finished-submitted,readbackMs:end-finished,totalMs:end-start,
+      scenePasses,screenPasses,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles};
+  };
+  try{
+    for(let i=0;i<15;i++){
+      for(const enabled of (i%2?[true,false]:[false,true]))samples.push(measure(enabled));
     }
+    // Separate diagnostic probes drain GPU work before readback. They alter the
+    // synchronization boundary, so never substitute them into the 2x assertion.
+    for(let i=0;i<3;i++)for(const enabled of [false,true])completionSamples.push(measure(enabled,true));
+  }finally{
+    renderer.render=originalRender;renderer.info.autoReset=autoReset;
   }
   const median=values=>values.sort((x,y)=>x-y)[Math.floor(values.length/2)];
-  const baselineMs=median(a),inkMs=median(b);
-  return {overlaps:kit.warnOverlaps(THREE,dishes),darkInkCount,bloomOverInk,inkChanged,hiddenChanged,flatChanged,views,postChanged,repeat,baselineMs,inkMs,ratio:inkMs/baselineMs};
+  const baselineMs=median(samples.filter(s=>!s.ink).map(s=>s.totalMs));
+  const inkMs=median(samples.filter(s=>s.ink).map(s=>s.totalMs));
+  return {baselineMs,inkMs,ratio:inkMs/baselineMs,samples,completionSamples};
 };
 `;
