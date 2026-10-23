@@ -9,7 +9,10 @@ on:
   pull_request:
     branches: [main, release]
   schedule:
+    # Twice a day: with no push trigger these are the only runs that test the
+    # combined tree, so the second bounds how long a bad merge can hide.
     - cron: '17 9 * * *'
+    - cron: '17 21 * * *'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -1428,6 +1431,15 @@ jobs:
           CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}
           CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}
         run: node scripts/ci-gate-report.js
+
+      # A red scheduled run tested the combined tree with no PR attached, so name
+      # the merges since the last green one instead of leaving a hand bisect.
+      # Diagnostic only; the step above already failed the gate.
+      - name: Name the suspect merges
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci-nightly-report.js
 
   full-gate:
     # A second check run published ONLY when the impact plan chose the complete

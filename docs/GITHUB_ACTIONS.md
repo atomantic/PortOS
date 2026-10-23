@@ -48,7 +48,7 @@ once per event:
 | Push/merge to `main` | **Nothing** — no push trigger; the PR gate already passed |
 | PR `main` → `release` | **Full suite**, forced regardless of the diff |
 | Push/merge to `release` | Reuses the release PR's green gate; full suite only if it cannot be verified |
-| Nightly 09:17 UTC | Full suite — the `main`-branch health signal |
+| Scheduled 09:17 and 21:17 UTC | Full suite — the `main`-branch health signal; a red run names the merges since the last green one |
 | `workflow_dispatch` | Full suite |
 
 A release therefore pays for one full run (on its PR), not three.
@@ -1066,7 +1066,7 @@ JSON argument array to `spawnSync`, never through shell interpolation.
 The complete server, client, DB, lint, build, and smoke suite runs:
 
 - on every pull request whose base branch is `release` (the release gate);
-- nightly at 09:17 UTC;
+- on the schedule, 09:17 and 21:17 UTC;
 - from manual workflow dispatch;
 - as a reusable workflow called by a release whose tree has no verifiable gate.
 
@@ -1074,6 +1074,13 @@ There is **no push trigger on `main`**. A merge commit on `main` re-tests a
 tree whose PR gate is already green, so the run was pure duplication; the
 nightly full run is what catches a semantic conflict between two independently
 green PRs, and the `main` → `release` PR catches it before a release ships.
+
+A red scheduled run cannot point at a PR, so the gate's last step
+(`scripts/ci-nightly-report.js`, scheduled runs only) writes the suspect list to the run
+summary: the failing jobs and steps, plus every pull request merged since the last
+**green** scheduled run (the Compare API against that run's head). An unreadable range or
+a missing earlier green run is reported as such, never as "no suspects". To bisect, run the
+failing suite at a merge in the middle of the list and halve it.
 
 Changes to CI/test configuration also force the full suite on their own PR.
 `[skip ci]` remains honored for push events only; PR CI always runs.
