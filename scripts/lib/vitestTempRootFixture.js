@@ -1,5 +1,6 @@
 // Dependency-free subprocess fixtures: each workspace runs its own lifecycle cases.
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, watch, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +38,10 @@ export function createVitestTempFixture(host, workspace, body, config = 'vitest.
     });
   `);
   const env = { ...process.env, TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1' };
+  // These synthetic lifecycle fixtures never use a database. A private,
+  // unprovisioned test name keeps the real DB config from queuing behind an
+  // unrelated portos_test run before temp-root assertions can execute.
+  if (config === 'vitest.config.db.js') env.PGTESTDATABASE = `pvt_${randomUUID().replaceAll('-', '')}_test`;
   delete env.PORTOS_TEST_TEMP_ROOT;
   delete env.VITEST_FAST;
   // The fixture's main process is not a pool worker of the suite spawning it.
