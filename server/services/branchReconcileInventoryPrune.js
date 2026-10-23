@@ -32,6 +32,9 @@ export async function findGoneInventoryRows(repoPath, rows, { includeObligations
   const registered = await registeredPaths(repoPath);
   const gone = [];
   for (const row of rows) {
+    // A remote-only hold has no local ref by definition. Only a new forge scan
+    // can establish that its remote preservation obligation is gone.
+    if (row?.reason === 'remote-branch-held') continue;
     if (!includeObligations && isObligationRow(row)) continue;
     if (typeof row?.path === 'string' && row.path) {
       if (!registered.has(row.path) && !await pathExists(row.path)) gone.push(row);
