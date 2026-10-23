@@ -122,6 +122,8 @@ export function releaseClaimBranch(agent, branch) {
   const released = ownershipList(agent, 'claimReleasedBranches');
   return {
     claimBranches: ownershipList(agent, 'claimBranches').filter((b) => b !== branch),
+    ...(Array.isArray(agent.metadata?.reconcileReservations)
+      ? { reconcileReservations: agent.metadata.reconcileReservations.filter(target => target.branch !== branch) } : {}),
     ...(agent.metadata?.reconcileMergeReservation?.branch === branch ? { reconcileMergeReservation: null } : {}),
     claimReleasedBranches: released.includes(branch) ? released : [...released, branch].slice(-MAX_BOUND_CLAIM_BRANCHES),
   };
@@ -171,7 +173,7 @@ export function reconcileAssignmentForTask(task) {
 }
 
 /** Match an exact target against both the registered and live assignment. */
-export function reconcileAssignedTarget(agent, task, target) {
+export function reconcileAssignedTarget(agent, task, target, { bindCheckout = false } = {}) {
   const assignment = reconcileAssignmentForTask(task);
   const meta = agent?.metadata;
   if (!assignment || agent.status !== 'running' || agent.taskId !== task.id
@@ -179,15 +181,27 @@ export function reconcileAssignedTarget(agent, task, target) {
     || JSON.stringify(assignment) !== JSON.stringify(meta?.reconcileAssignment)
     || !samePath(meta.sourceWorkspace || meta.workspacePath, assignment.repoPath)
     || !isPlainObject(target)) return null;
-  const assigned = assignment.targets.find(row => row.branch === target.branch
-    && samePath(row.workspacePath, target.workspacePath));
-  return assigned ? { assignment, target: assigned } : null;
+  const assigned = assignment.targets.find(row => row.branch === target.branch);
+  const reservations = meta.reconcileReservations ?? [];
+  if (!assigned || !Array.isArray(reservations) || reservations.some(row => !isPlainObject(row)
+    || typeof row.branch !== 'string' || (row.workspacePath !== null
+      && (typeof row.workspacePath !== 'string' || !isAbsolute(row.workspacePath))))) return null;
+  const reserved = reservations.find(row => row?.branch === target.branch);
+  const expectedPath = assigned.workspacePath ?? reserved?.workspacePath ?? null;
+  const observedPath = target.workspacePath ?? null;
+  // A scan may assign an existing branch before it has a checkout. Only the
+  // ownership service may bind its first observed holder; subsequent checks
+  // must preserve that holder even though the original assignment was null.
+  const matches = expectedPath ? samePath(expectedPath, observedPath)
+    : observedPath === null || (bindCheckout && typeof observedPath === 'string' && isAbsolute(observedPath));
+  if (!matches || (!bindCheckout && (!reserved || !samePath(reserved.workspacePath, observedPath)))) return null;
+  return { assignment, target: { ...assigned, workspacePath: observedPath } };
 }
 
 /** Assignment scope is not merge permission: retirement/review/handoff stay held. */
 export function reconcileMergeTarget(agent, task, target) {
   const proof = reconcileAssignedTarget(agent, task, target);
-  return proof?.target.merge && !agent.metadata.configReadOnly && !isTruthyMeta(task.metadata.readOnly)
+  return proof?.target.merge && proof.target.workspacePath && !agent.metadata.configReadOnly && !isTruthyMeta(task.metadata.readOnly)
     && agent.metadata.prCompletionPolicy !== 'leave-open' && !prStaysOpen(task) && !isTruthyMeta(task.metadata.reviewLoopLeaveOpen)
     && ![false, 'false'].includes(task.metadata.autoMerge) ? proof : null;
 }
@@ -213,7 +227,8 @@ export function injectReconcileAgentId(text, agentId) {
 // A release may also come from a run that holds the branch by reservation rather
 // than as a claim run (a branch-reconcile coordinator).
 function releaseRefusal(agent, branch) {
-  if (isLiveAgent(agent) && agent.metadata?.reconcileMergeReservation?.branch === branch) return null;
+  if (isLiveAgent(agent) && Array.isArray(agent.metadata?.reconcileReservations)
+    && agent.metadata.reconcileReservations.some(target => target.branch === branch)) return null;
   if (isLiveAgent(agent) && ownershipList(agent, 'claimBranches').includes(branch)) {
     return isClaimOwnershipBranch(branch) ? null : 'branch-invalid';
   }
@@ -299,7 +314,9 @@ function scanClaimHolders({ agents, holderPath, branchName, sourceWorkspace, ign
       return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
     }
     if (!inRepository(agent, sourceWorkspace)) continue;
-    if (agent.metadata?.reconcileMergeReservation?.branch === branchName || ownsClaimBranch(agent, branchName)) return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
+    const reservations = agent.metadata?.reconcileReservations;
+    if (reservations != null && (!Array.isArray(reservations) || reservations.some(target => !target || typeof target.branch !== 'string'))) { possible.push(agent.id); continue; }
+    if (reservations?.some(target => target?.branch === branchName) || ownsClaimBranch(agent, branchName)) return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
     if (claimHolder && mayPickClaimBranch(agent, branchName)) possible.push(agent.id);
   }
   return possible.length ? { occupancy: 'ambiguous', holderIds: possible.filter(Boolean) } : { occupancy: null, holderIds: [] };

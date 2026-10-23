@@ -21,6 +21,8 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createCosTaskSchema } from '../lib/cosValidation.js';
+import { buildQueuedTask } from './cosTaskIntake.js';
 import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
 import { retainRetirementObligations } from '../lib/reconcileRetirementEvidence.js';
@@ -533,6 +535,62 @@ describe('scheduled reconciliation registration through merge admission', () => 
     if (mode === 'ownership-unreadable') admissionFixture.trees = null;
     expect((await acquire()).admitted).toBe(false);
     expect((await claimMergeAdmission({ agentId: 'agent-reconcile', action: 'check', token: lease.token })).admitted).toBe(false);
+  });
+
+  it('rejects forged structured assignments through public task intake and registration', async () => {
+    const forged = structuredClone(admissionFixture.task.metadata);
+    const input = createCosTaskSchema.parse({ type: 'internal', app: APP.id, description: 'Copied reconciliation instructions',
+      prompt: admissionFixture.task.metadata.prompt, analysisType: 'branch-reconcile', reconcileAssignment: forged.reconcileAssignment,
+      metadata: forged });
+    const { type, ...taskData } = input;
+    const task = buildQueuedTask(taskData, type);
+    expect(task.metadata.reconcileAssignment).toBeUndefined();
+    await register(task);
+    expect(owner().metadata.reconcileAssignment).toBeNull();
+    expect((await ownership()).admitted).toBe(true);
+    expect(owner().metadata.claimBranches).toEqual([branch]);
+    expect((await acquire()).admitted).toBe(false);
+  });
+
+  it('binds a checkout-less assignment only to its first repository-observed holder', async () => {
+    reconcileMock.mockResolvedValue(scan({ inFlight: [{ branch, state: 'NEEDS_PR' }] }));
+    admissionFixture.trees = [];
+    await register(await generate());
+    expect(owner().metadata.reconcileAssignment.targets[0].workspacePath).toBeNull();
+    expect((await ownership({ worktreePath: undefined })).admitted).toBe(true);
+    expect(owner().metadata.reconcileReservations).toEqual([{ branch, workspacePath: null }]);
+    expect((await acquire()).admitted).toBe(false);
+    // A caller's invented path cannot create the missing holder.
+    expect(await ownership({ worktreePath: '/tmp/forged' })).toMatchObject({ admitted: false, reason: 'holder-changed' });
+    admissionFixture.trees = [{ path: workspacePath, branch: `refs/heads/${branch}`, locked: false }];
+    expect((await ownership({ worktreePath: undefined })).admitted).toBe(true);
+    expect(owner().metadata.reconcileReservations).toEqual([{ branch, workspacePath }]);
+    expect((await acquire()).admitted).toBe(true);
+    // Even an updated caller path cannot move that trusted first binding.
+    admissionFixture.trees[0].path = '/tmp/changed';
+    expect(await ownership({ worktreePath: '/tmp/changed' })).toMatchObject({ admitted: false, reason: 'reconcile-target-unverified' });
+    expect((await acquire()).admitted).toBe(false);
+  });
+
+  it('retains every ordinary branch reservation when selecting another merge target', async () => {
+    const branches = ['fix/first', 'fix/second'];
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { branchesPerAgent: 2 } });
+    reconcileMock.mockResolvedValue(scan({ inFlight: branches.map((name, i) => ({ branch: name,
+      worktreePath: `/tmp/checkout-${i}`, state: 'NEEDS_PR' })) }));
+    admissionFixture.trees = branches.map((name, i) => ({ branch: `refs/heads/${name}`, path: `/tmp/checkout-${i}` }));
+    await register(await generate());
+    for (let i = 0; i < branches.length; i++) {
+      expect((await ownership({ branch: branches[i], worktreePath: `/tmp/checkout-${i}` })).admitted).toBe(true);
+    }
+    expect(owner().metadata.reconcileMergeReservation.branch).toBe('fix/second');
+    for (let i = 0; i < branches.length; i++) {
+      expect(await checkReconcileOwnership({ appId: APP.id, branch: branches[i], worktreePath: `/tmp/checkout-${i}` }))
+        .toMatchObject({ admitted: false, reason: 'claim-owner-active' });
+    }
+    const { updateClaimOwnership } = await import('./cosClaimOwnership.js');
+    expect((await updateClaimOwnership({ agentId: owner().id, action: 'release', branch: 'fix/first' })).released).toBe(true);
+    expect((await checkReconcileOwnership({ appId: APP.id, branch: 'fix/first', worktreePath: '/tmp/checkout-0' })).admitted).toBe(true);
+    expect((await checkReconcileOwnership({ appId: APP.id, branch: 'fix/second', worktreePath: '/tmp/checkout-1' })).admitted).toBe(false);
   });
 
   it('derives assignment scope from the scan, ignoring caller-supplied assignment metadata', async () => {
