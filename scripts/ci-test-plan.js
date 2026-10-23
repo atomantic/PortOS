@@ -231,8 +231,10 @@ const describeDependencyVerdict = (path, { escalate, reason, packages }) => {
 // package, an `engines`/`overrides`/non-dependency field change, or a manifest
 // the planner could not read and compare escalates Windows.
 const FULL_TRIGGER_RULES = [
-  // Defines the windows-server job itself.
-  { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsEscalates: true },
+  // ci.yml defines the windows-server job itself. The other workflows (release,
+  // acceptance, cancel recovery) never run on windows-latest.
+  { re: /^\.github\/workflows\/ci\.yml$/, reason: 'workflow definition changed', windowsEscalates: true },
+  { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsEscalates: false },
   { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsEscalates: 'dependencies' },
   // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
   // it on the Windows install too.
@@ -265,9 +267,13 @@ const FULL_TRIGGER_RULES = [
   { re: /^server\/sockets\/logs\.js$/, reason: 'log socket source changed (broad import fanout)', windowsEscalates: true },
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
-  // prove themselves against the complete suite rather than their own scope —
-  // including on Windows, whose shard matrix ci-test-plan.js itself emits.
-  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|ci-test-plan|run-ci-(?:lint|tests)|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: true },
+  // prove themselves against the complete suite rather than their own scope.
+  // Only the ones the windows-server job itself executes (ci-base-sha,
+  // run-ci-tests and the githubOutput helper it imports) escalate Windows; the
+  // planner, lint runner, hidden-content scan and status verifier run on Linux
+  // jobs only, so a Windows run would observe nothing they change.
+  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: true },
+  { re: /^scripts\/(?:ci-test-plan|run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: false },
 ];
 
 // Files whose Windows behavior is not faithfully exercised by pinPlatform()

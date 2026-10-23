@@ -805,6 +805,14 @@ edits `App.jsx` *and* bumps a lockfile escalates. Otherwise the job drops to **o
 `WINDOWS_CONTRACT_TESTS`** — reduced, never skipped, and exactly the depth a
 Windows-risk scoped PR already gets.
 
+**Workflows and pipeline scripts decide by what runs on `windows-latest`.** Only
+`ci.yml` defines the windows-server job, so only it escalates Windows; `release.yml`,
+`eidoverse-acceptance.yml` and `ci-cancel-recovery.yml` still force a full Linux plan but
+Windows runs the baseline. Likewise only the pipeline scripts the Windows job executes
+(`ci-base-sha`, `run-ci-tests`, and `lib/githubOutput` which the runner imports) escalate it;
+`ci-test-plan`, `run-ci-lint`, `scan-diff-hidden-content` and `verify-ci-status` run on Linux jobs
+only. The nightly run and the `main` → `release` PR keep the complete matrix as the net.
+
 **Dependency manifests decide per package.** The planner's 32-PR sample in
 October 2026 traced every full plan to a lockfile/manifest change (4),
 `server/lib/validation.js` (2) or `.github/workflows/ci.yml` (2). A lockfile
