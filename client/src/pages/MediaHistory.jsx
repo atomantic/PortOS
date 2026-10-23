@@ -86,16 +86,30 @@ export default function MediaHistory() {
     return true;
   }, []);
 
+  const recheckStitch = useCallback(async (jobId) => {
+    const current = await getMediaJob(jobId).catch(() => null);
+    if (!mounted.current) return;
+    if (!current?.status && stitchJobsRef.current.delete(jobId)) {
+      toast('Stitch status unknown — check media history');
+    } else if (current?.status === 'completed' && settleStitch(jobId)) refresh();
+    else if (current?.status === 'failed' || current?.status === 'canceled') {
+      settleStitch(jobId, current.error || (current.status === 'canceled' ? 'Stitch canceled' : 'Stitch failed'));
+    }
+  }, [mounted, refresh, settleStitch]);
+
   useEffect(() => {
     const onCompleted = (event) => settleStitch(event?.generationId);
-    const onFailed = (event) => settleStitch(event?.generationId, event.error || 'Stitch failed');
+    const onFailed = (event) => settleStitch(event?.generationId, event?.error || 'Stitch failed');
+    const onReconnect = () => { for (const id of stitchJobsRef.current) void recheckStitch(id); };
     socket.on('video-gen:completed', onCompleted);
     socket.on('video-gen:failed', onFailed);
+    socket.on('connect', onReconnect);
     return () => {
       socket.off('video-gen:completed', onCompleted);
       socket.off('video-gen:failed', onFailed);
+      socket.off('connect', onReconnect);
     };
-  }, [settleStitch]);
+  }, [recheckStitch, settleStitch]);
 
   const handleStitch = async () => {
     if (selected.length < 2) return;
@@ -110,12 +124,7 @@ export default function MediaHistory() {
       setSelected([]);
       // Subscribe before this one-shot read: a terminal event can beat the POST
       // acknowledgement, or arrive during the read. The id set settles once.
-      const current = await getMediaJob(job.jobId).catch(() => null);
-      if (!mounted.current) return;
-      if (current?.status === 'completed' && settleStitch(job.jobId)) refresh();
-      else if (current?.status === 'failed' || current?.status === 'canceled') {
-        settleStitch(job.jobId, current.error || (current.status === 'canceled' ? 'Stitch canceled' : 'Stitch failed'));
-      }
+      await recheckStitch(job.jobId);
     } catch (err) {
       if (!mounted.current) return;
       setStitching(false);
