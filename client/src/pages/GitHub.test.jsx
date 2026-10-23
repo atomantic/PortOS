@@ -858,6 +858,40 @@ describe('GitHub automations tab', () => {
     }));
     expect(await screen.findByText('octocat/hello', { selector: 'span' })).toBeTruthy();
   });
+
+  it('preserves a saved agent rule pin while its provider catalog is loading', async () => {
+    let resolveProviders;
+    mock.getProviders.mockReturnValue(new Promise((resolve) => { resolveProviders = resolve; }));
+    const rule = { id: 'rule-pinned', kind: 'review-request', repo: '*', action: 'agent', provider: 'example-provider', model: 'example-model', effort: 'high' };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], agentRules: [rule], repos: [] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+    const edit = await screen.findByRole('button', { name: 'Edit Review requests rule for All repos' });
+    await act(async () => fireEvent.click(edit));
+    const form = screen.getByRole('form', { name: 'Edit automation rule' });
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
+    fireEvent.submit(form);
+    expect(mock.updateGitHubAccount).not.toHaveBeenCalled();
+
+    await act(async () => resolveProviders({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] }));
+    await waitFor(() => expect(screen.getByLabelText(/^Provider/)).toHaveValue('example-provider'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentRules: [rule] }));
+  });
+
+  it('allows non-agent rule edits while the provider catalog is loading', async () => {
+    mock.getProviders.mockReturnValue(new Promise(() => {}));
+    const rule = { id: 'rule-done', kind: 'ci-activity', repo: '*', action: 'done' };
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], agentRules: [rule], repos: [] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    renderTab('automations');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit CI activity rule for All repos' }));
+    fireEvent.change(screen.getByLabelText('Then'), { target: { value: 'leave' } });
+    const save = screen.getByRole('button', { name: 'Save rule' });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentRules: [{ ...rule, action: 'leave' }] }));
+  });
 });
 
 describe('GitHub audit tab', () => {

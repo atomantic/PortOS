@@ -66,7 +66,7 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
   const canApplyNow = matches > 0 && actsNow(account.mode, action);
   const submit = (event) => {
     event.preventDefault();
-    if (!repoValid || clash) return;
+    if (!repoValid || clash || saving || (action === 'agent' && picker.loading)) return;
     const agent = action === 'agent';
     onSubmit({
       id: rule?.id || newRuleId(),
@@ -131,7 +131,7 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
       )}
       {clash && <p role="alert" className="text-xs text-port-error">There is already a rule for this kind of notification in {repoLabel(repo)}.</p>}
       <div className="flex flex-wrap gap-2">
-        <button type="submit" disabled={saving || !repoValid || clash} className="rounded bg-port-accent px-3 py-1.5 text-xs text-white disabled:opacity-50">
+        <button type="submit" disabled={saving || !repoValid || clash || (action === 'agent' && picker.loading)} className="rounded bg-port-accent px-3 py-1.5 text-xs text-white disabled:opacity-50">
           {saving ? 'Saving…' : 'Save rule'}
         </button>
         <button type="button" onClick={onCancel} className="rounded border border-port-border px-3 py-1.5 text-xs text-gray-300">Cancel</button>
