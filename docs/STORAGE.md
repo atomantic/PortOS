@@ -69,6 +69,47 @@ retires that exact owner under one lock. Missing ownership can only replay the
 existing receipt, never create an owner. This does not certify a complete
 transcript, clear transcript warnings, or change the original task outcome.
 
+### Interrupted maintenance transactions
+
+An interrupted journal write stays fail-closed across restarts. Settings → General
+→ Graceful maintenance reports `interrupted-transaction` and the lock time,
+`unreadable-journal` for damaged/incompatible state, or `process-uncertain` when
+this process could not confirm a write. The first transaction failure logs its
+original error code and message; repeated refusals do not flood that diagnostic.
+
+Inspect the logs and resolve disk-space or I/O problems first. From the install
+directory, stop both PM2 apps and any standalone processes using this journal:
+
+```bash
+pm2 stop portos-server portos-cos
+node scripts/recover-maintenance-transaction.mjs --confirm "Inspected interrupted transaction and resolved disk problem"
+pm2 start portos-server portos-cos
+```
+
+Use your actual recovery reason. From a reviewed isolated checkout, set
+`PORTOS_DATA_ROOT` to the install root (the parent of `data/`). The command refuses
+live/transitioning PM2 ownership, an unreadable PM2 inventory, an invalid/future
+`state.json`, or linked/non-regular journal evidence. Restore compatible code or
+recover damaged journal data separately before retrying; never delete valid
+operations or replace damaged state with an empty journal to bypass this check.
+
+Recovery preserves the original state, `transaction/`, every `pending-*.json`,
+and a receipt recording the operator reason, lock mtime, pending sizes, original
+state hash and retained hold under `data/workflow-maintenance/recovered-<timestamp>-<id>/`.
+It publishes a **Transaction recovery** hold before moving the lock when no hold
+exists; an existing hold and every operation/exclusive owner remain intact.
+A failed repair retains admission fencing and evidence; after addressing its
+cause, repeat the confirmed command. There is no automatic expiry or PID-based
+lock removal. Starting both apps clears their in-memory uncertainty, but does
+not clear the hold or certify that unresolved work finished.
+
+After restarting, refresh maintenance status, inspect/reconcile any remaining
+blockers through their owning workflows, and choose **Resume previous policies**
+deliberately. With no unresolved operations the status is Ready; otherwise it is
+Draining. Recovery archives stay in the same backed-up, machine-local subtree:
+snapshots retain them as evidence and restores preserve the current subtree
+byte-for-byte, including archives, rather than installing a snapshot's authority.
+
 ### Explicitly abandoned duplicate agents
 
 A local operator may reconcile a user-killed duplicate that saved no output with
