@@ -17,6 +17,7 @@ vi.mock('../services/git.js', () => ({
   updateBranches: vi.fn().mockResolvedValue({}),
   getBranchComparison: vi.fn().mockResolvedValue({}),
   pushAll: vi.fn().mockResolvedValue({}),
+  rebaseAndPushDefaultBranch: vi.fn().mockResolvedValue({ success: true }),
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
   checkout: vi.fn().mockResolvedValue({}),
   pull: vi.fn().mockResolvedValue({}),
@@ -89,6 +90,7 @@ describe('git routes — workspace root validation', () => {
       ['POST /diff', '/diff', { path: '/etc' }],
       ['POST /commits', '/commits', { path: '/etc' }],
       ['POST /push', '/push', { path: '/etc' }],
+      ['POST /rebase-push', '/rebase-push', { path: '/etc' }],
       ['POST /pull', '/pull', { path: '/etc' }],
       ['POST /info', '/info', { path: '/etc' }],
       ['POST /branches', '/branches', { path: '/etc' }]
@@ -113,6 +115,7 @@ describe('git routes — workspace root validation', () => {
       ['POST /diff', '/diff', { path: '/Users/me/project' }],
       ['POST /commits', '/commits', { path: '/Users/me/project' }],
       ['POST /push', '/push', { path: '/Users/me/project' }],
+      ['POST /rebase-push', '/rebase-push', { path: '/Users/me/project' }],
       ['POST /pull', '/pull', { path: '/Users/me/project' }],
       ['POST /info', '/info', { path: '/Users/me/project' }],
       ['POST /branches', '/branches', { path: '/Users/me/project' }]
