@@ -297,6 +297,41 @@ describe('weaveEpisode', () => {
     expect(runStagedLLM.mock.calls[1][1].outlineDigest).toContain('[s1] Signal');
   });
 
+  it('overlays contract fields from the outline when the model drifts (ending emitted as a cut)', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+    const graph = generatedGraphFromOutline();
+    graph.nodes[2].playbackMode = 'cut';
+    graph.nodes[1].audienceConnection = 'connected';
+    runStagedLLM.mockResolvedValueOnce({ content: graph, runId: 'drift-expand' });
+
+    const result = await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    const episode = result.loom.episodes[0];
+    const scenes = episode.storyOutline.scenes;
+    episode.nodes.forEach((node, i) => {
+      expect(node.playbackMode).toBe(scenes[i].playbackMode);
+      expect(node.audienceConnection).toBe(scenes[i].audienceConnection);
+      expect(node.protagonistPresence).toBe(scenes[i].protagonistPresence);
+      expect(node.isEnding).toBe(scenes[i].isEnding);
+    });
+    expect(episode.nodes[2].playbackMode).toBe('decision');
+  });
+
+  it('still rejects a changed transition target and names the scene and field', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+    const graph = generatedGraphFromOutline();
+    graph.nodes[0].transitions[0].targetKey = 's3';
+    runStagedLLM.mockResolvedValueOnce({ content: graph, runId: 'broken-expand' });
+
+    await expect(weaveEpisode(loomId, episodeId, { expandFromOutline: true }))
+      .rejects.toThrow(/Signal.*transitions: outline=/);
+  });
+
   it('replaces an old teleplay after a structurally valid outline rewrite', async () => {
     const { loomId, episodeId } = await setup();
     runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });

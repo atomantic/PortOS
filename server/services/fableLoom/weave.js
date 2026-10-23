@@ -606,6 +606,11 @@ export async function weaveEpisode(loomId, episodeId, {
       endingLabel: outlineScene.endingLabel || '',
       plotPointId: outlineScene.plotPointId || null,
       challengePhase: outlineScene.challengePhase || null,
+      // The validated outline owns the contract; the model owns prose and prompts.
+      playbackMode: outlineScene.playbackMode,
+      audienceConnection: outlineScene.audienceConnection,
+      protagonistPresence: outlineScene.protagonistPresence,
+      isEnding: outlineScene.isEnding,
       transitions: node.transitions.map((transition) => {
         const paths = outlineScene.transitions.filter((path) => path.targetKey === transition.targetNodeId);
         const planned = paths.find((path) => path.intent === transition.intent) || (paths.length === 1 ? paths[0] : null);
