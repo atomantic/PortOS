@@ -1,4 +1,5 @@
 import { existsSync } from 'fs';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, join, resolve } from 'path';
@@ -174,11 +175,55 @@ export async function commit(dir, message, { paths = [] } = {}) {
   return withCheckoutPublication(dir, () => commitAdmitted(dir, message, { paths }));
 }
 
+// Snapshot only read-only identities. Detached/unborn HEAD cannot verify an
+// ambiguous result; ordinary successful commits there still work as before.
+async function commitIdentity(dir) {
+  const branch = await execGit(['symbolic-ref', '--quiet', 'HEAD'], dir, { ignoreExitCode: true });
+  const head = await execGit(['rev-parse', '--verify', 'HEAD'], dir, { ignoreExitCode: true });
+  return {
+    branch: branch.exitCode === 0 ? branch.stdout.trim() : null,
+    head: head.exitCode === 0 && /^[a-f0-9]{40,64}$/.test(head.stdout.trim()) ? head.stdout.trim() : null
+  };
+}
+
+async function verifyCommitReadback(dir, before, action) {
+  const after = await commitIdentity(dir);
+  if (!before.branch?.startsWith('refs/heads/') || !before.head
+    || after.branch !== before.branch || !after.head || after.head === before.head) return { after, verified: false };
+  const log = await execGit(['reflog', '-1', '--format=%H%x00%gs', before.branch], dir);
+  const [hash, subject] = log.stdout.trim().split('\0');
+  const parent = await execGit(['rev-parse', `${after.head}^1`], dir);
+  // A matching tree/message alone could belong to a competing writer. The
+  // per-invocation reflog action correlates this advance with our child process.
+  const current = await commitIdentity(dir);
+  return { after, verified: hash === after.head && subject?.startsWith(`${action}: `)
+    && parent.stdout.trim() === before.head
+    && current.branch === before.branch && current.head === after.head };
+}
+
 async function commitAdmitted(dir, message, { paths = [] } = {}) {
   const pathspecs = paths.length ? ['--', ...validateFilePaths(paths).map(toLiteralPathspec)] : [];
-  // Using spawn with -m argument passes message safely without shell interpretation
-  const result = await execGit(['commit', '-m', message, ...pathspecs], dir);
-  const hashMatch = result.stdout.match(/\[[\w-]+ ([a-f0-9]+)\]/);
+  const before = await commitIdentity(dir);
+  const action = `portos-commit-${randomUUID()}`;
+  // Rerere can fail AFTER commit updated the ref (#13292). Never repeat the
+  // mutation or touch a lock. Timeouts/signals remain uncertain lifetime errors.
+  const result = await execGit(['commit', '-m', message, ...pathspecs], dir, {
+    ignoreExitCode: true, env: { ...process.env, GIT_REFLOG_ACTION: action }
+  });
+  if (result.exitCode !== 0) {
+    const readback = Number.isInteger(result.exitCode) && !result.terminated
+      ? await verifyCommitReadback(dir, before, action).catch(() => null) : null;
+    const commitOutcome = {
+      command: 'commit', exitCode: result.exitCode, beforeHead: before.head,
+      afterHead: readback?.after?.head ?? null,
+      status: readback?.verified ? 'verified-committed' : 'unverified'
+    };
+    if (readback?.verified) return { hash: readback.after.head, message, commitOutcome };
+    throw Object.assign(new Error(result.stderr || `git exited with code ${result.exitCode}`), {
+      commitOutcome, ...(result.terminated ? { name: 'AbortError', terminated: true, signal: result.signal } : {})
+    });
+  }
+  const hashMatch = result.stdout.match(/^\[[^\r\n]* ([a-f0-9]+)\]/m);
   return {
     hash: hashMatch ? hashMatch[1] : null,
     message
