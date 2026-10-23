@@ -955,18 +955,25 @@ export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assis
 // Per-repo agent rules for the GitHub inbox: which kind of notification starts
 // a CoS agent, in one repo (`owner/repo`) or every repo (`*`), and on which
 // provider/model/effort. A repo rule wins over the `*` rule of the same kind.
-export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity']);
+export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity']);
+export const GITHUB_CI_RULE_ACTIONS = Object.freeze(['done', 'mute', 'leave']);
 export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 const emptyToNullString = (value) => (value === '' ? null : value);
 export const githubAgentRuleSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
   kind: z.enum(GITHUB_AGENT_RULE_KINDS),
   repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, or * for every repo'),
-  agent: z.boolean(),
+  // `ci-activity` rules carry an `action` instead of `agent`.
+  agent: z.boolean().optional(),
+  action: z.enum(GITHUB_CI_RULE_ACTIONS).optional(),
   provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
   model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
   effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
-}).strict();
+}).strict().superRefine((rule, ctx) => {
+  const ci = rule.kind === 'ci-activity';
+  if (ci && !rule.action) ctx.addIssue({ code: 'custom', path: ['action'], message: 'Choose what to do with CI notifications' });
+  if (!ci && typeof rule.agent !== 'boolean') ctx.addIssue({ code: 'custom', path: ['agent'], message: 'Choose whether to start an agent' });
+});
 export const githubAgentRulesSchema = z.array(githubAgentRuleSchema).max(200).superRefine((rules, ctx) => {
   const seen = new Set();
   rules.forEach((rule, index) => {

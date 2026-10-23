@@ -131,9 +131,8 @@ router.post('/restart', asyncHandler(async (req, res) => {
 
 // POST /api/browser/navigate - Open a URL in the CDP browser
 router.post('/navigate', asyncHandler(async (req, res) => {
-  const caller = req.headers['referer'] || req.headers['origin'] || 'unknown';
-  console.log(`🌐 Navigate: ${req.body?.url} (from ${caller})`);
   const { url } = validateRequest(navigateSchema, req.body);
+  console.log('🌐 Browser navigation requested');
   // Layer 2 — DNS-resolve pre-check: reject a hostname whose A record points at a
   // blocked (loopback / link-local / cloud-metadata) address BEFORE opening a
   // tab. Throws a clean 400 (UNSAFE_URL) via the shared safeUrlFetch gate; an

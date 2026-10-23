@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  agentHandoff, agentRuleScope, agentRunPin, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
+  agentHandoff, agentRuleScope, agentRunPin, ciActivityAction, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
   selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
@@ -370,5 +370,19 @@ describe('generic notification-resolve lane (#13191)', () => {
     expect(agentRunPin({ rulePin, defaults })).toEqual(rulePin);
     expect(agentRunPin({ rulePin: null, defaults })).toEqual(defaults);
     expect(agentRunPin({ defaults: { provider: 7 } })).toEqual({});
+  });
+});
+
+describe('ciActivityAction', () => {
+  const ci = { reason: 'ci_activity', subject_type: 'CheckSuite', repo_full_name: 'acme/app' };
+  it('marks CI notices done by default and lets a repo or * rule override it', () => {
+    expect(ciActivityAction({ account: { agentRules: [] }, row: ci })).toBe('done');
+    const rules = [{ id: 'a', kind: 'ci-activity', repo: '*', action: 'leave' }, { id: 'b', kind: 'ci-activity', repo: 'acme/app', action: 'mute' }];
+    expect(ciActivityAction({ account: { agentRules: rules }, row: ci })).toBe('mute');
+    expect(ciActivityAction({ account: { agentRules: rules }, row: { ...ci, repo_full_name: 'acme/other' } })).toBe('leave');
+  });
+  it('ignores non-CI threads and malformed rules', () => {
+    expect(ciActivityAction({ account: {}, row: { reason: 'mention', subject_type: 'Issue' } })).toBeNull();
+    expect(ciActivityAction({ account: { agentRules: [{ kind: 'ci-activity', repo: '*', action: 'nuke' }] }, row: ci })).toBe('done');
   });
 });

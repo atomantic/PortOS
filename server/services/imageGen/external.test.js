@@ -26,6 +26,26 @@ beforeEach(() => {
 });
 
 describe('external image generation lifecycle', () => {
+  it('keeps the prompt and private endpoint out of logs without changing the render request', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const prompt = 'Example private portrait for alice@example.com';
+    const sdapiUrl = 'https://example.com/private-model?key=example-secret';
+    fetchWithTimeout.mockImplementation(async (url) => {
+      if (url.endsWith('/txt2img')) throw new Error('stop after payload');
+      return response({ sd_model_checkpoint: 'example-model', progress: 0, state: {} });
+    });
+
+    try {
+      await expect(generateImage({ sdapiUrl, prompt })).rejects.toThrow('stop after payload');
+      const [url, init] = fetchWithTimeout.mock.calls.find(([url]) => url.endsWith('/txt2img'));
+      expect(url).toBe('https://example.com/sdapi/v1/txt2img');
+      expect(JSON.parse(init.body).prompt).toBe(prompt);
+      expect(log.mock.calls.flat().join('\n')).not.toMatch(/alice@example\.com|Example private portrait|example\.com|example-secret/);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('clears activeJob and emits a failure when a terminal response cannot be read', async () => {
     fetchWithTimeout
       .mockResolvedValueOnce(response({ sd_model_checkpoint: 'example-model' }))
