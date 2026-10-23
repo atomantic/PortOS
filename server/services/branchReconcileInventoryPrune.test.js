@@ -10,9 +10,6 @@ describe('historical checkout inventory', () => {
   it('keeps remote-only holds when their local branch is absent, while pruning missing local branches', async () => {
     const remote = { branch: 'fix/remote-only', reason: 'remote-branch-held' };
     const local = { branch: 'fix/gone', reason: 'actionable' };
-    execGit.mockImplementation(async (args) => args[0] === 'worktree'
-      ? { stdout: 'worktree /repo\nbranch refs/heads/main\n\n', exitCode: 0 }
-      : { stdout: '', exitCode: 1 });
     expect(await findGoneInventoryRows('/repo', [remote, local], { includeObligations: true })).toEqual([local]);
   });
 
