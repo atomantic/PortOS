@@ -24,6 +24,6 @@ describe('historical checkout inventory', () => {
     readCheckoutPathPresence.mockResolvedValueOnce(true);
     expect(await findGoneInventoryRows('/repo', rows, { includeObligations: true })).toEqual([]);
     readCheckoutPathPresence.mockResolvedValueOnce(null);
-    expect(await findGoneInventoryRows('/repo', rows, { includeObligations: true })).toEqual([]);
+    await expect(findGoneInventoryRows('/repo', rows, { includeObligations: true })).rejects.toThrow('checkout-presence-unavailable');
   });
 });
