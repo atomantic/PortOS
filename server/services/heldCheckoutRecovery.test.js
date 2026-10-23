@@ -9,6 +9,7 @@ import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, 
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
+import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -288,11 +289,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await execGit(['merge', '--squash', 'feature/held'], repo);
       await execGit(['commit', '-m', 'feat: synthetic feature (squash)'], repo);
     } });
+    const checkoutIdentity = await readRetirementCheckoutIdentity(path);
+    const delayed = { ...release, checkoutIdentity, observedAt: new Date().toISOString(), reason: 'retirement-review-pending' };
     await recordBranchReconcileOutcome('app-1', {
       status: 'incomplete', reason: 'holds-remaining', nextAction: 'Recover held checkouts.',
-      remaining: [{ ...release, managed: false, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
+      remaining: [{ ...delayed, managed: false, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
     });
-
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release: { ...release, checkoutIdentity: '0'.repeat(64) } }, { cosDir, readAgents: noOwners }))
+      .toEqual({ ok: false, reason: 'release-not-in-inventory' });
+    expect(await isCurrentRetirementCheckout(delayed)).toBe(true);
     const branchArchiveRoot = join(PATHS.cos, 'branch-retirement-archives');
     const priorArchives = new Set(await readdir(branchArchiveRoot).catch(() => []));
     const originalReflog = await readFile(join(repo, '.git', 'logs', 'refs', 'heads', 'feature', 'held'));
@@ -314,7 +319,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.status).toBe('incomplete');
     expect(outcome.remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
-    expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: result.archiveDir });
+    expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: result.archiveDir, checkoutIdentity });
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([]);
+    await execGit(['worktree', 'add', '-b', release.branch, path, release.head], repo);
+    const recreated = { ...delayed, checkoutIdentity: await readRetirementCheckoutIdentity(path), observedAt: new Date().toISOString() };
+    expect(recreated.checkoutIdentity).not.toBe(checkoutIdentity);
+    expect(await isCurrentRetirementCheckout(delayed)).toBe(false);
+    expect(await isCurrentRetirementCheckout({ ...recreated, head: '0'.repeat(40) })).toBe(false);
+    // Even while the new tuple is live, the old scan cannot create its obligation.
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([]);
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations)
+      .toEqual([expect.objectContaining({ checkoutIdentity: recreated.checkoutIdentity, reason: 'retirement-receipt-unverified' })]);
   });
 
   it('settles a stale inventory row whose checkout was already removed instead of refusing it', async () => {

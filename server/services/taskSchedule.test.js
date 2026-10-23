@@ -1,3 +1,5 @@
+vi.mock('../lib/retirementCheckoutObservation.js', () => ({ isCurrentRetirementCheckout: vi.fn(async () => false) }));
+import { isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('./branchReconcileInventoryPrune.js', async importOriginal => ({
@@ -3341,13 +3343,93 @@ describe('taskSchedule', () => {
         expect(outcome()).toMatchObject({ status: 'drained', retirementObligations: [], remaining: [] });
         // A new checkout with identical branch/path/head cannot reuse that receipt.
         const retiredAt = outcome().retired[0].retiredAt;
-        await recordBranchReconcileOutcome('app-1', { status: 'running', retirementObligations: [release] });
+        isCurrentRetirementCheckout.mockResolvedValueOnce(true);
+        await recordBranchReconcileOutcome('app-1', { status: 'running', retirementObligations: [{ ...release, checkoutIdentity: 'new-incarnation' }] });
         const recreatedAt = outcome().retirementObligations[0].createdAt;
         expect(Date.parse(recreatedAt)).toBeGreaterThan(Date.parse(retiredAt));
         await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
         await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches' });
-        expect(outcome()).toMatchObject({ status: 'incomplete', retirementObligations: [{ ...release, createdAt: recreatedAt, reason: 'retirement-receipt-unverified' }] });
+        expect(outcome()).toMatchObject({ status: 'incomplete', retirementObligations: [{ ...release, checkoutIdentity: 'new-incarnation', createdAt: recreatedAt, reason: 'retirement-receipt-unverified' }] });
 
+      });
+
+      it.each(['scan-first', 'receipt-first'])('does not resurrect a stale scan across serialized %s writes', async order => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-10-23T00:00:00Z'));
+        const row = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40),
+          checkoutIdentity: 'original', observedAt: new Date().toISOString(), reason: 'retirement-review-pending' };
+        const receipt = { ...row, branchDeleted: true, archiveDir: '/example/archive' };
+        const outcome = () => saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+        const scan = () => recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [row] });
+        const retire = () => recordHeldCheckoutRetirement('app-1', receipt);
+        // Queue both without awaiting: updateSchedule must merge with the prior write.
+        await Promise.all(order === 'scan-first' ? [scan(), retire()] : [retire(), scan()]);
+        expect(outcome()).toMatchObject({ retirementObligations: [], remaining: [] });
+        const retiredAt = outcome().retired[0].retiredAt;
+        vi.setSystemTime(new Date('2026-10-23T00:00:20Z'));
+        await scan();
+        // A legacy delayed producer has its original timestamp, not filesystem identity.
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [{ ...row, checkoutIdentity: undefined }] });
+        expect(outcome()).toMatchObject({ retirementObligations: [], remaining: [] });
+        expect(isCurrentRetirementCheckout).not.toHaveBeenCalled();
+        // A fresh same-tuple checkout needs a live identity check, even in the same clock tick.
+        vi.setSystemTime(new Date(retiredAt));
+        const recreated = { ...row, checkoutIdentity: 'recreated' };
+        isCurrentRetirementCheckout.mockResolvedValueOnce(true);
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
+        const obligation = outcome().retirementObligations[0];
+        expect(obligation).toMatchObject({ checkoutIdentity: 'recreated' });
+        expect(Date.parse(obligation.createdAt)).toBeGreaterThan(Date.parse(retiredAt));
+        expect(isCurrentRetirementCheckout).toHaveBeenCalledWith(recreated);
+        vi.setSystemTime(new Date('2026-10-23T00:01:00Z'));
+        await retire();
+        expect(outcome().retired[0].retiredAt).toBe(retiredAt);
+        expect(outcome().retirementObligations).toEqual([obligation]);
+        await recordHeldCheckoutRetirement('app-1', { ...receipt, checkoutIdentity: 'recreated', archiveDir: '/example/new-archive' });
+        expect(outcome().retirementObligations).toEqual([]);
+        // A delayed observation of a different, now absent incarnation cannot mint another obligation.
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [{ ...row, checkoutIdentity: 'absent' }] });
+        expect(outcome()).toMatchObject({ retirementObligations: [], remaining: [] });
+        vi.useRealTimers();
+      });
+
+      it('keeps both incarnations when recreation is observed before the original receipt arrives', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const original = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40),
+          checkoutIdentity: 'original', reason: 'retirement-review-pending' };
+        const recreated = { ...original, checkoutIdentity: 'recreated' };
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [original] });
+        isCurrentRetirementCheckout.mockResolvedValueOnce(true);
+        const pending = await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
+        expect(pending.retirementObligations.map(row => row.checkoutIdentity)).toEqual(['original', 'recreated']);
+        const retired = await recordHeldCheckoutRetirement('app-1', { ...original, branchDeleted: true, archiveDir: '/example/archive' });
+        expect(retired.retirementObligations).toEqual([expect.objectContaining({ checkoutIdentity: 'recreated' })]);
+        expect(retired.remaining).toEqual([expect.objectContaining({ checkoutIdentity: 'recreated' })]);
+      });
+
+      it('keeps stale-observation evidence after receipt display eviction and refuses duplicate replay', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const row = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40),
+          createdAt: '2026-01-01T00:00:00Z', reason: 'retirement-review-pending' };
+        const receipt = { ...row, branchDeleted: true, archiveDir: '/example/archive' };
+        const outcome = () => saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+        await recordHeldCheckoutRetirement('app-1', receipt);
+        const evidence = structuredClone(outcome().retirementReceiptEvidence);
+        for (let index = 0; index < 20; index++) {
+          await recordHeldCheckoutRetirement('app-1', { ...receipt, branch: `fix/other-${index}` });
+        }
+        expect(outcome().retired.some(entry => entry.branch === row.branch)).toBe(false);
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [row] });
+        await recordHeldCheckoutRetirement('app-1', receipt);
+        expect(outcome()).toMatchObject({ retirementObligations: [], remaining: [], retirementReceiptEvidence: evidence });
+        expect(outcome().retired.some(entry => entry.branch === row.branch)).toBe(false);
       });
 
       it('persists branch attempts through cap parks and manual resets, clearing only on sweep exhaustion', async () => {

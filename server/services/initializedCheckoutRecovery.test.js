@@ -1,3 +1,7 @@
+vi.mock('../lib/retirementCheckoutObservation.js', () => ({
+  readRetirementCheckoutIdentity: vi.fn(async () => null), isCurrentRetirementCheckout: vi.fn(async () => false),
+}));
+import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { pinPlatform } from '../lib/testHelper.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -64,6 +68,8 @@ let root, fixture;
 const release = { path: '/fixture/checkout', branch: 'claim/42', head: 'a'.repeat(40), locked: false, lockReason: null };
 const prUrl = 'https://github.com/example/repo/pull/42';
 beforeEach(async () => {
+  readRetirementCheckoutIdentity.mockReset().mockResolvedValue(null);
+  isCurrentRetirementCheckout.mockReset().mockResolvedValue(false);
   persisted.hostType = null; persisted.rejectDirectoryOpen = persisted.syntheticModes = false; persisted.fileSyncs = 0;
   root = await mkdtemp(join(tmpdir(), 'initialized-recovery-'));
   const facts = { prUrl, prHead: release.head, defaultHead: 'b'.repeat(40) };
@@ -953,12 +959,14 @@ describe('initialized checkout transaction', () => {
     return { ...bound, review: { prUrl, digest: response.review.digest, acceptSuperseded: fixture.superseded === true } };
   };
   it('finishes a quarantined branch with a new exact review and records the source checkout receipt', async () => {
+    readRetirementCheckoutIdentity.mockResolvedValue('original-checkout');
     const input = await quarantinedReview();
+    readRetirementCheckoutIdentity.mockResolvedValue('later-checkout');
     const result = await fixture.service.retireBranch(input);
     expect(result).toMatchObject({ ok: true, branchDeleted: true, receiptRecorded: true });
     expect(fixture.deps.deleteRef).toHaveBeenCalledWith('/fixture/repo', release.branch, release.head, { beforeMutation: expect.any(Function) });
     expect(fixture.deps.recordRetirement).toHaveBeenCalledWith('app', { path: release.path, branch: release.branch,
-      head: release.head, branchDeleted: true, archiveDir: join(root, input.transactionId) });
+      head: release.head, branchDeleted: true, archiveDir: join(root, input.transactionId), checkoutIdentity: 'original-checkout' });
     expect(fixture.cut).toBeNull();
     expect((await fixture.service.status(input)).phase).toBe('retired');
   });
@@ -1072,7 +1080,8 @@ describe('initialized checkout transaction', () => {
       path: `/later/${index}`, branch: `later/${index}`, head: 'f'.repeat(40),
       branchDeleted: true, archiveDir: `/later-archives/${index}`,
     });
-    const newer = { ...release, reason: 'retirement-review-pending' };
+    const newer = { ...release, checkoutIdentity: 'recreated', reason: 'retirement-review-pending' };
+    isCurrentRetirementCheckout.mockResolvedValueOnce(true);
     await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [newer] });
     const saved = JSON.parse(persisted.json);
     const outcome = saved.executions['task:branch-reconcile'].perApp.app.branchReconcileOutcome;
@@ -1105,7 +1114,8 @@ describe('initialized checkout transaction', () => {
     expect(retired.retirementObligations).toEqual([]);
     expect(retired.remaining).toEqual([]);
     const originalTimestamp = retired.retired[0].retiredAt;
-    const recreated = await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [pending] });
+    isCurrentRetirementCheckout.mockResolvedValueOnce(true);
+    const recreated = await recordBranchReconcileOutcome('app', { status: 'actionable', remaining: [{ ...pending, checkoutIdentity: 'recreated' }] });
     const generation = recreated.retirementObligations[0].createdAt;
     expect(Date.parse(generation)).toBeGreaterThan(Date.parse(originalTimestamp));
     expect(Date.parse(generation)).toBeGreaterThanOrEqual(Date.parse(firstCreated));
@@ -1116,7 +1126,7 @@ describe('initialized checkout transaction', () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(Date.parse(generation) + 1);
-      const completed = await recordHeldCheckoutRetirement('app', { ...receipt, archiveDir: '/archive/new-generation' });
+      const completed = await recordHeldCheckoutRetirement('app', { ...receipt, checkoutIdentity: 'recreated', archiveDir: '/archive/new-generation' });
       expect(completed.retirementObligations).toEqual([]);
       expect(completed.remaining).toEqual([]);
       expect(completed.retired.find(row => row.archiveDir === receipt.archiveDir).retiredAt).toBe(originalTimestamp);

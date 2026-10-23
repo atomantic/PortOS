@@ -67,6 +67,7 @@ vi.mock('./worktreeManager.js', async () => {
 // don't care about age behave as before; set worktreeMtimeMs to pin a specific age.
 let worktreeMtimeMs = 0;
 vi.mock('node:fs/promises', () => ({
+  lstat: vi.fn(async () => ({ isFile: () => true, dev: 1n, ino: 2n, birthtimeNs: 3n })),
   stat: vi.fn(async () => ({ mtimeMs: worktreeMtimeMs })),
 }));
 const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));

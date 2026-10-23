@@ -145,7 +145,7 @@ describe('scoped retirement recovery completion', () => {
     getTaskById.mockResolvedValue({ metadata: { retirementReview: { appId: 'persisted-app', release, createdAt: '2026-10-20T00:00:00Z' } } });
     getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, head: 'b'.repeat(40), branchDeleted: true, archiveDir: '/example/other' }] });
     expect(await settleRetirementReviewRun(recovery)).toEqual({ verified: false });
-    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('persisted-app', expect.objectContaining({ retirementObligations: [{ ...release, reason: 'retirement-receipt-unverified' }] }));
+    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('persisted-app', expect.objectContaining({ retirementObligations: [{ ...release, createdAt: '2026-10-20T00:00:00Z', reason: 'retirement-receipt-unverified' }] }));
     expect(reconcile).not.toHaveBeenCalled();
     for (const retiredAt of ['invalid', '2026-10-19T23:59:00Z']) {
       getBranchReconcileOutcome.mockResolvedValue({ retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt }] });

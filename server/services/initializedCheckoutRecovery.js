@@ -3,6 +3,7 @@
  * quarantined whole, never unlinked. Immutable journal steps and a durable
  * repository reservation survive an interrupted request or server restart.
  */
+import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { spawn } from '../lib/childProcess.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, opendir, readFile, readdir } from 'node:fs/promises';
@@ -204,7 +205,10 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release });
     const facts = await forge(ctx, release, prUrl);
     const base = await comparison(ctx, release, prUrl, snapshot, policy, facts);
-    const evidence = { ...base, mode: 'initialized-private-modules', snapshot };
+    const checkoutIdentity = await readRetirementCheckoutIdentity(release.path);
+    if (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity) fail('checkout-identity-changed');
+    const evidence = { ...base, mode: 'initialized-private-modules', snapshot,
+      ...(checkoutIdentity && { checkoutIdentity }) };
     delete evidence.digest;
     return { ctx, review: { digest: hash(evidence), ...evidence } };
   };
@@ -378,7 +382,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         if (state.phase === 'branch-retired') {
           const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
           await record(state.appId, { path: state.release.path, branch: state.release.branch,
-            head: state.release.head, branchDeleted: true, archiveDir: directory });
+            head: state.release.head, branchDeleted: true, archiveDir: directory,
+            ...(state.review.checkoutIdentity && { checkoutIdentity: state.review.checkoutIdentity }) });
           state = await appendStep(directory, state, 'retired', { receiptRecorded: true });
         }
         await beforeMutation();
@@ -447,7 +452,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
         await beforeMutation();
         const record = deps.recordRetirement || (await import('./taskSchedule.js')).recordHeldCheckoutRetirement;
         await record(state.appId, { path: state.release.path, branch: state.release.branch,
-          head: state.release.head, branchDeleted: true, archiveDir: directory });
+          head: state.release.head, branchDeleted: true, archiveDir: directory,
+          ...(state.review.checkoutIdentity && { checkoutIdentity: state.review.checkoutIdentity }) });
         state = await appendStep(directory, state, 'retired', { receiptRecorded: true });
         await beforeMutation();
         await gate.releaseCheckoutReservation(reservation);

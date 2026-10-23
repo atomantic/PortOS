@@ -1,4 +1,4 @@
-import { unresolvedRetirements, sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
+import { unresolvedRetirements, sameRetirementCheckout, sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 /**
@@ -684,7 +684,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,
-    createdAt: dispatchedOutcome.retirementObligations.find(row => sameRetirementCheckout(row, branch.retirement.release))?.createdAt,
+    createdAt: dispatchedOutcome.retirementObligations.find(row => sameRetirementObservation(row, branch.retirement.release))?.createdAt,
   }));
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [
