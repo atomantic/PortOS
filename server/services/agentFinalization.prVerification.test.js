@@ -624,13 +624,13 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
     await finalize({ runId: 'run-1' });
     // 6th arg is the explicit success override — without it the run history
     // would keep reporting success off `exitCode === 0`.
-    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, expect.anything(), false);
+    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, expect.anything(), false, expect.objectContaining({ executionSuccess: true }));
   });
 
   it('leaves the run record alone when the PR is confirmed', async () => {
     onBranch('claim/issue-1');
     await finalize({ runId: 'run-1' });
-    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null);
+    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null, expect.objectContaining({ executionSuccess: true }));
   });
 
   it('records forge-unreachable (not a generic failure) when gh cannot be reached', async () => {

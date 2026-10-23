@@ -1337,7 +1337,7 @@ async function runCleanupOrphanedAgents() {
       // completion, in that order. A hard kill (`pm2 restart`, reboot) lands here,
       // so this is the path that leaves dirt in a managed app repo if any of it
       // is skipped.
-      await retireDeadAgent({
+      const retirement = await retireDeadAgent({
         agent,
         task,
         success: false,
@@ -1356,7 +1356,7 @@ async function runCleanupOrphanedAgents() {
       cleanedCount++;
       retiredAgentIds.push(agent.id);
 
-      if (agent.taskId) {
+      if (agent.taskId && !retirement.deliveryHeld) {
         // Carry the agent's metadata forward rather than re-reading the record
         // later: `getAgent` on a completed agent still hits the disk to hydrate
         // its output.txt tail (capped since #3498, but not free), and the

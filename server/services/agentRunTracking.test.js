@@ -199,7 +199,10 @@ describe('completeAgentRun lifecycle ledger', () => {
 
     // Exit 0, but the caller's successOverride says the deliverable never landed
     // (#3358) — the ledger must agree with the run record, not with the process.
-    await completeAgentRun('run-overridden', 'output', 0, 4200, null, false);
+    const taskOutcome = { status: 'blocked', reason: 'Invented missing prerequisite.' };
+    await completeAgentRun('run-overridden', 'output', 0, 4200, null, false, { executionSuccess: true, taskOutcome });
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    expect(atomicWrite).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.objectContaining({ executionSuccess: true, success: false, taskOutcome }));
 
     expect(appendRunEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'run.finalized',

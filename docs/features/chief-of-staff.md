@@ -11,6 +11,23 @@ Autonomous agent manager that works the task queues, spawns sub-agents, and main
 - **CoS Routes** (`server/routes/cos.js`): REST API endpoints
 - **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs
 
+### Execution and delivery outcomes
+
+A normal process exit or completion sentinel ends execution; it does not prove
+that the task was achieved. Completion envelopes carry a markdown `summary`, an
+optional task-specific `payload`, and `taskOutcome: { status, reason }`. The status
+is `completed`, `no-action-needed`, `blocked`, or `incomplete`. Reasons describe
+the delivery evidence, remaining work, or unmet prerequisite. A reported no-op
+requires the task's existing delivery checks or permitted empty-branch proof.
+
+Agent results and run history retain `executionSuccess` independently of the
+validated `taskOutcome`; task metadata retains the outcome too. Explicit blocked
+or incomplete reports park the task and preserve work for continuation. Cards
+and Resume show the same verdict, while old records without delivery evidence
+say “Execution completed.” Historical user feedback is unchanged. GitHub
+notification resolution requires explicit completed or verified no-action-needed
+delivery; exit success alone cannot mark a thread done.
+
 ## Features
 
 1. **Dual Task Lists**: User tasks and system tasks, both stored in `cos_tasks`

@@ -17,7 +17,7 @@
  * the thread goes back to its old decision with a failed marker for the pill.
  */
 import { query } from '../lib/db.js';
-import { isQueuedContinuation } from '../lib/agentOutcome.js';
+import { isQueuedContinuation, isTaskDeliveryComplete } from '../lib/agentOutcome.js';
 import { GENERIC_AGENT_LANE } from '../lib/githubNotificationTriage.js';
 import { notificationHtmlUrl, repoApiPath } from '../lib/githubNotificationParse.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -197,9 +197,9 @@ function onResolveAgentCompleted(agent) {
   const taskId = agent?.taskId;
   // A relaunch requeues the same task; its continuation reports the outcome.
   if (!taskId || isQueuedContinuation(agent)) return null;
-  const run = agent.result?.success === true
+  const run = isTaskDeliveryComplete(agent)
     ? markResolved(taskId, agent.id)
-    : markFailed(taskId, agent.id, agent.result?.error);
+    : markFailed(taskId, agent.id, agent.result?.taskOutcome?.reason || agent.result?.error || 'Task delivery was not verified.');
   return run.catch((error) => console.error(`❌ GitHub notification follow-up for agent task ${taskId} failed: ${error.message}`));
 }
 

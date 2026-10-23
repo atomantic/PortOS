@@ -56,8 +56,12 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
 }));
 
 import { completeAgent } from './cosAgentLifecycle.js';
+import { updateTask } from './cosTaskStore.js';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { removeCompletionSentinel } from './agentCompletionCleanup.js';
-import { getTaskOutputHook } from './taskTypeHooks.js';
+import { getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { retireDeadAgent } from './agentFinalization.js';
 import { PRIVATE_SECURITY_TASK_TYPE } from '../lib/privateSecurityPolicy.js';
@@ -92,14 +96,70 @@ describe('retireDeadAgent (#8440)', () => {
     expect(completeAgentRun).toHaveBeenCalledWith('run-1', '', 1, 500, {
       message: 'Agent process terminated unexpectedly',
       category: 'orphaned',
-    });
+    }, false, { executionSuccess: false, taskOutcome: null });
     expect(completeAgent).toHaveBeenCalledWith('agent-dead', {
       success: false,
+      executionSuccess: false,
+      taskOutcome: null,
+      validationPassed: null,
       exitCode: 1,
       duration: 500,
       orphaned: true,
       error: 'Agent process terminated unexpectedly',
     });
+  });
+
+  it.each(['blocked', 'incomplete'])('preserves a recovered %s sentinel and parks its task before removing evidence', async status => {
+    const workspacePath = await mkdtemp(join(tmpdir(), 'recovered-outcome-'));
+    const taskOutcome = { status, reason: 'Invented prerequisite remains unmet.' };
+    const order = [];
+    updateTask.mockImplementationOnce(async () => { order.push('task'); return {}; });
+    removeCompletionSentinel.mockImplementationOnce(async () => { order.push('remove'); });
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-dead'), JSON.stringify({ taskOutcome }));
+      const result = await retireDeadAgent({ agent: { ...AGENT, metadata: { workspacePath, runId: 'run-1' } },
+        task: TASK, success: true, exitCode: 0, duration: 100 });
+      expect(result).toEqual({ success: false, taskOutcome, deliveryHeld: true });
+      expect(completeAgent).toHaveBeenCalledWith(AGENT.id, expect.objectContaining({ success: false, executionSuccess: true, taskOutcome }));
+      expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({ taskOutcome }) }), 'user');
+      expect(order).toEqual(['task', 'remove']);
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
+  });
+
+  it('accepts a recovered no-op only after its output hook verifies delivery', async () => {
+    const taskOutcome = { status: 'no-action-needed', reason: 'Invented verification found no remaining work.' };
+    const hook = vi.fn(async () => ({ accepted: true }));
+    getTaskOutputHook.mockResolvedValueOnce(hook);
+    isProgrammaticIoTaskType.mockReturnValueOnce(true);
+    const result = await retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome } }, task: TASK,
+      success: true, exitCode: 0, duration: 100 });
+    expect(result).toEqual({ success: true, taskOutcome, deliveryHeld: false });
+    expect(completeAgent).toHaveBeenCalledWith(AGENT.id, expect.objectContaining({ success: true,
+      validationPassed: true, taskOutcome }));
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { success: false, status: 'completed', exitCode: 1 },
+    { success: true, status: 'no-action-needed', exitCode: 0 },
+  ])('keeps failure recovery enabled for a synthesized incomplete outcome ($status, success=$success)', async ({ success, status, exitCode }) => {
+    const reportedOutcome = { status, reason: 'Invented delivery report.' };
+    const result = await retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome: reportedOutcome } },
+      task: TASK, success, exitCode, duration: 100 });
+    expect(result).toEqual({ success: false, deliveryHeld: false,
+      taskOutcome: expect.objectContaining({ status: 'incomplete' }) });
+    expect(completeAgent).toHaveBeenCalledWith(AGENT.id, expect.objectContaining({ success: false,
+      taskOutcome: result.taskOutcome }));
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('leaves recovery retryable when parking the held task cannot be persisted', async () => {
+    const taskOutcome = { status: 'blocked', reason: 'Invented prerequisite.' };
+    updateTask.mockResolvedValueOnce({ error: 'storage-unavailable' });
+    await expect(retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome } }, task: TASK,
+      success: true, exitCode: 0, duration: 100 })).rejects.toThrow('storage-unavailable');
+    expect(completeAgent).not.toHaveBeenCalled();
+    expect(removeCompletionSentinel).not.toHaveBeenCalled();
   });
 
   it('skips closing the run record for an agent with no runId', async () => {
@@ -115,14 +175,14 @@ describe('retireDeadAgent (#8440)', () => {
       agent: { ...AGENT, metadata: { runId: 'run-refused', executionInterruption } }, task: TASK,
       success, exitCode: success ? 0 : 143, duration: 100, category: 'interrupted',
     });
-    expect(result).toEqual({ success: false });
+    expect(result).toEqual({ success: false, taskOutcome: null, deliveryHeld: false });
     expect(completeAgentRun).toHaveBeenCalledWith('run-refused', '', success ? 0 : 143, 100,
-      expect.objectContaining({ category: 'content-refusal', origin: 'provider', permanent: true, requiresFallback: false }));
+      expect.objectContaining({ category: 'content-refusal', origin: 'provider', permanent: true, requiresFallback: false }), false, { executionSuccess: success, taskOutcome: null });
     expect(completeAgent).toHaveBeenCalledWith('agent-dead', expect.objectContaining({ success: false,
       executionInterruption, errorAnalysis: expect.objectContaining({ category: 'content-refusal' }) }));
   });
 
-  it('dispatches the output hook before removing the sentinel, and the run and agent records close after both', async () => {
+  it('dispatches the output hook before removing the sentinel, and removes the sentinel only after persisting the run and agent records', async () => {
     const order = [];
     getTaskOutputHook.mockResolvedValueOnce(async () => { order.push('hook'); return { accepted: true }; });
     removeCompletionSentinel.mockImplementation(async () => { order.push('sentinel-removed'); });
@@ -138,7 +198,7 @@ describe('retireDeadAgent (#8440)', () => {
     });
 
     expect(removeCompletionSentinel).toHaveBeenCalledWith({ agentId: 'agent-dead', agentState: expect.objectContaining({ id: 'agent-dead' }) });
-    expect(order).toEqual(['hook', 'sentinel-removed', 'run', 'agent']);
+    expect(order).toEqual(['hook', 'run', 'agent', 'sentinel-removed']);
   });
 
   // No immutable source inventory survives to validate a recovered private-security
@@ -155,13 +215,15 @@ describe('retireDeadAgent (#8440)', () => {
       duration: 10,
     });
 
-    expect(result).toEqual({ success: false });
+    expect(result).toEqual({ success: false, taskOutcome: null, deliveryHeld: false });
     expect(completeAgentRun).toHaveBeenCalledWith(
       'run-private',
       'Private security assessment interrupted; inspect its local assessment archive.',
       0,
       10,
       expect.anything(),
+      false,
+      { executionSuccess: true, taskOutcome: null },
     );
     expect(completeAgent).toHaveBeenCalledWith('agent-dead', expect.objectContaining({ success: false }));
   });

@@ -450,6 +450,17 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     expect(order).toEqual(['usage', 'completed']);
   });
 
+  it('retains delivery outcome through archive storage and list projection without changing feedback', async () => {
+    const { toAgentListItem } = await import('../lib/cosAgentListProjection.js');
+    const agentId = 'agent-task-outcome';
+    const taskOutcome = { status: 'blocked', reason: 'Invented prerequisite missing.' };
+    const feedback = { rating: 'positive', comment: 'Original feedback.' };
+    mockCosState.state.agents[agentId] = { id: agentId, status: 'running', metadata: {}, feedback };
+    const completed = await completeAgent(agentId, { success: false, executionSuccess: true, taskOutcome });
+    const archived = JSON.parse(await readFile(join(mockCosState.agentsDir, completed.completedAt.slice(0, 10), agentId, 'metadata.json'), 'utf8'));
+    expect(toAgentListItem(archived)).toMatchObject({ result: { success: false, executionSuccess: true, taskOutcome }, feedback });
+  });
+
   it('still emits agent:completed when the usage-ledger write rejects', async () => {
     // recordDomainUsage is .catch-guarded, so a ledger-write failure must not
     // swallow the completion event — the scheduler still needs to advance.

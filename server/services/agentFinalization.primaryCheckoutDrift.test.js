@@ -178,14 +178,14 @@ describe('finalizeAgent — a worktree run that mutated the primary is not a suc
   it('marks the RUN record failed too, even though the process exited 0', async () => {
     detectPrimaryCheckoutDriftMock.mockResolvedValue(DRIFT);
     await finalize({ runId: 'run-1' });
-    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, expect.anything(), false);
+    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, expect.anything(), false, expect.objectContaining({ executionSuccess: true }));
   });
 
   it('leaves an undrifted run completely unaffected', async () => {
     await finalize({ runId: 'run-1' });
     expect(completeAgentMock).toHaveBeenCalledWith('agent-1', expect.objectContaining({ success: true }));
     expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
-    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null);
+    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null, expect.objectContaining({ executionSuccess: true }));
   });
 
   it('does not overwrite the diagnosis of a run that already failed', async () => {
@@ -224,7 +224,7 @@ describe('finalizeAgent — a worktree run that mutated the primary is not a suc
     expect(completeAgentMock).toHaveBeenCalledWith('agent-1', expect.objectContaining({ success: true }));
     expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
     // The run record is a clean success — no error analysis, not force-failed.
-    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null);
+    expect(completeAgentRunMock).toHaveBeenCalledWith('run-1', 'done', 0, 1000, null, null, expect.objectContaining({ executionSuccess: true }));
     // ...but the unreviewed commits are still surfaced.
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('not attributable to agent-1'), expect.anything());
   });

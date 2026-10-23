@@ -31,7 +31,7 @@ describe('review-enabled completion merge gate', () => {
     expect(section).toContain('mergeHandoffMinQueuedRuns');
     expect(section).toContain('Unknown backlog, refused handoff');
     expect(section).not.toContain('--auto --merge');
-    expect(section).toContain('8. Write a short markdown summary');
+    expect(section).toContain('8. Write the structured completion JSON envelope');
   });
 
   it('retains immediate merging for a registered claim requiring local admission', () => {

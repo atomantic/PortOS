@@ -420,6 +420,19 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     expect(runnerAgents.has('agent-stale')).toBe(false);
   });
 
+  it('preserves the blocked task and worktree after retiring a run with a held outcome', async () => {
+    getAgents.mockResolvedValueOnce([{ id: 'agent-held', status: 'running', pid: 2147483646,
+      taskId: 'task-held', metadata: { useRunner: true, executionMode: 'runner' } }]);
+    getActiveAgentsFromRunner.mockResolvedValueOnce([{ id: 'agent-held', pid: 2147483646,
+      kind: 'cli', processActive: false, liveness: 'pid' }]);
+    getTaskById.mockResolvedValue({ id: 'task-held', taskType: 'user', status: 'in_progress', metadata: {} });
+    retireDeadAgent.mockResolvedValueOnce({ success: false, deliveryHeld: true,
+      taskOutcome: { status: 'blocked', reason: 'Invented prerequisite.' } });
+    await cleanupOrphanedAgents();
+    expect(retireDeadAgent).toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   it('does not reap a pre-fix Windows TUI whose processActive is a pid-0 artifact', async () => {
     getAgents.mockResolvedValueOnce([{
       id: 'agent-tui-old',
