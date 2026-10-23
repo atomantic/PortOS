@@ -28,7 +28,7 @@ async function supportsPendingMergeGuard(repoPath) {
   return source !== null && source.includes("case '--guards-only':") && source.includes("case '--merged-with':");
 }
 
-async function verifyCheckout(repoPath, worktreePath, branch, headSha) {
+export async function verifyPendingMergeCheckout(repoPath, worktreePath, branch, headSha) {
   if (!worktreePath || resolve(repoPath) === resolve(worktreePath)) return false;
   const read = async (args, cwd = worktreePath) => (await execGit(args, cwd)).stdout.trim();
   const checked = await Promise.all([
@@ -46,10 +46,11 @@ async function verifyCheckout(repoPath, worktreePath, branch, headSha) {
 /** Runs only on the handed-off, reviewed checkout, before acquiring admission. */
 export async function preparePendingMergeGuard({ app, entry, binding, prView, readDefault, env }) {
   if (!await supportsPendingMergeGuard(app.repoPath)) return { ok: true, evidence: null };
-  const worktreePath = binding?.worktreePath;
+  if (!binding) return { ok: false, reason: 'merged-tree-recovery-required', evidence: { headSha: prView.headRefOid } };
+  const worktreePath = binding.worktreePath;
   const headSha = binding?.headSha;
   if (!SHA.test(headSha || '') || prView.headRefOid !== headSha
-    || !await verifyCheckout(app.repoPath, worktreePath, entry.prBranch, headSha)) {
+    || !await verifyPendingMergeCheckout(app.repoPath, worktreePath, entry.prBranch, headSha)) {
     return { ok: false, reason: 'merged-tree-checkout-unverified' };
   }
   if (!await supportsPendingMergeGuard(worktreePath)) return { ok: false, reason: 'merged-tree-command-unavailable' };
@@ -81,7 +82,7 @@ export async function preparePendingMergeGuard({ app, entry, binding, prView, re
       ...evidence, failedTest: failedTest ? summarizeMergeGuardOutput(failedTest) : null,
     } };
   }
-  if (!await verifyCheckout(app.repoPath, worktreePath, entry.prBranch, headSha)) {
+  if (!await verifyPendingMergeCheckout(app.repoPath, worktreePath, entry.prBranch, headSha)) {
     return { ok: false, reason: 'merged-tree-checkout-changed', evidence };
   }
   return { ok: true, evidence };

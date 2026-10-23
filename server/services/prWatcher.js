@@ -700,6 +700,9 @@ async function attemptAdmittedMerge(entry, binding, prView, ctx) {
   });
   if (!guard.ok) {
     const retained = { ...entry, mergedTreeGuard: { ...guard.evidence, reason: guard.reason } };
+    if (guard.reason === 'merged-tree-recovery-required') {
+      return { step: await recoverUnboundMerge(retained, prView, ctx) };
+    }
     if (['merged-tree-validation-unavailable', 'merged-tree-default-branch-unavailable'].includes(guard.reason)) {
       return { step: await advanceTicks(ctx, entry, retained, binding, { reason: guard.reason }) };
     }
@@ -735,6 +738,35 @@ async function attemptAdmittedMerge(entry, binding, prView, ctx) {
   }
   console.error(`❌ Deterministic merge failed for PR #${entry.prNumber}: ${merge.error || 'unknown error'}`);
   return { assessed };
+}
+
+// Legacy queue producers cannot supply a verified checkout. Transfer custody
+// only after a pinned recovery is persisted; missing authority remains queued.
+async function recoverUnboundMerge(entry, prView, ctx) {
+  try {
+    const { preparePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
+    const prepared = await preparePendingMergeRecovery({ app: ctx.app, entry, headSha: prView.headRefOid });
+    if (prepared.deferred) return { outcome: entry, tally: { waiting: 1 } };
+    let recovery = prepared;
+    if (prepared.target) {
+      const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
+      recovery = await spawnReviewLoopFollowUp({ originalAgentId: entry.sourceAgentId || null,
+        originalTask: prepared.task, prUrl: entry.prUrl, prBranch: entry.prBranch,
+        sourceWorkspace: ctx.app.repoPath, ...prepared.policy, mergeGuardTarget: prepared.target });
+    }
+    if (recovery?.deferred) return { outcome: entry, tally: { waiting: 1 } };
+    if (recovery?.blocked) {
+      await notifyPendingMergeTimeout(ctx.app, entry, null,
+        `PR #${entry.prNumber} needs a verified checkout before merged-tree validation: ${recovery.blocked}. The pending entry is retained for explicit owner recovery.`);
+      return { outcome: { ...entry, recoveryBlocked: recovery.blocked }, tally: { waiting: 1 } };
+    }
+    if (!recovery?.id) return { outcome: entry, tally: { errors: 1 } };
+    return { outcome: null, tally: { escalated: 1 } };
+  } catch (error) {
+    const { summarizeMergeGuardOutput } = await import('./pendingMergeGuard.js');
+    console.error(`❌ Pending PR #${entry.prNumber} checkout recovery could not be persisted: ${summarizeMergeGuardOutput(error.message)}`);
+    return { outcome: entry, tally: { errors: 1 } };
+  }
 }
 
 // Merge a ready PR, otherwise spend a tick toward the budget.

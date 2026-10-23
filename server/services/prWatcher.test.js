@@ -76,6 +76,11 @@ vi.mock('./apps.js', () => ({
 }));
 
 const tasksById = vi.hoisted(() => new Map());
+const recoveryAgents = vi.hoisted(() => ({ value: [] }));
+vi.mock('./cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async () => recoveryAgents.value }));
+vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: async metadata => ({
+  reviewers: metadata.reviewers || [], usernames: metadata.usernames || [], optionalReviewers: [], reviewerMaxRounds: {},
+}) }));
 vi.mock('./cosTaskStore.js', () => ({
   getTaskById: async (id) => tasksById.get(id) ?? null,
 }));
@@ -130,6 +135,7 @@ beforeEach(() => {
   getOriginInfoMock.mockReset();
   mockApps.clear();
   tasksById.clear();
+  recoveryAgents.value = [];
   __resetSelfLoginCache();
 });
 
@@ -669,6 +675,65 @@ describe('merge-only PR watcher', () => {
       evidence.pr.baseRefName = 'main';
       return { app, evidence };
     };
+
+    const legacy = (snapshot = false) => {
+      const { app } = setup();
+      app.pendingMergePrs = [pendingMerge(snapshot ? { sourceAgentId: null, prBranch: 'portos/quality-snapshot',
+        sourceTask: { id: `quality-snapshot-${app.id}`, description: 'Publish PortOS quality snapshot', metadata: { app: app.id } } } : {})];
+      tasksById.get('task-88').metadata.app = app.id;
+      prepareGuardMock.mockResolvedValue({ ok: false, reason: 'merged-tree-recovery-required', evidence: { headSha: guard.headSha } });
+      return app;
+    };
+
+    it.each([false, true])('recovers an unbound producer with a pinned checkout task before any merge (snapshot=%s)', async snapshot => {
+      const app = legacy(snapshot);
+      expect(await processPendingMergePrs(app)).toMatchObject({ escalated: 1, merged: 0 });
+      expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+        prCompletion: 'merge-on-green', reviewers: [],
+        mergeGuardTarget: expect.objectContaining({ headSha: guard.headSha, appId: app.id,
+          sourceTaskId: snapshot ? `quality-snapshot-${app.id}` : 'task-88' }),
+      }));
+      expect(readPendingMergePrs(mockApps.get(app.id))).toEqual([]);
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(admissionState.state.mergeAdmissions).toEqual({});
+    });
+
+    it('retains the queue while a completed source still has an active worker', async () => {
+      const app = legacy();
+      recoveryAgents.value = [{ id: 'agent-88', taskId: 'task-88', status: 'running' }];
+      expect(await processPendingMergePrs(app)).toMatchObject({ waiting: 1 });
+      expect(readPendingMergePrs(mockApps.get(app.id))).toHaveLength(1);
+      expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves the live source review policy and roster instead of the skinny queued metadata', async () => {
+      const app = legacy();
+      Object.assign(tasksById.get('task-88').metadata, { prCompletion: 'review-then-merge', reviewers: ['claude'], usernames: ['reviewer'] });
+      await processPendingMergePrs(app);
+      expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+        prCompletion: 'review-then-merge', reviewers: ['claude'], usernames: ['reviewer'],
+      }));
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it('holds changed human completion policy without dispatching or merging', async () => {
+      const app = legacy();
+      tasksById.get('task-88').metadata.prCompletion = 'leave-open';
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ recoveryBlocked: 'recovery-owner-policy-held' });
+      expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it.each(['throw', 'unpersisted', 'deferred'])('retains queue custody when checkout recovery is %s', async outcome => {
+      const app = legacy();
+      if (outcome === 'throw') spawnReviewLoopFollowUpMock.mockRejectedValue(new Error('store unavailable'));
+      else spawnReviewLoopFollowUpMock.mockResolvedValue(outcome === 'deferred' ? { deferred: true } : null);
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ mergedTreeGuard: { headSha: guard.headSha, reason: 'merged-tree-recovery-required' } });
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
 
     it('retains a failing combined-tree receipt and log without taking admission or merging', async () => {
       const { app } = setup();

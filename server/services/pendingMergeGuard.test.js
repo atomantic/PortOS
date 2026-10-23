@@ -55,6 +55,12 @@ if (base.trim() === 'strict' && ${fail}) {
 }
 
 describe('pending merged-tree validation', () => {
+  it('requires checkout recovery for a supported repository without a handoff instead of bypassing guards', async () => {
+    const { input, headSha } = await fixture();
+    expect(await preparePendingMergeGuard({ ...input, binding: null })).toEqual({
+      ok: false, reason: 'merged-tree-recovery-required', evidence: { headSha },
+    });
+  });
   it('fetches the live base, pins both full SHAs, and preserves the clean claim checkout', async () => {
     vi.stubEnv('PORTOS_API_TOKEN', 'example-secret-not-for-tests');
     const { input, git, worktreePath, headSha, baseSha } = await fixture();
