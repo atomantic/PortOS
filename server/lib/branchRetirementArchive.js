@@ -2,9 +2,9 @@
  * Worktree-private archives do not cover logs/refs/heads, which Git removes
  * with the branch. This leaf also covers branches that have no checkout.
  */
-import { lstat, readFile, chmod, open, unlink, rename, mkdir } from 'node:fs/promises';
+import { lstat, readFile, chmod, open, unlink, rename, mkdir, realpath } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execGit } from './execGit.js';
 import { PATHS } from './paths.js';
 import { ensureDir, sha256File, writeFileGuarded } from './fileCore.js';
@@ -34,16 +34,19 @@ const unchanged = (left, right) => JSON.stringify(left.identity) === JSON.string
 
 // Included/global/worktree settings cannot be retired by editing the shared
 // config. Refuse them rather than leave a reused name with inherited settings.
-async function branchConfiguration(repoPath, branch) {
+async function branchConfiguration(repoPath, configPath, branch) {
   const pattern = `^branch\\.${escapeRegExp(branch)}\\.[^.]+$`;
-  const query = async scope => {
-    const result = await execGit(['config', '--null', '--show-origin', ...scope, '--get-regexp', pattern], repoPath, { ignoreExitCode: true });
-    if (![0, 1].includes(result.exitCode)) throw new Error('branch configuration cannot be read');
-    return result.stdout;
-  };
-  const local = await query(['--local', '--no-includes']);
-  if (local !== await query(['--includes'])) throw new Error('branch configuration has an external source');
-  return local;
+  const result = await execGit(['config', '--null', '--show-origin', '--includes', '--get-regexp', pattern], repoPath, { ignoreExitCode: true });
+  if (![0, 1].includes(result.exitCode)) throw new Error('branch configuration cannot be read');
+  const fields = result.stdout.split('\0');
+  if (fields.pop() !== '' || fields.length % 2) throw new Error('branch configuration cannot be parsed');
+  const source = await realpath(configPath);
+  for (let i = 0; i < fields.length; i += 2) {
+    if (!fields[i].startsWith('file:') || await realpath(resolve(repoPath, fields[i].slice(5))) !== source) {
+      throw new Error('branch configuration has an external source');
+    }
+  }
+  return result.stdout;
 }
 
 async function withNativeLock(path, bytes, work) {
@@ -73,13 +76,12 @@ export async function preserveBranchRetirement(repoPath, commonGitDir, branch, e
     throw new Error('branch reflog storage is unsupported');
   }
   const ref = `refs/heads/${branch}`;
-  if (await git(repoPath, ['rev-parse', '--verify', ref]) !== expectedHead) throw new Error('branch head changed');
   const source = join(commonGitDir, 'logs', 'refs', 'heads', ...branch.split('/'));
   const before = await readEvidence(source);
   const configPath = join(commonGitDir, 'config');
   const config = await readEvidence(configPath);
   if (!config.bytes) throw new Error('shared branch configuration is missing');
-  const settings = await branchConfiguration(repoPath, branch);
+  const settings = await branchConfiguration(repoPath, configPath, branch);
   const recoveryHeads = new Set([expectedHead]);
   for (const line of (before.bytes?.toString('utf8') || '').split('\n').filter(Boolean)) {
     const match = /^([a-f0-9]{40}(?:[a-f0-9]{24})?) ([a-f0-9]{40}(?:[a-f0-9]{24})?) /.exec(line);
@@ -135,8 +137,7 @@ export async function preserveBranchRetirement(repoPath, commonGitDir, branch, e
     restore: 'git -C <repo> fetch <archive>/commits.bundle refs/portos/branch-archive/<archive-id>/<head>:refs/heads/<restored-branch>',
   }, null, 2)}\n`;
   await writeFileGuarded(manifestPath, manifest, { flag: 'wx', mode: 0o600 });
-  const verifyConfig = async () => unchanged(await readEvidence(configPath), config)
-    && await branchConfiguration(repoPath, branch) === settings;
+  const verifyConfig = async () => unchanged(await readEvidence(configPath), config);
   const verifyArchive = () => Promise.all([
     sha256File(bundle), readFile(manifestPath, 'utf8'),
     before.bytes ? sha256File(join(archiveDir, 'reflog')) : null,
@@ -145,13 +146,17 @@ export async function preserveBranchRetirement(repoPath, commonGitDir, branch, e
     bundleHash === bundleSha256 && currentManifest === manifest
     && (!before.bytes || reflogHash === before.identity.sha256)
     && configHash === config.identity.sha256 && retiredHash === retiredSha256).catch(() => false);
-  const verify = () => Promise.all([
-    git(repoPath, ['rev-parse', '--verify', ref]), readEvidence(source), verifyConfig(), verifyArchive(),
-  ]).then(([head, current, configValid, archiveValid]) =>
-    head === expectedHead && unchanged(current, before) && configValid && archiveValid).catch(() => false);
-  if (!await verify()) throw new Error('branch reflog or archive changed during archival');
+  const verifyEvidence = () => Promise.all([
+    readEvidence(source), verifyConfig(), verifyArchive(),
+  ]).then(([current, configValid, archiveValid]) =>
+    unchanged(current, before) && configValid && archiveValid).catch(() => false);
+  // Callers verify the live head before retirement; the receiver compares it
+  // atomically. Evidence-only rechecks avoid repeated Git spawns inside the fence.
+  const verify = async () => await git(repoPath, ['rev-parse', '--verify', ref]).catch(() => null) === expectedHead
+    && await verifyEvidence();
+  if (!await verifyEvidence()) throw new Error('branch reflog or archive changed during archival');
   const retire = deleteRef => withNativeLock(`${configPath}.lock`, retiredConfig, async configLock => {
-    if (!await verify() || !await deleteRef()) return false;
+    if (!await verifyEvidence() || !await deleteRef()) return false;
     // The receiver's lease and holder checks remain authoritative for deletion.
     // Afterwards lock the absent ref so a native Git writer cannot recreate it
     // between the final incarnation check and the configuration rename.
@@ -162,6 +167,7 @@ export async function preserveBranchRetirement(repoPath, commonGitDir, branch, e
       const holders = await git(repoPath, ['worktree', 'list', '--porcelain', '-z']);
       if (absent.exitCode !== 1 || (await readEvidence(refPath)).bytes !== null
         || holders.split('\0').includes(`branch ${ref}`) || !await verifyArchive() || !await verifyConfig()
+        || await branchConfiguration(repoPath, configPath, branch) !== settings
         || !unchanged(await readEvidence(`${configPath}.lock`), configLock)) return false;
       if (settings) {
         await chmod(`${configPath}.lock`, config.identity.mode & 0o777);
