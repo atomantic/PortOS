@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, readdir, realpath, stat, chmod } from 'fs/promises';
+import { mkdtemp, readFile, readdir, realpath, chmod } from 'fs/promises';
 import { join, relative, isAbsolute, resolve } from 'path';
-import { homedir, tmpdir } from 'os';
+import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { spawn } from '../lib/childProcess.js';
@@ -10,30 +10,12 @@ import { createContentRefusalDetector, isContentRefusalError } from '../lib/aiTo
 import { initialSecurityScanEvidence, securityScanGrantSchema, securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { armForceKill } from './forceKill.js';
 import { cleanupSecurityScanGroup } from './securityScanRecovery.js';
+import { resolveInstalledSecurityScanner } from './securityScanCli.js';
 
 const CHILD = fileURLToPath(new URL('./securityScanChild.js', import.meta.url));
 const AGENT_ID = /^[a-zA-Z0-9_-]{1,200}$/;
 const ENV_KEYS = new Set(['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'CODEX_HOME']);
 const failure = (message, status = 409) => Object.assign(new Error(message), { status });
-
-// Read installed package metadata only. Never run npx, download a package, or
-// consult the registry while deciding whether a scan can be started.
-async function resolveInstalledSecurityScanner({ home = homedir(), root = process.cwd() } = {}) {
-  const candidates = [join(root, 'node_modules/@openai/codex-security')];
-  const cache = join(home, '.npm/_npx');
-  for (const name of (await readdir(cache).catch(() => [])).sort()) {
-    if (/^[a-f0-9]+$/.test(name)) candidates.push(join(cache, name, 'node_modules/@openai/codex-security'));
-  }
-  for (const directory of candidates) {
-    const pkg = await readFile(join(directory, 'package.json'), 'utf8').then(JSON.parse).catch(() => null);
-    const bin = pkg?.bin?.['codex-security'];
-    if (pkg?.name !== '@openai/codex-security' || typeof bin !== 'string') continue;
-    const path = resolve(directory, bin);
-    if (relative(directory, path).startsWith('..') || !(await stat(path).catch(() => null))?.isFile()) continue;
-    return { command: process.execPath, args: [path], version: pkg.version };
-  }
-  return null;
-}
 
 async function scopePaths(cwd, values, field) {
   const root = await realpath(cwd);
@@ -147,7 +129,7 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
       let invalidInput = false;
       try {
         const [paths, knowledgeBase, cli] = await Promise.all([
-          scopePaths(agent.workspacePath, request.paths, 'paths'), scopePaths(agent.workspacePath, request.knowledgeBase, 'knowledgeBase'), resolveCli(),
+          scopePaths(agent.workspacePath, request.paths, 'paths'), scopePaths(agent.workspacePath, request.knowledgeBase, 'knowledgeBase'), resolveCli({ environment }),
         ]);
         if (entry.stopReason) { entry.evidence.status = entry.stopReason; return { evidence: entry.evidence, artifactDirectory: null }; }
         if (!cli || !entry.grant.model || !entry.grant.effort || process.platform === 'win32') { entry.evidence.status = 'unavailable'; return { evidence: entry.evidence, artifactDirectory: null }; }

@@ -217,7 +217,8 @@ it('sends no full video detail to SQL and does not spill for the synthetic 2400-
     const page = await listGalleryPage({ media: true, kind: 'all', summary: true, hidden: false, compact, limit: 60 });
     expect(state.query).toHaveBeenCalledTimes(1);
     const [sql, params] = state.query.mock.calls[0];
-    const result = await client.query(sql, params);
+    // Measure the actual public-boundary result without executing the same query again.
+    const result = await state.query.mock.results[0].value;
     const explained = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, params);
     const nodes = planNodes(explained.rows[0]['QUERY PLAN'][0].Plan);
     return { page, params, videoBytes: Buffer.byteLength(params[0]), resultBytes: Buffer.byteLength(JSON.stringify(result.rows)),
