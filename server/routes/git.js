@@ -179,6 +179,12 @@ router.post('/push-all', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+router.post('/rebase-push', asyncHandler(async (req, res) => {
+  const { path } = validateRequest(gitPathBodySchema, req.body);
+  assertAllowedWorkspace(path);
+  res.json(await git.rebaseAndPushDefaultBranch(path));
+}));
+
 // POST /api/git/info - Get full git info for a path
 router.post('/info', asyncHandler(async (req, res) => {
   const { path } = validateRequest(gitPathBodySchema, req.body);

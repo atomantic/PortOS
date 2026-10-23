@@ -1,4 +1,4 @@
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -1144,6 +1144,66 @@ export async function syncBranch(dir, branch = null) {
   return withCheckoutPublication(dir, () => syncBranchAdmitted(dir, branch));
 }
 
+const rebasePushCheckouts = new Set();
+
+/** Reconcile local default-branch commits with origin without stashing or force-pushing. */
+export async function rebaseAndPushDefaultBranch(dir) {
+  const key = realpathSync(dir);
+  if (rebasePushCheckouts.has(key)) {
+    throw new ServerError('Rebase & push is already running for this checkout', { status: 409, code: 'GIT_BUSY' });
+  }
+  rebasePushCheckouts.add(key);
+  try {
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return await withCheckoutPublication(dir, () => rebaseAndPushDefaultBranchAdmitted(dir));
+  } finally {
+    rebasePushCheckouts.delete(key);
+  }
+}
+
+async function rebaseAndPushDefaultBranchAdmitted(dir) {
+  const refused = (error) => ({ success: false, pulled: false, pushed: false, error });
+  const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], dir)).stdout.trim();
+  if ([...SEQUENCER_STATE.map(([marker]) => marker), 'MERGE_HEAD', 'sequencer']
+    .some(marker => existsSync(join(gitDir, marker)))) {
+    return refused('Finish the Git operation already in progress before rebasing and pushing.');
+  }
+  const branch = await getBranch(dir);
+  const defaultBranch = await getDefaultBranch(dir, { strict: true });
+  if (!defaultBranch || branch !== defaultBranch) {
+    return refused('Check out the default branch before rebasing and pushing.');
+  }
+  assertSafeRef(branch);
+  if (!(await getStatus(dir)).clean) {
+    return refused('Commit or stash local changes before rebasing and pushing.');
+  }
+  await fetchOrigin(dir);
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  const counts = await execGit(['rev-list', '--left-right', '--count', `HEAD...${remoteRef}`], dir);
+  if (!(Number(counts.stdout.trim().split(/\s+/)[0]) > 0)) {
+    return refused('The default branch has no local commits ahead of origin.');
+  }
+  // Fetch + rebase is the explicit-origin equivalent of pull --rebase. Avoid
+  // pull.ff / upstream configuration and never move dirty work via autostash.
+  const rebased = await execGit(['rebase', '--no-autostash', remoteRef], dir, { ignoreExitCode: true });
+  if (rebased.exitCode !== 0) {
+    const aborted = await rebaseInProgress(dir)
+      ? await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true }) : null;
+    const recovery = aborted && aborted.exitCode !== 0
+      ? ` Rebase abort failed: ${gitResultError(aborted, 'Inspect the checkout before retrying.')}` : '';
+    return refused(`${gitResultError(rebased, 'Rebase failed; nothing was pushed.')}${recovery}`);
+  }
+  const pushed = await execGit(['push', 'origin', `HEAD:refs/heads/${branch}`], dir, { ignoreExitCode: true });
+  return {
+    success: pushed.exitCode === 0,
+    branch,
+    pulled: true,
+    pushed: pushed.exitCode === 0,
+    output: gitResultOutput(rebased) + gitResultOutput(pushed),
+    error: pushed.exitCode === 0 ? null : gitResultError(pushed, 'Push failed; rebased commits remain local.'),
+  };
+}
+
 async function syncBranchAdmitted(dir, branch = null) {
   if (branch) assertSafeRef(branch);
   const currentBranch = branch || await getBranch(dir);
@@ -2089,6 +2149,14 @@ export async function getGitInfo(dir) {
     getRepoBranches(dir).catch(() => ({ baseBranch: null, devBranch: null }))
   ]);
 
+  const originComparison = branch && branch !== 'HEAD'
+    ? await execGit(['rev-list', '--left-right', '--count', `HEAD...refs/remotes/origin/${branch}`], dir)
+      .then(({ stdout }) => {
+        const [ahead, behind] = stdout.trim().split(/\s+/).map(Number);
+        return Number.isFinite(ahead) && Number.isFinite(behind) ? { ahead, behind } : null;
+      }).catch(() => null)
+    : null;
+
   return {
     isRepo: isGit,
     branch,
@@ -2096,6 +2164,7 @@ export async function getGitInfo(dir) {
     recentCommits: commits,
     diffStats,
     remote,
+    originComparison,
     baseBranch: repoBranches.baseBranch,
     devBranch: repoBranches.devBranch,
     hasChangelog: hasChangelogDir(dir)
