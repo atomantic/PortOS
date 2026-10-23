@@ -1038,6 +1038,31 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(screen.getAllByRole('img').filter((image) => image.getAttribute('src') === '/data/image-thumbnails/chosen.webp')).toHaveLength(1);
   });
 
+  it('filters the unified character gallery without leaving a second unfiltered image list', async () => {
+    getCatalogIngredientDetails.mockResolvedValue({
+      ...detailsOf({ ...HERO, payload: {} }),
+      media: [
+        { kind: 'portrait', mediaKey: 'studio.png', caption: 'Studio portrait', library: { guide: true, variant: { age: 27 } } },
+        { kind: 'reference', mediaKey: 'winter.png', caption: 'Winter reference', library: { variant: { age: 7 } } },
+        { kind: 'reference', mediaKey: 'sheet.png', role: 'sheet:front', caption: 'Sheet in its own tab', library: { guide: true } },
+      ],
+    });
+    await renderPage('/casting/cat-chr-hero/references');
+    const library = screen.getByRole('region', { name: 'Reference library' });
+    expect(within(library).getAllByTestId('library-row')).toHaveLength(2);
+    expect(within(library).getByTestId('guide-count')).toHaveTextContent('2/4');
+    const winter = within(library).getByText('Winter reference').closest('li');
+    expect(within(winter).getByRole('img')).toHaveAttribute('src', '/data/image-thumbnails/winter.webp');
+    fireEvent.change(within(library).getByLabelText('Filter by age'), { target: { value: '27' } });
+    expect(screen.queryByAltText('Winter reference')).not.toBeInTheDocument();
+    expect(screen.getByAltText('Studio portrait')).toBeInTheDocument();
+    expect(screen.queryByAltText('Sheet in its own tab')).not.toBeInTheDocument();
+    fireEvent.change(within(library).getByLabelText('Filter by age'), { target: { value: '' } });
+    fireEvent.change(within(library).getByLabelText('Media scope'), { target: { value: 'all' } });
+    expect(screen.getByAltText('Sheet in its own tab')).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'reference details for sheet.png' })).getByRole('button', { name: 'Guide' })).toBeEnabled();
+  });
+
   it('keeps archive-only reference media visible on References without using it as a profile cover', async () => {
     getCatalogIngredientDetails.mockResolvedValue({
       ...detailsOf({ ...HERO, payload: {}, thumbnailKey: null }),
