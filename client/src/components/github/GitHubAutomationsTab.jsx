@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Play, Undo2, X } from 'lucide-react';
+import { Bot, Pencil, Play, Undo2, X } from 'lucide-react';
 import Pill from '../ui/Pill';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -18,6 +18,8 @@ import {
 } from '../../services/api';
 import { ACTION_LABELS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
 import GitHubAgentRules from './GitHubAgentRules';
+import GitHubAgentPinForm, { describeAgentPin } from './GitHubAgentPinForm';
+import useRunWithPicker from '../../hooks/useRunWithPicker';
 
 const MODE_OPTIONS = ['disabled', 'observe', 'assist', 'autopilot'];
 const MODE_LABELS = { disabled: 'Disabled', observe: 'Observe', assist: 'Assist', autopilot: 'Autopilot' };
@@ -67,7 +69,47 @@ function AgentAccess({ account, onAllow, saving }) {
   );
 }
 
-function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgents, onSaveRules, savingRules }) {
+// The provider/model/effort Resolve with agent starts from on this account
+// when no agent rule pins one. Each run can still pick its own.
+function AgentDefaults({ account, onSave, saving }) {
+  const [editing, setEditing] = useState(false);
+  const { providers } = useRunWithPicker({ preselectDefaults: false });
+  const defaults = account.agentDefaults || null;
+  const isSet = Boolean(defaults && (defaults.provider || defaults.model || defaults.effort));
+  const save = async (pin) => {
+    const empty = !pin.provider && !pin.model && !pin.effort;
+    if (await onSave(account.id, { agentDefaults: empty ? null : pin })) setEditing(false);
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400"><Bot size={12} aria-hidden="true" /> Agent defaults</h4>
+        {!editing && (
+          <button type="button" onClick={() => setEditing(true)} className="inline-flex min-h-[36px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300">
+            <Pencil size={12} aria-hidden="true" /> Edit
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <GitHubAgentPinForm
+          pin={defaults}
+          label={`Agent defaults for ${account.label}`}
+          submitLabel={saving ? 'Saving…' : 'Save defaults'}
+          busy={saving}
+          onSubmit={save}
+          onCancel={() => setEditing(false)}
+        />
+      ) : (
+        <p className="text-xs text-gray-400">
+          {isSet ? describeAgentPin(defaults, providers) : 'CoS defaults'}
+          {' · '}Resolve with agent starts here unless an agent rule pins its own; each run can change it.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgents, onSaveRules, savingRules, onSaveAccount }) {
   const selectId = `github-mode-${account.id}`;
   return (
     <li className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-4">
@@ -106,6 +148,7 @@ function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgent
         <Play size={12} aria-hidden="true" /> {running ? 'Checking…' : 'Run now'}
       </button>
       <AgentAccess account={account} onAllow={onAllowAgents} saving={savingMode} />
+      <AgentDefaults account={account} onSave={onSaveAccount} saving={savingMode} />
       <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} />
     </li>
   );
@@ -211,13 +254,14 @@ export default function GitHubAutomationsTab() {
     setSavingModeId(accountId);
     const updated = await updateGitHubAccount(accountId, patch).catch(() => null);
     setSavingModeId(null);
-    if (!updated) return;
+    if (!updated) return false;
     setOverview((prev) => ({
       ...prev,
       accounts: prev.accounts.map((account) => (account.id === accountId
-        ? { ...account, mode: updated.mode, allowAgents: updated.allowAgents === true }
+        ? { ...account, mode: updated.mode, allowAgents: updated.allowAgents === true, agentDefaults: updated.agentDefaults || null }
         : account)),
     }));
+    return true;
   };
   const changeMode = (accountId, mode) => changeAccount(accountId, { mode });
   const allowAgents = (accountId, allow) => changeAccount(accountId, { allowAgents: allow });
@@ -285,7 +329,7 @@ export default function GitHubAutomationsTab() {
       ) : (
         <ul className="grid grid-cols-1 gap-3 @3xl/page:grid-cols-2">
           {overview.accounts.map((account) => (
-            <AccountCard key={account.id} account={account} running={runningId === account.id} onRun={runNow} onMode={changeMode} savingMode={savingModeId === account.id} onAllowAgents={allowAgents} onSaveRules={saveRules} savingRules={savingRulesId === account.id} />
+            <AccountCard key={account.id} account={account} running={runningId === account.id} onRun={runNow} onMode={changeMode} savingMode={savingModeId === account.id} onAllowAgents={allowAgents} onSaveRules={saveRules} savingRules={savingRulesId === account.id} onSaveAccount={changeAccount} />
           ))}
         </ul>
       )}

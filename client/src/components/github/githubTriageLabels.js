@@ -64,6 +64,8 @@ export const LANE_VIEW = {
   // A one-off CoS task in a scratch clone, for a repo no app manages.
   'security-fix': { label: 'a security fix agent', tab: null },
   'do-review': { label: 'a Do:Review agent', tab: 'pull-requests' },
+  // A one-off CoS task in a scratch clone for any other vouched thread (#13191).
+  'notification-resolve': { label: 'a CoS agent', tab: null },
 };
 
 // The notification kinds an agent rule can name (GITHUB_AGENT_RULE_KINDS on the server).
@@ -81,10 +83,19 @@ export const CI_RULE_ACTIONS = [
   { value: 'leave', label: 'Leave in the inbox' },
 ];
 
-// Why Resolve with agent is unavailable for a thread.
+// Why Resolve with agent is unavailable for a thread (agentHandoff on the server).
 export const AGENT_REFUSED_LABELS = {
   'private-account': 'Allow agents on this Private account in Accounts to resolve it with an agent',
   'no-managed-app': 'Add this repo as a PortOS app to resolve it with an agent',
+  'outside-content': 'Outside content goes only to the screened Untrusted:Review and issue watcher lanes',
+  'comment-unchecked': 'Its latest comment has not been checked yet; new activity on the thread re-checks it',
+  'deployment-approval': 'Only you approve deployments: use Review deployment',
+  invitation: 'Only you accept or decline invitations',
+  'security-alert': 'Security alerts go only to their dependency update or security fix agents',
+  finished: 'Nothing is left to do here: mark it done',
+  'handed-off': 'An agent already has this thread',
+  'no-repo': 'It names no repository for an agent to work in',
+  suspect: 'Suspect threads never go to an agent',
 };
 
 // Why Autopilot left a thread with you instead of handing it off.
