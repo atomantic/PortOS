@@ -84,6 +84,8 @@ function rememberTemplate(scratch) {
 
 async function buildTemplate() {
   const scratch = await mkdtemp(join(tmpdir(), TEMPLATE_PREFIX));
+  // Own even a partially built template in the per-file/worker exit cleanup.
+  rememberTemplate(scratch);
   const repo = join(scratch, 'primary');
   const origin = join(scratch, 'origin.git');
   assertTempPath(scratch, 'git init for the fixture template');
@@ -97,10 +99,6 @@ async function buildTemplate() {
   await keepMaintenanceAttached(origin);
   await execGit(['remote', 'add', 'origin', origin], repo);
   await execGit(['push', '-u', 'origin', 'main'], repo);
-  // Copied sandboxes are torn down per-test; the template itself lives for
-  // the worker. Wipe it on process exit so watch-mode / repeated runs do
-  // not accumulate repos under os.tmpdir().
-  rememberTemplate(scratch);
   return { scratch, repo, origin };
 }
 
@@ -122,18 +120,25 @@ export async function makeGitSandbox({
   const template = await getTemplate();
   const scratch = await mkdtemp(join(tmpdir(), prefix));
   assertTempPath(scratch, 'git sandbox creation');
-  const repo = join(scratch, 'primary');
-  await cp(template.repo, repo, { recursive: true, force: true });
-  if (identity) await configureIdentity(repo, identity);
-  let originPath = null;
-  if (origin) {
-    originPath = join(scratch, 'origin.git');
-    await cp(template.origin, originPath, { recursive: true, force: true });
-    await execGit(['remote', 'set-url', 'origin', originPath], repo);
-  } else {
-    await stripOrigin(repo);
+  let ready = false;
+  try {
+    const repo = join(scratch, 'primary');
+    await cp(template.repo, repo, { recursive: true, force: true });
+    if (identity) await configureIdentity(repo, identity);
+    let originPath = null;
+    if (origin) {
+      originPath = join(scratch, 'origin.git');
+      await cp(template.origin, originPath, { recursive: true, force: true });
+      await execGit(['remote', 'set-url', 'origin', originPath], repo);
+    } else {
+      await stripOrigin(repo);
+    }
+    ready = true;
+    return { scratch, repo, origin: originPath };
+  } finally {
+    // The caller cannot own an allocation that rejected before returning it.
+    if (!ready) await destroyGitSandbox(scratch);
   }
-  return { scratch, repo, origin: originPath };
 }
 
 /**
@@ -277,5 +282,5 @@ export async function resetGitWorktreeSandbox(repo, initialHead, assertPath = re
 export async function destroyGitSandbox(scratch) {
   if (!scratch) return;
   assertTempPath(scratch, 'recursive sandbox delete');
-  await rm(scratch, { recursive: true, force: true }).catch(() => {});
+  await rm(scratch, { recursive: true, force: true });
 }
