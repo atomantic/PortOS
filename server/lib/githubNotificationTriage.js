@@ -36,7 +36,7 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 5;
+export const TRIAGE_RULES_VERSION = 6;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. They stay in the inbox (it
@@ -339,7 +339,8 @@ export function agentHandoff({ account, row }) {
     // needs a managed app (`needsApp` below refuses it otherwise).
     if (pullNumber > 0 && REVIEW_TRUST.has(row.trust)) plan = { lane: 'do-review', pullNumber, repo: row.repo_full_name, optIn: true };
     else if (pullNumber > 0 && row.decision === 'suggest-untrusted-review') plan = { lane: 'pr-reviewer', pullNumber };
-  } else if (kind === 'issue-activity' && HANDOFF_ISSUE_DECISIONS.has(row.decision) && (row.trust === 'outside' || evidence.commenter)) {
+  } else if (kind === 'issue-activity' && HANDOFF_ISSUE_DECISIONS.has(row.decision)
+    && (row.trust === 'outside' || (evidence.commenter && !['yours', 'trusted'].includes(evidence.commenterTrust)))) {
     plan = { lane: 'issue-watcher' };
   } else if (kind === 'security-alert' && row.decision === 'surface-high') {
     // A managed app's own dependency lane reads the repo's Dependabot alerts and

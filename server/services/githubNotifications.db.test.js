@@ -52,6 +52,7 @@ const { getDeploymentReview, reviewDeployment } = await import('./githubNotifica
 const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
+const { CANDIDATE_SQL } = await import('./githubNotificationAutopilot.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -972,6 +973,81 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 1 });
     expect(triggerOnDemandTask).toHaveBeenCalledWith('pr-reviewer', 'app-acme', expect.objectContaining({ targetPullRequest: 1201 }));
     expect(actions).toEqual([['DELETE', 'notifications/threads/1202']]);
+    vi.mocked(getAllApps).mockResolvedValue([]);
+  });
+
+  it('sends vouched issues in a managed app to generic lane and keeps them from Autopilot, and re-triages legacy rows once (#13213)', async () => {
+    await updateAccount(account.id, { mode: 'autopilot' });
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(triggerOnDemandTask).mockReset().mockImplementation(async (taskType) => ({ id: `demand-${taskType}` }));
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+
+    mockGh(() => listing([
+      thread('1601', { owner: 'acme', repo: 'app', reason: 'subscribed', type: 'Issue', url: 'https://api.github.com/repos/acme/app/issues/1601', commentUrl: 'https://api.github.com/repos/acme/app/issues/comments/601' }),
+      thread('1602', { owner: 'acme', repo: 'app', reason: 'subscribed', type: 'Issue', url: 'https://api.github.com/repos/acme/app/issues/1602', commentUrl: 'https://api.github.com/repos/acme/app/issues/comments/602' }),
+      thread('1603', { owner: 'acme', repo: 'app', reason: 'subscribed', type: 'Issue', url: 'https://api.github.com/repos/acme/app/issues/1603' }),
+    ]), {
+      'repos/acme/app/issues/1601': { author: account.login, association: 'OWNER', state: 'open', merged: false },
+      'repos/acme/app/issues/comments/601': { author: 'teammate', association: 'COLLABORATOR', mentions: 0 },
+      'repos/acme/app/collaborators/teammate/permission': { user: { login: 'teammate' }, permission: 'write' },
+
+      'repos/acme/app/issues/1602': { author: account.login, association: 'OWNER', state: 'open', merged: false },
+      'repos/acme/app/issues/comments/602': { author: 'visitor', association: 'NONE', mentions: 0 },
+      'repos/acme/app/collaborators/visitor/permission': { user: { login: 'visitor' }, permission: 'read' },
+
+      'repos/acme/app/issues/1603': { author: account.login, association: 'OWNER', state: 'open', merged: false },
+    });
+
+    await syncAccountNotifications(account.id);
+    expect(triggerOnDemandTask).toHaveBeenCalledTimes(1);
+    expect(triggerOnDemandTask).toHaveBeenCalledWith('issue-watcher', 'app-acme', { origin: 'github-notification' });
+    expect(await getNotification(account.id, '1602')).toMatchObject({ decision: 'handed-off' });
+
+    // CANDIDATE_SQL prefilter agrees with autopilotHandoff: selects 1602 (outside commenter), excludes 1601 (vouched)
+    await query(`UPDATE github_notifications SET decision = 'needs-you' WHERE thread_id = '1602' AND account_id = $1`, [account.id]);
+    const candidateQuery = `SELECT thread_id FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($14::text[]) AND ${CANDIDATE_SQL}`;
+    const { rows: candidateRows } = await query(candidateQuery, [
+      account.id,
+      true, [], [],
+      true, [], [],
+      true, [], [],
+      true, [], [],
+      ['1601', '1602'],
+    ]);
+    expect(candidateRows.map((r) => r.thread_id)).toEqual(['1602']);
+    await query(`UPDATE github_notifications SET decision = 'handed-off' WHERE thread_id = '1602' AND account_id = $1`, [account.id]);
+
+    const n1601 = await getNotification(account.id, '1601');
+    expect(n1601).toMatchObject({
+      decision: 'needs-you',
+      agent: { lane: 'notification-resolve', refused: null },
+    });
+
+    // Make 1601 look like a legacy row (rulesVersion: 5, no commenterTrust)
+    // Make 1603 look like an older row with no comments (rulesVersion: 5)
+    await query(
+      `UPDATE github_notifications
+       SET evidence = (evidence - 'commenterTrust') || '{"rulesVersion": 5}'::jsonb
+       WHERE account_id = $1 AND thread_id = '1601'`,
+      [account.id],
+    );
+    await query(
+      `UPDATE github_notifications
+       SET evidence = evidence || '{"rulesVersion": 5}'::jsonb
+       WHERE account_id = $1 AND thread_id = '1603'`,
+      [account.id],
+    );
+
+    // Sync without new activity from GitHub re-decides 1601 but leaves 1603 alone
+    await syncAccountNotifications(account.id);
+
+    const retriaged1601 = await getNotification(account.id, '1601');
+    expect(retriaged1601.evidence.commenterTrust).toBe('trusted');
+    expect(retriaged1601.evidence.rulesVersion).toBe(6);
+
+    const untouched1603 = await getNotification(account.id, '1603');
+    expect(untouched1603.evidence.rulesVersion).toBe(5);
+
     vi.mocked(getAllApps).mockResolvedValue([]);
   });
 

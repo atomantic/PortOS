@@ -321,6 +321,35 @@ describe('generic notification-resolve lane (#13191)', () => {
     expect(agentHandoff({ account: { ...account, trust: 'private', allowAgents: true }, row: ci })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
   });
 
+  it('sends a vouched issue outside a managed app to the generic lane, and unvouched to issue-watcher (#13213)', () => {
+    const vouchedIssue = {
+      ...ownPr,
+      subject_type: 'Issue',
+      trust: 'trusted',
+      evidence: { ...ownPr.evidence, commenter: 'teammate', commenterTrust: 'trusted', repoManaged: false },
+    };
+    expect(agentHandoff({ account, row: vouchedIssue })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
+
+    const outsideCommenterIssue = {
+      ...vouchedIssue,
+      evidence: { ...vouchedIssue.evidence, commenter: 'visitor', commenterTrust: 'outside' },
+    };
+    expect(agentHandoff({ account, row: outsideCommenterIssue })).toEqual({ lane: 'issue-watcher', refused: 'no-managed-app' });
+
+    const legacyCommentedIssue = {
+      ...vouchedIssue,
+      evidence: { ...vouchedIssue.evidence, commenter: 'teammate', commenterTrust: undefined },
+    };
+    expect(agentHandoff({ account, row: legacyCommentedIssue })).toEqual({ lane: 'issue-watcher', refused: 'no-managed-app' });
+
+    const managedVouchedIssue = {
+      ...vouchedIssue,
+      evidence: { ...vouchedIssue.evidence, repoManaged: true },
+    };
+    const autopilotAccount = { ...account, mode: 'autopilot' };
+    expect(autopilotHandoff({ account: autopilotAccount, row: managedVouchedIssue })).toBeNull();
+  });
+
   it('keeps deployment approvals, invitations, security alerts and suspect threads from it', () => {
     const deployment = { ...ci, trust: 'yours', reason: 'approval_requested', subject_type: 'WorkflowRun', decision: 'surface-high', evidence: { ...vouched, rule: 'deployment-approval' } };
     expect(agentHandoff({ account, row: deployment })).toMatchObject({ lane: 'notification-resolve', refused: 'deployment-approval' });

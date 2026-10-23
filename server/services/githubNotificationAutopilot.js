@@ -41,10 +41,11 @@ const MAX_HANDOFFS_PER_RUN = 50;
 // an older eligible thread is never starved by newer ones the rules would
 // reject. `inScope(n)` reads one `agentRuleScope` as parameters $n..$n+2.
 const inScope = (n) => `(($${n}::boolean AND NOT (lower(repo_full_name) = ANY($${n + 1}::text[]))) OR lower(repo_full_name) = ANY($${n + 2}::text[]))`;
-const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest' AND COALESCE(evidence->>'subjectState', '') NOT IN ('merged', 'closed') AND (
+export const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest' AND COALESCE(evidence->>'subjectState', '') NOT IN ('merged', 'closed') AND (
       (decision = 'suggest-untrusted-review' AND COALESCE(trust, '') NOT IN ('yours', 'trusted') AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(2)})
       OR (decision IN ('suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface') AND trust IN ('yours', 'trusted') AND ${inScope(5)})))
-  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface') AND (trust = 'outside' OR evidence->>'commenter' IS NOT NULL)
+  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface')
+    AND (trust = 'outside' OR (evidence->>'commenter' IS NOT NULL AND COALESCE(evidence->>'commenterTrust', '') NOT IN ('yours', 'trusted')))
     AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(8)})
   OR (reason = 'security_alert' AND decision = 'surface-high' AND ${inScope(11)}))`;
 const scopeParams = ({ all, except, only }) => [all, except, only];
