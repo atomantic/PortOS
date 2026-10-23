@@ -1,3 +1,4 @@
+import { channel } from 'node:diagnostics_channel';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -16,6 +17,7 @@ import { encodeComposition, encodeContactSheet, proofTimes, synthesizeCompositio
 import { validateLaunchVideoAssets } from '../../lib/launchVideoValidation.js';
 
 const active = new Map();
+const lifecycle = channel('portos.composition-render.lifecycle');
 // A music-video owner may run as long as its song, and no longer than this.
 const MUSIC_VIDEO_DURATION_CAP_SEC = 900;
 const MUSIC_VIDEO_OWNER = 'music-video';
@@ -139,10 +141,21 @@ export async function renderComposition(options) {
   return maintenance.run('composition', options.jobId, () => renderCompositionAdmitted(options), { continuation: true });
 }
 
-async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, song, ...input }) {
+async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, song, signal: parentSignal, ...input }) {
   const job = { controller: new AbortController(), committing: false };
   active.set(jobId, job);
+  // Relay cancellation through the same commit guard as cancel(jobId). The
+  // returned promise still waits for browser/encoder cleanup before settling.
+  const abort = () => { if (!job.committing) job.controller.abort(parentSignal.reason); };
+  parentSignal?.addEventListener('abort', abort, { once: true });
+  if (parentSignal?.aborted) abort();
   const { signal } = job.controller;
+  const began = performance.now();
+  const report = (phase, { encoderPid, frame, frames, failed } = {}) => lifecycle.publish({
+    jobId, phase, elapsedMs: Math.round(performance.now() - began),
+    ...(encoderPid !== undefined ? { encoderPid, frame, frames } : {}),
+    ...(failed !== undefined ? { failed } : {}),
+  });
   let page;
   let audioDirectory;
   let scratchRoot;
@@ -159,6 +172,8 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
     try { await write(handle); } finally { await handle.close(); }
   };
   try {
+    report('preflight');
+    signal.throwIfAborted();
     const musicVideo = await resolveMusicVideoOwner({ owner, audio, maxDurationSec });
     const parsedInput = validateRequest(htmlCompositionRenderSchema, input);
     let { directory } = parsedInput;
@@ -191,9 +206,11 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
       scratchRoot = staged.scratchRoot;
       signal.throwIfAborted();
     }
+    report('browser-open');
     page = await openComposition(directory, { signal, validateAssets: needsLaunchGate
       ? assets => { launchPlan = validateLaunchVideoAssets(assets, launchVideo); launchAssets = assets; }
       : undefined });
+    report('contract');
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');
@@ -223,6 +240,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
       ownedPaths.push(proofPath);
       const { columns } = await encodeContactSheet(page, target.contract, proofPath, { times, signal });
       page.check();
+      report('browser-close');
       await page.close({ verify: true });
       page = null;
       signal.throwIfAborted();
@@ -271,6 +289,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
           master: masterLoudness !== false,
           audio: musicVideo?.audio,
           signal,
+          onLifecycle: detail => report(detail.phase, detail),
           onProgress: (fraction, detail) => {
             const done = framesDone + (detail?.frame ?? Math.round(fraction * targetFrames));
             const elapsed = Date.now() - startedAt;
@@ -292,12 +311,15 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
         rendered.push({ ...target, filename, outputPath, sampleHistogram, loudness });
       }
       // End script execution before post-processing and publishing the result.
+      report('browser-close');
       await page.close({ verify: true });
       page = null;
       signal.throwIfAborted();
+      report('publication-admission');
       await withBackupAssetPublication(async () => {
         try {
           for (const video of rendered) {
+            report('thumbnail');
             video.thumbnail = await generateThumbnail(video.outputPath, video.id, launchPlan ? { atSec: launchPlan.posterSec } : undefined);
             if (!video.thumbnail) throw new Error('Composition thumbnail generation failed');
             signal.throwIfAborted();
@@ -336,6 +358,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
             ...(video.loudness ? { loudness: video.loudness } : {}),
             filename: video.filename, thumbnail: video.thumbnail, createdAt,
           }));
+          report('history');
           await mutateVideoHistory(history => { history.unshift(...metas); return history; });
           success = true;
           // `id`/`filename` name a real history entry (the first format); `generationId`
@@ -357,6 +380,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
     if (job.committing) maintenance.markCurrentUnsettled();
     failure = error;
   } finally {
+    report('cleanup');
     if (page) await page.close().catch(error => {
       maintenance.markCurrentUnsettled();
       failure ||= error;
@@ -372,7 +396,9 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
     if (!success) {
       for (const path of ownedPaths) await unlinkGuarded(path).catch(error => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
     }
+    parentSignal?.removeEventListener('abort', abort);
     active.delete(jobId);
+    report('settled', { failed: Boolean(failure) });
   }
   // Cleanup precedes the terminal event, so the queue cannot advance early.
   if (failure) throw failure;
