@@ -38,6 +38,7 @@ function primaryDependencies(host, workspace) {
   }
   put(join(dependencies, '.vite/keep'), 'primary persistent cache');
   put(join(dependencies, '.vite-temp/keep'), 'primary config scratch');
+  put(join(dependencies, '.vitest-cache/keep'), 'primary filesystem module cache');
   return dependencies;
 }
 
@@ -115,6 +116,7 @@ async function runTogether(fixtures, signal) {
 }
 
 const cachedResults = root => snapshot(root).filter(([name]) => name.endsWith('results.json'));
+const cachedModules = root => snapshot(join(root, 'modules')).filter(([name]) => /^[a-f0-9]{40}$/.test(name));
 
 // Assertions are supplied by the owning Vitest workspace; this shared fixture
 // imports only Node builtins and dependency-free fixture support.
@@ -125,16 +127,25 @@ export async function checkWorkspaceCacheIsolation(workspace, configName, cacheN
       const primary = [snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))];
       const a = checkout(host, 'a', workspace, configName, dependencies);
       const b = checkout(host, 'b', workspace, configName, dependencies);
+      const primaryModules = snapshot(join(dependencies, '.vitest-cache'));
       await runTogether([a, b], signal);
+      expect(snapshot(join(dependencies, '.vitest-cache'))).toEqual(primaryModules);
       const cacheA = join(a.root, '.cache', cacheName);
       const cacheB = join(b.root, '.cache', cacheName);
       expect(cachedResults(cacheA).length).toBeGreaterThan(0);
       expect(cachedResults(cacheB).length).toBeGreaterThan(0);
+      // Actual transformed module files, not just a resolved config or metadata.
+      for (const cache of [cacheA, cacheB]) {
+        expect(cachedModules(cache).length).toBeGreaterThan(0);
+      }
+      const modules = cachedModules(cacheA);
       const sibling = snapshot(cacheB);
       const names = snapshot(cacheA).map(([name]) => name);
       await run(a, signal);
+      expect(cachedModules(cacheA)).toEqual(modules);
       expect(snapshot(cacheA).map(([name]) => name)).toEqual(names);
       expect(snapshot(cacheB)).toEqual(sibling);
+      expect(snapshot(join(dependencies, '.vitest-cache'))).toEqual(primaryModules);
       expect([snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))]).toEqual(primary);
       rmSync(a.root, { recursive: true });
       expect(existsSync(cacheA)).toBe(false);
