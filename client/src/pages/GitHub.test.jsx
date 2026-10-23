@@ -449,6 +449,15 @@ describe('GitHub inbox tab', () => {
     mock.getGitHubNotifications.mockResolvedValue({ notifications: [NOTIFICATION], sync: {} });
   });
 
+  it('says why a thread is here and what state its pull request is in', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [{ ...NOTIFICATION,
+      subjectStatus: { state: 'open', draft: false, mergeState: 'blocked' } }], sync: {} });
+    await renderInbox();
+    expect(screen.getByText('Your review was requested')).toBeTruthy();
+    expect(screen.getByText('Blocked: needs review or checks')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Open pull request' })).toBeTruthy();
+  });
+
   it('uses the shared PR merge choices and applies a successful merge to the inbox immediately', async () => {
     const notification = { ...NOTIFICATION, ruleKind: 'dependabot-pr', trust: 'trusted',
       pullRequestAction: { action: 'do-review', taskId: 'previous-review' },

@@ -45,7 +45,7 @@ export const notificationAgentAccountBinding = (account, origin = 'user') => ({
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 8;
+export const TRIAGE_RULES_VERSION = 9;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. They stay in the inbox (it
