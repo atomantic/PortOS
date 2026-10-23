@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { execGit } from './execGit.js';
 import { PATHS } from './paths.js';
 import { ensureDir, sha256File, writeFileGuarded } from './fileCore.js';
+import { escapeRegExp } from './textUtils.js';
 
 const MAX_EVIDENCE_BYTES = 25 * 1024 * 1024;
 const MAX_RECOVERY_HEADS = 1024;
@@ -34,7 +35,7 @@ const unchanged = (left, right) => JSON.stringify(left.identity) === JSON.string
 // Included/global/worktree settings cannot be retired by editing the shared
 // config. Refuse them rather than leave a reused name with inherited settings.
 async function branchConfiguration(repoPath, branch) {
-  const pattern = `^branch\\.${branch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.[^.]+$`;
+  const pattern = `^branch\\.${escapeRegExp(branch)}\\.[^.]+$`;
   const query = async scope => {
     const result = await execGit(['config', '--null', '--show-origin', ...scope, '--get-regexp', pattern], repoPath, { ignoreExitCode: true });
     if (![0, 1].includes(result.exitCode)) throw new Error('branch configuration cannot be read');
@@ -47,16 +48,22 @@ async function branchConfiguration(repoPath, branch) {
 
 async function withNativeLock(path, bytes, work) {
   const handle = await open(path, 'wx', 0o600);
+  let identity;
   try {
-    await handle.writeFile(bytes);
-    await handle.sync();
-  } finally { await handle.close(); }
-  const owned = await readEvidence(path);
-  try { return await work(owned); }
+    try {
+      identity = await handle.stat();
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally { await handle.close(); }
+    return await work(await readEvidence(path));
+  }
   finally {
-    // Never remove a replaced or modified lock belonging to another writer.
-    const current = await readEvidence(path);
-    if (current.bytes && unchanged(current, owned)) await unlink(path);
+    // Cover partial writes and sync failures, but never unlink a replacement.
+    const current = await lstat(path).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (identity && current?.dev === identity.dev && current.ino === identity.ino) await unlink(path);
   }
 }
 

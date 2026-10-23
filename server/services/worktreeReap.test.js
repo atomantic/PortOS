@@ -25,6 +25,21 @@ import {
   SKIP_HEAVY_INTEGRATION,
 } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+const lockWriteFault = vi.hoisted(() => ({ path: null }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, open: async (path, ...args) => {
+    const handle = await actual.open(path, ...args);
+    if (path === lockWriteFault.path) {
+      const write = handle.writeFile.bind(handle);
+      handle.writeFile = async bytes => {
+        await write(bytes.subarray(0, 8));
+        throw Object.assign(new Error('fixture disk full'), { code: 'ENOSPC' });
+      };
+    }
+    return handle;
+  } };
+});
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-reap-archives-') }));
 afterAll(cleanupTempDataRoots);
 import { PATHS } from '../lib/paths.js';
@@ -194,6 +209,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => 
     finally { receiver.mockRestore(); }
     expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
     expect((await execGit(['config', 'branch.done.remote'], dir)).stdout.trim()).toBe('keep');
+  });
+
+  it('releases its partially written lock after disk failure without changing live configuration', async () => {
+    await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'keep'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const original = await readFile(join(common, 'config'));
+    lockWriteFault.path = join(common, 'config.lock');
+    try { expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false); }
+    finally { lockWriteFault.path = null; }
+    expect(existsSync(join(common, 'config.lock'))).toBe(false);
+    expect(await readFile(join(common, 'config'))).toEqual(original);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    await execGit(['config', 'branch.done.remote', 'retry'], dir);
   });
 
   it.each(['config.lock', 'refs/heads/done.lock'])('preserves another writer\'s %s and live settings', async lock => {
