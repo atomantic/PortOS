@@ -14,6 +14,18 @@ export const DECISION_VIEW = {
   'handed-off': { tone: 'success', label: 'Handed off' },
 };
 
+// Suggestions that are also an action: the chip is a button that does it.
+// `agent` opens Resolve with agent's picker (the thread's own lane decides
+// Do:Review or Untrusted:Review); the rest apply that inbox action.
+export const DECISION_ACTIONS = {
+  'suggest-review': { action: 'agent', label: 'Do:Review' },
+  'suggest-untrusted-review': { action: 'agent', label: 'Untrusted:Review' },
+  'suggest-done': { action: 'done', label: 'Mark done' },
+  'suggest-mark-read': { action: 'done', label: 'Mark done' },
+  duplicate: { action: 'done', label: 'Mark done' },
+  'suggest-mute': { action: 'mute', label: 'Mute' },
+};
+
 export const TRUST_VIEW = {
   yours: { tone: 'success', label: 'You' },
   trusted: { tone: 'success', label: 'Trusted' },

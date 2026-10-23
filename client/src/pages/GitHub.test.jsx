@@ -452,6 +452,38 @@ describe('GitHub inbox tab', () => {
     expect(await screen.findByText('Your inbox is clear.')).toBeTruthy();
   });
 
+  it('turns a suggestion into a button that does it, and leaves informational decisions as pills', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [
+        { ...NOTIFICATION, threadId: '201', title: 'Quiet thread', decision: 'suggest-mute', reason: 'subscribed' },
+        { ...NOTIFICATION, threadId: '202', title: 'Outside PR', decision: 'suggest-untrusted-review', agent: { lane: 'pr-reviewer', refused: 'no-managed-app', pin: null } },
+        { ...NOTIFICATION, threadId: '203', title: 'Red main', decision: 'surface', reason: 'ci_activity', subjectType: 'CheckSuite' },
+      ],
+      sync: {},
+    });
+    mock.applyGitHubNotificationAction.mockImplementation(async (_account, threadId) => ({ ...NOTIFICATION, threadId, state: 'muted' }));
+    renderTab('inbox');
+    fireEvent.click(await screen.findByRole('button', { name: 'Mute' }));
+    expect(mock.applyGitHubNotificationAction).toHaveBeenCalledWith('github-com', '201', 'mute');
+    // A suggestion whose lane is refused is a disabled button that says why.
+    const review = screen.getByRole('button', { name: 'Untrusted:Review' });
+    expect(review.disabled).toBe(true);
+    expect(document.getElementById(review.getAttribute('aria-describedby'))).toBeTruthy();
+    // "Worth a look" is information, not an action.
+    expect(screen.getByText('Worth a look').closest('button')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Quiet thread')).toBeNull());
+  });
+
+  it('opens the agent picker from a review suggestion', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, decision: 'suggest-review', agent: { lane: 'do-review', refused: null, pin: null } }],
+      sync: {},
+    });
+    renderTab('inbox');
+    fireEvent.click(await screen.findByRole('button', { name: 'Do:Review' }));
+    expect(await screen.findByRole('button', { name: 'Start agent' })).toBeTruthy();
+  });
+
   it('marks a thread done and takes it out of the inbox', async () => {
     mock.applyGitHubNotificationAction.mockResolvedValue({ ...NOTIFICATION, state: 'done', unread: false });
     renderTab('inbox');
@@ -470,7 +502,8 @@ describe('GitHub inbox tab', () => {
     renderTab('inbox');
     // The inbox mirrors GitHub's, so a folded duplicate is listed with its pill.
     expect(await screen.findByText('Folded CI notice')).toBeTruthy();
-    expect(screen.getByText('Duplicate')).toBeTruthy();
+    // Its suggestion is the action itself.
+    expect(screen.getAllByRole('button', { name: 'Mark done' }).length).toBe(1);
     fireEvent.click(screen.getByRole('button', { name: 'Mark 1 finished done' }));
     await waitFor(() => expect(mock.clearFinishedGitHubNotifications).toHaveBeenCalledWith(null));
   });
@@ -566,7 +599,7 @@ describe('GitHub inbox triage', () => {
       sync: {},
     });
     renderTab('inbox');
-    expect(await screen.findByText('Suggest Untrusted:Review')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Untrusted:Review' })).toBeTruthy();
     expect(screen.getByText('Outside')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /^Suspect/ }));

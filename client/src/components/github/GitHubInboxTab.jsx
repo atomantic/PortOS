@@ -9,7 +9,7 @@ import OverflowMenu from '../ui/OverflowMenu';
 import GitHubThreadDrawer from './GitHubThreadDrawer';
 import GitHubDeploymentReview from './GitHubDeploymentReview';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
-import { AGENT_REFUSED_LABELS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
+import { AGENT_REFUSED_LABELS, DECISION_ACTIONS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
 import socket from '../../services/socket';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -155,6 +155,14 @@ const agentFailedLink = ({ agentId, taskId }) => (agentId
   ? `/cos/agents/${encodeURIComponent(agentId)}`
   : `/cos/tasks?task=${encodeURIComponent(taskId)}&source=user`);
 
+const SUGGESTION_ICONS = { agent: Bot, done: Check, mute: BellOff };
+// A suggestion button keeps its pill's color, so the row still reads the same.
+const SUGGESTION_TONES = {
+  accent: 'border-port-accent/40 bg-port-accent/10 text-port-accent',
+  warning: 'border-port-warning/40 bg-port-warning/10 text-port-warning',
+  muted: 'border-port-border bg-port-bg text-gray-200',
+};
+
 function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated }) {
   const [reviewing, setReviewing] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -165,6 +173,9 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
   // Every open row offers the button; a refused lane disables it with its reason.
   const agent = handled ? null : notification.agent;
   const canResolve = Boolean(agent) && !agent.refused;
+  const refusedId = `agent-refused-${notification.accountId}-${notification.threadId}`;
+  const suggestionAction = handled ? null : DECISION_ACTIONS[notification.decision];
+  const suggestion = suggestionAction ? { ...suggestionAction, icon: SUGGESTION_ICONS[suggestionAction.action] } : null;
   const startAgent = async (pin) => {
     if (await onAction(notification, 'agent', pin)) setPicking(false);
   };
@@ -199,7 +210,17 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
             </p>
           )}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {decision && <Pill tone={decision.tone}>{decision.label}</Pill>}
+            {decision && (suggestion ? (
+              <button
+                type="button"
+                disabled={busy || (suggestion.action === 'agent' && !canResolve)}
+                onClick={() => (suggestion.action === 'agent' ? setPicking(true) : onAction(notification, suggestion.action))}
+                aria-describedby={suggestion.action === 'agent' && agent?.refused ? refusedId : undefined}
+                className={`inline-flex min-h-[36px] items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium hover:brightness-125 disabled:opacity-50 ${SUGGESTION_TONES[decision.tone] || SUGGESTION_TONES.muted}`}
+              >
+                <suggestion.icon size={12} aria-hidden="true" /> {suggestion.label}
+              </button>
+            ) : <Pill tone={decision.tone}>{decision.label}</Pill>)}
             {notification.yourRepo && <Pill tone="accent">Your repo</Pill>}
             {notification.repoPrivate && <Pill tone="muted">Private</Pill>}
             {trust && <Pill tone={trust.tone}>{trust.label}</Pill>}
@@ -229,7 +250,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
             />
           )}
           {agent?.refused && (
-            <p id={`agent-refused-${notification.accountId}-${notification.threadId}`} className="mt-1 text-xs text-gray-500">
+            <p id={refusedId} className="mt-1 text-xs text-gray-500">
               {AGENT_REFUSED_LABELS[agent.refused] || agent.refused}
             </p>
           )}
@@ -250,7 +271,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
               type="button"
               disabled={busy || !canResolve}
               onClick={() => setPicking(true)}
-              aria-describedby={agent.refused ? `agent-refused-${notification.accountId}-${notification.threadId}` : undefined}
+              aria-describedby={agent.refused ? refusedId : undefined}
               className={`inline-flex min-h-[36px] items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-50 ${canResolve
                 ? 'bg-port-accent text-white'
                 : 'border border-port-border text-gray-400'}`}
