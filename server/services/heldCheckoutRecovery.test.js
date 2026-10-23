@@ -50,7 +50,7 @@ vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
 }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout, recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout, recoverMissingCheckoutPreservations, findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
 const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
 
@@ -137,6 +137,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const recreated = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...release, reason: 'retirement-review-pending' }] });
     expect(recreated.retirementObligations).toHaveLength(1);
     expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
+  });
+
+  it('recognizes an absent completion archive without a schedule obligation and rejects changed or older evidence', async () => {
+    const { release, saved } = await historicalArchive();
+    const outcome = await getBranchReconcileOutcome('app-1');
+    const original = { ...release, createdAt: outcome.retirementObligations[0].createdAt };
+    injected.schedule = { executions: {} };
+    const withoutObligation = await getBranchReconcileOutcome('app-1');
+    await execGit(['branch', '-d', release.branch], repo);
+    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: original });
+    expect(proof).toMatchObject({ archiveDir: saved.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(await proof.recheck()).toBe(true);
+    await mkdir(release.path);
+    expect(await proof.recheck()).toBe(false);
+    await rm(release.path, { recursive: true });
+    const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
+    expect(await findMissingCheckoutPreservation({ repoPath: repo, release: { ...original, createdAt: new Date(Date.parse(manifest.archivedAt) + 1).toISOString() } })).toBeNull();
+    await writeFile(join(saved.archiveDir, 'files', 'private.txt'), 'corrupt archived evidence');
+    expect(await findMissingCheckoutPreservation({ repoPath: repo, release: original })).toBeNull();
+    expect(await getBranchReconcileOutcome('app-1')).toEqual(withoutObligation);
   });
 
   it.each([false, true])('clears the historical diagnosis after recovery retries, with other holds=%s', async otherHolds => {

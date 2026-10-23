@@ -29,9 +29,10 @@ vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: vi.fn(a
 vi.mock('./completedCheckoutEvidence.js', () => ({ readCompletedCheckoutIdentity: vi.fn() }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosAgentLifecycle.js', () => ({ reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true) }));
-vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]) }));
+vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({
+  findMissingCheckoutPreservation: vi.fn(async () => null),
   retireInventoriedCheckout: vi.fn(async () => ({ ok: true, archiveDir: '/private/archive', branchDeleted: true })),
   prepareInventoriedCheckoutRetirement: vi.fn().mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64) } }),
 }));
@@ -80,7 +81,7 @@ import { verifyAgentRepoState, sweepRepoStateVerifications, REPO_STATE_REMEDIATI
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { getTaskById } from './cosTaskStore.js';
 import { recordBranchReconcileOutcome } from './taskSchedule.js';
-import { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
+import { findMissingCheckoutPreservation, prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
 import { addTask, getAllTasks } from './cosTaskStore.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import { listWorktrees } from './worktreeManager.js';
@@ -141,6 +142,7 @@ const run = (overrides = {}) => verifyAgentRepoState({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  findMissingCheckoutPreservation.mockResolvedValue(null);
   inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'delivery-ci-or-review-pending' });
   readBranchCompletionPolicies.mockResolvedValue([]);
   getTaskById.mockResolvedValue(null);
@@ -168,6 +170,29 @@ beforeEach(() => {
 });
 
 describe('verifyAgentRepoState — clean runs', () => {
+  it('settles an absent completed checkout from verified original-generation archive evidence without deleting or queueing work', async () => {
+    const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
+      startedAt: CREATED_AT, capturedAt: CREATED_AT };
+    const state = agentState({ completedCheckouts: [completed], reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' }, repoStateVerification: { status: 'pending' } });
+    const recheck = vi.fn(async () => true);
+    findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: '/example/archive', evidenceDigest: 'a'.repeat(64), recheck });
+    expect(await run({ agentState: state })).toMatchObject({ verified: true, skipReason: null });
+    expect(findMissingCheckoutPreservation).toHaveBeenCalledWith({ repoPath: '/repo', release: { ...RELEASE, createdAt: CREATED_AT } });
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({
+      status: 'verified', reason: 'already-absent-preservation-verified', head: HEAD,
+      preservation: expect.objectContaining({ capturedAt: CREATED_AT, evidenceDigest: 'a'.repeat(64) }),
+    }));
+    expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
+    expect(addTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    recordCleanupOutcome.mockResolvedValueOnce(false);
+    expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
+    recheck.mockResolvedValue(false);
+    expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
+    findMissingCheckoutPreservation.mockResolvedValue(null);
+    expect(await run({ agentState: state })).toMatchObject({ verified: false, skipReason: 'already-absent-preservation-unverified' });
+  });
+
   it.each([['broken leaf symlink', true], ['unreadable EACCES leaf', null]])('never treats %s as absent or verified cleanup', async (_name, presence) => {
     readCheckoutPathPresence.mockResolvedValue(presence);
     const result = await run();
