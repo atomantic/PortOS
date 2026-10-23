@@ -22,7 +22,7 @@ export async function readFableLoomExportSource(root, filename) {
   const base = await realpath(root);
   const path = await realpath(join(base, filename));
   if (!isPathInsideDir(base, path)) throw refusal('EXPORT_MEDIA_PATH', 'Media resolves outside its approved root.');
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
     const before = await handle.stat();
     if (!before.isFile() || before.size <= 0 || before.size > FABLELOOM_EXPORT_LIMITS.maxAssetBytes) {

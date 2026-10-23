@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { createHash } from 'node:crypto';
+import { closeSync, constants, openSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import express from 'express';
@@ -10,6 +11,7 @@ import { errorMiddleware } from '../../lib/errorHandler.js';
 import { readZipArchive } from '../../lib/zipArchive.js';
 import { findFfmpeg, findFfprobe, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { FABLELOOM_EXPORT_LIMITS } from '../../lib/fableLoomExport.js';
+import { execFileSync } from '../../lib/childProcess.js';
 
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), {
   dataRoot: () => lazyTempDataRoot('portos-fableloom-export-'),
@@ -36,6 +38,7 @@ const bin = await findFfmpeg();
 const probe = await findFfprobe();
 const canPrepareVideo = Boolean(bin && probe);
 const videoIt = canPrepareVideo ? it : vitestIt.skip;
+const posixIt = process.platform === 'win32' ? vitestIt.skip : it;
 const privateMarker = 'EXAMPLE_PRIVATE_SENTINEL';
 const sourcePath = '/example-private/source';
 let sourceImage;
@@ -333,5 +336,28 @@ describe('portable FableLoom export boundary', () => {
     expect(() => store.add({ bytes: Buffer.from('de'), extension: 'mp4', durationMs: 1000 }))
       .toThrow(expect.objectContaining({ code: 'EXPORT_PACKAGE_SIZE' }));
     expect(store.byteLength).toBe(3);
+  });
+
+  posixIt('rejects a named pipe without a writer and lets the next queued export progress', async ({ signal }) => {
+    const pipe = join(PATHS.images, 'pipe.png');
+    execFileSync('mkfifo', [pipe], { timeout: 5000 });
+    const releaseBlockedReader = () => {
+      try { closeSync(openSync(pipe, constants.O_WRONLY | constants.O_NONBLOCK)); }
+      catch (failure) { if (!['ENXIO', 'ENOENT'].includes(failure.code)) throw failure; }
+    };
+    signal.addEventListener('abort', releaseBlockedReader, { once: true });
+    try {
+      loom.episodes[0].nodes[0].image = 'pipe.png';
+      const result = await terminal(await begin({ episodeIds: ['episode-one'] }));
+      expect(result).toMatchObject({ status: 'failed', error: { code: 'EXPORT_MEDIA_SIZE' } });
+      loom.episodes[0].nodes[0].image = null;
+      const next = await terminal(await begin({ episodeIds: ['episode-one'] }));
+      expect(next).toMatchObject({ status: 'failed', error: { code: 'EXPORT_VALIDATION_FAILED' } });
+    } finally {
+      releaseBlockedReader();
+      signal.removeEventListener('abort', releaseBlockedReader);
+      await __testing.drain();
+      await rm(pipe);
+    }
   });
 });
