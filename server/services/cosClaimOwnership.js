@@ -17,7 +17,7 @@
  *     while the worker mutates it; the run's completion releases it.
  */
 import { resolve } from 'path';
-import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 
 import { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
@@ -158,13 +158,13 @@ export async function checkReconcileOwnership(input, deps = {}) {
   // The git read stays outside the lock; only the agent registry — the half a
   // concurrent bind changes — is re-read where the reservation is decided.
   const worktrees = await listWorktrees(repoPath).catch(() => null);
+  const holder = Array.isArray(worktrees) ? worktrees.find(wt => branchOf(wt) === branch) || null : null;
 
   const admit = async () => {
     const agents = await getAgents().catch(() => null);
     if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admitted: false, reason: 'ownership-unreadable' };
     const completionHold = await readCompletionHold({ repoPath, branch, prUrl }).catch(() => 'pr-completion-policy-unavailable');
     if (completionHold) return { admitted: false, reason: completionHold };
-    const holder = worktrees.find((wt) => branchOf(wt) === branch) || null;
     if (worktreePath && !samePath(holder?.path, worktreePath)) return { admitted: false, reason: 'holder-changed' };
     const fenced = checkoutRetirementFenceReason({ repoPath, branch, path: holder?.path || null });
     if (fenced) return { admitted: false, reason: fenced };
@@ -176,7 +176,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
     return reason ? { admitted: false, reason } : { admitted: true };
   };
   const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  if (!agentId) return withCheckoutPublication(repoPath, admit)
+  if (!agentId || deps.reserve === false) return withCheckoutPublication(repoPath, admit)
     .catch(() => ({ admitted: false, reason: 'checkout-retirement-reserved' }));
 
   const { cosEvents } = await import('./cosEvents.js');
@@ -187,8 +187,25 @@ export async function checkReconcileOwnership(input, deps = {}) {
     if (!admission.admitted) return admission;
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { admitted: false, reason: 'owner-unknown' };
-    const patch = reserveReconcileBranch(agent, branch);
-    if (!patch) return admission;
+    let reservation = null;
+    if (agent.metadata?.reconcileAssignment) {
+      const { getTaskById } = await import('./cosTaskStore.js');
+      const task = await getTaskById(agent.taskId).catch(() => null);
+      const proof = reconcileAssignedTarget(agent, task, { branch, workspacePath: holder?.path || null }, { bindCheckout: true });
+      const { getOriginInfo } = await import('../lib/gitRemote.js');
+      const origin = await getOriginInfo(repoPath).catch(() => null);
+      if (!proof || proof.assignment.appId !== appId || !samePath(proof.assignment.repoPath, repoPath)
+        || origin?.host !== proof.assignment.origin.host || origin?.fullName !== proof.assignment.origin.fullName) {
+        return { admitted: false, reason: 'reconcile-target-unverified' };
+      }
+      const reconcileReservations = [...(agent.metadata.reconcileReservations || []).filter(target => target.branch !== branch),
+        { branch, workspacePath: proof.target.workspacePath }];
+      const reservedAgent = { ...agent, metadata: { ...agent.metadata, reconcileReservations } };
+      reservation = { reconcileReservations,
+        reconcileMergeReservation: reconcileMergeTarget(reservedAgent, task, proof.target)?.target || null };
+    }
+    const patch = { ...reserveReconcileBranch(agent, branch), ...reservation };
+    if (!Object.keys(patch).length) return admission;
     if (patch.refused) return { admitted: false, reason: patch.refused };
     state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
     await save();
