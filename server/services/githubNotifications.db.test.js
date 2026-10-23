@@ -46,7 +46,7 @@ const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const { __testing: { listAutopilotCandidates, candidateFilter } } = await import('./githubNotificationAutopilot.js');
 const {
-  syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
+  syncAccountNotifications, syncAllNotifications, listNotifications, listActionableNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, actOnPullRequest, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
 const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
@@ -152,6 +152,37 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     vi.mocked(runUntrustedContentAnalysis).mockReset();
     account = await createAccount({ host: 'github.com', login: `octocat${accountIds.length}`, label: 'Example' });
     accountIds.push(account.id);
+  });
+
+  // Central Actions must use the inbox's projection and never fetch GitHub on read.
+  it('projects unread open alerts across accounts, including suspect items, and removes handled or disabled sources', async () => {
+    const second = await createAccount({ host: 'github.com', login: `other${accountIds.length}`, label: 'Other example' });
+    accountIds.push(second.id);
+    mockGh(args => githubListing(args, [thread('9001'), thread('9002'), thread('9003'), thread('9004')]));
+    await syncAccountNotifications(account.id, { automate: false });
+    await syncAccountNotifications(second.id, { automate: false });
+    await query("UPDATE github_notifications SET suspect = TRUE WHERE account_id = $1 AND thread_id = '9002'", [account.id]);
+    await query("UPDATE github_notifications SET unread = FALSE WHERE account_id = $1 AND thread_id = '9003'", [account.id]);
+    await query("UPDATE github_notifications SET read_on_github_at = NOW() WHERE account_id = $1 AND thread_id = '9004'", [account.id]);
+    await updateAccount(second.id, { enabled: false });
+    vi.mocked(execGh).mockClear();
+
+    const rows = (await listActionableNotifications()).filter(row => row.accountId === account.id || row.accountId === second.id);
+    expect(rows.map(row => row.threadId).sort()).toEqual(['9001', '9002']);
+    const inbox = (await listNotifications({ accountId: account.id })).notifications.find(row => row.threadId === '9001');
+    expect(rows.find(row => row.threadId === '9001')).toEqual({ ...inbox, accountLabel: account.label });
+    expect(rows.find(row => row.threadId === '9002')).toMatchObject({ suspect: true, agent: { refused: 'suspect' } });
+    expect(await listActionableNotifications({ limit: 1 })).toHaveLength(1);
+    expect(execGh).not.toHaveBeenCalled();
+
+    for (const action of ['mute', 'unsubscribe', 'done']) {
+      await applyNotificationAction(account.id, '9001', action);
+      expect((await listActionableNotifications()).some(row => row.accountId === account.id && row.threadId === '9001')).toBe(false);
+      if (action !== 'done') {
+        await applyNotificationAction(account.id, '9001', 'resubscribe');
+        expect((await listActionableNotifications()).some(row => row.accountId === account.id && row.threadId === '9001')).toBe(true);
+      }
+    }
   });
 
   // Regression: CI can finish without a new notification or conditional-listing change.

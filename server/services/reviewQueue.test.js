@@ -27,6 +27,7 @@ const askPromote = { promoteLatestAssistantTurn: vi.fn() };
 const identity = { getGoals: vi.fn() };
 const stackerNews = { listPendingReviewActions: vi.fn() };
 const x = { listPendingReviewActions: vi.fn() };
+const githubNotifications = { listActionableNotifications: vi.fn() };
 const userTimezone = { getUserTimezone: vi.fn() };
 const reviewQueueTriageStore = {
   listReviewQueueTriage: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock('./identity.js', () => identity);
 vi.mock('./askPromote.js', () => askPromote);
 vi.mock('./stackerNews.js', () => stackerNews);
 vi.mock('./x.js', () => x);
+vi.mock('./githubNotifications.js', () => githubNotifications);
 vi.mock('./userTimezone.js', () => userTimezone);
 vi.mock('./reviewQueueTriageStore.js', () => reviewQueueTriageStore);
 
@@ -104,6 +106,7 @@ function resetEmpty() {
   identity.getGoals.mockResolvedValue({ goals: [] });
   stackerNews.listPendingReviewActions.mockResolvedValue([]);
   x.listPendingReviewActions.mockResolvedValue([]);
+  githubNotifications.listActionableNotifications.mockResolvedValue([]);
   userTimezone.getUserTimezone.mockResolvedValue('UTC');
   reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([]);
   reviewQueueTriageStore.upsertReviewQueueTriage.mockResolvedValue(undefined);
@@ -157,6 +160,51 @@ describe('reviewQueue.buildQueue', () => {
       operations: [{ id: 'resolve', label: 'Done', available: true }],
       availability: 'available',
       available: true,
+    });
+  });
+
+  it('projects account-scoped GitHub alerts with the full inbox card payload and renewed activity', async () => {
+    const notification = {
+      accountId: 'example-account', threadId: '123', accountLabel: 'Example account',
+      title: 'Review the example change', repoFullName: 'acme/app', reason: 'review_requested',
+      state: 'open', unread: true, updatedAt: '2026-10-20T10:00:00.000Z',
+      pullRequest: { number: 42, reviewEligible: true }, agent: { refused: null, pin: null },
+    };
+    githubNotifications.listActionableNotifications.mockResolvedValue([
+      notification,
+      { ...notification, accountId: 'other-account', suspect: true },
+    ]);
+    const queue = await buildQueue({ query: { view: 'today' } });
+    const row = queue.items.find((item) => item.id === 'github:example-account/123');
+    expect(row).toMatchObject({
+      source: 'github', sourceRef: 'example-account/123', sourceLabel: 'GitHub alerts',
+      actionKind: 'github.notification', required: true, operations: [],
+      revision: notification.updatedAt, githubNotification: notification,
+      drillTo: '/devtools/github/inbox/example-account/123',
+    });
+    expect(queue.sources.github.total).toBe(2);
+    expect(queue.items.find((item) => item.id === 'github:other-account/123').severity).toBe('high');
+    const snoozed = applyQueueTriage(queue.items, [{
+      ...queueActionIdentity(row), snoozedUntil: '2026-10-25T10:00:00.000Z',
+    }], new Date('2026-10-23T10:00:00.000Z'));
+    expect(snoozed.map((item) => item.id)).not.toContain(row.id);
+    githubNotifications.listActionableNotifications.mockResolvedValue([{ ...notification, updatedAt: '2026-10-23T11:00:00.000Z' }]);
+    const renewed = await buildQueue();
+    expect(applyQueueTriage(renewed.items, [{
+      ...queueActionIdentity(row), snoozedUntil: '2026-10-25T10:00:00.000Z',
+    }], new Date('2026-10-23T12:00:00.000Z')).map((item) => item.id)).toContain(row.id);
+  });
+
+  it('reports a failed or capped GitHub read without claiming the central inbox is clear', async () => {
+    githubNotifications.listActionableNotifications.mockRejectedValueOnce(new Error('read unavailable'));
+    expect(await buildQueue()).toMatchObject({
+      partial: true, total: null, sources: { github: { total: null, available: false } },
+    });
+    githubNotifications.listActionableNotifications.mockResolvedValue(Array.from({ length: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 }, (_, index) => ({
+      accountId: 'example', threadId: String(index), title: 'Example alert',
+    })));
+    expect(await buildQueue()).toMatchObject({
+      partial: true, sources: { github: { total: null, truncation: true, lowerBound: REVIEW_QUEUE_SOURCE_READ_LIMIT } },
     });
   });
 
