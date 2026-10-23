@@ -33,6 +33,8 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const json = value => canonicalStringify(value) + '\n';
 const error = (code, message, status = 422) => new ServerError(message, { status, code });
 const missing = () => error('NOT_FOUND', 'Export job not found for this loom.', 404);
+const invalidState = () => error('EXPORT_STATE_INVALID', 'Export state is unreadable or from an unsupported version.', 503);
+const absentJob = Symbol('absent-export-job');
 const save = job => atomicWrite(jobFile(job.jobId), job);
 function serializeAdmission(action) {
   const pending = admissionTail.then(action);
@@ -57,16 +59,27 @@ function publicJob(job) {
 
 async function readJob(id, loomId = null) {
   if (!uuid.test(id)) throw missing();
-  const job = await readJSONFile(jobFile(id), null, { strict: true, logError: false }).catch(() => {
-    throw error('EXPORT_STATE_INVALID', 'Export state is unreadable or from an unsupported version.', 503);
+  const job = await readJSONFile(jobFile(id), absentJob, { strict: true, logError: false }).catch(() => {
+    throw invalidState();
   });
-  if (!job) return null;
-  if (loomId !== null && job.loomId !== loomId) throw missing();
-  if (job.version !== 1 || job.jobId !== id || typeof job.loomId !== 'string'
-    || !Number.isFinite(job.createdAt) || !Array.isArray(job.findings)
+  if (job === absentJob) return null;
+  if (!job || job.version !== 1 || job.jobId !== id || typeof job.loomId !== 'string'
+    || !Number.isSafeInteger(job.createdAt)
+    || !Number.isFinite(new Date(job.createdAt + FABLELOOM_EXPORT_LIMITS.maxAgeMs).getTime())
+    || !Array.isArray(job.findings) || !job.progress
+    || ![job.progress.completed, job.progress.total].every(n => Number.isSafeInteger(n) && n >= 0)
+    || job.progress.completed > job.progress.total
     || !['queued', 'validating', 'packing', 'completed', 'failed'].includes(job.status)) {
-    throw error('EXPORT_STATE_INVALID', 'Export state is unreadable or from an unsupported version.', 503);
+    throw invalidState();
   }
+  if (job.status === 'completed' && (!job.sizeReport
+    || !['mediaBytes', 'totalBytes', 'archiveBytes', 'mediaFiles'].every(k => Number.isSafeInteger(job.sizeReport[k]) && job.sizeReport[k] >= 0)
+    || job.sizeReport.archiveBytes === 0 || job.sizeReport.archiveBytes > FABLELOOM_EXPORT_LIMITS.maxPackageBytes
+    || !/^fableloom-[a-f0-9]{16}-v1\.zip$/.test(job.filename))) {
+    throw invalidState();
+  }
+  if (job.status === 'failed' && (typeof job.error?.code !== 'string' || typeof job.error?.message !== 'string')) throw invalidState();
+  if (loomId !== null && job.loomId !== loomId) throw missing();
   if (!active.has(id) && !['completed', 'failed'].includes(job.status)) {
     await rmGuarded(join(jobDirectory(id), 'work'), { recursive: true, force: true });
     job.status = 'failed';
@@ -131,6 +144,32 @@ function assetProvenance(loom, node, request) {
   };
 }
 
+/** Only this store retains media buffers; source-ID caches receive small descriptors. */
+function createMediaStore(maxBytes = FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
+  const files = new Map();
+  let byteLength = 0;
+  return {
+    add({ bytes, extension, durationMs }) {
+      if (bytes.length > FABLELOOM_EXPORT_LIMITS.maxAssetBytes) {
+        throw error('EXPORT_MEDIA_SIZE', 'Prepared media exceeds the 64 MiB asset limit.');
+      }
+      const sha256 = hash(bytes);
+      const file = `media/${sha256}.${extension}`;
+      if (!files.has(file)) {
+        if (byteLength + bytes.length > maxBytes) {
+          throw error('EXPORT_PACKAGE_SIZE', 'Media exceeds the 256 MiB package limit. Export fewer episodes.');
+        }
+        files.set(file, bytes);
+        byteLength += bytes.length;
+      }
+      return { file, sha256, durationMs };
+    },
+    entries: () => files.entries(),
+    get byteLength() { return byteLength; },
+    get size() { return files.size; },
+  };
+}
+
 const packageReadme = `# FableLoom portable package
 
 Package schema: 1.0.0. Playback runtime: 1.0.0 (see runtime-v1.md).
@@ -188,10 +227,9 @@ async function build(job, snapshot, episodes, history, universe) {
   const directory = join(jobDirectory(job.jobId), 'work');
   await ensureDir(directory);
   const cache = new Map();
-  const media = new Map();
+  const media = createMediaStore();
   const nodeAssets = new Map();
   const provenance = [];
-  let mediaBytes = 0;
   for (const request of requests) {
     const key = `${request.kind}:${request.sourceId}`;
     let prepared = cache.get(key);
@@ -199,19 +237,7 @@ async function build(job, snapshot, episodes, history, universe) {
       const filename = request.kind === 'image' ? request.sourceId : history.find(h => h.id === request.sourceId)?.filename;
       if (!filename) throw error('EXPORT_MEDIA_MISSING', 'A referenced video history item is missing.');
       const bytes = await readFableLoomExportSource(request.kind === 'image' ? PATHS.images : PATHS.videos, filename);
-      prepared = await prepareFableLoomExportMedia(bytes, request.kind, directory);
-      if (prepared.bytes.length > FABLELOOM_EXPORT_LIMITS.maxAssetBytes) {
-        throw error('EXPORT_MEDIA_SIZE', 'Prepared media exceeds the 64 MiB asset limit.');
-      }
-      prepared.sha256 = hash(prepared.bytes);
-      prepared.file = `media/${prepared.sha256}.${prepared.extension}`;
-      if (!media.has(prepared.file)) {
-        mediaBytes += prepared.bytes.length;
-        if (mediaBytes > FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
-          throw error('EXPORT_PACKAGE_SIZE', 'Media exceeds the 256 MiB package limit. Export fewer episodes.');
-        }
-        media.set(prepared.file, prepared.bytes);
-      }
+      prepared = media.add(await prepareFableLoomExportMedia(bytes, request.kind, directory));
       cache.set(key, prepared);
     }
     const occupancy = request.kind === 'video' ? fableLoomExportOccupancy(request.node, request.sourceId) : null;
@@ -251,7 +277,7 @@ async function build(job, snapshot, episodes, history, universe) {
     { name: 'provenance.json', data: json({ schemaVersion: FABLELOOM_EXPORT_SCHEMA_VERSION, assets: provenance }) },
     { name: 'README.md', data: packageReadme },
     { name: 'runtime-v1.md', data: await readFile(new URL('../../../docs/features/fableloom-runtime-v1.md', import.meta.url)) },
-    ...[...media].map(([name, data]) => ({ name, data })),
+    ...[...media.entries()].map(([name, data]) => ({ name, data })),
   ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const totalBytes = entries.reduce((n, e) => n + Buffer.byteLength(e.data), 0);
   if (totalBytes > FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
@@ -263,7 +289,7 @@ async function build(job, snapshot, episodes, history, universe) {
   }
   await atomicWrite(join(jobDirectory(job.jobId), 'package.zip'), archive);
   job.filename = `fableloom-${hash(json(manifest)).slice(0, 16)}-v1.zip`;
-  job.sizeReport = { mediaBytes, totalBytes, archiveBytes: archive.length, mediaFiles: media.size };
+  job.sizeReport = { mediaBytes: media.byteLength, totalBytes, archiveBytes: archive.length, mediaFiles: media.size };
   job.status = 'completed';
 }
 
@@ -306,8 +332,11 @@ export async function startFableLoomExport(loomId, input = {}) {
       await prune();
       const snapshot = structuredClone(loom);
       const episodes = snapshot.episodes.filter(e => ids.has(e.id));
-      const history = structuredClone(await loadHistory());
-      if (!Array.isArray(history)) throw error('EXPORT_MEDIA_INVALID', 'Video history is unreadable.');
+      const sourceHistory = await loadHistory();
+      if (!Array.isArray(sourceHistory)) throw error('EXPORT_MEDIA_INVALID', 'Video history is unreadable.');
+      const videoIds = new Set(episodes.flatMap(e => e.nodes.flatMap(n => fableLoomExportAssetRequests(n)
+        .filter(a => a.kind === 'video').map(a => a.sourceId))));
+      const history = sourceHistory.filter(h => h && videoIds.has(h.id)).map(({ id, filename }) => ({ id, filename }));
       const universe = snapshot.universeId ? structuredClone(await getUniverse(snapshot.universeId)) : null;
       const job = { version: 1, jobId, loomId, createdAt: Date.now(), status: 'queued', options,
         progress: { completed: 0, total: 0 }, findings: [] };
@@ -338,10 +367,12 @@ export async function getFableLoomExportDownload(loomId, jobId) {
   return serializeAdmission(async () => {
     const job = await getFableLoomExport(loomId, jobId);
     if (job.status !== 'completed') throw error('EXPORT_NOT_READY', 'The export has not completed successfully.', 409);
-    const path = await realpath(join(jobDirectory(jobId), 'package.zip'));
-    const base = await realpath(jobDirectory(jobId));
-    const info = await stat(path);
-    if (!isPathInsideDir(base, path) || !info.isFile() || info.size !== job.sizeReport.archiveBytes) {
+    const [path, base] = await Promise.all([
+      realpath(join(jobDirectory(jobId), 'package.zip')).catch(() => null),
+      realpath(jobDirectory(jobId)).catch(() => null),
+    ]);
+    const info = path ? await stat(path).catch(() => null) : null;
+    if (!path || !base || !info?.isFile() || !isPathInsideDir(base, path) || info.size !== job.sizeReport.archiveBytes) {
       throw error('EXPORT_ARTIFACT_INVALID', 'The export artifact is unavailable. Start a new export.', 409);
     }
     const stored = await readJob(jobId);
@@ -357,4 +388,4 @@ export async function getFableLoomExportDownload(loomId, jobId) {
   });
 }
 
-export const __testing = { drain: async () => { await admissionTail; await workerTail; } };
+export const __testing = { createMediaStore, drain: async () => { await admissionTail; await workerTail; } };

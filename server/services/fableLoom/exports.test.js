@@ -180,6 +180,11 @@ describe('portable FableLoom export boundary', () => {
     const wrongLoom = await request(app()).get('/api/fableloom/another-loom/export/' + started.body.jobId);
     expect(wrongLoom.status).toBe(404);
     await expect(getFableLoomExportDownload('another-loom', started.body.jobId)).rejects.toMatchObject({ status: 404 });
+    const removed = await getFableLoomExportDownload(loom.id, started.body.jobId);
+    try { await rm(removed.path); } finally { removed.release(); }
+    const missingArtifact = await request(app()).get(status.body.downloadUrl);
+    expect([missingArtifact.status, missingArtifact.body.code]).toEqual([409, 'EXPORT_ARTIFACT_INVALID']);
+    expect(missingArtifact.text).not.toContain(removed.path);
   });
 
   videoIt('refuses unapproved media by default and records draft flags only after explicit opt-in', async () => {
@@ -267,8 +272,12 @@ describe('portable FableLoom export boundary', () => {
     await expect(stat(recordFile(id))).rejects.toMatchObject({ code: 'ENOENT' });
     const last = jobIds.at(-1);
     await terminal(last);
-    await writeFile(recordFile(last), '{invalid-json');
-    await expect(getFableLoomExport(loom.id, last)).rejects.toThrow();
+    const valid = JSON.parse(await readFile(recordFile(last), 'utf8'));
+    for (const invalid of ['{invalid-json', 'null', '{}', JSON.stringify({ ...valid, version: 2 }),
+      JSON.stringify({ ...valid, status: 'completed', sizeReport: undefined })]) {
+      await writeFile(recordFile(last), invalid);
+      await expect(getFableLoomExport(loom.id, last)).rejects.toMatchObject({ code: 'EXPORT_STATE_INVALID', status: 503 });
+    }
     await expect(getFableLoomExport(loom.id, '../../secret')).rejects.toMatchObject({ status: 404 });
   });
 
@@ -309,5 +318,20 @@ describe('portable FableLoom export boundary', () => {
     const result = await terminal(await begin({ episodeIds: ['episode-one'] }));
     expect(result).toMatchObject({ status: 'failed', error: { code: 'EXPORT_MEDIA_SIZE' } });
     await rm(filename);
+  });
+
+  it('retains one bounded buffer for identical sources and gives ID caches only small descriptors', () => {
+    const store = __testing.createMediaStore(4);
+    const original = Buffer.from('abc');
+    const descriptors = Array.from({ length: 50 }, (_, index) => store.add({
+      bytes: index ? Buffer.from('abc') : original, extension: 'mp4', durationMs: 1000,
+    }));
+    expect(store.byteLength).toBe(3);
+    expect(store.size).toBe(1);
+    expect([...store.entries()][0][1]).toBe(original);
+    expect(descriptors.every(d => !Object.values(d).some(Buffer.isBuffer))).toBe(true);
+    expect(() => store.add({ bytes: Buffer.from('de'), extension: 'mp4', durationMs: 1000 }))
+      .toThrow(expect.objectContaining({ code: 'EXPORT_PACKAGE_SIZE' }));
+    expect(store.byteLength).toBe(3);
   });
 });

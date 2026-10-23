@@ -79,6 +79,10 @@ terminal entries to keep at most four jobs. Four queued/running jobs return
 `EXPORT_QUEUE_FULL`. Each asset is capped at 64 MiB and each ZIP at 256 MiB.
 Only one job prepares media at a time. Graceful maintenance tracks it through
 final status persistence and scratch cleanup.
+Prepared buffers are retained once by content hash, with a 256 MiB aggregate
+budget; source-ID caches hold descriptors only. A preparation step adds at most
+one 64 MiB source and one 64 MiB prepared result; ZIP construction adds at most
+one 256 MiB archive buffer. Queued jobs retain only referenced video filenames.
 
 A failed job exposes an actionable code/message and its preflight findings,
 never a raw filesystem/encoder error or source path. It has no download URL.
