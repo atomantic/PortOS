@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  agentHandoff, agentRuleScope, agentRunPin, ciActivityAction, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
+  agentHandoff, agentRuleScope, agentRunPin, ruleAction, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
   selectNotificationProvider, spamSignals,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
@@ -234,7 +234,7 @@ describe('autopilotHandoff', () => {
     const alert = { ...review, reason: 'security_alert', decision: 'surface-high', subject_type: 'RepositoryVulnerabilityAlert', trust: 'unknown' };
     expect(autopilotHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/app' } })).toBeNull();
     expect(agentHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/app' } }))
-      .toMatchObject({ lane: 'dependency-updates', rule: { id: 'one', agent: false } });
+      .toMatchObject({ lane: 'dependency-updates', rule: { id: 'one', action: 'leave' } });
     expect(autopilotHandoff({ account: { ...account, agentRules: rules }, row: { ...alert, repo_full_name: 'acme/other' } }))
       .toMatchObject({ lane: 'dependency-updates', pin: { model: 'wide' }, rule: { id: 'all' } });
   });
@@ -262,21 +262,44 @@ describe('autopilotHandoff', () => {
   it('applies agent rules and their pin on a Private account that allows agents', () => {
     const rules = [{ id: 'r', kind: 'review-request', repo: 'acme/app', agent: true, provider: 'p1' }];
     const enterprise = { ...account, trust: 'private', allowAgents: true, agentRules: rules };
-    expect(agentHandoff({ account: enterprise, row: { ...review, repo_full_name: 'acme/app' } })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, pin: { provider: 'p1' }, rule: { id: 'r', agent: true } });
+    expect(agentHandoff({ account: enterprise, row: { ...review, repo_full_name: 'acme/app' } })).toEqual({ lane: 'pr-reviewer', pullNumber: 42, pin: { provider: 'p1' }, rule: { id: 'r', action: 'agent' } });
   });
 });
 
-describe('ciActivityAction', () => {
-  const ci = { reason: 'ci_activity', subject_type: 'CheckSuite', repo_full_name: 'acme/app' };
+describe('ruleAction', () => {
+  const ci = { state: 'open', reason: 'ci_activity', subject_type: 'CheckSuite', repo_full_name: 'acme/app', rule: 'ci-other' };
   it('marks CI notices done by default and lets a repo or * rule override it', () => {
-    expect(ciActivityAction({ account: { agentRules: [] }, row: ci })).toBe('done');
+    expect(ruleAction({ account: { agentRules: [] }, row: ci })).toBe('done');
     const rules = [{ id: 'a', kind: 'ci-activity', repo: '*', action: 'leave' }, { id: 'b', kind: 'ci-activity', repo: 'acme/app', action: 'mute' }];
-    expect(ciActivityAction({ account: { agentRules: rules }, row: ci })).toBe('mute');
-    expect(ciActivityAction({ account: { agentRules: rules }, row: { ...ci, repo_full_name: 'acme/other' } })).toBe('leave');
+    expect(ruleAction({ account: { agentRules: rules }, row: ci })).toBe('mute');
+    expect(ruleAction({ account: { agentRules: rules }, row: { ...ci, repo_full_name: 'acme/other' } })).toBeNull();
+    // A rule that starts an agent leaves the GitHub write to the fixed table.
+    expect(ruleAction({ account: { agentRules: [{ kind: 'ci-activity', repo: '*', action: 'agent' }] }, row: ci })).toBeNull();
+    expect(ruleAction({ account: { agentRules: [{ kind: 'ci-activity', repo: '*', action: 'nuke' }] }, row: ci })).toBe('done');
   });
-  it('ignores non-CI threads and malformed rules', () => {
-    expect(ciActivityAction({ account: {}, row: { reason: 'mention', subject_type: 'Issue' } })).toBeNull();
-    expect(ciActivityAction({ account: { agentRules: [{ kind: 'ci-activity', repo: '*', action: 'nuke' }] }, row: ci })).toBe('done');
+
+  it('applies a done or mute rule to any kind, but never to a suspect thread, a security alert or a pinned decision', () => {
+    const mention = { state: 'open', reason: 'mention', subject_type: 'PullRequest', repo_full_name: 'acme/app', rule: 'mention-elsewhere' };
+    const rules = [
+      { kind: 'mention', repo: 'acme/app', action: 'done' },
+      { kind: 'other', repo: '*', action: 'mute' },
+      // Refused at the schema; a stored one is ignored.
+      { kind: 'security-alert', repo: '*', action: 'done' },
+    ];
+    const account = { agentRules: rules };
+    expect(ruleAction({ account, row: mention })).toBe('done');
+    expect(ruleAction({ account, row: { ...mention, suspect: true } })).toBeNull();
+    expect(ruleAction({ account, row: { ...mention, state: 'done' } })).toBeNull();
+    expect(ruleAction({ account, row: { ...mention, reason: 'security_alert', rule: 'security-alert' } })).toBeNull();
+    const invitation = { state: 'open', reason: 'invitation', subject_type: 'RepositoryInvitation', repo_full_name: 'acme/app', rule: 'invitation-never-accepted' };
+    expect(ruleAction({ account, row: invitation })).toBeNull();
+    expect(ruleAction({ account, row: { ...invitation, reason: 'subscribed', subject_type: 'Discussion', rule: 'default' } })).toBe('mute');
+  });
+
+  it('reads a stored legacy agent boolean as agent or leave', () => {
+    const issue = { state: 'open', reason: 'subscribed', subject_type: 'Issue', repo_full_name: 'acme/app', rule: 'default' };
+    expect(ruleAction({ account: { agentRules: [{ kind: 'issue-activity', repo: '*', agent: false }] }, row: issue })).toBeNull();
+    expect(agentRuleScope([{ kind: 'issue-activity', repo: '*', agent: false }], 'issue-activity')).toEqual({ all: false, except: [], only: [] });
   });
 });
 
@@ -382,13 +405,21 @@ describe('generic notification-resolve lane (#13191)', () => {
     expect(agentHandoff({ account, row: { ...ci, evidence: legacyCi } })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
   });
 
-  it('is on-tap only: Autopilot never starts it, whatever rules match the thread', () => {
+  it('starts on Autopilot only for a kind no specific lane owns, on an explicit agent rule', () => {
     const issue = { ...ownPr, subject_type: 'Issue', evidence: { ...ownPr.evidence, commenter: null, commenterTrust: null } };
     const rules = [{ id: 'r', kind: 'issue-activity', repo: '*', agent: true, model: 'wide' }];
     const autopilot = { ...account, mode: 'autopilot', agentRules: rules };
     expect(agentHandoff({ account: autopilot, row: issue })).toMatchObject({ lane: 'notification-resolve', pin: { model: 'wide' } });
+    // A legacy issue-activity rule meant the issue watcher, never a generic run.
     expect(autopilotHandoff({ account: autopilot, row: issue })).toBeNull();
     expect(autopilotHandoff({ account: { ...autopilot, agentRules: [] }, row: ci })).toBeNull();
+    const ciAgent = { ...autopilot, agentRules: [{ id: 'c', kind: 'ci-activity', repo: 'acme/app', action: 'agent', effort: 'high' }] };
+    expect(autopilotHandoff({ account: ciAgent, row: ci })).toEqual({ lane: 'notification-resolve', repo: 'acme/app', pin: { effort: 'high' }, rule: { id: 'c', action: 'agent' } });
+    expect(autopilotHandoff({ account: { ...ciAgent, agentRules: [{ kind: 'ci-activity', repo: 'acme/app', action: 'done' }] }, row: ci })).toBeNull();
+    // Outside content is still refused (recorded as a skip), and a finished thread is not a candidate.
+    expect(autopilotHandoff({ account: { ...autopilot, agentRules: [{ kind: 'other', repo: '*', action: 'agent' }] }, row: { ...ownPr, trust: 'outside' } }))
+      .toMatchObject({ refused: 'outside-content' });
+    expect(autopilotHandoff({ account: ciAgent, row: { ...ci, decision: 'duplicate' } })).toBeNull();
   });
 
   it('picks the run pin whole: per-run, else the rule pin, else the account defaults', () => {

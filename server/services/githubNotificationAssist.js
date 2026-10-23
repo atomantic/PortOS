@@ -15,7 +15,9 @@ import { z } from 'zod';
 import { query, withTransaction } from '../lib/db.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
-import { ASSIST_VERDICTS, assistAction, ciActivityAction, decisionFromVerdict, selectNotificationProvider } from '../lib/githubNotificationTriage.js';
+import {
+  AGENT_RULE_KINDS, ASSIST_VERDICTS, KIND_SQL, PINNED_TRIAGE_RULES, assistAction, decisionFromVerdict, ruleAction, ruleActionScope, selectNotificationProvider,
+} from '../lib/githubNotificationTriage.js';
 import { resolveUntrustedContentPolicy } from '../lib/untrustedContent.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { execGh } from './github.js';
@@ -127,20 +129,29 @@ async function sortUndecided(account, env) {
 export async function assistAccountNotifications(account, env, { act }) {
   if (!ASSIST_MODES.has(account.mode)) return { sorted: 0, acted: 0 };
   const sorted = await sortUndecided(account, env);
+  // Rows a done/mute automation rule (or the built-in CI rule) covers, scoped
+  // exactly as `ruleAction` matches them, so a repo whose rule leaves its
+  // threads never takes a slot. Pinned decisions are never a rule's to change.
+  const scopes = AGENT_RULE_KINDS.map((kind) => ruleActionScope(account, kind));
+  const ruleSql = AGENT_RULE_KINDS.map((kind, index) => {
+    const n = 4 + index * 3;
+    return `(${KIND_SQL} = '${kind}' AND (($${n}::boolean AND NOT (lower(repo_full_name) = ANY($${n + 1}::text[]))) OR lower(repo_full_name) = ANY($${n + 2}::text[])))`;
+  }).join(' OR ');
   const { rows } = await query(
     `SELECT thread_id, decision, trust, suspect, state, reason, subject_type, repo_full_name, evidence->>'rule' AS rule FROM github_notifications
      WHERE account_id = $1 AND state = 'open' AND NOT suspect AND NOT (evidence ? 'assisted')
        AND decision IS DISTINCT FROM 'handed-off'
-       AND (decision = ANY($2::text[]) OR reason = 'ci_activity' OR subject_type = 'CheckSuite')
+       AND (decision = ANY($2::text[])
+         OR (reason <> 'security_alert' AND NOT (COALESCE(evidence->>'rule', '') = ANY($3::text[])) AND (${ruleSql})))
      ORDER BY gh_updated_at DESC LIMIT ${MAX_ACTIONS_PER_RUN}`,
-    [account.id, ACTIONABLE_DECISIONS],
+    [account.id, ACTIONABLE_DECISIONS, PINNED_TRIAGE_RULES, ...scopes.flatMap(({ all, except, only }) => [all, except, only])],
   );
   let acted = 0;
   for (const row of rows) {
-    // A CI rule is the operator's own choice, so it needs no trusted actor;
-    // `leave` falls back to the fixed table (a closed run is still done).
-    const ciAction = ciActivityAction({ account, row });
-    const action = (ciAction && ciAction !== 'leave' ? ciAction : null) || (ACTIONABLE_DECISIONS.includes(row.decision) ? assistAction(row) : null);
+    // An automation rule is the operator's own choice, so it needs no trusted
+    // actor; `leave` and `agent` fall back to the fixed table (a closed thread
+    // is still done).
+    const action = ruleAction({ account, row }) || (ACTIONABLE_DECISIONS.includes(row.decision) ? assistAction(row) : null);
     if (!action) continue;
     const ok = await act(row.thread_id, action, { decision: row.decision, rule: row.rule })
       .then(() => true)

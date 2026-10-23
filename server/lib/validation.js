@@ -952,28 +952,33 @@ export const GITHUB_ACCOUNT_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
 export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assist', 'autopilot']);
 
-// Per-repo agent rules for the GitHub inbox: which kind of notification starts
-// a CoS agent, in one repo (`owner/repo`) or every repo (`*`), and on which
-// provider/model/effort. A repo rule wins over the `*` rule of the same kind.
-export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity']);
-export const GITHUB_CI_RULE_ACTIONS = Object.freeze(['done', 'mute', 'leave']);
+// Per-repo automation rules for the GitHub inbox (#13192): what Assist and
+// Autopilot do with a kind of notification, in one repo (`owner/repo`) or every
+// repo (`*`), and on which provider/model/effort when it starts an agent. A repo
+// rule wins over the `*` rule of the same kind. Mirrors AGENT_RULE_KINDS and
+// AGENT_RULE_ACTIONS in lib/githubNotificationTriage.js.
+export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'mention', 'release', 'other']);
+export const GITHUB_AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave']);
 export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 const emptyToNullString = (value) => (value === '' ? null : value);
+// A legacy `agent: true/false` (rules saved before #13192) is accepted and
+// stored as `action: 'agent' / 'leave'`; `action` wins when both are sent.
 export const githubAgentRuleSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
   kind: z.enum(GITHUB_AGENT_RULE_KINDS),
   repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, or * for every repo'),
-  // `ci-activity` rules carry an `action` instead of `agent`.
   agent: z.boolean().optional(),
-  action: z.enum(GITHUB_CI_RULE_ACTIONS).optional(),
+  action: z.enum(GITHUB_AGENT_RULE_ACTIONS).optional(),
   provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
   model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
   effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
 }).strict().superRefine((rule, ctx) => {
-  const ci = rule.kind === 'ci-activity';
-  if (ci && !rule.action) ctx.addIssue({ code: 'custom', path: ['action'], message: 'Choose what to do with CI notifications' });
-  if (!ci && typeof rule.agent !== 'boolean') ctx.addIssue({ code: 'custom', path: ['agent'], message: 'Choose whether to start an agent' });
-});
+  const action = rule.action ?? (typeof rule.agent === 'boolean' ? (rule.agent ? 'agent' : 'leave') : null);
+  if (!action) ctx.addIssue({ code: 'custom', path: ['action'], message: 'Choose what to do with these notifications' });
+  else if (rule.kind === 'security-alert' && action !== 'agent' && action !== 'leave') {
+    ctx.addIssue({ code: 'custom', path: ['action'], message: 'Security alerts are never marked done or muted by a rule' });
+  }
+}).transform(({ agent, ...rule }) => ({ ...rule, action: rule.action ?? (agent ? 'agent' : 'leave') }));
 export const githubAgentRulesSchema = z.array(githubAgentRuleSchema).max(200).superRefine((rules, ctx) => {
   const seen = new Set();
   rules.forEach((rule, index) => {

@@ -44,8 +44,7 @@ const { addNotification } = await import('./notifications.js');
 const { addTask } = await import('./cosTaskStore.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
-const { __testing: { listAutopilotCandidates } } = await import('./githubNotificationAutopilot.js');
-const { autopilotHandoff } = await import('../lib/githubNotificationTriage.js');
+const { __testing: { listAutopilotCandidates, candidateFilter } } = await import('./githubNotificationAutopilot.js');
 const {
   syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, getAutomationsOverview, setNotificationCadence,
@@ -54,7 +53,7 @@ const { getDeploymentReview, reviewDeployment } = await import('./githubNotifica
 const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
-const { CANDIDATE_SQL } = await import('./githubNotificationAutopilot.js');
+const { AGENT_RULE_ACTIONS, AGENT_RULE_KINDS, KIND_SQL, autopilotHandoff, threadAgentKind } = await import('../lib/githubNotificationTriage.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -959,7 +958,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     // A review request on a merged PR is finished: marked done, never reviewed.
     expect(await getNotification(account.id, '1504')).toMatchObject({ decision: 'suggest-mark-read', state: 'done' });
     // A row still decided as a review suggestion is not an Autopilot candidate
-    // once its PR is merged (CANDIDATE_SQL mirrors agentHandoff).
+    // once its PR is merged (candidateFilter mirrors agentHandoff).
     await query(
       `UPDATE github_notifications SET state = 'open', decision = 'suggest-review', evidence = evidence - 'assisted'
        WHERE account_id = $1 AND thread_id = '1504'`,
@@ -1068,17 +1067,13 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(triggerOnDemandTask).toHaveBeenCalledWith('issue-watcher', 'app-acme', { origin: 'github-notification' });
     expect(await getNotification(account.id, '1602')).toMatchObject({ decision: 'handed-off' });
 
-    // CANDIDATE_SQL prefilter agrees with autopilotHandoff: selects 1602 (outside commenter), excludes 1601 (vouched)
+    // The candidate prefilter agrees with autopilotHandoff: selects 1602 (outside commenter), excludes 1601 (vouched)
     await query(`UPDATE github_notifications SET decision = 'needs-you' WHERE thread_id = '1602' AND account_id = $1`, [account.id]);
-    const candidateQuery = `SELECT thread_id FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($14::text[]) AND ${CANDIDATE_SQL}`;
-    const { rows: candidateRows } = await query(candidateQuery, [
-      account.id,
-      true, [], [],
-      true, [], [],
-      true, [], [],
-      true, [], [],
-      ['1601', '1602'],
-    ]);
+    const filter = candidateFilter([], 3);
+    const { rows: candidateRows } = await query(
+      `SELECT thread_id FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[]) AND ${filter.sql}`,
+      [account.id, ['1601', '1602'], ...filter.params],
+    );
     expect(candidateRows.map((r) => r.thread_id)).toEqual(['1602']);
     await query(`UPDATE github_notifications SET decision = 'handed-off' WHERE thread_id = '1602' AND account_id = $1`, [account.id]);
 
@@ -1114,6 +1109,142 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(untouched1603.evidence.rulesVersion).toBe(6);
 
     vi.mocked(getAllApps).mockResolvedValue([]);
+  });
+
+  it('keeps the Autopilot candidate SQL and the rule-kind SQL in step with the JS planner for every kind × action (#13192)', async () => {
+    // One open row per kind, shaped so the kind's lane (or the generic lane)
+    // would take it: managed, owned and vouched, so only the rules decide.
+    const evidence = (extra = {}) => ({ repoManaged: true, repoOwned: true, metadataMissing: false, commenter: null, commenterTrust: null, ...extra });
+    const fixtures = {
+      'review-request': [
+        { reason: 'review_requested', subject_type: 'PullRequest', trust: 'outside', decision: 'suggest-untrusted-review', evidence: evidence({ rule: 'review-outside-author' }) },
+        { reason: 'review_requested', subject_type: 'PullRequest', trust: 'trusted', decision: 'suggest-review', evidence: evidence({ rule: 'review-trusted-author' }) },
+      ],
+      'security-alert': [{ reason: 'security_alert', subject_type: 'RepositoryVulnerabilityAlert', trust: 'unknown', decision: 'surface-high', evidence: evidence({ rule: 'security-alert' }) }],
+      'issue-activity': [{ reason: 'subscribed', subject_type: 'Issue', trust: 'outside', decision: 'needs-you', evidence: evidence({ rule: 'default' }) }],
+      'ci-activity': [
+        { reason: 'ci_activity', subject_type: 'CheckSuite', trust: 'unknown', decision: 'surface', evidence: evidence({ rule: 'ci-default-branch' }) },
+        { reason: 'ci_activity', subject_type: 'CheckSuite', trust: 'unknown', decision: 'duplicate', evidence: evidence({ rule: 'ci-default-branch' }) },
+      ],
+      'own-pr': [{ reason: 'author', subject_type: 'PullRequest', trust: 'yours', decision: 'needs-you', evidence: evidence({ rule: 'default', repoManaged: false }) }],
+      mention: [{ reason: 'mention', subject_type: 'PullRequest', trust: 'trusted', decision: 'needs-you', evidence: evidence({ rule: 'default' }) }],
+      release: [{ reason: 'subscribed', subject_type: 'Release', trust: 'unknown', decision: 'needs-you', evidence: evidence({ rule: 'default' }) }],
+      other: [
+        { reason: 'comment', subject_type: 'Discussion', trust: 'yours', decision: 'needs-you', evidence: evidence({ rule: 'default' }) },
+        { reason: '', subject_type: '', trust: 'yours', decision: 'needs-you', evidence: evidence({ rule: 'default' }) },
+      ],
+    };
+    // Every kind the planner knows has a fixture, so a new kind cannot skip the check.
+    expect(Object.keys(fixtures).sort()).toEqual([...AGENT_RULE_KINDS].sort());
+    const rows = [];
+    let n = 0;
+    for (const [kind, shapes] of Object.entries(fixtures)) {
+      for (const shape of shapes) {
+        n += 1;
+        const row = {
+          account_id: account.id, thread_id: `parity-${n}`, repo_full_name: 'acme/app', repo_owner: 'acme', state: 'open', suspect: false,
+          subject_api_url: `https://api.github.com/repos/acme/app/${shape.subject_type === 'Issue' ? 'issues' : 'pulls'}/${n}`, latest_comment_api_url: null, ...shape,
+        };
+        await query(
+          `INSERT INTO github_notifications (account_id, thread_id, repo_full_name, repo_owner, reason, subject_type, subject_api_url, gh_updated_at, state, decision, trust, suspect, evidence)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'open', $8, $9, FALSE, $10::jsonb)`,
+          [row.account_id, row.thread_id, row.repo_full_name, row.repo_owner, row.reason, row.subject_type, row.subject_api_url, row.decision, row.trust, JSON.stringify(row.evidence)],
+        );
+        rows.push({ kind, row });
+      }
+    }
+    const ids = rows.map(({ row }) => row.thread_id);
+    // The SQL classifier names the same kind as threadAgentKind.
+    const { rows: kinds } = await query(`SELECT thread_id, ${KIND_SQL} AS kind FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[])`, [account.id, ids]);
+    const sqlKind = new Map(kinds.map((entry) => [entry.thread_id, entry.kind]));
+    for (const { kind, row } of rows) {
+      expect(threadAgentKind(row), row.thread_id).toBe(kind);
+      expect(sqlKind.get(row.thread_id), row.thread_id).toBe(kind);
+    }
+    const disagreements = [];
+    for (const ruleKind of AGENT_RULE_KINDS) {
+      for (const action of [...AGENT_RULE_ACTIONS, null]) {
+        for (const repo of ['*', 'acme/app']) {
+          const agentRules = action ? [{ id: 'parity', kind: ruleKind, repo, action }] : [];
+          const autopilot = { ...account, mode: 'autopilot', agentRules };
+          const filter = candidateFilter(agentRules, 3);
+          const { rows: selected } = await query(
+            `SELECT thread_id FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[]) AND ${filter.sql}`,
+            [account.id, ids, ...filter.params],
+          );
+          const sqlIds = new Set(selected.map((entry) => entry.thread_id));
+          for (const { row } of rows) {
+            const js = Boolean(autopilotHandoff({ account: autopilot, row }));
+            if (js !== sqlIds.has(row.thread_id)) disagreements.push(`${ruleKind}/${action}/${repo} on ${row.thread_id} (${threadAgentKind(row)}): js=${js} sql=${!js}`);
+          }
+        }
+      }
+    }
+    expect(disagreements).toEqual([]);
+    await query('DELETE FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[])', [account.id, ids]);
+  });
+
+  it('applies done rules saved from a row on the next Assist run, never to security alerts, and keeps legacy agent rules (#13192)', async () => {
+    await updateAccount(account.id, {
+      mode: 'assist',
+      agentRules: [
+        { id: 'rule-mentions', kind: 'mention', repo: 'acme/app', action: 'done' },
+        // A legacy rule from before #13192 is accepted and stored as an action.
+        { id: 'rule-legacy', kind: 'issue-activity', repo: '*', agent: true },
+      ],
+    });
+    expect(() => updateAccount(account.id, { agentRules: [{ id: 'x', kind: 'security-alert', repo: '*', action: 'done' }] })).toThrow('Validation failed');
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+    const actions = mockGh(() => listing([
+      thread('1701', { owner: 'acme', repo: 'app', reason: 'mention', type: 'Issue', url: 'https://api.github.com/repos/acme/app/issues/1701' }),
+      thread('1702', { owner: 'acme', repo: 'app', reason: 'mention', type: 'PullRequest' }),
+      thread('1703', { owner: 'acme', repo: 'other', reason: 'mention', type: 'PullRequest' }),
+      thread('1704', { owner: 'acme', repo: 'app', reason: 'security_alert', type: 'RepositoryVulnerabilityAlert', url: null }),
+    ]), {
+      'repos/acme/app/issues/1701': { author: 'teammate', association: 'COLLABORATOR', state: 'open', merged: false },
+      'repos/acme/app/pulls/1702': { author: 'teammate', association: 'COLLABORATOR', state: 'open', merged: false },
+      'repos/acme/other/pulls/1703': { author: 'teammate', association: 'COLLABORATOR', state: 'open', merged: false },
+      'repos/acme/app/collaborators/teammate/permission': { user: { login: 'teammate' }, permission: 'write' },
+      'repos/acme/other/collaborators/teammate/permission': { user: { login: 'teammate' }, permission: 'write' },
+    });
+    await syncAccountNotifications(account.id);
+    // A mention on a PR in acme/app matches the rule; one on an issue is issue activity.
+    expect(await getNotification(account.id, '1702')).toMatchObject({ state: 'done' });
+    expect(actions).toContainEqual(['DELETE', 'notifications/threads/1702']);
+    for (const id of ['1701', '1703', '1704']) expect(await getNotification(account.id, id), id).toMatchObject({ state: 'open' });
+    // The automation event can be undone like any other.
+    const done = (await listAutomationActivity()).find((entry) => entry.accountId === account.id && entry.threadId === '1702');
+    expect(done).toMatchObject({ action: 'done', undoable: true });
+    await undoAutomationAction(done.id);
+    expect(await getNotification(account.id, '1702')).toMatchObject({ state: 'open' });
+    // The legacy rule reads back as an agent action.
+    const overview = await getAutomationsOverview();
+    const card = overview.accounts.find((entry) => entry.id === account.id);
+    expect(card.agentRules.find((rule) => rule.id === 'rule-legacy')).toEqual({ id: 'rule-legacy', kind: 'issue-activity', repo: '*', action: 'agent' });
+    expect(card.openByKind).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'mention', repo: 'acme/app', total: 1, actionable: 1 }), expect.objectContaining({ kind: 'security-alert', actionable: 0 })]));
+    await updateAccount(account.id, { mode: 'observe', agentRules: [] });
+  });
+
+  it('starts a generic agent run on Autopilot for CI in a repo of yours only under an explicit agent rule (#13192)', async () => {
+    const login = account.login;
+    let taskCount = 0;
+    vi.mocked(addTask).mockReset().mockImplementation(async (task) => ({ id: `task-${++taskCount}`, description: task.description }));
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+    const ciThread = (id, repo) => thread(id, {
+      owner: login, repo, reason: 'ci_activity', type: 'CheckSuite', url: null, title: 'CI failed for main branch',
+    });
+    await updateAccount(account.id, { mode: 'autopilot', agentRules: [{ id: 'rule-ci', kind: 'ci-activity', repo: `${login}/tool`, action: 'agent', effort: 'high' }] });
+    mockGh(() => listing([ciThread('1801', 'tool'), ciThread('1802', 'side')]), {
+      [`repos/${login}/tool`]: { default_branch: 'main' },
+      [`repos/${login}/side`]: { default_branch: 'main' },
+    });
+    expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 1, agentRuns: 1 });
+    expect(vi.mocked(addTask).mock.calls[0][0]).toMatchObject({ effort: 'high', metadata: { githubNotificationResolve: { threadId: '1801', repo: `${login}/tool` } } });
+    expect(await getNotification(account.id, '1801')).toMatchObject({ decision: 'handed-off' });
+    // No agent rule for the other repo: the built-in CI rule marks it done instead.
+    expect(await getNotification(account.id, '1802')).toMatchObject({ state: 'done' });
+    expect(addTask).toHaveBeenCalledTimes(1);
+    await updateAccount(account.id, { mode: 'observe', agentRules: [] });
   });
 
   it('runs the scheduled pass without any model call, respecting the poll interval', async () => {

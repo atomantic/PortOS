@@ -80,20 +80,31 @@ export const LANE_VIEW = {
   'notification-resolve': { label: 'a CoS agent', tab: null },
 };
 
-// The notification kinds an agent rule can name (GITHUB_AGENT_RULE_KINDS on the server).
+// The notification kinds an automation rule can name (GITHUB_AGENT_RULE_KINDS on the server).
 export const AGENT_RULE_KINDS = [
   { value: 'review-request', label: 'Review requests', hint: 'A review request starts a review-only Do:Review run that publishes an inline review. An outside pull request in one of your apps goes to Untrusted:Review instead.' },
-  { value: 'security-alert', label: 'Security alerts', hint: 'A security alert starts a run that updates the vulnerable dependencies, opens a pull request and merges it when checks pass.' },
+  { value: 'security-alert', label: 'Security alerts', hint: 'A security alert starts a run that updates the vulnerable dependencies, opens a pull request and merges it when checks pass. A rule never marks one done or mutes it.' },
   { value: 'issue-activity', label: 'Issue activity', hint: 'Outside activity on an issue in one of your apps goes to its issue watcher.' },
-  { value: 'ci-activity', label: 'CI activity', hint: 'A workflow run or check suite notice. By default Autopilot and Assist mark these done; pick another action per repo.' },
+  { value: 'ci-activity', label: 'CI activity', hint: 'A workflow run or check suite notice. By default Autopilot and Assist mark these done. An agent looks into a failure only in a repo of yours.' },
+  { value: 'own-pr', label: 'Your pull requests', hint: 'Activity on a pull request you opened. An agent takes it only when everyone in the thread is you or trusted.' },
+  { value: 'mention', label: 'Mentions', hint: 'You or your team were mentioned. An agent takes it only when everyone in the thread is you or trusted.' },
+  { value: 'release', label: 'Releases', hint: 'A new release in a repo you watch.' },
+  { value: 'other', label: 'Everything else', hint: 'Any other notification: comments, discussions, commits and subscriptions. An agent takes it only when everyone in the thread is you or trusted.' },
 ];
 
-// What a ci-activity rule does with the notice (GITHUB_CI_RULE_ACTIONS on the server).
-export const CI_RULE_ACTIONS = [
+// What an automation rule does (GITHUB_AGENT_RULE_ACTIONS on the server).
+export const RULE_ACTIONS = [
+  { value: 'agent', label: 'Start a CoS agent' },
   { value: 'done', label: 'Mark done' },
   { value: 'mute', label: 'Mute the thread' },
   { value: 'leave', label: 'Leave in the inbox' },
 ];
+
+// Security alerts are never marked done or muted by a rule.
+export const actionsForKind = (kind) => (kind === 'security-alert' ? RULE_ACTIONS.filter((option) => option.value === 'agent' || option.value === 'leave') : RULE_ACTIONS);
+
+// A rule's action; a legacy `agent` boolean reads as agent / leave.
+export const ruleActionOf = (rule) => rule?.action || (rule?.agent === true ? 'agent' : 'leave');
 
 // Why Resolve with agent is unavailable for a thread (agentHandoff on the server).
 export const AGENT_REFUSED_LABELS = {

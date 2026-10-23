@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { Bot, Pencil, Play, Undo2, X } from 'lucide-react';
 import Pill from '../ui/Pill';
 import LoadFailedState from '../ui/LoadFailedState';
@@ -16,7 +16,7 @@ import {
   undoGitHubAutomationAction,
   updateGitHubAccount,
 } from '../../services/api';
-import { ACTION_LABELS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
+import { ACTION_LABELS, AGENT_RULE_KINDS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
 import GitHubAgentRules from './GitHubAgentRules';
 import GitHubAgentPinForm, { describeAgentPin } from './GitHubAgentPinForm';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
@@ -34,7 +34,7 @@ function modeHint(account) {
   if (account.mode !== 'autopilot') return assist;
   const handoff = account.trust === 'private' && !account.allowAgents
     ? 'Private accounts hand threads off only after you allow agents on them below.'
-    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. A security alert in another repo of yours starts one CoS task per repo that fixes it in a pull request and merges it. Agent rules below turn kinds on or off per repo and pick the provider.';
+    : 'Also hands outside review requests, outside issues and security alerts in your PortOS apps to Untrusted:Review, the issue watcher and dependency updates when those are on for the app, one run per app for each. A security alert in another repo of yours starts one CoS task per repo that fixes it in a pull request and merges it. Automation rules below turn kinds on or off per repo, mark them done or muted, and pick the provider.';
   return `${assist} ${handoff}`;
 }
 
@@ -109,7 +109,18 @@ function AgentDefaults({ account, onSave, saving }) {
   );
 }
 
-function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgents, onSaveRules, savingRules, onSaveAccount }) {
+// An inbox row's Add automation rule links here with the thread's kind and
+// repo, so the form opens prefilled and the link stays shareable.
+const RULE_PARAMS = ['ruleAccount', 'ruleKind', 'ruleRepo'];
+const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
+function rulePrefillFrom(params) {
+  const kind = params.get('ruleKind');
+  const repo = params.get('ruleRepo') || '*';
+  if (!params.get('ruleAccount') || !AGENT_RULE_KINDS.some((option) => option.value === kind) || !RULE_REPO_RE.test(repo)) return null;
+  return { accountId: params.get('ruleAccount'), kind, repo };
+}
+
+function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgents, onSaveRules, savingRules, onSaveAccount, prefill, onPrefillDone }) {
   const selectId = `github-mode-${account.id}`;
   return (
     <li className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-4">
@@ -149,7 +160,7 @@ function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgent
       </button>
       <AgentAccess account={account} onAllow={onAllowAgents} saving={savingMode} />
       <AgentDefaults account={account} onSave={onSaveAccount} saving={savingMode} />
-      <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} />
+      <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} prefill={prefill} onPrefillDone={onPrefillDone} onApplyNow={onRun} />
     </li>
   );
 }
@@ -205,6 +216,13 @@ function RuleList({ rules, onDelete }) {
 }
 
 export default function GitHubAutomationsTab() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rulePrefill = rulePrefillFrom(searchParams);
+  const clearRulePrefill = () => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    RULE_PARAMS.forEach((key) => next.delete(key));
+    return next;
+  }, { replace: true });
   const [overview, setOverview] = useState(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [runningId, setRunningId] = useState(null);
@@ -329,7 +347,20 @@ export default function GitHubAutomationsTab() {
       ) : (
         <ul className="grid grid-cols-1 gap-3 @3xl/page:grid-cols-2">
           {overview.accounts.map((account) => (
-            <AccountCard key={account.id} account={account} running={runningId === account.id} onRun={runNow} onMode={changeMode} savingMode={savingModeId === account.id} onAllowAgents={allowAgents} onSaveRules={saveRules} savingRules={savingRulesId === account.id} onSaveAccount={changeAccount} />
+            <AccountCard
+              key={account.id}
+              account={account}
+              running={runningId === account.id}
+              onRun={runNow}
+              onMode={changeMode}
+              savingMode={savingModeId === account.id}
+              onAllowAgents={allowAgents}
+              onSaveRules={saveRules}
+              savingRules={savingRulesId === account.id}
+              onSaveAccount={changeAccount}
+              prefill={rulePrefill?.accountId === account.id ? rulePrefill : null}
+              onPrefillDone={clearRulePrefill}
+            />
           ))}
         </ul>
       )}
