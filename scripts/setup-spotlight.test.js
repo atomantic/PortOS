@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { excludeFromSpotlight, SPOTLIGHT_MARKER } from './lib/spotlightExclude.js';
+import { excludeFromSpotlight, SPOTLIGHT_EXCLUDED_DIRS, SPOTLIGHT_MARKER } from './lib/spotlightExclude.js';
 import { setupSpotlight } from './setup-spotlight.js';
 
 describe('Spotlight exclusion of data/', () => {
@@ -25,5 +25,13 @@ describe('Spotlight exclusion of data/', () => {
     const dir = join(tmp(), 'data');
     expect(setupSpotlight(dir, { log: () => {}, env: { PORTOS_SKIP_SPOTLIGHT_EXCLUDE: '1' } })).toBe('skipped');
     expect(existsSync(dir)).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('creates private machinery directories on macOS', () => {
+    const dir = tmp();
+    excludeFromSpotlight(dir, { platform: 'darwin' });
+    for (const rel of SPOTLIGHT_EXCLUDED_DIRS) {
+      expect(statSync(join(dir, rel)).mode & 0o777, rel).toBe(0o700);
+    }
   });
 });
