@@ -34,7 +34,7 @@ import { sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
 import { readLocalBranchPresence, readCheckoutPathPresence, inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 import { join, resolve } from 'path';
 import { emitLog } from './cosEvents.js';
-import { addTask } from './cosTaskStore.js';
+import { addTask, updateTask } from './cosTaskStore.js';
 import * as git from './git.js';
 import { listWorktrees } from './worktreeManager.js';
 import { listRemoteHeads, driveToMerge } from './branchReconcile.js';
@@ -251,15 +251,24 @@ const verificationRuns = new Map();
 
 export async function verifyAgentRepoState(input) {
   if (verificationRuns.has(input.agentId)) return verificationRuns.get(input.agentId);
-  const run = verifyRunBranches(input).then(async result => {
+  const cleanupPending = input.agentState?.result?.cleanupPending === true;
+  const run = verifyRunBranches({ ...input, success: input.success || cleanupPending }).then(async result => {
+    if (cleanupPending && result.verified) {
+      const updated = await updateTask(input.task.id, { status: 'completed', metadata: {
+        deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined,
+        taskOutcome: { status: 'completed', reason: 'Delivery and repository preservation were verified by completion recovery.' },
+      } }, input.task.taskType || 'user', { expectedStatus: 'in_progress',
+        expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: input.agentId } });
+      if (updated?.status !== 'completed' || updated?.error || updated?.statusChanged) return { ...result, verified: false, skipReason: 'cleanup-task-settlement-unverified' };
+    }
     // Completion persists pending before publishing its event. A failed probe,
     // active follow-up or refused task write stays pending for the timer sweep.
     if (input.agentState?.metadata?.repoStateVerification?.status === 'pending') {
       const outcomes = result.branches || [result];
       const terminalSkips = [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
         REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE, REPO_STATE_SKIPS.FAILED_RUN];
-      const settled = outcomes.every(item => item.verified || terminalSkips.includes(item.skipReason))
-        || leavesPrForHuman(input.task);
+      const settled = cleanupPending ? result.verified
+        : outcomes.every(item => item.verified || terminalSkips.includes(item.skipReason)) || leavesPrForHuman(input.task);
       const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
       await recordRepoStateVerification(input.agentId, { status: settled ? 'completed' : 'pending',
         checkedAt: new Date().toISOString(), reasons: [...new Set(outcomes.map(item => item.skipReason).filter(Boolean))] });
@@ -282,6 +291,8 @@ async function resumeCompletionAudits() {
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
+  await recoverLegacyDeliveryBlocks(agents);
   const pending = agents.filter(agent => agent.status === 'completed' && agent.metadata?.repoStateVerification?.status === 'pending')
     .sort((a, b) => (a.metadata.repoStateVerification.checkedAt || '').localeCompare(b.metadata.repoStateVerification.checkedAt || ''));
   let checked = 0;
@@ -458,7 +469,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     return skipped(null, { issues, observed });
   }
 
-  return settleDivergedBranch({ agentId, task, app, appId, metadata, sourceWorkspace, branchName, worktreePath,
+  return settleDivergedBranch({ agentId, task, agentState, app, appId, metadata, sourceWorkspace, branchName, worktreePath,
     observed, issues, record, blockWith });
 }
 
@@ -567,7 +578,8 @@ async function retireIntegratedCheckout({ appId, observed, issues, record, block
  * Cleanup bookkeeping/unknown forge/CI waits remain deterministic. Only
  * source/history judgment or an actual undelivered branch needs cognition.
  */
-async function settleUndeliveredBranch({ agentId, app, sourceWorkspace, branchName, worktreePath, observed, issues, record, blockWith }) {
+async function settleUndeliveredBranch({ agentId, app, sourceWorkspace, branchName, worktreePath, observed, issues, record, blockWith, agentState }) {
+  if (agentState?.result?.cleanupPending === true) return blockWith('cleanup-delivery-unverified', { issues, observed });
   if (!issues.some(issue => issue.code === REPO_STATE_ISSUES.BRANCH_UNMERGED || issue.code === REPO_STATE_ISSUES.PR_UNMERGED)) {
     return blockWith('deterministic-cleanup-pending', { issues, observed });
   }

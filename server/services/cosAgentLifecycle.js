@@ -304,7 +304,7 @@ export async function completeAgent(agentId, result = {}) {
       // "not declared" with "declared and failed" (false). Distinct from
       // result.success (the runner's exit-code verdict).
       result: { validationPassed: null, ...result },
-      ...(result.success && (state.agents[agentId].metadata?.isWorktree || state.agents[agentId].metadata?.claimPicksOwnBranch)
+      ...((result.success || result.cleanupPending === true) && (state.agents[agentId].metadata?.isWorktree || state.agents[agentId].metadata?.claimPicksOwnBranch)
         ? { metadata: { ...state.agents[agentId].metadata, repoStateVerification: { status: 'pending' } } } : {}),
     };
     if (completedCheckouts) state.agents[agentId].metadata = { ...state.agents[agentId].metadata, completedCheckouts };

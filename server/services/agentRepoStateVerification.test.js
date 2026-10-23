@@ -41,6 +41,7 @@ vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-recovery-1' }),
   getAllTasks: vi.fn().mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } }),
   getTaskById: vi.fn().mockResolvedValue(null),
+  updateTask: vi.fn().mockResolvedValue({ status: 'completed' }),
 }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn().mockReturnValue([]) }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn().mockResolvedValue([]) }));
@@ -79,7 +80,7 @@ import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { verifyAgentRepoState, sweepRepoStateVerifications, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
-import { getTaskById } from './cosTaskStore.js';
+import { getTaskById, updateTask } from './cosTaskStore.js';
 import { recordBranchReconcileOutcome } from './taskSchedule.js';
 import { findMissingCheckoutPreservation, prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
 import { addTask, getAllTasks } from './cosTaskStore.js';
@@ -170,6 +171,22 @@ beforeEach(() => {
 });
 
 describe('verifyAgentRepoState — clean runs', () => {
+  it('settles only the cleanup handoff owned by this run after archive and integration proof', async () => {
+    const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
+      startedAt: CREATED_AT, capturedAt: CREATED_AT };
+    const state = { ...agentState({ completedCheckouts: [completed],
+      reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' }, repoStateVerification: { status: 'pending' } }),
+      result: { success: false, cleanupPending: true } };
+    await run({ success: false, agentState: state });
+    expect(updateTask).not.toHaveBeenCalled();
+    findMissingCheckoutPreservation.mockResolvedValue({ archiveDir: '/example/archive', evidenceDigest: 'a'.repeat(64), recheck: async () => true });
+    expect(await run({ success: false, agentState: state })).toMatchObject({ verified: true });
+    expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', {
+      expectedStatus: 'in_progress', expectedMetadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' },
+    });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('settles an absent completed checkout from verified original-generation archive evidence without deleting or queueing work', async () => {
     const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
       startedAt: CREATED_AT, capturedAt: CREATED_AT };

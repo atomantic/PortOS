@@ -236,6 +236,20 @@ describe('composable skill template routing', () => {
     }
   });
 
+  it('scopes merge guards to PortOS in both prompt paths and carries recovery evidence', async () => {
+    for (const app of ['portos-default', 'example-app']) {
+      const task = makeTask({ description: 'Finish the selected issue', metadata: { app, claimFlow: true,
+        failureCount: 1, taskOutcome: { status: 'incomplete', reason: 'Existing PR needs its remaining check.' } } });
+      const prompts = [buildLightContextPrompt(task, '/workspace/app', null, { agentId: 'parent-example', providerId: 'codex-tui', providerCommand: 'codex' }),
+        await buildAgentPrompt(task, {}, '/workspace/app', null, { agentId: 'parent-example', providerType: 'api' })];
+      for (const prompt of prompts) {
+        expect(prompt.includes('node scripts/pregate.js --guards-only')).toBe(app === 'portos-default');
+        expect(prompt).toContain('Existing PR needs its remaining check.');
+        expect(prompt).toContain('"action":"acquire"');
+      }
+    }
+  });
+
   it('keeps the final module-hygiene mission generic across API and TUI/CLI paths', async () => {
     const description = DEFAULT_TASK_PROMPTS['module-hygiene']
       .replaceAll('{appName}', 'Example App')
