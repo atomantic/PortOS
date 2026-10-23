@@ -124,11 +124,20 @@ describe('universe store facade — file backend', () => {
   it('runs API stores/loads, caps at 200, and does NOT bump the epoch', async () => {
     const s = getUniverseStore(passthroughSanitize);
     const before = getUniverseMutationEpoch();
-    for (let i = 0; i < 205; i += 1) {
-      await s.appendRun({ id: `run-${i}`, universeId: 'u-1', jobIds: [], promptCount: i, createdAt: new Date(1700000000000 + i).toISOString() });
-    }
+    const runs = Array.from({ length: 201 }, (_, i) => ({
+      id: `run-${i}`, universeId: 'u-1', jobIds: [], promptCount: i,
+      createdAt: new Date(1700000000000 + i).toISOString(),
+    }));
+    await s.appendRun(runs[0]);
+    // Seed a valid full history; only the append crossing the cap needs to
+    // exercise the durable write path, rather than repeating 205 fsyncs.
+    const indexPath = join(TEST_DATA_ROOT, 'universes', 'index.json');
+    const index = JSON.parse(readFileSync(indexPath, 'utf8'));
+    writeFileSync(indexPath, JSON.stringify({ ...index, config: { ...index.config, runs: runs.slice(0, 200) } }));
+    await s.appendRun(runs[200]);
     const all = await s.loadRuns();
     expect(all.length).toBe(200);
+    expect(all.map(run => run.id)).toEqual(runs.slice(1).reverse().map(run => run.id));
     expect(getUniverseMutationEpoch()).toBe(before); // runs are local-only
   });
 
