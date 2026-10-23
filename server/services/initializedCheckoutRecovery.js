@@ -515,19 +515,31 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (!['branch-retired', 'retired'].includes(state.phase) || state.branchDeleted !== true) fail('archive-retirement-unconfirmed');
     const archivedAt = state.reservation?.owner?.startedAt;
     if (!(Date.parse(archivedAt) >= Date.parse(release.createdAt)) || Date.parse(archivedAt) > Date.now()) fail('archive-generation-mismatch');
-    // The journal locates the manifest; the existing native verifier checks its
-    // digest, every preserved source and the standalone object closure.
-    const manifestPath = join(directory, 'manifest.json');
-    const info = await lstat(manifestPath);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 16 * 1024 * 1024) fail('archive-manifest-invalid');
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    if (manifest.facts?.repoPath !== repoPath || !sameRelease(manifest.facts?.release, release)) fail('archive-identity-mismatch');
-    const result = await verifyArchive({ appId, transactionId: state.id, journalDigest: hash(state) });
-    if (result.proof?.verified !== true || result.proof?.standalone !== true) fail('archive-preservation-unverified');
-    if (hash(await readJournal(directory, { bounded: true })) !== hash(state)) fail('retirement-journal-changed');
-    const recheck = async () => hash(await readJournal(directory, { bounded: true })) === hash(state)
-      && createHash('sha256').update(await readFile(manifestPath)).digest('hex') === state.proof.manifestSha256;
-    return { repoPath, archiveDir: directory, archivedAt, evidenceDigest: state.proof.manifestSha256, kind: 'initialized', recheck };
+    // Every archive mutation takes this execution fence. Keep it until the
+    // schedule writer accepts or refuses the evidence, not just through verify.
+    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
+    try {
+      if (hash(await readJournal(directory, { bounded: true })) !== hash(state)) fail('retirement-journal-changed');
+      // The journal locates the manifest; the existing native verifier checks its
+      // digest, every preserved source and the standalone object closure.
+      const manifestPath = join(directory, 'manifest.json');
+      const info = await lstat(manifestPath);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 16 * 1024 * 1024) fail('archive-manifest-invalid');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      if (manifest.facts?.repoPath !== repoPath || !sameRelease(manifest.facts?.release, release)) fail('archive-identity-mismatch');
+      const result = await verifyArchive({ appId, transactionId: state.id, journalDigest: hash(state) });
+      if (result.proof?.verified !== true || result.proof?.standalone !== true) fail('archive-preservation-unverified');
+      if (hash(await readJournal(directory, { bounded: true })) !== hash(state)) fail('retirement-journal-changed');
+      const recheck = async () => {
+        executor.assertHeld();
+        const unchanged = hash(await readJournal(directory, { bounded: true })) === hash(state)
+          && createHash('sha256').update(await readFile(manifestPath)).digest('hex') === state.proof.manifestSha256;
+        executor.assertHeld();
+        return unchanged;
+      };
+      return { repoPath, archiveDir: directory, archivedAt, evidenceDigest: state.proof.manifestSha256, kind: 'initialized', recheck,
+        releaseFence: () => executor.release() };
+    } catch (error) { await executor.release(); throw error; }
   };
 
   // Explicit recovery restores the exact original inodes. It does not erase

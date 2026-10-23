@@ -971,8 +971,20 @@ describe('initialized checkout transaction', () => {
     await writeFile(join(archiveDir, 'manifest.json'), JSON.stringify({ facts: { repoPath: '/fixture/repo', release } }));
     const request = { appId: 'app', repoPath: '/fixture/repo', archiveDir, release: { ...release, createdAt } };
     fixture.deps.native.mockClear(); fixture.deps.deleteRef.mockClear();
-    expect(await fixture.service.verifyMissingPreservation(request)).toMatchObject({ archiveDir, kind: 'initialized', evidenceDigest: 'e'.repeat(64) });
-    expect(fixture.deps.native.mock.calls.map(([value]) => value.command)).toEqual(['verify']);
+    const originalNative = fixture.deps.native.getMockImplementation();
+    const releaseFence = vi.fn(async () => {});
+    fixture.deps.native.mockImplementation((input, options) => input.command === 'lock'
+      ? { assertHeld: () => { if (fixture.fenceLost) throw new Error('retirement-executor-lost'); }, release: releaseFence }
+      : originalNative(input, options));
+    const recovered = await fixture.service.verifyMissingPreservation(request);
+    expect(recovered).toMatchObject({ archiveDir, kind: 'initialized', evidenceDigest: 'e'.repeat(64) });
+    expect(fixture.deps.native.mock.calls.map(([value]) => value.command)).toEqual(['lock', 'verify']);
+    expect(releaseFence).not.toHaveBeenCalled();
+    fixture.fenceLost = true;
+    await expect(recovered.recheck()).rejects.toThrow('retirement-executor-lost');
+    await recovered.releaseFence();
+    expect(releaseFence).toHaveBeenCalledOnce();
+    fixture.fenceLost = false;
     expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
     await expect(fixture.service.verifyMissingPreservation({ ...request, release: { ...request.release, head: 'f'.repeat(40) } }))
       .rejects.toThrow('archive-identity-mismatch');
@@ -980,6 +992,7 @@ describe('initialized checkout transaction', () => {
       .rejects.toThrow('archive-generation-mismatch');
     fixture.failArchive = true;
     await expect(fixture.service.verifyMissingPreservation(request)).rejects.toThrow('archive-changed');
+    expect(releaseFence).toHaveBeenCalledTimes(2);
   });
   it('invalidates branch finalization when the default advances or a holder appears', async () => {
     const input = await quarantinedReview();

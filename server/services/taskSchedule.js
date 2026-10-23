@@ -812,7 +812,7 @@ export async function recordRecoveredCheckoutPreservations(appId, expected, obse
       const observation = observations.find(row => sameRetirementCheckout(row.release, release) && row.release.createdAt === release.createdAt);
       if (!observation) return release;
       const accepted = observation.proof && recoveredPreservations.length < 1000;
-      const { recheck: _recheck, ...proof } = observation.proof || {};
+      const { recheck: _recheck, releaseFence: _releaseFence, ...proof } = observation.proof || {};
       if (accepted) recoveredPreservations.push({
         branch: release.branch, path: release.path, head: release.head,
         obligationCreatedAt: release.createdAt, ...proof, verified: true, verifiedAt: now,

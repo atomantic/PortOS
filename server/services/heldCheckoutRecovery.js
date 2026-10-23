@@ -20,7 +20,8 @@
 
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { createReadStream, realpathSync } from 'node:fs';
-import { lstat, stat, readlink, readdir, readFile, chmod, open } from 'node:fs/promises';
+import { lstat, stat, readlink, readdir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
+import { devNull, tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { sameRetirementCheckout, unresolvedRetirements } from '../lib/reconcileRetirementEvidence.js';
@@ -125,6 +126,19 @@ async function verifyHeldArchive(repoPath, dir, release) {
     || captured.recoveryHeads.some(head => !heads.has(head))) throw new Error('archive-bundle-head-mismatch');
   const bundleHash = await sha256File(bundle);
   if (saved.bundleSha256 && bundleHash !== saved.bundleSha256) throw new Error('archive-bundle-changed');
+  // Bundle verify/list-heads validate headers, not packed object integrity. Prove
+  // the complete closure without borrowing any object from the live repository.
+  const scratch = await mkdtemp(join(tmpdir(), 'portos-retirement-proof-'));
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' };
+  const prove = args => execGit(['--no-optional-locks', '-c', `core.hooksPath=${devNull}`, '-c', 'core.fsmonitor=false', ...args], scratch,
+    { env, maxBuffer: GIT_OUTPUT_BYTES });
+  try {
+    await prove(['init', '--bare', `--object-format=${release.head.length === 64 ? 'sha256' : 'sha1'}`, '.']);
+    await prove(['bundle', 'unbundle', bundle]);
+    await prove(['fsck', '--full', '--strict', '--no-reflogs', '--no-dangling', ...captured.recoveryHeads]);
+  } catch { throw new Error('archive-bundle-object-proof-failed'); }
+  finally { await rmGuarded(scratch, { recursive: true, force: true }); }
   if ((await archiveManifest(dir)).digest !== digest) throw new Error('archive-manifest-changed');
   const recheck = async () => {
     for (const [path, original] of stamps) {
@@ -136,9 +150,8 @@ async function verifyHeldArchive(repoPath, dir, release) {
   return { repoPath, archiveDir: dir, archivedAt: saved.archivedAt, evidenceDigest: evidenceHash(digest + bundleHash), kind: 'held', recheck };
 }
 
-async function historicalCheckoutAbsent(repoPath, release) {
+async function historicalCheckoutAbsent(release, trees) {
   const present = await lstat(release.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  const trees = await listWorktrees(repoPath);
   return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
 }
 
@@ -149,6 +162,8 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
   const expected = structuredClone(outcome);
   const obligations = unresolvedRetirements(expected);
   if (!obligations.length) return outcome;
+  const trees = await listWorktrees(repoPath).catch(() => null);
+  if (!trees?.length) return outcome;
   const roots = [heldCheckoutArchiveRoot(opts.cosDir), join(opts.cosDir || PATHS.cos, 'initialized-checkout-retirements')];
   const candidates = [];
   let discoveryReason = null;
@@ -163,37 +178,44 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
     } catch { discoveryReason = 'archive-discovery-unavailable'; }
   }
   const observations = [];
-  for (const release of obligations) {
-    if (!await historicalCheckoutAbsent(repoPath, release).catch(() => false)) continue;
-    const evidence = [];
-    let proof = null;
-    for (const candidate of candidates) {
-      try {
-        proof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release)
-          : await (await import('./initializedCheckoutRecovery.js')).verifyMissingInitializedCheckoutPreservation({ appId, repoPath, release, archiveDir: candidate.dir });
-        evidence.push({ archiveDir: candidate.dir, reason: 'preservation-verified' });
-        break;
-      } catch (error) {
-        evidence.push({ archiveDir: candidate.dir, reason: /^[a-z][a-z-]+$/.test(error.message) ? error.message : 'archive-unverifiable' });
+  const evidenceFences = [];
+  try {
+    for (const release of obligations) {
+      if (!await historicalCheckoutAbsent(release, trees).catch(() => false)) continue;
+      const evidence = [];
+      let proof = null;
+      for (const candidate of candidates) {
+        try {
+          proof = candidate.kind === 'held' ? await verifyHeldArchive(repoPath, candidate.dir, release)
+            : await (await import('./initializedCheckoutRecovery.js')).verifyMissingInitializedCheckoutPreservation({ appId, repoPath, release, archiveDir: candidate.dir });
+          if (proof.releaseFence) evidenceFences.push(proof.releaseFence);
+          evidence.push({ archiveDir: candidate.dir, reason: 'preservation-verified' });
+          break;
+        } catch (error) {
+          evidence.push({ archiveDir: candidate.dir, reason: /^[a-z][a-z-]+$/.test(error.message) ? error.message : 'archive-unverifiable' });
+        }
       }
+      observations.push({ release, proof, evidence, reason: discoveryReason || (candidates.length ? 'archive-evidence-unverified' : 'archive-evidence-missing'), nextAction: historicalNextAction });
     }
-    observations.push({ release, proof, evidence, reason: discoveryReason || (candidates.length ? 'archive-evidence-unverified' : 'archive-evidence-missing'), nextAction: historicalNextAction });
+    if (!observations.length) return outcome;
+    const { recordRecoveredCheckoutPreservations } = await import('./taskSchedule.js');
+    return await withClaimOwnershipLock(() => recordRecoveredCheckoutPreservations(appId, expected, observations, async () => {
+      const { getAppById } = await import('./apps.js');
+      if ((await getAppById(appId))?.repoPath !== repoPath) return false;
+      const currentTrees = await listWorktrees(repoPath);
+      for (const row of observations) {
+        if (!await historicalCheckoutAbsent(row.release, currentTrees)) return false;
+        if (row.proof?.recheck && !await row.proof.recheck().catch(() => false)) {
+          row.evidence.push({ archiveDir: row.proof.archiveDir, reason: 'archive-changed-during-verification' });
+          row.proof = null;
+          row.reason = 'archive-changed-during-verification';
+        }
+      }
+      return true;
+    }));
+  } finally {
+    for (const releaseFence of evidenceFences) await releaseFence();
   }
-  if (!observations.length) return outcome;
-  const { recordRecoveredCheckoutPreservations } = await import('./taskSchedule.js');
-  return withClaimOwnershipLock(() => recordRecoveredCheckoutPreservations(appId, expected, observations, async () => {
-    const { getAppById } = await import('./apps.js');
-    if ((await getAppById(appId))?.repoPath !== repoPath) return false;
-    for (const row of observations) {
-      if (!await historicalCheckoutAbsent(repoPath, row.release)) return false;
-      if (row.proof?.recheck && !await row.proof.recheck().catch(() => false)) {
-        row.evidence.push({ archiveDir: row.proof.archiveDir, reason: 'archive-changed-during-verification' });
-        row.proof = null;
-        row.reason = 'archive-changed-during-verification';
-      }
-    }
-    return true;
-  }));
 }
 
 // Refuse rather than archive a subset: a partial archive followed by removal

@@ -5,7 +5,7 @@
  * its lock and its branch as found.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes, truncate } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -139,7 +139,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
   });
 
-  it.each(['missing', 'wrong-repository', 'wrong-path', 'wrong-head', 'changed-file', 'changed-patch', 'legacy-dirty', 'partial-original'])(
+  it.each(['missing', 'wrong-repository', 'wrong-path', 'wrong-head', 'changed-file', 'changed-patch', 'legacy-dirty', 'legacy-corrupt-bundle', 'partial-original'])(
     'retains an actionable historical obligation for %s preservation evidence', async failure => {
       const { release, saved } = await historicalArchive();
       const manifestPath = join(saved.archiveDir, 'manifest.json');
@@ -150,6 +150,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       if (failure === 'wrong-head') manifest.head = 'f'.repeat(40);
       if (failure === 'changed-file') await writeFile(join(saved.archiveDir, 'files', 'private.txt'), 'changed archive bytes');
       if (failure === 'changed-patch') await writeFile(join(saved.archiveDir, 'index.diff'), 'changed patch bytes');
+      if (failure === 'legacy-corrupt-bundle') {
+        delete manifest.bundleSha256;
+        const bundlePath = join(saved.archiveDir, 'commits.bundle');
+        const bundle = await readFile(bundlePath);
+        // Preserve the valid textual header and destroy only the packed objects.
+        await truncate(bundlePath, bundle.indexOf('\n\n') + 12);
+      }
       if (failure === 'legacy-dirty') delete manifest.patchHashes;
       if (failure === 'partial-original') manifest.captured.missingCheckout = true;
       if (failure !== 'missing') await writeFile(manifestPath, JSON.stringify(manifest));
