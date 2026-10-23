@@ -3,17 +3,11 @@
  * can offer per-row actions. Disappearance establishes missing source, never
  * preservation. Callers must retain it as an obligation without an exact receipt.
  */
-import { execGit } from '../lib/execGit.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 
 // Rows that bind a retirement-receipt obligation are evidence, not display data.
 export const isObligationRow = row => ['retirement-review-pending', 'retirement-receipt-unverified',
   'retirement-provenance-unverified'].includes(row?.reason);
-
-async function registeredPaths(repoPath) {
-  const { stdout } = await execGit(['worktree', 'list', '--porcelain'], repoPath);
-  return new Set(stdout.split(/\r?\n/).filter(line => line.startsWith('worktree ')).map(line => line.slice(9)));
-}
 
 /**
  * Stored inventory rows whose checkout (or, for a branch-only row, local branch)
@@ -28,7 +22,6 @@ async function registeredPaths(repoPath) {
  */
 export async function findGoneInventoryRows(repoPath, rows, { includeObligations = false } = {}) {
   if (!Array.isArray(rows) || !rows.length) return [];
-  const registered = await registeredPaths(repoPath);
   const gone = [];
   for (const row of rows) {
     // A remote-only hold has no local ref by definition. Only a new forge scan
@@ -36,7 +29,6 @@ export async function findGoneInventoryRows(repoPath, rows, { includeObligations
     if (row?.reason === 'remote-branch-held') continue;
     if (!includeObligations && (isObligationRow(row) || row?.reason === 'claim-reservation-owner-unverified')) continue;
     if (typeof row?.path === 'string' && row.path) {
-      if (registered.has(row.path)) continue;
       const present = await readCheckoutPathPresence(row.path);
       if (present === null) throw new Error('checkout-presence-unavailable');
       if (present === false) gone.push(row);

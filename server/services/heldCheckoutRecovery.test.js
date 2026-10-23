@@ -470,15 +470,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const { path, release } = await heldCheckout('gone-between-scans', { branch: 'feature/missing' });
     const marker = { branch: 'claim/issue-99', issue: 99, reason: 'claim-reservation-owner-unverified' };
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [{ ...release, reason: 'worktree-locked' }, marker] });
-    await execGit(['worktree', 'unlock', path], repo);
-    // Model an external actor; the retirement service never receives this deletion.
-    await execGit(['worktree', 'remove', '--force', path], repo);
+    // Model an external directory deletion that leaves Git's registration intact.
+    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    await writeFile(join(gitDir, 'portos-review-status'), 'recoverable private evidence');
+    await rm(path, { recursive: true, force: true });
+    expect(await registered(path)).toBe(true);
     await recordBranchReconcileOutcome('app-1', { status: 'drained', remaining: [] });
     const pending = await getBranchReconcileOutcome('app-1');
     expect(pending).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
       retirementObligations: [{ ...release, reason: 'retirement-provenance-unverified' }],
     });
     expect(pending.remaining).toHaveLength(1);
+    expect(await readFile(join(gitDir, 'portos-review-status'), 'utf8')).toBe('recoverable private evidence');
     const createdAt = pending.retirementObligations[0].createdAt;
     // A receipt for another head cannot explain the original disappearance.
     await recordHeldCheckoutRetirement('app-1', { ...release, head: 'f'.repeat(40), branchDeleted: true, archiveDir: '/example/other-archive' });
