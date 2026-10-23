@@ -473,7 +473,11 @@ export function analyzeStoryOutlineTeleplaySync(episode, outline, {
     const outlineTransitions = sortedTransitionContract(scene.transitions, 'targetKey');
     const nodeTransitions = sortedTransitionContract(node.transitions, 'targetNodeId');
     if (JSON.stringify(outlineTransitions) !== JSON.stringify(nodeTransitions)) {
-      differingFields.push({ field: 'transitions', outline: outlineTransitions.length, teleplay: nodeTransitions.length });
+      differingFields.push({
+        field: 'transitions',
+        outline: outlineTransitions.map((item) => item.replace('\u0000', ' -> ')),
+        teleplay: nodeTransitions.map((item) => item.replace('\u0000', ' -> ')),
+      });
     }
     if (differingFields.length) {
       const detail = differingFields
