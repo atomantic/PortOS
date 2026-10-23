@@ -61,7 +61,7 @@ const planWith = (overrides = {}) => ({
 });
 
 const DEFAULT_OPTIONS = {
-  base: null, full: false, skipLint: false, planOnly: false, help: false,
+  base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false, mergedWith: null,
   skipDb: false, skipBrowser: false, skipBuild: false, skipSmoke: false,
 };
 
@@ -197,6 +197,88 @@ describe('pregate hidden-content invocation', () => {
 
   afterAll(async () => {
     if (template?.scratch) await destroyGitSandbox(template.scratch);
+  });
+
+  // A branch and base can each be green while their combined route inventory fails.
+  it('runs guards on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
+    mkdirSync(join(root, 'server/routes'), { recursive: true });
+    write('server/routes/universe-builder.js', 'export const mutation = false;\n');
+    write('server/lib/strict.js', 'export const strict = false;\n');
+    write('server/lib/hostControlRoutes.test.js', `
+      import { readFileSync } from 'fs';
+      import { strict } from './strict.js';
+      if (strict && readFileSync('server/routes/universe-builder.js', 'utf8').includes('mutation = true')) {
+        throw new Error('hostControlRoutes.test.js: unclassified Universe Builder mutation');
+      }
+    `);
+    write('scripts/run-ci-tests.js', `
+      import { resolve } from 'path';
+      import { pathToFileURL } from 'url';
+      if (process.env.PORTOS_TEST_MEMO !== 'off') throw new Error('merged guards reused memo');
+      for (const file of JSON.parse(process.env.CI_TEST_FILES)) {
+        if (file.endsWith('hostControlRoutes.test.js')) await import(pathToFileURL(resolve(file)));
+      }
+    `);
+    git('add', '--all');
+    git('commit', '-qm', 'green common guard');
+    const common = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'new-base');
+    write('docs/tracked note.md', '# Unrelated base move\n');
+    git('add', '--all'); git('commit', '-qm', 'base move');
+    const movedBase = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'feature', common);
+    const invoke = (...flags) => spawnSync(process.execPath, ['scripts/pregate.js', ...flags], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, PORTOS_TEST_MEMO: 'on' },
+    });
+    mkdirSync(join(root, '.cache/pregate'), { recursive: true });
+    write(PREGATE_REPORT_PATH, 'original attestation receipt');
+    const original = { ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') };
+    const green = invoke('--guards-only', '--merged-with', movedBase);
+    expect(green.status, green.stderr).toBe(0);
+    expect(green.stdout).toContain('Merged-tree guards: HEAD');
+    expect(green.stdout).not.toContain('hidden-content scan');
+    expect(green.stdout).not.toContain('client/server lint');
+    expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(original);
+    expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
+
+    // The base tightens its guard independently; feature remains green in its own tree.
+    write('server/routes/universe-builder.js', 'export const mutation = true;\n');
+    git('add', '--all'); git('commit', '-qm', 'feature mutation before stricter guard');
+    const branchOnly = invoke('--guards-only', '--base', common);
+    expect(branchOnly.status, branchOnly.stderr).toBe(0);
+    // The stricter base policy and feature route change do not conflict textually.
+    git('checkout', 'new-base');
+    write('server/lib/strict.js', 'export const strict = true;\n');
+    git('add', '--all'); git('commit', '-qm', 'strict inventory');
+    const strictBase = git('rev-parse', 'HEAD');
+    git('checkout', 'feature');
+    const before = { ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') };
+    const failed = invoke('--guards-only', '--merged-with', strictBase);
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain('hostControlRoutes.test.js: unclassified Universe Builder mutation');
+    expect(failed.stdout).not.toContain('Pregate passed');
+    expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(before);
+    expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
+
+    write('docs/tracked note.md', '# Pending local work\n');
+    const dirty = snapshot();
+    const refused = invoke('--guards-only', '--merged-with', strictBase);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain('requires a clean committed checkout');
+    expect(snapshot()).toEqual(dirty);
+    write('docs/tracked note.md', '# Example\n');
+
+    git('checkout', 'new-base');
+    write('server/routes/universe-builder.js', 'export const mutation = "conflicting";\n');
+    git('add', '--all'); git('commit', '-qm', 'conflicting mutation');
+    const conflictBase = git('rev-parse', 'HEAD');
+    git('checkout', 'feature');
+    const preConflict = snapshot();
+    const conflict = invoke('--guards-only', '--merged-with', conflictBase);
+    expect(conflict.status).not.toBe(0);
+    expect(conflict.stderr).toContain('Cannot construct merged guard tree');
+    expect(conflict.stdout).not.toContain('Pregate passed');
+    expect(snapshot()).toEqual(preConflict);
   });
 
   // This regression catches stale inherited packages before any lint/test child
@@ -619,6 +701,15 @@ describe('parseArgs', () => {
     expect(parseArgs(['--base', 'origin/release', '--full'])).toEqual({
       ...DEFAULT_OPTIONS, base: 'origin/release', full: true,
     });
+  });
+
+  it('accepts guard-only merged validation and rejects combinations that can skip it', () => {
+    expect(parseArgs(['--guards-only', '--merged-with', 'origin/main'])).toMatchObject({ guardsOnly: true, mergedWith: 'origin/main' });
+    expect(() => parseArgs(['--merged-with', 'origin/main'])).toThrow('requires --guards-only');
+    expect(() => parseArgs(['--guards-only', '--merged-with'])).toThrow('requires a value');
+    expect(() => parseArgs(['--guards-only', '--full'])).toThrow('cannot be combined');
+    expect(() => parseArgs(['--guards-only', '--skip-lint'])).toThrow('cannot be combined');
+    expect(() => parseArgs(['--guards-only', '--merged-with', 'origin/main', '--base', 'HEAD'])).toThrow('cannot be combined');
   });
 
   it('accepts one skip flag per resource suite', () => {
