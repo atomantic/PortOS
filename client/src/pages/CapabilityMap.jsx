@@ -158,8 +158,7 @@ function CapabilityMapContent() {
   return (
     <div className="space-y-4">
       {error && <p role="status" className="text-port-warning">Capability refresh failed. Showing the last available reading.</p>}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-
+      <div className="flex items-center justify-end gap-3 flex-wrap">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${setup.complete ? STATUS_STYLE.ok.border : STATUS_STYLE.warn.border} ${setup.complete ? STATUS_STYLE.ok.color : STATUS_STYLE.warn.color} ${setup.complete ? STATUS_STYLE.ok.bg : STATUS_STYLE.warn.bg}`}>
           {setup.complete ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
           <span className="font-semibold">

@@ -1133,6 +1133,7 @@ export default function ChiefOfStaff() {
         <PageSkeleton
           layout="split"
           label="Loading Chief of Staff"
+          padded
           fullHeight
           bodyClassName="p-3 lg:p-4"
           sideCollapsed={desktopPanelCollapsed}

@@ -216,6 +216,7 @@ describe('ChiefOfStaff loading skeleton', () => {
     expect(busy).toHaveAttribute('aria-label', 'Loading Chief of Staff');
     expect(busy.className).toContain('cos-wide:grid-cols-[320px_1fr]');
     expect(busy.className).toContain('h-full');
+    expect(busy.lastElementChild).toHaveClass('p-3', 'lg:p-4');
     // The old spinner shell — a fixed 16rem box centering its child.
     expect(container.querySelector('.h-64')).toBeNull();
   });
