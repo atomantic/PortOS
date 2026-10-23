@@ -13,6 +13,7 @@ import { PATHS } from '../lib/paths.js';
 import { execGit } from '../lib/execGit.js';
 import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
 import { withClaimOwnershipLock } from './cosClaimOwnershipState.js';
+import { SPOTLIGHT_MARKER } from '../../scripts/lib/spotlightExclude.js';
 
 const helper = fileURLToPath(new URL('../../scripts/lib/initialized_checkout_archive.py', import.meta.url));
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -923,6 +924,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     let count = 0;
     for await (const entry of entries) {
       if (++count > 1000) return { ok: false, reason: 'retirement-discovery-budget-exceeded', transactions: [] };
+      if (entry.name === SPOTLIGHT_MARKER && entry.isFile()) continue;
       if (!/^[a-f0-9-]{36}$/.test(entry.name)) {
         rows.push({ transactionId: null, reason: 'retirement-journal-name-invalid' });
         continue;

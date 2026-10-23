@@ -31,7 +31,7 @@ export function excludeFromSpotlight(dataDir, { platform = process.platform, dir
     const dir = join(dataDir, rel);
     const marker = join(dir, SPOTLIGHT_MARKER);
     if (existsSync(marker)) continue;
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(marker, '');
     created = true;
   }
