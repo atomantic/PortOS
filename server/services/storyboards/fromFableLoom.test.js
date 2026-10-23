@@ -59,7 +59,7 @@ describe('storyboard from a FableLoom path', () => {
     expect((await request(app).post(`/api/storyboards/${board.id}/panels/${panelId}/takes`).send({ source: 'generated', image: 'market.png' })).status).toBe(201);
     const sent = await request(app).post(`/api/storyboards/${board.id}/panels/${panelId}/scene-art`);
     expect(sent.status).toBe(200);
-    expect(sent.body.node).toMatchObject({ id: 'node-c', image: 'market.png' });
+    expect(sent.body.target).toMatchObject({ loomId: loom.id, sceneId: 'node-c' });
     const after = await looms.getLoom(loom.id);
     expect(after.episodes[0].nodes.map((n) => n.image)).toEqual(['harbor.png', null, 'market.png']);
   });

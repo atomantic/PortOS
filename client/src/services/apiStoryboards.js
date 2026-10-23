@@ -97,8 +97,14 @@ export const startVideoFromStoryboard = (id, input, options) =>
   request(`/storyboards/${enc(id)}/video`, { ...json('POST', input), ...options });
 
 // A new board from one FableLoom episode path (`via`: the transition ids picked at forks) → board.
-// Use as scene art: the panel's selected image becomes its scene's image → { board, node }.
+// Use as scene / shot art: the panel's selected image goes back to its FableLoom scene or
+// pipeline shot → { board, target }.
 export const makeStoryboardFromFableLoom = (loomId, episodeId, via, options) =>
   request(`/storyboards/from-fableloom/${enc(loomId)}/${enc(episodeId)}`, { ...json('POST', { via }), ...options });
 export const sendStoryboardPanelToFableLoom = (id, panelId, options) =>
   request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/scene-art`, { method: 'POST', ...options });
+
+// Open in storyboard editor (Series Pipeline): the issue's linked board, made from its
+// storyboard scenes the first time → { boardId, created }.
+export const openStoryboardForPipelineIssue = (issueId, options) =>
+  request(`/storyboards/from-pipeline/${enc(issueId)}`, { method: 'POST', ...options });

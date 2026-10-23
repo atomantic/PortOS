@@ -13,7 +13,7 @@ import { fableLoomBoardPath } from '../../lib/fableLoomBoard.js';
 import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
 import { STORYBOARD_ASPECT_RATIOS, STORYBOARD_LIMITS as L } from '../../lib/storyboardVocabulary.js';
 import { trimTo } from '../../lib/textUtils.js';
-import { createStoryboard, getStoryboard } from './index.js';
+import { createStoryboard } from './index.js';
 
 const notFound = (what) => new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });
 
@@ -54,23 +54,10 @@ export async function makeStoryboardFromFableLoom(loomId, episodeId, { via = [] 
   return board;
 }
 
-/** Use as scene art: the panel's selected image becomes its FableLoom scene's image. */
-export async function sendPanelArtToFableLoom(boardId, panelId) {
-  const board = await getStoryboard(boardId);
-  if (board.source?.kind !== 'fableloom') {
-    throw new ServerError('This storyboard was not made from a FableLoom episode.', { status: 400, code: 'NO_SOURCE' });
-  }
-  const panel = board.beats.flatMap((beat) => beat.panels).find((p) => p.id === panelId);
-  if (!panel) throw notFound('Panel');
-  if (!panel.sourceSceneId) throw new ServerError('This panel has no FableLoom scene.', { status: 400, code: 'NO_SOURCE' });
-  const take = panel.takes.find((t) => t.id === panel.selectedTakeId);
-  if (!take?.image) {
-    throw new ServerError('Pick an image for this panel first; a sketch can\'t be scene art.', { status: 400, code: 'NO_IMAGE' });
-  }
+/** Use as scene art: the image becomes the FableLoom scene's image. */
+export async function attachPanelArtToFableLoomScene(source, panel, image) {
   const { attachNodeImage } = await import('../fableLoom/records.js');
-  const { loomId, episodeId } = board.source;
-  const node = await attachNodeImage(loomId, episodeId, panel.sourceSceneId, { filename: take.image, jobId: null });
+  const node = await attachNodeImage(source.loomId, source.episodeId, panel.sourceSceneId, { filename: image, jobId: null });
   if (!node) throw notFound('FableLoom scene');
-  console.log(`🎬 Storyboard ${boardId} panel ${panelId} art sent to FableLoom scene ${node.id}`);
-  return { board, node };
+  return { loomId: source.loomId, episodeId: source.episodeId, sceneId: node.id };
 }

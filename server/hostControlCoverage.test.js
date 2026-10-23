@@ -1169,6 +1169,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/storyboards/fit-music-video/:projectId', RECORDS],
   ['POST /api/storyboards/from-fableloom/:loomId/:episodeId', RECORDS],
   ['POST /api/storyboards/from-music-video/:projectId', RECORDS],
+  ['POST /api/storyboards/from-pipeline/:issueId', RECORDS],
   ['POST /api/storyboards/music-video/:projectId/shots/:sceneId/panel-art', RECORDS],
   ['POST /api/storyboards/music-video/:projectId/shots/:sceneId/update-from-panel', RECORDS],
   ['POST /api/storyboards/recipes', RECORDS],
