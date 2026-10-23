@@ -492,6 +492,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/fableloom/:id/episodes/:episodeId/sessions/host', TOOL_FREE_INFERENCE],
   ['POST /api/fableloom/:id/episodes/:episodeId/sessions/preflight', READ_OVER_POST],
   ['POST /api/fableloom/:id/episodes/:episodeId/shots/apply', RECORDS],
+  ['POST /api/fableloom/:id/episodes/:episodeId/shots/cancel', REDUCES_EXECUTION],
   ['DELETE /api/fableloom/sessions/:sessionId', REMOVES_RECORD],
   ['PATCH /api/fableloom/sessions/:sessionId', RECORDS],
   // /api/feature-agents

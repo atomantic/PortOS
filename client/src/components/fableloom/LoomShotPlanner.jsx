@@ -1,26 +1,42 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Scissors } from 'lucide-react';
+import { useFableLoomRun } from '../../hooks/useFableLoomRun';
+import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { applyLoomEpisodeShots, planLoomEpisodeShots } from '../../services/api';
+import { applyLoomEpisodeShots, startLoomEpisodeShotRun, getLoomEpisodeShotRun, cancelLoomEpisodeShotRun, getLoom } from '../../services/api';
 import { analyzeEpisodeShots } from '../../../../server/lib/fableLoomShots.js';
 
 export default function LoomShotPlanner({ loom, episode, route, guidance, disabled, onLoomUpdate, onRunningChange }) {
   const [plan, setPlan] = useState(null);
   const [confirmation, setConfirmation] = useState(null);
-  const [run, running] = useAsyncAction(async (apply = false) => {
-    const result = await planLoomEpisodeShots(loom.id, episode.id, { ...route, guidance, apply, maxRounds: 3 }, { silent: true });
-    setPlan(result);
-    if (result.loom) onLoomUpdate(result.loom);
+  const { run: shotRun, applyRun } = useFableLoomRun({
+    loomId: loom.id, episodeId: episode.id, event: 'fableloom:shots:run',
+    loadRun: () => getLoomEpisodeShotRun(loom.id, episode.id, { silent: true }),
+    onTerminal: (finished, isCurrent) => {
+      if (finished.status === 'completed') {
+        setPlan(finished.result);
+        if (finished.result?.loom) getLoom(loom.id, { silent: true }).then(current => { if (isCurrent()) onLoomUpdate(current); }).catch(() => toast.error('Shot plan applied, but the story could not be refreshed. Reload to see it.'));
+      }
+    },
+  });
+  const active = ['running', 'canceling'].includes(shotRun?.status);
+  const [run, running] = useAsyncAction(async (apply = false, resume = false) => {
+    const result = await startLoomEpisodeShotRun(loom.id, episode.id, { ...route, guidance, apply, maxRounds: 3, resume }, { silent: true });
+    applyRun(result);
   }, { errorMessage: 'Shot planning failed' });
   const [apply, applying] = useAsyncAction(async () => {
     const result = await applyLoomEpisodeShots(loom.id, episode.id, { sourceFingerprint: plan.sourceFingerprint, groups: plan.groups }, { silent: true });
     onLoomUpdate(result.loom);
     setPlan({ ...plan, ...result });
   }, { errorMessage: 'Could not apply shot plan' });
-  useEffect(() => { onRunningChange?.(running || applying); }, [running, applying, onRunningChange]);
+  const [cancel, canceling] = useAsyncAction(async () => {
+    applyRun(await cancelLoomEpisodeShotRun(loom.id, episode.id, { silent: true }));
+  }, { errorMessage: 'Could not stop shot planning' });
+  useEffect(() => { setPlan(null); }, [loom.id, episode.id]);
+  useEffect(() => { onRunningChange?.(active || running || applying); }, [active, running, applying, onRunningChange]);
   const timing = analyzeEpisodeShots(episode);
-  const busy = disabled || running || applying;
+  const busy = disabled || active || running || applying;
   return <section className="rounded border border-port-border p-3 space-y-3" aria-label="Timed shot planning">
     <h4 className="font-semibold text-sm flex items-center gap-2"><Scissors size={15} /> Split dramatic scenes into shots</h4>
     <p className="text-xs text-port-text-muted">One node becomes one 5–10 second render. The selected model drafts and reviews short shots before replacing scene nodes. Branches stay connected. Applying clears old scene media; preview first or let autopilot apply a passing plan.</p>
@@ -28,6 +44,11 @@ export default function LoomShotPlanner({ loom, episode, route, guidance, disabl
       <button type="button" disabled={busy || !episode.nodes.length} onClick={() => run(false)} className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50">{running ? <Loader2 size={14} className="inline animate-spin mr-2" /> : null}Preview shot split</button>
       <button type="button" disabled={busy || !episode.nodes.length} onClick={() => setConfirmation('autopilot')} className="min-h-11 rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">Run shot autopilot</button>
     </div>
+    {shotRun && <div role="status" className="text-xs space-y-2">
+      <p>{shotRun.message}</p>
+      {active ? <button type="button" disabled={canceling || shotRun.status === 'canceling'} onClick={cancel} className="min-h-11 rounded border border-port-border px-3">Stop shot planning</button> : null}
+      {['failed', 'canceled'].includes(shotRun.status) ? <button type="button" disabled={busy} onClick={() => run(false, true)} className="min-h-11 rounded border border-port-border px-3">Resume saved shot plan</button> : null}
+    </div>}
     {confirmation && <ConfirmButtonPair
       prompt={`Replace ${episode.nodes.length} existing scene nodes and remove their rendered media bindings?`}
       confirmText={confirmation === 'autopilot' ? 'Replace with shot autopilot' : 'Replace with reviewed shots'}

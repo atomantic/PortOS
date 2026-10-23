@@ -438,8 +438,10 @@ describe('socket.js — initSocket', () => {
     const run = { id: 'run-example', loomId: 'loom-example', revision: 1 };
     fableLoomRunEvents.emit('editorial', run);
     fableLoomRunEvents.emit('production', run);
+    fableLoomRunEvents.emit('shots', run);
     expect(viewer.emitted).toContainEqual(['fableloom:editorial:run', run]);
     expect(viewer.emitted).toContainEqual(['fableloom:production:run', run]);
+    expect(viewer.emitted).toContainEqual(['fableloom:shots:run', run]);
     expect(peer.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
     expect(io.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
     viewer.handlers['fableloom:unsubscribe']();

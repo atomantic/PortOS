@@ -675,6 +675,7 @@ describe('FableLoom mutation inventory (#10668)', () => {
     'PATCH /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId',
     'DELETE /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId',
     'POST /api/fableloom/:id/episodes/:episodeId/shots/apply',
+    'POST /api/fableloom/:id/episodes/:episodeId/shots/cancel',
     'POST /api/fableloom/:id/episodes/:episodeId/outline/validate',
     'POST /api/fableloom/:id/episodes/:episodeId/sessions/preflight',
     'POST /api/fableloom/:id/episodes/:episodeId/sessions/host',

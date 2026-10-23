@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
@@ -13,13 +13,18 @@ vi.mock('../ProviderModelSelector', () => ({ default: ({ onProviderChange, onMod
 
 vi.mock('../../services/api', () => ({
   generateLoomEpisodeOutline: vi.fn(),
-  planLoomEpisodeShots: vi.fn(),
+  startLoomEpisodeShotRun: vi.fn(),
+  getLoomEpisodeShotRun: vi.fn(async () => null),
+  cancelLoomEpisodeShotRun: vi.fn(),
+  getLoom: vi.fn(),
   applyLoomEpisodeShots: vi.fn(),
   reviewLoomEpisodeOutline: vi.fn(),
   updateLoomEpisode: vi.fn(),
   validateLoomEpisodeOutline: vi.fn(),
 }));
 
+vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
+import socket from '../../services/socket';
 import * as api from '../../services/api';
 import LoomEpisodeOutlinePlanner from './LoomEpisodeOutlinePlanner';
 
@@ -159,13 +164,15 @@ describe('LoomEpisodeOutlinePlanner', () => {
 });
 
 it('blocks competing outline work until shot planning settles', async () => {
-  let finish;
-  api.planLoomEpisodeShots.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  const run = { id: 'shots-example', loomId: 'loom-1', episodeId: 'ep-1', revision: 1, createdAt: '2026-01-01', status: 'running', message: 'Planning shots' };
+  api.startLoomEpisodeShotRun.mockResolvedValue(run);
   render(<LoomEpisodeOutlinePlanner open loom={loom} episode={{ ...episode, nodes: [{ id: 'scene-1' }] }} onLoomUpdate={vi.fn()} onExpand={vi.fn()} />);
   await userEvent.click(screen.getByRole('button', { name: 'Preview shot split' }));
   expect(screen.getByRole('button', { name: 'Refresh with AI' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Validate outline' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Expand validated outline to teleplay' })).toBeDisabled();
-  finish({ review: { summary: 'Ready.' }, groups: [] });
+  expect(api.startLoomEpisodeShotRun).toHaveBeenCalledTimes(1);
+  const accept = socket.on.mock.calls.findLast(([name]) => name === 'fableloom:shots:run')[1];
+  await act(async () => accept({ ...run, revision: 2, status: 'completed', result: { review: { summary: 'Ready.' }, groups: [] } }));
   await findEnabledByRole('button', { name: 'Expand validated outline to teleplay' });
 });
