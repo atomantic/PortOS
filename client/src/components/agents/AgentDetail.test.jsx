@@ -81,8 +81,8 @@ describe('AgentDetail route lifecycle', () => {
       mockPlatformDeferreds['agent-b'].resolve([{ platform: 'moltworld' }]);
     });
     await waitFor(() => expect(screen.getByText('Agent Beta')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /World/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Moltbook/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /World/ })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Moltbook/ })).not.toBeInTheDocument();
 
     await act(async () => {
       mockAgentDeferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', enabled: true });
@@ -91,8 +91,8 @@ describe('AgentDetail route lifecycle', () => {
 
     expect(screen.getByText('Agent Beta')).toBeInTheDocument();
     expect(screen.queryByText('Agent Alpha')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /World/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Moltbook/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /World/ })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Moltbook/ })).not.toBeInTheDocument();
   });
 
   it('clears the old agent before loading the next route and toggles the active agent', async () => {

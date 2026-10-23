@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
@@ -255,16 +257,14 @@ export default function WorkspaceContexts() {
   const { appId } = useParams();
 
   return (
-    <div className="max-w-5xl mx-auto space-y-4">
-      <div className="flex items-center gap-2">
-        <Layers size={20} className="text-port-accent" />
-        <h1 className="text-xl font-semibold text-white">Workspace Contexts</h1>
-      </div>
+    <PageLayout header={<PageHeader icon={Layers} title="Workspace Contexts" />}>
+      <div className="max-w-5xl mx-auto space-y-4">
       <p className="text-sm text-gray-500">
         Save and restore each project's working context — the active git branch, the
         shell sessions rooted in its repo, and the tasks scoped to it.
       </p>
       {appId ? <ContextDetail key={appId} appId={appId} /> : <ContextList />}
-    </div>
+      </div>
+    </PageLayout>
   );
 }

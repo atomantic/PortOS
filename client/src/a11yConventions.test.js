@@ -4011,7 +4011,6 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
 
   const ROUTE_HEADING_GAP_ALLOWLIST = new Set([
     'src/pages/Ambient.jsx',        // chromeless ambient display — wants an sr-only h1, not a bar
-    'src/pages/CapabilityMap.jsx',
     'src/pages/MoodBoardDetail.jsx',
     'src/pages/UniverseBuilder.jsx',
   ]);

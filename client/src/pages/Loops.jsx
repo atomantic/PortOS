@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import {
   RefreshCw, Play, Square, Trash2, Plus, Clock, Zap, ChevronDown, ChevronRight,
@@ -342,7 +344,7 @@ const LOOP_EVENTS = [
   'loop:iteration:start', 'loop:iteration:complete', 'loop:iteration:error',
 ];
 
-export default function Loops() {
+function LoopsContent() {
   // The create form is always on screen above the list, so the empty state's
   // call to action focuses its prompt field rather than opening anything.
   const promptRef = useRef(null);
@@ -377,11 +379,8 @@ export default function Loops() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-100 flex items-center gap-2">
-            <RefreshCw size={20} className="text-port-accent" /> Loops
-          </h1>
           <p className="text-xs text-gray-500 mt-0.5">
             Recurring AI tasks — like Claude Code's /loop, for any AI provider
           </p>
@@ -423,5 +422,13 @@ export default function Loops() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function Loops() {
+  return (
+    <PageLayout header={<PageHeader icon={RefreshCw} title="Loops" />}>
+      <LoopsContent />
+    </PageLayout>
   );
 }

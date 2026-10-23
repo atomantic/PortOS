@@ -155,6 +155,12 @@ const FULL_WIDTH_PATH_PREFIXES = [
 ];
 
 const FULL_WIDTH_PATH_REGEXES = [
+  // Shared PageLayout owns the scroll; accept React Router's trailing slash
+  // without also claiming sibling paths or different detail components.
+  /^\/(?:devtools\/(?:runner|usage)|templates|instances|capabilities|loops)\/?$/,
+  /^\/devtools\/quota-burn(?:\/|$)/,
+  /^\/workspace-contexts(?:\/|$)/,
+  /^\/system-resources(?:\/|$)/,
   // Music mirrors the Media Gen page shell: title bar + tabs over a separately
   // scrolling body. Keep this boundary-specific so `/music-video` retains its
   // own route classification.

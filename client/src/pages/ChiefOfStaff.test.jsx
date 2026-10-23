@@ -1255,7 +1255,7 @@ describe('CoS agent panel layout sizing', () => {
     // must retain cos-wide:w-full and min-w-0 when hasCanvasAvatar is false,
     // preventing child content like EventLog or StatCards from expanding
     // beyond the 320px rail.
-    const title = screen.getByRole('heading', { level: 1, name: 'Chief of Staff' });
+    const title = screen.getByRole('heading', { level: 2, name: 'Chief of Staff' });
     const innerContainer = title.parentElement;
     expect(innerContainer?.className).toContain('cos-wide:w-full');
     expect(innerContainer?.className).toContain('min-w-0');

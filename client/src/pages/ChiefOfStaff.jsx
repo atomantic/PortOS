@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { useSocket } from '../hooks/useSocket';
@@ -1106,27 +1108,42 @@ export default function ChiefOfStaff() {
     return <CoSCharacter state={agentState} speaking={speaking} />;
   };
 
+  const navigation = (
+    <TabPills
+      tabs={visibleTabs}
+      activeTab={activeTab}
+      onChange={(id) => navigate(`/cos/${id}`)}
+      mobileCompact
+      ariaLabel="Chief of Staff sections"
+      controlsIdPrefix={loading ? undefined : 'tabpanel'}
+      className="w-full min-w-0 shrink-0"
+    />
+  );
+
   if (loading) {
     // Reserve the loaded two-pane shell (#4144) — `/cos` is an `isFullWidth`
     // route, so a centered spinner reserved nothing and the whole page jumped
     // into place on first paint. `desktopPanelCollapsed` comes from
     // localStorage, so the skeleton already knows which rail width to hold.
     return (
-      <PageSkeleton
-        layout="split"
-        label="Loading Chief of Staff"
-        fullHeight
-        padded
-        bodyClassName="p-3 lg:p-4"
-        sideCollapsed={desktopPanelCollapsed}
-        splitContainer
-        splitColsClass={desktopPanelCollapsed ? 'cos-wide:grid-cols-[0px_1fr]' : 'cos-wide:grid-cols-[320px_1fr]'}
-        sideClassName="flex flex-col gap-3 border-b cos-wide:border-b-0 cos-wide:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 p-3 cos-wide:px-4 cos-wide:py-6 cos-wide:h-full cos-wide:overflow-hidden"
-        sideHero
-        sideBlocks={4}
-        sideBlockColsClass="grid-cols-2"
-        tabs={visibleTabs.length}
-      />
+      <PageLayout className="@container/cos" bodyClassName="overflow-hidden"
+        header={<PageHeader icon={Brain} title="Chief of Staff" />}
+        navigation={navigation}
+      >
+        <PageSkeleton
+          layout="split"
+          label="Loading Chief of Staff"
+          fullHeight
+          bodyClassName="p-3 lg:p-4"
+          sideCollapsed={desktopPanelCollapsed}
+          splitContainer
+          splitColsClass={desktopPanelCollapsed ? 'cos-wide:grid-cols-[0px_1fr]' : 'cos-wide:grid-cols-[320px_1fr]'}
+          sideClassName="flex flex-col gap-3 border-b cos-wide:border-b-0 cos-wide:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 p-3 cos-wide:px-4 cos-wide:py-6 cos-wide:h-full cos-wide:overflow-hidden"
+          sideHero
+          sideBlocks={4}
+          sideBlockColsClass="grid-cols-2"
+        />
+      </PageLayout>
     );
   }
 
@@ -1143,7 +1160,10 @@ export default function ChiefOfStaff() {
   );
 
   return (
-    <div className="@container/cos h-full">
+    <PageLayout className="@container/cos" bodyClassName="overflow-hidden"
+      header={<PageHeader icon={Brain} title="Chief of Staff" />}
+      navigation={navigation}
+    >
     <div className={`relative flex flex-col cos-wide:grid ${desktopPanelCollapsed ? 'cos-wide:grid-cols-[0px_1fr]' : 'cos-wide:grid-cols-[320px_1fr]'} h-full overflow-hidden transition-[grid-template-columns] duration-200`}>
       {/* Agent Panel */}
       {!statusKnown ? (
@@ -1212,7 +1232,7 @@ export default function ChiefOfStaff() {
               aria-controls="cos-agent-panel"
             >
               <div className="flex items-center gap-2">
-                <h1
+                <h2
                   className="text-base font-bold"
                   style={{
                     background: COS_TITLE_GRADIENT,
@@ -1222,7 +1242,7 @@ export default function ChiefOfStaff() {
                   }}
                 >
                   CoS
-                </h1>
+                </h2>
                 <StatusIndicator running={status?.running} paused={status?.paused} />
               </div>
               <div className="flex items-center gap-1.5 text-gray-400">
@@ -1263,7 +1283,7 @@ export default function ChiefOfStaff() {
             aria-controls="cos-agent-panel"
           >
             <div className="flex items-center gap-2">
-              <h1
+              <h2
                 className="text-base font-bold"
                 style={{
                   background: COS_TITLE_GRADIENT,
@@ -1273,7 +1293,7 @@ export default function ChiefOfStaff() {
                 }}
               >
                 CoS
-              </h1>
+              </h2>
               <StatusIndicator running={status?.running} paused={status?.paused} />
             </div>
             <div className="flex items-center gap-1.5 text-gray-400">
@@ -1321,7 +1341,7 @@ export default function ChiefOfStaff() {
               <div className="hidden cos-wide:block text-sm font-semibold tracking-widest uppercase text-port-text-muted mb-1 font-mono">
                 Digital Assistant
               </div>
-              <h1
+              <h2
                 className="hidden cos-wide:block text-lg sm:text-xl cos-wide:text-2xl xl:text-3xl font-bold mb-2 cos-wide:mb-4"
                 style={{
                   background: COS_TITLE_GRADIENT,
@@ -1331,7 +1351,7 @@ export default function ChiefOfStaff() {
                 }}
               >
                 Chief of Staff
-              </h1>
+              </h2>
 
               {isGenericStatusMessage(statusMessage) && <StatusPill state={agentState} message={statusMessage} />}
               {!hasCanvasAvatar && renderAvatar()}
@@ -1412,19 +1432,6 @@ export default function ChiefOfStaff() {
             value={learningRate ?? '—'}
             icon={<Brain className="w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5" />}
             mini
-          />
-        </div>
-
-        {/* Tabs */}
-        <div className="relative mb-4 shrink-0 lg:mb-6">
-          <TabPills
-            tabs={visibleTabs}
-            activeTab={activeTab}
-            onChange={(id) => navigate(`/cos/${id}`)}
-            mobileCompact
-            ariaLabel="Chief of Staff sections"
-            controlsIdPrefix="tabpanel"
-            className="pb-px"
           />
         </div>
 
@@ -1537,6 +1544,6 @@ export default function ChiefOfStaff() {
         )}
       </div>
     </div>
-    </div>
+    </PageLayout>
   );
 }

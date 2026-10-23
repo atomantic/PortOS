@@ -1,3 +1,4 @@
+import TabPills from '../ui/TabPills';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
@@ -11,6 +12,10 @@ import WorldTab from './tabs/WorldTab';
 import PublishedTab from './tabs/PublishedTab';
 import SchedulesTab from './tabs/SchedulesTab';
 import ActivityTab from './tabs/ActivityTab';
+
+const NAV_TABS = AGENT_DETAIL_TABS.map(({ icon, ...tab }) => ({
+  ...tab, icon: () => <span aria-hidden="true">{icon}</span>,
+}));
 
 export default function AgentDetail() {
   const { agentId } = useParams();
@@ -104,7 +109,7 @@ function AgentDetailContent() {
   );
 
   const visibleTabs = useMemo(
-    () => AGENT_DETAIL_TABS.filter(t =>
+    () => NAV_TABS.filter(t =>
       (t.id !== 'tools' || hasMoltbookAccount) &&
       (t.id !== 'world' || hasMoltworldAccount)
     ),
@@ -195,26 +200,8 @@ function AgentDetailContent() {
         </div>
       </div>
 
-      {/* Sub-tab Navigation */}
-      <div className="flex gap-1 px-4 py-2 border-b border-port-border bg-port-card/50">
-        {visibleTabs.map(tabDef => {
-          const isActive = activeTab === tabDef.id;
-          return (
-            <button
-              key={tabDef.id}
-              onClick={() => navigate(`/agents/${agentId}/${tabDef.id}`)}
-              className={`px-4 py-2 rounded-t flex items-center gap-2 transition-colors ${
-                isActive
-                  ? 'bg-port-bg text-white border-t border-l border-r border-port-border -mb-px'
-                  : 'text-gray-400 hover:text-white hover:bg-port-border/30'
-              }`}
-            >
-              <span>{tabDef.icon}</span>
-              <span>{tabDef.label}</span>
-            </button>
-          );
-        })}
-      </div>
+      <TabPills tabs={visibleTabs} activeTab={activeTab} onChange={(tab) => navigate(`/agents/${agentId}/${tab}`)}
+        ariaLabel="Social agent sections" mobileCompact className="shrink-0 min-w-0" />
 
       {/* Tab Content */}
       <div className="flex-1 overflow-auto bg-port-bg">

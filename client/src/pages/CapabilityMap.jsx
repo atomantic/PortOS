@@ -1,3 +1,5 @@
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 import { Link } from 'react-router';
@@ -56,7 +58,7 @@ function CapabilityRow({ cap, id }) {
   );
 }
 
-export default function CapabilityMap() {
+function CapabilityMapContent() {
   const [savedPreference, setSavedPreference] = useState(null);
   const [saving, setSaving] = useState(false);
   const { data, loading, error } = useSocketResource(
@@ -157,10 +159,7 @@ export default function CapabilityMap() {
     <div className="space-y-4">
       {error && <p role="status" className="text-port-warning">Capability refresh failed. Showing the last available reading.</p>}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-          <ListChecks size={20} />
-          Setup &amp; Capabilities
-        </h2>
+
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${setup.complete ? STATUS_STYLE.ok.border : STATUS_STYLE.warn.border} ${setup.complete ? STATUS_STYLE.ok.color : STATUS_STYLE.warn.color} ${setup.complete ? STATUS_STYLE.ok.bg : STATUS_STYLE.warn.bg}`}>
           {setup.complete ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
           <span className="font-semibold">
@@ -216,5 +215,13 @@ export default function CapabilityMap() {
         </div>
       </section>
     </div>
+  );
+}
+
+export default function CapabilityMap() {
+  return (
+    <PageLayout header={<PageHeader icon={ListChecks} title="Setup & Capabilities" />}>
+      <CapabilityMapContent />
+    </PageLayout>
   );
 }

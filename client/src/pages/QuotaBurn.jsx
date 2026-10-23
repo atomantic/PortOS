@@ -1,3 +1,6 @@
+import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 /**
  * Quota Burn — configure the ONE install-level loop that spends subscription
  * quota which would otherwise expire unused.
@@ -75,7 +78,7 @@ const normalizeCatalog = (data) => ({
   ])),
 });
 
-export default function QuotaBurn() {
+function QuotaBurnContent() {
   // Which family is expanded lives in the URL, not local state, so a specific
   // family's plan is linkable and survives a reload.
   const { familyId: expanded } = useParams();
@@ -470,7 +473,6 @@ export default function QuotaBurn() {
         </Banner>
       )}
       <header className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold text-white flex items-center gap-2"><Flame size={20} className="text-orange-400" /> Quota Burn</h1>
         {/* There is no Save button on this page, and nothing else said so — the
             silence is what makes people reach for the nearest button-shaped
             thing (the per-job ▶, which spends quota) to "commit" an edit. */}
@@ -581,5 +583,13 @@ export default function QuotaBurn() {
         </section>
       )}
     </div>
+  );
+}
+
+export default function QuotaBurn() {
+  return (
+    <PageLayout header={<PageHeader icon={Flame} title="Quota Burn" />} navigation={<ModelsTabsHeader activeTab="quota-burn" />}>
+      <QuotaBurnContent />
+    </PageLayout>
   );
 }

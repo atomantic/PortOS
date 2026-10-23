@@ -690,6 +690,12 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/models', true], ['/models/performance', true], ['/models/llms', true],
     // Whole-section prefixes, and the default for an unlisted route.
     ['/songbook', true], ['/', false],
+    ['/devtools/runner', true], ['/devtools/runner/', true], ['/devtools/usage', true], ['/devtools/usage/', true], ['/devtools/usage-extra', false],
+    ['/devtools/quota-burn', true], ['/devtools/quota-burn/example', true], ['/devtools/quota-burner', false],
+    ['/system-resources/overview', true], ['/system-resources/storage', true], ['/system-resources/queues', true],
+    ['/workspace-contexts', true], ['/workspace-contexts/example', true], ['/workspace-contexts-other', false],
+    ['/instances', true], ['/capabilities', true], ['/loops', true], ['/templates', true],
+    ['/cos/agents', true], ['/cos/mind', true], ['/cos/agents/example', true],
   ])('%s -> %s', (pathname, expected) => {
     expect(isFullWidthRoute(pathname)).toBe(expected);
   });
