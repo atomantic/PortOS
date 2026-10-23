@@ -25,6 +25,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
     } };
 });
 vi.mock('../mediaCollections.js', () => ({ listCollections: async () => [], getCollection: async () => null }));
+vi.mock('../peerHostedMedia.js', () => ({ resolveMediaLocations: async items => items.map(() => ({ location: 'local' })) }));
 vi.mock('../mediaAnnotations.js', () => ({ listAnnotations: async () => ({ 'video:synthetic-video-00001': { own: { starred: true } } }) }));
 
 let history;
