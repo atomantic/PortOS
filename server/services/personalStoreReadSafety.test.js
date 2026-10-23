@@ -215,18 +215,18 @@ it('checks the legacy goals mirror before changing the canonical birth date', as
 it('preflights MortalLoom import destinations and preserves repaired records on retry', async () => {
   const source = join(PATHS.data, 'mortal-source.json');
   const goalsPath = join(PATHS.digitalTwin, 'goals.json');
-  const alcoholPath = join(PATHS.meatspace, 'alcohol-drinks.json');
+  const dailyLogPath = join(PATHS.meatspace, 'daily-log.json');
   const goals = JSON.stringify({ goals: [{ id: 'retained-goal' }] });
-  await seed(source, JSON.stringify({ goals: [{ id: 'incoming-goal' }], alcoholDrinks: [{ id: 'incoming-drink' }] }));
+  await seed(source, JSON.stringify({ goals: [{ id: 'incoming-goal' }], alcoholDrinks: [{ id: 'incoming-drink', date: '2026-01-02', name: 'Example', oz: 12, abv: 5 }] }));
   await seed(goalsPath, goals);
-  await seed(alcoholPath, '{');
+  await seed(dailyLogPath, '{');
   await expect(importToPortOS()).rejects.toThrow(/Unreadable JSON file/);
   expect(await readFile(goalsPath, 'utf8')).toBe(goals);
-  expect(await readFile(alcoholPath, 'utf8')).toBe('{');
-  await seed(alcoholPath, JSON.stringify([{ id: 'retained-drink' }]));
+  expect(await readFile(dailyLogPath, 'utf8')).toBe('{');
+  await seed(dailyLogPath, JSON.stringify({ entries: [{ date: '2026-01-01', alcohol: { drinks: [{ id: 'retained-drink', name: 'Example', oz: 12, abv: 5, count: 1 }], standardDrinks: 1 } }] }));
   await expect(importToPortOS()).resolves.toMatchObject({ ok: true });
   expect(JSON.parse(await readFile(goalsPath, 'utf8')).goals.map(goal => goal.id)).toEqual(['retained-goal', 'incoming-goal']);
-  expect(JSON.parse(await readFile(alcoholPath, 'utf8')).map(drink => drink.id)).toEqual(['retained-drink', 'incoming-drink']);
+  expect(JSON.parse(await readFile(dailyLogPath, 'utf8')).entries.flatMap(entry => entry.alcohol.drinks.map(drink => drink.id))).toEqual(['retained-drink', 'incoming-drink']);
 });
 
 it('keeps goal edits while importing MortalLoom records and updating the birth-date mirror', async () => {

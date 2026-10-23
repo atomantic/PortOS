@@ -277,6 +277,55 @@ export async function updateLifestyle(updates) {
   return config;
 }
 
+/**
+ * Strict read of the stored `config.json` with no defaults applied: `null` when
+ * absent, a throw when present-but-unreadable or not an object.
+ */
+export async function readStoredConfig() {
+  const stored = await readJSONFile(CONFIG_FILE, null, { allowArray: false, strict: true });
+  if (stored !== null && !isPlainObject(stored)) throw new Error(`MeatSpace config malformed: ${CONFIG_FILE}`);
+  return stored;
+}
+
+const presentString = value => typeof value === 'string' && value !== '';
+
+/**
+ * Explicit MortalLoom import of a native `HealthProfile` into `config.json`,
+ * fill-only: a field the stored config already holds is a local edit and wins.
+ * With no stored config the shipped lifestyle defaults are not edits, so the
+ * profile's lifestyle values replace them.
+ * @returns {Promise<{ filled: string[] }>}
+ */
+export async function fillConfigFromMortalLoomProfile(profile) {
+  return queueConfigWrite(async () => {
+    const stored = await readStoredConfig();
+    const config = stored ?? structuredClone(DEFAULT_CONFIG);
+    const storedLifestyle = isPlainObject(stored?.lifestyle) ? stored.lifestyle : {};
+    const filled = [];
+    if (config.sex == null && presentString(profile.biologicalSex)) {
+      config.sex = profile.biologicalSex;
+      config.sexSource = 'mortalloom';
+      filled.push('sex');
+    }
+    if (config.birthDate == null && presentString(profile.birthDate)) {
+      config.birthDate = profile.birthDate;
+      filled.push('birthDate');
+    }
+    if (isPlainObject(profile.lifestyle)) {
+      if (!isPlainObject(config.lifestyle)) config.lifestyle = {};
+      for (const [key, value] of Object.entries(profile.lifestyle)) {
+        if (value == null || storedLifestyle[key] !== undefined) continue;
+        config.lifestyle[key] = value;
+        filled.push(`lifestyle.${key}`);
+      }
+    }
+    if (filled.length === 0) return { filled };
+    config.updatedAt = new Date().toISOString();
+    await saveConfig(config);
+    return { filled };
+  });
+}
+
 // === Birth Date (canonical source: meatspace/config.json) ===
 
 async function migrateBirthDateFromGoals(config) {
