@@ -21,8 +21,8 @@ the delivery evidence, remaining work, or unmet prerequisite. A reported no-op
 requires the task's existing delivery checks or permitted empty-branch proof.
 
 Agent results and run history retain `executionSuccess` independently of the
-validated `taskOutcome`; task metadata retains the outcome too. Blocked or
-incomplete delivery parks the task and preserves work for continuation. Cards
+validated `taskOutcome`; task metadata retains the outcome too. Explicit blocked
+or incomplete reports park the task and preserve work for continuation. Cards
 and Resume show the same verdict, while old records without delivery evidence
 say “Execution completed.” Historical user feedback is unchanged. GitHub
 notification resolution requires explicit completed or verified no-action-needed
