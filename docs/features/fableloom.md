@@ -8,6 +8,10 @@ decision nodes loop while the viewer chooses a path or gives free-text
 feedback—when that story's audience role permits it. A loom holds one or more ordered episodes, and the Play surface can
 rehearse the same experience at any of those three production stages.
 
+The [runtime v1 contract](fableloom-runtime-v1.md) documents traversal, live-input
+gates and the mapping from portable events to private hosted sessions. External
+package export is tracked in #13104; the contract alone does not provide an exporter.
+
 ## Planning a series
 
 The series editor has separate, linkable sections for the arc, plot points and
