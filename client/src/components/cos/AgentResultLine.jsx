@@ -23,7 +23,9 @@ export default function AgentResultLine({ agent, className = '' }) {
   const scanIncomplete = scanner && scanner.status !== 'completed';
   const cleanup = agent.metadata?.cleanupOutcome;
   const cleanupRecovery = agent.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup';
-  const cleanupPending = (cleanupRecovery || cleanup) && cleanup?.status !== 'verified';
+  const cleanupTracked = cleanupRecovery || cleanup || agent.result.cleanupPending === true;
+  const cleanupPending = cleanupTracked && cleanup?.status !== 'verified';
+  const merged = cleanup?.committedIntegrationVerified === true;
   const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;
   const tone = handoff ? 'text-port-accent' : !executionSuccess ? 'text-port-error' : incomplete || deliveryHeld ? 'text-port-warning'
     : deliveryComplete ? 'text-port-success' : executionSuccess ? 'text-port-text-muted' : 'text-port-error';
@@ -41,13 +43,37 @@ export default function AgentResultLine({ agent, className = '' }) {
         <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
       )}
       </span>
-      {!handoff && outcome?.reason && <div>{outcome.reason}</div>}
+      {!handoff && cleanupTracked && <div>{merged ? 'Code merged.' : deliveryComplete ? 'Delivery verified.' : 'Code delivery still needs verification.'}</div>}
+      {!handoff && outcome?.reason && !cleanupTracked && <div>{outcome.reason}</div>}
       {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
-      {cleanupPending && <div>Cleanup {cleanup?.status === 'already-absent' ? 'already absent; preservation unverified' : cleanup?.status === 'blocked' ? 'blocked' : 'unverified/pending'}{cleanup?.reason ? `: ${cleanup.reason}` : ''}<CleanupHolders owners={cleanup?.owners} /></div>}
+      {!handoff && cleanupTracked && <CleanupStatus cleanup={cleanup} outcome={outcome} />}
       <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
       {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
       {!handoff && validationFailed && <div>Delivery validation failed</div>}
       {!handoff && publicationIncomplete && <div>{publication.status === 'running' ? 'Publication checks running' : 'Publication blocked; worktree preserved'}</div>}
+    </div>
+  );
+}
+
+function CleanupStatus({ cleanup, outcome }) {
+  const verified = cleanup?.status === 'verified';
+  const absent = cleanup?.status === 'already-absent';
+  const blocked = cleanup?.status === 'blocked';
+  const owners = Array.isArray(cleanup?.owners) && cleanup.owners.length > 0;
+  return (
+    <div>
+      <div>{verified ? 'Local cleanup confirmed; preservation verified.'
+        : absent ? 'The local worktree is already gone, but PortOS has not verified its backup yet.'
+          : blocked ? 'Local cleanup is blocked. PortOS has not confirmed safe removal.'
+            : 'Local cleanup is pending; preservation and removal are not yet confirmed.'}</div>
+      {!verified && <div>{owners ? <>Next: wait for the current owner to finish.<CleanupHolders owners={cleanup.owners} /></>
+        : cleanup?.taskId ? <>Next: the <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(cleanup.taskId)}&source=internal`}>cleanup recovery task</Link> must verify preservation and finish cleanup.</>
+          : absent ? 'Next: PortOS must verify the preservation evidence.'
+            : 'Next: PortOS must resolve the cleanup hold and verify preservation before removal.'}</div>}
+      <details className="mt-1 text-port-text-muted">
+        <summary className="cursor-pointer">Cleanup diagnostics</summary>
+        <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify({ cleanup: cleanup || null, reportedOutcome: outcome }, null, 2)}</pre>
+      </details>
     </div>
   );
 }
