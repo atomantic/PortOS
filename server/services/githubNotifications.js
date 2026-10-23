@@ -377,7 +377,8 @@ async function learnFromOperator(client, row, action) {
 /**
  * Apply one thread action on GitHub, then mirror it locally. The operator's
  * actions teach learned rules (unless `learn: false`, for a bulk audit change);
- * an automation's carry the decision behind it.
+ * an automation's carry the decision behind it. A bulk caller passes `emit: false`
+ * and announces the change once.
  */
 export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator', emit = true } = {}) {
   const spec = ACTION_SPECS[action];
@@ -415,6 +416,8 @@ export async function applyNotificationAction(accountId, threadId, action, { act
   return toApi(row, new Map([[account.id, account]]));
 }
 
+const ACCOUNT_FAILURES = new Set(['GITHUB_ACCOUNT_DISABLED', 'GITHUB_ACCOUNT_UNAVAILABLE']);
+
 /**
  * Mark every open finished thread done on GitHub (one account, or all), as
  * the operator but without teaching learned rules: the decision already says
@@ -430,15 +433,21 @@ export async function clearFinishedNotifications({ accountId = null } = {}) {
        ORDER BY gh_updated_at DESC`,
       [account.id],
     );
-    for (const row of rows) {
-      const ok = await applyNotificationAction(account.id, row.thread_id, 'done', { learn: false, emit: false, detail: { decision: row.decision, bulk: 'finished' } })
-        .then(() => true)
-        .catch((error) => {
-          console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
-          return false;
-        });
-      if (ok) cleared += 1;
-      else failed += 1;
+    for (const [index, row] of rows.entries()) {
+      const error = await applyNotificationAction(account.id, row.thread_id, 'done', { learn: false, emit: false, detail: { decision: row.decision, bulk: 'finished' } })
+        .then(() => null, (failure) => failure);
+      if (!error) {
+        cleared += 1;
+        continue;
+      }
+      // An account gh cannot act as fails every thread the same way.
+      if (ACCOUNT_FAILURES.has(error.code)) {
+        console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
+        failed += rows.length - index;
+        break;
+      }
+      console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
+      failed += 1;
     }
     if (rows.length) githubNotificationEvents.emit('changed', { accountId: account.id });
   }
