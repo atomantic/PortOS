@@ -111,7 +111,7 @@ export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/tas
  *
  * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|{ refused: string }|null>}
  */
-async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true, reviewTarget = null, preserveLockfiles = false }) {
+async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false, adopt = true, reviewTarget = null, mergeGuardTarget = null, preserveLockfiles = false }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
@@ -150,6 +150,11 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
     return null;
   }
 
+  if (mergeGuardTarget) {
+    const { validatePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
+    const refused = await validatePendingMergeRecovery({ target: mergeGuardTarget, workspacePath: holder.path, requireCheckout: true, launchTaskId: taskId });
+    if (refused) return { refused };
+  }
   if (reviewTarget) {
     const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
     const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: holder.path, requireCheckout: true, launchTaskId: taskId });
@@ -235,6 +240,7 @@ async function prepareRequestedWorktree({
     return { outcome: 'blocked', reason };
   }
   const reviewTarget = task.metadata?.cleanupReviewTarget;
+  const mergeGuardTarget = task.metadata?.pendingMergeGuardTarget;
   const pinnedHead = existingBranch ? resolveTaskPinnedHead(task.metadata) : null;
   if (pinnedHead === '') {
     return refusePinnedAttach(task, workspacePath, `Task ${task.id} must attach at a reviewed head commit but records none; refusing to check out ${existingBranch}`);
@@ -270,6 +276,7 @@ async function prepareRequestedWorktree({
       // can prove both. Releasing an idle sibling holder in place stays allowed.
       adopt: !pinnedHead,
       reviewTarget,
+      mergeGuardTarget,
       preserveLockfiles: isolateDependencies,
     })
     : Promise.resolve(null);
@@ -310,7 +317,7 @@ async function prepareRequestedWorktree({
     ...(task.metadata?.existingBranch && task.metadata?.resumedFromAgentId ? { resumeBranch: existingBranch } : {}),
     // Fork coordinates select the remote head, independent of the local branch name.
     forkHead: forkHead || undefined,
-    expectedHeadSha: pinnedHead || reviewTarget?.headSha || undefined,
+    expectedHeadSha: pinnedHead || reviewTarget?.headSha || mergeGuardTarget?.headSha || undefined,
     planId: task.metadata?.planId || undefined,
     linkDependencies: !isolateDependencies,
   });
@@ -521,6 +528,17 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
 
   const prepareAndRegister = async () => {
     const result = await prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly });
+    if (result.outcome === 'ready' && task.metadata?.pendingMergeGuardTarget) {
+      const { validatePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
+      const refused = await validatePendingMergeRecovery({ target: task.metadata.pendingMergeGuardTarget, workspacePath: result.workspacePath, requireCheckout: true, launchTaskId: task.id });
+      if (refused) {
+        await blockTask(task, refused, 'pr-head-moved');
+        return onPrepared({ outcome: 'blocked', reason: refused });
+      }
+      task.metadata.pendingMergeGuardLaunchEvidence = task.metadata.pendingMergeGuardTarget;
+      task.metadata.pendingMergeGuardTarget = undefined;
+      result.cleanupReviewPinConsumed = true;
+    }
     if (result.outcome === 'ready' && task.metadata?.cleanupReviewTarget) {
       const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');
       const refused = await validateCleanupReviewTarget({ target: task.metadata.cleanupReviewTarget, workspacePath: result.workspacePath, requireCheckout: true, launchTaskId: task.id });
@@ -557,6 +575,17 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
  * @returns {Promise<object|null>} the blocked outcome, or null to proceed
  */
 async function refuseUnsafeLaunchTarget({ task, workspacePath, isReadOnly }) {
+  const guardTarget = task.metadata?.pendingMergeGuardTarget;
+  if (guardTarget) {
+    const { validatePendingMergeRecovery } = await import('./pendingMergeRecovery.js');
+    const refused = guardTarget.repoPath !== workspacePath || resolveTaskTargetBranch(task.metadata) !== guardTarget.branch || isReadOnly || leavesPrForHuman(task)
+      || resolvePrCompletion(task.metadata) !== guardTarget.prCompletion || isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
+      ? 'recovery-target-task-changed' : await validatePendingMergeRecovery({ target: guardTarget, workspacePath, launchTaskId: task.id });
+    if (refused) {
+      await blockTask(task, refused, 'pr-head-moved');
+      return { outcome: 'blocked', reason: refused };
+    }
+  }
   const recoveryTarget = task.metadata?.cleanupReviewTarget;
   if (recoveryTarget) {
     const { validateCleanupReviewTarget } = await import('./cosMergeHandoff.js');

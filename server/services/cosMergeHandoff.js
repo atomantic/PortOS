@@ -10,6 +10,7 @@
  * at the deferred merge instant, and it can merge before unenforced checks run.
  */
 import { randomUUID } from 'node:crypto';
+import { followUpRoster } from './mergeFollowUpPolicy.js';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { execGh } from './github.js';
@@ -83,27 +84,6 @@ function reviewEvidenceAccepted({ status, head: reviewedHead }, head, policy, { 
   const allOptional = reviewers.length > 0 && reviewers.every((reviewer) => optionalReviewers.includes(reviewer));
   if (status === 'optional-inconclusive') return allOptional && reviewedHead === head;
   return status === 'clean' && (allOptional || reviewedHead === head);
-}
-
-async function followUpRoster(task, policy) {
-  if (policy !== PR_COMPLETIONS.REVIEW_THEN_MERGE) return { reviewers: [], usernames: [], optionalReviewers: [], reviewerMaxRounds: {} };
-  const [{ resolveReviewLoopOptions }, { normalizeReviewers }] = await Promise.all([
-    import('./codeReview.js'), import('../lib/validation.js'),
-  ]);
-  const metadata = { ...task.metadata };
-  if (isTruthyMeta(metadata.reviewLoopFollowUp)) {
-    for (const [key, saved] of Object.entries({ reviewers: 'reviewLoopReviewers', usernames: 'reviewLoopReviewerUsernames',
-      optionalReviewers: 'reviewLoopOptionalReviewers', reviewerMaxRounds: 'reviewLoopReviewerMaxRounds',
-      reviewStopMode: 'reviewLoopStopMode', reviewerModels: 'reviewLoopReviewerModels', reviewerEfforts: 'reviewLoopReviewerEfforts' })) {
-      if (Object.hasOwn(metadata, saved)) metadata[key] = metadata[saved];
-    }
-  }
-  const options = await resolveReviewLoopOptions(metadata, { normalize: normalizeReviewers });
-  return {
-    reviewers: options.reviewers, usernames: options.usernames,
-    optionalReviewers: options.optionalReviewers, reviewerMaxRounds: options.reviewerMaxRounds,
-    reviewStopMode: options.reviewStopMode, reviewerModels: options.reviewerModels, reviewerEfforts: options.reviewerEfforts,
-  };
 }
 
 /** Read-only target check shared by orphan review and its eventual workspace launch.

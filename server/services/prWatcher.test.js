@@ -39,6 +39,13 @@ vi.mock('./untrustedContent.js', () => ({
   screenUntrustedContent: (...args) => screenMock(...args),
   getContributionAssessmentFingerprint: (...args) => fingerprintMock(...args),
 }));
+const prepareGuardMock = vi.fn();
+const guardCurrentMock = vi.fn();
+vi.mock('./pendingMergeGuard.js', async importOriginal => ({
+  summarizeMergeGuardOutput: (await importOriginal()).summarizeMergeGuardOutput,
+  preparePendingMergeGuard: (...args) => prepareGuardMock(...args),
+  pendingMergeGuardCurrent: (...args) => guardCurrentMock(...args),
+}));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({
   mergePR: (...args) => mergePrMock(...args),
@@ -69,6 +76,11 @@ vi.mock('./apps.js', () => ({
 }));
 
 const tasksById = vi.hoisted(() => new Map());
+const recoveryAgents = vi.hoisted(() => ({ value: [] }));
+vi.mock('./cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async () => recoveryAgents.value }));
+vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: async metadata => ({
+  reviewers: metadata.reviewers || [], usernames: metadata.usernames || [], optionalReviewers: [], reviewerMaxRounds: {},
+}) }));
 vi.mock('./cosTaskStore.js', () => ({
   getTaskById: async (id) => tasksById.get(id) ?? null,
 }));
@@ -114,6 +126,8 @@ beforeEach(() => {
   ensureForgeReachableMock.mockReset();
   ensureForgeReachableMock.mockResolvedValue({ ok: true, status: 'ok', detail: null, remedy: null });
   mergePrMock.mockReset();
+  prepareGuardMock.mockReset().mockResolvedValue({ ok: true, evidence: null });
+  guardCurrentMock.mockReset().mockResolvedValue(true);
   addNotificationMock.mockReset();
   spawnReviewLoopFollowUpMock.mockReset();
   addNotificationMock.mockResolvedValue({ id: 'notification-1' });
@@ -121,6 +135,7 @@ beforeEach(() => {
   getOriginInfoMock.mockReset();
   mockApps.clear();
   tasksById.clear();
+  recoveryAgents.value = [];
   __resetSelfLoginCache();
 });
 
@@ -646,6 +661,174 @@ describe('merge-only PR watcher', () => {
       description: expect.stringContaining('could not be read from the forge'),
     }));
     expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
+  });
+
+  describe('merged-tree guard admission', () => {
+    const guard = { headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), baseBranch: 'main', logPath: '/example/guard.log' };
+    const handoff = { headSha: guard.headSha, repository: 'github.com/o/r', agentId: 'agent-88', taskId: 'task-88',
+      receiptId: 'receipt-88', prCompletion: 'merge-on-green' };
+    const setup = () => {
+      const app = pendingApp([pendingMerge({ handoff })]);
+      mockApps.set(app.id, app);
+      tasksById.set('task-88', { id: 'task-88', status: 'completed', metadata: { prCompletion: 'merge-on-green' } });
+      const evidence = installPendingEvidence();
+      evidence.pr.baseRefName = 'main';
+      return { app, evidence };
+    };
+
+    const legacy = (snapshot = false) => {
+      const { app } = setup();
+      app.pendingMergePrs = [pendingMerge(snapshot ? { sourceAgentId: null, prBranch: 'portos/quality-snapshot',
+        sourceTask: { id: `quality-snapshot-${app.id}`, description: 'Publish PortOS quality snapshot', metadata: { app: app.id } } } : {})];
+      tasksById.get('task-88').metadata.app = app.id;
+      prepareGuardMock.mockResolvedValue({ ok: false, reason: 'merged-tree-recovery-required', evidence: { headSha: guard.headSha } });
+      return app;
+    };
+
+    it.each([false, true])('recovers an unbound producer with a pinned checkout task before any merge (snapshot=%s)', async snapshot => {
+      const app = legacy(snapshot);
+      expect(await processPendingMergePrs(app)).toMatchObject({ escalated: 1, merged: 0 });
+      expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+        prCompletion: 'merge-on-green', reviewers: [],
+        mergeGuardTarget: expect.objectContaining({ headSha: guard.headSha, appId: app.id,
+          sourceTaskId: snapshot ? `quality-snapshot-${app.id}` : 'task-88' }),
+      }));
+      expect(readPendingMergePrs(mockApps.get(app.id))).toEqual([]);
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(admissionState.state.mergeAdmissions).toEqual({});
+    });
+
+    it('retains the queue while a completed source still has an active worker', async () => {
+      const app = legacy();
+      recoveryAgents.value = [{ id: 'agent-88', taskId: 'task-88', status: 'running' }];
+      expect(await processPendingMergePrs(app)).toMatchObject({ waiting: 1 });
+      expect(readPendingMergePrs(mockApps.get(app.id))).toHaveLength(1);
+      expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves the live source review policy and roster instead of the skinny queued metadata', async () => {
+      const app = legacy();
+      Object.assign(tasksById.get('task-88').metadata, { prCompletion: 'review-then-merge', reviewers: ['claude'], usernames: ['reviewer'] });
+      await processPendingMergePrs(app);
+      expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+        prCompletion: 'review-then-merge', reviewers: ['claude'], usernames: ['reviewer'],
+      }));
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it('holds changed human completion policy without dispatching or merging', async () => {
+      const app = legacy();
+      tasksById.get('task-88').metadata.prCompletion = 'leave-open';
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ recoveryBlocked: 'recovery-owner-policy-held' });
+      expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it.each(['throw', 'unpersisted', 'deferred'])('retains queue custody when checkout recovery is %s', async outcome => {
+      const app = legacy();
+      if (outcome === 'throw') spawnReviewLoopFollowUpMock.mockRejectedValue(new Error('store unavailable'));
+      else spawnReviewLoopFollowUpMock.mockResolvedValue(outcome === 'deferred' ? { deferred: true } : null);
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ mergedTreeGuard: { headSha: guard.headSha, reason: 'merged-tree-recovery-required' } });
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it('retains a failing combined-tree receipt and log without taking admission or merging', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockImplementation(async () => {
+        expect(admissionState.state.mergeAdmissions).toEqual({});
+        return { ok: false, reason: 'merged-tree-guards-failed', evidence: guard };
+      });
+      await processPendingMergePrs(app);
+      const kept = readPendingMergePrs(mockApps.get(app.id))[0];
+      expect(kept).toMatchObject({ handoff, ticks: 0, mergedTreeGuard: { ...guard, reason: 'merged-tree-guards-failed' },
+        recoveryBlocked: 'merged-tree-guards-failed' });
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(admissionState.state.mergeAdmissions).toEqual({});
+      expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(prepareGuardMock).toHaveBeenCalledTimes(1);
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('retains an actionable diagnostic when validation prerequisites throw', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockRejectedValue(new Error('git fetch failed: repository unavailable'));
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ handoff,
+        mergedTreeGuard: { reason: 'merged-tree-validation-unavailable', detail: 'git fetch failed: repository unavailable' } });
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(admissionState.state.mergeAdmissions).toEqual({});
+    });
+
+    it('notifies once and retains the owner when an unavailable prerequisite exhausts its retry budget', async () => {
+      const { app } = setup();
+      app.pendingMergePrs[0].ticks = MAX_PENDING_MERGE_TICKS - 1;
+      prepareGuardMock.mockRejectedValue(new Error('git fetch failed: repository unavailable'));
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ handoff,
+        ticks: MAX_PENDING_MERGE_TICKS, attention: 'merged-tree-validation-unavailable' });
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it('notifies and holds a checkout refusal for repair instead of retrying forever', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockResolvedValue({ ok: false, reason: 'merged-tree-checkout-unverified' });
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ handoff,
+        recoveryBlocked: 'merged-tree-checkout-unverified' });
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(prepareGuardMock).toHaveBeenCalledTimes(1);
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it('runs the guard outside admission and merges the unchanged reviewed head inside it', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockImplementation(async () => {
+        expect(admissionState.state.mergeAdmissions).toEqual({});
+        return { ok: true, evidence: guard };
+      });
+      guardCurrentMock.mockImplementation(async () => {
+        expect(Object.keys(admissionState.state.mergeAdmissions)).toHaveLength(1);
+        return true;
+      });
+      mergePrMock.mockResolvedValue({ success: true });
+      expect(await processPendingMergePrs(app)).toMatchObject({ merged: 1 });
+      expect(guardCurrentMock).toHaveBeenCalledWith(guard, expect.objectContaining({ headRefOid: guard.headSha }), expect.any(Function));
+      expect(mergePrMock).toHaveBeenCalledWith(app.repoPath, 88, { forgeAccount: 'other-account', expectedHeadSha: guard.headSha });
+    });
+
+    it('releases admission when the checked base moves and validates again before a later merge', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockResolvedValue({ ok: true, evidence: guard });
+      guardCurrentMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      mergePrMock.mockResolvedValue({ success: true });
+      expect(await processPendingMergePrs(app)).toMatchObject({ merged: 0, waiting: 1 });
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ handoff, mergedTreeGuard: guard, ticks: 0 });
+      expect(Object.values(admissionState.state.mergeAdmissions).every(lease => lease.status !== 'active')).toBe(true);
+      expect(await processPendingMergePrs(mockApps.get(app.id))).toMatchObject({ merged: 1 });
+      expect(prepareGuardMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('never merges a head changed during guard execution and preserves the receipt for fresh recovery', async () => {
+      const { app, evidence } = setup();
+      prepareGuardMock.mockImplementation(async () => {
+        evidence.pr.headRefOid = 'c'.repeat(40);
+        return { ok: true, evidence: guard };
+      });
+      await processPendingMergePrs(app);
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(readPendingMergePrs(mockApps.get(app.id))[0].handoff).toEqual(handoff);
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({ prCompletion: 'merge-on-green' }));
+    });
   });
 
   describe('a bound handoff receipt', () => {

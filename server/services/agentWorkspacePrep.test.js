@@ -12,6 +12,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
+const pendingGuardCheck = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./pendingMergeRecovery.js', () => ({ validatePendingMergeRecovery: (...args) => pendingGuardCheck(...args) }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
 const publication = vi.hoisted(() => ({ active: false, refuse: false }));
@@ -107,7 +109,7 @@ import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktree
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
-beforeEach(() => { vi.clearAllMocks(); recoveryCheck.mockReset().mockResolvedValue(null); listWorktrees.mockResolvedValue([]); publication.active = publication.refuse = false; });
+beforeEach(() => { vi.clearAllMocks(); recoveryCheck.mockReset().mockResolvedValue(null); pendingGuardCheck.mockReset().mockResolvedValue(null); listWorktrees.mockResolvedValue([]); publication.active = publication.refuse = false; });
 
 describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () => {
   it('pins a CD no-worktree task to an isolated scratch dir and skips the git pull', async () => {
@@ -874,6 +876,44 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     recoveryCheck.mockClear();
     await prepareAgentWorkspace({ agentId: 'agent-new', task });
     expect(recoveryCheck).not.toHaveBeenCalled();
+  });
+
+  it('pins a legacy pending-merge recovery checkout and consumes the pin only before registration', async () => {
+    const target = { version: 1, repoPath: PATHS.root, branch: 'cos/task-x/agent-y', headSha: 'a'.repeat(40), prCompletion: 'merge-on-green' };
+    const task = followUpTask({ pendingMergeGuardTarget: target, prCompletion: 'merge-on-green' });
+    createWorktree.mockReset().mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: target.branch });
+    const registered = vi.fn(async result => {
+      expect(task.metadata.pendingMergeGuardTarget).toBeUndefined();
+      expect(task.metadata.pendingMergeGuardLaunchEvidence).toEqual(target);
+      expect(result.cleanupReviewPinConsumed).toBe(true);
+      return result;
+    });
+    expect((await prepareAgentWorkspace({ agentId: 'agent-new', task, onPrepared: registered })).outcome).toBe('ready');
+    expect(createWorktree).toHaveBeenCalledWith('agent-new', PATHS.root, task.id, expect.objectContaining({ expectedHeadSha: target.headSha }));
+    expect(pendingGuardCheck.mock.calls.map(([call]) => [call.workspacePath, call.requireCheckout])).toEqual([
+      [PATHS.root, undefined], ['/mock/worktrees/agent-new', true],
+    ]);
+    expect(registered).toHaveBeenCalledOnce();
+  });
+
+  it('blocks a stale pending-merge target before touching its checkout', async () => {
+    const target = { version: 1, repoPath: PATHS.root, branch: 'cos/task-x/agent-y', headSha: 'a'.repeat(40), prCompletion: 'merge-on-green' };
+    const task = followUpTask({ pendingMergeGuardTarget: target, prCompletion: 'merge-on-green' });
+    pendingGuardCheck.mockResolvedValue('recovery-head-moved');
+    expect((await prepareAgentWorkspace({ agentId: 'agent-new', task })).outcome).toBe('blocked');
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(task.metadata.pendingMergeGuardTarget).toEqual(target);
+  });
+
+  it('verifies a retained legacy checkout before adopting it for guard recovery', async () => {
+    const target = { version: 1, repoPath: PATHS.root, branch: 'cos/task-x/agent-y', headSha: 'a'.repeat(40), prCompletion: 'merge-on-green' };
+    const task = followUpTask({ pendingMergeGuardTarget: target, prCompletion: 'merge-on-green' });
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: target.branch, adopted: true });
+    expect((await prepareAgentWorkspace({ agentId: 'agent-new', task })).outcome).toBe('ready');
+    expect(pendingGuardCheck.mock.calls.map(([call]) => call.workspacePath)).toEqual([PATHS.root, '/mock/worktrees/agent-y', '/mock/worktrees/agent-new']);
+    expect(adoptWorktree).toHaveBeenCalledOnce();
+    expect(createWorktree).not.toHaveBeenCalled();
   });
 
   it('preserves the pin and holder when target drift is detected before adoption', async () => {
