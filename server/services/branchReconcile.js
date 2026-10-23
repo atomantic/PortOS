@@ -1100,6 +1100,7 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       ...(entry.locked !== undefined && { locked: entry.locked, lockReason: entry.lockReason ?? null }),
       ...(entry.detached && { detached: true }),
       ...(entry.managed !== undefined && { managed: entry.managed }),
+      ...(entry.archiveLimit && { archiveLimit: entry.archiveLimit }),
       reason: entry.cause,
     })),
     notLaterThan: lifts.length ? new Date(Math.min(...lifts)).toISOString() : null

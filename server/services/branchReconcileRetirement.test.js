@@ -148,6 +148,24 @@ describe('historical completed-checkout review obligations', () => {
     expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({ candidates: [], held: [{ branch: branch.branch, reason }] });
   });
 
+  it.each(['preview', 'merged-retirement', 'reviewed-retirement'])('keeps archive capacity diagnostics in held status after %s', async phase => {
+    const deps = setup();
+    const refusal = { ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+      scope: 'content', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: 264 * 1024 * 1024,
+    } };
+    if (phase === 'preview') deps.prepare.mockResolvedValue(refusal);
+    if (phase === 'reviewed-retirement') {
+      const prepared = await deps.prepare();
+      prepared.review.comparison = { disposition: 'integrated', localPatch: '', difference: '' };
+      deps.prepare.mockResolvedValue(prepared);
+    }
+    deps.retire = vi.fn(async () => refusal);
+    expect(await prepareReconcileRetirements(app, scan({ isMerged: phase === 'merged-retirement' }), deps)).toEqual({ candidates: [], retired: [], held: [{ branch: tree.branch, path: tree.path, head, locked: false, lockReason: null,
+      reason: refusal.reason, archiveLimit: refusal.archiveLimit,
+    }] });
+    if (phase === 'preview') expect(deps.retire).not.toHaveBeenCalled();
+  });
+
   it('does not invent approval after forge failure or vanished historical policy', async () => {
     const deps = setup(); deps.readPr.mockRejectedValueOnce(new Error('unreadable'));
     expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-pr-lookup-unavailable');
