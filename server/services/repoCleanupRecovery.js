@@ -57,10 +57,15 @@ export async function inspectOrQueueCompletedReview(input, deps = {}) {
     // successor can be identified, never reset its budget or blindly redispatch.
     return { disposition: 'held', reason: 'cleanup-publication-unverified' };
   }
-  const reason = task?.id ? (purpose === 'code-repair' ? 'code-repair-queued' : 'required-code-review-queued') : 'required-code-review-held';
+  // An existing coordinator id is also returned on a refused resume. Keep its
+  // ownership link without claiming it was queued or retrying its spent budget.
+  const queued = Boolean(task?.id && !task.blocked && !task.deferred);
+  const phase = queued ? 'dispatched' : task?.deferred ? 'deferred' : 'blocked';
+  const reason = task?.blocked || (task?.deferred ? 'required-code-review-deferred'
+    : queued ? (purpose === 'code-repair' ? 'code-repair-queued' : 'required-code-review-queued') : 'required-code-review-held');
   await lifecycle.recordRepoCleanupRecovery(inspected.agentId, target.branch, observation,
-    { phase: task?.id ? 'dispatched' : 'blocked', taskId: task?.id || null });
+    { phase, taskId: task?.id || null, reason });
   await lifecycle.recordCleanupOutcome(inspected.agentId, { branch: target.branch, path: target.worktreePath,
-    status: task?.id ? 'pending' : 'blocked', reason, taskId: task?.id || null });
-  return { disposition: task?.id ? 'queued-review' : 'held', reason, taskId: task?.id || null };
+    status: queued ? 'pending' : 'blocked', reason, taskId: task?.id || null });
+  return { disposition: queued ? 'queued-review' : 'held', reason, taskId: task?.id || null };
 }
