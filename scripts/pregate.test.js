@@ -201,6 +201,7 @@ describe('pregate hidden-content invocation', () => {
 
   // A branch and base can each be green while their combined route inventory fails.
   it('runs guards on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
+    git('config', 'core.autocrlf', 'true');
     mkdirSync(join(root, 'server/routes'), { recursive: true });
     write('server/routes/universe-builder.js', 'export const mutation = false;\n');
     write('server/lib/strict.js', 'export const strict = false;\n');
@@ -260,13 +261,14 @@ describe('pregate hidden-content invocation', () => {
     expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(before);
     expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
 
+    const originalDocBytes = readFileSync(join(root, 'docs/tracked note.md'));
     write('docs/tracked note.md', '# Pending local work\n');
     const dirty = snapshot();
     const refused = invoke('--guards-only', '--merged-with', strictBase);
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain('requires a clean committed checkout');
     expect(snapshot()).toEqual(dirty);
-    write('docs/tracked note.md', '# Example\n');
+    writeFileSync(join(root, 'docs/tracked note.md'), originalDocBytes);
 
     git('checkout', 'new-base');
     write('server/routes/universe-builder.js', 'export const mutation = "conflicting";\n');
