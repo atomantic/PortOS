@@ -56,12 +56,12 @@ const MORE_ACTIONS = [
 // Mirrors HANDLED_DECISIONS in server/lib/githubNotificationTriage.js:
 // nothing is left for you on these threads, so they sit under Handled.
 const HANDLED_DECISIONS = new Set(['handled-by-pr-workflow', 'duplicate', 'handed-off', 'suggest-mark-read']);
-const nothingLeft = (row) => !row.suspect && HANDLED_DECISIONS.has(row.decision);
+const nothingLeft = (row) => row.readOnGithub || (!row.suspect && HANDLED_DECISIONS.has(row.decision));
 
 // Whether a row still belongs in the view after an action moved it.
 const VIEW_MATCHERS = {
   'needs-you': (row) => row.state === 'open' && !row.suspect && !nothingLeft(row),
-  suspect: (row) => row.state === 'open' && row.suspect,
+  suspect: (row) => row.state === 'open' && !row.readOnGithub && row.suspect,
   handled: (row) => row.state !== 'open' || nothingLeft(row),
   all: () => true,
 };
@@ -181,6 +181,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction }) {
             {notification.yourRepo && <Pill tone="accent">Your repo</Pill>}
             {notification.repoPrivate && <Pill tone="muted">Private</Pill>}
             {trust && <Pill tone={trust.tone}>{trust.label}</Pill>}
+            {notification.readOnGithub && <Pill tone="muted">Read on GitHub</Pill>}
             {handled && <Pill tone="muted">{STATE_LABELS[notification.state] || notification.state}</Pill>}
           </div>
           {!handled && notification.agent?.refused && (
