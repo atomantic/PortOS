@@ -187,6 +187,18 @@ shipped prompt-history guard runs locally when selected; the Windows job and
 the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
 contract: `docs/CONTRIBUTING.md`.
 
+The fixed `pregate:merged` package script advertises support for
+`node scripts/pregate.js --guards-only --merged-with <base-sha>` to the quality
+snapshot publisher. It validates the exact published head and fetched default
+SHA before merge admission, then rechecks both inputs inside admission and pins
+the GitHub merge to that head. New and reused snapshot PRs use detached checkouts.
+Failed guards, moved/unreadable inputs, or refused merges retain the PR, checkout,
+and `.cache/quality-snapshot-merge.json` evidence for a later publish cycle;
+they do not enter the generic pending-merge queue. Guard-capable GitLab MRs stay
+open until a supported pinned validation path is available. Repositories without
+this capability retain their existing snapshot merge behavior; arbitrary scripts
+are never executed as a substitute.
+
 ### Pregate attestation
 
 A green pregate on this machine runs the same planner, runners, environment
