@@ -8,6 +8,7 @@ import { seedDataDir } from './lib/seedDataDir.js';
 import { mergeJsonStarterTargets } from './lib/mergeJsonStarter.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
 import { adoptLegacyAppliedList } from './lib/migrationLedger.js';
+import { setupSpotlight } from './setup-spotlight.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -46,6 +47,7 @@ const rewritePortosRootPlaceholder = () => {
 
 const { created } = seedDataDir({ referenceDir, dataDir, log: console.log });
 rewritePortosRootPlaceholder();
+setupSpotlight(dataDir);
 console.log(created
   ? '✅ Data directory created'
   : '✅ Data directory already exists, ensured subdirectories and files');

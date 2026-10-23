@@ -2,15 +2,13 @@
  * Vitest worker caps for GitHub Actions. Standard Linux runners for public
  * repositories are 4 vCPU / 16GB; uncapped forks oversubscribe those cores
  * during transform and swap.
- * Local `npm test` stays unbounded so a developer machine can use every core.
- * That is not the supported full-suite result: an unbounded run oversubscribes
- * a loaded machine and resource-heavy cases hit their existing budgets.
- * `PORTOS_PREGATE_MAX_WORKERS=4 npm test` is the supported full local
- * validation (same cap as CI). A focused file run is evidence for that file
- * only. See docs/CONTRIBUTING.md.
- * `npm run pregate` exports PORTOS_PREGATE_MAX_WORKERS so several concurrent
- * worktree gates share one host budget (#9773). The value can only LOWER a
- * workspace's cap, never raise it past the proven one.
+ * Local runs are bounded by the CoS "max concurrent agents" setting
+ * (scripts/lib/cosWorkerBudget.js): cores / agents, never above the proven cap,
+ * so several concurrent worktree gates share one host budget (#9773). Lower the
+ * setting in the app to lighten host load; no env var is needed. A focused file
+ * run is evidence for that file only. See docs/CONTRIBUTING.md.
+ * `PORTOS_PREGATE_MAX_WORKERS` remains an internal handoff (pregate stage env,
+ * browser-fidelity's single worker); it can only LOWER a workspace's cap.
  *
  * fileParallelism stays at Vitest's default (true): four workers stay busy on
  * independent files. The DB suite already serializes files because those
@@ -21,6 +19,7 @@
  * Vitest 5 exposes `maxWorkers` only — there is no `minWorkers` / `minThreads`.
  */
 import { readFileSync } from 'node:fs';
+import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 
 export function vitestCiPool({ maxWorkers = 4 } = {}) {
   if (process.env.CI) {
@@ -32,8 +31,10 @@ export function vitestCiPool({ maxWorkers = 4 } = {}) {
     return { maxWorkers: ci === null ? maxWorkers : Math.min(maxWorkers, ci) };
   }
   const raw = process.env.PORTOS_PREGATE_MAX_WORKERS;
-  const pregate = /^[1-9]\d*$/.test(raw ?? '') ? Number(raw) : null;
-  return pregate === null ? {} : { maxWorkers: Math.min(maxWorkers, pregate) };
+  // An explicit handoff (pregate stage env, fidelity's single worker) wins;
+  // otherwise the CoS max-concurrent-agents setting sets the host budget.
+  const pregate = /^[1-9]\d*$/.test(raw ?? '') ? Number(raw) : cosWorkerBudget({ maxWorkers });
+  return { maxWorkers: Math.min(maxWorkers, pregate) };
 }
 
 // Keep these public Chrome/ffmpeg contracts in the full/CI runner, but give
