@@ -263,7 +263,22 @@ async function resolveForgeCredentials(dir, { timeoutMs, signal, pinned }) {
  * @returns {Promise<{ GH_TOKEN?: string, GH_ENTERPRISE_TOKEN?: string, GH_HOST?: string, GIT_AUTHOR_NAME?: string, GIT_AUTHOR_EMAIL?: string,
  *                     GIT_COMMITTER_NAME?: string, GIT_COMMITTER_EMAIL?: string }>}
  */
-export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccount = null } = {}) {
+export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccount = null, githubAccount = null } = {}) {
+  if (githubAccount) {
+    // A notification's repository may have no checkout. Resolve its selected
+    // identity at dispatch, never store a token in task metadata or use cwd's owner.
+    const { getAccount, resolveGitHubAccountEnv } = await import('./githubAccounts.js');
+    const account = await getAccount(githubAccount.id);
+    if (!account.enabled) throw new Error('The GitHub notification account is disabled');
+    if (account.host !== githubAccount.host || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(githubAccount.login || '')
+      || (account.login && account.login.toLowerCase() !== githubAccount.login.toLowerCase())) throw new Error('The GitHub notification account identity changed');
+    const probeEnv = { ...process.env };
+    for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete probeEnv[key];
+    const { env } = await resolveGitHubAccountEnv({ ...account, login: githubAccount.login }, { baseEnv: probeEnv });
+    const tokenKey = account.host === 'github.com' ? 'GH_TOKEN' : 'GH_ENTERPRISE_TOKEN';
+    if (!env?.[tokenKey]) throw new Error('The GitHub notification account credential is unavailable');
+    return { GH_HOST: account.host, [tokenKey]: env[tokenKey] };
+  }
   // Keep the whole lookup inside the agent-spawn budget. The shared abort signal
   // kills whichever gh subprocess is active when the outer budget expires and
   // prevents a slow git lookup from starting a stale follow-on auth probe. Each

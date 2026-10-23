@@ -28,6 +28,7 @@ import {
   agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, KIND_SQL, learnedDecisionForAction, normalizeAgentRules, PINNED_TRIAGE_RULES, threadAgentKind,
 } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
+import { notificationPullRequestView } from '../lib/githubNotificationPullRequest.js';
 
 const GH_TIMEOUT_MS = 30_000;
 const PER_PAGE = 50;
@@ -181,7 +182,7 @@ async function runAutomation(account, env, automate) {
   const assist = await assistAccountNotifications(account, env, {
     act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail }),
   });
-  return { ...assist, handedOff: autopilot.handedOff, agentRuns: autopilot.agentRuns };
+  return { ...assist, handedOff: autopilot.handedOff, agentRuns: autopilot.agentRuns, ...(autopilot.merged ? { merged: autopilot.merged } : {}) };
 }
 
 const listedIds = (listing) => listing.threads.map((thread) => String(thread?.id));
@@ -363,6 +364,9 @@ const toApi = (row, accountsById) => {
     ruleKind: threadAgentKind(row),
     agent: agentView(account, row),
     agentFailed: agentFailedView(row),
+    pullRequest: notificationPullRequestView(account, row),
+    pullRequestAction: row.evidence?.pullRequestAction || null,
+    pullRequestAttempt: row.evidence?.pullRequestAttempt || null,
     updatedAt: toIso(row.gh_updated_at),
   };
 };
@@ -735,4 +739,12 @@ export async function resolveWithAgent(accountId, threadId, perRun) {
   const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
   githubNotificationEvents.emit('changed', { accountId: account.id });
   return toApi(row, new Map([[account.id, account]]));
+}
+
+export async function actOnPullRequest(accountId, threadId, options) {
+  const account = await getAccount(accountId);
+  const { actOnNotificationPullRequest } = await import('./githubNotificationPullRequest.js');
+  const result = await actOnNotificationPullRequest(account, threadId, options);
+  const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
+  return { notification: toApi(row, new Map([[account.id, account]])), ...result };
 }

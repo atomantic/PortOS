@@ -16,6 +16,7 @@
  */
 import { isUntrustedContentProvider } from './untrustedContent.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { PULL_REQUEST_ACTIONS, PULL_REQUEST_RULE_KINDS } from '../../lib/pullRequestActions.js';
 
 export const TRIAGE_DECISIONS = Object.freeze([
   'suspect',
@@ -36,7 +37,7 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 7;
+export const TRIAGE_RULES_VERSION = 8;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. They stay in the inbox (it
@@ -239,17 +240,17 @@ const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 
 // The notification kinds an automation rule can name (GITHUB_AGENT_RULE_KINDS
 // in lib/validation.js).
-export const AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'mention', 'release', 'other']);
+export const AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other']);
 const RULE_KINDS = new Set(AGENT_RULE_KINDS);
 // What a rule does with a matching thread (#13192). A stored legacy rule's
 // `agent: true/false` reads as `agent` / `leave`.
-export const AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave']);
+export const AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave', ...PULL_REQUEST_ACTIONS]);
 // A security alert is never marked done or muted by a rule.
 const AGENT_ONLY_RULE_KINDS = new Set(['security-alert']);
 // Kinds no specific lane owns: an `agent` rule on one sends it to the generic
 // lane on Autopilot. Review, issue and alert rules keep their meaning from
 // before #13192 (their own lanes), so they never start a generic run.
-export const GENERIC_RULE_KINDS = Object.freeze(['ci-activity', 'own-pr', 'mention', 'release', 'other']);
+export const GENERIC_RULE_KINDS = Object.freeze(['ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other']);
 const GENERIC_KIND_SET = new Set(GENERIC_RULE_KINDS);
 const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100}))$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
@@ -261,11 +262,13 @@ const FINISHED_SUBJECT_STATES = new Set(['merged', 'closed']);
 /** The rule kind of a thread, from its reason and subject type only. */
 export function threadAgentKind(row) {
   if (row?.reason === 'security_alert') return 'security-alert';
+  if (row?.subject_type === 'PullRequest' && row.evidence?.actor === 'dependabot[bot]' && row.evidence?.actorType === 'Bot') return 'dependabot-pr';
   if (row?.reason === 'review_requested' && row.subject_type === 'PullRequest') return 'review-request';
   if (row?.reason === 'ci_activity' || row?.subject_type === 'CheckSuite') return 'ci-activity';
   if (row?.subject_type === 'Issue') return 'issue-activity';
   if (row?.reason === 'author' && row.subject_type === 'PullRequest') return 'own-pr';
   if (MENTION_REASONS.has(row?.reason)) return 'mention';
+  if (row?.subject_type === 'PullRequest') return 'pull-request';
   if (row?.subject_type === 'Release') return 'release';
   return 'other';
 }
@@ -274,11 +277,13 @@ export function threadAgentKind(row) {
 // github_notifications rows; the parity DB test fails when they drift.
 export const KIND_SQL = `(CASE
     WHEN reason = 'security_alert' THEN 'security-alert'
+    WHEN subject_type = 'PullRequest' AND evidence->>'actor' = 'dependabot[bot]' AND evidence->>'actorType' = 'Bot' THEN 'dependabot-pr'
     WHEN reason = 'review_requested' AND subject_type = 'PullRequest' THEN 'review-request'
     WHEN reason = 'ci_activity' OR subject_type = 'CheckSuite' THEN 'ci-activity'
     WHEN subject_type = 'Issue' THEN 'issue-activity'
     WHEN reason = 'author' AND subject_type = 'PullRequest' THEN 'own-pr'
     WHEN reason IN ('mention', 'team_mention') THEN 'mention'
+    WHEN subject_type = 'PullRequest' THEN 'pull-request'
     WHEN subject_type = 'Release' THEN 'release'
     ELSE 'other' END)`;
 
@@ -306,8 +311,27 @@ const validRules = (rules, kind) => (Array.isArray(rules) ? rules : []).flatMap(
   if (typeof rule.repo !== 'string' || !RULE_REPO_RE.test(rule.repo)) return [];
   const action = agentRuleAction(rule);
   if (!action || (AGENT_ONLY_RULE_KINDS.has(kind) && action !== 'agent' && action !== 'leave')) return [];
+  if (PULL_REQUEST_ACTIONS.includes(action) && !PULL_REQUEST_RULE_KINDS.includes(kind)) return [];
+  if (action === 'merge' && kind !== 'dependabot-pr') return [];
   return [{ ...rule, action }];
 });
+
+/** Explicit PR actions run independently of the generic agent hand-off. */
+export function pullRequestAutomationRule(account, row) {
+  if (account?.mode !== 'autopilot' || row?.state !== 'open' || row.suspect) return null;
+  if (row.decision === 'handed-off' || FINISHED_SUBJECT_STATES.has(row.evidence?.subjectState)) return null;
+  const rule = matchAgentRule(account.agentRules, threadAgentKind(row), row.repo_full_name);
+  return PULL_REQUEST_ACTIONS.includes(rule?.action) ? rule : null;
+}
+
+/** SQL mirror of explicit PR rule scope, reused for dispatch and Assist exclusion. */
+export function pullRequestAutomationFilter(rules, first = 2) {
+  const scopes = PULL_REQUEST_RULE_KINDS.map(kind => agentRuleScope(rules, kind, { optIn: true, actions: PULL_REQUEST_ACTIONS }));
+  return {
+    sql: PULL_REQUEST_RULE_KINDS.map((kind, index) => `(${KIND_SQL} = '${kind}' AND ${agentRuleScopeSql(first + index * 3)})`).join(' OR '),
+    params: scopes.flatMap(({ all, except, only }) => [all, except, only]),
+  };
+}
 
 // Built-in rules shown under every account. A rule the operator saves for the
 // same kind and repo wins; with none, a CI notice is simply marked done.

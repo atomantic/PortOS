@@ -31,6 +31,7 @@ import {
 import { toPgJson } from '../lib/pgJson.js';
 import { managedAppsByRepoKey, threadDiscussionVouched } from './githubNotificationTriage.js';
 import { requireAccountEnv } from './githubNotifications.js';
+import { githubReviewAccountSelector } from './githubAccounts.js';
 import { queueNotificationResolveTask } from './githubNotificationResolveTask.js';
 import { queueSecurityFixTask } from './githubSecurityFixTask.js';
 import { spawnPrDoReviewTask } from './prDoReviewTask.js';
@@ -102,7 +103,8 @@ async function queueLane(plan, app, origin, { account, rows, immediate = false }
     // The stored html url is rebuilt from GitHub's own API url on the account's host.
     const url = rows[0]?.html_url || '';
     if (!url.endsWith(`/pull/${plan.pullNumber}`)) return { error: 'No pull request link for this notification' };
-    const queued = await spawnPrDoReviewTask({ app, pullRequest: { number: plan.pullNumber, url }, repoFullName: plan.repo, ...pin, immediate });
+    const githubAccount = await githubReviewAccountSelector(account, await requireAccountEnv(account));
+    const queued = await spawnPrDoReviewTask({ app, pullRequest: { number: plan.pullNumber, url }, repoFullName: plan.repo, githubAccount, ...pin, immediate });
     if (!queued.task) return { error: 'The review could not be queued' };
     return queued.duplicate ? { duplicate: true, taskId: queued.task.id } : { taskId: queued.task.id };
   }
@@ -164,9 +166,11 @@ export const __testing = { listAutopilotCandidates, candidateFilter };
 
 export async function autopilotAccountNotifications(account, env = null) {
   if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };
+  const { automateNotificationPullRequests } = await import('./githubNotificationPullRequest.js');
+  const pullRequests = await automateNotificationPullRequests(account, env);
   const rows = await listAutopilotCandidates(account);
   const plans = rows.map((row) => ({ row, plan: withRunPin(account, autopilotHandoff({ account, row })) })).filter((entry) => entry.plan);
-  if (!plans.length) return { handedOff: 0, agentRuns: 0 };
+  if (!plans.length) return { handedOff: pullRequests.reviews, agentRuns: pullRequests.reviews, merged: pullRequests.merged };
   const apps = await managedAppsByRepoKey();
   const batches = new Map();
   const skipped = [];
@@ -240,7 +244,7 @@ export async function autopilotAccountNotifications(account, env = null) {
     for (const entry of entries) await record({ ...entry, outcome });
     if (!queued.error) console.log(`🤝 Autopilot handed ${entries.length} GitHub notification(s) to one ${lane} run for ${app?.name || repo || 'your repositories'}`);
   }
-  return { handedOff, agentRuns };
+  return { handedOff: handedOff + pullRequests.reviews, agentRuns: agentRuns + pullRequests.reviews, merged: pullRequests.merged };
 }
 
 const REFUSED_MESSAGES = {

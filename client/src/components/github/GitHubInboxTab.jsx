@@ -9,6 +9,7 @@ import OverflowMenu from '../ui/OverflowMenu';
 import GitHubThreadDrawer from './GitHubThreadDrawer';
 import GitHubDeploymentReview from './GitHubDeploymentReview';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
+import GitHubPullRequestActions from './GitHubPullRequestActions';
 import { AGENT_REFUSED_LABELS, DECISION_ACTIONS, DECISION_VIEW, TRUST_VIEW } from './githubTriageLabels';
 import socket from '../../services/socket';
 import LoadFailedState from '../ui/LoadFailedState';
@@ -180,7 +181,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
   const agent = handled ? null : notification.agent;
   const canResolve = Boolean(agent) && !agent.refused;
   const refusedId = `agent-refused-${notification.accountId}-${notification.threadId}`;
-  const suggestionAction = handled ? null : DECISION_ACTIONS[notification.decision];
+  const suggestionAction = handled || notification.pullRequest ? null : DECISION_ACTIONS[notification.decision];
   const suggestion = suggestionAction ? { ...suggestionAction, icon: SUGGESTION_ICONS[suggestionAction.action] } : null;
   const startAgent = async (pin) => {
     if (await onAction(notification, 'agent', pin)) setPicking(false);
@@ -198,7 +199,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
         <kind.icon size={18} className={kind.className} aria-label={kind.label} role="img" />
         {notification.unread && <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-port-accent ring-2 ring-port-card" aria-label="Unread" />}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2 @3xl/page:flex-row @3xl/page:items-start">
+      <div className="flex min-w-0 flex-1 flex-col gap-2 @3xl/page:grid @3xl/page:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] @3xl/page:items-start">
         <div className="min-w-0 flex-1">
           <Link
             to={`/devtools/github/inbox/${encodeURIComponent(notification.accountId)}/${notification.threadId}`}
@@ -265,7 +266,7 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
             </p>
           )}
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
           {!handled && notification.deployment && !reviewing && (
             <button
               type="button"
@@ -276,7 +277,8 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
               <Rocket size={13} aria-hidden="true" /> Review deployment
             </button>
           )}
-          {agent && !picking && (
+          {notification.pullRequest && <GitHubPullRequestActions notification={notification} onUpdated={onUpdated} />}
+          {agent && !picking && !notification.pullRequest && (
             <button
               type="button"
               disabled={busy || !canResolve}

@@ -154,11 +154,23 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       : basePrompt;
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
     const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
-    const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
+    const { provider: preparedProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
       requestedProvider,
       selectedModel,
       requestedProvider.effort || null,
     );
+    let runProvider = preparedProvider;
+    if (task.metadata?.githubAccount && !publicReview) {
+      const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
+      const { composeProviderEnv } = await import('../lib/cliChildEnv.js');
+      const accountEnv = await resolveForgeTokenEnv(workspacePath, { githubAccount: task.metadata.githubAccount });
+      // The selected inbox account outranks cwd/provider defaults for this run.
+      // Persist/register the original provider below; credentials stay transient.
+      // Empty aliases also prevent the lower spawners from resolving cwd's
+      // github.com credential for a selected Enterprise account.
+      runProvider = { ...preparedProvider, envVars: composeProviderEnv({ provider: preparedProvider, model: selectedModel,
+        extra: { GH_TOKEN: '', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '', ...accountEnv } }) };
+    }
     const localEndpoint = localEndpointOfProvider(provider);
     const localPromptBudget = localEndpoint
       ? planLocalPromptBudget({

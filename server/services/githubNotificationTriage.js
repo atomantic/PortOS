@@ -41,6 +41,7 @@ const REDECIDE_SQL = `(state = 'open' AND decision IS DISTINCT FROM 'handed-off'
     OR (reason = 'review_requested' AND evidence->>'subjectState' IN ('merged', 'closed'))
     OR reason = 'approval_requested'
     OR trust = 'outside'
+    OR (subject_type = 'PullRequest' AND COALESCE(evidence->>'rulesVersion', '0') <> '${TRIAGE_RULES_VERSION}')
     OR (latest_comment_api_url IS NOT NULL AND NOT (evidence ? 'commenterTrust'))))`;
 // A deployment waiting on you is re-checked every sync: approving or rejecting
 // it on GitHub does not touch the notification thread.
@@ -253,6 +254,7 @@ async function triageThread(row, ctx) {
       rule,
       signals,
       actor: actorLogin,
+      actorType: typeof actorType === 'string' ? actorType : null,
       commenter: commenter && commenter !== actorLogin ? commenter : null,
       // Always recorded (null: no other commenter) so the generic agent lane
       // can tell a vouched thread from one triaged before it was kept (#13191).
