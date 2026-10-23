@@ -11,6 +11,7 @@
  * status that keeps accepted artifacts. Nothing runs at boot and a restart
  * marks a stranded run interrupted without calling a provider.
  */
+import { channel } from 'node:diagnostics_channel';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
@@ -38,6 +39,8 @@ const PILOT_MAX_SAMPLES = 240;
 const RESUMABLE = new Set(['interrupted', 'canceled', 'exhausted', 'failed']);
 const BUDGET_CODE = 'CODE_ANIMATION_BUDGET_EXHAUSTED';
 const CANCEL_CODE = 'CODE_ANIMATION_RUN_CANCELED';
+
+const lifecycle = channel('portos.code-animation-stage.lifecycle');
 
 const activeRuns = trackedRenderMap('code-animation', { noun: 'Code Animation production run', link: () => '/code-animation/production' });
 export const activeStageRunIds = () => [...activeRuns.keys()];
@@ -108,7 +111,10 @@ async function runStage(ctx, key, revision, body, { renders = false } = {}) {
   checkBudget(ctx);
   const entry = { key, rendererBinding: ctx.state.renderer?.binding ?? null, stageRunId: randomUUID(), revisionId: revision.id, sourceHash: revision.sourceHash, packageHash: revision.packageHash, status: 'running', startedAt: iso() };
   ctx.state.stages.push(entry);
+  const report = phase => lifecycle.publish({ runId: ctx.runId, stage: key, phase, elapsedMs: Date.now() - ctx.startedAt });
+  report('persist-start');
   await persist(ctx);
+  report('execute');
   const { ms, dimension } = remainingMs(ctx);
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(exhausted(dimension)), Math.max(1, Math.ceil(ms)));
@@ -130,9 +136,11 @@ async function runStage(ctx, key, revision, body, { renders = false } = {}) {
     throw error;
   } finally {
     clearTimeout(timer);
+    report('persist-end');
     if (renders) ctx.state.spent.renderMs += Date.now() - began;
     await persist(ctx).catch(error => console.error(`❌ Code Animation stage ${key} status could not be saved: ${error.message}`));
   }
+  report('settled');
   return entry;
 }
 
