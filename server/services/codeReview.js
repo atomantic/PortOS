@@ -13,6 +13,7 @@
  */
 
 import { CODE_REVIEW_BATCH_BYTES, CODE_REVIEW_MAX_BATCHES, runCodeReviewBatches, takeCodeReviewCallBudget, isReviewContextCapacityFailure, reviewContextCapacityFailure } from '../lib/codeReviewBatches.js'
+import { withAbortTimeout, awaitWithAbort } from '../lib/abortTimeout.js'
 import { effortLevelsForProvider } from '../lib/providerModels.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
@@ -842,12 +843,17 @@ export function __resetThinkingUnsupportedCache() { thinkingUnsupportedModels.cl
  * fall through to the request (and its 400-retry) rather than silently
  * dropping a level the model does in fact accept.
  */
-async function modelRejectsThinking(backend, model) {
+async function modelRejectsThinking(backend, model, reviewBudget = null) {
   const cacheKey = thinkingCacheKey(backend, model)
   if (thinkingUnsupportedModels.get(cacheKey) === true) return true
   if (backend !== 'ollama') return false
   const capabilities = await import('./ollamaManager.js')
-    .then(({ getModelCapabilities }) => getModelCapabilities(model))
+    .then(({ getModelCapabilities }) => {
+      if (!reviewBudget) return getModelCapabilities(model)
+      const remainingMs = reviewBudget.deadline - Date.now()
+      if (remainingMs <= 0) return null
+      return withAbortTimeout(remainingMs, signal => awaitWithAbort(getModelCapabilities(model, { signal, timeout: remainingMs }), signal))
+    })
     .catch(() => null)
   if (!Array.isArray(capabilities) || capabilities.length === 0) return false
   if (capabilities.includes('thinking')) return false
@@ -1001,8 +1007,9 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     const { callProviderAISimple } = await import('./aiProvider.js')
     budgetMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
     if (budgetMs === null) return { ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' }
-    result = await callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: budgetMs, fallbackProvider: null }, model,
-      prompt, { max_tokens: 8192, allowModelRecovery: false })
+    result = await withAbortTimeout(budgetMs, signal => awaitWithAbort(callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: budgetMs, fallbackProvider: null }, model,
+      prompt, { max_tokens: 8192, allowModelRecovery: false, signal, deadlineMs: reviewBudget?.deadline }), signal))
+      .catch(() => ({ error: 'Reviewer preparation or execution failed within its shared budget.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
   } else {
     if (!transport.transport) return { ok: false, code: transport.code, error: transport.error }
     const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js')
@@ -1021,12 +1028,14 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     const cwd = isolatedCwd || reviewCwd
     result = await Promise.resolve().then(async () => {
       const { resolveBootstrapEnv } = await import('../lib/credentialBootstrap.js')
-      const bootstrapEnv = await resolveBootstrapEnv(provider, { safetyProfile })
+      const preparationMs = reviewBudget ? reviewBudget.deadline - Date.now() : timeoutMs
+      if (preparationMs <= 0) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
+      const bootstrapEnv = await withAbortTimeout(preparationMs, signal => awaitWithAbort(resolveBootstrapEnv(provider, { safetyProfile, signal, timeoutMs: preparationMs }), signal))
       const remainingMs = takeCodeReviewCallBudget(reviewBudget, timeoutMs)
       if (remainingMs === null) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
       return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
         safetyProfile, codeReview: true })
-    }).catch(() => ({ error: 'Reviewer credential setup or execution failed.' }))
+    }).catch(() => ({ error: 'Reviewer credential setup or execution failed.', code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }))
       .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
     // A failed headless command request is a configuration fault, not a verdict.
     // Replace vendor prose with a bounded remedy before health or bridge output.
@@ -1124,7 +1133,7 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
   // Probe only when there is actually a level to drop — an unpinned effort
   // sends no field either way, so a capability round-trip would buy nothing.
   const requestedEffort = normalizeReviewerEffort(effort, backend) || null
-  let effortUnsupported = requestedEffort ? await modelRejectsThinking(backend, model) : false
+  let effortUnsupported = requestedEffort ? await modelRejectsThinking(backend, model, reviewBudget) : false
   let resolvedEffort = effortUnsupported ? null : requestedEffort
 
   let remainingMs = takeCodeReviewCallBudget(reviewBudget, timeoutMs)
@@ -1292,6 +1301,7 @@ async function runSingleCodeReview({ backend, model, diff, effort = null, timeou
     userMessage: { role: 'user', content: `Review this PR diff:\n\n${fence}diff\n${trimmedDiff}\n${fence}` },
   })
   if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model: result.model || model, effort }
+  if (result.code === 'REVIEW_BUDGET_EXHAUSTED') return { ...result, error: localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? reviewTimeoutMs, diffSizeBytes, phase: 'reviewer-process' }) }
   if (!result.ok) return result
   const { verdict, reason } = normalizeCodeReviewVerdict(result.content)
   if (!verdict) return {

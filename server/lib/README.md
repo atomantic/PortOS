@@ -517,7 +517,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). `insecureFetch` size-cap rejections carry `code: RESPONSE_TOO_LARGE`. |
-| `abortTimeout.js` | `withAbortTimeout(timeoutMs, fn)` — runs `fn(signal)` under an `AbortController` that aborts after `timeoutMs` and always clears the timer on settle. Generic lifecycle helper for callers that need the insecure-agent `peerFetch` (so can't use `fetchWithTimeout`) or one signal across parallel fetches. |
+| `abortTimeout.js` | `awaitWithAbort(promise, signal)` cancels a caller's wait while owning eventual rejection of shared preparation; `withAbortTimeout(timeoutMs, fn)` — runs `fn(signal)` under an `AbortController` that aborts after `timeoutMs` and always clears the timer on settle. Generic lifecycle helper for callers that need the insecure-agent `peerFetch` (so can't use `fetchWithTimeout`) or one signal across parallel fetches. |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
 | `tailnetPeer.js` | `isTailnetPeer(peer)` — fail-closed security predicate for "is this peer reachable only over the tailnet". Deliberately separate from `instances.js`'s `peerRequiresTailscale()` probe-deferral heuristic so a polling-noise tweak can't widen a privacy boundary; required by the unattended-routing gate in ADR 2026-08-20-federated-visual-prompts. |
 | `federatedMediaRequest.js` | Builds and validates the versioned federated-media submission body for a visual kind, so every call site that persists a remote-job marker projects local params onto the wire identically. |

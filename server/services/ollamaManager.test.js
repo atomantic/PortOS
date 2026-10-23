@@ -194,6 +194,21 @@ describe('ollamaManager model capability sentinel', () => {
     await expect(getModelCapabilities('example-model')).resolves.toBeNull()
   })
 
+  it('cancels a pending capability probe at the caller deadline', async () => {
+    const controller = new AbortController();
+    let entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    vi.stubGlobal('fetch', vi.fn((_url, options) => {
+      entered();
+      return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+    }));
+    const { getModelCapabilities } = await loadManager();
+    const pending = getModelCapabilities('deadline-example', { signal: controller.signal, timeout: 42 });
+    await started;
+    controller.abort();
+    await expect(pending).resolves.toBeNull();
+  });
+
   it('keeps an answered empty capability set distinct from a failed probe', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,

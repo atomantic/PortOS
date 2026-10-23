@@ -12,7 +12,16 @@ export function isReviewContextCapacityFailure(result) {
   // Successful JSON verdicts may legitimately discuss context-capacity bugs.
   // Classify structured errors or plain vendor refusals, never their quoted text.
   const plain = value => typeof value === 'string' && !/^[\s]*[\[{`]/.test(value) ? value : null;
-  return [result?.error, result?.error?.message,
+  const streamErrors = [];
+  if (result?.streamFormat === 'stream-json' && typeof result.text === 'string') {
+    for (const line of result.text.split('\n')) {
+      try {
+        const event = JSON.parse(line);
+        if (event?.is_error || event?.type === 'error') streamErrors.push(event.error?.message, event.error, event.message, event.result);
+      } catch { /* Incomplete stream lines cannot establish a capacity refusal. */ }
+    }
+  }
+  return [...streamErrors, result?.error, result?.error?.message,
     result?.error || result?.partial ? result?.stderr : null,
     plain(result?.text), plain(result?.content)].some(value =>
     typeof value === 'string' && /prompt is too long|context[_ ](?:length[_ ]exceeded|window[_ ]exceeded)|maximum context length|exceeds? (?:the |your )?(?:model.s? )?(?:context|input) (?:window|limit|length)|input (?:is )?too (?:long|large)/i.test(value));
@@ -80,7 +89,8 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
       continue;
     }
     const input = batch.files.map(file => file.diff).join('');
-    const result = await runBatch(input, remainingMs, budget);
+    const result = await Promise.resolve().then(() => runBatch(input, remainingMs, budget))
+      .catch(() => ({ ok: false, code: 'REVIEW_BATCH_FAILED', error: 'A review batch failed before returning a verdict; review coverage is incomplete.' }));
     identity = { ...identity, ...Object.fromEntries(['backend', 'model', 'effort', 'effortUnsupported'].filter(key => result[key] !== undefined).map(key => [key, result[key]])) };
     const capacity = isReviewContextCapacityFailure(result) || result.code === 'REVIEW_CONTEXT_CAPACITY';
     batches.push({ files: batch.files.map(file => file.id), diffSha256: digest(input), outcome: result.ok ? result.verdict : capacity ? 'context_capacity' : 'inconclusive', attempted: true });
@@ -116,7 +126,7 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
       error: failure?.code === 'REVIEW_CONTEXT_CAPACITY'
         ? 'The selected reviewer could not cover every file within its context capacity; review coverage is incomplete.'
         : failure?.code === 'REVIEW_BUDGET_EXHAUSTED'
-          ? 'The configured review budget ended before every file received a verdict; review coverage is incomplete.'
+          ? failure?.error || 'The configured review budget ended before every file received a verdict; review coverage is incomplete.'
           : failure?.error || 'A review batch returned no usable verdict; review coverage is incomplete.',
     } : {}),
   };

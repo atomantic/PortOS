@@ -217,6 +217,44 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
   });
 
+  it.each([true, false])('classifies Claude stream capacity refusals without leaking events or paths (partial=%s)', async partial => {
+    getProviderById.mockResolvedValue({ ...provider, type: 'tui', command: 'claude' });
+    runCliProviderPrompt.mockResolvedValue({ text: JSON.stringify({ type: 'result', is_error: true, result: 'Prompt is too long /private/example' }), partial, streamFormat: 'stream-json' });
+    const result = await runLocalCodeReview({ backend, diff: 'example diff' });
+    expect(result).toMatchObject({ ok: false, code: 'REVIEW_CONTEXT_CAPACITY', coverage: { complete: false, remainingFiles: [0] } });
+    expect(JSON.stringify(result)).not.toContain('/private/example');
+    expect(result).not.toHaveProperty('text');
+    expect(result).not.toHaveProperty('verdict');
+  });
+
+  it('retains prior findings and immutable coverage when the next provider batch rejects', async () => {
+    const section = name => `diff --git a/${name} b/${name}\n+${'x'.repeat(700)}\n`;
+    callProviderAISimple.mockResolvedValueOnce({ text: JSON.stringify({ verdict: 'findings', findings: [{ severity: 'blocking', location: 'a.js:1', outcome: 'Write loses data.', fix: 'Serialize writes.' }] }) }).mockRejectedValueOnce(new Error('/private/provider/setup'));
+    const result = await runLocalCodeReview({ backend, diff: section('a.js') + section('b.js'), maxBatchBytes: 1024 });
+    expect(result).toMatchObject({ ok: false, verdict: 'findings', coverage: { reviewedFiles: [0], remainingFiles: [1] } });
+    expect(result.findings).toContain('Write loses data.');
+    expect(JSON.stringify(result)).not.toContain('/private/provider/setup');
+  });
+
+  it('cancels pending reviewer preparation at the absolute deadline without accepting a late verdict', async () => {
+    vi.useFakeTimers();
+    try {
+      let entered;
+      const started = new Promise(resolve => { entered = resolve; });
+      let capturedSignal;
+      callProviderAISimple.mockImplementationOnce((_provider, _model, _prompt, options) => {
+        capturedSignal = options.signal;
+        entered();
+        return new Promise(() => {});
+      });
+      const pending = runLocalCodeReview({ backend, diff: 'example diff', timeoutMs: 100 });
+      await started;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await pending).toMatchObject({ ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', coverage: { complete: false, calls: 1 } });
+      expect(capturedSignal.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('reports an oversized-input spawn failure as a specific non-verdict, not a credential fault (#10273)', async () => {
     getProviderById.mockResolvedValue({ ...provider, type: 'tui', command: 'claude' });
     runCliProviderPrompt.mockResolvedValue({ error: "Prompt is too large for agy's command-line transport (E2BIG); the run was not started. Reduce the input size.", code: 'E2BIG' });

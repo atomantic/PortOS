@@ -583,3 +583,41 @@ describe('HTTP provider body cancellation', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+
+describe('provider review preparation deadline', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('cancels readiness waiting and never dispatches inference when shared startup finishes later', async () => {
+    const { ensureProviderReady, isOllamaProvider } = await import('./ollamaManager.js');
+    vi.mocked(isOllamaProvider).mockReturnValue(true);
+    let finishReady;
+    let entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    vi.mocked(ensureProviderReady).mockImplementationOnce(() => { entered(); return new Promise(resolve => { finishReady = resolve; }); });
+    const controller = new AbortController();
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const pending = callProviderAISimple({ id: 'deadline-local', type: 'api', endpoint: 'http://localhost:11434/v1' }, 'm', 'prompt', { signal: controller.signal, deadlineMs: Date.now() + 1000, allowModelRecovery: false });
+    await started;
+    controller.abort();
+    expect(await pending).toMatchObject({ error: 'Provider readiness cancelled.' });
+    finishReady({ success: true });
+    await Promise.resolve();
+    expect(fetch).not.toHaveBeenCalled();
+    vi.mocked(isOllamaProvider).mockReturnValue(false);
+  });
+
+  it('rechecks the absolute deadline after readiness before sending the completion', async () => {
+    const { ensureProviderReady, isOllamaProvider } = await import('./ollamaManager.js');
+    let now = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.mocked(isOllamaProvider).mockReturnValue(true);
+    vi.mocked(ensureProviderReady).mockImplementationOnce(async () => { now = 200; return { success: true }; });
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    expect(await callProviderAISimple({ id: 'deadline-after-ready', type: 'api', endpoint: 'http://localhost:11434/v1' }, 'm', 'prompt', { deadlineMs: 100, allowModelRecovery: false })).toMatchObject({ error: 'Provider request deadline expired.' });
+    expect(fetch).not.toHaveBeenCalled();
+    vi.mocked(isOllamaProvider).mockReturnValue(false);
+  });
+});
