@@ -1,7 +1,11 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 import { createVideoDiagnosticTail } from '../server/lib/videoFailure.js';
 
@@ -21,26 +25,157 @@ const importRunner = [
   'spec.loader.exec_module(runner)',
 ].join('\n');
 
+// This synthetic scenario never launches a real converter or any descendants.
+// Keep run + cancellation below Vitest's unchanged 30-second test budget.
+const SCENARIO_TIMEOUT_MS = 20_000;
+const SETTLEMENT_TIMEOUT_MS = 3_000;
+const PHASE_PREFIX = 'PORTOS_FIXTURE_PHASE:';
+
+function runConverterFixture(source, root, {
+  spawnProcess = spawn, cleanup = () => rmSync(root, { recursive: true, force: true }),
+  onPhase = () => {},
+} = {}) {
+  let phase = 'launch';
+  let terminal = false;
+  let failure = null;
+  let cancelling = false;
+  let output = '';
+  let pending = '';
+  let deadline;
+  let settlement;
+  let child;
+  const result = new Promise((resolve, reject) => {
+    const finish = (code) => {
+      terminal = true;
+      clearTimeout(deadline);
+      clearTimeout(settlement);
+      // close, unlike kill's return value or exit, confirms stdio settlement.
+      try { cleanup(); } catch { failure = 'cleanup-failed'; }
+      if (failure || code !== 0) reject(new Error(`Python fixture ${failure || 'failed'}; last confirmed phase=${phase}; settlement=confirmed`));
+      else resolve(output);
+    };
+    const cancel = (reason = 'timeout') => {
+      if (terminal || cancelling) return;
+      cancelling = true;
+      failure ||= reason;
+      settlement = setTimeout(() => {
+        reject(new Error(`Python fixture ${failure}; last confirmed phase=${phase}; settlement=unconfirmed`));
+      }, SETTLEMENT_TIMEOUT_MS);
+      try { child.kill('SIGKILL'); } catch { /* Only close confirms settlement. */ }
+    };
+    try {
+      child = spawnProcess(pyBin, ['-u', '-c', source, script, root], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      });
+    } catch {
+      finish(1);
+      return;
+    }
+    child.once('error', () => { failure ||= 'launch-failed'; });
+    child.once('close', finish);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      if (output.length + chunk.length > 64 * 1024) { cancel('output-limit'); return; }
+      output += chunk;
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => {
+      if (pending.length + chunk.length > 64 * 1024) { cancel('output-limit'); return; }
+      pending += chunk;
+      let newline;
+      while ((newline = pending.indexOf('\n')) !== -1) {
+        const line = pending.slice(0, newline).trimEnd();
+        pending = pending.slice(newline + 1);
+        const next = line.startsWith(PHASE_PREFIX) ? line.slice(PHASE_PREFIX.length) : '';
+        if (['import', 'scenario'].includes(next)) {
+          phase = next;
+          onPhase(phase, cancel);
+        }
+      }
+    });
+    deadline = setTimeout(cancel, SCENARIO_TIMEOUT_MS);
+  });
+  return result;
+}
+
+const converterProgram = (scenario) => [
+  'import sys',
+  `print("${PHASE_PREFIX}import", file=sys.stderr, flush=True)`,
+  importRunner,
+  `print("${PHASE_PREFIX}scenario", file=sys.stderr, flush=True)`,
+  scenario,
+].join('\n');
+
+// Unique regression: cancellation must wait for close before deleting the
+// Python-owned fixture; a kill request alone cannot authorize cleanup.
+describe('converter fixture process ownership', () => {
+  it('keeps an unconfirmed child fixture and reports only allowlisted phase evidence', async () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = vi.fn(() => true);
+    const cleanup = vi.fn();
+    try {
+      const result = runConverterFixture('', '', { spawnProcess: () => child, cleanup });
+      const assertion = expect(result).rejects.toThrow('Python fixture timeout; last confirmed phase=import; settlement=unconfirmed');
+      child.stderr.write(`${PHASE_PREFIX}import\nprivate path and raw failure\n`);
+      await vi.advanceTimersByTimeAsync(SCENARIO_TIMEOUT_MS);
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(cleanup).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(SETTLEMENT_TIMEOUT_MS);
+      await assertion;
+      expect(cleanup).not.toHaveBeenCalled();
+      // A late terminal event still permits cleanup, but cannot turn failure green.
+      child.emit('close', null);
+      expect(cleanup).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+describe.skipIf(!pyBin)('converter fixture real cancellation', () => {
+  it('settles a stalled Python scenario before removing its fixture', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fastvideo-stalled-'));
+    const cleanup = vi.fn(() => rmSync(root, { recursive: true, force: true }));
+    const phases = [];
+    let cleanedBeforeCancellation;
+    const result = runConverterFixture(converterProgram('sys.stdin.read()'), root, {
+      cleanup,
+      onPhase: (phase, cancel) => {
+        phases.push(phase);
+        if (phase === 'scenario') {
+          cleanedBeforeCancellation = cleanup.mock.calls.length;
+          cancel();
+        }
+      },
+    });
+    await expect(result).rejects.toThrow('Python fixture timeout; last confirmed phase=scenario; settlement=confirmed');
+    expect(phases).toEqual(['import', 'scenario']);
+    expect(cleanedBeforeCancellation).toBe(0);
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+});
+
 describe.skipIf(!pyBin)('generate_fastvideo.py', () => {
-  it.each(['ValueError: loading converted tensors failed', 'kIOGPUCommandBufferCallbackErrorTimeout', null])('preserves converter cause evidence (%s) without inventing it from an exit code', (cause) => {
-    const output = runPython(`${importRunner}\n${[
-      'import tempfile',
+  it.each(['ValueError: loading converted tensors failed', 'kIOGPUCommandBufferCallbackErrorTimeout', null])('preserves converter cause evidence (%s) without inventing it from an exit code', async (cause) => {
+    const root = mkdtempSync(join(tmpdir(), 'fastvideo-converter-'));
+    const output = await runConverterFixture(converterProgram([
       'from contextlib import redirect_stderr',
       'from unittest.mock import patch',
-      'with tempfile.TemporaryDirectory() as tmp:',
-      '    root = Path(tmp)',
-      '    (root / "model" / "transformer").mkdir(parents=True)',
-      '    converter = root.joinpath(*runner._CONVERTER_SCRIPT)',
-      '    converter.parent.mkdir(parents=True)',
-      '    converter.touch()',
-      '    with patch.object(runner.subprocess, "Popen") as spawn, redirect_stderr(sys.stdout):',
-      `        spawn.return_value.stdout = ${JSON.stringify(['Loading weights', ...(cause ? [cause] : [])])}`,
-      '        spawn.return_value.wait.return_value = 1',
-      '        try:',
-      '            runner.ensure_mlx_checkpoint(root, root / "model", "int4", {}, root / "cache")',
-      '        except RuntimeError as error:',
-      '            print(f"❌ {error}")',
-    ].join('\n')}`);
+      'root = Path(sys.argv[2])',
+      '(root / "model" / "transformer").mkdir(parents=True)',
+      'converter = root.joinpath(*runner._CONVERTER_SCRIPT)',
+      'converter.parent.mkdir(parents=True)',
+      'converter.touch()',
+      'with patch.object(runner.subprocess, "Popen") as spawn, redirect_stderr(sys.stdout):',
+      `    spawn.return_value.stdout = ${JSON.stringify(['Loading weights', ...(cause ? [cause] : [])])}`,
+      '    spawn.return_value.wait.return_value = 1',
+      '    try:',
+      '        runner.ensure_mlx_checkpoint(root, root / "model", "int4", {}, root / "cache")',
+      '    except RuntimeError as error:',
+      '        print(f"❌ {error}")',
+    ].join('\n')), root);
     expect(output).toContain('STATUS:Loading weights');
     const tail = createVideoDiagnosticTail();
     tail.push('stderr', output);
