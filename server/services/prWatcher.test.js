@@ -39,6 +39,12 @@ vi.mock('./untrustedContent.js', () => ({
   screenUntrustedContent: (...args) => screenMock(...args),
   getContributionAssessmentFingerprint: (...args) => fingerprintMock(...args),
 }));
+const prepareGuardMock = vi.fn();
+const guardCurrentMock = vi.fn();
+vi.mock('./pendingMergeGuard.js', () => ({
+  preparePendingMergeGuard: (...args) => prepareGuardMock(...args),
+  pendingMergeGuardCurrent: (...args) => guardCurrentMock(...args),
+}));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({
   mergePR: (...args) => mergePrMock(...args),
@@ -114,6 +120,8 @@ beforeEach(() => {
   ensureForgeReachableMock.mockReset();
   ensureForgeReachableMock.mockResolvedValue({ ok: true, status: 'ok', detail: null, remedy: null });
   mergePrMock.mockReset();
+  prepareGuardMock.mockReset().mockResolvedValue({ ok: true, evidence: null });
+  guardCurrentMock.mockReset().mockResolvedValue(true);
   addNotificationMock.mockReset();
   spawnReviewLoopFollowUpMock.mockReset();
   addNotificationMock.mockResolvedValue({ id: 'notification-1' });
@@ -646,6 +654,80 @@ describe('merge-only PR watcher', () => {
       description: expect.stringContaining('could not be read from the forge'),
     }));
     expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
+  });
+
+  describe('merged-tree guard admission', () => {
+    const guard = { headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), baseBranch: 'main', logPath: '/example/guard.log' };
+    const handoff = { headSha: guard.headSha, repository: 'github.com/o/r', agentId: 'agent-88', taskId: 'task-88',
+      receiptId: 'receipt-88', prCompletion: 'merge-on-green' };
+    const setup = () => {
+      const app = pendingApp([pendingMerge({ handoff })]);
+      mockApps.set(app.id, app);
+      tasksById.set('task-88', { id: 'task-88', status: 'completed', metadata: { prCompletion: 'merge-on-green' } });
+      const evidence = installPendingEvidence();
+      evidence.pr.baseRefName = 'main';
+      return { app, evidence };
+    };
+
+    it('retains a failing combined-tree receipt and log without taking admission or merging', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockImplementation(async () => {
+        expect(admissionState.state.mergeAdmissions).toEqual({});
+        return { ok: false, reason: 'merged-tree-guards-failed', evidence: guard };
+      });
+      await processPendingMergePrs(app);
+      const kept = readPendingMergePrs(mockApps.get(app.id))[0];
+      expect(kept).toMatchObject({ handoff, ticks: 0, mergedTreeGuard: { ...guard, reason: 'merged-tree-guards-failed' },
+        recoveryBlocked: 'merged-tree-guards-failed' });
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(admissionState.state.mergeAdmissions).toEqual({});
+      expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(prepareGuardMock).toHaveBeenCalledTimes(1);
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs the guard outside admission and merges the unchanged reviewed head inside it', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockImplementation(async () => {
+        expect(admissionState.state.mergeAdmissions).toEqual({});
+        return { ok: true, evidence: guard };
+      });
+      guardCurrentMock.mockImplementation(async () => {
+        expect(Object.keys(admissionState.state.mergeAdmissions)).toHaveLength(1);
+        return true;
+      });
+      mergePrMock.mockResolvedValue({ success: true });
+      expect(await processPendingMergePrs(app)).toMatchObject({ merged: 1 });
+      expect(guardCurrentMock).toHaveBeenCalledWith(guard, expect.objectContaining({ headRefOid: guard.headSha }), expect.any(Function));
+      expect(mergePrMock).toHaveBeenCalledWith(app.repoPath, 88, { forgeAccount: 'other-account', expectedHeadSha: guard.headSha });
+    });
+
+    it('releases admission when the checked base moves and validates again before a later merge', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockResolvedValue({ ok: true, evidence: guard });
+      guardCurrentMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      mergePrMock.mockResolvedValue({ success: true });
+      expect(await processPendingMergePrs(app)).toMatchObject({ merged: 0, waiting: 1 });
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ handoff, mergedTreeGuard: guard, ticks: 0 });
+      expect(Object.values(admissionState.state.mergeAdmissions).every(lease => lease.status !== 'active')).toBe(true);
+      expect(await processPendingMergePrs(mockApps.get(app.id))).toMatchObject({ merged: 1 });
+      expect(prepareGuardMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('never merges a head changed during guard execution and preserves the receipt for fresh recovery', async () => {
+      const { app, evidence } = setup();
+      prepareGuardMock.mockImplementation(async () => {
+        evidence.pr.headRefOid = 'c'.repeat(40);
+        return { ok: true, evidence: guard };
+      });
+      await processPendingMergePrs(app);
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(readPendingMergePrs(mockApps.get(app.id))[0].handoff).toEqual(handoff);
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({ prCompletion: 'merge-on-green' }));
+    });
   });
 
   describe('a bound handoff receipt', () => {

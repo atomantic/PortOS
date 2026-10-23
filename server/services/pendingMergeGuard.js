@@ -1,0 +1,79 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { promisify, stripVTControlCharacters } from 'node:util';
+import { execFile } from '../lib/childProcess.js';
+import { execGit } from '../lib/execGit.js';
+
+const run = promisify(execFile);
+const SHA = /^[0-9a-f]{40}$/;
+const SCRIPT = 'scripts/pregate.js';
+const readOptional = path => readFile(path, 'utf8').catch(error => {
+  if (error.code === 'ENOENT') return null;
+  throw error;
+});
+
+// Capability, not upstream slug: forks inherit the guard, ordinary managed apps
+// and older PortOS checkouts without merged-tree support keep their behavior.
+export async function supportsPendingMergeGuard(repoPath) {
+  const source = await readOptional(resolve(repoPath, SCRIPT));
+  return source !== null && source.includes("case '--guards-only':") && source.includes("case '--merged-with':");
+}
+
+async function verifyCheckout(repoPath, worktreePath, branch, headSha) {
+  if (!worktreePath || resolve(repoPath) === resolve(worktreePath)) return false;
+  const read = async (args, cwd = worktreePath) => (await execGit(args, cwd)).stdout.trim();
+  const [common, primaryCommon, head, ref, status] = await Promise.all([
+    read(['rev-parse', '--path-format=absolute', '--git-common-dir']),
+    read(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath),
+    read(['rev-parse', '--verify', 'HEAD^{commit}']),
+    read(['symbolic-ref', '--quiet', '--short', 'HEAD']),
+    read(['status', '--porcelain=v1', '--untracked-files=all']),
+  ]);
+  return common === primaryCommon && head === headSha && ref === branch && !status;
+}
+
+/** Runs only on the handed-off, reviewed checkout, before acquiring admission. */
+export async function preparePendingMergeGuard({ app, entry, binding, prView, readDefault, env }) {
+  if (!await supportsPendingMergeGuard(app.repoPath)) return { ok: true, evidence: null };
+  const worktreePath = binding?.worktreePath;
+  const headSha = binding?.headSha;
+  if (!SHA.test(headSha || '') || prView.headRefOid !== headSha
+    || !await verifyCheckout(app.repoPath, worktreePath, entry.prBranch, headSha)) {
+    return { ok: false, reason: 'merged-tree-checkout-unverified' };
+  }
+  if (!await supportsPendingMergeGuard(worktreePath)) return { ok: false, reason: 'merged-tree-command-unavailable' };
+  const base = await readDefault();
+  if (!base || !SHA.test(base.sha) || prView.baseRefName !== base.name) {
+    return { ok: false, reason: 'merged-tree-default-branch-unverified' };
+  }
+  // Fetch the named ref, then pin the command to the fetched object. Concurrent
+  // fetches cannot silently replace the base whose evidence we record.
+  await execGit(['fetch', '--no-tags', 'origin', `refs/heads/${base.name}`], worktreePath, { env, timeout: 60000 });
+  const fetched = (await execGit(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'], worktreePath)).stdout.trim();
+  if (fetched !== base.sha) return { ok: false, reason: 'merged-tree-base-moved' };
+  const gitPath = (await execGit(['rev-parse', '--git-path', `portos-merged-guards-${headSha}-${base.sha}.log`], worktreePath)).stdout.trim();
+  const evidence = { headSha, baseSha: base.sha, baseBranch: base.name, logPath: resolve(worktreePath, gitPath) };
+  const result = await run(process.execPath, [SCRIPT, '--guards-only', '--merged-with', base.sha], {
+    cwd: worktreePath, env: { ...process.env, PORTOS_TEST_MEMO: 'off' },
+    timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
+  }).then(value => ({ ...value, ok: true }), error => ({
+    ok: false, stdout: error.stdout || '', stderr: error.stderr || error.message,
+  }));
+  await writeFile(evidence.logPath, `HEAD ${headSha}\nBASE ${base.sha}\n${result.stdout}\n${result.stderr}`, { mode: 0o600 });
+  if (!result.ok) {
+    const failedTest = stripVTControlCharacters(`${result.stdout}\n${result.stderr}`).match(/\bFAIL\s+([^\r\n]+)/)?.[1];
+    return { ok: false, reason: 'merged-tree-guards-failed', evidence: { ...evidence, failedTest: failedTest || null } };
+  }
+  if (!await verifyCheckout(app.repoPath, worktreePath, entry.prBranch, headSha)) {
+    return { ok: false, reason: 'merged-tree-checkout-changed', evidence };
+  }
+  return { ok: true, evidence };
+}
+
+/** Live reads happen inside admission; stale evidence never grants a merge. */
+export async function pendingMergeGuardCurrent(evidence, prView, readDefault) {
+  if (!evidence) return true;
+  if (prView.headRefOid !== evidence.headSha || prView.baseRefName !== evidence.baseBranch) return false;
+  const base = await readDefault();
+  return base?.name === evidence.baseBranch && base.sha === evidence.baseSha;
+}

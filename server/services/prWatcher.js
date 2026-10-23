@@ -634,7 +634,7 @@ async function describeWithheldAssessment(assessment, expectedHeadSha) {
 
 // Runs inside merge admission. Answers the merge attempt (or owner policy) plus
 // the withheld-assessment evidence the settle path records.
-async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeExec }) {
+async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeExec }, guard) {
   const currentPr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
   if (!currentPr || !isPendingMergeReady(currentPr)) {
     return { merge: { success: false, error: 'Current head is not merge-ready' }, assessed: NOT_ASSESSED };
@@ -658,6 +658,14 @@ async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeE
   // Re-read the durable owner's policy inside admission, after remote
   // assessment and immediately before merge. Waiting CI is not authority to
   // ignore a later manual hold or a changed review requirement.
+  if (assessment.ok && guard) {
+    const { pendingMergeGuardCurrent } = await import('./pendingMergeGuard.js');
+    const livePr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
+    if (!livePr || !isPendingMergeReady(livePr) || !await pendingMergeGuardCurrent(guard, livePr,
+      () => readPendingDefault({ origin, repoSpec, forgeExec })).catch(() => false)) {
+      return { merge: { guardDeferred: true }, assessed };
+    }
+  }
   const ownerPolicy = await currentHandoffOwnerPolicy(binding);
   if (ownerPolicy) return { merge: ownerPolicy, assessed };
   const merge = assessment.ok
@@ -670,17 +678,43 @@ async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeE
 
 // Answers `{ step }` when the entry is finished this sweep, otherwise
 // `{ assessed }` for the settle path.
-async function attemptAdmittedMerge(entry, binding, ctx) {
+async function readPendingDefault({ origin, repoSpec, forgeExec }) {
+  const name = await getDefaultBranch(repoSpec, forgeExec);
+  if (!name) return null;
+  const sha = await execGh(['api', '--hostname', githubApiHost(origin.host),
+    `repos/${origin.fullName}/git/ref/heads/${encodeURIComponent(name)}`, '--jq', '.object.sha'],
+  undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
+  return sha ? { name, sha: sha.trim() } : null;
+}
+
+async function attemptAdmittedMerge(entry, binding, prView, ctx) {
+  const ownerPolicy = await currentHandoffOwnerPolicy(binding);
+  if (ownerPolicy) return { step: await holdForOwner(ctx.app, entry, binding, ownerPolicy.ownerBlocked) };
+  const { preparePendingMergeGuard } = await import('./pendingMergeGuard.js');
+  const guard = await preparePendingMergeGuard({ app: ctx.app, entry, binding, prView,
+    readDefault: () => readPendingDefault(ctx), env: ctx.forgeExec.env,
+  }).catch(() => ({ ok: false, reason: 'merged-tree-validation-unavailable' }));
+  if (!guard.ok) {
+    const retained = { ...entry, mergedTreeGuard: { ...guard.evidence, reason: guard.reason }, attention: guard.reason };
+    if (guard.reason === 'merged-tree-guards-failed') {
+      retained.recoveryBlocked = guard.reason;
+      await notifyPendingMergeTimeout(ctx.app, entry, null,
+        `PR #${entry.prNumber} failed merged-tree guards${guard.evidence?.failedTest ? `: ${guard.evidence.failedTest}` : ''}. Its receipt, checkout, and mergedTreeGuard log are retained. Repair and submit a fresh verified handoff.`);
+    }
+    return { step: { outcome: retained, tally: { waiting: 1 } } };
+  }
+  const retained = guard.evidence ? { ...entry, mergedTreeGuard: guard.evidence } : entry;
   const { withPendingMergeAdmission, markMergeHandoffMerged } = await import('./cosMergeAdmission.js');
-  const admitted = await withPendingMergeAdmission(ctx.origin, () => mergeAssessedHead(entry, binding, ctx));
+  const admitted = await withPendingMergeAdmission(ctx.origin, () => mergeAssessedHead(entry, binding, ctx, guard.evidence));
   if (!admitted.admitted) {
     console.log(`⏳ Pending merge deferred for PR #${entry.prNumber}: ${admitted.reason}`);
-    return { step: { outcome: entry, tally: { waiting: 1 } } };
+    return { step: { outcome: retained, tally: { waiting: 1 } } };
   }
   const { merge, assessed } = admitted.result;
+  if (merge.guardDeferred) return { step: { outcome: retained, tally: { waiting: 1 } } };
   if (merge.ownerDeferred || merge.ownerBlocked) {
-    const retained = assessed.hold ? { ...entry, assessmentWithheld: assessed.hold } : entry;
-    return { step: await holdForOwner(ctx.app, entry, binding, merge.ownerBlocked, retained) };
+    const held = assessed.hold ? { ...retained, assessmentWithheld: assessed.hold } : retained;
+    return { step: await holdForOwner(ctx.app, entry, binding, merge.ownerBlocked, held) };
   }
   if (merge.success) {
     // The post-merge gate audit (#12549) exempts only a merge made here.
@@ -701,7 +735,7 @@ async function mergeOrSettle(entry, binding, prView, ctx) {
   const cachedHold = ready ? await unchangedAssessmentHold(entry, prView) : null;
   let assessed = { reason: cachedHold?.reason, hold: cachedHold };
   if (ready && !cachedHold) {
-    const attempt = await attemptAdmittedMerge(entry, binding, ctx);
+    const attempt = await attemptAdmittedMerge(entry, binding, prView, ctx);
     if (attempt.step) return attempt.step;
     assessed = attempt.assessed;
   }
