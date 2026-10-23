@@ -516,6 +516,9 @@ function recoveryReferenceKind(path) {
   if (/^refs(?:\/|$)/.test(relative)) return 'ref';
   if (relative === 'packed-refs') return 'packed';
   if (relative === 'FETCH_HEAD') return 'fetch';
+  // HEAD resolves to tree.head, which is already a recovery root; skipping it
+  // saves two Git spawns per retirement (#13154 spawn ceiling).
+  if (relative === 'HEAD') return null;
   if (relative === 'MERGE_HEAD' || relative === 'shallow') return 'objects';
   if (['COMMIT_EDITMSG', 'MERGE_MSG', 'MERGE_MODE', 'MERGE_RR', 'SQUASH_MSG', 'TAG_EDITMSG', 'NOTES_EDITMSG'].includes(relative)) return null;
   // Worktree-private root refs use uppercase names. Unknown operation formats
