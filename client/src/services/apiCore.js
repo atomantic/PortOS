@@ -63,6 +63,9 @@ const inflightReads = new Map();
 // Options that change error handling are part of the key, so a silent caller never
 // joins (or starts) a flight whose failure toasts, and vice versa.
 export function singleFlightRead(endpoint, start, options = {}) {
+  // A caller owns its signal's lifetime; aborting it must not cancel another
+  // consumer's read or make a remount join the request its cleanup just aborted.
+  if (options.signal) return start();
   const key = `${endpoint}|silent:${!!options.silent}|hco:${!!options.hostControlOptional}`;
   let pending = inflightReads.get(key);
   if (!pending) {

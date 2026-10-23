@@ -7,6 +7,7 @@ import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { fitStoryboardToSong, storyboardFitSong } from '../../lib/storyboardFit.js';
 
 const ROOT = () => lazyTempDataRoot('storyboard-fit-mv-');
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
@@ -47,6 +48,24 @@ async function linkedProject(extra = {}) {
 }
 
 describe('fit a music video to its storyboard', () => {
+  it('writes the previewed short shots when three beats share a three-second song', async () => {
+    const { project, board } = await linkedProject({ audioAnalysis: { ...analysis, durationSec: 3, sections: [] }, lyricCues: [] });
+    await request(app).post(`/api/storyboards/${board.id}/beats/add`).send({ beats: [
+      { title: 'Farewell', panels: [{ action: 'The bus leaves', seconds: 3 }] },
+    ] });
+    const updatedBoard = (await request(app).get(`/api/storyboards/${board.id}`)).body;
+    const preview = fitStoryboardToSong(updatedBoard, storyboardFitSong(await projects.getProject(project.id)));
+    expect(preview.beats).toHaveLength(3);
+    expect(preview.beats.reduce((sum, beat) => sum + beat.short, 0)).toBe(4);
+
+    const res = await request(app).post(`/api/storyboards/fit-music-video/${project.id}`).send({ boardUpdatedAt: updatedBoard.updatedAt });
+    expect(res.status).toBe(200);
+    const spans = (shots) => shots.map(({ startSec, endSec, panelId }) => ({ startSec, endSec, panelId }));
+    expect(spans(res.body.project.scenes)).toEqual(spans(preview.shots));
+    expect(spans((await projects.getProject(project.id)).scenes)).toEqual(spans(preview.shots));
+    expect(res.body.project.scenes.every((shot) => shot.endSec > shot.startSec && shot.endSec <= 3)).toBe(true);
+  });
+
   it('writes one shot per panel on the song, tied to its panel', async () => {
     const { project, board } = await linkedProject();
     const res = await request(app).post(`/api/storyboards/fit-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });

@@ -31,8 +31,8 @@ async function supportsPendingMergeGuard(repoPath) {
 export async function verifyPendingMergeCheckout(repoPath, worktreePath, branch, headSha) {
   if (!worktreePath || resolve(repoPath) === resolve(worktreePath)) return false;
   const read = async (args, cwd = worktreePath) => (await execGit(args, cwd)).stdout.trim();
-  // A rejected probe still owns its sibling Git processes until they settle.
-  // In particular, detached HEAD must not release a checkout while status runs.
+  // Drain sibling Git processes even if a probe rejects (such as detached
+  // HEAD); their live cwd handles can otherwise block checkout retirement.
   const checked = await Promise.allSettled([
     read(['rev-parse', '--path-format=absolute', '--git-common-dir']),
     read(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath),

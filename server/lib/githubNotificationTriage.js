@@ -35,6 +35,14 @@ export const TRIAGE_DECISIONS = Object.freeze([
 
 export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unknown']);
 
+/** Non-secret account identity and authority carried into an inbox agent task. */
+export const notificationAgentAccountBinding = (account, origin = 'user') => ({
+  accountId: account.id,
+  host: account.host,
+  login: account.login || null,
+  origin,
+});
+
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
 export const TRIAGE_RULES_VERSION = 8;

@@ -180,6 +180,26 @@ describe('shell bootstrap reads are single-flight', () => {
     expect(toast.error).toHaveBeenCalledTimes(1);
   });
 
+  it('isolates a caller-owned abort from concurrent shared bootstrap readers', async () => {
+    global.fetch.mockImplementation((_url, { signal }) => {
+      if (!signal) return Promise.resolve(makeResponse({ status: 200, ok: true, json: { theme: 'classic-midnight' } }));
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    });
+    const controller = new AbortController();
+    const abandoned = getSettings({ silent: true, signal: controller.signal }).catch((err) => err);
+    const readers = Promise.allSettled([getSettings({ silent: true }), getSettings({ silent: true })]);
+    controller.abort();
+
+    await expect(readers).resolves.toEqual([
+      { status: 'fulfilled', value: { theme: 'classic-midnight' } },
+      { status: 'fulfilled', value: { theme: 'classic-midnight' } },
+    ]);
+    await expect(abandoned).resolves.toMatchObject({ code: 'SERVER_UNREACHABLE' });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('does not cache a failure', async () => {
     global.fetch.mockResolvedValueOnce(makeResponse({ status: 500, json: { error: 'boom' } }));
     await expect(getSettings({ silent: true })).rejects.toMatchObject({ status: 500 });

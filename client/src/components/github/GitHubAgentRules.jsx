@@ -63,6 +63,7 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
   const options = actionsForKind(kind);
   // A kind that cannot take the chosen action falls back to its first one.
   const action = options.some((option) => option.value === chosenAction) ? chosenAction : options[0].value;
+  const agent = action === 'agent' || isPullRequestAgentAction(action);
 
   const repo = repoChoice === OTHER_REPO ? otherRepo.trim() : repoChoice === OTHER_OWNER ? `${otherRepo.trim()}/*` : repoChoice;
   const repoValid = repoChoice === OTHER_OWNER ? OWNER_RE.test(otherRepo.trim()) : repo === ALL_REPOS || REPO_RE.test(repo);
@@ -71,8 +72,7 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
   const canApplyNow = matches > 0 && actsNow(account.mode, action);
   const submit = (event) => {
     event.preventDefault();
-    if (!repoValid || clash) return;
-    const agent = action === 'agent' || isPullRequestAgentAction(action);
+    if (!repoValid || clash || saving || (agent && picker.loading)) return;
     onSubmit({
       id: rule?.id || newRuleId(),
       kind,
@@ -117,7 +117,7 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
           <input id={`${formId}-other`} value={otherRepo} onChange={(event) => setOtherRepo(event.target.value)} placeholder={repoChoice === OTHER_OWNER ? 'owner' : 'owner/repo'} autoComplete="off" className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 font-mono text-sm text-white" />
         </label>
       )}
-      {(action === 'agent' || isPullRequestAgentAction(action)) && (
+      {agent && (
         <div className="space-y-1">
           <span className="flex items-center gap-1.5 text-xs text-gray-400"><Bot size={12} aria-hidden="true" /> Run with</span>
           <ProviderModelSelector {...picker.selectorProps} compact />
@@ -141,7 +141,7 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
       )}
       {clash && <p role="alert" className="text-xs text-port-error">There is already a rule for this kind of notification in {repoLabel(repo)}.</p>}
       <div className="flex flex-wrap gap-2">
-        <button type="submit" disabled={saving || !repoValid || clash} className="rounded bg-port-accent px-3 py-1.5 text-xs text-white disabled:opacity-50">
+        <button type="submit" disabled={saving || !repoValid || clash || (agent && picker.loading)} className="rounded bg-port-accent px-3 py-1.5 text-xs text-white disabled:opacity-50">
           {saving ? 'Saving…' : 'Save rule'}
         </button>
         <button type="button" onClick={onCancel} className="rounded border border-port-border px-3 py-1.5 text-xs text-gray-300">Cancel</button>

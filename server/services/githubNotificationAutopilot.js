@@ -104,7 +104,7 @@ async function queueLane(plan, app, origin, { account, rows, immediate = false }
     const url = rows[0]?.html_url || '';
     if (!url.endsWith(`/pull/${plan.pullNumber}`)) return { error: 'No pull request link for this notification' };
     const githubAccount = await githubReviewAccountSelector(account, await requireAccountEnv(account));
-    const queued = await spawnPrDoReviewTask({ app, pullRequest: { number: plan.pullNumber, url }, repoFullName: plan.repo, githubAccount, ...pin, immediate });
+    const queued = await spawnPrDoReviewTask({ app, pullRequest: { number: plan.pullNumber, url }, repoFullName: plan.repo, githubAccount, ...pin, immediate, notificationAccount: account, notificationOrigin: origin });
     if (!queued.task) return { error: 'The review could not be queued' };
     return queued.duplicate ? { duplicate: true, taskId: queued.task.id } : { taskId: queued.task.id };
   }

@@ -10,19 +10,25 @@ vi.mock('../lib/childProcess.js', async (original) => ({ ...(await original()), 
 // vs. inferred account split explicit per test.
 vi.mock('./agentAppWorkspace.js', () => ({ listForgePinnedApps: vi.fn(async () => []) }));
 vi.mock('./githubAccounts.js', () => ({ getAccount: vi.fn(), resolveGitHubAccountEnv: vi.fn() }));
+vi.mock('./github.js', () => ({ execGh: vi.fn() }));
 
 import { spawn } from '../lib/childProcess.js';
 import { listForgePinnedApps } from './agentAppWorkspace.js';
 import { resolveForgeForRepo, resolveForgeTokenEnv } from './forgeAuth.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { getAccount, resolveGitHubAccountEnv } from './githubAccounts.js';
+import { execGh } from './github.js';
 
 describe('notification account credentials', () => {
+  beforeEach(() => {
+    execGh.mockResolvedValue(JSON.stringify({ id: 42, login: 'example-reviewer', name: null, email: null }));
+  });
   it('uses the selected Enterprise account rather than the PortOS checkout or inherited token', async () => {
     getAccount.mockResolvedValue({ enabled: true, host: 'ghe.example.com', login: 'example-reviewer' });
     resolveGitHubAccountEnv.mockResolvedValue({ env: { GH_HOST: 'ghe.example.com', GH_ENTERPRISE_TOKEN: 'synthetic-notification-token' } });
     expect(await resolveForgeTokenEnv('/example/portos', { githubAccount: { id: 'example-account', host: 'ghe.example.com', login: 'example-reviewer' } })).toEqual({
       GH_HOST: 'ghe.example.com', GH_ENTERPRISE_TOKEN: 'synthetic-notification-token',
+      GH_TOKEN: '', GITHUB_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '',
     });
     const [selected, { baseEnv }] = resolveGitHubAccountEnv.mock.calls[0];
     expect(selected).toMatchObject({ login: 'example-reviewer', host: 'ghe.example.com' });
@@ -35,11 +41,11 @@ describe('notification account credentials', () => {
 
   it('refuses disabled or unavailable account credentials without falling back', async () => {
     getAccount.mockResolvedValue({ enabled: false, host: 'github.com', login: 'example-reviewer' });
-    await expect(resolveForgeTokenEnv('/example/portos', { githubAccount: { id: 'example-account', host: 'ghe.example.com', login: 'example-reviewer' } })).rejects.toThrow('disabled');
+    await expect(resolveForgeTokenEnv('/example/portos', { githubAccount: { id: 'example-account', host: 'ghe.example.com', login: 'example-reviewer' } })).rejects.toMatchObject({ code: 'GITHUB_AGENT_ACCOUNT_UNAVAILABLE' });
     expect(spawn).not.toHaveBeenCalled();
     getAccount.mockResolvedValue({ enabled: true, host: 'ghe.example.com', login: 'example-reviewer' });
     resolveGitHubAccountEnv.mockResolvedValue({ status: 'not-authenticated' });
-    await expect(resolveForgeTokenEnv('/example/portos', { githubAccount: { id: 'example-account', host: 'ghe.example.com', login: 'example-reviewer' } })).rejects.toThrow('unavailable');
+    await expect(resolveForgeTokenEnv('/example/portos', { githubAccount: { id: 'example-account', host: 'ghe.example.com', login: 'example-reviewer' } })).rejects.toMatchObject({ code: 'GITHUB_AGENT_ACCOUNT_UNAVAILABLE' });
     expect(spawn).not.toHaveBeenCalled();
   });
 });

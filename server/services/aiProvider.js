@@ -6,7 +6,6 @@
 import { normalizeReviewFinishReason } from '../lib/reviewerHealth.js';
 import { getAllProviders } from './providers.js';
 import { startAIOp } from './aiStatusEvents.js';
-import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
 // localModelHealing is lazy-imported at its (rare, error-recovery) call site
 // below — a static import here pulls its notifications/providers deps (which
 // eagerly import fileUtils `PATHS`) into every aiProvider consumer's module
@@ -539,6 +538,8 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   // bargain — the only place a simple call refreshes the idle clock, so a
   // run that takes an hour still counts as use throughout, and the next call
   // doesn't get a bare connection refusal.
+  // Provider selection and parsing need none of the managed daemon graph.
+  const { ensureManagedRuntimeReady } = await import('./providerExecutionReadiness.js');
   const ready = await ensureManagedRuntimeReady(provider, {
     onStarting: (label) => statusOp.update('provider:starting', `Starting ${label} if needed…`, { providerId: provider.id }),
   });
