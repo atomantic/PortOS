@@ -18,7 +18,14 @@ function Harness({ projected = objects, onTravel, onIdentityRename, capture } = 
     <button onClick={() => frame.changeLabelVisibility('off')}>Hide labels</button>
   </>;
 }
-const mount = () => render(<MemoryRouter initialEntries={['/eidoverse']}><Harness /></MemoryRouter>);
+// The inert iframe dispatches its initial load asynchronously. Settle that
+// mount before a test starts the explicit load/handshake it controls.
+const renderFrame = async (element) => {
+  let view;
+  await act(async () => { view = render(element); });
+  return view;
+};
+const mount = () => renderFrame(<MemoryRouter initialEntries={['/eidoverse']}><Harness /></MemoryRouter>);
 const send = (source, data, extra = {}) => act(() => {
   window.dispatchEvent(new MessageEvent('message', { source, origin: new URL(hostUrl).origin, data, ...extra }));
 });
@@ -33,7 +40,7 @@ describe('hosted Eidoverse frame navigation', () => {
   beforeEach(mockFrameWindows);
   it('waits for the current renderer departure acknowledgement before retiring its frame', async () => {
     let frame;
-    render(<MemoryRouter><Harness capture={(value) => { frame = value; }} /></MemoryRouter>);
+    await renderFrame(<MemoryRouter><Harness capture={(value) => { frame = value; }} /></MemoryRouter>);
     const iframe = screen.getByTitle('Test renderer');
     const source = iframe.contentWindow;
     const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
@@ -56,7 +63,7 @@ describe('hosted Eidoverse frame navigation', () => {
   it('refuses travel when the current renderer cannot confirm departure', async () => {
     vi.useFakeTimers();
     let frame;
-    render(<MemoryRouter><Harness capture={(value) => { frame = value; }} /></MemoryRouter>);
+    await renderFrame(<MemoryRouter><Harness capture={(value) => { frame = value; }} /></MemoryRouter>);
     const iframe = screen.getByTitle('Test renderer');
     const source = iframe.contentWindow;
     const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
@@ -68,10 +75,10 @@ describe('hosted Eidoverse frame navigation', () => {
     expect(await result).toMatch(/Could not leave/);
     expect(iframe.getAttribute('src')).not.toBe('about:blank');
   });
-  it('resolves a pod through the local legend rather than a destination claimed by the frame', () => {
+  it('resolves a pod through the local legend rather than a destination claimed by the frame', async () => {
     const onTravel = vi.fn();
     const pod = { id: 'example-pod', route: '/eidoverse', travelPeerId: 'peer-example' };
-    render(<MemoryRouter><Harness projected={[pod]} onTravel={onTravel} /></MemoryRouter>);
+    await renderFrame(<MemoryRouter><Harness projected={[pod]} onTravel={onTravel} /></MemoryRouter>);
     const iframe = screen.getByTitle('Test renderer');
     const source = iframe.contentWindow;
     const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
@@ -85,9 +92,9 @@ describe('hosted Eidoverse frame navigation', () => {
     expect(onTravel).toHaveBeenCalledExactlyOnceWith('peer-example');
   });
 
-  it('accepts a bounded identity draft only from the negotiated current frame session', () => {
+  it('accepts a bounded identity draft only from the negotiated current frame session', async () => {
     const onIdentityRename = vi.fn();
-    render(<MemoryRouter><Harness onIdentityRename={onIdentityRename} /></MemoryRouter>);
+    await renderFrame(<MemoryRouter><Harness onIdentityRename={onIdentityRename} /></MemoryRouter>);
     const iframe = screen.getByTitle('Test renderer');
     const source = iframe.contentWindow;
     const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
@@ -112,9 +119,9 @@ describe('hosted Eidoverse frame navigation', () => {
     expect(onIdentityRename).toHaveBeenCalledExactlyOnceWith('Example Visitor');
   });
 
-  it('refuses identity drafts from a renderer without the negotiated capability', () => {
+  it('refuses identity drafts from a renderer without the negotiated capability', async () => {
     const onIdentityRename = vi.fn();
-    render(<MemoryRouter><Harness onIdentityRename={onIdentityRename} /></MemoryRouter>);
+    await renderFrame(<MemoryRouter><Harness onIdentityRename={onIdentityRename} /></MemoryRouter>);
     const iframe = screen.getByTitle('Test renderer');
     const source = iframe.contentWindow;
     const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
@@ -125,8 +132,8 @@ describe('hosted Eidoverse frame navigation', () => {
     expect(onIdentityRename).not.toHaveBeenCalled();
   });
 
-  it('requires the hosted window, exact origin, current handshake and projected section route', () => {
-    mount();
+  it('requires the hosted window, exact origin, current handshake and projected section route', async () => {
+    await mount();
     const frame = screen.getByTitle('Test renderer');
     const source = frame.contentWindow;
     const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
@@ -175,18 +182,18 @@ describe('hosted Eidoverse frame navigation', () => {
     expect(screen.getByLabelText('Route')).toHaveTextContent('/apps');
   });
 
-  it('starts hidden even if an older visit saved always-on labels', () => {
+  it('starts hidden even if an older visit saved always-on labels', async () => {
     safeWriteStorage('portos-eidoverse-label-visibility', 'all-nearby');
-    mount();
+    await mount();
     const iframe = screen.getByTitle('Test renderer');
     const post = vi.spyOn(iframe.contentWindow, 'postMessage').mockImplementation(() => {});
     fireEvent.load(iframe);
     expect(post.mock.calls.at(-1)[0]).toMatchObject({ type: 'portos:connect', labelVisibility: 'off' });
   });
 
-  it('marks an unresponsive older renderer unsupported without waiting in production time', () => {
+  it('marks an unresponsive older renderer unsupported without waiting in production time', async () => {
     vi.useFakeTimers();
-    const view = mount();
+    const view = await mount();
     const iframe = screen.getByTitle('Test renderer');
     vi.spyOn(iframe.contentWindow, 'postMessage').mockImplementation(() => {});
     fireEvent.load(iframe);
