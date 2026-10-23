@@ -1061,6 +1061,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       ...(result.text ? { text: result.text } : {}),
       ...(result.status ? { status: result.status } : {}),
       ...(result.statusCode ? { statusCode: result.statusCode } : {}),
+      ...(result.stallPhase ? { stallPhase: result.stallPhase } : {}),
       ...(result.name ? { name: result.name } : {}),
       ...(result.code ? { code: result.code } : {}),
     }
@@ -1074,7 +1075,7 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
     if (result.ok || !Number.isFinite(diffSizeBytes) || !isTimeoutFailure(result.error)) return result
     return {
       ...result,
-      error: localCodeReviewTimeoutError({ backend, timeoutMs: result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: 'reviewer-process' }),
+      error: localCodeReviewTimeoutError({ backend, timeoutMs: result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: result.stallPhase || 'reviewer-process' }),
     }
   }
   if (!isLocalLlmReviewer(backend)) {
