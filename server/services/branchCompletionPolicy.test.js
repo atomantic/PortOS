@@ -295,6 +295,24 @@ describe('reviewed reused-branch checkout incarnation', () => {
     return [current, prior];
   }
 
+  it('permits retirement of a cleanup handoff only with its captured checkout and fresh merged-head proof', () => {
+    const agents = owners();
+    const current = agents[0];
+    current.result = { success: false, executionSuccess: true, cleanupPending: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    current.metadata.completedCheckouts = [{ version: 1, agentId: current.id, repoPath, branch, path: checkoutPath,
+      head: runtime.tip, incarnation: { pointer: { ino: '1' }, gitdir: { ino: '2' } } }];
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeNull();
+    expect(reviewedRetirementPolicy({ ...input(), agents, verifiedPrHead: null }).reason).toBeTruthy();
+    current.metadata.workspacePath = repoPath; // A self-managed claim runs from the primary checkout.
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeNull();
+    current.result.cleanupPending = false;
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeTruthy();
+    current.result.cleanupPending = true;
+    current.metadata.completedCheckouts[0].head = 'b'.repeat(40);
+    expect(reviewedRetirementPolicy({ ...input(), agents }).reason).toBeTruthy();
+  });
+
   it('separates explicit prior checkout history only under fresh current PR/head proof', () => {
     const agents = owners();
     const result = reviewedRetirementPolicy({ ...input(), agents });

@@ -109,3 +109,7 @@ export function isStaleRetryHold(metadata, now = Date.now(), graceMs = RETRY_HOL
   if (!Number.isFinite(since)) return true;
   return now - since >= graceMs;
 }
+
+/** Repository verification owns these tasks across completion and restarts. */
+export const isDeliveryCleanupHeld = metadata => metadata?.deliveryRecovery === 'cleanup'
+  && typeof metadata.deliveryRecoveryAgentId === 'string' && metadata.deliveryRecoveryAgentId.length > 0;

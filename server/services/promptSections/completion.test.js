@@ -71,6 +71,14 @@ describe('claim ownership binding instructions (#10089)', () => {
 });
 
 describe('claim parent merge admission instructions', () => {
+  it('does not impose PortOS scripts on a different managed repository', () => {
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', portosMergedTreeGuards: false });
+    expect(prompt).not.toContain('scripts/pregate.js');
+    expect(prompt).toContain('target repository’s documented validation and merge gates');
+    expect(prompt).toContain('"action":"acquire"');
+    expect(prompt).toContain('--match-head-commit');
+  });
+
   it('acquires only after green CI, merges a CLEAN head pinned and resyncs outside the lease', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
@@ -85,6 +93,7 @@ describe('claim parent merge admission instructions', () => {
     expect(positions).toEqual([...positions].sort((x, y) => x - y));
     expect(prompt).toContain('does NOT require a resync or fresh CI');
     expect(prompt).toContain('node scripts/pregate.js --guards-only --merged-with origin/<default>');
+    expect(prompt).toContain('A missing PortOS guard is a validation defect to repair');
     expect(prompt).toContain('single-issue claims and each swarm Phase C merge');
     expect(prompt).toContain('if either differs from the guard inputs');
     expect(prompt).toContain('release with outcome resync');

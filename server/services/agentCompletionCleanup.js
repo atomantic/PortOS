@@ -584,6 +584,9 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
     const { getAgent: getAgentForResult } = await import('./cosAgentLifecycle.js');
     const currentAgent = await getAgentForResult(agentId).catch(() => null);
     await updateAgent(agentId, { result: { ...currentAgent?.result, warnings: cleanupWarnings } });
+    // The original task already owns a bounded retry, cleanup proof, or human
+    // decision. Another recovery task would race it or bypass its safety stop.
+    if (currentAgent?.result?.deliveryRecoveryOwned === true) return;
 
     const appName = task?.metadata?.appName || task?.metadata?.app || 'PortOS';
     void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).then(recoveryTask => {

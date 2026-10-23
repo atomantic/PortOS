@@ -288,7 +288,7 @@ export async function completeAgent(agentId, result = {}) {
     let completedCheckouts;
     if (agent.metadata?.claimPicksOwnBranch || agent.metadata?.isWorktree) {
       completedCheckouts = [];
-      if (result.success === true) {
+      if (result.success === true || result.cleanupPending === true) {
         const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
         completedCheckouts = await captureCompletedCheckouts(agent, { success: true }).catch(() => []);
       }
@@ -304,7 +304,7 @@ export async function completeAgent(agentId, result = {}) {
       // "not declared" with "declared and failed" (false). Distinct from
       // result.success (the runner's exit-code verdict).
       result: { validationPassed: null, ...result },
-      ...(result.success && (state.agents[agentId].metadata?.isWorktree || state.agents[agentId].metadata?.claimPicksOwnBranch)
+      ...((result.success || result.cleanupPending === true) && (state.agents[agentId].metadata?.isWorktree || state.agents[agentId].metadata?.claimPicksOwnBranch)
         ? { metadata: { ...state.agents[agentId].metadata, repoStateVerification: { status: 'pending' } } } : {}),
     };
     if (completedCheckouts) state.agents[agentId].metadata = { ...state.agents[agentId].metadata, completedCheckouts };

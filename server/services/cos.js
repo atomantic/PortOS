@@ -23,7 +23,7 @@ import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { unclaimedTaskIds, runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../lib/cosSpawnWindow.js';
-import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
+import { isRetryHeld, isStaleRetryHold, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { clearStaleActiveAgents } from './appActivity.js';
 // The single Priority-0 on-demand loop body, shared with the evaluateTasks
 // engine in cosTaskGenerator.js so the two can no longer drift (#6618).
@@ -883,6 +883,7 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
       // bypasses: the hold is armed AFTER `completeAgent`, so a crash-restart
       // inside that 60s window would otherwise skip the very task the boot pass
       // exists to recover and strand it until the 15-minute periodic sweep.
+      if (isDeliveryCleanupHeld(task.metadata)) continue;
       const held = isRetryHeld(task.metadata);
       const recoverHold = held && (bootRecovery || isStaleRetryHold(task.metadata));
       if (held && !recoverHold) {

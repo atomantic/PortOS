@@ -735,6 +735,9 @@ async function preparePauseRelease(taskId, updates) {
  * than each re-testing `updates.status !== 'in_progress'`.
  */
 const TRANSITION_METADATA_CLEARS = Object.freeze([
+  // An explicit retry or new cycle cancels the old cleanup coordinator.
+  ['isRequeue', ['deliveryRecovery', 'deliveryRecoveryAgentId']],
+  ['isRevive', ['deliveryRecovery', 'deliveryRecoveryAgentId']],
   // Leaving `blocked` by any door — a dedupe revive, an autopilot re-dispatch, an
   // orphan-cooldown expiry, or a human unblocking it from the task list. Clearing
   // only in `resumeAgent` left every one of those paths running a task that still
@@ -742,7 +745,7 @@ const TRANSITION_METADATA_CLEARS = Object.freeze([
   // still-paused agent record then read its own pause as spent and spawned a SECOND
   // agent on a fresh task. The failure counters go too, or the revived task
   // re-blocks on the budget it blocked with.
-  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
+  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'deliveryDecisionAgentId', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
   // A retry hold (#3373) only means anything while the task is `in_progress` waiting
   // on a cleanup to resolve its resume pointer. Any other status the task reaches —
   // terminal, or a requeue some other path performed — retires it, so drop the marker

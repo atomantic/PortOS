@@ -364,12 +364,63 @@ describe('recovery output-hook dispatch (#3182)', () => {
       expect(result).toMatchObject({ success: !held, taskOutcome });
       expect(completeAgent).toHaveBeenCalledWith('agent-example', expect.objectContaining({ executionSuccess: true, success: !held, taskOutcome }));
       expect(completeAgentRun).toHaveBeenCalledWith('run-example', '', 0, 1000, held ? expect.objectContaining({ category: `task-${status}` }) : undefined, held ? false : null, { executionSuccess: true, taskOutcome });
-      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: held ? 'blocked' : 'completed', metadata: expect.objectContaining({ taskOutcome }) }), task.taskType);
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: held ? 'in_progress' : 'completed', metadata: expect.objectContaining({ taskOutcome }) }), task.taskType);
       expect(persistedAgent.metadata.taskOutcome).toEqual(taskOutcome);
       expect(processAgentCompletion).toHaveBeenCalledWith('agent-example', task, !held, '');
     } finally {
       await rm(workspacePath, { recursive: true, force: true });
     }
+  });
+
+  it('retains explicit approval with choices instead of retrying', async () => {
+    const taskOutcome = { status: 'blocked', reason: 'Continuing would exceed the authorized budget.',
+      recovery: { mode: 'approval', options: ['Increase the budget and retry.', 'Keep the work stopped.'] } };
+    await finalizeAgent({ agentId: 'agent-example', task: TASK, success: true, exitCode: 0,
+      finalSummary: JSON.stringify({ summary: 'Budget decision needed.', taskOutcome }) });
+    expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ blockedCategory: 'task-approval',
+        blockedReason: expect.stringContaining('1. Increase the budget and retry.') }) }), TASK.taskType);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('hands cleanup-only work to completion recovery without another agent or success claim', async () => {
+    const taskOutcome = { status: 'incomplete', reason: 'Verified delivery; owner still holds checkout.', recovery: { mode: 'cleanup' } };
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    persistedAgent.metadata.isWorktree = true;
+    try {
+      await finalizeAgent({ agentId: 'agent-example', task: { id: TASK.id, taskType: 'user', metadata: {} },
+        success: true, exitCode: 0, finalSummary: JSON.stringify({ summary: 'Cleanup handed off.', taskOutcome }) });
+      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
+        metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), 'user');
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
+      expect(addTask).not.toHaveBeenCalled();
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it('retains an already persisted cleanup handoff when its run is recovered after a crash', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'cleanup-restart-'));
+    const taskOutcome = { status: 'incomplete', reason: 'Only preservation remains.', recovery: { mode: 'cleanup' } };
+    const task = { ...TASK, metadata: { ...TASK.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } };
+    persistedAgent.metadata = { workspacePath, isWorktree: true };
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ taskOutcome }));
+      await retireDeadAgent({ agent: persistedAgent, task, success: false, exitCode: 1, duration: 1000 });
+      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
+        metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), TASK.taskType);
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
+  });
+
+  it('stops repeated delivery recovery at the existing budget with concrete choices', async () => {
+    const taskOutcome = { status: 'incomplete', reason: 'Validation remains red.' };
+    await finalizeAgent({ agentId: 'agent-example', task: { ...TASK, metadata: { ...TASK.metadata, failureCount: MAX_TASK_RETRIES - 1 } },
+      success: true, exitCode: 0, finalSummary: JSON.stringify({ summary: 'Retained failed work.', taskOutcome }) });
+    expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ blockedCategory: 'task-recovery-exhausted',
+        blockedReason: expect.stringContaining('Options:') }) }), TASK.taskType);
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('holds an unverified no-op', async () => {
@@ -429,7 +480,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
       await rm(sentinelPath);
       await finish(finalSummary);
       expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, executionSuccess: true, taskOutcome }));
-      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({ taskOutcome }) }), TASK.taskType);
+      expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress', metadata: expect.objectContaining({ taskOutcome }) }), TASK.taskType);
       expect(persistedAgent.metadata.taskSummary).toBe(finalSummary);
     } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });

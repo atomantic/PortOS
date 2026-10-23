@@ -38,7 +38,8 @@ vi.mock('./taskTypeHooks.js', () => ({
   // output-hook suite which forces null to isolate its own dispatch cases.
   resolveTaskHookType: vi.fn(task => task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null),
 }));
-vi.mock('./agentErrorAnalysis.js', () => ({ resolveFailedTaskUpdate: vi.fn(), resolveTypeFailureSignal: vi.fn() }));
+vi.mock('./agentErrorAnalysis.js', async importOriginal => ({ ...(await importOriginal()), resolveFailedTaskUpdate: vi.fn(), resolveTypeFailureSignal: vi.fn() }));
+vi.mock('./agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async () => ({})) }));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./investigationTaskProducer.js', () => ({
   investigationCircuitOpen: vi.fn(() => false),
@@ -55,6 +56,7 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
   getGoalFidelityConfig: vi.fn(async () => null),
 }));
 
+import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cosTaskStore.js';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -109,21 +111,32 @@ describe('retireDeadAgent (#8440)', () => {
     });
   });
 
-  it.each(['blocked', 'incomplete'])('preserves a recovered %s sentinel and parks its task before removing evidence', async status => {
+  it.each(['blocked', 'incomplete'])('preserves a recovered %s sentinel and holds its retry until evidence is removed', async status => {
     const workspacePath = await mkdtemp(join(tmpdir(), 'recovered-outcome-'));
     const taskOutcome = { status, reason: 'Invented prerequisite remains unmet.' };
     const order = [];
     updateTask.mockImplementationOnce(async () => { order.push('task'); return {}; });
     removeCompletionSentinel.mockImplementationOnce(async () => { order.push('remove'); });
+    releaseRetryHold.mockImplementationOnce(async () => { order.push('release'); });
     try {
       await writeFile(join(workspacePath, '.agent-done-agent-dead'), JSON.stringify({ taskOutcome }));
       const result = await retireDeadAgent({ agent: { ...AGENT, metadata: { workspacePath, runId: 'run-1' } },
         task: TASK, success: true, exitCode: 0, duration: 100 });
       expect(result).toEqual({ success: false, taskOutcome, deliveryHeld: true });
       expect(completeAgent).toHaveBeenCalledWith(AGENT.id, expect.objectContaining({ success: false, executionSuccess: true, taskOutcome }));
-      expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({ taskOutcome }) }), 'user');
-      expect(order).toEqual(['task', 'remove']);
+      expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress', metadata: expect.objectContaining({ taskOutcome, retryPendingCleanup: AGENT.id, failureCount: 1 }) }), 'user');
+      expect(order).toEqual(['task', 'remove', 'release']);
     } finally { await rm(workspacePath, { recursive: true, force: true }); }
+  });
+
+  it('preserves the first attempt pointer when a recovered outcome needs approval', async () => {
+    const taskOutcome = { status: 'blocked', reason: 'Authorized budget exhausted.', recovery: {
+      mode: 'approval', options: ['Increase the budget and retry.', 'Preserve the stopped work.'],
+    } };
+    await retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome } }, task: TASK, success: true, exitCode: 0, duration: 100 });
+    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ deliveryDecisionAgentId: AGENT.id }) }), 'user');
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: AGENT.id, task: TASK, success: false, agentMetadata: AGENT.metadata });
   });
 
   it('accepts a recovered no-op only after its output hook verifies delivery', async () => {
