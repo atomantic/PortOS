@@ -413,6 +413,14 @@ describe('GitHub inbox tab', () => {
     expect(mock.getGitHubRepos).not.toHaveBeenCalled();
   });
 
+  it('offers Add automation rule from a row, linked to a form prefilled with its kind and repo (#13192)', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [{ ...NOTIFICATION, ruleKind: 'review-request' }], sync: {} });
+    renderTab('inbox');
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions for Example change' }));
+    const link = await screen.findByRole('menuitem', { name: /Add automation rule/ });
+    expect(link.getAttribute('href')).toBe('/devtools/github/automations?ruleAccount=github-com&ruleKind=review-request&ruleRepo=octocat%2Fhello');
+  });
+
   it('links a deployment approval to the run waiting on you', async () => {
     const runUrl = 'https://github.com/octocat/hello/actions/runs/4242';
     mock.getGitHubNotifications.mockResolvedValue({
@@ -722,6 +730,42 @@ describe('GitHub automations tab', () => {
     expect(await screen.findByText(/^CoS defaults/)).toBeTruthy();
   });
 
+  it('adds a rule from an inbox row link, shows how many threads it matches and applies it now (#13192)', async () => {
+    mock.getGitHubAutomations.mockResolvedValue({
+      ...OVERVIEW,
+      accounts: [{
+        ...OVERVIEW.accounts[0], mode: 'assist', agentRules: [], repos: ['octocat/hello'],
+        openByKind: [
+          { kind: 'ci-activity', repo: 'octocat/hello', total: 2, actionable: 2 },
+          { kind: 'ci-activity', repo: 'octocat/other', total: 3, actionable: 3 },
+          { kind: 'mention', repo: 'octocat/hello', total: 4, actionable: 4 },
+        ],
+      }],
+    });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    render(
+      <MemoryRouter initialEntries={['/devtools/github/automations?ruleAccount=github-com&ruleKind=ci-activity&ruleRepo=octocat%2Fhello']}>
+        <Routes><Route path="/devtools/github/:tab" element={<GitHub />} /></Routes>
+      </MemoryRouter>,
+    );
+    const form = await screen.findByRole('form', { name: 'New automation rule' });
+    expect(screen.getByLabelText('When I get').value).toBe('ci-activity');
+    expect(screen.getByLabelText('In').value).toBe('octocat/hello');
+    expect(screen.getByLabelText('Then').value).toBe('done');
+    expect(screen.getByText('Matches 2 open threads now.')).toBeTruthy();
+    // All repos is one change away, and counts every repo.
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: '*' } });
+    expect(screen.getByText('Matches 5 open threads now.')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('In'), { target: { value: 'octocat/hello' } });
+    fireEvent.click(screen.getByLabelText('Apply to these 2 now'));
+    fireEvent.submit(form);
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', {
+      agentRules: [expect.objectContaining({ kind: 'ci-activity', repo: 'octocat/hello', action: 'done' })],
+    }));
+    await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
+    expect(screen.queryByRole('form', { name: 'New automation rule' })).toBeNull();
+  });
+
   it('adds an agent rule for review requests in one repo and refuses a duplicate', async () => {
     mock.getProviders.mockResolvedValue({ providers: [{ id: 'example-provider', name: 'Example Provider', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
     mock.getGitHubAutomations.mockResolvedValue({
@@ -731,7 +775,8 @@ describe('GitHub automations tab', () => {
     mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
     renderTab('automations');
 
-    expect(await screen.findByText("Don't start an agent")).toBeTruthy();
+    // A stored legacy `agent: false` rule reads as Leave in the inbox.
+    expect(await screen.findByText('Leave in the inbox')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Add rule/ }));
     // Same kind and repo as the existing rule: refused until changed.
     expect(await screen.findByText(/There is already a rule/)).toBeTruthy();
@@ -740,7 +785,7 @@ describe('GitHub automations tab', () => {
     await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', {
       agentRules: [
         { id: 'rule-1', kind: 'review-request', repo: '*', agent: false },
-        expect.objectContaining({ kind: 'review-request', repo: 'octocat/hello', agent: true }),
+        expect.objectContaining({ kind: 'review-request', repo: 'octocat/hello', action: 'agent' }),
       ],
     }));
     expect(await screen.findByText('octocat/hello', { selector: 'span' })).toBeTruthy();

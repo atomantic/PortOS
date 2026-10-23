@@ -13,7 +13,9 @@
  * agent defaults). The inbox's Resolve with agent button hands one thread off
  * the same way on a tap, in any mode; a thread no specific lane fits goes on a
  * tap to a generic `notification-resolve` run (githubNotificationResolveTask.js),
- * which Autopilot never starts on its own.
+ * which Autopilot starts only for a kind no specific lane owns (CI, your own
+ * PRs, mentions, releases, other) on an explicit `agent` automation rule
+ * (#13192), after the same whole-thread commenter check as the tap.
  *
  * Nothing here reads thread text: each hand-off queues the lane's own run,
  * which re-screens its input with its own guards. The on-demand origin is
@@ -23,7 +25,9 @@
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { advisoryIdFromUrl } from '../lib/githubNotificationParse.js';
-import { agentHandoff, agentRuleScope, agentRunPin, APP_FREE_AGENT_LANES as APP_FREE_LANES, autopilotHandoff, GENERIC_AGENT_LANE } from '../lib/githubNotificationTriage.js';
+import {
+  agentHandoff, agentRuleScope, agentRunPin, APP_FREE_AGENT_LANES as APP_FREE_LANES, autopilotHandoff, FINISHED_DECISIONS, GENERIC_AGENT_LANE, GENERIC_RULE_KINDS, KIND_SQL,
+} from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { managedAppsByRepoKey, threadDiscussionVouched } from './githubNotificationTriage.js';
 import { requireAccountEnv } from './githubNotifications.js';
@@ -36,19 +40,39 @@ import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 
 // Threads per run, not agent runs: a run queues at most one agent per repo and lane.
 const MAX_HANDOFFS_PER_RUN = 50;
-// The SQL mirror of `agentHandoff`'s lane rules and the account's agent
-// rules, so a run's limit is spent only on threads that can be handed off and
-// an older eligible thread is never starved by newer ones the rules would
-// reject. `inScope(n)` reads one `agentRuleScope` as parameters $n..$n+2.
+const sqlList = (values) => [...values].map((value) => `'${value}'`).join(', ');
+// `inScope(n)` reads one `agentRuleScope` as parameters $n..$n+2.
 const inScope = (n) => `(($${n}::boolean AND NOT (lower(repo_full_name) = ANY($${n + 1}::text[]))) OR lower(repo_full_name) = ANY($${n + 2}::text[]))`;
-export const CANDIDATE_SQL = `((reason = 'review_requested' AND subject_type = 'PullRequest' AND COALESCE(evidence->>'subjectState', '') NOT IN ('merged', 'closed') AND (
-      (decision = 'suggest-untrusted-review' AND COALESCE(trust, '') NOT IN ('yours', 'trusted') AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(2)})
-      OR (decision IN ('suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface') AND trust IN ('yours', 'trusted') AND ${inScope(5)})))
-  OR (subject_type = 'Issue' AND decision IN ('needs-you', 'surface')
+const NOT_FINISHED_SQL = `COALESCE(evidence->>'subjectState', '') NOT IN ('merged', 'closed')`;
+const PULL_URL_SQL = `COALESCE(subject_api_url, '') ~ '/pulls/[0-9]{1,9}$'`;
+
+/**
+ * The SQL mirror of `autopilotHandoff` over the account's rules, so a run's
+ * limit is spent only on threads that can be handed off and an older eligible
+ * thread is never starved by newer ones the rules would reject. Parameters
+ * start at `$first`. The parity DB test runs every kind × action through both.
+ */
+function candidateFilter(rules, first = 2) {
+  const scopes = [
+    agentRuleScope(rules, 'review-request'),
+    agentRuleScope(rules, 'review-request', { optIn: true }),
+    agentRuleScope(rules, 'issue-activity'),
+    agentRuleScope(rules, 'security-alert'),
+  ];
+  const generic = [...GENERIC_RULE_KINDS].map((kind) => agentRuleScope(rules, kind, { optIn: true }));
+  const at = (index) => first + index * 3;
+  const genericSql = [...GENERIC_RULE_KINDS].map((kind, index) => `(${KIND_SQL} = '${kind}' AND ${inScope(at(scopes.length + index))})`).join(' OR ');
+  const sql = `((${KIND_SQL} = 'review-request' AND ${NOT_FINISHED_SQL} AND ${PULL_URL_SQL} AND (
+      (decision = 'suggest-untrusted-review' AND COALESCE(trust, '') NOT IN ('yours', 'trusted') AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(at(0))})
+      OR (decision IN ('suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface') AND trust IN ('yours', 'trusted') AND ${inScope(at(1))})))
+  OR (${KIND_SQL} = 'issue-activity' AND decision IN ('needs-you', 'surface')
     AND (trust = 'outside' OR (evidence->>'commenter' IS NOT NULL AND COALESCE(evidence->>'commenterTrust', '') NOT IN ('yours', 'trusted')))
-    AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(8)})
-  OR (reason = 'security_alert' AND decision = 'surface-high' AND ${inScope(11)}))`;
-const scopeParams = ({ all, except, only }) => [all, except, only];
+    AND (evidence->>'repoManaged')::boolean IS TRUE AND ${inScope(at(2))})
+  OR (${KIND_SQL} = 'security-alert' AND decision = 'surface-high' AND ${inScope(at(3))})
+  OR (COALESCE(decision, '') NOT IN (${sqlList([...FINISHED_DECISIONS, 'handed-off'])}) AND ${NOT_FINISHED_SQL} AND (${genericSql})))`;
+  const params = [...scopes, ...generic].flatMap(({ all, except, only }) => [all, except, only]);
+  return { sql, params };
+}
 
 /**
  * Queue the app's run of a whole-app lane unless one is already queued or
@@ -127,26 +151,20 @@ async function recordHandoff(account, row, handoff, actor = 'automation') {
  * `autopilotHandoff`, so each must agree with it on every row.
  */
 async function listAutopilotCandidates(account) {
-  const rules = account.agentRules;
+  const candidates = candidateFilter(account.agentRules, 2);
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
-       AND ${CANDIDATE_SQL} AND NOT (evidence ? 'handoff')
+       AND ${candidates.sql} AND NOT (evidence ? 'handoff')
      ORDER BY gh_updated_at DESC LIMIT ${MAX_HANDOFFS_PER_RUN}`,
-    [
-      account.id,
-      ...scopeParams(agentRuleScope(rules, 'review-request')),
-      ...scopeParams(agentRuleScope(rules, 'review-request', { optIn: true })),
-      ...scopeParams(agentRuleScope(rules, 'issue-activity')),
-      ...scopeParams(agentRuleScope(rules, 'security-alert')),
-    ],
+    [account.id, ...candidates.params],
   );
   return rows;
 }
 
 // The DB suite checks the SQL prefilter against `autopilotHandoff` row by row.
-export const __testing = { listAutopilotCandidates };
+export const __testing = { listAutopilotCandidates, candidateFilter };
 
-export async function autopilotAccountNotifications(account) {
+export async function autopilotAccountNotifications(account, env = null) {
   if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };
   const rows = await listAutopilotCandidates(account);
   const plans = rows.map((row) => ({ row, plan: withRunPin(account, autopilotHandoff({ account, row })) })).filter((entry) => entry.plan);
@@ -159,7 +177,9 @@ export async function autopilotAccountNotifications(account) {
     if (!entry.plan.refused && APP_FREE_LANES.has(entry.plan.lane)) {
       // A security fix runs once per repo, and once for every global advisory
       // together; a review runs once per pull request.
-      const target = entry.plan.lane === 'do-review' ? `${entry.row.repo_full_name}#${entry.plan.pullNumber}` : entry.plan.repo || '*';
+      // A generic run resolves one thread.
+      const target = entry.plan.lane === 'do-review' ? `${entry.row.repo_full_name}#${entry.plan.pullNumber}`
+        : entry.plan.lane === GENERIC_AGENT_LANE ? `thread#${entry.row.thread_id}` : entry.plan.repo || '*';
       const key = `${entry.plan.lane}#${target}`;
       if (!batches.has(key)) batches.set(key, { app, lane: entry.plan.lane, repo: entry.plan.repo, plan: entry.plan, entries: [] });
       batches.get(key).entries.push({ ...entry, app });
@@ -183,6 +203,8 @@ export async function autopilotAccountNotifications(account) {
       appName: app?.name || null,
       ...(plan.pullNumber ? { pullNumber: plan.pullNumber } : {}),
       ...(plan.pin ? { pin: plan.pin } : {}),
+      // A failed generic run restores it (githubNotificationResolveTask.js).
+      ...(plan.lane === GENERIC_AGENT_LANE ? { previousDecision: row.decision || null } : {}),
       ...outcome,
       at: new Date().toISOString(),
     };
@@ -200,6 +222,15 @@ export async function autopilotAccountNotifications(account) {
     const batchPlan = lane === 'do-review' || (lane === 'pr-reviewer' && pullNumbers.size === 1)
       ? plan
       : { lane, repo, ...(plan.pin ? { pin: plan.pin } : {}) };
+    // The generic run reads the whole thread, not just the latest comment
+    // triage rated, so every commenter is checked first, as on a tap.
+    if (lane === GENERIC_AGENT_LANE) {
+      const vouched = await threadDiscussionVouched(account, env || await requireAccountEnv(account), entries[0].row).catch(() => false);
+      if (!vouched) {
+        for (const entry of entries) await record({ ...entry, outcome: { skipped: 'outside-content' } });
+        continue;
+      }
+    }
     // A lane that throws (a schedule write failing) is a recorded skip, so
     // it never stops Assist or the rest of the sync for this account.
     const queued = await queueLane(batchPlan, app, ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION, { account, rows: entries.map((entry) => entry.row) })

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   Bell, BellOff, Bot, Check, CheckCheck, CheckCircle2, CircleDot, CircleX, ExternalLink, GitCommitHorizontal, GitPullRequest,
-  Inbox, Layers, Mail, MailX, MessagesSquare, RefreshCw, Rocket, ShieldAlert, Tag,
+  Inbox, Layers, ListPlus, Mail, MailX, MessagesSquare, RefreshCw, Rocket, ShieldAlert, Tag,
 } from 'lucide-react';
 import Pill from '../ui/Pill';
 import OverflowMenu from '../ui/OverflowMenu';
@@ -163,6 +163,13 @@ const SUGGESTION_TONES = {
   muted: 'border-port-border bg-port-bg text-gray-200',
 };
 
+// The Automations tab's rule form, prefilled with this thread's kind and repo.
+const automationRuleLink = (notification) => {
+  const params = new URLSearchParams({ ruleAccount: notification.accountId, ruleKind: notification.ruleKind });
+  if (notification.repoFullName) params.set('ruleRepo', notification.repoFullName);
+  return `/devtools/github/automations?${params}`;
+};
+
 function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated }) {
   const [reviewing, setReviewing] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -179,9 +186,13 @@ function NotificationRow({ notification, accountLabel, busy, onAction, onUpdated
   const startAgent = async (pin) => {
     if (await onAction(notification, 'agent', pin)) setPicking(false);
   };
-  const overflow = handled ? [] : MORE_ACTIONS.map(({ action, label, icon }) => ({
-    id: action, label, icon, disabled: busy, onSelect: () => onAction(notification, action),
-  }));
+  const overflow = [
+    ...(handled ? [] : MORE_ACTIONS.map(({ action, label, icon }) => ({
+      id: action, label, icon, disabled: busy, onSelect: () => onAction(notification, action),
+    }))),
+    // Handle every similar thread the same way from now on (#13192).
+    ...(notification.ruleKind ? [{ id: 'add-rule', label: 'Add automation rule…', icon: ListPlus, to: automationRuleLink(notification) }] : []),
+  ];
   return (
     <article className="flex min-w-0 gap-3 px-3 py-3 @3xl/page:px-4">
       <span className="relative mt-0.5 shrink-0">

@@ -24,7 +24,9 @@ import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccou
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
-import { agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, learnedDecisionForAction } from '../lib/githubNotificationTriage.js';
+import {
+  agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, KIND_SQL, learnedDecisionForAction, normalizeAgentRules, PINNED_TRIAGE_RULES, threadAgentKind,
+} from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -174,7 +176,7 @@ const SKIPPED_AUTOMATION = Object.freeze({ sorted: 0, acted: 0, handedOff: 0, ag
 async function runAutomation(account, env, automate) {
   if (!automate) return SKIPPED_AUTOMATION;
   const autopilot = account.mode === 'autopilot'
-    ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account)
+    ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account, env)
     : { handedOff: 0, agentRuns: 0 };
   const assist = await assistAccountNotifications(account, env, {
     act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail }),
@@ -358,6 +360,8 @@ const toApi = (row, accountsById) => {
     suspect: row.suspect === true,
     rule: row.evidence?.rule || null,
     signals: Array.isArray(row.evidence?.signals) ? row.evidence.signals : [],
+    // The automation-rule kind, so a row can prefill Add automation rule (#13192).
+    ruleKind: threadAgentKind(row),
     agent: agentView(account, row),
     agentFailed: agentFailedView(row),
     updatedAt: toIso(row.gh_updated_at),
@@ -643,7 +647,7 @@ export async function getAutomationsOverview() {
   const { getJob } = await import('./autonomousJobs.js');
   const [accounts, job] = await Promise.all([listAccounts(), getJob(NOTIFICATION_CHECK_JOB_ID)]);
   const ids = accounts.map((account) => account.id);
-  const [syncRows, countRows, repoRows] = await Promise.all([
+  const [syncRows, countRows, repoRows, openRows] = await Promise.all([
     query('SELECT account_id, last_sync_at, last_error, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])', [ids]),
     query(
       `SELECT account_id, COUNT(*) FILTER (WHERE NOT suspect)::int AS needs_you, COUNT(*) FILTER (WHERE suspect)::int AS suspect,
@@ -657,7 +661,23 @@ export async function getAutomationsOverview() {
        FROM github_notifications WHERE account_id = ANY($1::text[]) AND repo_full_name <> '' GROUP BY account_id`,
       [ids],
     ),
+    // Open threads per rule kind and repo, so the rule form can say how many a
+    // rule matches now. `actionable` leaves out the threads a pinned triage rule
+    // decided, which a done or mute rule never touches.
+    query(
+      `SELECT account_id, ${KIND_SQL} AS kind, lower(repo_full_name) AS repo, COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE NOT (COALESCE(evidence->>'rule', '') = ANY($2::text[])))::int AS actionable
+       FROM github_notifications WHERE account_id = ANY($1::text[]) AND state = 'open' AND NOT suspect
+         AND decision IS DISTINCT FROM 'handed-off'
+       GROUP BY 1, 2, 3`,
+      [ids, [...PINNED_TRIAGE_RULES]],
+    ),
   ]);
+  const openById = new Map();
+  for (const row of openRows.rows) {
+    if (!openById.has(row.account_id)) openById.set(row.account_id, []);
+    openById.get(row.account_id).push({ kind: row.kind, repo: row.repo, total: row.total, actionable: row.actionable });
+  }
   const reposById = new Map(repoRows.rows.map((row) => [row.account_id, row.repos.slice(0, 200)]));
   const syncById = new Map(syncRows.rows.map((row) => [row.account_id, row]));
   const countsById = new Map(countRows.rows.map((row) => [row.account_id, row]));
@@ -683,9 +703,10 @@ export async function getAutomationsOverview() {
         pending: counts?.pending || 0,
         allowAgents: account.allowAgents === true,
         agentDefaults: account.agentDefaults || null,
-        agentRules: Array.isArray(account.agentRules) ? account.agentRules : [],
+        agentRules: normalizeAgentRules(account.agentRules),
         defaultAgentRules: DEFAULT_AGENT_RULES,
         repos: reposById.get(account.id) || [],
+        openByKind: openById.get(account.id) || [],
       };
     }),
   };

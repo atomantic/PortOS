@@ -176,6 +176,8 @@ export function decisionFromVerdict(verdict) {
 // actor; it never overrides a spam signal, a security alert or an invitation.
 const LEARNED_DECISIONS = Object.freeze(['surface', 'suggest-done', 'suggest-mute']);
 const PINNED_RULES = new Set(['spam-signal', 'security-alert', 'invitation-never-accepted', 'deployment-approval']);
+/** Triage rules no learned or automation rule may override. */
+export const PINNED_TRIAGE_RULES = Object.freeze(PINNED_RULES);
 const ACTION_LESSONS = Object.freeze({ done: 'suggest-done', unsubscribe: 'suggest-done', mute: 'suggest-mute', reopen: 'surface', resubscribe: 'surface' });
 
 /** The decision an operator action teaches, or null when it teaches nothing (a plain read). */
@@ -235,11 +237,19 @@ export function selectNotificationProvider({ account, providers = [], policy = {
 const HANDOFF_ISSUE_DECISIONS = new Set(['needs-you', 'surface']);
 const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 
-// The notification kinds an agent rule can name (GITHUB_AGENT_RULE_KINDS in
-// lib/validation.js), and the kind of a thread, or null when no rule applies.
-const RULE_KINDS = new Set(['review-request', 'security-alert', 'issue-activity', 'ci-activity']);
-// `ci-activity` rules name a GitHub action instead of starting an agent.
-export const CI_RULE_ACTIONS = Object.freeze(['done', 'mute', 'leave']);
+// The notification kinds an automation rule can name (GITHUB_AGENT_RULE_KINDS
+// in lib/validation.js).
+export const AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'mention', 'release', 'other']);
+const RULE_KINDS = new Set(AGENT_RULE_KINDS);
+// What a rule does with a matching thread (#13192). A stored legacy rule's
+// `agent: true/false` reads as `agent` / `leave`.
+export const AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave']);
+// A security alert is never marked done or muted by a rule.
+export const AGENT_ONLY_RULE_KINDS = Object.freeze(new Set(['security-alert']));
+// Kinds no specific lane owns: an `agent` rule on one sends it to the generic
+// lane on Autopilot. Review, issue and alert rules keep their meaning from
+// before #13192 (their own lanes), so they never start a generic run.
+export const GENERIC_RULE_KINDS = Object.freeze(new Set(['ci-activity', 'own-pr', 'mention', 'release', 'other']));
 const RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/;
 // A review request still waiting on you; one you sorted as done or noise is not.
 const REVIEW_DECISIONS = new Set(['suggest-review', 'suggest-untrusted-review', 'needs-you', 'surface']);
@@ -247,21 +257,56 @@ const REVIEW_TRUST = new Set(['yours', 'trusted']);
 // Mirrored in CANDIDATE_SQL (githubNotificationAutopilot.js).
 const FINISHED_SUBJECT_STATES = new Set(['merged', 'closed']);
 
-function threadAgentKind(row) {
+/** The rule kind of a thread, from its reason and subject type only. */
+export function threadAgentKind(row) {
   if (row?.reason === 'security_alert') return 'security-alert';
   if (row?.reason === 'review_requested' && row.subject_type === 'PullRequest') return 'review-request';
+  if (row?.reason === 'ci_activity' || row?.subject_type === 'CheckSuite') return 'ci-activity';
   if (row?.subject_type === 'Issue') return 'issue-activity';
+  if (row?.reason === 'author' && row.subject_type === 'PullRequest') return 'own-pr';
+  if (MENTION_REASONS.has(row?.reason)) return 'mention';
+  if (row?.subject_type === 'Release') return 'release';
+  return 'other';
+}
+
+// The SQL mirror of `threadAgentKind`, for candidate queries over
+// github_notifications rows; the parity DB test fails when they drift.
+export const KIND_SQL = `(CASE
+    WHEN reason = 'security_alert' THEN 'security-alert'
+    WHEN reason = 'review_requested' AND subject_type = 'PullRequest' THEN 'review-request'
+    WHEN reason = 'ci_activity' OR subject_type = 'CheckSuite' THEN 'ci-activity'
+    WHEN subject_type = 'Issue' THEN 'issue-activity'
+    WHEN reason = 'author' AND subject_type = 'PullRequest' THEN 'own-pr'
+    WHEN reason IN ('mention', 'team_mention') THEN 'mention'
+    WHEN subject_type = 'Release' THEN 'release'
+    ELSE 'other' END)`;
+
+/** A stored rule's action: its `action`, else the legacy `agent` boolean, else null. */
+export function agentRuleAction(rule) {
+  if (AGENT_RULE_ACTIONS.includes(rule?.action)) return rule.action;
+  if (typeof rule?.agent === 'boolean') return rule.agent ? 'agent' : 'leave';
   return null;
 }
 
+/** Stored rules as the client edits them: legacy `agent` booleans read as `action`. */
+export const normalizeAgentRules = (rules) => (Array.isArray(rules) ? rules : []).map((rule) => {
+  const action = agentRuleAction(rule);
+  if (!action || !rule || typeof rule !== 'object') return rule;
+  const { agent: _legacy, ...rest } = rule;
+  return { ...rest, action };
+});
+
 /**
- * The account's agent rule for a kind of thread in a repo: the repo's own rule,
- * else the `*` rule, else null. A malformed stored rule is ignored.
+ * The account's rules for one kind, coerced to `{ ...rule, action }`. A
+ * malformed rule, or one naming an action its kind cannot take, is ignored.
  */
-const validRules = (rules, kind) => (Array.isArray(rules) ? rules : []).filter((rule) => rule
-  && RULE_KINDS.has(rule.kind) && rule.kind === kind
-  && typeof rule.repo === 'string' && RULE_REPO_RE.test(rule.repo)
-  && (kind === 'ci-activity' ? CI_RULE_ACTIONS.includes(rule.action) : typeof rule.agent === 'boolean'));
+const validRules = (rules, kind) => (Array.isArray(rules) ? rules : []).flatMap((rule) => {
+  if (!rule || !RULE_KINDS.has(rule.kind) || rule.kind !== kind) return [];
+  if (typeof rule.repo !== 'string' || !RULE_REPO_RE.test(rule.repo)) return [];
+  const action = agentRuleAction(rule);
+  if (!action || (AGENT_ONLY_RULE_KINDS.has(kind) && action !== 'agent' && action !== 'leave')) return [];
+  return [{ ...rule, action }];
+});
 
 // Built-in rules shown under every account. A rule the operator saves for the
 // same kind and repo wins; with none, a CI notice is simply marked done.
@@ -269,18 +314,21 @@ export const DEFAULT_AGENT_RULES = Object.freeze([
   Object.freeze({ id: 'default-ci-activity', kind: 'ci-activity', repo: '*', action: 'done', builtin: true }),
 ]);
 
-const isCiThread = (row) => row?.reason === 'ci_activity' || row?.subject_type === 'CheckSuite';
+const withDefaults = (account) => [...(Array.isArray(account?.agentRules) ? account.agentRules : []), ...DEFAULT_AGENT_RULES];
 
 /**
- * What the account's rules do with a CI notification: `done`, `mute` or
- * `leave`. The repo's own rule, else the `*` rule, else the built-in default.
- * Suspect and closed-out threads are handled elsewhere, so this only reads
- * the thread's kind and repo.
+ * The GitHub write the account's rules make for a thread on Assist or
+ * Autopilot: `done` or `mute`, or null (no rule, or a rule that starts an agent
+ * or leaves it). A rule is the operator's own choice, so it needs no trusted
+ * actor, but it never acts on a suspect or closed thread, or one a pinned rule
+ * decided (a security alert, an invitation, a deployment approval).
+ * `row.rule` is the triage rule (`evidence->>'rule'`).
  */
-export function ciActivityAction({ account, row }) {
-  if (!isCiThread(row)) return null;
-  const rules = [...(Array.isArray(account?.agentRules) ? account.agentRules : []), ...DEFAULT_AGENT_RULES];
-  return matchAgentRule(rules, 'ci-activity', row.repo_full_name)?.action || null;
+export function ruleAction({ account, row }) {
+  if (!row || row.suspect || row.state !== 'open') return null;
+  if (PINNED_RULES.has(row.rule ?? row.evidence?.rule) || row.reason === 'security_alert') return null;
+  const action = matchAgentRule(withDefaults(account), threadAgentKind(row), row.repo_full_name)?.action;
+  return action === 'done' || action === 'mute' ? action : null;
 }
 
 function matchAgentRule(rules, kind, repo) {
@@ -291,19 +339,24 @@ function matchAgentRule(rules, kind, repo) {
 }
 
 /**
- * Which repos Autopilot hands a kind of thread off in, for its candidate query:
- * every repo except `except` when `all`, else only the `only` repos (lowercase).
- * The `*` rule sets the default; a kind with no `*` rule is on unless `optIn`.
- * Mirrors `matchAgentRule` + `autopilotHandoff`, so a row a rule keeps from an
- * agent never takes a slot in the run.
+ * Which repos a kind of thread gets one of `actions` in, for a candidate
+ * query: every repo except `except` when `all`, else only the `only` repos
+ * (lowercase). The `*` rule sets the default; a kind with no `*` rule is in
+ * unless `optIn`. Mirrors `matchAgentRule`, so a row a rule keeps out never
+ * takes a slot in the run.
  */
-export function agentRuleScope(rules, kind, { optIn = false } = {}) {
+export function agentRuleScope(rules, kind, { optIn = false, actions = ['agent'] } = {}) {
   const valid = validRules(rules, kind);
   const star = valid.find((rule) => rule.repo === '*');
-  const all = star ? star.agent : !optIn;
-  const repos = (agent) => valid.filter((rule) => rule.repo !== '*' && rule.agent === agent).map((rule) => rule.repo.toLowerCase());
+  const all = star ? actions.includes(star.action) : !optIn;
+  const repos = (inScope) => valid.filter((rule) => rule.repo !== '*' && actions.includes(rule.action) === inScope).map((rule) => rule.repo.toLowerCase());
   return all ? { all, except: repos(false), only: [] } : { all, except: [], only: repos(true) };
 }
+
+/** `agentRuleScope` over the account's rules plus the built-in defaults, for Assist's done/mute rules. */
+export const ruleActionScope = (account, kind) => (AGENT_ONLY_RULE_KINDS.has(kind)
+  ? { all: false, except: [], only: [] }
+  : agentRuleScope(withDefaults(account), kind, { optIn: true, actions: ['done', 'mute'] }));
 
 const rulePin = (rule) => {
   const pin = {};
@@ -363,7 +416,7 @@ export function agentHandoff({ account, row }) {
   if (!plan) plan = genericHandoff(row, evidence);
   const pin = rulePin(rule);
   if (pin) plan.pin = pin;
-  if (rule) plan.rule = { id: rule.id || null, agent: rule.agent };
+  if (rule) plan.rule = { id: rule.id || null, action: rule.action };
   if (plan.refused) return plan;
   if (account?.trust === 'private' && account.allowAgents !== true) return { ...plan, refused: 'private-account' };
   const needsApp = !APP_FREE_AGENT_LANES.has(plan.lane);
@@ -436,16 +489,19 @@ export function agentRunPin({ perRun, rulePin: rule, defaults } = {}) {
 
 /**
  * Autopilot's plan for a thread: `agentHandoff` in Autopilot mode, minus
- * anything an agent rule switched off, and minus an opt-in lane no rule
- * switched on.
+ * anything a rule gave another action, and minus an opt-in lane no rule
+ * switched on. The generic lane runs only for a kind no specific lane owns,
+ * on an explicit `agent` rule, and never for a thread already finished or
+ * with an agent (CANDIDATE_SQL mirrors all of this).
  */
 export function autopilotHandoff({ account, row }) {
   if (account?.mode !== 'autopilot') return null;
   const plan = agentHandoff({ account, row });
-  if (!plan || plan.rule?.agent === false) return null;
-  // The generic lane is on-tap only: an agent rule for it (#13192) is the only
-  // way Autopilot may start one, and the review/issue/alert rules do not count.
-  if (plan.lane === GENERIC_AGENT_LANE) return null;
-  if (plan.optIn && plan.rule?.agent !== true) return null;
+  if (!plan || (plan.rule && plan.rule.action !== 'agent')) return null;
+  if (plan.lane === GENERIC_AGENT_LANE) {
+    if (plan.rule?.action !== 'agent' || !GENERIC_RULE_KINDS.has(threadAgentKind(row))) return null;
+    return plan.refused === 'finished' || plan.refused === 'handed-off' ? null : plan;
+  }
+  if (plan.optIn && plan.rule?.action !== 'agent') return null;
   return plan;
 }
