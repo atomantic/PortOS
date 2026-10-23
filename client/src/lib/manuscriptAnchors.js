@@ -4,9 +4,9 @@
  *
  * Editorial comments anchor to manuscript text by VERBATIM substring
  * (`anchorQuote`), not character offsets — mirroring the server. `locateFind`
- * here mirrors `locateFind` in `server/services/pipeline/manuscriptFix.js`
- * (nearest-occurrence disambiguation) so a highlight lands where an accepted fix
- * would actually splice. It is also reused by `applyManuscriptEdits.js` for the
+ * is re-exported from `server/lib/manuscriptLocate.js` — the same implementation
+ * the server splices accepted fixes with — so a highlight lands where an accepted
+ * fix would actually splice. It is also reused by `applyManuscriptEdits.js` for the
  * client-side impact preview.
  *
  *   locateAnchors(content, comments) → [{ commentId, severity, start, end }]
@@ -18,51 +18,11 @@
  * carrying every comment covering it, toned by the highest severity present.
  */
 
-import { escapeRegExp } from './textUtils.js';
+import { locateFind, locateFindSpan } from '../../../server/lib/manuscriptLocate.js';
 
 const SEVERITY_RANK = { high: 3, medium: 2, low: 1 };
 
-// Locate the `find` span to highlight/replace. `indexOf` alone targets the FIRST
-// match, which is the wrong spot when `find` recurs. When ambiguous, pick the
-// occurrence nearest the `anchorQuote`. Returns the start index, or -1 if absent.
-export function locateFind(text, find, anchorQuote) {
-  if (!find) return -1;
-  const first = text.indexOf(find);
-  if (first === -1) return -1;
-  if (text.indexOf(find, first + 1) === -1) return first; // unique
-  const anchorIdx = anchorQuote ? text.indexOf(anchorQuote) : -1;
-  if (anchorIdx === -1) return first; // can't disambiguate — first match
-  let best = first;
-  let bestDist = Math.abs(first - anchorIdx);
-  for (let i = text.indexOf(find, first + 1); i !== -1; i = text.indexOf(find, i + 1)) {
-    const dist = Math.abs(i - anchorIdx);
-    if (dist < bestDist) { best = i; bestDist = dist; }
-  }
-  return best;
-}
-
-// Locate `find` tolerating whitespace-only differences (LLMs reformat spacing
-// when quoting). Tries exact first, then a regex where each run of whitespace
-// matches any run of whitespace. Returns the matched { start, end } in the
-// original text (the span length may differ from find.length) or null. Mirrors
-// `locateFindSpan` in `server/services/pipeline/manuscriptFix.js`.
-export function locateFindSpan(text, find, anchorQuote) {
-  if (!find) return null;
-  const exact = locateFind(text, find, anchorQuote);
-  if (exact !== -1) return { start: exact, end: exact + find.length };
-
-  const escaped = escapeRegExp(find);
-  const re = new RegExp(escaped.replace(/\s+/g, '\\s+'), 'g');
-  const anchorIdx = anchorQuote ? text.indexOf(anchorQuote) : -1;
-  let best = null;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    const cand = { start: m.index, end: m.index + m[0].length };
-    if (!best) best = cand;
-    else if (anchorIdx !== -1 && Math.abs(cand.start - anchorIdx) < Math.abs(best.start - anchorIdx)) best = cand;
-    if (m.index === re.lastIndex) re.lastIndex += 1;
-  }
-  return best;
-}
+export { locateFind, locateFindSpan };
 
 // Resolve each comment's anchorQuote to a [start, end) span in `content`.
 // Comments whose anchor isn't present (edited since review, or fuzzy) are
