@@ -1,13 +1,18 @@
 import { channel } from 'node:diagnostics_channel';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { observeTestProcesses, processAttribution, processIdentity } from './lib/testProcessAttribution.js';
-import { killTestProcessesUnder } from './lib/vitestStaleRunRoots.js';
+import { killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses } from './lib/vitestStaleRunRoots.js';
 import { cleanupRunTempRoot } from './vitestTempRootSetup.js';
+
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, appendFileSync: vi.fn(actual.appendFileSync) };
+});
 
 const originalExit = process.exitCode;
 afterEach(() => { process.exitCode = originalExit; vi.restoreAllMocks(); });
@@ -59,5 +64,30 @@ it('retains the root and an explicit diagnostic gap when process inspection fail
     expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toMatchObject({ inspected: false, total: 0, terminated: 0, unsettled: 1 });
     expect(process.exitCode).toBe(1);
     expect(existsSync(root)).toBe(true);
+  } finally { rmSync(host, { recursive: true, force: true }); }
+});
+
+it.each(['persisted', 'write-failed'])('pool-close preserves a %s pending identity omitted from current ownership metadata', persistence => {
+  const host = mkdtempSync(join(tmpdir(), 'process-pending-close-'));
+  const root = mkdtempSync(join(host, 'pvt-'));
+  const reportPath = join(host, 'processes.json');
+  const ancestors = [{ pid: process.pid, ppid: process.ppid }, { pid: process.ppid, ppid: 1 }];
+  const child = { pid: 900001, ppid: process.pid, start: 'original', args: ['node'], env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
+  writeFileSync(join(root, '.owner.pid'), '999999 0\n');
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    if (persistence === 'write-failed') appendFileSync.mockImplementationOnce(() => { throw Object.assign(Error('synthetic full disk'), { code: 'ENOSPC' }); });
+    sweepStaleRunRoots(host, { read: () => [...ancestors, child], probe: () => false, terminate: () => {} });
+    const partial = () => [...ancestors, { pid: child.pid, ppid: process.pid, start: child.start }];
+    sweepStaleRunRoots(host, { read: partial, probe: () => false, probePid: () => true });
+    expect(existsSync(root)).toBe(true);
+    cleanupRunTempRoot(root, { reportPath, platform: 'linux',
+      contain: (path, callbacks) => killTestProcessesUnder(path, { ...callbacks, read: partial, probe: () => false, probePid: () => true }),
+      verifyPending: path => verifyPendingTestProcesses(path, { read: partial, probePid: () => true }) });
+    expect(existsSync(root)).toBe(true);
+    expect(process.exitCode).toBe(1);
+    expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toMatchObject({ pendingVerified: false, unsettled: 1 });
+    expect(verifyPendingTestProcesses(root, { read: () => [], probePid: () => false })).toBe(true);
   } finally { rmSync(host, { recursive: true, force: true }); }
 });

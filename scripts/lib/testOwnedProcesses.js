@@ -18,7 +18,7 @@ function legacyBrowserProcesses(pids, exec) {
       // ps text is never used to infer generic argv or environment ownership.
       const profile = /(?:^|\s)--user-data-dir=(\S+)/.exec(match[6])?.[1];
       return [{ pid: Number(match[1]), ppid: Number(match[2]), start: `legacy:${match[5]}`, terminal: match[4].startsWith('Z'),
-        args: profile ? [`--user-data-dir=${profile}`] : [], env: {} }];
+        args: profile ? [`--user-data-dir=${profile}`] : [], env: {}, ownershipComplete: Boolean(profile) }];
     });
   } catch { return null; }
 }
@@ -32,6 +32,7 @@ function linuxIdentity(pid) {
 }
 
 function linuxProcess(pid) {
+  const unavailable = () => probeTestPid(pid) === false ? null : { pid, ownershipComplete: false };
   try {
     const before = linuxIdentity(pid);
     if (!before) return null;
@@ -49,8 +50,8 @@ function linuxProcess(pid) {
       metadata = { args, env };
     } catch { /* retain ancestry without claiming ownership */ }
     const after = linuxIdentity(pid);
-    return after?.start === before.start && after.ppid === before.ppid ? { ...before, ...metadata } : null;
-  } catch { return null; }
+    return after?.start === before.start && after.ppid === before.ppid ? { ...before, ...metadata } : unavailable();
+  } catch { return unavailable(); }
 }
 
 // The Darwin reader uses the existing system Python, with no installation or

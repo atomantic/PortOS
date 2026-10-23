@@ -100,6 +100,9 @@ that bypass the observer (including grandchildren whose parent already exited)
 remain explicitly unattributed. Unknown/unconfirmed settlement retains the run
 root and fails the run; a successful signal alone does not authorize removal.
 Interrupted-run sweeps retain roots while their deferred escalation is pending.
+On POSIX, incomplete process inventories also retain stale roots; a dead runner
+does not prove its children exited. Pending identity checks apply to pool-close
+cleanup as well as later sweeps.
 
 Pregate proves only the stages it runs, and it says which it did not. A scoped
 plan runs every suite CI would run for it, in CI's dependency order and with

@@ -1,5 +1,6 @@
 """Structured, same-user process metadata; stdout is a private pipe, never a log."""
 import ctypes
+import errno
 import json
 import os
 import struct
@@ -16,8 +17,10 @@ def snapshot():
         if libproc.proc_pidinfo(pid, 3, 0, buf, layout.size) != layout.size:
             return None
         values = layout.unpack(buf.raw)
-        if values[3] != pid or values[5] != os.getuid():
+        if values[3] != pid:
             return None
+        if values[5] != os.getuid():
+            return False
         return {'pid': pid, 'ppid': values[4], 'start': f'{values[-2]}:{values[-1]}', 'terminal': values[1] == 5}
 
     requested = json.load(sys.stdin)
@@ -36,7 +39,15 @@ def snapshot():
         if not isinstance(pid, int) or pid <= 1:
             continue
         before = identity(pid)
+        if before is False:
+            continue
         if before is None:
+            try:
+                os.kill(pid, 0)
+            except OSError as error:
+                if error.errno in (errno.ESRCH, errno.EPERM):
+                    continue
+            result.append({'pid': pid, 'ownershipComplete': False})
             continue
         # Keep ancestry even when arguments are unavailable. Missing ownership
         # evidence must never become permission to signal a process.

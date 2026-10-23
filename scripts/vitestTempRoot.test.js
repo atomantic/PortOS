@@ -6,6 +6,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createVitestTempFixture, runWatchConfigRestart } from './lib/vitestTempRootFixture.js';
 import { STALE_ROOT_AGE_MS, killTestBrowsersUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
 
 describe('real workspace runner temp lifecycle', () => {
@@ -98,11 +99,12 @@ describe('real workspace runner temp lifecycle', () => {
         child.once('exit', () => { clearTimeout(timer); reject(Error('config exited before handshake')); });
       });
       expect(existsSync(owned)).toBe(true);
-      sweepStaleRunRoots(host);
+      const read = pids => readTestProcesses(pids ?? [process.pid, process.ppid, child.pid]);
+      sweepStaleRunRoots(host, { read });
       expect(existsSync(owned)).toBe(true);
       child.kill('SIGKILL');
       await closed;
-      sweepStaleRunRoots(host);
+      sweepStaleRunRoots(host, { read });
       expect(existsSync(owned)).toBe(false);
       expect(existsSync(live)).toBe(true);
     } finally {
@@ -165,12 +167,13 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
       const owned = orphanBrowser(join(live, 'profile'));
       pids.push(owned.pid);
       expect(isProcessAlive(orphan.pid)).toBe(true);
+      const read = ids => readTestProcesses(ids ?? [process.pid, process.ppid, ...pids]);
 
-      sweepStaleRunRoots(host);
+      sweepStaleRunRoots(host, { read });
       expect(await gone(orphan.pid)).toBe(true);
       // The first sweep retains ownership while its asynchronous escalation settles.
       expect(existsSync(dead)).toBe(true);
-      sweepStaleRunRoots(host);
+      sweepStaleRunRoots(host, { read });
       expect(existsSync(dead)).toBe(false);
       expect(isProcessAlive(owned.pid)).toBe(true);
 

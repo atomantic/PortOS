@@ -29,7 +29,8 @@ import { toWorkspacePath } from './lib/workspaceTests.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
-import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
+import { readTestProcesses } from './lib/testOwnedProcesses.js';
+import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
 // Synthetic crash/retry cases must not print a fabricated crash as a real
@@ -1015,6 +1016,10 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
       const result = await next.closed;
       expect(result.code, result.output).toBe(0);
       expect(ownedRoot(host, next.child.pid)).toBeUndefined();
+      // Unreadable unrelated host processes now make automatic reclamation
+      // conservative. Prove retirement against the complete fixture inventory.
+      sweepStaleRunRoots(host, { prefix: 'portos-vitest-',
+        read: ids => readTestProcesses(ids ?? [process.pid, process.ppid, ...descendants, ...runs.map(run => run.child.pid)]) });
       expect(existsSync(deadRoot)).toBe(false);
       expect(existsSync(liveRoot)).toBe(true);
       expect(alive(live.child.pid)).toBe(true);

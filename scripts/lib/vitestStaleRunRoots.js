@@ -4,10 +4,10 @@
  * Workspace configs and the CI launcher stamp `.owner.pid` in each root. A
  * killed run never reaches its runner close hook, so its root is
  * left behind; the next config load calls `sweepStaleRunRoots()` to reclaim
- * it for the caller's exact prefix (default `pvt-`). A recorded owner that is provably gone frees the root immediately, an
- * owner that is alive keeps it however old it is (a >6h run must not be swept
- * from under itself), and a root whose owner cannot be determined falls back
- * to the conservative 6h age rule.
+ * it for the caller's exact prefix (default `pvt-`). A dead owner permits
+ * reclamation after complete process inspection and pending-identity settlement.
+ * A live owner keeps its root however old it is; an unknown owner additionally
+ * requires the conservative 6h age threshold.
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -21,6 +21,7 @@ export const PENDING_FILE = '.process-settlement-pending';
 
 // Private control metadata, like .owner.pid; never included in diagnostic reports.
 const pendingLimit = 4096;
+const failedPendingWrites = new Map();
 function readPending(root) {
   try {
     const path = join(root, PENDING_FILE);
@@ -43,12 +44,26 @@ function markPending(root, record) {
   // One short append preserves other simultaneous sweepers' evidence. A partial
   // write or a capped record stays unresolved rather than being overwritten.
   try { appendFileSync(join(root, PENDING_FILE), `${JSON.stringify({ v: 1, pid: record.pid, start: record.start })}\n`); }
-  catch { /* preserve in this snapshot even if the stamp fails */ }
+  catch {
+    const failed = failedPendingWrites.get(root) ?? new Map();
+    failed.set(processIdentity(record), { pid: record.pid, start: record.start });
+    failedPendingWrites.set(root, failed);
+  }
 }
 
 function pendingSettled(root, records, probePid) {
   const pending = readPending(root);
-  return !pending.incomplete && pending.processes.every(record => testProcessSettlement(record, records, probePid) === 'terminated');
+  const processes = [...pending.processes, ...(failedPendingWrites.get(root)?.values() ?? [])];
+  const settled = !pending.incomplete && processes.every(record => testProcessSettlement(record, records, probePid) === 'terminated');
+  if (settled) failedPendingWrites.delete(root);
+  return settled;
+}
+
+
+export function verifyPendingTestProcesses(root, { read = readTestProcesses, probePid = probeTestPid } = {}) {
+  const pending = readPending(root);
+  const processes = [...pending.processes, ...(failedPendingWrites.get(root)?.values() ?? [])];
+  return pendingSettled(root, processes.length ? read(processes.map(item => item.pid)) : [], probePid);
 }
 
 export const STALE_ROOT_AGE_MS = 6 * 60 * 60 * 1000;
@@ -262,7 +277,9 @@ export function sweepOrphanedTestProcesses(tmpRoot, { prefix = 'pvt-', now = Dat
     try { terminate(record, { valid }); signaled++; } catch { /* settlement unknown */ }
   }
   if (signaled) console.warn(`🧹 Requested termination of ${signaled} interrupted-run test processes; settlement pending`);
-  return { signaled, inspected: true, preserved, records: snapshot.records };
+  const inspected = snapshot.records.every(record => snapshot.ancestors.has(record.pid) || record.terminal
+    || (record.ownershipComplete !== false && Array.isArray(record.args) && record.env && typeof record.env === 'object'));
+  return { signaled, inspected, preserved, records: snapshot.records };
 }
 
 // Retain the established import boundary while callers adopt the broader name.
@@ -273,9 +290,11 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
   if (typeof prefix !== 'string' || !/^[a-zA-Z0-9-]+-$/.test(prefix)) {
     throw new Error('Owned temp prefix must be a nonempty name ending in a hyphen');
   }
-  // Dead-owner evidence is sufficient to reclaim a root even if process
-  // inspection failed. Unknown owners still require inspection before aging out.
+  // A dead runner does not prove its children exited. On POSIX, a partial
+  // inventory also cannot recover identities whose pending stamp failed.
+  // Windows has no process reader or signal-based containment here.
   const { inspected, preserved, records } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate });
+  if (!inspected && process.platform !== 'win32') return;
   let names;
   try {
     names = readdirSync(tmpRoot);

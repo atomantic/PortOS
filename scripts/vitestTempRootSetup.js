@@ -9,7 +9,7 @@ import { PROCESS_OWNERS_DIR } from './lib/testProcessAttribution.js';
 import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describeOwnedBrowserObservation, describeStageFixtureRoot, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
-import { OWNER_FILE, PENDING_FILE, killTestProcessesUnder } from './lib/vitestStaleRunRoots.js';
+import { OWNER_FILE, PENDING_FILE, killTestProcessesUnder, verifyPendingTestProcesses } from './lib/vitestStaleRunRoots.js';
 
 export function setup({ vitest }) {
   const root = process.env.PORTOS_TEST_TEMP_ROOT;
@@ -94,7 +94,7 @@ export function isEffectivelyEmpty(path) {
   return children.every((child) => isEffectivelyEmpty(join(path, child)));
 }
 
-export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { contain = killTestProcessesUnder, reportPath, durable = false, platform = process.platform } = {}) {
+export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { contain = killTestProcessesUnder, reportPath, durable = false, platform = process.platform, verifyPending = verifyPendingTestProcesses } = {}) {
   if (!root) return;
   // A process a suite failed to tear down would outlive the run (#10840).
   const outcomes = [];
@@ -109,8 +109,10 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
       if (outcomes.length < 64) outcomes.push(outcome);
     },
   });
-  if (total || !inspected) {
-    const report = { version: 1, inspected, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
+  const pendingVerified = platform === 'win32' || verifyPending(root);
+  if (!pendingVerified) unsettled++;
+  if (total || !inspected || !pendingVerified) {
+    const report = { version: 1, inspected, pendingVerified, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
     const retainedPath = join(fileURLToPath(new URL('../.cache/test-process-diagnostics/', import.meta.url)), `${randomUUID()}.json`);
     const destinations = reportPath ? [reportPath, ...(durable ? [retainedPath] : [])] : [retainedPath];
     let retained = true;

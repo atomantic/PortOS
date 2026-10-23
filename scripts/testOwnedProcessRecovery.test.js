@@ -19,7 +19,7 @@ describe('test process ownership boundaries', () => {
     expect(processAncestors([...records, { pid: 900003, ppid: 900001 }], 900001)).toBeNull();
   });
 
-  it.each(['missing ancestor', 'unavailable reader', 'cyclic ancestry'])('reclaims dead roots and gates the age fallback with %s', mode => {
+  it.each(['complete ancestry', 'unavailable reader', 'cyclic ancestry'])('requires process inspection before reclaiming dead or aged roots with %s', mode => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-snapshot-'));
     const dead = join(host, 'pvt-dead');
     const live = join(host, 'pvt-live');
@@ -35,9 +35,9 @@ describe('test process ownership boundaries', () => {
         utimesSync(root, aged, aged);
       }
       sweepStaleRunRoots(host, { read, probe: ({ pid }) => pid === 900001 ? false : pid === 900002 ? true : null });
-      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(dead)).toBe(process.platform !== 'win32' && mode !== 'complete ancestry');
       expect(existsSync(live)).toBe(true);
-      expect(existsSync(unknown)).toBe(mode !== 'missing ancestor');
+      expect(existsSync(unknown)).toBe(mode !== 'complete ancestry');
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
@@ -114,7 +114,7 @@ describe('test process ownership boundaries', () => {
       expect(existsSync(root)).toBe(true);
       sweep([]); // omitted rows plus a live PID remain unknown
       expect(existsSync(root)).toBe(true);
-      sweep([{ pid: child.pid, ppid: 1, start: 'replacement' }]);
+      sweep([{ pid: child.pid, ppid: 1, start: 'replacement', args: ['node'], env: {} }]);
       expect(existsSync(root)).toBe(false);
       expect(terminate).toHaveBeenCalledTimes(1); // no signal to a replacement identity
     } finally { rmSync(host, { recursive: true, force: true }); }
