@@ -78,6 +78,8 @@ vi.mock('./apps.js', () => ({
 
 vi.mock('./taskInputGate.js', () => ({ inputsUnchangedSince: vi.fn().mockResolvedValue(false), readHead: vi.fn() }))
 
+vi.mock('./branchReconcileInventoryPrune.js', () => ({ findGoneInventoryRows: vi.fn().mockResolvedValue([]) }))
+
 vi.mock('./instanceFeatures.js', () => ({
   isInstanceFeatureEnabled: vi.fn().mockResolvedValue(true),
 }))
@@ -205,7 +207,8 @@ import { loadState } from './cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
 import { writeFile } from 'fs/promises'
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeOverrides, getActiveApps, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
+import { isTaskTypeEnabledForApp, getAppById, getAppTaskTypeInterval, getAppTaskTypeOverrides, getActiveApps, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
+import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun } from './eventScheduler.js'
@@ -3316,6 +3319,29 @@ describe('taskSchedule', () => {
           .toMatchObject({ status: 'incomplete', reason: 'agent-failed', remaining, observedAt });
         expect((await getScheduleStatus()).tasks['branch-reconcile'].reconcileOutcomes['app-1'])
           .toMatchObject({ status: 'incomplete', reason: 'agent-failed', remaining, observedAt });
+      });
+
+      it('persists missing checkout and branch evidence when the Schedule view refreshes', async () => {
+        let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: false } }, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        getAppById.mockResolvedValueOnce({ repoPath: '/example/repo' });
+        const rows = [
+          { branch: 'fix/missing-checkout', path: '/example/checkout', head: 'a'.repeat(40), reason: 'worktree-locked' },
+          { branch: 'fix/missing-ref', head: 'b'.repeat(40), reason: 'branch-held' },
+        ];
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: rows });
+        findGoneInventoryRows.mockResolvedValueOnce(rows);
+        const outcome = (await getScheduleStatus()).tasks['branch-reconcile'].reconcileOutcomes['app-1'];
+        expect(outcome).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
+          retirementObligations: rows.map(row => ({ ...row, reason: 'retirement-provenance-unverified', createdAt: expect.any(String) })),
+        });
+        expect(outcome.retired).toBeUndefined();
+        // Loading the persisted state again and an empty sweep cannot clear the evidence.
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
+        const reloaded = (await getScheduleStatus()).tasks['branch-reconcile'].reconcileOutcomes['app-1'];
+        expect(reloaded.retirementObligations).toEqual(outcome.retirementObligations);
+        expect(reloaded.remaining).toEqual(outcome.retirementObligations);
       });
 
       it('never loses exact retirement obligations across empty scans, restart reads or unrelated receipts', async () => {

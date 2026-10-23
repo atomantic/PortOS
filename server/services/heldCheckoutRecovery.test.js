@@ -51,7 +51,7 @@ vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
 const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout, recoverMissingCheckoutPreservations, findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement, parkPerpetual } = await import('./taskSchedule.js');
 const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () => {
@@ -438,17 +438,54 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: result.archiveDir });
   });
 
-  it('settles a stale inventory row whose checkout was already removed instead of refusing it', async () => {
-    const { path, release } = await heldCheckout('already-gone');
+  it('retains vanished active claim provenance instead of reporting an unarchived checkout retired', async () => {
+    const { path, release } = await heldCheckout('already-gone', { branch: 'claim/issue-42' });
+    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    await writeFile(join(gitDir, 'portos-review-status'), 'private synthetic evidence');
     await recordBranchReconcileOutcome('app-1', {
-      status: 'incomplete', remaining: [{ ...release, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
+      status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }, { branch: 'other', reason: 'actionable' }],
     });
     await execGit(['worktree', 'unlock', path], repo);
     await execGit(['worktree', 'remove', '--force', path], repo);
 
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners }))
-      .toEqual({ ok: true, alreadyRetired: true });
-    expect((await getBranchReconcileOutcome('app-1')).remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
+    const activeOwner = async () => [{ id: 'agent-live', status: 'running', metadata: {
+      sourceWorkspace: repo, claimBranches: [release.branch], claimReleasedBranches: [],
+    } }];
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: activeOwner }))
+      .toEqual({ ok: false, reason: 'retirement-provenance-unverified' });
+    const obligation = { ...release, reason: 'retirement-provenance-unverified', createdAt: expect.any(String) };
+    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete',
+      retirementObligations: [obligation], remaining: [obligation, { branch: 'other', reason: 'actionable' }],
+    });
+    // Neither ignored bytes nor private Git state can be reconstructed from the merged head.
+    expect(await archives()).toEqual([]);
+    expect((await execGit(['rev-parse', `refs/heads/${release.branch}`], repo)).stdout.trim()).toBe(release.head);
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
+    await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches' });
+    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete', remaining: [obligation] });
+  });
+
+  it('retains a checkout that vanishes between sweeps until its exact preservation receipt arrives', async () => {
+    const { path, release } = await heldCheckout('gone-between-scans', { branch: 'feature/missing' });
+    const marker = { branch: 'claim/issue-99', issue: 99, reason: 'claim-reservation-owner-unverified' };
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [{ ...release, reason: 'worktree-locked' }, marker] });
+    await execGit(['worktree', 'unlock', path], repo);
+    // Model an external actor; the retirement service never receives this deletion.
+    await execGit(['worktree', 'remove', '--force', path], repo);
+    await recordBranchReconcileOutcome('app-1', { status: 'drained', remaining: [] });
+    const pending = await getBranchReconcileOutcome('app-1');
+    expect(pending).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
+      retirementObligations: [{ ...release, reason: 'retirement-provenance-unverified' }],
+    });
+    expect(pending.remaining).toHaveLength(1);
+    const createdAt = pending.retirementObligations[0].createdAt;
+    // A receipt for another head cannot explain the original disappearance.
+    await recordHeldCheckoutRetirement('app-1', { ...release, head: 'f'.repeat(40), branchDeleted: true, archiveDir: '/example/other-archive' });
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations[0].createdAt).toBe(createdAt);
+    // Only the trusted service writer can supply recovered preservation evidence.
+    await recordHeldCheckoutRetirement('app-1', { ...release, branchDeleted: true, archiveDir: '/example/recovered-original' });
+    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ retirementObligations: [], remaining: [] });
   });
 
   it('refuses a release that does not name a row of the last inventory', async () => {
