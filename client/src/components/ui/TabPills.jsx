@@ -258,7 +258,7 @@ export default function TabPills({
                   disabled={t.disabled}
                   onClick={() => onChange(t.id)}
                   onKeyDown={!isFilter ? (event) => handleTabKeyDown(event, index) : undefined}
-                  className={`flex items-center ${iconRow ? 'max-sm:min-w-[44px] max-sm:min-h-[44px]' : ''} ${sz.gap} ${sz.padding} rounded ${sz.text} transition-colors whitespace-nowrap ${
+                  className={`flex items-center ${stretch ? 'flex-1 min-w-0 justify-center' : 'shrink-0'} ${iconRow ? 'max-sm:justify-center max-sm:min-w-[44px] max-sm:min-h-[44px]' : ''} ${sz.gap} ${sz.padding} rounded ${sz.text} transition-colors whitespace-nowrap ${
                     active
                       ? 'bg-port-accent/20 text-port-accent border border-port-accent/40'
                       : 'text-gray-300 hover:bg-port-bg border border-transparent'
@@ -267,7 +267,7 @@ export default function TabPills({
                   {running
                     ? <Loader2 size={sz.icon} className="animate-spin shrink-0" />
                     : (Icon && <Icon size={sz.icon} aria-hidden="true" className="shrink-0" />)}
-                  {renderLabel(t.label)}
+                  {renderLabel(t.label, stretch)}
                   {t.count != null && t.count > 0 && (
                     <span className={`text-[10px] ${active ? 'text-port-accent/70' : 'text-gray-500'}`}>
                       {t.count}

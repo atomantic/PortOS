@@ -104,7 +104,7 @@ export const syncMoodBoardPinterest = (id, options) =>
     ...options,
   });
 
-// One-shot import through the signed-in PortOS CDP browser. Resolves
+// One-shot Pin or board import through the signed-in PortOS CDP browser. Resolves
 // `{ board, added, found, skipped }`; no credentials or recurring link stored.
 export const importMoodBoardPinterest = (id, url, options) =>
   request(`/mood-boards/${encodeURIComponent(id)}/pinterest/import`, {

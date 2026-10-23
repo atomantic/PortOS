@@ -494,19 +494,19 @@ function MoodBoardEditor({ id }) {
   };
 
   const handleImportPinterest = async () => {
-    if (!mountedRef.current) return;
-    if (!pinUrl.trim()) { toast.error('Enter a Pinterest board URL'); return; }
+    if (!mountedRef.current || importingPinterest) return;
+    if (!pinUrl.trim()) { toast.error('Enter a Pinterest Pin or board URL'); return; }
     setImportingPinterest(true);
     const result = await importMoodBoardPinterest(id, pinUrl.trim(), { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
     setImportingPinterest(false);
     if (!result?.board) {
-      toast.error('Could not import that board — check that Pinterest is signed in to the PortOS browser');
+      toast.error('Could not import that Pin or board — check the URL and sign in to Pinterest in the PortOS browser');
       return;
     }
     setBoard(result.board);
     toast.success(result.added > 0
-      ? `Added ${result.added} of ${result.found} Pinterest pins`
+      ? `Added ${formatCount(result.added)} of ${formatCount(result.found)} Pinterest pin${result.found === 1 ? '' : 's'}`
       : result.found > 0 ? 'No new Pinterest pins were added' : 'The Pinterest board has no pins');
   };
 
@@ -555,39 +555,40 @@ function MoodBoardEditor({ id }) {
   const pinDirty = pinUrl.trim() !== linkedBoardUrl;
   const isLinked = !!linkedFeedUrl;
 
-  // The board-URL input is identical whether linking fresh or re-pointing an
-  // already-linked board — only the label/button text and (for a re-link) the
-  // dirty gate differ.
-  const renderPinUrlForm = (label, buttonText) => (
+  const renderPinUrlForm = (buttonText) => (
     <div>
-      <label htmlFor="pinterest-url" className="block text-xs text-gray-400 mb-1">{label}</label>
-      <div className="flex flex-wrap gap-2">
+      <label htmlFor="pinterest-url" className="block text-xs text-gray-400 mb-1">Pin or board URL</label>
+      <div className="space-y-2">
         <input
           id="pinterest-url"
-          type="text"
+          type="url"
+          autoCapitalize="none"
+          autoCorrect="off"
           value={pinUrl}
           maxLength={2048}
-          placeholder="https://www.pinterest.com/user/board/"
+          placeholder="https://www.pinterest.com/pin/1234567890/"
           onChange={(e) => setPinUrl(e.target.value)}
-          className="flex-[1_1_12rem] min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+          className="block w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm focus:border-port-accent outline-none"
         />
-        <button
-          type="button"
-          onClick={handleLinkPinterest}
-          disabled={linking || importingPinterest || !pinUrl.trim() || (isLinked && !pinDirty)}
-          className="px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
-        >
-          {linking ? 'Linking…' : buttonText}
-        </button>
-        <button
-          type="button"
-          onClick={handleImportPinterest}
-          disabled={importingPinterest || linking || syncing || !pinUrl.trim()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
-        >
-          <Download className={`w-4 h-4 ${importingPinterest ? 'animate-pulse' : ''}`} aria-hidden="true" />
-          {importingPinterest ? 'Importing…' : 'Import pins'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleImportPinterest}
+            disabled={importingPinterest || linking || syncing || !pinUrl.trim()}
+            className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+          >
+            <Download className={`w-4 h-4 shrink-0 ${importingPinterest ? 'animate-pulse' : ''}`} aria-hidden="true" />
+            {importingPinterest ? 'Importing…' : 'Import pins'}
+          </button>
+          <button
+            type="button"
+            onClick={handleLinkPinterest}
+            disabled={linking || importingPinterest || !pinUrl.trim() || (isLinked && !pinDirty)}
+            className="min-h-[44px] px-3 py-1.5 text-sm rounded bg-port-bg border border-port-border text-white hover:bg-port-border disabled:opacity-50 transition-colors"
+          >
+            {linking ? 'Linking…' : buttonText}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -714,7 +715,7 @@ function MoodBoardEditor({ id }) {
       <div className="bg-port-card border border-port-border rounded-md p-4">
         <div className="flex items-center gap-2 mb-3">
           <Link2 className="w-4 h-4 text-port-accent" aria-hidden="true" />
-          <h2 className="text-sm font-medium text-white">Pinterest board</h2>
+          <h2 className="text-sm font-medium text-white">Import from Pinterest</h2>
         </div>
         {linkedFeedUrl ? (
           <div className="space-y-3">
@@ -765,13 +766,14 @@ function MoodBoardEditor({ id }) {
                 </button>
               )}
             </div>
-            {renderPinUrlForm('Change board URL', 'Update')}
+            {renderPinUrlForm('Update board link')}
+            <p className="text-[11px] text-gray-500">Import a single Pin or a full board. Importing a Pin keeps your linked board unchanged.</p>
           </div>
         ) : (
           <div>
-            {renderPinUrlForm('Board URL', 'Link')}
+            {renderPinUrlForm('Link board')}
             <p className="text-[11px] text-gray-500 mt-2">
-              Link a public board to sync its newest ~25 pins. “Import pins” reads the full board from your signed-in PortOS browser and saves the images here.
+              Paste a Pin, board or pin.it share link. “Import pins” saves the images from your signed-in PortOS browser. “Link board” connects a public board to sync its newest ~25 pins.
             </p>
           </div>
         )}
@@ -785,21 +787,23 @@ function MoodBoardEditor({ id }) {
         </div>
         <div>
           <label htmlFor="x-post-url" className="block text-xs text-gray-400 mb-1">Post URL</label>
-          <div className="flex flex-wrap gap-2">
+          <div className="@container/post-import flex flex-wrap gap-2">
             <input
               id="x-post-url"
-              type="text"
+              type="url"
+              autoCapitalize="none"
+              autoCorrect="off"
               value={xPostUrl}
               maxLength={2048}
               placeholder="https://x.com/user/status/1234567890"
               onChange={(e) => setXPostUrl(e.target.value)}
-              className="flex-[1_1_12rem] min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+              className="w-full @sm/post-import:flex-1 min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm focus:border-port-accent outline-none"
             />
             <button
               type="button"
               onClick={handleImportXPost}
               disabled={importingXPost || !xPostUrl.trim()}
-              className="px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
+              className="min-h-[44px] px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
             >
               {importingXPost ? 'Importing…' : 'Import'}
             </button>
