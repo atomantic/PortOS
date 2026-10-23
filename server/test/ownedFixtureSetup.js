@@ -4,7 +4,9 @@ import { browserCleanupDeadline } from '../../scripts/lib/ownedBrowserCleanup.js
  * Phase operations must retain acquired resources before returning. close()
  * stops admission immediately, then waits for that continuation before cleanup.
  */
-export function createOwnedFixtureSetup({ cleanup, timeoutMs = 30000, report = message => console.log(message) }) {
+// CI silences console methods; retain these bounded, redacted phase summaries
+// even when Vitest's hook deadline wins the race with our own deadline.
+export function createOwnedFixtureSetup({ cleanup, timeoutMs = 30000, report = message => process.stdout.write(`${message}\n`) }) {
   let task, closing, started, stopped = false, active = 'not-started';
   const phases = [];
   const elapsed = () => Math.max(0, Math.round(performance.now() - started));

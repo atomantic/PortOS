@@ -84,6 +84,21 @@ describe('whole fixture setup ownership', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('retains phase evidence when CI silences console output', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const output = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const fixture = createOwnedFixtureSetup({ cleanup: vi.fn() });
+    try {
+      await expect(fixture.run(phase => phase('bundle', () => { throw new Error('private details'); }))).rejects.toThrow('private details');
+      await fixture.close();
+      const evidence = output.mock.calls.map(([message]) => message).join('');
+      expect(evidence).toContain('Fixture setup failed; phase=bundle');
+      expect(evidence).not.toContain('private details');
+      expect(evidence.length).toBeLessThan(512);
+      expect(log).not.toHaveBeenCalled();
+    } finally { output.mockRestore(); log.mockRestore(); }
+  });
+
   it('keeps setup and cleanup failures distinct and emits only phase timing', async () => {
     const initial = new Error('synthetic private path or launch details');
     const cleanupFailure = new Error('synthetic cleanup failure');
