@@ -16,6 +16,7 @@ import { execGlab } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
+import { forgeMissingScopesOf } from '../lib/forgeAccessErrors.js';
 
 export const MERGE_METHODS = Object.freeze(['merge', 'squash', 'rebase']);
 export const DEFAULT_MERGE_METHOD = 'merge';
@@ -58,11 +59,16 @@ const isLongLivedSourceBranch = (headBranch, baseBranch) => {
   return !head || PROTECTED_BRANCHES.includes(head) || head === String(baseBranch || '').trim();
 };
 
-const classifyFailure = detail => ({
-  ok: false,
-  code: METHOD_REFUSED.test(detail) ? 'method-not-allowed' : 'merge-failed',
-  error: detail,
-});
+// A token missing an OAuth scope is neither a bad method nor a forge outage: the
+// merge would succeed once the credential is refreshed, so it gets its own code
+// (and the scopes) for the route to turn into a fix the user can act on.
+const classifyFailure = (detail, scopes = []) => (scopes.length > 0
+  ? { ok: false, code: 'missing-scope', error: detail, scopes }
+  : {
+    ok: false,
+    code: METHOD_REFUSED.test(detail) ? 'method-not-allowed' : 'merge-failed',
+    error: detail,
+  });
 
 async function mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranch, timeoutMs, expectedHeadSha }) {
   const args = ['pr', 'merge', String(number)];
@@ -78,7 +84,9 @@ async function mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranc
   if (expectedHeadSha) args.push('--match-head-commit', expectedHeadSha);
 
   const error = await execGh(args, timeoutMs, { cwd, env }).then(() => null, err => err);
-  return error ? classifyFailure(error.ghStderr || error.message || 'gh pr merge failed') : { ok: true };
+  return error
+    ? classifyFailure(error.ghStderr || error.message || 'gh pr merge failed', forgeMissingScopesOf(error))
+    : { ok: true };
 }
 
 async function mergeGitlabCore({ cwd, env, number, method, deleteBranch, timeoutMs }) {
@@ -143,7 +151,7 @@ export async function runForgeMerge({ cwd, env, forge, repoSpec = null, number, 
  * @param {object} [options]
  * @param {'merge'|'squash'|'rebase'} [options.method='merge']
  * @param {boolean} [options.deleteBranch=false] - delete the source branch, unless it is long-lived
- * @returns {Promise<{ok:boolean, code?:string, error?:string, method?:string, deletedBranch?:boolean}>}
+ * @returns {Promise<{ok:boolean, code?:string, error?:string, scopes?:string[], host?:string|null, method?:string, deletedBranch?:boolean}>}
  */
 export async function mergeAppPullRequest(app, pullRequest, { method = DEFAULT_MERGE_METHOD, deleteBranch = false } = {}) {
   if (!MERGE_METHODS.includes(method)) {
@@ -175,7 +183,9 @@ export async function mergeAppPullRequest(app, pullRequest, { method = DEFAULT_M
     expectedHeadSha: target.forge === 'github' ? pullRequest.headSha ?? '' : null,
     timeoutMs: MERGE_TIMEOUT_MS,
   });
-  if (!result.ok) return result;
+  // The host rides along on a missing-scope failure so the route can name the
+  // forge the token must be refreshed for (an enterprise host, not github.com).
+  if (!result.ok) return result.code === 'missing-scope' ? { ...result, host: target.webHost || target.apiHost || null } : result;
 
   console.log(`🔀 Merged ${target.forge === 'gitlab' ? 'MR' : 'PR'} #${pullRequest.number} for app ${app.id} via ${method}${deleting ? ' (source branch deleted)' : ''}`);
   return { ok: true, method, deletedBranch: deleting };

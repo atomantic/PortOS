@@ -454,6 +454,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/apps/:id/pull-requests/:number/merge',
   'POST /api/apps/:id/pull-requests/:number/review',
   'POST /api/apps/:id/pull-requests/:number/do-review',
+  'POST /api/apps/:id/forge-auth/refresh',
+  'GET /api/apps/:id/forge-auth/refresh/:jobId/events',
+  'POST /api/apps/:id/forge-auth/refresh/:jobId/cancel',
   // Enable or queue CoS agent work against an app.
   'POST /api/apps/:id/launch-videos',
   'POST /api/apps/:id/launch-videos/publish',

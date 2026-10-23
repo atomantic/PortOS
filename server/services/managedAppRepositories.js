@@ -5,6 +5,8 @@ import { getOriginInfo, parseGitRemoteUrl, readRemoteUrl } from '../lib/gitRemot
 import { githubApiHost, hostToWorkTracker, isGithubHost } from '../lib/workTracker.js';
 import { execGitSafe, fetchOrigin, isFetchFresh, resolveForgeForRepo } from './git.js';
 import { execGh } from './github.js';
+import { forgeMissingScopesOf } from '../lib/forgeAccessErrors.js';
+import { forgeScopeMissingError } from './forgeScopeRefresh.js';
 
 const GH_TIMEOUT_MS = 60_000;
 
@@ -340,6 +342,12 @@ export async function syncManagedAppFork(app) {
     cwd: app.repoPath,
     env: { ...(forge?.env || process.env), GH_HOST: githubApiHost(origin.host) },
   }).catch((error) => {
+    // Syncing upstream commits that touch `.github/workflows/` needs the token's
+    // `workflow` scope: a credential fix, not a failed sync.
+    const missingScopes = forgeMissingScopesOf(error);
+    if (missingScopes.length > 0) {
+      throw forgeScopeMissingError({ host: githubApiHost(origin.host), scopes: missingScopes, error: error.message });
+    }
     if (/fast forward|diverge|non-fast/i.test(error.message || '')) {
       throw new ServerError(
         `The ${origin.fullName} fork has commits that cannot be fast-forwarded from ${upstream.fullName}. Reconcile those commits on GitHub before syncing.`,

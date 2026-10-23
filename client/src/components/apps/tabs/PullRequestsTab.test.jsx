@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const { socketHandlers, socketMock } = vi.hoisted(() => {
@@ -28,6 +28,15 @@ vi.mock('../../../services/apiLocalLlm', () => ({
   getVisionModels: vi.fn().mockResolvedValue({ models: [] }),
 }));
 vi.mock('../../ui/Toast', () => ({ default: toastMock }));
+// The refresh slot is SSE-backed; its own behavior is the server state machine's
+// contract. Here the tab only has to offer it, drive it and react to its outcome.
+const { refreshSlot, refreshOptions } = vi.hoisted(() => ({
+  refreshSlot: { active: false, pending: false, device: null, start: vi.fn(), cancel: vi.fn() },
+  refreshOptions: {},
+}));
+vi.mock('../../../hooks/useForgeScopeRefresh', () => ({
+  default: (options) => { refreshOptions.current = options; return refreshSlot; },
+}));
 vi.mock('../../../services/api', () => ({
   getAppPullRequests: vi.fn(),
   getInstanceFeatures: vi.fn().mockResolvedValue({ features: {} }),
@@ -527,6 +536,61 @@ describe('PullRequestsTab', () => {
     await waitFor(() => expect(api.mergeAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { method: 'merge', deleteBranch: false },
     ));
+  });
+
+  describe('a merge refused for a missing token scope', () => {
+    const scopeError = () => Object.assign(new Error('GraphQL: refusing to allow an OAuth App to create or update workflow without `workflow` scope'), {
+      code: 'FORGE_TOKEN_SCOPE_MISSING',
+      context: { host: 'ghe.example.com', scopes: ['workflow'], command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: true },
+    });
+    const mergeOnce = async () => {
+      api.mergeAppPullRequest.mockRejectedValue(scopeError());
+      await renderTab();
+      fireEvent.click(await screen.findByRole('button', { name: /^Merge$/ }));
+      fireEvent.click(screen.getByRole('button', { name: /Merge #17/ }));
+      await screen.findByText(/token is missing the workflow scope/);
+    };
+
+    beforeEach(() => {
+      Object.assign(refreshSlot, { active: false, pending: false, device: null });
+      refreshSlot.start.mockClear();
+    });
+
+    it('offers the enterprise host\'s fix instead of a bare error toast', async () => {
+      await mergeOnce();
+
+      expect(screen.getByText(/ghe\.example\.com token is missing/)).toBeInTheDocument();
+      expect(screen.getByText('gh auth refresh -h ghe.example.com -s workflow')).toBeInTheDocument();
+      expect(toastMock.error).not.toHaveBeenCalled();
+      // The confirm row stays, so the merge can be retried straight after the fix.
+      expect(screen.getByLabelText('Merge method for #17')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Authorize workflow/ }));
+      expect(refreshSlot.start).toHaveBeenCalledWith(['workflow']);
+    });
+
+    it('shows the one-time code to approve while gh waits, and can cancel the flow', async () => {
+      Object.assign(refreshSlot, { active: true, device: { code: 'ABCD-1234', url: 'https://ghe.example.com/login/device' } });
+      await mergeOnce();
+
+      expect(screen.getByText('ABCD-1234')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Open ghe\.example\.com/ })).toHaveAttribute('href', 'https://ghe.example.com/login/device');
+      expect(screen.queryByRole('button', { name: /Authorize workflow/ })).not.toBeInTheDocument();
+
+      // The merge confirm row has its own Cancel; this one belongs to the banner.
+      const banner = screen.getByText(/token is missing the workflow scope/).closest('[role="status"]');
+      fireEvent.click(within(banner).getByRole('button', { name: 'Cancel' }));
+      expect(refreshSlot.cancel).toHaveBeenCalled();
+    });
+
+    it('clears the banner and points back at Merge once the scope is granted', async () => {
+      await mergeOnce();
+
+      act(() => refreshOptions.current.onRefreshed());
+
+      expect(screen.queryByText(/token is missing the workflow scope/)).not.toBeInTheDocument();
+      expect(toastMock).toHaveBeenCalledWith(expect.stringContaining('press Merge again'));
+    });
   });
 
   it('keeps the confirm row open so a refused merge method can be changed', async () => {

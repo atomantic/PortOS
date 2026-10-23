@@ -8,7 +8,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { dispatchHintFromLabels } from '../lib/dispatchLabels.js';
-import { isForgeNoAccessMessage } from '../lib/forgeAccessErrors.js';
+import { isForgeNoAccessMessage, parseForgeMissingScopes } from '../lib/forgeAccessErrors.js';
 
 const DATA_DIR = PATHS.data;
 const REPOS_FILE = join(DATA_DIR, 'github-repos.json');
@@ -180,11 +180,15 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
         // never clear. `settle(null)` preserves whatever backoff a genuinely
         // transient failure already recorded. See lib/forgeAccessErrors.js.
         const noAccess = isForgeNoAccessMessage(detail);
-        settle(noAccess ? null : false);
+        // A missing OAuth scope is permanent until the token is refreshed, the
+        // same as no-access: retrying cannot clear it, so it stays out of backoff.
+        const missingScopes = parseForgeMissingScopes(detail);
+        settle(noAccess || missingScopes.length > 0 ? null : false);
         const error = new Error(detail || `gh exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
         error.ghExitCode = code;
         error.ghStderr = detail;
         if (noAccess) error.ghNoAccess = true;
+        if (missingScopes.length > 0) error.ghMissingScopes = missingScopes;
         reject(error);
       } else {
         settle(true);

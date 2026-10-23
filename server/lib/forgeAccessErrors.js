@@ -65,6 +65,84 @@ export function forgeNoAccessRemedy(repoSpec) {
     + 'log in to the owning account (`gh auth login`) or pin it on the app record\'s Forge account field';
 }
 
+// A credential that REACHES the repo but lacks an OAuth scope. Like no-access it
+// is permanent until the credential changes, so `execGh` keeps it out of the
+// backoff too. Three phrasings, because GitHub answers per transport: GraphQL
+// ("refusing to allow an OAuth App to create or update workflow … without
+// `workflow` scope"), REST ("needs the \"gist\" scope"), and gh's own preflight
+// ("missing required scopes [workflow]"). Deliberately NOT
+// "Resource not accessible by integration": that is a permission grant on an
+// App token, which no scope refresh fixes.
+const MISSING_SCOPE_PATTERNS = [
+  /without [`'"]?([\w:.-]+)[`'"]? scope/i,
+  /needs? the [`'"]?([\w:.-]+)[`'"]? scope/i,
+  /missing required scopes? \[([^\]]+)\]/i,
+  /requires one of the following scopes: \[([^\]]+)\]/i,
+];
+const SCOPE_NAME = /^[a-z][a-z0-9:_.-]*$/i;
+
+/**
+ * The OAuth scope names a `gh` failure says the token lacks, [] when it says
+ * nothing of the kind. Names are validated: they end up in a displayed command
+ * and a spawn argument, so a malformed capture never reaches either.
+ * @param {string|null|undefined} text
+ * @returns {string[]}
+ */
+export function parseForgeMissingScopes(text) {
+  if (typeof text !== 'string' || !text.trim()) return [];
+  for (const pattern of MISSING_SCOPE_PATTERNS) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    const scopes = match[1].split(',').map((scope) => scope.replace(/['"`\s]/g, '')).filter((scope) => SCOPE_NAME.test(scope));
+    if (scopes.length > 0) return [...new Set(scopes)];
+  }
+  return [];
+}
+
+/**
+ * Whether the refusal names a personal access token rather than an OAuth login.
+ * `gh auth refresh` only re-scopes the keyring's OAuth token; a PAT has to be
+ * reissued with the scope, so the refresh must not be offered for it.
+ * @param {string|null|undefined} text
+ * @returns {boolean}
+ */
+export const isForgePersonalTokenRefusal = (text) => typeof text === 'string' && /personal access token/i.test(text);
+
+/**
+ * Scopes a missing-scope `execGh` rejection names. Prefers the `ghMissingScopes`
+ * `execGh` stamps on, falling back to re-reading stderr/message for a caller that
+ * received the error through a wrapper that dropped it.
+ * @param {unknown} err
+ * @returns {string[]}
+ */
+export function forgeMissingScopesOf(err) {
+  if (!err || typeof err !== 'object') return [];
+  if (Array.isArray(err.ghMissingScopes) && err.ghMissingScopes.length > 0) return err.ghMissingScopes;
+  const fromStderr = parseForgeMissingScopes(err.ghStderr);
+  return fromStderr.length > 0 ? fromStderr : parseForgeMissingScopes(err.message);
+}
+
+/**
+ * Scopes the one-click refresh may request. Refreshing grants whatever is named
+ * once the user approves it in their browser, so this is a closed set of
+ * ordinary working scopes — never `admin:*` or `delete_repo`. A scope outside it
+ * still gets the printed command; PortOS just won't drive it.
+ */
+export const REFRESHABLE_FORGE_SCOPES = Object.freeze([
+  'repo', 'workflow', 'read:org', 'gist', 'project', 'read:project',
+  'read:packages', 'write:packages', 'notifications', 'read:user', 'user:email',
+]);
+
+/**
+ * The command that fixes a missing scope by hand.
+ * @param {string} host - forge host, e.g. `github.com` or an enterprise host
+ * @param {string[]} scopes
+ * @returns {string}
+ */
+export function forgeScopeRefreshCommand(host, scopes) {
+  return `gh auth refresh -h ${host} -s ${scopes.join(',')}`;
+}
+
 const loggedNoAccess = new Set();
 
 /**

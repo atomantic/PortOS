@@ -44,6 +44,7 @@ import {
   isDirectlyMergeablePullRequest,
   mergeAppPullRequest,
 } from '../../services/appPullRequestMerge.js';
+import { forgeScopeMissingError } from '../../services/forgeScopeRefresh.js';
 import { isDoReviewTask, spawnPrDoReviewTask } from '../../services/prDoReviewTask.js';
 import {
   isReviewablePullRequest,
@@ -357,6 +358,7 @@ router.post('/:id/pull-requests/:number/merge', loadApp, asyncHandler(async (req
 
   const merge = await mergeAppPullRequest(app, pullRequest, { method, deleteBranch });
   if (!merge.ok) {
+    if (merge.code === 'missing-scope') throw forgeScopeMissingError(merge);
     const refused = merge.code === 'method-not-allowed';
     throw new ServerError(merge.error, {
       // Only the forge failing the merge itself is a bad gateway; everything
