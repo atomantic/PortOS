@@ -75,6 +75,20 @@ describe('usage.js — summary', () => {
     vi.useRealTimers();
   });
 
+  it('reports calendar months independently of the filter, preserving rollups and cache tokens', async () => {
+    readJSONFile.mockResolvedValueOnce(makeUsage({
+      '2025-06-01': { byProvider: { example: { tokensIn: 10, tokensOut: 20, cacheReadTokens: 30, cacheWriteTokens: 40, source: 'measured' } } },
+      '2025-06-10': { tokens: 5 },
+    }, { monthlyActivity: { '2025-04': { tokensIn: 100, tokens: 200 } } }));
+    await loadUsage();
+    const history = getUsageSummary({ from: '2025-06-10', to: '2025-06-11' }).monthlyHistory;
+    expect(history).toEqual([
+      { month: '2025-04', tokens: 300, source: 'estimate', partial: false },
+      { month: '2025-05', tokens: 0, source: 'estimate', partial: false },
+      { month: '2025-06', tokens: 105, source: 'mixed', partial: true },
+    ]);
+  });
+
   describe('summary structure', () => {
     it('returns all expected fields with correct types', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}, {

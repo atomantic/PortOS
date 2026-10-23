@@ -1132,6 +1132,30 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
   };
 }
 
+/** Calendar-month ledger totals, independent of the report filter. */
+function monthlyUsageHistory(providers) {
+  const today = new Date().toISOString().slice(0, 10);
+  const firstDay = getFirstActivityDay();
+  if (!firstDay) return [];
+  const now = new Date(`${today}T00:00:00Z`);
+  return Array.from({ length: 12 }, (_, index) => {
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + index, 1));
+    const month = start.toISOString().slice(0, 7);
+    const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+    if (end < firstDay) return null;
+    const { totals } = buildUsageReport(usageData.dailyActivity, {
+      from: `${month}-01`, to: end < today ? end : today,
+      monthlyActivity: usageData.monthlyActivity, providers,
+    });
+    return {
+      month,
+      tokens: totals.tokensIn + totals.tokensOut + totals.cacheReadTokens + totals.cacheWriteTokens,
+      source: totals.source,
+      partial: today < end || firstDay > `${month}-01`,
+    };
+  }).filter(Boolean);
+}
+
 /**
  * Get usage summary. Optional `range` selects the cost-report window:
  * `{ from, to }` as inclusive YYYY-MM-DD strings (null = unbounded), plus the
@@ -1155,6 +1179,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
     }
     return {
       ...empty,
+      monthlyHistory: [],
       last7Days,
       estimatedCost: 0,
       topProviders: [],
@@ -1223,6 +1248,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
       .sort((a, b) => b.sessions - a.sessions)
       .slice(0, 5),
     report,
+    monthlyHistory: monthlyUsageHistory(providers),
     // Free-tier counterpart of the paid cost report: the report rows already
     // free-classified (local inference, Zen quota), plus the observed limit
     // blocks with ledger volume since each — the estimated-quota signal for
