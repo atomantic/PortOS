@@ -25,6 +25,16 @@ installFormValidityFix();
 const networkGuard = createUnexpectedFetchGuard(() => expect.getState().currentTestName);
 globalThis.fetch = networkGuard.fetch;
 
+// Iframe protocol tests inspect URLs and supply their own messages/documents.
+// Allow inert frame creation, then stop navigation before Happy DOM's internal
+// fetch (which bypasses the global fetch guard). Disabling the loader itself
+// emits an error even for about:blank instead of giving these fixtures a frame.
+const testDomSettings = globalThis.window?.happyDOM?.settings;
+if (testDomSettings) {
+  testDomSettings.navigation.disableChildFrameNavigation = true;
+  testDomSettings.enableIframePageLoading = true;
+}
+
 // The test DOM doesn't implement Element.prototype.scrollIntoView; components call it
 // (often from a requestAnimationFrame callback that can fire AFTER a test unmounts),
 // and the resulting unhandled error fails the whole run despite passing assertions
