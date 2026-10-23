@@ -22,6 +22,8 @@
  *   node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
  *                           [--skip-db] [--skip-browser] [--skip-build] [--skip-smoke]
  *
+ *   --guards-only [--merged-with <ref>]  run tree-wide guards on HEAD or a temporary merged tree
+ *
  *   --base <ref>    compare against <ref> instead of the remote default branch
  *   --full          actually run the complete suite when the plan demands it
  *                   (without this, a full plan runs the always-run guards only
@@ -49,11 +51,11 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
-import { writeSync } from 'fs';
-import { constants } from 'os';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeSync } from 'fs';
+import { constants, tmpdir } from 'os';
 import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
@@ -371,9 +373,61 @@ function defaultBaseRef() {
   return resolved || 'origin/main';
 }
 
+/** Validate committed merge inputs without registering a worktree or writing to the caller's Git state. */
+async function withMergedPregateTree(repoRoot, mergedWith, run) {
+  const readGit = (args, cwd = repoRoot) => execFileSync('git', args, {
+    cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  if (readGit(['status', '--porcelain=v1', '--untracked-files=all'])) {
+    throw new Error('--merged-with requires a clean committed checkout; commit the intended changes first.');
+  }
+  const head = readGit(['rev-parse', '--verify', 'HEAD^{commit}']);
+  const base = readGit(['rev-parse', '--verify', `${mergedWith}^{commit}`]);
+  const scratch = mkdtempSync(join(tmpdir(), 'portos-merged-guards-'));
+  try {
+    // All new merge objects, refs, index entries and generated files live in this disposable clone.
+    readGit(['clone', '--quiet', '--shared', '--no-checkout', '--', repoRoot, scratch]);
+    let tree;
+    try {
+      tree = readGit(['merge-tree', '--write-tree', base, head], scratch).split('\n')[0];
+    } catch (error) {
+      throw new Error(`Cannot construct merged guard tree (resolve conflicts before merging): ${error.stdout || error.stderr || error.message}`);
+    }
+    const commit = execFileSync('git', ['-c', 'user.name=Pregate', '-c', 'user.email=pregate@example.invalid',
+      'commit-tree', tree, '-p', base, ...(head === base ? [] : ['-p', head])], {
+      cwd: scratch, encoding: 'utf8', input: 'Temporary merged-tree guard validation\n',
+    }).trim();
+    readGit(['checkout', '--quiet', '--detach', commit], scratch);
+    // Submodule bytes must match the merged gitlink too; use existing local objects, never the network.
+    const primary = resolve(repoRoot, readGit(['rev-parse', '--git-common-dir']), '..');
+    for (const entry of readGit(['ls-tree', '-r', '-z', commit], scratch).split('\0')) {
+      if (!entry.startsWith('160000 ')) continue;
+      const [metadata, path] = entry.split('\t');
+      const sha = metadata.split(' ')[2];
+      const source = [join(repoRoot, path), join(primary, path)].find(dir => existsSync(join(dir, '.git')));
+      if (!source) throw new Error(`Initialize submodule ${path} before running merged-tree guards.`);
+      readGit(['clone', '--quiet', '--shared', '--no-checkout', '--', source, join(scratch, path)]);
+      readGit(['checkout', '--quiet', '--detach', sha], join(scratch, path));
+    }
+    for (const workspace of ['', 'server', 'client', 'autofixer']) {
+      const source = join(repoRoot, workspace, 'node_modules');
+      if (!existsSync(source)) continue;
+      mkdirSync(join(scratch, workspace), { recursive: true });
+      symlinkSync(source, join(scratch, workspace, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    console.log(`🌳 Merged-tree guards: HEAD ${head.slice(0, 12)} + base ${base.slice(0, 12)} = tree ${tree.slice(0, 12)}.`);
+    const comparisonBase = readGit(['merge-base', head, base], scratch);
+    return await run({ root: scratch, base, head, tree, comparisonBase });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 export const USAGE = `Usage: node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
                               [--skip-db] [--skip-browser] [--skip-build] [--skip-smoke]
 
+  --guards-only  run only always-run and diff-selected structural guards (no attestation receipt)
+  --merged-with <ref>  validate HEAD merged with this fetched ref in an isolated temporary repository
   --base <ref>    compare against <ref> instead of the remote default branch
   --full          run the complete suite when the plan demands it
   --skip-lint     skip linting in both client and server workspaces
@@ -389,12 +443,19 @@ const SKIP_FLAGS = { '--skip-db': 'skipDb', '--skip-browser': 'skipBrowser', '--
 /** Parse argv before doing any Git inspection or starting a child process. */
 export function parseArgs(argv) {
   const options = {
-    base: null, full: false, skipLint: false, planOnly: false, help: false,
+    base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false, mergedWith: null,
     skipDb: false, skipBrowser: false, skipBuild: false, skipSmoke: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     switch (flag) {
+      case '--guards-only': options.guardsOnly = true; break;
+      case '--merged-with': {
+        const value = argv[++index];
+        if (!value || value.startsWith('-')) throw new Error('--merged-with requires a value.');
+        options.mergedWith ??= value;
+        break;
+      }
       case '--base': {
         const value = argv[index + 1];
         if (!value || value.startsWith('-')) throw new Error('--base requires a value.');
@@ -412,12 +473,17 @@ export function parseArgs(argv) {
         throw new Error(`Unknown option: ${flag}.`);
     }
   }
+  if (options.mergedWith && !options.guardsOnly) throw new Error('--merged-with requires --guards-only.');
+  if (options.guardsOnly && (options.full || options.skipLint || options.skipDb || options.skipBrowser || options.skipBuild || options.skipSmoke)) {
+    throw new Error('--guards-only cannot be combined with --full or --skip-* options.');
+  }
+  if (options.mergedWith && options.base) throw new Error('--merged-with cannot be combined with --base.');
   return options;
 }
 
 /** Spawn target for a stage: a repo script under node, or npm itself. */
-function stageSpawn(stage, env) {
-  if (!stage.npm) return { command: process.execPath, args: [join(REPO_ROOT, 'scripts', stage.script), ...stage.args] };
+function stageSpawn(stage, env, repoRoot = REPO_ROOT) {
+  if (!stage.npm) return { command: process.execPath, args: [join(repoRoot, 'scripts', stage.script), ...stage.args] };
   // A bare `npm` is a `.cmd` shim on Windows; resolve and wrap it the way every
   // other npm spawn in this tree does (server/lib/bufferedSpawn.js).
   return prepareWindowsSafeSpawn(resolveWindowsExecutable('npm', IS_WIN32, env) || 'npm', stage.npm, IS_WIN32);
@@ -511,11 +577,11 @@ async function sweepStageGroup(pgid) {
 }
 
 /** Run one stage; an owner signal during it resolves only after the stage group settled. */
-async function runStage(stage, owner) {
+async function runStage(stage, owner, { repoRoot = REPO_ROOT } = {}) {
   const env = stageSpawnEnv(process.env, stage.env);
-  const { command, args } = stageSpawn(stage, env);
+  const { command, args } = stageSpawn(stage, env, repoRoot);
   const child = spawn(command, args, {
-    cwd: REPO_ROOT,
+    cwd: repoRoot,
     stdio: 'inherit',
     env,
     // A separate group lets cancellation reach only this stage's descendants.
@@ -589,6 +655,25 @@ async function main() {
 
   assertNodeVersion();
 
+  if (options.mergedWith) {
+    const status = await withMergedPregateTree(REPO_ROOT, options.mergedWith, async ({ root, comparisonBase }) => {
+      const owner = installOwnerCancellation();
+      try {
+        const outcome = await runStage({ name: 'merged-tree guards', script: 'pregate.js',
+          args: ['--guards-only', '--base', comparisonBase, ...(options.planOnly ? ['--plan-only'] : [])],
+          env: { PORTOS_TEST_MEMO: 'off' },
+        }, owner, { repoRoot: root });
+        if (outcome.error || outcome.unsettled) throw new Error(outcome.error?.message || outcome.unsettled);
+        const signal = outcome.interrupted || outcome.signal;
+        return signal ? 128 + constants.signals[signal] : (outcome.status ?? 1);
+      } finally {
+        owner.release();
+      }
+    });
+    process.exitCode = status;
+    return;
+  }
+
   const unmerged = spawnSync('git', ['ls-files', '-u', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' });
   if (unmerged.status !== 0) {
     console.error(`❌ Cannot inspect the Git index for unresolved conflicts: ${unmerged.stderr || 'git ls-files failed'}`);
@@ -655,7 +740,11 @@ async function main() {
   };
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
 
-  const downgraded = plan.full && !options.full;
+  const downgraded = plan.full && !options.full && !options.guardsOnly;
+  if (options.guardsOnly) {
+    plan = downgradeFullPlan(plan, git(['ls-files', '-z']).split('\0').filter(Boolean), changedFiles);
+    Object.assign(plan, { lint: { mode: 'skip', files: [] }, browser: { files: [] }, db: false, windows: false, build: false, smoke: false, promptHistory: false, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false });
+  }
   if (downgraded) {
     plan = downgradeFullPlan(plan, git(['ls-files']).split('\n').filter(Boolean), changedFiles);
     console.log('⚠️ CI will run the FULL suite for this diff — running always-run and diff-selected structural guards only. Pass --full to run everything, including the build, smoke, browser and DB suites.');
@@ -668,7 +757,11 @@ async function main() {
     const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites });
     announceUncovered(uncovered);
     const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
-    return { uncovered, stages: resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, skip, databaseEnv }) };
+    const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, skip, databaseEnv });
+    return { uncovered, stages: options.guardsOnly
+      ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
+        .map(stage => ({ ...stage, env: { ...stage.env, PORTOS_TEST_MEMO: 'off' } }))
+      : stages };
   };
 
   if (options.planOnly) {
@@ -804,13 +897,13 @@ async function main() {
     startedAt,
     finishedAt: new Date().toISOString(),
   });
-  writePregateReport(REPO_ROOT, report);
+  if (!options.guardsOnly) writePregateReport(REPO_ROOT, report);
   // Synchronous: a piped stderr is written asynchronously, and the self-signal
   // below would drop these lines before they flush.
   if (tree !== null && !report.treeStable) {
     writeSync(2, `⚠️ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); the receipt covers the tree it started with.\n`);
   }
-  if (failure) writeSync(2, `${failure}\n📄 Receipt: ${PREGATE_REPORT_PATH}\n`);
+  if (failure) writeSync(2, `${failure}\n${options.guardsOnly ? '' : `📄 Receipt: ${PREGATE_REPORT_PATH}\n`}`);
   else if (owner.signal) writeSync(2, `⚠️ Received ${owner.signal} after every stage passed; the receipt records that completed run.\n`);
 
   owner.release();
@@ -824,7 +917,7 @@ async function main() {
   if (uncovered.length > 0) {
     console.log(`⚠️ Not run here (CI still proves them): ${uncovered.map(({ suite, reason }) => `${suite} (${reason})`).join(', ')}.`);
   }
-  console.log(`📄 Receipt: ${PREGATE_REPORT_PATH}`);
+  if (!options.guardsOnly) console.log(`📄 Receipt: ${PREGATE_REPORT_PATH}`);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {

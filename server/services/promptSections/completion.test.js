@@ -84,6 +84,9 @@ describe('claim parent merge admission instructions', () => {
     expect(positions.every((at) => at >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((x, y) => x - y));
     expect(prompt).toContain('does NOT require a resync or fresh CI');
+    expect(prompt).toContain('node scripts/pregate.js --guards-only --merged-with origin/<default>');
+    expect(prompt).toContain('single-issue claims and each swarm Phase C merge');
+    expect(prompt).toContain('if either differs from the guard inputs');
     expect(prompt).toContain('release with outcome resync');
     expect(prompt).toContain('OUTSIDE the lease');
     expect(prompt).toContain('at most 10 minutes');
