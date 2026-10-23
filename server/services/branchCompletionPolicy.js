@@ -136,9 +136,9 @@ function reviewedIncarnation(input, policies) {
   if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
     || !input.prUrl || input.verifiedPrHead !== input.tip
     || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '')) return null;
-  const owners = policies.filter(policy => policy.agent.status === 'completed' && policy.agent.result?.success === true
+  const owners = policies.filter(policy => policy.agent.status === 'completed' && (policy.agent.result?.success === true || completedCleanupForRetirement(policy, input))
     && policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE
-    && samePath(policy.agent.metadata?.workspacePath, input.checkoutPath)
+    && (samePath(policy.agent.metadata?.workspacePath, input.checkoutPath) || completedCleanupForRetirement(policy, input))
     && retirementPr(policy) === input.prUrl && (!policy.tip || policy.tip === input.tip)
     && (!reviewTarget(policy) || (reviewTarget(policy).branch === input.branch && reviewTarget(policy).url === input.prUrl))
     && Number.isFinite(Date.parse(policy.agent.startedAt))
@@ -168,6 +168,19 @@ function reviewedIncarnation(input, policies) {
   return { current, prior };
 }
 
+/** Cleanup handoff is retirement evidence only under fresh merged-head and
+ * server-captured checkout identity. It never grants merge/review authority.
+ */
+function completedCleanupForRetirement(policy, input) {
+  const agent = policy.agent;
+  const result = agent.result;
+  return result?.cleanupPending === true && (result.executionSuccess === true || result.cleanupDeliveryVerified === true) && result.validationPassed !== false
+    && result.taskOutcome?.recovery?.mode === 'cleanup' && input.verifiedPrHead === input.tip && !!input.tip
+    && agent.metadata?.completedCheckouts?.some(row => row.version === 1 && row.agentId === agent.id
+      && row.repoPath === input.repoPath && row.branch === input.branch && row.path === input.checkoutPath
+      && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir);
+}
+
 /** Operator review settles successful completed review obligations. PR-bound
  * obligations additionally need a fresh exact-head, exact-checkout incarnation.
  * This is review evidence, never unattended consent or a saved policy rewrite.
@@ -180,7 +193,7 @@ export function reviewedRetirementPolicy(input) {
   const incarnation = reviewedIncarnation(input, decision.policies || []);
   const policies = incarnation?.current || decision.policies || [];
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
-  if (policies.some(p => p.agent.status !== 'completed' || p.agent.result?.success !== true
+  if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input))
     || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
     || (retirementPr(p) && (!incarnation || retirementPr(p) !== input.prUrl))
     || (reviewTarget(p) && (reviewTarget(p).branch !== input.branch || (p.prUrl && p.prUrl !== reviewTarget(p).url)))

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 const socket = vi.hoisted(() => {
   const handlers = new Map();
@@ -108,6 +108,8 @@ it('preserves run overrides when reopening the drawer for one category', async (
     { appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', prCompletion: 'inherit', claimBetweenAudits: false, taskTypes: ['security'], explicitCheck: true },
     { silent: true }
   ));
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect(within(screen.getByRole('region', { name: 'Quality status' })).getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
 });
 
 it('launches alongside pending runners and stops each run independently', async () => {
@@ -185,6 +187,62 @@ it('leaves audits that cannot apply to this repository out of batch runs, but ru
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['accessibility'], explicitCheck: true }), { silent: true }));
 });
 
+it('shows active, queued and held checks on the status card and stops only the selected batch', async () => {
+  const running = { id: 'active', appId: app.id, status: 'running',
+    steps: ['done', 'security', 'ux'].map(id => ({ id, taskRef: { taskType: id } })),
+    completed: { done: '2026-10-01T00:00:00Z' }, active: { stepId: 'security', taskType: 'security', status: 'in_progress', agentId: 'agent-example' } };
+  const queued = { id: 'queued', appId: app.id, status: 'running',
+    steps: ['performance', 'security'].map(id => ({ id, taskRef: { taskType: id } })),
+    active: { stepId: 'performance', taskType: 'performance', status: 'queued' }, reason: 'Waiting for capacity' };
+  const held = { id: 'held', appId: app.id, status: 'running',
+    steps: [{ id: 'ux', taskRef: { taskType: 'ux' } }], reason: 'Enable UX in Schedule' };
+  getMaintenanceRuns.mockResolvedValue({ runs: [running, queued, held,
+    { ...queued, id: 'completed', status: 'completed' },
+    { ...running, id: 'another-app', appId: 'app-2' },
+  ] });
+  let resolveStop;
+  stopMaintenanceRun.mockImplementation(() => new Promise(resolve => { resolveStop = resolve; }));
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  const card = within(screen.getByRole('region', { name: 'Quality status' }));
+  await card.findByText('1 active · 4 pending');
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  const batches = card.getAllByRole('listitem');
+  expect(batches[0]).toHaveTextContent('Security · Active · 1/3 complete · 1 pending');
+  expect(batches[1]).toHaveTextContent('Performance · Queued · 0/2 complete · 2 pending');
+  expect(batches[2]).toHaveTextContent('UX · Waiting · 0/1 complete · 1 pending');
+  expect(card.getByText('Waiting for capacity')).toBeInTheDocument();
+  expect(card.getByRole('link', { name: 'View active agent' })).toHaveAttribute('href', '/cos/agents/agent-example');
+  expect(card.getAllByRole('listitem')).toHaveLength(3);
+
+  fireEvent.click(within(card.getAllByRole('listitem')[1]).getByRole('button', { name: 'Stop remaining checks' }));
+  expect(stopMaintenanceRun).toHaveBeenCalledExactlyOnceWith('queued', { silent: true });
+  expect(card.getAllByRole('button', { name: 'Stop remaining checks' }).every(button => button.disabled)).toBe(true);
+  await act(async () => resolveStop({ run: { ...queued, status: 'stopped' } }));
+  expect(card.getByText('1 active · 2 pending')).toBeInTheDocument();
+  expect(card.getAllByRole('listitem')).toHaveLength(2);
+  expect(card.queryByText('Waiting for capacity')).not.toBeInTheDocument();
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(1);
+  expect(startMaintenanceRun).not.toHaveBeenCalled();
+});
+
+it('shows status and stop failures on the top card without hiding outstanding checks', async () => {
+  getMaintenanceRuns.mockRejectedValueOnce(new Error('Status unavailable'));
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  const card = within(screen.getByRole('region', { name: 'Quality status' }));
+  await card.findByText('Runner status is unavailable.');
+  expect(card.queryByText('No checks in flight.')).not.toBeInTheDocument();
+  const run = { id: 'pending', appId: app.id, status: 'running', steps: [{ id: 'security', taskRef: { taskType: 'security' } }] };
+  getMaintenanceRuns.mockResolvedValue({ runs: [run] });
+  fireEvent.click(card.getByRole('button', { name: 'Retry' }));
+  await card.findByText('0 active · 1 pending');
+  stopMaintenanceRun.mockRejectedValueOnce(new Error('Could not stop checks'));
+  fireEvent.click(card.getByRole('button', { name: 'Stop remaining checks' }));
+  expect(await card.findByRole('alert')).toHaveTextContent('Could not stop checks');
+  expect(card.getByRole('button', { name: 'Stop remaining checks' })).toBeEnabled();
+  expect(card.getByText('0 active · 1 pending')).toBeInTheDocument();
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+
 it('offers every enabled process provider regardless of subscription family, and hides disabled ones', async () => {
   render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
   await waitFor(() => expect(useProviderModels).toHaveBeenCalled());
@@ -197,21 +255,27 @@ it('offers every enabled process provider regardless of subscription family, and
 it('refreshes matching maintenance events and recovers once per reconnect/reshow without polling', async () => {
   vi.useFakeTimers();
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
-  const view = render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  const view = render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await act(async () => {});
+  const card = within(screen.getByRole('region', { name: 'Quality status' }));
+  expect(card.getByText('No checks in flight.')).toBeInTheDocument();
   expect(getMaintenanceRuns).toHaveBeenCalledTimes(1);
   await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
   expect(getMaintenanceRuns).toHaveBeenCalledTimes(1);
 
-  getMaintenanceRuns.mockResolvedValue({ runs: [{ id: 'run-push', appId: app.id, status: 'running', steps: [] }] });
+  getMaintenanceRuns.mockResolvedValue({ runs: [{ id: 'run-push', appId: app.id, status: 'running',
+    steps: [{ id: 'security', taskRef: { taskType: 'security' } }], active: { stepId: 'security', taskType: 'security', status: 'running' } }] });
   await act(async () => socket.fire('cos:maintenance:updated', { appId: 'another-app' }));
   expect(getMaintenanceRuns).toHaveBeenCalledTimes(1);
   await act(async () => socket.fire('cos:maintenance:updated', { appId: app.id }));
   expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
+  expect(card.getByText('1 active · 0 pending')).toBeInTheDocument();
   expect(getMaintenanceRuns).toHaveBeenCalledTimes(2);
 
+  getMaintenanceRuns.mockResolvedValue({ runs: [] });
   await act(async () => socket.fire('connect'));
   expect(getMaintenanceRuns).toHaveBeenCalledTimes(3);
+  expect(card.getByText('No checks in flight.')).toBeInTheDocument();
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
   await act(async () => {
     document.dispatchEvent(new Event('visibilitychange'));

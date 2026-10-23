@@ -14,6 +14,7 @@ import {
   hasAudioStream, buildTrimConcatArgs, bt709TagFilter,
 } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 
@@ -98,6 +99,9 @@ export async function stitchVideos(videoIds, opts = {}) {
     // "no cut, but here is the real length." Only a non-zero offset routes the
     // concat through the filter graph.
     trims = null,
+    // Optional AbortSignal (the stitch media job's cancel): kills the ffmpeg
+    // child and removes the partial output so a cancelled encode publishes no row.
+    signal = null,
   } = opts;
   if (!Array.isArray(videoIds) || videoIds.length < 2) {
     throw new ServerError('Need at least 2 videos to stitch', { status: 400, code: 'VALIDATION_ERROR' });
@@ -160,12 +164,22 @@ export async function stitchVideos(videoIds, opts = {}) {
   // return, so a failure mid-encode would otherwise trail a run of them behind
   // the line that matters.
   const runFfmpeg = (args, { captureStderr = false } = {}) => new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' }));
+      return;
+    }
     const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: captureStderr ? ['ignore', 'ignore', 'pipe'] : 'ignore' }));
+    const onAbort = () => killWithEscalation(proc, { label: 'stitch ffmpeg child', stillRunning: () => true });
+    signal?.addEventListener('abort', onAbort, { once: true });
+    proc.on('close', () => signal?.removeEventListener('abort', onAbort));
     let tail = '';
     proc.stderr?.on('data', (d) => { tail = `${tail}${d}`.slice(-400); });
-    proc.on('close', (code) => code === 0
-      ? resolve()
-      : reject(new ServerError(`Stitch failed${tail ? `: ${tail.split(/[\r\n]+/).filter(Boolean).pop()?.trim() || ''}` : ''}`, { status: 500, code: 'FFMPEG_FAILED' })));
+    proc.on('close', (code) => {
+      if (signal?.aborted) return reject(new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' }));
+      if (code === 0) return resolve();
+      const detail = tail ? `: ${tail.split(/[\r\n]+/).filter(Boolean).pop()?.trim() || ''}` : '';
+      reject(new ServerError(`Stitch failed${detail}`, { status: 500, code: 'FFMPEG_FAILED' }));
+    });
     proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
   });
 
@@ -216,6 +230,11 @@ export async function stitchVideos(videoIds, opts = {}) {
       await runFfmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath], { captureStderr: true });
     }
     await optimizeForStreaming(outPath);
+    if (signal?.aborted) throw new ServerError('Stitch canceled', { status: 499, code: 'STITCH_CANCELED' });
+  } catch (err) {
+    // A canceled encode leaves a partial file that no history row will ever own.
+    if (signal?.aborted) await unlinkGuarded(outPath).catch(() => {});
+    throw err;
   } finally {
     if (listFileWritten) await unlinkGuarded(listFile).catch(() => {});
   }

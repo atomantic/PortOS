@@ -8,7 +8,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
-import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
+import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost, getFleetMonthlyUsage } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
@@ -33,14 +33,15 @@ router.get('/', asyncHandler(async (req, res) => {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
   const summary = usage.getUsageSummary({ from, to, providers });
-  // Two independent reads over the same resolved window, so they overlap:
+  // Independent reads overlap; savings and fleet use the report window:
   // - savings: what the user's flat-rate plans cost over the SAME window, so
   //   the headline API-rate figure has something to be compared against.
   // - fleet: the per-instance breakdown across the federation, priced over the
   //   same window by the same report builder. Empty on a single-machine install
   //   (or before a peer's first usage sync) — the UI hides that section rather
   //   than showing a one-row "fleet".
-  const [subscriptionSavings, fleet] = await Promise.all([
+  // - monthly: fixed calendar months with the rolling chart's fleet coverage.
+  const [subscriptionSavings, fleet, monthly] = await Promise.all([
     getSubscriptionSavings({
       report: summary.report,
       providers,
@@ -52,8 +53,14 @@ router.get('/', asyncHandler(async (req, res) => {
     }),
     getApiBilledInstanceIds().then((apiBilledInstanceIds) =>
       getFleetUsage({ from, to, providers, apiBilledInstanceIds })),
+    getFleetMonthlyUsage({ providers }),
   ]);
-  res.json({ ...summary, subscriptionSavings, fleet });
+  res.json({
+    ...summary, subscriptionSavings, fleet,
+    monthlyHistory: monthly.history,
+    monthlySeries: monthly.series,
+    monthlyInstanceCount: monthly.instanceCount,
+  });
 }));
 
 // GET /api/usage/rolling-cost - Trailing-30-day estimated API cost summed across

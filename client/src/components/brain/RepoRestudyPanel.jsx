@@ -4,7 +4,8 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import RepoStudyFields from './RepoStudyFields';
-import { useAsyncAction, useRepoStudyConfig } from '../../hooks';
+import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { useRepoStudyConfig } from '../../hooks/useRepoStudyConfig.js';
 
 /**
  * The Links tab's on-demand "Update & study" form for an already-cloned repo:

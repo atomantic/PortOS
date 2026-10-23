@@ -8,6 +8,14 @@ Nothing calls an AI provider when a page loads or when the server starts.
 The browser explicitly requests `includeQuality=true` on app reads; bare
 `/api/apps` peer probes retain their existing response without assessment prose.
 
+The Quality tab's top status card shows active and pending check counts, each
+batch's current check and progress, and any reason it is waiting. Stop remaining
+checks is available on each batch without opening Run checks. Stopping prevents
+later checks from starting; work already queued or running can still finish.
+Status updates arrive through the existing maintenance events, including after
+reconnecting or returning to the tab. Loading and failed reads are shown beside
+a retry action rather than reported as an empty queue.
+
 Every scheduled audit category first inventory first-party source roots, scan
 for their category's signals, rank the top five candidates (or all if fewer),
 and validate the strongest candidates before selecting a bounded investigation.

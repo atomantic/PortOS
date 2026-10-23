@@ -4,30 +4,54 @@ export const sameRetirementCheckout = (left, right) => left.branch === right.bra
 export const sameRetirementObservation = (left, right) => sameRetirementCheckout(left, right)
   && (left.checkoutIdentity || null) === (right.checkoutIdentity || null);
 
+export const isRetirementObligation = row => ['retirement-review-pending', 'retirement-receipt-unverified',
+  'retirement-provenance-unverified'].includes(row?.reason);
+
 export const matchingRetirementReceipts = (outcome, release) => [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})].filter(row =>
   sameRetirementCheckout(row, release) && row.branchDeleted === true
   && typeof row.archiveDir === 'string' && row.archiveDir.length > 0
   && Number.isFinite(Date.parse(row.retiredAt)));
 
-export const hasRetirementReceipt = (outcome, release) => matchingRetirementReceipts(outcome, release).some(row => {
-  if (release.checkoutIdentity) return row.checkoutIdentity === release.checkoutIdentity;
+export const hasRetirementReceipt = (outcome, release) => {
   const observed = Date.parse(release.createdAt || release.observedAt);
-  return Number.isFinite(observed) && Date.parse(row.retiredAt) >= observed;
-});
+  const receiptHit = matchingRetirementReceipts(outcome, release).some(row => {
+    // Identity distinguishes a recreated checkout from the one a receipt already settled.
+    if (release.checkoutIdentity) return row.checkoutIdentity === release.checkoutIdentity;
+    return Number.isFinite(observed) && Date.parse(row.retiredAt) >= observed;
+  });
+  if (receiptHit) return true;
+  // Recovered archives are not branch-deleted receipts. They settle the obligation
+  // they were verified for, and only that createdAt.
+  return outcome?.recoveredPreservations?.some(row => sameRetirementCheckout(row, release)
+    && row.obligationCreatedAt === release.createdAt && row.verified === true
+    && typeof row.archiveDir === 'string' && row.archiveDir.length > 0
+    && /^[a-f0-9]{64}$/.test(row.evidenceDigest || '')
+    && Number.isFinite(Date.parse(release.createdAt))
+    && Date.parse(row.archivedAt) >= Date.parse(release.createdAt)
+    && Date.parse(row.verifiedAt) >= Date.parse(row.archivedAt)) === true;
+};
 
 export function unresolvedRetirements(outcome, additional = []) {
   const rows = [...(outcome?.retirementObligations || []), ...(outcome?.remaining || []), ...additional];
   const obligations = [];
   for (const row of rows) {
-    if (!['retirement-review-pending', 'retirement-receipt-unverified'].includes(row.reason)
-      || hasRetirementReceipt(outcome, row) || obligations.some(previous => sameRetirementObservation(previous, row))) continue;
-    obligations.push({ ...row, reason: 'retirement-receipt-unverified' });
+    if (!isRetirementObligation(row) || hasRetirementReceipt(outcome, row)) continue;
+    const previous = obligations.find(entry => sameRetirementObservation(entry, row));
+    if (previous) {
+      if (row.reason === 'retirement-provenance-unverified') previous.reason = row.reason;
+      continue;
+    }
+    obligations.push({
+      ...row,
+      reason: row.reason === 'retirement-provenance-unverified' ? row.reason : 'retirement-receipt-unverified',
+    });
   }
   return obligations;
 }
 
 /** New incarnations are admitted by the serialized writer after a live check.
  * Never replace a producer's observation time with its delayed write time.
+ * A recreated exact path/head starts after every older matching receipt.
  */
 export function retainRetirementObligations(outcome, additional, now) {
   const existing = unresolvedRetirements(outcome);
@@ -36,7 +60,12 @@ export function retainRetirementObligations(outcome, additional, now) {
     const previous = existing.find(entry => sameRetirementObservation(entry, row));
     if (Number.isFinite(Date.parse(previous?.createdAt))) return { ...row, createdAt: previous.createdAt };
     if (Number.isFinite(Date.parse(row.createdAt))) return row;
-    const earlier = matchingRetirementReceipts(outcome, row).map(entry => Date.parse(entry.retiredAt));
+    const earlier = [
+      ...matchingRetirementReceipts(outcome, row).map(entry => Date.parse(entry.retiredAt)),
+      ...(outcome?.recoveredPreservations || [])
+        .filter(entry => sameRetirementCheckout(entry, row))
+        .map(entry => Date.parse(entry.verifiedAt || entry.archivedAt)),
+    ].filter(Number.isFinite);
     const observed = Number.isFinite(Date.parse(row.observedAt)) ? Date.parse(row.observedAt) : Date.parse(now);
     return { ...row, createdAt: new Date(Math.max(observed, ...earlier.map(time => time + 1))).toISOString() };
   });

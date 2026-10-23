@@ -5,7 +5,7 @@
  * its lock and its branch as found.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes, truncate } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -21,18 +21,34 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null }));
+const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
     // Pauses an archive mid-write, after its first snapshot and before its re-read.
     if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
+    if (injected.onEvidence && args[0] === 'bundle' && args[1] === 'verify') await injected.onEvidence();
+    if (retirementFaults.onRemove && args[0] === 'worktree' && args[1] === 'remove') await retirementFaults.onRemove();
+    if (retirementFaults.onBranchDelete && args[0] === 'push' && args.some(arg => arg.startsWith(':refs/heads/'))) await retirementFaults.onBranchDelete();
     if (args.includes('credential.helper=!gh auth git-credential') && args.includes('fetch')) {
       injected.fetches.push({ args, options });
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
     }
-    return actual.execGit(args, cwd, options);
+    try { return await actual.execGit(args, cwd, options); }
+    catch (error) {
+      const phase = args.includes('unbundle') ? 'unbundle' : args.includes('fsck') ? 'fsck' : args.includes('--bare') ? 'init' : null;
+      if (phase && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') {
+        // Persisted evidence hides child stderr; retain bounded fixture-only diagnostics.
+        let message = String(error.message);
+        for (const root of [cwd, tmpdir(), realpathSync(tmpdir())]) {
+          message = message.split(root).join('<temp>').split(root.replaceAll('\\', '/')).join('<temp>');
+        }
+        injected.proofFailures.push({ phase, message: message.replace(/\s+/g, ' ').slice(0, 500) });
+      }
+      throw error;
+    }
   } };
 });
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ env: { ...process.env, GH_TOKEN: 'synthetic-account-token' } }) }));
@@ -46,12 +62,15 @@ vi.mock('./branchCompletionPolicy.js', async (importOriginal) => {
 vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
   ...await importOriginal(),
   loadSchedule: async () => injected.schedule,
-  updateSchedule: async (mutate) => (await mutate(injected.schedule)).result,
+  updateSchedule: async mutate => {
+    if (++retirementFaults.scheduleWrites === retirementFaults.failScheduleWrite) throw new Error('synthetic receipt persistence failure');
+    return (await mutate(injected.schedule)).result;
+  },
 }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./taskSchedule.js');
+const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, retirePendingMergeCheckout, heldCheckoutArchiveRoot, preserveMergedCheckout, recoverMissingCheckoutPreservations, findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement, parkPerpetual } = await import('./taskSchedule.js');
 const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () => {
@@ -62,7 +81,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async () => {
-    Object.assign(injected, { policies: [], schedule: { executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null });
+    Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -92,18 +112,303 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const [gitPath, head] = (await Promise.all([
       execGit(['rev-parse', '--show-toplevel'], path), execGit(['rev-parse', 'HEAD'], path),
     ])).map(result => result.stdout.trim());
-    return { path, release: { path: gitPath, head, branch, locked: true, lockReason } };
+    // Git also expands Windows short-name aliases; separator normalization alone
+    // cannot make the native input match the registered checkout identity.
+    return { path: gitPath, release: { path: gitPath, head, branch, locked: true, lockReason } };
   }
 
-  const registered = async (path) => (await execGit(['worktree', 'list', '--porcelain'], repo)).stdout.includes(`worktree ${path}`);
+  // Git emits forward slashes on Windows even when the fixture uses native paths.
+  const registered = async (path) => (await execGit(['worktree', 'list', '--porcelain'], repo)).stdout
+    .split(/\r?\n/).includes(`worktree ${path.replaceAll('\\', '/')}`);
   const lockText = async (path) => (await execGit(['worktree', 'list', '--porcelain'], repo)).stdout
-    .split('\n\n').find(block => block.startsWith(`worktree ${path}\n`))?.match(/^locked ?(.*)$/m)?.[1] ?? null;
+    .split(/\r?\n\r?\n/).find(block => block.split(/\r?\n/)[0] === `worktree ${path.replaceAll('\\', '/')}`)?.match(/^locked ?(.*)$/m)?.[1] ?? null;
   /** The operator confirms a row the last sweep persisted. */
   async function retire(release, opts = {}) {
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-locked' }] });
     return retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners, ...opts });
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
+
+  async function historicalArchive() {
+    const path = join(external, 'historical');
+    const branch = 'feature/historical';
+    await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
+    await writeFile(join(path, 'initial.txt'), 'staged historical work\n');
+    await execGit(['add', 'initial.txt'], path);
+    await writeFile(join(path, 'private.txt'), 'synthetic private bytes');
+    const release = { path, branch, head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim(), locked: false, lockReason: null };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
+    const saved = await preserveMergedCheckout(repo, { ...release, branch: `refs/heads/${branch}` }, 'main', { cosDir: PATHS.cos });
+    await execGit(['worktree', 'remove', '--force', path], repo);
+    return { release, saved };
+  }
+
+  async function supersededCheckout() {
+    const { release } = await heldCheckout('superseded', { branch: 'feature/superseded' });
+    await execGit(['worktree', 'unlock', release.path], repo);
+    await execGit(['add', 'initial.txt'], release.path);
+    await writeFile(join(release.path, 'initial.txt'), 'unstaged original work\n');
+    const gitdir = (await execGit(['rev-parse', '--absolute-git-dir'], release.path)).stdout.trim();
+    await writeFile(join(gitdir, 'private-note'), 'private administration');
+    const dirtyPaths = (await execGit(['status', '--porcelain'], release.path)).stdout.trimEnd().split('\n').filter(Boolean).map(line => line.slice(3));
+    const entry = { branch: release.branch, tip: release.head, worktreePath: release.path, worktreeLocked: false,
+      worktreeAgeMs: 365 * 86400000, dirtyPaths,
+      verdict: { branch: release.branch, tip: release.head, verdict: 'SUPERSEDED', dirtyPaths } };
+    return { entry, release: { ...release, locked: false, lockReason: null } };
+  }
+  const reapSuperseded = async (entry, readAgents = noOwners) => (await import('./branchReconcile.js')).reapSupersededBranches(repo, 'main', [entry], {
+    appId: 'app-1', cosDir, claimOwners: { agents: [], readAgents },
+  });
+
+  it('retires a superseded branch without a worktree through its full branch archive without claiming checkout preservation', async () => {
+    const branch = 'feature/no-worktree';
+    const head = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'superseded branch-only commit'], repo)).stdout.trim();
+    await execGit(['branch', branch, head], repo);
+    const missingCheckout = { branch, path: join(external, 'lost-original'), head, locked: false, lockReason: null };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...missingCheckout, reason: 'retirement-provenance-unverified' }] });
+    let archiveDir;
+    retirementFaults.onBranchDelete = async () => {
+      for (const name of await readdir(join(PATHS.cos, 'branch-retirement-archives'))) {
+        const dir = join(PATHS.cos, 'branch-retirement-archives', name);
+        const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
+        if (manifest.repoPath === repo && manifest.branch === branch && manifest.expectedHead === head) {
+          archiveDir = dir;
+          expect(manifest.recoveryHeads).toContain(head);
+          expect(manifest.bundleSha256).toMatch(/^[a-f0-9]{64}$/);
+        }
+      }
+      expect(archiveDir).toBeTruthy();
+      expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo)).stdout.trim()).toBe(head);
+    };
+    const entry = { branch, tip: head, worktreePath: null, dirtyPaths: [], verdict: { branch, tip: head, verdict: 'SUPERSEDED', dirtyPaths: [] } };
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [branch], skipped: [] });
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    const restored = join(scratch, 'branch-restore.git');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['bundle', 'unbundle', join(archiveDir, 'commits.bundle')], restored);
+    expect((await execGit(['cat-file', '-e', `${head}^{commit}`], restored)).exitCode).toBe(0);
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired || []).toEqual([]);
+    expect(outcome.retirementObligations).toContainEqual(expect.objectContaining(missingCheckout));
+    expect(await archives()).toEqual([]);
+  });
+
+  it('archives every superseded checkout byte and persists its exact generation before removal, then records retirement', async () => {
+    const { entry, release } = await supersededCheckout();
+    let prepared;
+    retirementFaults.onRemove = async () => {
+      const outcome = await getBranchReconcileOutcome('app-1');
+      const row = outcome.retirementObligations.find(row => row.branch === release.branch);
+      prepared = row.preservationReceipt;
+      expect(row).toMatchObject(release);
+      expect(outcome.retired || []).toEqual([]);
+      expect(await readFile(join(prepared.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+      expect(await readFile(join(prepared.archiveDir, 'administration', 'gitdir', 'private-note'), 'utf8')).toBe('private administration');
+      expect(await readFile(join(prepared.archiveDir, 'index.diff'), 'utf8')).toContain('tracked edit');
+      expect(await readFile(join(prepared.archiveDir, 'worktree.diff'), 'utf8')).toContain('unstaged original work');
+      expect((await execGit(['bundle', 'verify', join(prepared.archiveDir, 'commits.bundle')], repo)).exitCode).toBe(0);
+    };
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
+    expect(prepared.archiveDir).toBeTruthy();
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired).toContainEqual(expect.objectContaining({ path: release.path, branch: release.branch, head: release.head,
+      archiveDir: prepared.archiveDir, branchDeleted: true, retiredAt: expect.any(String) }));
+    expect(outcome.retirementObligations).toEqual([]);
+    expect(existsSync(release.path)).toBe(false);
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+  });
+
+  it.each(['archive failure', 'preservation receipt failure', 'new owner', 'ignored bytes change', 'private administration change', 'checkout identity change', 'app scope change'])('keeps superseded originals on %s', async failure => {
+    const { entry, release } = await supersededCheckout();
+    let owners = [];
+    if (failure === 'preservation receipt failure') retirementFaults.failScheduleWrite = 3;
+    else injected.onBundle = async () => {
+      injected.onBundle = null;
+      if (failure === 'archive failure') throw new Error('synthetic archive failure');
+      if (failure === 'new owner') owners = [{ id: 'new-owner', status: 'running', metadata: { sourceWorkspace: repo, claimBranches: [release.branch] } }];
+      if (failure === 'ignored bytes change') await writeFile(join(release.path, 'ignored.txt'), 'new ignored bytes');
+      if (failure === 'private administration change') {
+        const gitdir = (await execGit(['rev-parse', '--absolute-git-dir'], release.path)).stdout.trim();
+        await writeFile(join(gitdir, 'private-note'), 'new private administration');
+      }
+      if (failure === 'app scope change') injected.app = { ...injected.app, repoPath: join(scratch, 'different-app-repository') };
+      if (failure === 'checkout identity change') {
+        const pointer = join(release.path, '.git');
+        const bytes = await readFile(pointer);
+        await rename(pointer, join(scratch, 'original-indirection'));
+        await writeFile(pointer, bytes);
+      }
+    };
+    const result = await reapSuperseded(entry, async () => owners);
+    expect(result.reaped).toEqual([]);
+    expect(result.skipped).toHaveLength(1);
+    expect(existsSync(release.path)).toBe(true);
+    expect(await registered(release.path)).toBe(true);
+    expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
+    expect((await getBranchReconcileOutcome('app-1'))?.retired || []).toEqual([]);
+  });
+
+  it('preserves a superseded branch whose exact head no longer matches its verdict', async () => {
+    const { entry, release } = await supersededCheckout();
+    entry.tip = 'f'.repeat(40);
+    entry.verdict.tip = entry.tip;
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'branch-head-changed' }] });
+    expect(existsSync(release.path)).toBe(true);
+    expect(await registered(release.path)).toBe(true);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('never substitutes an older compatible archive when the prepared superseded archive is corrupt', async () => {
+    const { entry, release } = await supersededCheckout();
+    let owners = [];
+    injected.onBundle = async () => {
+      injected.onBundle = null;
+      owners = [{ id: 'temporary-owner', status: 'running', metadata: { sourceWorkspace: repo, claimBranches: [release.branch] } }];
+    };
+    expect((await reapSuperseded(entry, async () => owners)).reaped).toEqual([]);
+    const first = await getBranchReconcileOutcome('app-1');
+    const older = { archiveDir: first.retirementObligations[0].preservationReceipt.archiveDir };
+    owners = [];
+    await writeFile(join(release.path, 'ignored.txt'), 'new private ignored work');
+    retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 4;
+    expect((await reapSuperseded(entry)).reaped).toEqual([]);
+    const outcome = await getBranchReconcileOutcome('app-1');
+    const archiveDir = outcome.retirementObligations[0].preservationReceipt.archiveDir;
+    expect(archiveDir).not.toBe(older.archiveDir);
+    expect(await readFile(join(older.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    await writeFile(join(archiveDir, 'files', 'ignored.txt'), 'corrupt the exact prepared archive');
+    const recovered = await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome }, { cosDir });
+    expect(recovered.retirementObligations).toHaveLength(1);
+    expect(recovered.recoveredPreservations || []).toEqual([]);
+    expect(recovered.retirementObligations[0].preservationReceipt.archiveDir).toBe(archiveDir);
+  });
+
+  it('preserves an existing checkout when its historical obligation has no original incarnation proof', async () => {
+    const { entry, release } = await supersededCheckout();
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...release, reason: 'retirement-review-pending' }] });
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'retirement-checkout-generation-unverified' }] });
+    expect(existsSync(release.path)).toBe(true);
+    expect(await registered(release.path)).toBe(true);
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toHaveLength(1);
+    expect(await archives()).toEqual([]);
+  });
+
+  it('keeps a durable preservation obligation when final retirement receipt persistence fails', async () => {
+    const { entry, release } = await supersededCheckout();
+    retirementFaults.failScheduleWrite = 4;
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'retirement-receipt-unverified' }] });
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired || []).toEqual([]);
+    expect(outcome.retirementObligations).toContainEqual(expect.objectContaining({ path: release.path, head: release.head,
+      preservationReceipt: expect.objectContaining({ archiveDir: expect.any(String), preparedAt: expect.any(String) }) }));
+    expect(existsSync(release.path)).toBe(false);
+  });
+
+  it('recovers complete preservation through the schedule boundary with only the primary checkout, without claiming branch deletion', async () => {
+    const { release, saved } = await historicalArchive();
+    const before = (await execGit(['show-ref'], repo)).stdout;
+    const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
+    expect(outcome.retirementObligations, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`).toEqual([]);
+    expect(outcome.remaining).toEqual([]);
+    expect(outcome.recoveredPreservations).toEqual([expect.objectContaining({ path: release.path, branch: release.branch, head: release.head,
+      archiveDir: saved.archiveDir, verified: true,
+      evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })]);
+    expect(outcome.retired).toBeUndefined();
+    expect(outcome.recoveredPreservations[0]).not.toHaveProperty('branchDeleted');
+    expect(existsSync(release.path)).toBe(false);
+    expect((await execGit(['show-ref'], repo)).stdout).toBe(before);
+    // A new generation with the same branch/path/head cannot reuse the archive.
+    const recreated = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...release, reason: 'retirement-review-pending' }] });
+    expect(recreated.retirementObligations).toHaveLength(1);
+    expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
+  });
+
+  it('recognizes an absent completion archive without a schedule obligation and rejects changed or older evidence', async () => {
+    const { release, saved } = await historicalArchive();
+    const outcome = await getBranchReconcileOutcome('app-1');
+    const original = { ...release, createdAt: outcome.retirementObligations[0].createdAt };
+    injected.schedule = { executions: {} };
+    const withoutObligation = await getBranchReconcileOutcome('app-1');
+    await execGit(['branch', '-d', release.branch], repo);
+    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: original });
+    expect(proof).toMatchObject({ archiveDir: saved.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(await proof.recheck()).toBe(true);
+    await mkdir(release.path);
+    expect(await proof.recheck()).toBe(false);
+    await rm(release.path, { recursive: true });
+    const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
+    expect(await findMissingCheckoutPreservation({ repoPath: repo, release: { ...original, createdAt: new Date(Date.parse(manifest.archivedAt) + 1).toISOString() } })).toBeNull();
+    await writeFile(join(saved.archiveDir, 'files', 'private.txt'), 'corrupt archived evidence');
+    expect(await findMissingCheckoutPreservation({ repoPath: repo, release: original })).toBeNull();
+    expect(await getBranchReconcileOutcome('app-1')).toEqual(withoutObligation);
+  });
+
+  it.each([false, true])('clears the historical diagnosis after recovery retries, with other holds=%s', async otherHolds => {
+    const { saved } = await historicalArchive();
+    const unavailable = join(PATHS.cos, 'temporarily-unavailable-archive');
+    await rename(saved.archiveDir, unavailable);
+    const remaining = otherHolds ? [{ branch: 'feature/other', reason: 'worktree-locked' }] : [];
+    const unresolved = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining });
+    expect(unresolved.reason).toBe('historical-preservation-unresolved');
+    await rename(unavailable, saved.archiveDir);
+    const recovered = await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome: unresolved });
+    expect(recovered.retirementObligations).toEqual([]);
+    expect(recovered.remaining).toEqual(remaining);
+    expect(recovered).toMatchObject({ status: 'incomplete', reason: otherHolds ? 'remaining-holds' : 'preservation-recovered' });
+    expect(recovered.nextAction).not.toContain('backup');
+  });
+
+  it.each(['missing', 'wrong-repository', 'wrong-path', 'wrong-head', 'changed-file', 'changed-patch', 'legacy-dirty', 'legacy-corrupt-bundle', 'partial-original'])(
+    'retains an actionable historical obligation for %s preservation evidence', async failure => {
+      const { release, saved } = await historicalArchive();
+      const manifestPath = join(saved.archiveDir, 'manifest.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      if (failure === 'missing') await rm(saved.archiveDir, { recursive: true, force: true });
+      if (failure === 'wrong-repository') manifest.repoPath = join(scratch, 'other-repo');
+      if (failure === 'wrong-path') manifest.path = join(external, 'other-checkout');
+      if (failure === 'wrong-head') manifest.head = 'f'.repeat(40);
+      if (failure === 'changed-file') await writeFile(join(saved.archiveDir, 'files', 'private.txt'), 'changed archive bytes');
+      if (failure === 'changed-patch') await writeFile(join(saved.archiveDir, 'index.diff'), 'changed patch bytes');
+      if (failure === 'legacy-corrupt-bundle') {
+        delete manifest.bundleSha256;
+        const bundlePath = join(saved.archiveDir, 'commits.bundle');
+        const bundle = await readFile(bundlePath);
+        // Preserve the valid textual header and destroy only the packed objects.
+        await truncate(bundlePath, bundle.indexOf('\n\n') + 12);
+      }
+      if (failure === 'legacy-dirty') delete manifest.patchHashes;
+      if (failure === 'partial-original') manifest.captured.missingCheckout = true;
+      if (failure !== 'missing') await writeFile(manifestPath, JSON.stringify(manifest));
+      const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
+      expect(outcome.retirementObligations).toEqual([expect.objectContaining({ ...release,
+        preservationEvidence: expect.objectContaining({ status: 'unresolved', nextAction: expect.stringContaining('backup') }),
+      })]);
+      expect(outcome).toMatchObject({ status: 'incomplete', reason: 'historical-preservation-unresolved', recoveredPreservations: [] });
+      expect(outcome.remaining).toEqual(outcome.retirementObligations);
+      expect(existsSync(release.path)).toBe(false);
+    });
+
+  it.each(['recreated-path', 'new-holder', 'inventory-change', 'repository-change'])(
+    'does not settle historical evidence after a concurrent %s', async change => {
+      const { release } = await historicalArchive();
+      const outcome = await getBranchReconcileOutcome('app-1');
+      injected.onEvidence = async () => {
+        injected.onEvidence = null;
+        if (change === 'recreated-path') await mkdir(release.path);
+        if (change === 'new-holder') await execGit(['worktree', 'add', join(external, 'new-holder'), release.branch], repo);
+        if (change === 'repository-change') injected.app.repoPath = join(scratch, 'changed-repo');
+        if (change === 'inventory-change') {
+          const current = injected.schedule.executions['task:branch-reconcile'].perApp['app-1'];
+          current.branchReconcileOutcome = { ...current.branchReconcileOutcome, observedAt: 'changed-inventory' };
+        }
+      };
+      await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome });
+      const current = await getBranchReconcileOutcome('app-1');
+      expect(current.retirementObligations).toHaveLength(1);
+      expect(current.recoveredPreservations).toBeUndefined();
+      if (change === 'inventory-change') expect(current.observedAt).toBe('changed-inventory');
+    });
 
   it('preserves ignored evidence before unattended cleanup and refuses later byte or head changes', async () => {
     const path = join(external, 'merged');
@@ -159,10 +464,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(join(admin, 'AUTO_MERGE'), `${autoMerge}\n`);
     await execGit(['update-ref', 'refs/worktree/private-blob', blob], path);
     await execGit(['update-ref', 'refs/worktree/private-tag', tag], path);
+    await execGit(['symbolic-ref', 'refs/worktree/symbolic-tag', 'refs/worktree/private-tag'], path);
+    await execGit(['symbolic-ref', 'refs/worktree/current', 'HEAD'], path);
+    const mergeHead = (await execGit(['commit-tree', autoMerge, '-m', 'private merge recovery'], path)).stdout.trim();
+    const otherMergeHead = (await execGit(['commit-tree', autoMerge, '-m', 'other private merge recovery'], path)).stdout.trim();
+    await writeFile(join(admin, 'MERGE_HEAD'), `${mergeHead}\n${otherMergeHead}\n`);
     const tree = { path, branch: 'refs/heads/feature/private-objects', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
     const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
     const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([autoMerge, blob, tag]));
+    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([autoMerge, blob, tag, mergeHead, otherMergeHead]));
     expect(await readFile(join(saved.archiveDir, 'administration', 'gitdir', 'AUTO_MERGE'), 'utf8')).toBe(`${autoMerge}\n`);
     expect(await saved.verify(tree)).toBe(null);
     // The archive must supply the conflict tree's children, not just list roots
@@ -175,21 +485,78 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['cat-file', 'blob', conflictBlob], restored)).stdout).toContain('>>>>>>> theirs');
     expect((await execGit(['cat-file', 'blob', blob], restored)).stdout).toBe('private root blob bytes');
     expect((await execGit(['rev-parse', `${tag}^{tree}`], restored)).stdout.trim()).toBe(autoMerge);
+    expect((await execGit(['rev-parse', `${mergeHead}^{tree}`], restored)).stdout.trim()).toBe(autoMerge);
+    expect((await execGit(['rev-parse', `${otherMergeHead}^{tree}`], restored)).stdout.trim()).toBe(autoMerge);
     await execGit(['fsck', '--full', '--strict'], restored);
   });
 
-  it('retains the checkout when an AUTO_MERGE recovery tree is missing', async () => {
+  it.each(['AUTO_MERGE', 'refs/worktree/missing', 'logs/HEAD:old', 'logs/HEAD:new', 'FETCH_HEAD'])(
+    'retains the checkout when a genuine recovery object is missing from %s', async reference => {
     const path = join(external, 'missing-auto-merge');
     await execGit(['worktree', 'add', '-b', 'feature/missing-auto-merge', path, 'main'], repo);
     const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
     const missing = 'f'.repeat(40);
-    await writeFile(join(admin, 'AUTO_MERGE'), `${missing}\n`);
     const tree = { path, branch: 'refs/heads/feature/missing-auto-merge', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    const relative = reference.split(':')[0];
+    const bytes = reference === 'logs/HEAD:old' ? `${missing} ${tree.head} Test <test@example.com> 1 +0000\tmissing old object\n`
+      : reference === 'logs/HEAD:new' ? `${tree.head} ${missing} Test <test@example.com> 1 +0000\tmissing new object\n`
+      : reference === 'FETCH_HEAD' ? `${missing}\t\tbranch 'missing' of https://example.invalid/repo\n` : `${missing}\n`;
+    await mkdir(dirname(join(admin, relative)), { recursive: true });
+    await writeFile(join(admin, relative), bytes);
     await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir })).rejects.toThrow();
     expect(existsSync(path)).toBe(true);
-    expect(await readFile(join(admin, 'AUTO_MERGE'), 'utf8')).toBe(`${missing}\n`);
+    expect(await readFile(join(admin, relative), 'utf8')).toBe(bytes);
     expect(await archives()).toEqual([]);
     expect((await execGit(['for-each-ref', '--format=%(refname)', 'refs/portos/archive'], repo)).stdout).toBe('');
+  });
+
+  it.each(['refs/worktree/unknown', 'logs/HEAD', 'FETCH_HEAD', 'FUTURE_HEAD', 'sequencer/todo', 'index.lock'])(
+    'retains unknown or active recovery state in %s', async relative => {
+      const nativePath = join(external, 'unknown-recovery');
+      await execGit(['worktree', 'add', '-b', 'feature/unknown-recovery', nativePath, 'main'], repo);
+      const [path, admin, head] = (await execGit(['rev-parse', '--show-toplevel', '--absolute-git-dir', 'HEAD'], nativePath)).stdout.trim().split(/\r?\n/);
+      const tree = { path, branch: 'refs/heads/feature/unknown-recovery', head };
+      await mkdir(dirname(join(admin, relative)), { recursive: true });
+      const bytes = relative.startsWith('refs/') ? 'ref: HEAD^{tree}\n' : `unrecognized recovery format ${tree.head}\n`;
+      await writeFile(join(admin, relative), bytes);
+      await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir })).rejects.toThrow();
+      expect(existsSync(nativePath)).toBe(true);
+      expect(await registered(path)).toBe(true);
+      expect(await readFile(join(admin, relative), 'utf8')).toBe(bytes);
+      expect(await archives()).toEqual([]);
+    });
+
+  it('preserves SHA-256 private refs and packed roots without interpreting metadata as objects', async () => {
+    repo = join(scratch, 'sha256-repo');
+    await execGit(['init', '--object-format=sha256', '-b', 'main', repo], scratch);
+    await execGit(['config', 'user.name', 'Test'], repo);
+    await execGit(['config', 'user.email', 'test@example.com'], repo);
+    await execGit(['config', 'commit.gpgsign', 'false'], repo);
+    await writeFile(join(repo, 'initial.txt'), 'sha256 initial');
+    await execGit(['add', 'initial.txt'], repo);
+    await execGit(['commit', '-m', 'sha256 initial'], repo);
+    const path = join(external, 'sha256');
+    await execGit(['worktree', 'add', '-b', 'feature/sha256', path, 'main'], repo);
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const tree = { path, branch: 'refs/heads/feature/sha256', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    await writeFile(join(path, 'private.txt'), 'private sha256 blob');
+    const blob = (await execGit(['hash-object', '-w', 'private.txt'], path)).stdout.trim();
+    await rm(join(path, 'private.txt'));
+    await execGit(['update-ref', 'refs/worktree/private', blob], path);
+    await execGit(['tag', '-a', 'temporary', blob, '-m', 'packed sha256 tag'], path);
+    const tag = (await execGit(['rev-parse', 'refs/tags/temporary'], path)).stdout.trim();
+    await execGit(['tag', '-d', 'temporary'], path);
+    await writeFile(join(admin, 'packed-refs'), `# pack-refs with: peeled\n${tag} refs/worktree/packed\n^${blob}\n`);
+    await writeFile(join(admin, 'portos-pr-review-outcome.json'), JSON.stringify({ avatar: '1'.repeat(64) }));
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    expect(await saved.verify(tree)).toBe(null);
+    await rename(repo, `${repo}-unavailable`);
+    const restored = join(scratch, 'sha256-restored');
+    await execGit(['init', '--bare', '--object-format=sha256', restored], scratch);
+    await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    expect((await execGit(['cat-file', 'blob', blob], restored)).stdout).toBe('private sha256 blob');
+    expect((await execGit(['rev-parse', `${tag}^{blob}`], restored)).stdout.trim()).toBe(blob);
+    await execGit(['fsck', '--full', '--strict'], restored);
   });
 
   it.each([false, true])('archives a missing checkout private index and staged contents before pruning, parentAlias=%s', async parentAlias => {
@@ -321,7 +688,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(outcome.remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
     expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: result.archiveDir, checkoutIdentity });
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
-    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([]);
+    // The stale retired checkout stays settled. The sibling row left this scan, and its
+    // branch is absent, so disappearance stays a provenance obligation.
+    const settled = await getBranchReconcileOutcome('app-1');
+    expect(settled.retirementObligations).toEqual([
+      expect.objectContaining({ branch: 'other', reason: 'retirement-provenance-unverified' }),
+    ]);
+    expect(settled.retirementObligations.some(row => row.path === delayed.path)).toBe(false);
     await execGit(['worktree', 'add', '-b', release.branch, path, release.head], repo);
     const recreated = { ...delayed, checkoutIdentity: await readRetirementCheckoutIdentity(path), observedAt: new Date().toISOString() };
     expect(recreated.checkoutIdentity).not.toBe(checkoutIdentity);
@@ -329,23 +702,70 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await isCurrentRetirementCheckout({ ...recreated, head: '0'.repeat(40) })).toBe(false);
     // Even while the new tuple is live, the old scan cannot create its obligation.
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
-    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([]);
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([
+      expect.objectContaining({ branch: 'other', reason: 'retirement-provenance-unverified' }),
+    ]);
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
-    expect((await getBranchReconcileOutcome('app-1')).retirementObligations)
-      .toEqual([expect.objectContaining({ checkoutIdentity: recreated.checkoutIdentity, reason: 'retirement-receipt-unverified' })]);
+    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([
+      expect.objectContaining({ branch: 'other', reason: 'retirement-provenance-unverified' }),
+      expect.objectContaining({ checkoutIdentity: recreated.checkoutIdentity, reason: 'retirement-receipt-unverified' }),
+    ]);
   });
 
-  it('settles a stale inventory row whose checkout was already removed instead of refusing it', async () => {
-    const { path, release } = await heldCheckout('already-gone');
+  it('retains vanished active claim provenance instead of reporting an unarchived checkout retired', async () => {
+    const { path, release } = await heldCheckout('already-gone', { branch: 'claim/issue-42' });
+    await execGit(['branch', 'other', 'main'], repo);
+    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    await writeFile(join(gitDir, 'portos-review-status'), 'private synthetic evidence');
     await recordBranchReconcileOutcome('app-1', {
-      status: 'incomplete', remaining: [{ ...release, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
+      status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }, { branch: 'other', reason: 'actionable' }],
     });
     await execGit(['worktree', 'unlock', path], repo);
     await execGit(['worktree', 'remove', '--force', path], repo);
 
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners }))
-      .toEqual({ ok: true, alreadyRetired: true });
-    expect((await getBranchReconcileOutcome('app-1')).remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
+    const activeOwner = async () => [{ id: 'agent-live', status: 'running', metadata: {
+      sourceWorkspace: repo, claimBranches: [release.branch], claimReleasedBranches: [],
+    } }];
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: activeOwner }))
+      .toEqual({ ok: false, reason: 'retirement-provenance-unverified' });
+    const obligation = { ...release, reason: 'retirement-provenance-unverified', createdAt: expect.any(String) };
+    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete',
+      retirementObligations: [obligation], remaining: [obligation, { branch: 'other', reason: 'actionable' }],
+    });
+    // Neither ignored bytes nor private Git state can be reconstructed from the merged head.
+    expect(await archives()).toEqual([]);
+    expect((await execGit(['rev-parse', `refs/heads/${release.branch}`], repo)).stdout.trim()).toBe(release.head);
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
+    await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches' });
+    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete', remaining: [obligation] });
+  });
+
+  it('retains a checkout that vanishes between sweeps until its exact preservation receipt arrives', async () => {
+    const { path, release } = await heldCheckout('gone-between-scans', { branch: 'feature/missing' });
+    const marker = { branch: 'claim/issue-99', issue: 99, reason: 'claim-reservation-owner-unverified' };
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [{ ...release, reason: 'worktree-locked' }, marker] });
+    // Model an external directory deletion that leaves Git's registration intact.
+    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    await writeFile(join(gitDir, 'portos-review-status'), 'recoverable private evidence');
+    await rm(path, { recursive: true, force: true });
+    expect(await registered(path)).toBe(true);
+    await recordBranchReconcileOutcome('app-1', { status: 'drained', remaining: [] });
+    const pending = await getBranchReconcileOutcome('app-1');
+    expect(pending).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
+      retirementObligations: [{ ...release, reason: 'retirement-provenance-unverified' }],
+    });
+    expect(pending.remaining).toHaveLength(1);
+    expect(await readFile(join(gitDir, 'portos-review-status'), 'utf8')).toBe('recoverable private evidence');
+    const createdAt = pending.retirementObligations[0].createdAt;
+    // A receipt for another head cannot explain the original disappearance.
+    await recordHeldCheckoutRetirement('app-1', { ...release, head: 'f'.repeat(40), branchDeleted: true, archiveDir: '/example/other-archive' });
+    await recordBranchReconcileOutcome('app-1', { status: 'drained', remaining: [] });
+    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
+      retirementObligations: [{ ...release, reason: 'retirement-provenance-unverified', createdAt }],
+    });
+    // Only the trusted service writer can supply recovered preservation evidence.
+    await recordHeldCheckoutRetirement('app-1', { ...release, branchDeleted: true, archiveDir: '/example/recovered-original' });
+    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ retirementObligations: [], remaining: [] });
   });
 
   it('refuses a release that does not name a row of the last inventory', async () => {
@@ -756,6 +1176,39 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }];
     return current;
   }
+
+  it('retires reviewed metadata with unrelated hashes while recovering only structural reflog and fetch objects', async () => {
+    const c = await reviewedCheckout('metadata-hashes');
+    const absent = '1'.repeat(40);
+    expect((await execGit(['cat-file', '-e', absent], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    const metadata = Buffer.from(`${JSON.stringify({ reviews: [{ user: { avatar_url: `https://example.invalid/avatar/${absent}` } }], note: '2'.repeat(64) }, null, 2)}\n`);
+    await writeFile(join(c.admin, 'portos-pr-review-outcome.json'), metadata);
+    await writeFile(join(c.admin, 'COMMIT_EDITMSG'), `Unrelated message hash ${absent}\n`);
+    const tree = (await execGit(['rev-parse', 'HEAD^{tree}'], c.path)).stdout.trim();
+    const old = (await execGit(['commit-tree', tree, '-m', 'only in the old reflog field'], c.path)).stdout.trim();
+    const next = (await execGit(['commit-tree', tree, '-m', 'only in the new reflog field'], c.path)).stdout.trim();
+    const fetched = (await execGit(['commit-tree', tree, '-m', 'only in FETCH_HEAD'], c.path)).stdout.trim();
+    await writeFile(join(c.admin, 'logs/HEAD'), `${old} ${next} Test <test@example.com> 1 +0000\tmessage ${absent}\n`);
+    await writeFile(join(c.admin, 'FETCH_HEAD'), `${fetched}\tnot-for-merge\tbranch '${absent}' of https://example.invalid/repo\n`);
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, branchDeleted: true, archiveDir: expect.any(String) });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await readFile(join(result.archiveDir, 'administration/gitdir/portos-pr-review-outcome.json'))).toEqual(metadata);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      path: c.release.path, branch: c.release.branch, head: c.release.head, archiveDir: result.archiveDir, branchDeleted: true,
+    }));
+    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([old, next, fetched]));
+    expect(manifest.captured.recoveryHeads).not.toContain(absent);
+    await rename(repo, `${repo}-unavailable`);
+    const restored = join(scratch, 'metadata-restored');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    for (const oid of [old, next, fetched]) expect((await execGit(['cat-file', '-t', oid], restored)).stdout.trim()).toBe('commit');
+    await execGit(['fsck', '--full', '--strict'], restored);
+  });
 
   it('retires a freshly reviewed reused-branch incarnation with a standalone archive and exact receipt', async () => {
     const c = await reviewedCheckout('quality-reused', { gitlink: true });

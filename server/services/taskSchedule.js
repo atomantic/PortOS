@@ -771,7 +771,7 @@ export async function isPerpetualParkActive(taskType, appId = null) {
 
 /** Persist the latest deterministic sweep evidence independently of agent success. */
 export async function recordBranchReconcileOutcome(appId, { status, reason, remaining, nextAction, retirementObligations: additionalObligations = [] }) {
-  return updateSchedule(async (schedule) => {
+  const outcome = await updateSchedule(async (schedule) => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const now = new Date().toISOString();
     const previous = record.branchReconcileOutcome;
@@ -790,7 +790,13 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
         rejected.push(row);
       } else admitted.push(row);
     }
-    const retirementObligations = retainRetirementObligations(previous, admitted, now);
+    // A fresh empty scan must not erase the last observation of vanished source.
+    const omitted = remaining === undefined ? [] : (previous?.remaining || [])
+      .filter(row => !remaining.some(current => sameRetirementCheckout(current, row))
+        && !rejected.some(entry => sameRetirementObservation(entry, row)));
+    const missing = await missingInventoryRows(appId, omitted);
+    const retirementObligations = retainRetirementObligations(previous,
+      [...admitted, ...missing.map(missingPreservationObligation)], now);
     const inventory = (remaining === undefined ? previous?.remaining ?? null : remaining)
       ?.filter(row => !rejected.some(entry => sameRetirementObservation(entry, row))) ?? null;
     const current = inventory?.map(row => {
@@ -804,6 +810,60 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
       ...previous, status, reason, nextAction, updatedAt: now, retirementObligations,
       remaining: retained.length ? [...(current || []), ...retained] : current,
       observedAt: remaining === undefined ? record.branchReconcileOutcome?.observedAt ?? null : now,
+      ...(retirementObligations.some(row => row.reason === 'retirement-provenance-unverified') && missingPreservationStatus),
+    };
+    return { result: record.branchReconcileOutcome, changed: true };
+  });
+  if (!appId || !unresolvedRetirements(outcome).length) return outcome;
+  const app = await getAppById(appId).catch(() => null);
+  if (!app?.repoPath) return outcome;
+  // Keep the expensive archive verifier off ordinary live-checkout writes.
+  const missing = await findGoneInventoryRows(app.repoPath, unresolvedRetirements(outcome), { includeObligations: true }).catch(() => []);
+  if (!missing.length) return outcome;
+  const { recoverMissingCheckoutPreservations } = await import('./heldCheckoutRecovery.js');
+  return recoverMissingCheckoutPreservations({ appId, repoPath: app.repoPath, outcome });
+}
+
+/** Compare the whole observed inventory and its generation inside the schedule
+ * writer. A verifier result never authorizes a newer/recreated checkout.
+ */
+export async function recordRecoveredCheckoutPreservations(appId, expected, observations, stillAbsent) {
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const outcome = record.branchReconcileOutcome;
+    if (JSON.stringify(outcome) !== JSON.stringify(expected) || !await stillAbsent()) return { result: outcome, changed: false };
+    const now = new Date().toISOString();
+    const recoveredPreservations = [...(outcome.recoveredPreservations || [])];
+    const diagnosed = unresolvedRetirements(outcome).map(release => {
+      const observation = observations.find(row => sameRetirementCheckout(row.release, release) && row.release.createdAt === release.createdAt);
+      if (!observation) return release;
+      const accepted = observation.proof && recoveredPreservations.length < 1000;
+      const { recheck: _recheck, releaseFence: _releaseFence, ...proof } = observation.proof || {};
+      if (accepted) recoveredPreservations.push({
+        branch: release.branch, path: release.path, head: release.head,
+        obligationCreatedAt: release.createdAt, ...proof, verified: true, verifiedAt: now,
+      });
+      return { ...release, preservationEvidence: { status: 'unresolved',
+        reason: observation.proof && !accepted ? 'preservation-receipt-budget-exceeded' : observation.reason,
+        checkedAt: now, archives: observation.evidence, nextAction: observation.nextAction } };
+    });
+    const retirementObligations = unresolvedRetirements({ retirementObligations: diagnosed, recoveredPreservations });
+    const remaining = (outcome.remaining || []).flatMap(row => {
+      const diagnosedRow = diagnosed.find(release => sameRetirementCheckout(row, release) && row.createdAt === release.createdAt);
+      return diagnosedRow ? retirementObligations.filter(release => sameRetirementCheckout(release, diagnosedRow)) : [row];
+    });
+    const historical = retirementObligations.find(row => row.preservationEvidence);
+    // Recovery proves preservation, not repository convergence. Retire the old
+    // diagnosis and let the next sweep establish the aggregate completion state.
+    const diagnosis = historical
+      ? { status: 'incomplete', reason: 'historical-preservation-unresolved', nextAction: historical.preservationEvidence.nextAction }
+      : outcome.reason === 'historical-preservation-unresolved'
+        ? { status: 'incomplete', reason: remaining.length ? 'remaining-holds' : 'preservation-recovered',
+          nextAction: remaining.length ? 'Resolve the remaining holds, then run branch reconciliation again.'
+            : 'Historical preservation verified; run branch reconciliation again to confirm repository completion.' }
+        : {};
+    record.branchReconcileOutcome = { ...outcome, retirementObligations, recoveredPreservations, remaining, updatedAt: now,
+      ...diagnosis,
     };
     return { result: record.branchReconcileOutcome, changed: true };
   });
@@ -832,37 +892,63 @@ export async function getBranchReconcileOutcome(appId) {
   return resolveExecutionRecord(schedule, 'branch-reconcile', appId)?.branchReconcileOutcome ?? null;
 }
 
-/** Remove stored inventory rows (display data only; obligations are untouched). */
-export async function dropInventoryRows(appId, rows) {
+const missingPreservationObligation = row => ({ ...row, reason: 'retirement-provenance-unverified' });
+const missingPreservationStatus = {
+  status: 'incomplete', reason: 'retirement-provenance-unverified',
+  nextAction: 'Trace the missing original checkout/ref and recover its exact archive receipt; disappearance and merged commits do not prove preservation.',
+};
+
+async function missingInventoryRows(appId, rows, options) {
+  if (!appId || !rows.length) return [];
+  const app = await getAppById(appId);
+  if (!app?.repoPath) return [];
+  return findGoneInventoryRows(app.repoPath, rows, options);
+}
+
+/** Missing originals remain evidence until an exact service receipt settles them. */
+export async function recordMissingInventoryRows(appId, rows) {
   return updateSchedule(async (schedule) => {
     const outcome = ensureExecutionRecord(schedule, 'branch-reconcile', appId).branchReconcileOutcome;
     if (!Array.isArray(outcome?.remaining)) return { result: outcome ?? null, changed: false };
-    const kept = outcome.remaining.filter(entry => !rows.some(row => sameRetirementCheckout(row, entry)));
-    if (kept.length === outcome.remaining.length) return { result: outcome, changed: false };
-    outcome.remaining = kept;
+    const missing = outcome.remaining.filter(entry => rows.some(row => sameRetirementCheckout(row, entry)));
+    if (!missing.length) return { result: outcome, changed: false };
+    const now = new Date().toISOString();
+    const obligations = retainRetirementObligations(outcome, missing.map(missingPreservationObligation), now);
+    Object.assign(outcome, missingPreservationStatus, { updatedAt: now, retirementObligations: obligations,
+      remaining: outcome.remaining.map(row => obligations.find(entry => sameRetirementCheckout(entry, row)) || row),
+    });
     return { result: outcome, changed: true };
   });
 }
 
-/**
- * Drop stored inventory rows whose checkout or branch no longer exists, so the
- * Schedule view never offers an action on something already cleaned up.
- * Returns the outcome as it now stands.
- */
-async function pruneGoneInventory(appId, outcome) {
+/** Reconcile display inventory with missing source without claiming archival success. */
+async function reconcileMissingInventory(appId, outcome) {
   if (!appId || !outcome?.remaining?.length) return outcome;
-  const app = await getAppById(appId).catch(() => null);
-  if (!app?.repoPath) return outcome;
-  const gone = await findGoneInventoryRows(app.repoPath, outcome.remaining, { includeObligations: true }).catch(() => []);
+  const gone = await missingInventoryRows(appId, outcome.remaining, { includeObligations: true }).catch(() => []);
   if (!gone.length) return outcome;
-  const obsolete = gone.filter(row => !isObligationRow(row));
-  const current = obsolete.length ? await dropInventoryRows(appId, obsolete).catch(() => null) ?? outcome : outcome;
-  // Missing originals do not prove preservation. Keep obligations, but do not
-  // present their historical tuple as a checkout that can still be retired.
+  const unrecorded = gone.filter(row => !isObligationRow(row));
+  const current = unrecorded.length ? await recordMissingInventoryRows(appId, unrecorded).catch(() => null) ?? outcome : outcome;
+  // The original checkout is gone; flag it so the UI never offers a retire action on it.
   return { ...current, remaining: current.remaining.map(row => ({
     ...row,
     ...(row.path && gone.some(missing => sameRetirementCheckout(missing, row)) && { checkoutMissing: true }),
   })) };
+}
+
+/** A prepared archive does not claim deletion. This exact-generation receipt
+ * must exist before superseded cleanup is allowed to remove its originals.
+ */
+export async function recordHeldCheckoutPreservation(appId, { path, branch, head, createdAt, archiveDir, incarnation }) {
+  return updateSchedule(async schedule => {
+    const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
+    const outcome = record.branchReconcileOutcome;
+    const row = outcome?.retirementObligations?.find(entry => sameRetirementCheckout(entry, { path, branch, head }) && entry.createdAt === createdAt);
+    if (!row || !incarnation?.pointer || !incarnation?.gitdir
+      || JSON.stringify(row.checkoutIncarnation) !== JSON.stringify(incarnation)
+      || (archiveDir !== null && (typeof archiveDir !== 'string' || !archiveDir))) throw new Error('retirement-obligation-changed');
+    row.preservationReceipt = { archiveDir, incarnation: structuredClone(incarnation), status: archiveDir === null ? 'preparing' : 'preserved', preparedAt: new Date().toISOString() };
+    return { result: row.preservationReceipt, changed: true };
+  });
 }
 
 const RETIRED_CHECKOUTS_KEPT = 20;
@@ -1777,7 +1863,7 @@ export async function getScheduleStatus() {
           .map(([appId, record]) => [appId, record.branchReconcileOutcome]),
       ];
       taskStatus.reconcileOutcomes = Object.fromEntries(
-        await mapWithConcurrency(outcomes, 8, async ([appId, outcome]) => [appId, await pruneGoneInventory(appId, outcome)])
+        await mapWithConcurrency(outcomes, 8, async ([appId, outcome]) => [appId, await reconcileMissingInventory(appId, outcome)])
       );
     }
     status.tasks[taskType] = taskStatus;

@@ -289,10 +289,12 @@ export function deleteCompletedLocalBranch(repoPath, branch, expectedHead, { bef
     const preservation = await preserveBranchRetirement(repoPath, common, branch, expectedHead);
     if (!await preservation.verify()) return false;
     await Promise.resolve().then(beforeMutation).catch(error => { callbackError = error; throw error; });
-    const result = await execGit(['push',
-      '--receive-pack=git -c receive.denyCurrentBranch=refuse -c receive.denyDeleteCurrent=refuse -c receive.autogc=false receive-pack',
-      `--force-with-lease=${ref}:${expectedHead}`, '--', common, `:${ref}`], repoPath, { ignoreExitCode: true });
-    return result.exitCode === 0;
+    return preservation.retire(async () => {
+      const result = await execGit(['push',
+        '--receive-pack=git -c receive.denyCurrentBranch=refuse -c receive.denyDeleteCurrent=refuse -c receive.autogc=false receive-pack',
+        `--force-with-lease=${ref}:${expectedHead}`, '--', common, `:${ref}`], repoPath, { ignoreExitCode: true });
+      return result.exitCode === 0;
+    });
   }).catch(error => { if (error === callbackError) throw error; return false; });
 }
 

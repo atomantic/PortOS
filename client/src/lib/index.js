@@ -270,6 +270,7 @@ export * from './riggingReasons.js';
 export * from './jevHeadReasons.js';
 export * from './scopeAdherenceReasons.js';
 export * from './usagePeriods.js';
+export * from './usageChartColors.js';
 export * from './usdzExport.js';
 export * from './eidoverseFrame.js';
 export * from './songBookDraft.js';

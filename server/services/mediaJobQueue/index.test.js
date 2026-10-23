@@ -83,6 +83,8 @@ const stubs = {
   hasSurvivingTrainer: vi.fn(async () => false),
   runVideoUpscale: vi.fn(() => new Promise(() => {})),
   cancelVideoUpscale: vi.fn(),
+  runVideoStitch: vi.fn(() => new Promise(() => {})),
+  cancelVideoStitch: vi.fn(),
   runSharingCopy: vi.fn(async () => ({})),
   cancelSharingCopy: vi.fn(() => true),
   renderComposition: vi.fn(async () => ({})),
@@ -123,6 +125,11 @@ vi.mock('../superColliderRender.js', () => ({
 vi.mock('../videoGen/upscaleJob.js', () => ({
   runVideoUpscale: (...args) => stubs.runVideoUpscale(...args),
   cancel: (...args) => stubs.cancelVideoUpscale(...args),
+}));
+
+vi.mock('../videoGen/stitchJob.js', () => ({
+  runVideoStitch: (...args) => stubs.runVideoStitch(...args),
+  cancel: (...args) => stubs.cancelVideoStitch(...args),
 }));
 
 vi.mock('../videoGen/grok.js', () => ({
@@ -246,6 +253,7 @@ beforeEach(async () => {
   stubs.runTraining.mockImplementation(() => new Promise(() => {}));
   stubs.hasSurvivingTrainer.mockResolvedValue(false);
   stubs.runVideoUpscale.mockImplementation(() => new Promise(() => {}));
+  stubs.runVideoStitch.mockImplementation(() => new Promise(() => {}));
   await importFresh();
 });
 
@@ -4223,6 +4231,7 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
   const KIND_CASES = [
     { kind: 'video', params: {}, entry: 'generateVideo', bus: 'video', verb: 'Rendering', window: WINDOWS.VIDEO },
     { kind: 'video-upscale', params: {}, entry: 'runVideoUpscale', bus: 'video', verb: 'Upscaling', window: WINDOWS.VIDEO },
+    { kind: 'video-stitch', params: {}, entry: 'runVideoStitch', bus: 'video', verb: 'Stitching', window: WINDOWS.VIDEO },
     { kind: 'video-sharing', params: { sharingProjectId: 'mv-example', renderHistoryId: 'final-example', sourceHash: 'a'.repeat(64) },
       entry: 'runSharingCopy', bus: 'video', verb: 'Generating', window: WINDOWS.VIDEO },
     { kind: 'html-composition', params: { directory: 'compositions/example' }, entry: 'renderComposition', bus: 'video', verb: 'Generating', window: WINDOWS.IMAGE },

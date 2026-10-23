@@ -285,6 +285,10 @@ export function buildAgentRegistration({
       && isTruthyMeta(task.metadata?.reviewLoopFollowUp)
       && !isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
       ? { url: task.metadata.reviewLoopPRUrl, branch: task.metadata.reviewLoopPRBranch,
+        ...(worktreeInfo?.detached === true && !task.metadata.forkHead ? {
+          workspacePath,
+          detached: { version: 1, headSha: worktreeInfo.headSha },
+        } : {}),
         ...(task.metadata.forkHead ? {
           workspacePath,
           fork: task.metadata.reviewLoopForkTarget ? structuredClone(task.metadata.reviewLoopForkTarget) : null,

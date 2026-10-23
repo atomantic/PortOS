@@ -14,7 +14,7 @@ const operationSchema = z.object({
   pid: z.number().int().positive(), startedAt: z.string().datetime(), unsettled: z.boolean().optional(),
   uncertaintyStamp: z.string().uuid().optional(),
 }).strict();
-const schema = z.object({
+export const maintenanceJournalSchema = z.object({
   version: z.literal(1), revision: z.number().int().nonnegative(),
   hold: z.object({ id: z.string().uuid(), revision: z.number().int().positive(),
     reason: z.string().min(1).max(500), owner: z.string().min(1).max(128), requestedAt: z.string().datetime(),
@@ -31,7 +31,7 @@ const error = (code = 'MAINTENANCE_HELD', message = 'Maintenance is holding new 
   Object.assign(new Error(message), { status: code === 'MAINTENANCE_STALE' ? 409 : 503, code });
 export const isMaintenanceHold = err => ['MAINTENANCE_HELD', 'MAINTENANCE_UNAVAILABLE'].includes(err?.code);
 
-function syncDirectory(path, io) {
+export function syncMaintenanceDirectory(path, io = fs) {
   if (process.platform === 'win32') return;
   const fd = io.openSync(path, 'r');
   try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
@@ -47,7 +47,14 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   // A failed publication must not reopen admission in this process, even if
   // an operator removes an interrupted transaction before restarting it.
   let uncertain = false;
-  const unavailable = () => error('MAINTENANCE_UNAVAILABLE', 'Maintenance state needs recovery; new work remains held.');
+  let failureReported = false;
+  const reportFailure = err => {
+    if (failureReported) return;
+    failureReported = true;
+    while (err.cause instanceof Error) err = err.cause;
+    console.error(`❌ Maintenance transaction failed (${err.code ?? 'UNKNOWN'}): ${String(err.message).replace(/\s+/g, ' ')}`);
+  };
+  const unavailable = cause => Object.assign(error('MAINTENANCE_UNAVAILABLE', 'Maintenance state needs recovery; new work remains held.'), cause ? { cause } : {});
   const exists = path => {
     try { io.lstatSync(path); return true; } catch (err) { if (err.code === 'ENOENT') return false; throw err; }
   };
@@ -56,8 +63,8 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     try {
       if (!exists(file)) return empty();
       if (!io.lstatSync(file).isFile()) throw unavailable();
-      return schema.parse(JSON.parse(io.readFileSync(file, 'utf8')));
-    } catch { throw unavailable(); }
+      return maintenanceJournalSchema.parse(JSON.parse(io.readFileSync(file, 'utf8')));
+    } catch (err) { throw unavailable(err); }
   };
   // status()/held() are polled several times a second (media drain loop, spawn
   // gates); re-parsing a journal that carries every settled operation allocated
@@ -70,7 +77,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     if (uncertain) throw unavailable();
     let stats;
     try { stats = io.lstatSync(file); }
-    catch (err) { if (err.code === 'ENOENT') return empty(); throw unavailable(); }
+    catch (err) { if (err.code === 'ENOENT') return empty(); throw unavailable(err); }
     if (!stats.isFile()) throw unavailable();
     const key = `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
     if (statusCache?.key !== key) statusCache = { key, state: read() };
@@ -85,11 +92,19 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     scope: 'PortOS agents, mind turns, provider runs, media renders and scheduled shell/script work, through cleanup and saving. Unrelated host applications are outside this scope.',
   });
   const status = () => {
+    let cause = 'unreadable-journal';
+    let since;
     try {
-      if (exists(lock)) throw unavailable();
+      if (exists(lock)) {
+        cause = 'interrupted-transaction';
+        since = io.lstatSync(lock).mtime.toISOString();
+        throw unavailable();
+      }
+      if (uncertain) { cause = 'process-uncertain'; throw unavailable(); }
       return project(readForStatus());
     } catch {
       return { state: 'unavailable', revision: null, hold: null, blockers: [],
+        cause, ...(since ? { since } : {}),
         error: 'Maintenance state needs recovery. New work is held; readiness is unknown.' };
     }
   };
@@ -110,28 +125,29 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
         }
       }
-    } catch { throw unavailable(); }
+    } catch (err) { reportFailure(err); throw unavailable(); }
     let published = false;
     let result;
     try {
       const state = read();
       result = change(state);
       state.revision++;
-      schema.parse(state);
+      maintenanceJournalSchema.parse(state);
       const pending = join(directory, `pending-${makeId()}.json`);
       const fd = io.openSync(pending, 'wx', 0o600);
       try { io.writeFileSync(fd, JSON.stringify(state) + '\n'); io.fsyncSync(fd); } finally { io.closeSync(fd); }
       io.renameSync(pending, file);
-      syncDirectory(directory, io);
+      syncMaintenanceDirectory(directory, io);
       published = true;
     } catch (err) {
       // Refused admission/stale requests didn't attempt a publication.
       if (['MAINTENANCE_HELD', 'MAINTENANCE_STALE'].includes(err.code)) published = true;
-      else uncertain = true;
+      else { uncertain = true; reportFailure(err); }
       throw err.code?.startsWith('MAINTENANCE_') ? err : unavailable();
     } finally {
       if (published) {
-        try { io.rmdirSync(lock); syncDirectory(directory, io); } catch { uncertain = true; }
+        try { io.rmdirSync(lock); syncMaintenanceDirectory(directory, io); }
+        catch (err) { uncertain = true; reportFailure(err); }
       }
     }
     if (uncertain) throw unavailable();

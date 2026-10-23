@@ -21,9 +21,9 @@ export function __runCosTaskRepositoryContract({ name, makeBackend }) {
     let backend;
     // Saves a whole list the way the store does: plan against what is loaded, then apply.
     const save = async (source, next) => {
-      const { rows } = await backend.loadWorkingSet(source);
+      const { rows, version } = await backend.loadWorkingSet(source);
       const plan = planListSave({ previous: rows, next, source });
-      await backend.apply(source, { upserts: plan.upserts, deletes: plan.deletes });
+      await backend.apply(source, { ...plan, expectedVersions: { [source]: version } });
       return plan;
     };
     const ids = async (source) => (await backend.loadWorkingSet(source)).rows.map((row) => row.task.id);
@@ -59,6 +59,18 @@ export function __runCosTaskRepositoryContract({ name, makeBackend }) {
       expect(plan.deletes).toEqual([id(2)]);
       const { rows } = await backend.loadWorkingSet('user');
       expect(rows.map((row) => row.task.description)).toEqual(['Edited']);
+    });
+
+    it('refuses stale or unversioned replacements, including after an explicit deletion', async () => {
+      await save('user', [task(1), task(2)]);
+      const snapshot = await backend.loadWorkingSet('user');
+      const plan = planListSave({ previous: snapshot.rows, next: [task(1, { description: 'Stale edit' }), task(3)], source: 'user' });
+      await backend.deleteById(id(1), 'user');
+      await expect(backend.apply('user', { ...plan, expectedVersions: { user: snapshot.version } }))
+        .rejects.toMatchObject({ code: 'COS_TASK_LIST_CONFLICT' });
+      await expect(backend.apply('user', plan)).rejects.toThrow('require the versions');
+      expect(await ids('user')).toEqual([id(2)]);
+      expect(await backend.readVersion('user')).toBe(snapshot.version + 1);
     });
 
     it('returns copies, never references into the backend', async () => {

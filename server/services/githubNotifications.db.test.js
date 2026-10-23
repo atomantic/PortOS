@@ -46,7 +46,7 @@ const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const { __testing: { listAutopilotCandidates, candidateFilter } } = await import('./githubNotificationAutopilot.js');
 const {
-  syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
+  syncAccountNotifications, syncAllNotifications, listNotifications, listActionableNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, actOnPullRequest, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
 const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
@@ -154,6 +154,37 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     accountIds.push(account.id);
   });
 
+  // Central Actions must use the inbox's projection and never fetch GitHub on read.
+  it('projects unread open alerts across accounts, including suspect items, and removes handled or disabled sources', async () => {
+    const second = await createAccount({ host: 'github.com', login: `other${accountIds.length}`, label: 'Other example' });
+    accountIds.push(second.id);
+    mockGh(args => githubListing(args, [thread('9001'), thread('9002'), thread('9003'), thread('9004')]));
+    await syncAccountNotifications(account.id, { automate: false });
+    await syncAccountNotifications(second.id, { automate: false });
+    await query("UPDATE github_notifications SET suspect = TRUE WHERE account_id = $1 AND thread_id = '9002'", [account.id]);
+    await query("UPDATE github_notifications SET unread = FALSE WHERE account_id = $1 AND thread_id = '9003'", [account.id]);
+    await query("UPDATE github_notifications SET read_on_github_at = NOW() WHERE account_id = $1 AND thread_id = '9004'", [account.id]);
+    await updateAccount(second.id, { enabled: false });
+    vi.mocked(execGh).mockClear();
+
+    const rows = (await listActionableNotifications()).filter(row => row.accountId === account.id || row.accountId === second.id);
+    expect(rows.map(row => row.threadId).sort()).toEqual(['9001', '9002']);
+    const inbox = (await listNotifications({ accountId: account.id })).notifications.find(row => row.threadId === '9001');
+    expect(rows.find(row => row.threadId === '9001')).toEqual({ ...inbox, accountLabel: account.label });
+    expect(rows.find(row => row.threadId === '9002')).toMatchObject({ suspect: true, agent: { refused: 'suspect' } });
+    expect(await listActionableNotifications({ limit: 1 })).toHaveLength(1);
+    expect(execGh).not.toHaveBeenCalled();
+
+    for (const action of ['mute', 'unsubscribe', 'done']) {
+      await applyNotificationAction(account.id, '9001', action);
+      expect((await listActionableNotifications()).some(row => row.accountId === account.id && row.threadId === '9001')).toBe(false);
+      if (action !== 'done') {
+        await applyNotificationAction(account.id, '9001', 'resubscribe');
+        expect((await listActionableNotifications()).some(row => row.accountId === account.id && row.threadId === '9001')).toBe(true);
+      }
+    }
+  });
+
   // Regression: CI can finish without a new notification or conditional-listing change.
   it('rechecks pending Dependabot PRs on later syncs and merges only the passing exact head without a model call', async () => {
     await updateAccount(account.id, { mode: 'autopilot', agentRules: [{ id: 'deps', kind: 'dependabot-pr', repo: '*', action: 'merge', mergeMethod: 'squash', deleteBranch: false }] });
@@ -193,8 +224,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await syncAccountNotifications(account.id);
     expect(merges).toEqual([['pr', 'merge', '2011', '--repo', `github.com/${repo}`, '--squash', '--match-head-commit', head]]);
     const result = await getNotification(account.id, '2011');
-    expect(result).toMatchObject({ decision: 'suggest-mark-read', pullRequest: null, pullRequestAction: { merged: true, headSha: head } });
-    expect(result.events.some(event => event.kind === 'merged')).toBe(true);
+    expect(result).toMatchObject({ state: 'done', pullRequest: null, pullRequestAction: { merged: true, headSha: head } });
+    expect(result.events.map(event => event.kind)).toEqual(expect.arrayContaining(['merged', 'done']));
     await syncAccountNotifications(account.id);
     expect(merges).toHaveLength(1);
     expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
@@ -213,6 +244,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       reviewDecision: 'APPROVED', statusCheckRollup: [{ name: 'CI', conclusion: 'SUCCESS' }] };
     let current = ready;
     let refuseMerge = false;
+    let landMerge = false;
     const merges = [];
     const fallback = vi.mocked(execGh).getMockImplementation();
     vi.mocked(execGh).mockImplementation(async (args, ...rest) => {
@@ -220,6 +252,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       if (args[1] === 'merge') {
         merges.push(args);
         if (refuseMerge) throw new Error('Head commit changed');
+        if (landMerge) current = { ...ready, state: 'MERGED' };
         return '';
       }
       return JSON.stringify(current);
@@ -237,6 +270,11 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await expect(actOnPullRequest(account.id, '2012', { action: 'merge' })).rejects.toMatchObject({ code: 'GITHUB_PR_MERGE_UNCONFIRMED' });
     expect(await getNotification(account.id, '2012')).toMatchObject({ state: 'open', decision: 'needs-you', pullRequestAction: null });
     expect(merges.every(args => args.includes(head))).toBe(true);
+    // A confirmed merge finishes the thread: it comes back done, with no further click.
+    landMerge = true;
+    const done = await actOnPullRequest(account.id, '2012', { action: 'merge' });
+    expect(done).toMatchObject({ merged: true, notification: { state: 'done', unread: false } });
+    expect((await getNotification(account.id, '2012')).events.map(event => event.kind)).toEqual(expect.arrayContaining(['merged', 'done']));
   });
 
   it('reaches an older ready PR after a full batch of newer PRs remains pending', async () => {
@@ -1412,6 +1450,31 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(second.find((result) => result.accountId === account.id)).toMatchObject({ skipped: 'poll-interval' });
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+
+  it.each([{ mode: 'disabled' }, { enabled: false }])('hides cached inbox rows, counts and sync errors for inactive accounts (%j) without deleting them', async (disabled) => {
+    mockGh(() => listing([thread('821')]));
+    await syncAccountNotifications(account.id, { automate: false });
+    await query('UPDATE github_notification_sync SET last_error = $2 WHERE account_id = $1', [account.id, 'Old sync failure']);
+    expect((await listNotifications({ accountId: account.id })).counts.all).toBe(1);
+    await updateAccount(account.id, disabled);
+    vi.mocked(execGh).mockClear();
+
+    for (const view of ['needs-you', 'suspect', 'handled', 'all']) {
+      const scoped = await listNotifications({ accountId: account.id, view });
+      expect(scoped.notifications).toEqual([]);
+      expect(Object.values(scoped.counts).every(count => count === 0)).toBe(true);
+      expect(scoped.sync).toEqual({});
+      const combined = await listNotifications({ view });
+      expect(combined.notifications.some(row => row.accountId === account.id)).toBe(false);
+      expect(combined.sync[account.id]).toBeUndefined();
+    }
+    await updateAccount(account.id, { mode: 'observe', enabled: true });
+    const restored = await listNotifications({ accountId: account.id });
+    expect(restored.notifications.map(row => row.threadId)).toEqual(['821']);
+    expect(restored.counts.all).toBe(1);
+    expect(restored.sync[account.id].lastError).toBe('Old sync failure');
+    expect(execGh).not.toHaveBeenCalled();
   });
 
   it('never fetches or processes a disabled account, scheduled or manual', async () => {

@@ -97,7 +97,20 @@ export function normalizeTaskOutcome(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   if (!['completed', 'no-action-needed', 'blocked', 'incomplete'].includes(value.status)) return null;
   if (typeof value.reason !== 'string' || !value.reason.trim()) return null;
-  return { status: value.status, reason: value.reason.trim() };
+  const outcome = { status: value.status, reason: value.reason.trim() };
+  if (['blocked', 'incomplete'].includes(value.status)) {
+    if (value.recovery?.mode === 'cleanup') outcome.recovery = { mode: 'cleanup' };
+    if (value.recovery?.mode === 'approval') {
+      const options = Array.isArray(value.recovery.options)
+        ? value.recovery.options.filter(option => typeof option === 'string' && option.trim()).map(option => option.trim()) : [];
+      // Malformed approval requests fail closed, with concrete default choices.
+      outcome.recovery = { mode: 'approval', options: options.length >= 2 ? options : [
+        'Address the named prerequisite, then retry the retained work.',
+        'Keep the task stopped and preserve its work.',
+      ] };
+    }
+  }
+  return outcome;
 }
 
 /** Only evidenced delivery may resolve external work; legacy exits are unknown. */

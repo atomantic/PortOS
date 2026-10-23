@@ -14,15 +14,6 @@ vi.mock('./catalogDB.js', () => ({ attachMedia, setPortraitMedia, listMediaForIn
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const hook = await import('./catalogImageAttachHook.js');
 
-async function waitFor(predicate, { timeoutMs = 1000, intervalMs = 5 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  throw new Error('waitFor: predicate never became true');
-}
-
 const completedImageJob = (params, filename = 'job-abc.png') => ({
   kind: 'image',
   params,
@@ -45,13 +36,14 @@ describe('catalogImageAttachHook', () => {
     getIngredient.mockResolvedValue({ id: 'ing', deleted: false });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await hook.__testing.settled();
     hook.__testing.reset();
   });
 
   it('sets the first render as the portrait when the ingredient has no media', async () => {
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-1' } }, 'first.png'));
-    await waitFor(() => setPortraitMedia.mock.calls.length > 0);
+    await hook.__testing.settled();
     expect(setPortraitMedia).toHaveBeenCalledWith('ing-1', 'first.png');
     expect(attachMedia).not.toHaveBeenCalled();
   });
@@ -59,14 +51,14 @@ describe('catalogImageAttachHook', () => {
   it('attaches as a reference when the ingredient already has a portrait', async () => {
     listMediaForIngredient.mockResolvedValue([{ mediaKey: 'old.png', kind: 'portrait' }]);
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-2' } }, 'second.png'));
-    await waitFor(() => attachMedia.mock.calls.length > 0);
+    await hook.__testing.settled();
     expect(attachMedia).toHaveBeenCalledWith('ing-2', 'second.png', 'reference');
     expect(setPortraitMedia).not.toHaveBeenCalled();
   });
 
   it('honors an explicit reference kind even with no existing portrait', async () => {
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-3', kind: 'reference' } }, 'ref.png'));
-    await waitFor(() => attachMedia.mock.calls.length > 0);
+    await hook.__testing.settled();
     expect(attachMedia).toHaveBeenCalledWith('ing-3', 'ref.png', 'reference');
     expect(setPortraitMedia).not.toHaveBeenCalled();
   });
@@ -77,7 +69,7 @@ describe('catalogImageAttachHook', () => {
     mediaJobEvents.emit('completed', completedImageJob({
       catalogAttach: { ingredientId: 'ing-sheet', kind: 'portrait', role: 'sheet:environment' },
     }, 'sheet.png'));
-    await waitFor(() => attachMedia.mock.calls.length > 0);
+    await hook.__testing.settled();
     expect(attachMedia).toHaveBeenCalledWith('ing-sheet', 'sheet.png', 'reference', { role: 'sheet:environment' });
     expect(setPortraitMedia).not.toHaveBeenCalled();
   });
@@ -85,7 +77,7 @@ describe('catalogImageAttachHook', () => {
   it('honors an explicit portrait kind even when a portrait already exists', async () => {
     listMediaForIngredient.mockResolvedValue([{ mediaKey: 'old.png', kind: 'portrait' }]);
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-4', kind: 'portrait' } }, 'new.png'));
-    await waitFor(() => setPortraitMedia.mock.calls.length > 0);
+    await hook.__testing.settled();
     expect(setPortraitMedia).toHaveBeenCalledWith('ing-4', 'new.png');
     expect(attachMedia).not.toHaveBeenCalled();
   });
@@ -135,7 +127,7 @@ describe('catalogImageAttachHook', () => {
     // Two catalog-tagged jobs for the SAME ingredient complete back-to-back.
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-race' } }, 'a.png'));
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-race' } }, 'b.png'));
-    await waitFor(() => rows.length === 2);
+    await hook.__testing.settled();
 
     expect(setPortraitMedia).toHaveBeenCalledTimes(1);
     expect(setPortraitMedia).toHaveBeenCalledWith('ing-race', 'a.png');
@@ -191,14 +183,14 @@ describe('catalogImageAttachHook', () => {
       kind: 'image', params: { catalogAttach: { ingredientId: 'ing-q', kind: 'portrait' } },
       result: { filename: 'new.png' }, queuedAt: '2026-06-29T00:00:02.000Z',
     });
-    await waitFor(() => rows.length === 1);
+    await hook.__testing.settled();
     // An OLDER explicit-portrait render completes out of order — it must NOT
     // demote the newer portrait; it is kept as a reference instead.
     mediaJobEvents.emit('completed', {
       kind: 'image', params: { catalogAttach: { ingredientId: 'ing-q', kind: 'portrait' } },
       result: { filename: 'old.png' }, queuedAt: '2026-06-29T00:00:01.000Z',
     });
-    await waitFor(() => rows.length === 2);
+    await hook.__testing.settled();
 
     expect(setPortraitMedia).toHaveBeenCalledTimes(1);
     expect(setPortraitMedia).toHaveBeenCalledWith('ing-q', 'new.png');
@@ -229,14 +221,14 @@ describe('catalogImageAttachHook', () => {
       kind: 'image', params: { catalogAttach: { ingredientId: 'ing-dup', kind: 'portrait' } },
       result: { filename: 'new.png' }, queuedAt: '2026-06-29T00:00:02.000Z',
     });
-    await waitFor(() => listMediaForIngredient.mock.calls.length > 0);
+    await hook.__testing.settled();
     // An OLDER explicit-portrait render completes afterward — it must be demoted
     // to a reference, NOT replace the newer portrait the client filed.
     mediaJobEvents.emit('completed', {
       kind: 'image', params: { catalogAttach: { ingredientId: 'ing-dup', kind: 'portrait' } },
       result: { filename: 'old.png' }, queuedAt: '2026-06-29T00:00:01.000Z',
     });
-    await waitFor(() => rows.length === 2);
+    await hook.__testing.settled();
 
     expect(setPortraitMedia).not.toHaveBeenCalled(); // newer portrait never overwritten
     expect(attachMedia).toHaveBeenCalledWith('ing-dup', 'old.png', 'reference');

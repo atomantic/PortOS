@@ -1,9 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   computeCameraDistance,
   COMPACT_FRAME_HEIGHT,
   DESKTOP_FRAME_HEIGHT,
 } from './CoSBackgroundCamera.jsx';
+
+// Distance-only tests do not need Fiber's renderer or its CommonJS Three.js import.
+vi.mock('@react-three/fiber', () => ({ useThree: vi.fn() }));
 
 describe('computeCameraDistance', () => {
   const z = 3.7;

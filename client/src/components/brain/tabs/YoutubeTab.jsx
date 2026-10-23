@@ -6,7 +6,7 @@ import FormField from '../../ui/FormField';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatDateTime } from '../../../utils/formatters';
 import { useSyncSourceSettings } from '../../../hooks/useSyncSourceSettings';
-import { useVideoDownload } from '../../../hooks';
+import useVideoDownload from '../../../hooks/useVideoDownload.js';
 import {
   getYoutubeStatus,
   getYoutubeSetupCheck,

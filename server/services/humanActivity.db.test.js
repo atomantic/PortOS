@@ -18,7 +18,7 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 const tzState = vi.hoisted(() => ({ tz: 'UTC' }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => tzState.tz }));
 
-import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount, countEventsByHandle } from './humanActivity.js';
+import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount, countEventsByHandle, eraseEvents, listSourceCounts } from './humanActivity.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -391,5 +391,38 @@ describe.skipIf(!runDb)('countEventsByHandle — SQL-aggregated handle frequency
   it('returns nothing for a source with no matching events', async () => {
     const rows = await countEventsByHandle({ source: `${SOURCE}-empty` });
     expect(rows).toEqual([]);
+  });
+});
+
+describe.skipIf(!runDb)('eraseEvents — user-driven source erasure (#12987)', () => {
+  const ERASE_SOURCE = `test-${nonce}-erase`;
+  const KEEP_SOURCE = `test-${nonce}-keep`;
+  afterAll(async () => {
+    if (dbReady) await query('DELETE FROM human_activity_events WHERE source = ANY($1::text[])', [[ERASE_SOURCE, KEEP_SOURCE]]).catch(() => {});
+  });
+
+  it('erases only the named source, honors a range, refuses a missing source, and re-import restores', async () => {
+    const rows = [
+      mk({ source: ERASE_SOURCE, dedupeKey: 'e-1', happenedAt: '2026-01-01T10:00:00Z' }),
+      mk({ source: ERASE_SOURCE, dedupeKey: 'e-2', happenedAt: '2026-03-01T10:00:00Z' }),
+      mk({ source: ERASE_SOURCE, kind: 'message.sent', dedupeKey: 'e-3', happenedAt: '2026-01-02T10:00:00Z' }),
+      mk({ source: ERASE_SOURCE, dedupeKey: 'e-4', happenedAt: '2025-12-01T10:00:00Z' }),
+      mk({ source: KEEP_SOURCE, dedupeKey: 'k-1' }),
+    ];
+    await recordEvents(rows);
+
+    expect(await eraseEvents({})).toEqual({ deleted: 0 });
+    expect((await listSourceCounts()).find((s) => s.source === ERASE_SOURCE).eventCount).toBe(4);
+
+    const ranged = await eraseEvents({ source: ERASE_SOURCE, kind: 'message.received', from: '2026-01-01T00:00:00Z', to: '2026-02-01T00:00:00Z' });
+    expect(ranged.deleted).toBe(1);
+    expect(await listEvents({ source: ERASE_SOURCE })).toHaveLength(3);
+
+    const all = await eraseEvents({ source: ERASE_SOURCE });
+    expect(all.deleted).toBe(3);
+    expect(await listEvents({ source: KEEP_SOURCE })).toHaveLength(1);
+
+    const again = await recordEvents(rows.slice(0, 4));
+    expect(again.recorded).toBe(4);
   });
 });

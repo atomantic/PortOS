@@ -30,6 +30,7 @@ export async function settleBranchReconcileRun(agent) {
   const { readPendingMergePrs } = await import('./prWatcher.js');
   const pendingMergeBranches = new Set(readPendingMergePrs(app).map((entry) => entry?.prBranch).filter(Boolean));
   const result = await reconcile(app.repoPath, {
+    appId: app.id,
     cleanup: true,
     reapSuperseded: task.metadata.reapSuperseded !== false,
     pendingMergeBranches,

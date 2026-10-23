@@ -17,7 +17,7 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  *   inFlight / wip correctly).
  */
 
-vi.mock('./heldCheckoutRecovery.js', () => ({ preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })) }));
+vi.mock('./heldCheckoutRecovery.js', () => ({ preserveSupersededCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null, recordRetirement: async () => {} })), preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })) }));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 
@@ -1647,7 +1647,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 
   // The abandoned-worktree shape: branch fully behind main, uncommitted work in a
   // dead agent's worktree, one collision path with the default branch.
-  const setupAbandoned = ({ tip = 'aaaaaaa', replacedByReachable = true } = {}) => {
+  const setupAbandoned = ({ tip = RETIRE_HEAD, replacedByReachable = true } = {}) => {
     git.getBranches.mockResolvedValue([
       { name: BRANCH, isDefault: false, current: false, tracking: 'origin/main', merged: false }
     ]);
@@ -1675,7 +1675,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
       branch: BRANCH,
       repoPath: '/repo',
       verdict: 'SUPERSEDED',
-      tip: 'aaaaaaa',
+      tip: RETIRE_HEAD,
       dirtyPaths: ['server/services/thing.js'],
       collisionPaths: ['server/services/thing.js'],
       replacedBy: ['ffffff1'],
@@ -1828,7 +1828,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     execGit.mockImplementation(async (args) => {
       if (pinnedRef(args)) return { stdout: RETIRE_HEAD, exitCode: 0 };
       const [cmd] = args;
-      if (cmd === 'rev-parse') return { stdout: 'aaaaaaa\n', exitCode: 0 };
+      if (cmd === 'rev-parse') return { stdout: `${RETIRE_HEAD}\n`, exitCode: 0 };
       if (cmd === 'merge-base' && args[1] === '--is-ancestor') return { stdout: '', exitCode: 0 };
       if (cmd === 'merge-base') return { stdout: 'base000\n', exitCode: 0 };
       if (cmd === 'diff') return { stdout: 'server/services/thing.js\n', exitCode: 0 };
@@ -1839,7 +1839,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     tryReadFileMock.mockResolvedValue(JSON.stringify({
       version: 1,
       entries: [{
-        branch: CLAIM, repoPath: '/repo', verdict: 'SUPERSEDED', tip: 'aaaaaaa',
+        branch: CLAIM, repoPath: '/repo', verdict: 'SUPERSEDED', tip: RETIRE_HEAD,
         dirtyPaths: [], collisionPaths: ['server/services/thing.js'], replacedBy: ['ffffff1']
       }]
     }));
@@ -1857,12 +1857,12 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     const CLAIM_TREE = '/repo/data/cos/worktrees/claim-issue-5769';
     const superseded = [{
       branch: CLAIM,
-      tip: 'aaaaaaa',
+      tip: RETIRE_HEAD,
       worktreePath: CLAIM_TREE,
       worktreeLocked: true,
       dirtyPaths: [],
       verdict: {
-        branch: CLAIM, repoPath: '/repo', verdict: 'SUPERSEDED', tip: 'aaaaaaa',
+        branch: CLAIM, repoPath: '/repo', verdict: 'SUPERSEDED', tip: RETIRE_HEAD,
         dirtyPaths: [], collisionPaths: ['server/services/thing.js'], replacedBy: ['ffffff1']
       }
     }];
@@ -1883,11 +1883,12 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
   // location gate lacks; a short idle floor covers a process still in the tree.
   it('reaps a superseded branch from an unmanaged location once its worktree has sat idle', async () => {
     const TMP_TREE = '/private/tmp/portos-deep-oversized-order';
+    wt.listWorktrees.mockResolvedValue([{ head: RETIRE_HEAD, path: TMP_TREE, branch: `refs/heads/${BRANCH}` }]);
     const verdict = {
-      branch: BRANCH, repoPath: '/repo', verdict: 'SUPERSEDED', tip: 'aaaaaaa',
+      branch: BRANCH, repoPath: '/repo', verdict: 'SUPERSEDED', tip: RETIRE_HEAD,
       dirtyPaths: [], collisionPaths: ['server/services/thing.js'], replacedBy: ['ffffff1']
     };
-    const entry = (worktreeAgeMs) => ({ branch: BRANCH, tip: 'aaaaaaa', worktreePath: TMP_TREE, worktreeLocked: false, worktreeAgeMs, dirtyPaths: [], verdict });
+    const entry = (worktreeAgeMs) => ({ branch: BRANCH, tip: RETIRE_HEAD, worktreePath: TMP_TREE, worktreeLocked: false, worktreeAgeMs, dirtyPaths: [], verdict });
 
     const young = await reapSupersededBranches('/repo', 'main', [entry(5 * 60 * 1000)], { activeAgentIds: new Set() });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
@@ -1923,12 +1924,12 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
   it('holds the reap of a superseded branch when an active CoS agent is running in it', async () => {
     const superseded = [{
       branch: BRANCH,
-      tip: 'aaaaaaa',
+      tip: RETIRE_HEAD,
       worktreePath: WORKTREE,
       worktreeLocked: false,
       dirtyPaths: ['server/services/thing.js'],
       verdict: {
-        branch: BRANCH, repoPath: '/repo', verdict: 'SUPERSEDED', tip: 'aaaaaaa',
+        branch: BRANCH, repoPath: '/repo', verdict: 'SUPERSEDED', tip: RETIRE_HEAD,
         dirtyPaths: ['server/services/thing.js'], collisionPaths: ['server/services/thing.js'], replacedBy: ['ffffff1']
       }
     }];
@@ -1990,8 +1991,8 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     // disagrees with its own verdict — the contract check a direct caller needs.
     const { reapSupersededBranches } = await import('./branchReconcile.js');
     const out = await reapSupersededBranches('/repo', 'main', [{
-      branch: BRANCH, tip: 'aaaaaaa', worktreePath: WORKTREE, dirtyPaths: ['other.js'],
-      verdict: { tip: 'aaaaaaa', dirtyPaths: ['server/services/thing.js'] }
+      branch: BRANCH, tip: RETIRE_HEAD, worktreePath: WORKTREE, dirtyPaths: ['other.js'],
+      verdict: { tip: RETIRE_HEAD, dirtyPaths: ['server/services/thing.js'] }
     }], { activeAgentIds: new Set() });
     expect(out.reaped).toEqual([]);
     expect(out.skipped).toEqual([{ branch: BRANCH, reason: 'verdict-does-not-match-branch' }]);

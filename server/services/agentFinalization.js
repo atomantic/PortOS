@@ -1,5 +1,5 @@
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
-import { retryHoldMetadata } from '../lib/taskRetryHold.js';
+import { retryHoldMetadata, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
@@ -39,7 +39,7 @@ import { markProviderUsageLimit, markProviderUnavailable } from './providerStatu
 import { resolveProviderBench } from '../lib/providerCooldown.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
-import { resolveFailedTaskDecision, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
+import { resolveFailedTaskDecision, resolveFailedTaskUpdate, resolveTypeFailureSignal, resolveUndeliveredTaskUpdate } from './agentErrorAnalysis.js';
 import { resolveAgentFinalVerdict } from '../lib/agentFinalVerdict.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
@@ -1257,16 +1257,22 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     );
   }
 
-  if (deliveryHeld && task?.id && task.status !== 'completed') {
-    const update = await updateTask(task.id, { status: 'blocked', metadata: { ...task.metadata,
-      taskOutcome, blockedCategory: `task-${taskOutcome.status}`, blockedReason: taskOutcome.reason,
-      blockedAt: new Date().toISOString(),
-    } }, task.taskType || 'user');
+  const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
+  const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
+    && (agent.metadata?.isWorktree === true || isTruthyMeta(agent.metadata?.claimPicksOwnBranch)));
+  const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
+  const recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
+    ? resolveUndeliveredTaskUpdate(task, recoveryOutcome, agent.id) : null;
+  if (recoveryUpdate) {
+    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user');
     if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
   }
   await completeAgent(agent.id, {
     success: effectiveSuccess,
     executionSuccess,
+    ...(recoveryUpdate ? { deliveryRecoveryOwned: true } : {}),
+    ...(recoveryUpdate?.metadata?.deliveryRecoveryAgentId === agent.id ? { cleanupPending: true } : {}),
+    ...(savedCleanup ? { cleanupDeliveryVerified: true } : {}),
     taskOutcome,
     validationPassed,
     exitCode,
@@ -1288,6 +1294,13 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const { removeCompletionSentinel } = await import('./agentCompletionCleanup.js');
   await removeCompletionSentinel({ agentId: agent.id, agentState: agent })
     .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
+
+  if (recoveryUpdate?.metadata?.retryPendingCleanup
+    || ['task-approval', 'task-recovery-exhausted'].includes(recoveryUpdate?.metadata?.blockedCategory)) {
+    const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
+    await releaseRetryHold({ agentId: agent.id, task, success: false, agentMetadata: agent.metadata })
+      .catch(err => emitLog('warn', `Recovered delivery retry deferred for ${agent.id}: ${err.message}`, { agentId: agent.id }));
+  }
 
   return { success: effectiveSuccess, taskOutcome, deliveryHeld };
 }
@@ -1682,7 +1695,8 @@ export async function finalizeAgent({
   const reportedTaskOutcome = !terminatedByUser && !isPrivateSecurityTask(task)
     ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
-  if (deliveryHeld) {
+  if (deliveryHeld && reportedTaskOutcome.recovery?.mode !== 'cleanup'
+    && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent) {
     reportedSuccess = false;
     error = reportedTaskOutcome.reason;
     reportedErrorAnalysis = { category: `task-${reportedTaskOutcome.status}`, message: error,
@@ -1924,9 +1938,14 @@ export async function finalizeAgent({
     errorAnalysis: { category: hookResult?.outcome?.reason || `task-${taskOutcome.status}`,
       message: taskOutcome.reason, permanent: true, actionable: false, requiresFallback: false },
   } : verdict;
+  const cleanupOwner = taskOutcome?.recovery?.mode === 'cleanup' ? await getAgentRecord(agentId) : null;
+  const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || isTruthyMeta(cleanupOwner?.metadata?.claimPicksOwnBranch);
+  const terminalFailure = !verdict.success && (verdict.errorAnalysis?.actionable || verdict.errorAnalysis?.permanent)
+    && !(verdict.source === 'reported' && verdict.errorAnalysis?.category === `task-${reportedTaskOutcome?.status}`);
   const taskUpdate = (deliveryHeld || (verdict.success && outcomeHeld)) && !terminatedByUser
-    ? { status: 'blocked', metadata: { ...preHookTask.metadata, blockedReason: taskOutcome.reason,
-      blockedCategory: `task-${taskOutcome.status}`, blockedAt: new Date().toISOString() } }
+    && !terminalFailure && !executionInterruption && !isPrivateSecurityTask(task) && hookResult?.outcome?.accepted !== false
+    ? resolveUndeliveredTaskUpdate(preHookTask, (!executionSuccess || !verdict.success || validationPassed === false || !cleanupEligible) && taskOutcome.recovery?.mode === 'cleanup'
+      ? { ...taskOutcome, recovery: undefined } : taskOutcome, agentId)
     : await resolveFinalTaskUpdate({ task, preHookTask, hookMetadata, verdict, terminatedByUser, agentId });
   taskUpdate.metadata = { ...(taskUpdate.metadata || task.metadata), taskOutcome };
 
@@ -1949,7 +1968,11 @@ export async function finalizeAgent({
   // failure.
   await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
-  }), executionSuccess, taskOutcome });
+  }), executionSuccess, taskOutcome,
+    ...(['task-approval', 'task-recovery-exhausted'].includes(taskUpdate.metadata?.blockedCategory)
+      || taskUpdate.metadata?.retryPendingCleanup === agentId || taskUpdate.metadata?.deliveryRecoveryAgentId === agentId
+      ? { deliveryRecoveryOwned: true } : {}),
+    ...(taskUpdate.metadata?.deliveryRecoveryAgentId === agentId ? { cleanupPending: true } : {}) });
 
   if (runId) {
     // Every failed verdict overrides exit-code/commit rescue in run tracking,

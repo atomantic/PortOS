@@ -11,6 +11,7 @@ const EVENTS = [
   'cos:tasks:changed', 'cos:agent:completed',
   'cos:memory:approval-needed', 'cos:memory:approved', 'cos:memory:rejected', 'cos:agent:feedback',
   'messages:changed', 'messages:draft:created', 'messages:draft:sent',
+  'github:notifications:changed',
   'backup:started', 'backup:completed', 'backup:failed',
   'review:item:created', 'review:item:updated', 'review:item:deleted',
   'review:items:bulk-updated', 'review:queue:changed',

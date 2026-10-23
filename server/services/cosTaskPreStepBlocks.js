@@ -466,6 +466,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     finishAbandoned: metadata.finishAbandoned
   };
   const result = await reconcile(app.repoPath, {
+    appId: app.id,
     cleanup: actions.cleanupMerged !== false,
     // A fresh SUPERSEDED verdict is terminal: nothing else retires the branch,
     // so holding it only re-reports it. Backup-first, behind the same owner gates.
@@ -618,7 +619,8 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     // the abandoned-worktree case).
     const gatedSuffix = countSuffix(cognitiveInFlight.filter(branch => !allActionable.includes(branch)), 'in-flight branch(es) skipped by disabled action toggles', (b) => b.state);
     const deliverySuffix = countSuffix(routineDeliveryHolds, 'delivery branch(es) awaiting completion', branch => branch.reason);
-    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing actionable (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${deliverySuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix})`, { appId: app.id });
+    const disposition = dispatchedOutcome.remaining?.length ? 'no coordinator task eligible; unresolved holds retained' : 'no remaining branch work';
+    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: ${disposition} (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${deliverySuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix})`, { appId: app.id });
     return { skip: true };
   }
   // Retain attempted revisions across caps/manual retries. A blocked prefix must

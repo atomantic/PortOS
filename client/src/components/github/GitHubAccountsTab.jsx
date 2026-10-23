@@ -54,8 +54,8 @@ const payloadFromForm = (form) => ({
   login: form.login.trim() || null,
   label: form.label.trim(),
   trust: form.trust,
-  allowedProviders: form.trust === 'private' && form.allowedProviders.length ? form.allowedProviders : null,
-  allowAgents: form.trust === 'private' && form.allowAgents,
+  allowedProviders: form.allowedProviders.length ? form.allowedProviders : null,
+  allowAgents: form.allowAgents,
   trustInstanceUsers: isEnterpriseHost(form.host) && form.trustInstanceUsers,
 });
 

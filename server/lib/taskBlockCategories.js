@@ -58,6 +58,8 @@ export const TIMED_COOLDOWN_BLOCKED_CATEGORIES = new Set([
  */
 export const PAUSED_BLOCKED_CATEGORIES = new Set([
   ...TIMED_COOLDOWN_BLOCKED_CATEGORIES,
+  'task-approval', // A user decision must retain its checkout and never silently expire.
+  'task-recovery-exhausted', // Continuing beyond the retry/spawn limit needs an explicit decision.
   'deep-audit-partial', // Explicit resume only; keep retained remediation and never auto-expire.
   'app-unresolved',    // the task's app has no usable Repository Path
   'workspace-invalid', // the resolved workspace isn't a usable directory
@@ -86,6 +88,8 @@ export const USER_DECISION_BLOCKED_CATEGORIES = new Set([
   'user-terminated',      // user explicitly stopped the agent
   AGENT_PAUSED_CATEGORY,  // user paused; resumable on demand
   'challenge-escalation', // parked awaiting the user's arbitration
+  'task-approval', // A user decision must retain its checkout and never silently expire.
+  'task-recovery-exhausted', // Continuing beyond the retry/spawn limit needs an explicit decision.
   'deep-audit-partial', // Explicit resume only; keep retained remediation and never auto-expire.
   'app-unresolved',
   'workspace-invalid',

@@ -18,6 +18,7 @@ describe('MaintenanceBanner', () => {
     expect(container).toBeEmptyDOMElement();
     unmount();
     show({ state: 'unavailable', blockerCount: 0 });
-    expect(screen.getByRole('status')).toHaveTextContent('readiness unknown');
+    expect(screen.getByRole('status')).toHaveTextContent('recovery needed');
+    expect(screen.getByRole('link', { name: 'View maintenance' })).toHaveAttribute('href', '/settings/general');
   });
 });

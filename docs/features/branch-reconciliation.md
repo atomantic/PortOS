@@ -23,6 +23,30 @@ checkout on their own. Long-lived protected branches and the primary checkout
 remain governed by the existing reconciliation policy; an empty reported work
 list is not permission to remove them.
 
+## A parked sweep is not necessarily a clean repository
+
+`no coordinator task eligible; unresolved holds retained` means the inventory
+still contains work, but none can currently be dispatched. Inspect the per-app
+outcome rather than treating the absence of a generated task as successful cleanup.
+
+- `retirement-forge-unavailable` means PR evidence could not be read. Restore
+  the managed app's forge access and rerun. A missing local commit on the forge
+  is handled separately: reconciliation tries bounded merged-branch history,
+  requires exactly one matching-repository candidate, and still performs the
+  fresh checkout/policy/content review before any retirement. A branch-name
+  match alone never establishes that local work was integrated.
+- `retirement-pr-lookup-unavailable` and `retirement-review-unavailable`
+  distinguish an unexpected lookup failure from a failed checkout preview.
+- `retirement-receipt-unverified` means preservation is unproven. An exception
+  after retirement starts retains this obligation, including the exact checkout
+  identity; it is not downgraded to a failed preview or silently retried as one.
+- `worktree-unmanaged-location` requires a scoped release of the inventoried
+  checkout using the action below. Do not add all external checkouts to a trusted
+  root merely because their commits are merged: another tool may still own them.
+- `delivery-head-unverified` requires comparing the current local branch and
+  published PR. Preserve local-only changes and establish the current owner
+  before continuing delivery; do not reset the checkout to make the heads match.
+
 ## Retiring a held checkout
 
 A row with a checkout path and HEAD offers **Archive and retire checkout**. The

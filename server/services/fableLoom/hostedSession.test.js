@@ -18,6 +18,7 @@ import {
   verifyHostedHostToken,
   verifyHostedToken,
 } from './hostedSession.js';
+import { FABLELOOM_RUNTIME_VERSION } from '../../lib/fableLoomPlayback.js';
 import * as records from './records.js';
 import * as weave from './weave.js';
 import * as networkExposure from '../../lib/networkExposure.js';
@@ -197,6 +198,7 @@ describe('fableLoom hostedSession', () => {
       expect(result.session).toBeDefined();
       expect(result.session.id).toBeDefined();
       expect(result.session.status).toBe('active');
+      expect(result.session.runtimeVersion).toBe(FABLELOOM_RUNTIME_VERSION);
       expect(result.session.audioTarget).toBe('host');
       expect(result.session.currentNodeId).toBe('node-start');
       expect(result.token).toBeDefined();
@@ -285,40 +287,81 @@ describe('fableLoom hostedSession', () => {
     });
   });
 
-  describe('half-duplex turn execution', () => {
-    it('executes full speech-first turn and commits story transition', async () => {
+  describe('runtime v1 listening admission', () => {
+    // These regressions are checked at turn admission: a stale host phase,
+    // explicit window presence or unsafe occupancy must never start providers.
+    it.each([
+      ['cut node with stale hold phase', { playbackMode: 'cut' }, 'hold', 'PLAYBACK_NOT_DECISION'],
+      ['decision entry clip', {}, 'entry', 'PLAYBACK_NOT_IN_HOLD_PHASE'],
+      ['decision exit clip', {}, 'exit', 'PLAYBACK_NOT_IN_HOLD_PHASE'],
+      ['disconnected decision', { audienceConnection: 'disconnected' }, 'hold', 'AUDIENCE_DISCONNECTED'],
+      ['onscreen live window', { interactionWindow: { enabled: true, protagonistPresence: 'onscreen' } }, 'hold', 'PROTAGONIST_ONSCREEN'],
+      ['occupied hold', {
+        playbackAssets: {
+          holdLoopVideoHistoryIds: ['vid-dialogue'],
+          audioOccupancy: { 'vid-dialogue': { characterDialogue: [{ startMs: 0, endMs: 1000 }], safeForLiveVoice: true } },
+        },
+      }, 'hold', 'HOLD_ASSET_OCCUPIED_BY_DIALOGUE'],
+    ])('refuses %s before starting a turn', async (_label, patch, phase, code) => {
       const { session } = await createHostedSession('loom-1', 'ep-1');
-      const mockIo = {
-        of: () => ({
-          to: () => ({
-            emit: vi.fn(),
-          }),
-        }),
-      };
+      const changedLoom = structuredClone(mockLoom);
+      Object.assign(changedLoom.episodes[0].nodes[0], patch);
+      vi.mocked(records.getLoom).mockResolvedValue(changedLoom);
+      _getInternalSession(session.id).playbackPhase = phase;
+      vi.spyOn(weave, 'playTurn');
+      const io = makeIo();
 
-      // 1. Start listening
-      const listenRes = await startHostedListening(session.id, { io: mockIo });
-      expect(listenRes.ok).toBe(true);
+      await expect(startHostedListening(session.id, { io })).rejects.toMatchObject({ status: 409, code });
+
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(stt.transcribe).not.toHaveBeenCalled();
+      expect(tts.synthesize).not.toHaveBeenCalled();
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+      expect(io.emits).toEqual([]);
+    });
+
+    it('retains the legacy decision default for a connected offscreen hold', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const legacyLoom = structuredClone(mockLoom);
+      delete legacyLoom.episodes[0].nodes[0].playbackMode;
+      vi.mocked(records.getLoom).mockResolvedValue(legacyLoom);
+
+      await expect(startHostedListening(session.id)).resolves.toMatchObject({ ok: true });
       expect(getHostedSession(session.id).turnPhase).toBe('listening');
+    });
+  });
 
-      // Mock LLM play response
+  describe('half-duplex turn execution', () => {
+    it('dispatches synthesized speech before committing the story transition', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const io = makeIo();
+      const speech = deferred();
+      vi.mocked(tts.synthesize).mockReturnValue(speech.promise);
+      await startHostedListening(session.id, { io });
       vi.spyOn(weave, 'playTurn').mockResolvedValue({
-        action: 'move',
-        transitionId: 'tr-1',
+        action: 'move', transitionId: 'tr-1',
         narration: 'We shall enter the dark woods together.',
         node: { id: 'node-2', title: 'Deep Woods' },
       });
 
-      // 2. Process audience utterance
-      const turnRes = await processHostedUtterance(session.id, {
-        audioBuffer: Buffer.from('fake-audio-bytes'),
-        io: mockIo,
+      const pending = processHostedUtterance(session.id, {
+        audioBuffer: Buffer.from('fake-audio-bytes'), io,
       });
+      await vi.waitFor(() => expect(tts.synthesize).toHaveBeenCalled());
+      expect(getHostedSession(session.id)).toMatchObject({
+        currentNodeId: 'node-start', turnPhase: 'speaking',
+      });
+      expect(io.emits.some(({ event }) => event === 'hosted:story:transition')).toBe(false);
 
-      expect(turnRes.ok).toBe(true);
-      const afterSession = getHostedSession(session.id);
-      expect(afterSession.currentNodeId).toBe('node-2'); // Moved to next node
-      expect(afterSession.transcript.length).toBeGreaterThan(1);
+      speech.resolve({ wav: Buffer.from('RIFFmockwavdata') });
+      await expect(pending).resolves.toMatchObject({ ok: true });
+
+      expect(io.emits.filter(({ event }) => [
+        'hosted:turn:phase', 'hosted:turn:tts', 'hosted:story:transition',
+      ].includes(event)).map(({ event, payload }) => payload.phase || event)).toEqual([
+        'listening', 'thinking', 'speaking', 'hosted:turn:tts', 'hosted:story:transition',
+      ]);
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-2');
     });
 
     it('synthesizes the selected protagonist with its approved AuK profile regardless of character order', async () => {

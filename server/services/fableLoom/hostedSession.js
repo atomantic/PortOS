@@ -10,7 +10,7 @@
  * 5. Authoritative server story/session state and computer playback clock.
  * 6. Half-duplex turn contract: LISTENING -> THINKING -> SPEAKING -> LISTENING.
  * 7. Live conversation gate revalidation (helper decision hold, offscreen protagonist, safe audio occupancy).
- * 8. Speech completion before story transition commitment.
+ * 8. Speech synthesis and dispatch before commitment (playback ACK: #13112).
  * 9. Reconnect snapshots and session teardown with in-flight abort.
  */
 
@@ -27,7 +27,8 @@ import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { pcmToFloat } from '../voice/callEndpointing.js';
 import {
   FABLELOOM_AUDIO_TARGETS,
-  isAssetSafeForLiveVoice,
+  FABLELOOM_RUNTIME_VERSION,
+  evaluateFableLoomLiveInput,
   resolvePlaybackPhaseAsset,
 } from '../../lib/fableLoomPlayback.js';
 import {
@@ -81,6 +82,7 @@ export function sanitizeHostedSession(session) {
   if (!session) return null;
   return {
     id: session.id,
+    runtimeVersion: FABLELOOM_RUNTIME_VERSION,
     loomId: session.loomId,
     episodeId: session.episodeId,
     universeId: session.universeId || null,
@@ -230,28 +232,11 @@ export function revalidateLiveConversationGate({ session, node, asset }) {
   if (session?.status !== 'active') {
     return { allowed: false, reason: 'SESSION_INACTIVE' };
   }
-  if (!node) {
-    return { allowed: false, reason: 'NODE_NOT_FOUND' };
-  }
-  if (node.isEnding) {
-    return { allowed: false, reason: 'STORY_ENDED' };
-  }
-  if (node.audienceConnection !== 'connected') {
-    return { allowed: false, reason: 'AUDIENCE_DISCONNECTED' };
-  }
-  if (session.playbackPhase !== 'hold') {
-    return { allowed: false, reason: 'PLAYBACK_NOT_IN_HOLD_PHASE' };
-  }
-  if (node.protagonistPresence === 'onscreen') {
-    return { allowed: false, reason: 'PROTAGONIST_ONSCREEN' };
-  }
-  if (asset) {
-    const raw = asset.manifest || asset;
-    if (raw.safeForLiveVoice === false || !isAssetSafeForLiveVoice(raw)) {
-      return { allowed: false, reason: 'HOLD_ASSET_OCCUPIED_BY_DIALOGUE' };
-    }
-  }
-  return { allowed: true };
+  return evaluateFableLoomLiveInput({
+    node,
+    phase: session.playbackPhase,
+    asset,
+  });
 }
 
 /**

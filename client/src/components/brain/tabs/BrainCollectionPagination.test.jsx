@@ -41,8 +41,10 @@ vi.mock('../../../services/api', () => api);
 vi.mock('../../../services/apiBrain', () => api);
 vi.mock('../../../services/socket', () => ({ default: mockSocket }));
 
-vi.mock('../../../hooks', () => ({
+vi.mock('../../../hooks/useLocalStorageBool.js', () => ({
   useLocalStorageBool: () => [false, vi.fn()],
+}));
+vi.mock('../../../hooks/useRepoIntake.js', () => ({
   useRepoIntake: () => ({
     repo: null,
     options: { malwareScan: false, learn: false },

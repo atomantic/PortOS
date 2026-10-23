@@ -1,26 +1,27 @@
-/** Preserve shared branch reflogs and their objects before branch retirement.
+/** Preserve shared branch configuration, reflogs and objects before retirement.
  * Worktree-private archives do not cover logs/refs/heads, which Git removes
  * with the branch. This leaf also covers branches that have no checkout.
  */
-import { lstat, readFile, chmod } from 'node:fs/promises';
+import { lstat, readFile, chmod, open, unlink, rename, mkdir, realpath } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execGit } from './execGit.js';
 import { PATHS } from './paths.js';
 import { ensureDir, sha256File, writeFileGuarded } from './fileCore.js';
+import { escapeRegExp } from './textUtils.js';
 
-const MAX_REFLOG_BYTES = 25 * 1024 * 1024;
+const MAX_EVIDENCE_BYTES = 25 * 1024 * 1024;
 const MAX_RECOVERY_HEADS = 1024;
 const git = (repoPath, args) => execGit(args, repoPath).then(result => result.stdout.trim());
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
-async function readReflog(path) {
+async function readEvidence(path) {
   const info = await lstat(path).catch(error => {
     if (error.code === 'ENOENT') return null;
     throw error;
   });
   if (!info) return { bytes: null, identity: null };
-  if (!info.isFile() || info.size > MAX_REFLOG_BYTES) throw new Error('branch reflog cannot be archived');
+  if (!info.isFile() || info.size > MAX_EVIDENCE_BYTES) throw new Error('branch retirement evidence cannot be archived');
   const bytes = await readFile(path);
   const identity = {
     dev: info.dev, ino: info.ino, mode: info.mode, size: info.size,
@@ -29,15 +30,58 @@ async function readReflog(path) {
   return { bytes, identity };
 }
 
+const unchanged = (left, right) => JSON.stringify(left.identity) === JSON.stringify(right.identity);
+
+// Included/global/worktree settings cannot be retired by editing the shared
+// config. Refuse them rather than leave a reused name with inherited settings.
+async function branchConfiguration(repoPath, configPath, branch) {
+  const pattern = `^branch\\.${escapeRegExp(branch)}\\.[^.]+$`;
+  const result = await execGit(['config', '--null', '--show-origin', '--includes', '--get-regexp', pattern], repoPath, { ignoreExitCode: true });
+  if (![0, 1].includes(result.exitCode)) throw new Error('branch configuration cannot be read');
+  const fields = result.stdout.split('\0');
+  if (fields.pop() !== '' || fields.length % 2) throw new Error('branch configuration cannot be parsed');
+  const source = await realpath(configPath);
+  for (let i = 0; i < fields.length; i += 2) {
+    if (!fields[i].startsWith('file:') || await realpath(resolve(repoPath, fields[i].slice(5))) !== source) {
+      throw new Error('branch configuration has an external source');
+    }
+  }
+  return result.stdout;
+}
+
+async function withNativeLock(path, bytes, work) {
+  const handle = await open(path, 'wx', 0o600);
+  let identity;
+  try {
+    try {
+      identity = await handle.stat();
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally { await handle.close(); }
+    return await work(await readEvidence(path));
+  }
+  finally {
+    // Cover partial writes and sync failures, but never unlink a replacement.
+    const current = await lstat(path).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (identity && current?.dev === identity.dev && current.ino === identity.ino) await unlink(path);
+  }
+}
+
 export async function preserveBranchRetirement(repoPath, commonGitDir, branch, expectedHead, { cosDir = PATHS.cos } = {}) {
   const storage = await execGit(['config', '--get', 'extensions.refStorage'], repoPath, { ignoreExitCode: true });
   if ((storage.exitCode !== 0 && storage.exitCode !== 1) || (storage.stdout.trim() && storage.stdout.trim() !== 'files')) {
     throw new Error('branch reflog storage is unsupported');
   }
   const ref = `refs/heads/${branch}`;
-  if (await git(repoPath, ['rev-parse', '--verify', ref]) !== expectedHead) throw new Error('branch head changed');
   const source = join(commonGitDir, 'logs', 'refs', 'heads', ...branch.split('/'));
-  const before = await readReflog(source);
+  const before = await readEvidence(source);
+  const configPath = join(commonGitDir, 'config');
+  const config = await readEvidence(configPath);
+  if (!config.bytes) throw new Error('shared branch configuration is missing');
+  const settings = await branchConfiguration(repoPath, configPath, branch);
   const recoveryHeads = new Set([expectedHead]);
   for (const line of (before.bytes?.toString('utf8') || '').split('\n').filter(Boolean)) {
     const match = /^([a-f0-9]{40}(?:[a-f0-9]{24})?) ([a-f0-9]{40}(?:[a-f0-9]{24})?) /.exec(line);
@@ -49,6 +93,16 @@ export async function preserveBranchRetirement(repoPath, commonGitDir, branch, e
   const archiveDir = join(cosDir, 'branch-retirement-archives', id);
   await ensureDir(archiveDir);
   await chmod(archiveDir, 0o700);
+  // Keep the original bytes, including duplicate values and formatting. Both
+  // copies are private; the prepared copy lets Git remove precisely its section.
+  const configCopy = join(archiveDir, 'config');
+  const retiredCopy = join(archiveDir, 'config.retired');
+  await writeFileGuarded(configCopy, config.bytes, { flag: 'wx', mode: 0o600 });
+  await writeFileGuarded(retiredCopy, config.bytes, { flag: 'wx', mode: 0o600 });
+  if (settings) await git(repoPath, ['config', '--file', retiredCopy, '--remove-section', `branch.${branch}`]);
+  await chmod(retiredCopy, 0o600);
+  const retiredConfig = await readFile(retiredCopy);
+  const retiredSha256 = digest(retiredConfig);
   if (before.bytes) {
     const copy = join(archiveDir, 'reflog');
     await writeFileGuarded(copy, before.bytes, { flag: 'wx', mode: 0o600 });
@@ -75,20 +129,52 @@ export async function preserveBranchRetirement(repoPath, commonGitDir, branch, e
   const bundleSha256 = await sha256File(bundle);
   const manifestPath = join(archiveDir, 'manifest.json');
   const manifest = `${JSON.stringify({
-    version: 1, repoPath, commonGitDir, branch, expectedHead, archivedAt: new Date().toISOString(),
+    version: 2, repoPath, commonGitDir, branch, expectedHead, archivedAt: new Date().toISOString(),
     reflog: { present: before.bytes !== null, source, identity: before.identity },
+    configuration: { source: configPath, identity: config.identity, retiredSha256,
+      restore: 'Inspect config and restore only the archived branch section into the current repository configuration.' },
     recoveryHeads: [...recoveryHeads], bundleSha256,
     restore: 'git -C <repo> fetch <archive>/commits.bundle refs/portos/branch-archive/<archive-id>/<head>:refs/heads/<restored-branch>',
   }, null, 2)}\n`;
   await writeFileGuarded(manifestPath, manifest, { flag: 'wx', mode: 0o600 });
-  const verify = () => Promise.all([
-    git(repoPath, ['rev-parse', '--verify', ref]), readReflog(source),
+  const verifyConfig = async () => unchanged(await readEvidence(configPath), config);
+  const verifyArchive = () => Promise.all([
     sha256File(bundle), readFile(manifestPath, 'utf8'),
     before.bytes ? sha256File(join(archiveDir, 'reflog')) : null,
-  ]).then(([head, current, bundleHash, currentManifest, reflogHash]) =>
-    head === expectedHead && JSON.stringify(current.identity) === JSON.stringify(before.identity)
-    && bundleHash === bundleSha256 && currentManifest === manifest
-    && (!before.bytes || reflogHash === before.identity.sha256)).catch(() => false);
-  if (!await verify()) throw new Error('branch reflog or archive changed during archival');
-  return { archiveDir, verify };
+    sha256File(configCopy), sha256File(retiredCopy),
+  ]).then(([bundleHash, currentManifest, reflogHash, configHash, retiredHash]) =>
+    bundleHash === bundleSha256 && currentManifest === manifest
+    && (!before.bytes || reflogHash === before.identity.sha256)
+    && configHash === config.identity.sha256 && retiredHash === retiredSha256).catch(() => false);
+  const verifyEvidence = () => Promise.all([
+    readEvidence(source), verifyConfig(), verifyArchive(),
+  ]).then(([current, configValid, archiveValid]) =>
+    unchanged(current, before) && configValid && archiveValid).catch(() => false);
+  // Callers verify the live head before retirement; the receiver compares it
+  // atomically. Evidence-only rechecks avoid repeated Git spawns inside the fence.
+  const verify = async () => await git(repoPath, ['rev-parse', '--verify', ref]).catch(() => null) === expectedHead
+    && await verifyEvidence();
+  if (!await verifyEvidence()) throw new Error('branch reflog or archive changed during archival');
+  const retire = deleteRef => withNativeLock(`${configPath}.lock`, retiredConfig, async configLock => {
+    if (!await verifyEvidence() || !await deleteRef()) return false;
+    // The receiver's lease and holder checks remain authoritative for deletion.
+    // Afterwards lock the absent ref so a native Git writer cannot recreate it
+    // between the final incarnation check and the configuration rename.
+    const refPath = join(commonGitDir, ...ref.split('/'));
+    await mkdir(dirname(refPath), { recursive: true });
+    return withNativeLock(`${refPath}.lock`, Buffer.alloc(0), async () => {
+      const absent = await execGit(['show-ref', '--verify', '--quiet', ref], repoPath, { ignoreExitCode: true });
+      const holders = await git(repoPath, ['worktree', 'list', '--porcelain', '-z']);
+      if (absent.exitCode !== 1 || (await readEvidence(refPath)).bytes !== null
+        || holders.split('\0').includes(`branch ${ref}`) || !await verifyArchive() || !await verifyConfig()
+        || await branchConfiguration(repoPath, configPath, branch) !== settings
+        || !unchanged(await readEvidence(`${configPath}.lock`), configLock)) return false;
+      if (settings) {
+        await chmod(`${configPath}.lock`, config.identity.mode & 0o777);
+        await rename(`${configPath}.lock`, configPath);
+      }
+      return true;
+    });
+  });
+  return { archiveDir, verify, retire };
 }

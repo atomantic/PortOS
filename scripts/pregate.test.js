@@ -417,6 +417,59 @@ describe('pregate hidden-content invocation', () => {
     expect(snapshot()).toEqual(preConflict);
   });
 
+  it('merges a remote-only base from a shallow source and still reports real conflicts', () => {
+    write('scripts/run-ci-tests.js', `
+      import { readFileSync } from 'fs';
+      if (readFileSync('docs/tracked note.md', 'utf8').trim() !== '# Base update'
+        || readFileSync('docs/feature.md', 'utf8').trim() !== '# Independent feature') {
+        throw new Error('guard did not receive both merge inputs');
+      }
+    `);
+    git('add', '--all'); git('commit', '-qm', 'merged guard fixture');
+    const upstream = root;
+    const shallow = join(scratch, 'shallow');
+    git('clone', '--quiet', '--no-local', '--depth', '1', '--', upstream, shallow);
+    write(trackedPath, '# Base update\n');
+    git('add', '--all'); git('commit', '-qm', 'base update');
+    const movedBase = git('rev-parse', 'HEAD');
+
+    root = shallow;
+    for (const workspace of ['', 'client', 'server', 'autofixer']) {
+      mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
+    }
+    git('config', 'user.name', 'Example Agent');
+    git('config', 'user.email', 'agent@example.com');
+    git('config', 'commit.gpgsign', 'false');
+    git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
+    git('checkout', '-qb', 'feature');
+    write('docs/feature.md', '# Independent feature\n');
+    git('add', '--all'); git('commit', '-qm', 'feature update');
+    git('fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main');
+    expect(git('rev-parse', '--is-shallow-repository')).toBe('true');
+    expect(git('rev-parse', 'origin/main')).toBe(movedBase);
+    expect(git('for-each-ref', '--format=%(refname)', '--points-at', movedBase, 'refs/heads')).toBe('');
+    const tree = git('merge-tree', '--write-tree', 'HEAD', 'origin/main').split('\n')[0];
+    const invoke = () => spawnSync(process.execPath, ['scripts/pregate.js', '--guards-only', '--merged-with', 'origin/main'], {
+      cwd: root, encoding: 'utf8',
+    });
+    const sourceState = () => ({ ...snapshot(), refs: git('show-ref'), shallow: readFileSync(join(root, '.git/shallow')) });
+    const before = sourceState();
+    const merged = invoke();
+    expect(merged.status, merged.stderr).toBe(0);
+    expect(merged.stdout).toContain(`= tree ${tree.slice(0, 12)}.`);
+    expect(sourceState()).toEqual(before);
+
+    write(trackedPath, '# Conflicting feature update\n');
+    git('add', '--all'); git('commit', '-qm', 'conflicting feature update');
+    const preConflict = sourceState();
+    const conflict = invoke();
+    expect(conflict.status).not.toBe(0);
+    expect(conflict.stderr).toContain('Cannot construct merged guard tree');
+    expect(conflict.stderr).toContain('CONFLICT (content)');
+    expect(conflict.stdout).not.toContain('Pregate passed');
+    expect(sourceState()).toEqual(preConflict);
+  });
+
   // This regression catches stale inherited packages before any lint/test child
   // can produce a misleading product failure or repair the shared source tree.
   it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling'])(

@@ -54,7 +54,9 @@
  * well under a second and removes the profile, so it gets most of the budget. A `Browser` from `launch()` exposes no process, so a real launch
  * goes through Playwright's process-backed `launchServer()` and connects to
  * it: the fixture keeps the server, closes gracefully first, then kills only
- * that server's own process, and reports success only on its exit status. A
+ * that server's own process, and requires its exit, Playwright cleanup settlement,
+ * and observed profile absence. Redacted cleanup phases survive CI silent mode
+ * in the step summary. A
  * `{ launch }` stand-in — the CDP adapter attaching to an external browser
  * among them — keeps only `close()`, which never terminates what it attached
  * to.
@@ -265,7 +267,15 @@ export async function startBrowserFixture({
       return { browser, closer: () => browser.close() };
     }
     const server = await chromium.launchServer(options);
-    const closer = () => reapOwnedBrowser(server, phaseMs.cleanup);
+    const closer = async () => {
+      const evidence = await reapOwnedBrowser(server, phaseMs.cleanup, { requireProfileRemoval: true }).catch(error => {
+        retainLine(`❌ ${name} browser cleanup: ${error.message}`);
+        throw error;
+      });
+      const line = `🧹 ${name} browser cleanup (${evidence})`;
+      console.log(line);
+      retainLine(line);
+    };
     // Nobody will use a browser startup already gave up on: skip connecting.
     if (isAbandoned()) return { closer };
     try {

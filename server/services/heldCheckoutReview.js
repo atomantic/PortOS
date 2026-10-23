@@ -25,8 +25,18 @@ export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccoun
   if (!oid(tip)) throw new Error('retirement-pr-ambiguous');
   // Query the exact commit, not an unbounded reused-branch history. A capped
   // association result cannot establish uniqueness and stays held.
-  const rows = JSON.parse(await execGh(['api', '--hostname', origin.host,
-    `repos/${origin.fullName}/commits/${tip}/pulls?per_page=100`], undefined, options));
+  const association = await execGh(['api', '--hostname', origin.host,
+    `repos/${origin.fullName}/commits/${tip}/pulls?per_page=100`], undefined, options)
+    .catch(error => {
+      // An unpublished/rebased local tip may not exist on the forge. That
+      // endpoint's missing-commit response does not establish empty history: permit only the
+      // bounded historical lookup below, which must independently succeed.
+      const detail = error.ghStderr || '';
+      if (/\(HTTP 404\)/.test(detail)
+        || (detail.includes(`No commit found for SHA: ${tip}`) && /\(HTTP 422\)/.test(detail))) return null;
+      throw new Error('retirement-forge-unavailable');
+    });
+  const rows = association === null ? [] : JSON.parse(association);
   if (!Array.isArray(rows) || rows.length >= 100
     || new Set(rows.map(row => row?.html_url)).size !== rows.length
     || rows.some(row => {
@@ -41,9 +51,11 @@ export async function findMergedPullRequest(repoPath, branch, tip, { forgeAccoun
   if (matches.length === 1) return { url: matches[0].html_url, mergedAt: matches[0].merged_at };
   // Preserve historical review of an older local tip only when branch history
   // itself has exactly one candidate. Never choose among mismatching heads.
-  const historical = JSON.parse(await execGh(['pr', 'list', '--repo', spec, '--head', branch, '--state', 'merged',
-    '--limit', '2', '--json', 'url'], undefined, options));
-  if (!Array.isArray(historical) || historical.length !== 1 || typeof historical[0]?.url !== 'string') throw new Error('retirement-pr-ambiguous');
+  const historical = await execGh(['pr', 'list', '--repo', spec, '--head', branch, '--state', 'merged',
+    '--limit', '2', '--json', 'url'], undefined, options).then(JSON.parse)
+    .catch(() => { throw new Error('retirement-forge-unavailable'); });
+  const selected = Array.isArray(historical) && historical.length === 1 && parsePullRequestUrl(historical[0]?.url);
+  if (!selected || selected.host !== origin.host || `${selected.owner}/${selected.repo}` !== origin.fullName) throw new Error('retirement-pr-ambiguous');
   return { url: historical[0].url, mergedAt: null };
 }
 

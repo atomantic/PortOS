@@ -15,6 +15,7 @@ vi.mock('../services/usage.js', () => ({
 
 vi.mock('../services/peerUsage.js', () => ({
   getFleetUsage: vi.fn(async () => ({ instances: [], totals: null })),
+  getFleetMonthlyUsage: vi.fn(async () => ({ instanceCount: 1, series: [], history: [] })),
   getFleetRollingCost: vi.fn(async () => ({ windowDays: 30, instanceCount: 1, points: [] }))
 }));
 
@@ -59,7 +60,7 @@ import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
 import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
-import { getFleetUsage, getFleetRollingCost } from '../services/peerUsage.js';
+import { getFleetUsage, getFleetRollingCost, getFleetMonthlyUsage } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import usageRoutes from './usage.js';
 
@@ -132,7 +133,10 @@ describe('usage routes', () => {
       totalSessions: 4,
       providers: ['anthropic'],
       subscriptionSavings: { configured: false, families: [] },
-      fleet: { instances: [], totals: null }
+      fleet: { instances: [], totals: null },
+      monthlyHistory: [],
+      monthlySeries: [],
+      monthlyInstanceCount: 1,
     });
     const arg = usage.getUsageSummary.mock.calls[0][0];
     expect(arg.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -141,6 +145,20 @@ describe('usage routes', () => {
     // The fleet breakdown must be priced over the SAME window as the summary,
     // or a peer row would silently report a different period than its heading.
     expect(getFleetUsage).toHaveBeenCalledWith({ from: arg.from, to: null, providers: [], apiBilledInstanceIds: [] });
+  });
+
+  it('GET /api/usage returns fleet monthly history independently of the selected report window', async () => {
+    const monthly = {
+      instanceCount: 2,
+      series: [{ key: 'codex', label: 'Codex' }],
+      history: [{ month: '2026-09', estimatedCost: 12, values: [12], tokens: 1000, partial: false }],
+    };
+    getFleetMonthlyUsage.mockResolvedValueOnce(monthly);
+    usage.getUsageSummary.mockReturnValue({ totalSessions: 4 });
+    const res = await request(buildApp()).get('/api/usage?from=2026-10-01&to=2026-10-02');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ monthlyHistory: monthly.history, monthlySeries: monthly.series, monthlyInstanceCount: 2 });
+    expect(getFleetMonthlyUsage).toHaveBeenCalledWith({ providers: [] });
   });
 
   it('GET /api/usage passes an explicit from/to range through', async () => {

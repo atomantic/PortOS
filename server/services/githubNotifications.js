@@ -303,9 +303,10 @@ export async function syncAllNotifications(options = {}) {
 // can clear finished or read threads in one tap without teaching a rule.
 const FINISHED_SQL = `decision IN (${FINISHED_DECISIONS.map((decision) => `'${decision}'`).join(', ')})`;
 const CLEARABLE_SQL = `state = 'open' AND NOT suspect AND (${FINISHED_SQL} OR NOT unread)`;
+const OPEN_UNREAD_SQL = "state = 'open' AND unread AND read_on_github_at IS NULL";
 const VIEW_FILTERS = {
-  'needs-you': "state = 'open' AND unread AND read_on_github_at IS NULL AND NOT suspect",
-  suspect: "state = 'open' AND unread AND read_on_github_at IS NULL AND suspect",
+  'needs-you': `${OPEN_UNREAD_SQL} AND NOT suspect`,
+  suspect: `${OPEN_UNREAD_SQL} AND suspect`,
   handled: "(state <> 'open' OR NOT unread OR read_on_github_at IS NOT NULL)",
   all: 'TRUE',
 };
@@ -337,6 +338,15 @@ const deploymentView = (account, row) => {
   return htmlUrl ? { runId: run.id, name: run.name, displayTitle: run.displayTitle, headBranch: run.headBranch, htmlUrl } : null;
 };
 
+// The thread's own state, so a row says what it is now: open, draft, merged,
+// closed, and for an open PR GitHub's merge readiness (clean, blocked, ...).
+// Null mergeState: GitHub had not computed it yet, or the thread is no PR.
+const subjectStatusView = (row) => {
+  const evidence = row.evidence || {};
+  if (!evidence.subjectState) return null;
+  return { state: evidence.subjectState, draft: evidence.subjectDraft === true, mergeState: evidence.mergeState || null };
+};
+
 const toApi = (row, accountsById) => {
   const account = accountsById.get(row.account_id);
   const login = account?.login?.toLowerCase();
@@ -359,6 +369,7 @@ const toApi = (row, accountsById) => {
     trust: row.trust || null,
     suspect: row.suspect === true,
     rule: row.evidence?.rule || null,
+    subjectStatus: subjectStatusView(row),
     signals: Array.isArray(row.evidence?.signals) ? row.evidence.signals : [],
     // The automation-rule kind, so a row can prefill Add automation rule (#13192).
     ruleKind: threadAgentKind(row),
@@ -371,11 +382,23 @@ const toApi = (row, accountsById) => {
   };
 };
 
+/** Local projection only: opening Actions never starts a GitHub sync or model call. */
+export async function listActionableNotifications({ limit = 100 } = {}) {
+  const accounts = (await listAccounts()).filter(isActive);
+  if (!accounts.length) return [];
+  const accountsById = new Map(accounts.map((account) => [account.id, account]));
+  const { rows } = await query(
+    `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${OPEN_UNREAD_SQL}
+     ORDER BY gh_updated_at DESC, account_id, thread_id LIMIT $2`,
+    [accounts.map((account) => account.id), limit],
+  );
+  return rows.map((row) => ({ ...toApi(row, accountsById), accountLabel: accountsById.get(row.account_id).label }));
+}
 
 export async function listNotifications({ accountId = null, view = 'needs-you' } = {}) {
-  const accounts = await listAccounts();
+  const accounts = (await listAccounts()).filter(isActive);
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
-  const ids = accountId ? [accountId] : accounts.map((account) => account.id);
+  const ids = accounts.filter((account) => !accountId || account.id === accountId).map((account) => account.id);
   const [rows, syncRows, countRows] = await Promise.all([
     query(
       `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${VIEW_FILTERS[view]}

@@ -24,7 +24,9 @@
  * past its respective cursor — drain by re-pulling with the maxSequences from
  * the previous response.
  *
- * Apply: receiver POSTs the envelope to /api/catalog/sync/apply. Conflict
+ * Apply: syncOrchestrator applies pulled envelopes in-process via
+ * applyRemoteChanges; sharing/peerSyncReceive uses the same function for
+ * incoming catalog bundles. Conflict
  * resolution is LWW on `updated_at` for ingredient/scrap rows; source/ref
  * rows are tuple-unique and idempotent on conflict. Each row is wrapped in
  * its own try/catch so one malformed row can't poison the whole batch.

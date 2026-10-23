@@ -25,6 +25,26 @@ import { toPgJson } from '../lib/pgJson.js';
 const SOURCES = ['user', 'internal'];
 // Bounds a single statement's parameter payload (prompts can be MBs).
 const UPSERT_BATCH = 100;
+const conflict = () => Object.assign(new Error('Task queue changed; reload and retry the operation'), {
+  code: 'COS_TASK_LIST_CONFLICT', status: 409,
+});
+
+function checkExpectedVersions(source, expectedVersions, versions) {
+  if (!Number.isSafeInteger(expectedVersions?.[source]) || expectedVersions[source] < 0
+    || Object.entries(expectedVersions).some(([key, value]) => !SOURCES.includes(key) || !Number.isSafeInteger(value) || value < 0)) {
+    throw new Error('Task saves require the versions of the snapshots they read');
+  }
+  if (Object.entries(expectedVersions).some(([key, value]) => versions[key] !== value)) throw conflict();
+}
+
+// Every writer locks the same version rows before touching tasks. The fixed
+// order also makes a save conditional on both queues safe for cross-queue dedup.
+async function lockVersions(client) {
+  await client.query(`INSERT INTO cos_task_lists (source, version) VALUES ('user', 0), ('internal', 0) ON CONFLICT DO NOTHING`);
+  const { rows } = await client.query('SELECT source, version FROM cos_task_lists ORDER BY source FOR UPDATE');
+  return Object.fromEntries(rows.map((row) => [row.source, Number(row.version)]));
+}
+
 const tasksFile = () => join(PATHS.data, 'cos-tasks.json');
 const byIdDesc = (a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 
@@ -37,23 +57,27 @@ function makePgBackend(db) {
       return rows[0] ? Number(rows[0].version) : 0;
     },
     async loadWorkingSet(source, { now = Date.now() } = {}) {
-      const version = await this.readVersion(source);
+      // One MVCC snapshot binds the version to the rows, including an empty list.
       const { rows } = await query(
         `WITH newest AS (
            SELECT task_id FROM cos_tasks WHERE source = $1 AND status = 'completed'
            ORDER BY completed_at DESC NULLS LAST, task_id DESC LIMIT $3
-         )
+         ), working AS (
          SELECT task, position FROM cos_tasks
          WHERE source = $1 AND (status <> 'completed' OR completed_at >= $2 OR task_id IN (SELECT task_id FROM newest))
          ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'challenged' THEN 2
                               WHEN 'blocked' THEN 3 ELSE 4 END,
-                  priority_value DESC, position, task_id`,
+                  priority_value DESC, position, task_id
+         )
+         SELECT COALESCE((SELECT version FROM cos_task_lists WHERE source = $1), 0) AS version,
+                COALESCE(json_agg(working), '[]'::json) AS rows FROM working`,
         [source, new Date(now - WORKING_SET_COMPLETED_WINDOW_MS).toISOString(), WORKING_SET_KEEP_COMPLETED],
       );
-      return { version, rows: rows.map((row) => ({ task: row.task, position: row.position })) };
+      return { version: Number(rows[0].version), rows: rows[0].rows };
     },
-    async apply(source, { upserts, deletes }) {
+    async apply(source, { upserts, deletes, expectedVersions }) {
       return withTransaction(async (client) => {
+        checkExpectedVersions(source, expectedVersions, await lockVersions(client));
         if (deletes.length > 0) await client.query('DELETE FROM cos_tasks WHERE source = $1 AND task_id = ANY($2::text[])', [source, deletes]);
         for (let start = 0; start < upserts.length; start += UPSERT_BATCH) {
           const columns = upserts.slice(start, start + UPSERT_BATCH).map(({ task, position }) => ({ task, position, ...rowColumns(task) }));
@@ -106,6 +130,7 @@ function makePgBackend(db) {
     },
     async deleteById(taskId, source) {
       return withTransaction(async (client) => {
+        await lockVersions(client);
         const { rows } = await client.query(
           'DELETE FROM cos_tasks WHERE task_id = $1 AND ($2::text IS NULL OR source = $2) RETURNING source',
           [taskId, source],
@@ -156,7 +181,8 @@ async function makeMemoryBackend({ persist }) {
     async loadWorkingSet(source, { now = Date.now() } = {}) {
       return { version: versions[source], rows: clone(selectWorkingSet([...lists[source].values()], { now })) };
     },
-    async apply(source, { upserts, deletes }) {
+    async apply(source, { upserts, deletes, expectedVersions }) {
+      checkExpectedVersions(source, expectedVersions, versions);
       for (const id of deletes) lists[source].delete(id);
       for (const { task, position } of upserts) lists[source].set(task.id, clone({ task, position }));
       versions[source] += 1;
@@ -207,7 +233,7 @@ export async function readTaskListVersion(source) { return (await backend()).rea
 /** `{ version, rows: [{ task, position }] }` in queue order for one queue's working set. */
 export async function loadTaskWorkingSet(source) { return (await backend()).loadWorkingSet(source); }
 
-/** Persist a save plan (`planListSave`'s upserts/deletes) in one transaction; returns the new version. */
+/** Persist a plan with expectedVersions in one transaction; stale snapshots fail with COS_TASK_LIST_CONFLICT. */
 export async function applyTaskListSave(source, plan) { return (await backend()).apply(source, plan); }
 
 /** One task as `{ source, task, position }` whatever its status or age, user queue first. Omit `source` to search both. */

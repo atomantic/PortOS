@@ -619,10 +619,38 @@ describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
     expect(capped).toHaveLength(10);
     expect(capped.every((r) => r.relationship === 'linked')).toBe(true);
 
-    // Limit above the link count: the 11 links plus neighbours fill the remainder.
-    const filled = await memoryDB.getRelatedMemories(hub.id, 13);
-    expect(filled).toHaveLength(13);
-    expect(filled.filter((r) => r.relationship === 'similar')).toHaveLength(2);
+    // Force the ANN candidate shortage independently of vacuum timing, table
+    // statistics and physical tie order. The service must still fill both slots.
+    const originalQuery = pg.Pool.prototype.query;
+    let indexedRows = Infinity;
+    const probe = vi.spyOn(pg.Pool.prototype, 'query').mockImplementation(async function (sql, params) {
+      if (typeof sql !== 'string' || !sql.includes('ORDER BY embedding <=> $1')) {
+        return originalQuery.call(this, sql, params);
+      }
+      const client = await this.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SET LOCAL enable_seqscan = off');
+        await client.query('SET LOCAL enable_sort = off');
+        await client.query('SET LOCAL hnsw.ef_search = 1');
+        const iterative = await client.query("SELECT current_setting('hnsw.iterative_scan', true) AS mode");
+        if (iterative.rows[0].mode !== null) await client.query('SET LOCAL hnsw.iterative_scan = off');
+        const plan = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
+        expect(JSON.stringify(plan.rows)).toContain('idx_memories_embedding');
+        const result = await client.query(sql, params);
+        indexedRows = result.rows.length;
+        return result;
+      } finally {
+        try { await client.query('ROLLBACK'); }
+        finally { client.release(); }
+      }
+    });
+    try {
+      const filled = await memoryDB.getRelatedMemories(hub.id, 13);
+      expect(indexedRows).toBeLessThan(2);
+      expect(filled).toHaveLength(13);
+      expect(filled.filter((r) => r.relationship === 'similar')).toHaveLength(2);
+    } finally { probe.mockRestore(); }
   });
 });
 

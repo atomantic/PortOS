@@ -127,3 +127,4 @@ export {
   startFalVideoAutomation,
 } from './falVideoAutomation.js';
 export { applyEpisodeShots, runEpisodeShotAutopilot } from './shots.js';
+export { startFableLoomExport, getFableLoomExport, getFableLoomExportDownload } from './exports.js';

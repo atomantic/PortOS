@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepareReconcileRetirements, retirementReviewInstructions, retirementCognitiveIdentity } from './branchReconcileRetirement.js';
 
 const forge = vi.hoisted(() => ({ read: vi.fn() }));
@@ -18,6 +18,7 @@ const setup = () => ({
 });
 
 describe('historical completed-checkout review obligations', () => {
+  beforeEach(() => forge.read.mockReset());
   it('archives and retires a checkout whose commits are all on the default branch without a PR read or dispatch', async () => {
     const deps = setup();
     deps.retire = vi.fn(async () => ({ ok: true, branchDeleted: true, archiveDir: '/private/verified-archive' }));
@@ -150,10 +151,83 @@ describe('historical completed-checkout review obligations', () => {
 
   it('does not invent approval after forge failure or vanished historical policy', async () => {
     const deps = setup(); deps.readPr.mockRejectedValueOnce(new Error('unreadable'));
-    expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-review-unavailable');
+    expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-pr-lookup-unavailable');
     deps.prepare.mockResolvedValue({ ok: true, review: { policy: { policies: [] } } });
     expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-policy-changed');
   });
+
+  it.each([404, 422])('recovers historical review when the local tip is not published on the forge (HTTP %s)', async status => {
+    const deps = setup();
+    forge.read.mockRejectedValueOnce(Object.assign(new Error('synthetic missing commit'), {
+      ghStderr: `gh: No commit found for SHA: ${head} (HTTP ${status})`, ghExitCode: 1,
+    })).mockResolvedValueOnce(JSON.stringify([{ url: 'https://github.com/example/repo/pull/42' }]));
+    const result = await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare });
+    expect(result.candidates).toHaveLength(1);
+    expect(deps.prepare).toHaveBeenCalledWith(expect.objectContaining({ prUrl: 'https://github.com/example/repo/pull/42', release: expect.objectContaining({ head }) }));
+    expect(forge.read).toHaveBeenLastCalledWith(['pr', 'list', '--repo', 'github.com/example/repo', '--head', branch.branch,
+      '--state', 'merged', '--limit', '2', '--json', 'url'], undefined, expect.any(Object));
+  });
+
+  it.each([
+    { history: [] },
+    { history: [{ url: 'https://github.com/example/repo/pull/41' }, { url: 'https://github.com/example/repo/pull/42' }] },
+    { history: [{ url: 'https://github.com/other/repo/pull/42' }] },
+  ])('does not turn missing exact-head evidence into historical approval: %j', async ({ history }) => {
+    const deps = setup();
+    forge.read.mockRejectedValueOnce(Object.assign(new Error('missing'), { ghStderr: 'gh: Not Found (HTTP 404)' }))
+      .mockResolvedValueOnce(JSON.stringify(history));
+    expect(await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare })).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'retirement-pr-ambiguous' }],
+    });
+    expect(deps.prepare).not.toHaveBeenCalled();
+  });
+
+  it('retains a historical candidate when fresh preview refuses it', async () => {
+    const deps = setup();
+    forge.read.mockRejectedValueOnce(Object.assign(new Error('missing'), { ghStderr: 'gh: Not Found (HTTP 404)' }))
+      .mockResolvedValueOnce(JSON.stringify([{ url: 'https://github.com/example/repo/pull/42' }]));
+    deps.prepare.mockResolvedValue({ ok: false, reason: 'claim-owner-active' });
+    expect(await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare })).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'claim-owner-active' }],
+    });
+  });
+
+  it('distinguishes a failed preview from uncertain retirement without leaking raw errors', async () => {
+    const deps = setup();
+    deps.prepare.mockRejectedValueOnce(new Error('private diagnostic'));
+    expect((await prepareReconcileRetirements(app, scan(), deps)).held[0].reason).toBe('retirement-review-unavailable');
+    const prepared = await deps.prepare();
+    prepared.review.comparison = { disposition: 'integrated', localPatch: '', difference: '' };
+    deps.prepare.mockResolvedValue(prepared);
+    deps.retire = vi.fn(async () => { throw new Error('private diagnostic after possible removal'); });
+    expect(await prepareReconcileRetirements(app, scan(), deps)).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'retirement-receipt-unverified' }],
+    });
+    expect(deps.retire).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a failed historical fallback held rather than inferring a merged PR', async () => {
+    const deps = setup();
+    forge.read.mockRejectedValueOnce(Object.assign(new Error('gh: Not Found (HTTP 404)'), { ghStderr: 'gh: Not Found (HTTP 404)' }))
+      .mockRejectedValueOnce(new Error('synthetic unavailable'));
+    expect(await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare })).toMatchObject({
+      candidates: [], retired: [], held: [{ reason: 'retirement-forge-unavailable' }],
+    });
+    expect(deps.prepare).not.toHaveBeenCalled();
+  });
+
+  it.each(['gh: rate limit exceeded (HTTP 403)', 'gh: authentication required (HTTP 401)', 'operation timed out',
+    'gh: Validation Failed (HTTP 422)', `gh: No commit found for SHA: ${'b'.repeat(40)} (HTTP 422)`])(
+    'does not replace an unreadable exact-head lookup with branch history: %s', async message => {
+      const deps = setup();
+      forge.read.mockRejectedValueOnce(Object.assign(new Error(message), { ghStderr: message }));
+      const calls = forge.read.mock.calls.length;
+      expect(await prepareReconcileRetirements(app, scan(), { prepare: deps.prepare })).toMatchObject({
+        candidates: [], retired: [], held: [{ reason: 'retirement-forge-unavailable' }],
+      });
+      expect(forge.read.mock.calls.length).toBe(calls + 1);
+      expect(deps.prepare).not.toHaveBeenCalled();
+    });
 
   it('selects the unique exact head on a reused branch, then requires its fresh preview', async () => {
     const deps = setup();

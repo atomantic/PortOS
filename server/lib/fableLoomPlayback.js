@@ -10,6 +10,9 @@
 import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { isNonBlankStr, trimTo } from './textUtils.js';
 
+// Version of docs/features/fableloom-runtime-v1.md, independent of package schema versions.
+export const FABLELOOM_RUNTIME_VERSION = '1.0.0';
+
 export const FABLELOOM_PLAYBACK_MODES = Object.freeze(['cut', 'decision']);
 export const FABLELOOM_PLAYBACK_MODE_DEFAULT = 'decision';
 
@@ -264,6 +267,36 @@ export function sanitizeVisualConditioning(raw) {
 export function isAssetSafeForLiveVoice(manifest) {
   if (!manifest) return true;
   return validateAudioOccupancy(manifest).safeForLiveVoice === true;
+}
+
+/**
+ * Transport-neutral live-input admission for runtime v1. A missing playback
+ * mode retains the persisted legacy decision default; an explicit cut never
+ * opens a conversation even if a stale player reports the hold phase.
+ */
+export function evaluateFableLoomLiveInput({ node, phase, asset } = {}) {
+  if (!node) return { allowed: false, reason: 'NODE_NOT_FOUND' };
+  if (node.isEnding) return { allowed: false, reason: 'STORY_ENDED' };
+  if (node.audienceConnection !== 'connected') {
+    return { allowed: false, reason: 'AUDIENCE_DISCONNECTED' };
+  }
+  if (asFableLoomPlaybackMode(node.playbackMode) !== 'decision') {
+    return { allowed: false, reason: 'PLAYBACK_NOT_DECISION' };
+  }
+  if (phase !== 'hold') {
+    return { allowed: false, reason: 'PLAYBACK_NOT_IN_HOLD_PHASE' };
+  }
+  if (resolveFableLoomProtagonistPresence(node) === 'onscreen') {
+    return { allowed: false, reason: 'PROTAGONIST_ONSCREEN' };
+  }
+  if (asset) {
+    const occupancy = asset.manifest || asset.audioOccupancy || asset;
+    if (asset.safeForLiveVoice === false
+      || occupancy.safeForLiveVoice === false || !isAssetSafeForLiveVoice(occupancy)) {
+      return { allowed: false, reason: 'HOLD_ASSET_OCCUPIED_BY_DIALOGUE' };
+    }
+  }
+  return { allowed: true };
 }
 
 /**

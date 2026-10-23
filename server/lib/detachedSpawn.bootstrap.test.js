@@ -40,7 +40,7 @@ function launcher(run) {
 const failure = (handle) => new Promise((resolve) => handle.once('error', resolve));
 
 describe('Windows detached bootstrap failure contract', () => {
-  it('retains bounded diagnostics in the error before cleanup removes the files', async () => {
+  it('retains cancellation and bounded diagnostics when supervisor shutdown is unconfirmed', async () => {
     launcher(async (child) => {
       await writeFile(join(controlDir, 'launcher-bootstrap.log'), 'supervisor-started hresult=0');
       await writeFile(join(controlDir, 'supervisor-bootstrap.log'), [
@@ -58,9 +58,10 @@ describe('Windows detached bootstrap failure contract', () => {
     expect(error.message).toContain('launcher=0');
     expect(error.message).toContain('supervisor-stage=failed hresult=-2147024894');
     expect(error.message).toContain('elapsed-ms=9401; timeline=reading-job@820ms>starting-job@900ms>failed@9401ms');
-    await vi.waitFor(async () => {
-      await expect(readFile(join(controlDir, 'supervisor-bootstrap.log'))).rejects.toThrow();
-    });
+    expect(error.message).toContain('cancellation=written; cleanup=unconfirmed');
+    expect(await readFile(join(controlDir, 'launch-cancelled'), 'utf8')).toBe('1');
+    expect(await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log'))
+      .toContain('failed hresult=-2147024894 elapsed-ms=9401');
   });
 
   it('projects successful handoff timings without exporting absolute timestamps or job data', async () => {

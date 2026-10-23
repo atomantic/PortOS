@@ -114,6 +114,11 @@ vi.mock('../services/videoGen/upscaleJob.js', () => ({
   enqueueLtxUpscale: vi.fn(),
 }));
 
+// Stitch is queued as a media job (#13000); the route reaches it directly.
+vi.mock('../services/videoGen/stitchJob.js', () => ({
+  enqueueStitch: vi.fn(),
+}));
+
 vi.mock('../services/videoGen/trimStart.js', () => ({
   trimHistoryItemStart: vi.fn(),
 }));
@@ -308,6 +313,7 @@ vi.mock('fs/promises', () => ({
 import { copyFile, unlink } from 'fs/promises';
 import * as videoGenService from '../services/videoGen/local.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
+import * as stitchJobService from '../services/videoGen/stitchJob.js';
 import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
@@ -3293,21 +3299,21 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(400);
     });
 
-    it('proxies array of ids to stitchVideos and wraps result', async () => {
-      videoGenService.stitchVideos.mockResolvedValue({ id: 's1', filename: 's1.mp4' });
+    it('queues the stitch and answers with the job before ffmpeg runs', async () => {
+      stitchJobService.enqueueStitch.mockResolvedValue({ jobId: 'job-s1', position: 1, status: 'queued' });
       const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: [validId(1), validId(2)] });
       expect(r.status).toBe(200);
-      expect(r.body.ok).toBe(true);
-      expect(r.body.video.id).toBe('s1');
-      expect(videoGenService.stitchVideos).toHaveBeenCalledWith([validId(1), validId(2)]);
+      expect(r.body).toEqual({ ok: true, job: { jobId: 'job-s1', position: 1, status: 'queued' } });
+      expect(stitchJobService.enqueueStitch).toHaveBeenCalledWith([validId(1), validId(2)]);
+      expect(videoGenService.stitchVideos).not.toHaveBeenCalled();
     });
 
     it('accepts a shared-gallery upload history id', async () => {
-      videoGenService.stitchVideos.mockResolvedValue({ id: 's1', filename: 's1.mp4' });
+      stitchJobService.enqueueStitch.mockResolvedValue({ jobId: 'job-s2', position: 1, status: 'queued' });
       const uploadId = 'upload-ab12cd34';
       const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: [uploadId, validId(2)] });
       expect(r.status).toBe(200);
-      expect(videoGenService.stitchVideos).toHaveBeenCalledWith([uploadId, validId(2)]);
+      expect(stitchJobService.enqueueStitch).toHaveBeenCalledWith([uploadId, validId(2)]);
     });
   });
 

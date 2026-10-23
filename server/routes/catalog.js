@@ -29,7 +29,6 @@ import {
   catalogIngredientQuerySchema,
   catalogTagQuerySchema,
   catalogScrapCommitSchema,
-  catalogSyncEnvelopeSchema,
   catalogExtractRequestSchema,
   catalogPruneRequestSchema,
   catalogEmbeddingsBackfillSchema,
@@ -910,15 +909,6 @@ router.get('/sync', asyncHandler(async (req, res) => {
     ...changes,
     portosMeta: { schemaVersions: { catalog: PORTOS_SCHEMA_VERSIONS.catalog } },
   });
-}));
-
-router.post('/sync/apply', asyncHandler(async (req, res) => {
-  const body = validateRequest(catalogSyncEnvelopeSchema, req.body);
-  // applyRemoteChanges throws CatalogSyncVersionMismatchError (status 412)
-  // when the peer is ahead on the `catalog` schema; centralized error
-  // middleware translates `err.status` to the HTTP response.
-  const stats = await catalogSync.applyRemoteChanges(body);
-  res.json(stats);
 }));
 
 router.post('/embeddings/backfill', asyncHandler(async (req, res) => {

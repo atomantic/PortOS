@@ -33,7 +33,7 @@ describe('branch reconciliation completion', () => {
   it('settles a non-perpetual run immediately using fresh ownership and its target account', async () => {
     expect(await settleBranchReconcileRun(agent)).toMatchObject({ cleaned: ['merged'], reapedSuperseded: ['superseded'] });
     expect(reconcile).toHaveBeenCalledWith('/example/repo', {
-      cleanup: true, reapSuperseded: true, pendingMergeBranches: new Set(['claim/queued']), activeAgentIds: new Set(['active']),
+      appId: 'example', cleanup: true, reapSuperseded: true, pendingMergeBranches: new Set(['claim/queued']), activeAgentIds: new Set(['active']),
       claimOwners: { agents: [], readAgents: readClaimOwnershipAgents }, forgeAccount: 'example-account'
     });
   });
