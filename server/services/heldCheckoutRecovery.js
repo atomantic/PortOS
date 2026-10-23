@@ -21,7 +21,7 @@
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { createReadStream, realpathSync } from 'node:fs';
 import { lstat, stat, readlink, readdir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { sameRetirementCheckout, unresolvedRetirements } from '../lib/reconcileRetirementEvidence.js';
@@ -129,9 +129,11 @@ async function verifyHeldArchive(repoPath, dir, release) {
   // Bundle verify/list-heads validate headers, not packed object integrity. Prove
   // the complete closure without borrowing any object from the live repository.
   const scratch = await mkdtemp(join(tmpdir(), 'portos-retirement-proof-'));
+  // Git's null path also works on Windows; Node's device-namespace spelling
+  // (\\.\nul) is not the Git configuration-file contract.
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
-    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' };
-  const prove = args => execGit(['--no-optional-locks', '-c', `core.hooksPath=${devNull}`, '-c', 'core.fsmonitor=false', ...args], scratch,
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' };
+  const prove = args => execGit(['--no-optional-locks', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], scratch,
     { env, maxBuffer: GIT_OUTPUT_BYTES });
   try {
     await prove(['init', '--bare', `--object-format=${release.head.length === 64 ? 'sha256' : 'sha1'}`, '.']);

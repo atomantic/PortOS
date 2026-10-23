@@ -21,7 +21,7 @@ afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -35,7 +35,19 @@ vi.mock('../lib/execGit.js', async importOriginal => {
       injected.fetches.push({ args, options });
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
     }
-    return actual.execGit(args, cwd, options);
+    try { return await actual.execGit(args, cwd, options); }
+    catch (error) {
+      const phase = args.includes('unbundle') ? 'unbundle' : args.includes('fsck') ? 'fsck' : args.includes('--bare') ? 'init' : null;
+      if (phase && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') {
+        // Persisted evidence hides child stderr; retain bounded fixture-only diagnostics.
+        let message = String(error.message);
+        for (const root of [cwd, tmpdir(), realpathSync(tmpdir())]) {
+          message = message.split(root).join('<temp>').split(root.replaceAll('\\', '/')).join('<temp>');
+        }
+        injected.proofFailures.push({ phase, message: message.replace(/\s+/g, ' ').slice(0, 500) });
+      }
+      throw error;
+    }
   } };
 });
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ env: { ...process.env, GH_TOKEN: 'synthetic-account-token' } }) }));
@@ -69,7 +81,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   beforeEach(async () => {
     Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -291,7 +303,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const { release, saved } = await historicalArchive();
     const before = (await execGit(['show-ref'], repo)).stdout;
     const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
-    expect(outcome.retirementObligations).toEqual([]);
+    expect(outcome.retirementObligations, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`).toEqual([]);
     expect(outcome.remaining).toEqual([]);
     expect(outcome.recoveredPreservations).toEqual([expect.objectContaining({ path: release.path, branch: release.branch, head: release.head,
       archiveDir: saved.archiveDir, verified: true,
