@@ -631,6 +631,7 @@ export default function FableLoomStory({ view = 'graph' }) {
         </div>
       ) : boardOpen ? (
         <LoomBoard
+          loomId={loomId}
           episode={episode}
           aspectRatio={asFableLoomRenderSettings(loom.renderSettings).aspectRatio}
           via={via}

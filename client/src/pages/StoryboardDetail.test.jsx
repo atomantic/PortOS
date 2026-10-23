@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   extractStoryboardBeats: vi.fn(),
   addStoryboardBeats: vi.fn(),
   uploadFile: vi.fn(),
+  sendStoryboardPanelToFableLoom: vi.fn(),
   getUploadUrl: (filename) => `/api/uploads/${filename}`,
 }));
 vi.mock('../services/api', () => {
@@ -128,6 +129,22 @@ describe('StoryboardDetail', () => {
     await waitFor(() => expect(screen.getByTestId('location').textContent)
       .toBe(`/media/annotate/sketch%3Aabc-123?returnTo=${encodeURIComponent('/storyboards/sb-1/panel/panel-1')}`));
     expect(api.addStoryboardPanelTake).toHaveBeenCalledWith('sb-1', 'panel-1', { source: 'sketch', sketchKey: 'sketch:abc-123' });
+  });
+
+  it('sends a panel made from a FableLoom scene back as its scene art', async () => {
+    const linked = board({
+      source: { kind: 'fableloom', loomId: 'loom-1', episodeId: 'ep-1' },
+      beats: [{ id: 'beat-1', title: 'Arrival', what: '', why: '', emotion: '', musicalRole: null, sectionHint: '', panels: [
+        panel('panel-1', { sourceSceneId: 'node-1', takes: [{ id: 'take-1', source: 'generated', image: 'harbor.png', sketchKey: null }], selectedTakeId: 'take-1' }),
+      ] }],
+    });
+    api.getStoryboard.mockResolvedValue(linked);
+    api.sendStoryboardPanelToFableLoom.mockResolvedValue({ board: linked, node: { id: 'node-1', image: 'harbor.png' } });
+    renderAt('/storyboards/sb-1/panel/panel-1');
+
+    expect(await screen.findByRole('link', { name: 'FableLoom episode' })).toHaveAttribute('href', '/fableloom/loom-1/ep-1/board');
+    fireEvent.click(screen.getByRole('button', { name: 'Use as scene art' }));
+    await waitFor(() => expect(api.sendStoryboardPanelToFableLoom).toHaveBeenCalledWith('sb-1', 'panel-1'));
   });
 
   it('says so when the linked panel is gone', async () => {

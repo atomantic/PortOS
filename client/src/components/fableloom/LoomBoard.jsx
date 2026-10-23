@@ -1,6 +1,8 @@
-import { useMemo } from 'react';
-import { Check, CornerUpLeft, GitBranch, ImageIcon } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router';
+import { Check, CornerUpLeft, GitBranch, ImageIcon, LayoutPanelLeft, Loader2 } from 'lucide-react';
 import MediaImage from '../MediaImage';
+import { listStoryboards, makeStoryboardFromFableLoom } from '../../services/api';
 import { aspectClass } from '../storyboards/storyboardArt';
 import { formatCount, formatTimecode } from '../../utils/formatters';
 import { fableLoomBoardPath } from '../../../../server/lib/fableLoomBoard.js';
@@ -16,15 +18,45 @@ const thumb = (image) => `/data/images/${encodeURIComponent(image)}`;
  * One path through an episode as storyboard panels, grouped by dramatic scene.
  * A fork's other choices sit under its panel; picking one moves the path
  * (`via`, in the URL). Tapping a panel opens the scene in the graph.
+ * "Make storyboard from this path" copies the path into Create › Storyboards,
+ * where recipes make panel art that "Use as scene art" sends back here.
  */
-export default function LoomBoard({ episode, aspectRatio, via, onPick, onOpenNode }) {
+export default function LoomBoard({ loomId, episode, aspectRatio, via, onPick, onOpenNode }) {
+  const navigate = useNavigate();
   const path = useMemo(() => fableLoomBoardPath(episode, via), [episode, via]);
+  const [boards, setBoards] = useState([]);
+  const [making, setMaking] = useState(false);
+  useEffect(() => {
+    let active = true;
+    listStoryboards({ silent: true })
+      .then((rows) => { if (active) setBoards((rows || []).filter((b) => b.source?.loomId === loomId && b.source?.episodeId === episode.id)); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [loomId, episode.id]);
+  const makeBoard = async () => {
+    setMaking(true);
+    const board = await makeStoryboardFromFableLoom(loomId, episode.id, via).catch(() => null);
+    setMaking(false);
+    if (board?.id) navigate(`/storyboards/${encodeURIComponent(board.id)}`);
+  };
   const scenes = path.beats.reduce((sum, beat) => sum + beat.panels.length, 0);
   const titleOf = (id) => episode.nodes.find((node) => node.id === id)?.title || 'an earlier scene';
 
   if (path.end === 'empty') return <p className="p-6 text-sm text-port-text-muted">This episode has no start scene yet.</p>;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-2 sm:p-4 space-y-4" aria-label="Episode board">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={makeBoard} disabled={making}
+          className="min-h-[44px] inline-flex items-center gap-1.5 rounded border border-port-border px-3 text-sm text-port-text hover:border-port-accent/60 disabled:opacity-50">
+          {making ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <LayoutPanelLeft size={16} aria-hidden="true" />} Make storyboard from this path
+        </button>
+        {boards.map((board) => (
+          <Link key={board.id} to={`/storyboards/${encodeURIComponent(board.id)}`}
+            className="min-h-[44px] inline-flex items-center rounded px-2 text-sm text-port-accent hover:underline">
+            {board.name}
+          </Link>
+        ))}
+      </div>
       <p className="text-xs text-port-text-muted">
         {formatCount(scenes)} scene{scenes === 1 ? '' : 's'} on this path
         {path.totalSeconds > 0 && <>, <span className="tabular-nums">{formatTimecode(path.totalSeconds)}</span></>}. {END_LABELS[path.end]}

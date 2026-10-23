@@ -154,3 +154,8 @@ export const storyboardFitSchema = z.object({
   starts: z.record(entityId, z.number().min(0).max(36000))
     .refine((starts) => Object.keys(starts).length <= L.beats, { message: `At most ${L.beats} picked starts` }).optional(),
 }).strict();
+
+// Make storyboard from this FableLoom path: the transition ids picked at forks.
+export const storyboardFromFableLoomSchema = z.object({
+  via: z.array(z.string().min(1).max(128)).max(500).default([]),
+}).strict();
