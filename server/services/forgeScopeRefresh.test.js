@@ -44,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -166,7 +167,6 @@ describe('startForgeScopeRefresh', () => {
       expect.any(Number), expect.objectContaining({ env: expect.not.objectContaining({ GH_ENTERPRISE_TOKEN: 'ambient-token' }) }),
     );
     await settle(jobId);
-    vi.unstubAllEnvs();
   });
 
   it('refuses when the active account cannot be verified and releases the host reservation', async () => {

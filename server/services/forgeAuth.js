@@ -184,6 +184,10 @@ export function resolveForgeForRepo(dir, opts = {}) {
 async function resolveForgeWithPin(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal, forgeAccount = null } = {}, pinState = {}) {
   const explicitPin = (typeof forgeAccount === 'string' && forgeAccount.trim()) ? forgeAccount.trim() : null;
   pinState.account = explicitPin || await resolveConfiguredAccount(dir);
+  pinState.resolved = true;
+  // The outer budget may expire while the registry or worktree lookup waits.
+  // It already refused the unknown pin; do not start late credential probes.
+  if (signal?.aborted) return { cli: 'gh', env: process.env, host: null, owner: null, account: null, identity: null };
   return resolveForgeCredentials(dir, { timeoutMs, signal, pinned: pinState.account }).catch((error) => {
     if (pinState.account) throw error;
     return { cli: 'gh', env: process.env, host: null, owner: null, account: null, identity: null };
@@ -266,13 +270,14 @@ export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccoun
   // gh subprocess keeps its own timeout as a second bound for direct callers.
   let timer;
   const controller = new AbortController();
-  const pinState = {};
+  const pinState = { resolved: false, account: null };
   const resolved = await Promise.race([
     resolveForgeWithPin(dir, { timeoutMs, signal: controller.signal, forgeAccount }, pinState),
     new Promise((resolve, reject) => {
       timer = setTimeout(() => {
         controller.abort();
-        if (pinState.account === null) return resolve(null);
+        // Unknown is not unpinned: a late registry read may reveal a pin.
+        if (pinState.resolved && !pinState.account) return resolve(null);
         reject(new ServerError('Pinned GitHub account resolution timed out. Retry after checking gh auth status.', {
           status: 503, code: 'FORGE_AUTH_TIMEOUT',
         }));

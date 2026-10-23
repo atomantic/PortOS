@@ -400,3 +400,16 @@ it('keeps unpinned transient credential failures on ambient auth', async () => {
   expect(options.env).toBe(process.env);
   expect(options.customEnv).toBeNull();
 });
+
+it('refuses an unresolved pin lookup and never starts late probes after its budget expires', async () => {
+  vi.useFakeTimers();
+  let finishRegistryRead;
+  listForgePinnedApps.mockImplementation(() => new Promise((resolve) => { finishRegistryRead = resolve; }));
+  const pending = resolveForgeTokenEnv('/example/repo', { timeoutMs: 10 });
+  const refused = expect(pending).rejects.toMatchObject({ code: 'FORGE_AUTH_TIMEOUT' });
+  await vi.advanceTimersByTimeAsync(10);
+  await refused;
+  finishRegistryRead([]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(spawn).not.toHaveBeenCalled();
+});
