@@ -38,7 +38,7 @@ const WORKOUTS_FILE = join(MEATSPACE_DIR, 'workouts.json');
 
 const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 
-// Every read-modify-write of the three files below runs inside `queueHealthWrite`
+// Every read-modify-write of the local health files runs inside `queueHealthWrite`
 // — the queue the federation snapshot apply (`dataSync.js`) also uses — so a peer
 // snapshot cannot overwrite a record added between its read and its write.
 // `writeLocal` itself is NOT queued: callers already hold the queue.
@@ -294,11 +294,13 @@ export async function addWorkout({ date, type, durationMinutes, intensity, notes
     intensity: typeof intensity === 'string' && intensity.trim() ? intensity.trim() : null,
     notes: typeof notes === 'string' && notes.trim() ? notes.trim() : null,
   };
-  const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] });
-  if (!Array.isArray(data.workouts)) data.workouts = [];
-  data.workouts.push(entry);
-  data.workouts.sort(byDate);
-  await writeLocal(WORKOUTS_FILE, data);
+  await queueHealthWrite(async () => {
+    const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] }, { strict: true });
+    if (!Array.isArray(data.workouts)) throw new Error('Workouts malformed');
+    data.workouts.push(entry);
+    data.workouts.sort(byDate);
+    await writeLocal(WORKOUTS_FILE, data);
+  });
   console.log(`🏋️ Workout logged: ${trimmedType}${entry.durationMinutes ? ` (${entry.durationMinutes}min)` : ''} for ${targetDate}`);
   return entry;
 }
@@ -339,12 +341,15 @@ export async function addBloodPressureReading({ date, systolic, diastolic }) {
     return { date: targetDate, systolic, diastolic };
   }
 
-  const log = await readJSONFile(HEALTH_METRICS_FILE, { entries: [] });
-  let entry = log.entries.find(e => e.date === targetDate);
-  if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
-  Object.assign(entry, patch);
-  log.entries.sort(byDate);
-  await writeLocal(HEALTH_METRICS_FILE, log);
+  await queueHealthWrite(async () => {
+    const log = await readJSONFile(HEALTH_METRICS_FILE, { entries: [] }, { strict: true });
+    if (!Array.isArray(log.entries)) throw new Error('Health metrics malformed');
+    let entry = log.entries.find(e => e.date === targetDate);
+    if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
+    Object.assign(entry, patch);
+    log.entries.sort(byDate);
+    await writeLocal(HEALTH_METRICS_FILE, log);
+  });
   console.log(`🩺 Blood pressure ${systolic}/${diastolic} logged for ${targetDate}`);
   return { date: targetDate, systolic, diastolic };
 }
