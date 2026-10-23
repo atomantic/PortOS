@@ -33,7 +33,7 @@ import { parse } from '@babel/parser';
 
 const SERVER_ROOT = dirname(fileURLToPath(import.meta.url));
 
-const parseSource = (src) => parse(src, { sourceType: 'module', errorRecovery: true, allowReturnOutsideFunction: true });
+const parseSource = (src) => parse(src, { sourceType: 'module', errorRecovery: true, allowReturnOutsideFunction: true, attachComment: false });
 
 const isAsyncInit = (node) => (
   (node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression') && node.async === true
@@ -42,10 +42,12 @@ const isAsyncInit = (node) => (
 function walk(node, visit) {
   if (!node || typeof node.type !== 'string') return;
   visit(node);
-  for (const key of Object.keys(node)) {
-    if (key === 'loc' || key === 'extra') continue;
+  for (const key in node) {
+    if (key === 'loc' || key === 'extra' || key === 'comments' || key === 'errors') continue;
     const child = node[key];
-    if (Array.isArray(child)) child.forEach((c) => walk(c, visit));
+    if (Array.isArray(child)) {
+      for (const c of child) walk(c, visit);
+    }
     else if (child && typeof child === 'object') walk(child, visit);
   }
 }
@@ -82,44 +84,73 @@ function asyncDeclarations(ast) {
   return { local, exported };
 }
 
-const exportCache = new Map();
-
-function asyncExportsOf(absPath) {
-  if (!exportCache.has(absPath)) {
-    const candidates = [absPath, `${absPath}.js`, join(absPath, 'index.js')];
-    const file = candidates.find((p) => p.endsWith('.js') && existsSync(p) && !p.endsWith('/'));
-    exportCache.set(absPath, file ? asyncDeclarations(parseSource(readFileSync(file, 'utf8'))).exported : new Set());
-  }
-  return exportCache.get(absPath);
-}
-
-/**
- * Lines of every bare `asyncFn();` statement in `src`. `dir` resolves relative
- * imports; omit it to scan local declarations only.
- */
-export function findFloatingAsyncCalls(src, dir = null) {
+/** Retain recognition facts rather than every imported module's AST. */
+function summarizeSource(src) {
   const ast = parseSource(src);
-  const asyncNames = new Set(asyncDeclarations(ast).local);
-  if (dir) {
-    for (const stmt of ast.program.body) {
-      if (stmt.type !== 'ImportDeclaration' || !stmt.source.value.startsWith('.')) continue;
-      const exported = asyncExportsOf(resolve(dir, stmt.source.value));
-      for (const spec of stmt.specifiers) {
-        if (spec.type === 'ImportSpecifier' && exported.has(spec.imported.name || spec.imported.value)) {
-          asyncNames.add(spec.local.name);
-        }
-      }
-    }
-  }
-  const hits = [];
+  const { local, exported } = asyncDeclarations(ast);
+  const imports = ast.program.body.filter((stmt) => stmt.type === 'ImportDeclaration' && stmt.source.value.startsWith('.'))
+    .map((stmt) => ({
+      source: stmt.source.value,
+      names: stmt.specifiers.filter((spec) => spec.type === 'ImportSpecifier')
+        .map((spec) => ({ imported: spec.imported.name || spec.imported.value, local: spec.local.name })),
+    }));
+  const calls = [];
   walk(ast, (node) => {
     if (node.type !== 'ExpressionStatement') return;
     const call = node.expression;
-    if (call.type === 'CallExpression' && call.callee.type === 'Identifier' && asyncNames.has(call.callee.name)) {
-      hits.push(`line ${node.loc.start.line}: ${call.callee.name}()`);
+    if (call.type === 'CallExpression' && call.callee.type === 'Identifier') {
+      calls.push({ name: call.callee.name, line: node.loc.start.line });
     }
   });
-  return hits;
+  return { local, exported, imports, calls };
+}
+
+/** One scan owns its cache; import spellings share the resolved file's summary. */
+function createFloatingAsyncScanner(readSource = (file) => readFileSync(file, 'utf8')) {
+  const summaries = new Map();
+  const resolutions = new Map();
+  const summaryOf = (file) => {
+    if (!summaries.has(file)) summaries.set(file, summarizeSource(readSource(file)));
+    return summaries.get(file);
+  };
+  const asyncExportsOf = (absPath) => {
+    if (!resolutions.has(absPath)) {
+      const candidates = [absPath, `${absPath}.js`, join(absPath, 'index.js')];
+      const file = candidates.find((p) => p.endsWith('.js') && existsSync(p) && !p.endsWith('/'));
+      resolutions.set(absPath, file ?? null);
+    }
+    const file = resolutions.get(absPath);
+    return file ? summaryOf(file).exported : new Set();
+  };
+  const findCalls = ({ local, imports, calls }, dir) => {
+    const asyncNames = new Set(local);
+    if (dir) {
+      for (const imported of imports) {
+        const exported = asyncExportsOf(resolve(dir, imported.source));
+        for (const name of imported.names) {
+          if (exported.has(name.imported)) asyncNames.add(name.local);
+        }
+      }
+    }
+    return calls.filter((call) => asyncNames.has(call.name))
+      .map((call) => `line ${call.line}: ${call.name}()`);
+  };
+  return {
+    findInSource: (src, dir = null) => findCalls(summarizeSource(src), dir),
+    findInFile: (file) => {
+      const summary = summaryOf(file);
+      if (summary.hits) return summary.hits;
+      const hits = findCalls(summary, dirname(file));
+      // After visiting a file, only its exports and verdict can be needed again.
+      summaries.set(file, { exported: summary.exported, hits });
+      return hits;
+    },
+  };
+}
+
+/** Lines of every bare `asyncFn();` statement; omit `dir` to scan local declarations only. */
+export function findFloatingAsyncCalls(src, dir = null) {
+  return createFloatingAsyncScanner().findInSource(src, dir);
 }
 
 const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
@@ -135,9 +166,9 @@ describe('async calls own their rejections (#12978)', () => {
 
   it('has no bare statement-level call to an async function', () => {
     const violations = [];
+    const scanner = createFloatingAsyncScanner();
     for (const file of trackedServerSources()) {
-      const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
-      for (const hit of findFloatingAsyncCalls(src, dirname(join(SERVER_ROOT, file)))) {
+      for (const hit of scanner.findInFile(join(SERVER_ROOT, file))) {
         violations.push(`server/${file} ${hit}`);
       }
     }
@@ -174,5 +205,31 @@ describe('the floating-async recognizer', () => {
     expect(findFloatingAsyncCalls("import { getAllowedCommands as sync } from './services/commands.js';\nsync();", SERVER_ROOT)).toEqual([]);
     expect(findFloatingAsyncCalls("import { logAction as log } from './services/history.js';\nlog();", SERVER_ROOT))
       .toEqual(['line 2: log()']);
+  });
+
+  it('reuses one file summary across import spellings and the whole-tree visit', () => {
+    const reads = new Map();
+    const scanner = createFloatingAsyncScanner((file) => {
+      reads.set(file, (reads.get(file) || 0) + 1);
+      return readFileSync(file, 'utf8');
+    });
+    const source = (specifier) => `import { logAction as log } from '${specifier}';\nlog();`;
+    expect(scanner.findInSource(source('./services/history'), SERVER_ROOT)).toEqual(['line 2: log()']);
+    expect(scanner.findInFile(join(SERVER_ROOT, 'services/history.js'))).toEqual([]);
+    expect(scanner.findInSource(source('./services/history.js'), SERVER_ROOT)).toEqual(['line 2: log()']);
+    expect(scanner.findInFile(join(SERVER_ROOT, 'services/history.js'))).toEqual([]);
+    expect(reads.get(join(SERVER_ROOT, 'services/history.js'))).toBe(1);
+  });
+
+  it('starts a fresh import cache for each scan and propagates unreadable or invalid imports', () => {
+    const source = "import { run } from './services/history.js';\nrun();";
+    expect(createFloatingAsyncScanner(() => 'export async function run() {}')
+      .findInSource(source, SERVER_ROOT)).toEqual(['line 2: run()']);
+    expect(createFloatingAsyncScanner(() => 'export function run() {}')
+      .findInSource(source, SERVER_ROOT)).toEqual([]);
+    expect(() => createFloatingAsyncScanner(() => { throw new Error('unreadable import'); })
+      .findInSource(source, SERVER_ROOT)).toThrow('unreadable import');
+    expect(() => createFloatingAsyncScanner(() => 'export function {')
+      .findInSource(source, SERVER_ROOT)).toThrow();
   });
 });
