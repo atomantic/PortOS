@@ -227,3 +227,12 @@ it('repairs cross-scene consistency findings within the remaining rounds and kee
   expect(checkpoint.consistency[0].review.risks).toEqual(['Preserve the lamp placement between scenes.']);
   expect(checkpoint.scenes[groups[0].sceneId].rounds[0].feedback).toContain('lamp');
 });
+
+it('keeps the synchronous compatibility response backed by a durable background journal', async () => {
+  const { planEpisodeShotRun, getEpisodeShotRun } = await import('./shotRuns.js');
+  const { loom, ep, groups } = await setup();
+  mockPlan(groups);
+  const result = await planEpisodeShotRun(loom.id, ep);
+  expect(result.validation.stats.ready).toBe(true);
+  expect((await getEpisodeShotRun(loom.id, ep))).toMatchObject({ status: 'completed', result: { sourceFingerprint: result.sourceFingerprint } });
+});

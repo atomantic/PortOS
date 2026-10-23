@@ -54,7 +54,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   reviewEpisodeContinuity: vi.fn(),
 }));
 
-vi.mock('../services/fableLoom/shotRuns.js', () => ({ startEpisodeShotRun: vi.fn(), getEpisodeShotRun: vi.fn(), cancelEpisodeShotRun: vi.fn() }));
+vi.mock('../services/fableLoom/shotRuns.js', () => ({ startEpisodeShotRun: vi.fn(), planEpisodeShotRun: vi.fn(), getEpisodeShotRun: vi.fn(), cancelEpisodeShotRun: vi.fn() }));
 import * as shotRuns from '../services/fableLoom/shotRuns.js';
 import * as fableLoom from '../services/fableLoom/index.js';
 import routes from './fableLoom.js';

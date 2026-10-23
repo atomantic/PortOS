@@ -93,7 +93,13 @@ export async function startEpisodeShotRun(loomId, episodeId, { resume = false, .
     run.message = resume ? 'Resuming shot planning…' : 'Starting shot planning…';
     await publish(run);
     active.set(key, run);
-    void execute(run).catch(error => console.error(`❌ Shot run persistence failed: ${error.message}`));
+    void execute(run).catch(error => {
+      console.error(`❌ Shot run persistence failed: ${error.message}`);
+      run.status = 'failed';
+      run.message = 'Could not persist the shot run. Previously saved steps remain available for recovery.';
+      run.revision += 1;
+      fableLoomRunEvents.emit('shots', snapshot(run));
+    });
     return snapshot(run);
   });
 }
@@ -110,4 +116,26 @@ export async function cancelEpisodeShotRun(loomId, episodeId) {
     }
     return snapshot(run);
   });
+}
+
+/** Compatibility callers still await a plan, but do not own the worker's lifetime. */
+export async function planEpisodeShotRun(loomId, episodeId, options = {}) {
+  let runId;
+  let resolveResult, rejectResult;
+  const earlyTerminals = new Map();
+  const result = new Promise((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+  const accept = run => {
+    if (run.loomId !== loomId || run.episodeId !== episodeId || !['completed', 'failed', 'canceled'].includes(run.status)) return;
+    if (!runId) { earlyTerminals.set(run.id, run); return; }
+    if (run.id !== runId) return;
+    if (run.status === 'completed') resolveResult(run.result);
+    else rejectResult(new ServerError(run.message, { status: 422, code: 'SHOT_RUN_FAILED' }));
+  };
+  // Subscribe before start, including an instant completion or an already-active run.
+  fableLoomRunEvents.on('shots', accept);
+  return startEpisodeShotRun(loomId, episodeId, options).then(run => {
+    runId = run.id;
+    accept(earlyTerminals.get(runId) || run);
+    return result;
+  }).finally(() => fableLoomRunEvents.off('shots', accept));
 }
