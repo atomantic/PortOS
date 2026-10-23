@@ -538,13 +538,81 @@ export async function preserveMergedCheckout(repoPath, tree, defaultBranch, { co
   };
 }
 
+// All administration bytes are preserved separately. Only Git's reference
+// formats establish object dependencies; messages and application JSON do not.
+function recoveryReferenceKind(path) {
+  const relative = path.replace(/^gitdir\//, '');
+  if (/^(rebase-merge|rebase-apply|sequencer|reftable)(\/|$)/.test(relative)
+    || /\.lock$/.test(relative) || (/^BISECT_/.test(relative) && relative !== 'BISECT_HEAD')) return 'unsafe';
+  if (/^logs(?:\/|$)/.test(relative)) return 'reflog';
+  if (/^refs(?:\/|$)/.test(relative)) return 'ref';
+  if (relative === 'packed-refs') return 'packed';
+  if (relative === 'FETCH_HEAD') return 'fetch';
+  // HEAD resolves to tree.head, which is already a recovery root; skipping it
+  // saves two Git spawns per retirement (#13154 spawn ceiling).
+  if (relative === 'HEAD') return null;
+  if (relative === 'MERGE_HEAD' || relative === 'shallow') return 'objects';
+  if (['COMMIT_EDITMSG', 'MERGE_MSG', 'MERGE_MODE', 'MERGE_RR', 'SQUASH_MSG', 'TAG_EDITMSG', 'NOTES_EDITMSG'].includes(relative)) return null;
+  // Worktree-private root refs use uppercase names. Unknown operation formats
+  // must hold rather than silently omit recovery objects introduced by Git.
+  return /^[A-Z][A-Z0-9_]*$/.test(relative) ? 'ref' : null;
+}
+
+async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot }) {
+  const heads = new Set([tree.head]);
+  const oid = new RegExp(`^[a-f0-9]{${tree.head.length}}$`, 'i');
+  const invalid = () => { throw new Error('unrecognized private recovery reference'); };
+  const add = (value, allowZero = false) => {
+    if (!oid.test(value)) invalid();
+    if (/^0+$/.test(value)) { if (allowZero) return; invalid(); }
+    heads.add(value.toLowerCase());
+    if (heads.size > 1024) throw new Error('too many private recovery objects');
+  };
+  for (const link of administration.symlinks) {
+    if (recoveryReferenceKind(link.path)) throw new Error('unsupported linked recovery reference');
+  }
+  for (const file of administration.files) {
+    const kind = recoveryReferenceKind(file.path);
+    if (!kind) continue;
+    if (kind === 'unsafe') throw new Error('retirement-operation-active');
+    const contents = await readFile(file.source, 'utf8');
+    const lines = contents.split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    if (kind === 'ref') {
+      if (lines.length !== 1) invalid();
+      const symbolic = /^ref: (\S+)$/.exec(lines[0]);
+      if (symbolic) {
+        const prefix = missingRoot ? ['--git-dir', missingRoot, '--work-tree', tree.path] : [];
+        await git([...prefix, 'check-ref-format', '--allow-onelevel', symbolic[1]], missingRoot ? repoPath : tree.path);
+        add((await git([...prefix, 'rev-parse', '--verify', '--end-of-options', symbolic[1]], missingRoot ? repoPath : tree.path)).trim());
+      } else add(lines[0]);
+      continue;
+    }
+    if (kind === 'objects' && !lines.length) invalid();
+    for (const line of lines) {
+      if (kind === 'reflog') {
+        const fields = /^([a-f0-9]+) ([a-f0-9]+) [^\t]+(?:\t.*)?$/i.exec(line);
+        if (!fields) invalid();
+        add(fields[1], true);
+        add(fields[2], true);
+      } else if (kind === 'fetch') {
+        const fields = /^([a-f0-9]+)\t(?:not-for-merge)?\t.*$/i.exec(line);
+        if (!fields) invalid();
+        add(fields[1]);
+      } else if (kind === 'packed') {
+        if (line.startsWith('#')) continue;
+        const fields = /^(?:([a-f0-9]+) refs\/\S+|\^([a-f0-9]+))$/i.exec(line);
+        if (!fields) invalid();
+        add(fields[1] || fields[2]);
+      } else add(line);
+    }
+  }
+  return heads;
+}
+
 async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, release, review, missingRoot = null }) {
   const [snapshot, administration] = await archiveSnapshots(tree, repoPath, missingRoot);
-  // Sequencer state can contain abbreviated or external object references.
-  // Keep that checkout for recovery instead of claiming a complete bundle.
-  if (administration.files.some(file => /^gitdir\/(rebase-merge|rebase-apply|sequencer)\//.test(file.path))) {
-    throw new Error('retirement-operation-active');
-  }
+  const recoveryHeads = await recoveryObjectHeads(administration, { repoPath, tree, missingRoot });
   await ensureDir(dir);
   await chmod(dir, 0o700);
 
@@ -555,15 +623,6 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   // names a tree containing conflict-resolution evidence, not a commit.
   // Named bundle roots preserve their reachable objects too. Unknown/missing
   // recovery objects still hold the checkout.
-  const recoveryHeads = new Set([tree.head]);
-  for (const file of administration.files) {
-    if (file.path === 'git-indirection' || /\/(index|gitdir|commondir|locked)$/.test(file.path)) continue;
-    const contents = await readFile(file.source, 'utf8');
-    for (const match of contents.matchAll(/(?<![a-f0-9])[a-f0-9]{40}(?:[a-f0-9]{24})?(?![a-f0-9])/gi)) {
-      if (!/^0+$/.test(match[0])) recoveryHeads.add(match[0].toLowerCase());
-    }
-  }
-  if (recoveryHeads.size > 1024) throw new Error('too many private recovery objects');
   const recoveryRefs = [];
   const namespace = `refs/portos/archive/${randomUUID()}`;
   try {

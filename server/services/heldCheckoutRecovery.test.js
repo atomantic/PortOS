@@ -279,10 +279,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(join(admin, 'AUTO_MERGE'), `${autoMerge}\n`);
     await execGit(['update-ref', 'refs/worktree/private-blob', blob], path);
     await execGit(['update-ref', 'refs/worktree/private-tag', tag], path);
+    await execGit(['symbolic-ref', 'refs/worktree/symbolic-tag', 'refs/worktree/private-tag'], path);
+    await execGit(['symbolic-ref', 'refs/worktree/current', 'HEAD'], path);
+    const mergeHead = (await execGit(['commit-tree', autoMerge, '-m', 'private merge recovery'], path)).stdout.trim();
+    const otherMergeHead = (await execGit(['commit-tree', autoMerge, '-m', 'other private merge recovery'], path)).stdout.trim();
+    await writeFile(join(admin, 'MERGE_HEAD'), `${mergeHead}\n${otherMergeHead}\n`);
     const tree = { path, branch: 'refs/heads/feature/private-objects', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
     const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
     const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([autoMerge, blob, tag]));
+    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([autoMerge, blob, tag, mergeHead, otherMergeHead]));
     expect(await readFile(join(saved.archiveDir, 'administration', 'gitdir', 'AUTO_MERGE'), 'utf8')).toBe(`${autoMerge}\n`);
     expect(await saved.verify(tree)).toBe(null);
     // The archive must supply the conflict tree's children, not just list roots
@@ -295,21 +300,77 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect((await execGit(['cat-file', 'blob', conflictBlob], restored)).stdout).toContain('>>>>>>> theirs');
     expect((await execGit(['cat-file', 'blob', blob], restored)).stdout).toBe('private root blob bytes');
     expect((await execGit(['rev-parse', `${tag}^{tree}`], restored)).stdout.trim()).toBe(autoMerge);
+    expect((await execGit(['rev-parse', `${mergeHead}^{tree}`], restored)).stdout.trim()).toBe(autoMerge);
+    expect((await execGit(['rev-parse', `${otherMergeHead}^{tree}`], restored)).stdout.trim()).toBe(autoMerge);
     await execGit(['fsck', '--full', '--strict'], restored);
   });
 
-  it('retains the checkout when an AUTO_MERGE recovery tree is missing', async () => {
+  it.each(['AUTO_MERGE', 'refs/worktree/missing', 'logs/HEAD:old', 'logs/HEAD:new', 'FETCH_HEAD'])(
+    'retains the checkout when a genuine recovery object is missing from %s', async reference => {
     const path = join(external, 'missing-auto-merge');
     await execGit(['worktree', 'add', '-b', 'feature/missing-auto-merge', path, 'main'], repo);
     const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
     const missing = 'f'.repeat(40);
-    await writeFile(join(admin, 'AUTO_MERGE'), `${missing}\n`);
     const tree = { path, branch: 'refs/heads/feature/missing-auto-merge', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    const relative = reference.split(':')[0];
+    const bytes = reference === 'logs/HEAD:old' ? `${missing} ${tree.head} Test <test@example.com> 1 +0000\tmissing old object\n`
+      : reference === 'logs/HEAD:new' ? `${tree.head} ${missing} Test <test@example.com> 1 +0000\tmissing new object\n`
+      : reference === 'FETCH_HEAD' ? `${missing}\t\tbranch 'missing' of https://example.invalid/repo\n` : `${missing}\n`;
+    await mkdir(dirname(join(admin, relative)), { recursive: true });
+    await writeFile(join(admin, relative), bytes);
     await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir })).rejects.toThrow();
     expect(existsSync(path)).toBe(true);
-    expect(await readFile(join(admin, 'AUTO_MERGE'), 'utf8')).toBe(`${missing}\n`);
+    expect(await readFile(join(admin, relative), 'utf8')).toBe(bytes);
     expect(await archives()).toEqual([]);
     expect((await execGit(['for-each-ref', '--format=%(refname)', 'refs/portos/archive'], repo)).stdout).toBe('');
+  });
+
+  it.each(['refs/worktree/unknown', 'logs/HEAD', 'FETCH_HEAD', 'FUTURE_HEAD', 'sequencer/todo', 'index.lock'])(
+    'retains unknown or active recovery state in %s', async relative => {
+      const path = join(external, 'unknown-recovery');
+      await execGit(['worktree', 'add', '-b', 'feature/unknown-recovery', path, 'main'], repo);
+      const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+      const tree = { path, branch: 'refs/heads/feature/unknown-recovery', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+      await mkdir(dirname(join(admin, relative)), { recursive: true });
+      const bytes = relative.startsWith('refs/') ? 'ref: HEAD^{tree}\n' : `unrecognized recovery format ${tree.head}\n`;
+      await writeFile(join(admin, relative), bytes);
+      await expect(preserveMergedCheckout(repo, tree, 'main', { cosDir })).rejects.toThrow();
+      expect(await registered(path)).toBe(true);
+      expect(await readFile(join(admin, relative), 'utf8')).toBe(bytes);
+      expect(await archives()).toEqual([]);
+    });
+
+  it('preserves SHA-256 private refs and packed roots without interpreting metadata as objects', async () => {
+    repo = join(scratch, 'sha256-repo');
+    await execGit(['init', '--object-format=sha256', '-b', 'main', repo], scratch);
+    await execGit(['config', 'user.name', 'Test'], repo);
+    await execGit(['config', 'user.email', 'test@example.com'], repo);
+    await execGit(['config', 'commit.gpgsign', 'false'], repo);
+    await writeFile(join(repo, 'initial.txt'), 'sha256 initial');
+    await execGit(['add', 'initial.txt'], repo);
+    await execGit(['commit', '-m', 'sha256 initial'], repo);
+    const path = join(external, 'sha256');
+    await execGit(['worktree', 'add', '-b', 'feature/sha256', path, 'main'], repo);
+    const admin = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const tree = { path, branch: 'refs/heads/feature/sha256', head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() };
+    await writeFile(join(path, 'private.txt'), 'private sha256 blob');
+    const blob = (await execGit(['hash-object', '-w', 'private.txt'], path)).stdout.trim();
+    await rm(join(path, 'private.txt'));
+    await execGit(['update-ref', 'refs/worktree/private', blob], path);
+    await execGit(['tag', '-a', 'temporary', blob, '-m', 'packed sha256 tag'], path);
+    const tag = (await execGit(['rev-parse', 'refs/tags/temporary'], path)).stdout.trim();
+    await execGit(['tag', '-d', 'temporary'], path);
+    await writeFile(join(admin, 'packed-refs'), `# pack-refs with: peeled\n${tag} refs/worktree/packed\n^${blob}\n`);
+    await writeFile(join(admin, 'portos-pr-review-outcome.json'), JSON.stringify({ avatar: '1'.repeat(64) }));
+    const saved = await preserveMergedCheckout(repo, tree, 'main', { cosDir });
+    expect(await saved.verify(tree)).toBe(null);
+    await rename(repo, `${repo}-unavailable`);
+    const restored = join(scratch, 'sha256-restored');
+    await execGit(['init', '--bare', '--object-format=sha256', restored], scratch);
+    await execGit(['fetch', join(saved.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    expect((await execGit(['cat-file', 'blob', blob], restored)).stdout).toBe('private sha256 blob');
+    expect((await execGit(['rev-parse', `${tag}^{blob}`], restored)).stdout.trim()).toBe(blob);
+    await execGit(['fsck', '--full', '--strict'], restored);
   });
 
   it.each([false, true])('archives a missing checkout private index and staged contents before pruning, parentAlias=%s', async parentAlias => {
@@ -859,6 +920,39 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }];
     return current;
   }
+
+  it('retires reviewed metadata with unrelated hashes while recovering only structural reflog and fetch objects', async () => {
+    const c = await reviewedCheckout('metadata-hashes');
+    const absent = '1'.repeat(40);
+    expect((await execGit(['cat-file', '-e', absent], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    const metadata = Buffer.from(`${JSON.stringify({ reviews: [{ user: { avatar_url: `https://example.invalid/avatar/${absent}` } }], note: '2'.repeat(64) }, null, 2)}\n`);
+    await writeFile(join(c.admin, 'portos-pr-review-outcome.json'), metadata);
+    await writeFile(join(c.admin, 'COMMIT_EDITMSG'), `Unrelated message hash ${absent}\n`);
+    const tree = (await execGit(['rev-parse', 'HEAD^{tree}'], c.path)).stdout.trim();
+    const old = (await execGit(['commit-tree', tree, '-m', 'only in the old reflog field'], c.path)).stdout.trim();
+    const next = (await execGit(['commit-tree', tree, '-m', 'only in the new reflog field'], c.path)).stdout.trim();
+    const fetched = (await execGit(['commit-tree', tree, '-m', 'only in FETCH_HEAD'], c.path)).stdout.trim();
+    await writeFile(join(c.admin, 'logs/HEAD'), `${old} ${next} Test <test@example.com> 1 +0000\tmessage ${absent}\n`);
+    await writeFile(join(c.admin, 'FETCH_HEAD'), `${fetched}\tnot-for-merge\tbranch '${absent}' of https://example.invalid/repo\n`);
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, branchDeleted: true, archiveDir: expect.any(String) });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await readFile(join(result.archiveDir, 'administration/gitdir/portos-pr-review-outcome.json'))).toEqual(metadata);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      path: c.release.path, branch: c.release.branch, head: c.release.head, archiveDir: result.archiveDir, branchDeleted: true,
+    }));
+    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([old, next, fetched]));
+    expect(manifest.captured.recoveryHeads).not.toContain(absent);
+    await rename(repo, `${repo}-unavailable`);
+    const restored = join(scratch, 'metadata-restored');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
+    for (const oid of [old, next, fetched]) expect((await execGit(['cat-file', '-t', oid], restored)).stdout.trim()).toBe('commit');
+    await execGit(['fsck', '--full', '--strict'], restored);
+  });
 
   it('retires a freshly reviewed reused-branch incarnation with a standalone archive and exact receipt', async () => {
     const c = await reviewedCheckout('quality-reused', { gitlink: true });
