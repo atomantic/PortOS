@@ -254,7 +254,23 @@ const verificationRuns = new Map();
 export async function verifyAgentRepoState(input) {
   if (verificationRuns.has(input.agentId)) return verificationRuns.get(input.agentId);
   const cleanupPending = input.agentState?.result?.cleanupPending === true;
-  const run = verifyRunBranches({ ...input, success: input.success || cleanupPending }).then(async result => {
+  const verify = async () => {
+    if (cleanupPending) {
+      const { getTaskById } = await import('./cosTaskStore.js');
+      const current = await getTaskById(input.task.id);
+      if (!current) return skipped('cleanup-task-unavailable');
+      if (current.status !== 'in_progress' || current.metadata?.deliveryRecovery !== 'cleanup'
+        || current.metadata.deliveryRecoveryAgentId !== input.agentId) {
+        const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+        await recordRepoStateVerification(input.agentId, { status: 'completed', reasons: ['cleanup-owner-changed'] });
+        return skipped('cleanup-owner-changed');
+      }
+      input = { ...input, task: current };
+    }
+    return verifyRunBranches({ ...input, success: input.success || cleanupPending });
+  };
+  const run = verify().then(async result => {
+    if (result.skipReason === 'cleanup-owner-changed' || result.skipReason === 'cleanup-task-unavailable') return result;
     const outcomes = result.branches || [result];
     const unsupported = outcomes.find(item => [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
       REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE,
