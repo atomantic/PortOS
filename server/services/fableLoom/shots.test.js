@@ -47,7 +47,9 @@ describe('timed shot autopilot', () => {
     const updated = await updateNode(loom.id, ep, groups[0].sceneId, visual);
     mockPlan(groups);
     await runEpisodeShotAutopilot(loom.id, ep);
-    for (const [, variables] of runStagedLLM.mock.calls.filter(([, variables]) => JSON.parse(variables.source).scenes[0]?.shot)) {
+    const groundedCalls = runStagedLLM.mock.calls.filter(([, variables]) => JSON.parse(variables.source).scenes[0]?.shot);
+    expect(groundedCalls).toHaveLength(2);
+    for (const [, variables] of groundedCalls) {
       const source = JSON.parse(variables.source);
       expect(source.startNodeId).toBe(updated.episodes[0].startNodeId);
       if (source.scenes[0].id === groups[0].sceneId) expect(source.scenes[0]).toMatchObject(visual);
