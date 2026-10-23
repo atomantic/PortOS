@@ -145,21 +145,23 @@ export async function threadDiscussionVouched(account, env, row) {
   const [, kind, number] = match;
   const paths = [`repos/${repo}/issues/${number}/comments`];
   if (kind === 'pulls') paths.push(`repos/${repo}/pulls/${number}/comments`, `repos/${repo}/pulls/${number}/reviews`);
-  const logins = new Set();
+  // login → the forge's user.type (Bot/User), which GitHub-native bot trust needs.
+  const actors = new Map();
   for (const path of paths) {
-    const out = await execGh(['api', '--hostname', account.host, '--method', 'GET', path, '--paginate', '--jq', '.[].user.login'], GH_TIMEOUT_MS, { env })
+    const out = await execGh(['api', '--hostname', account.host, '--method', 'GET', path, '--paginate', '--jq', '.[] | "\\(.user.login)\\t\\(.user.type)"'], GH_TIMEOUT_MS, { env })
       .catch(() => null);
     if (out === null) return false;
     for (const line of out.split('\n').map((entry) => entry.trim()).filter(Boolean)) {
-      if (!loginOrNull(line)) return false;
-      logins.add(line);
+      const [login, type] = line.split('\t');
+      if (!loginOrNull(login)) return false;
+      actors.set(login, type === 'Bot' || type === 'User' ? type : null);
     }
   }
-  if (!logins.size) return true;
+  if (!actors.size) return true;
   const reader = createReader(account, env);
   const ctx = { account, reader, ownLogins: await ownLoginsFor(account, reader), repo, repoOwned: row.evidence?.repoOwned === true, repoOwner: row.repo_owner };
-  for (const login of logins) {
-    if (!VOUCHED_TRUST.has(await rateActor(ctx, login))) return false;
+  for (const [login, type] of actors) {
+    if (!VOUCHED_TRUST.has(await rateActor(ctx, login, type))) return false;
   }
   return true;
 }
