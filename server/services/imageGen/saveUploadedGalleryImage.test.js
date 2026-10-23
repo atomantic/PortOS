@@ -9,18 +9,19 @@ import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 const uploadTrace = new AsyncLocalStorage();
 
 // Log starts as well as settlements: a timed-out worker may never reach finally.
-// Only stage names/timings leave the fixture, never its paths or image metadata.
+// Direct output survives CI quiet mode; only fixed labels, timings, and the
+// expected missing-staging code leave the fixture, never paths or metadata.
 function beginStage(stage) {
   if (!uploadTrace.getStore()) return () => {};
   const start = performance.now();
   const event = { stage, state: 'running' };
-  console.info(`📥 Gallery upload stage ${JSON.stringify(event)}`);
+  process.stdout.write(`📥 Gallery upload stage ${JSON.stringify(event)}\n`);
   return (state = 'fulfilled', code) => {
     if (event.state !== 'running') return;
     event.state = state;
-    if (code) event.code = code;
+    if (code === 'ENOENT') event.code = 'ENOENT';
     event.elapsedMs = Math.round(performance.now() - start);
-    console.info(`📥 Gallery upload stage ${JSON.stringify(event)}`);
+    process.stdout.write(`📥 Gallery upload stage ${JSON.stringify(event)}\n`);
   };
 }
 
