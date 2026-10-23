@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers, Pencil } from 'lucide-react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers, Pencil, LayoutPanelLeft } from 'lucide-react';
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
@@ -33,6 +33,7 @@ import {
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
   createBlankSketch,
+  openStoryboardForPipelineIssue,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
@@ -122,6 +123,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     });
     if (updated) onStageUpdate?.('storyboards', updated.stages.storyboards, updated);
     return !!updated;
+  };
+
+  // Open in storyboard editor: the issue's linked board in Create › Storyboards
+  // (made from these scenes the first time), where recipes make panel art.
+  const [openingBoard, setOpeningBoard] = useState(false);
+  const openBoard = async () => {
+    setOpeningBoard(true);
+    const res = await openStoryboardForPipelineIssue(issue.id).catch(() => null);
+    setOpeningBoard(false);
+    if (res?.boardId) navigate(`/storyboards/${encodeURIComponent(res.boardId)}`);
   };
 
   const addScene = () => persist([...scenes, { slugline: '', description: '', imageJobId: null }]);
@@ -478,6 +489,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
               ? <Loader2 size={14} className="animate-spin" />
               : <Wand2 size={14} />}
             From prose
+          </button>
+          <button
+            type="button"
+            onClick={openBoard}
+            disabled={openingBoard || !scenes.length}
+            title={scenes.length ? 'Open these scenes in the shared storyboard editor' : 'Add or extract scenes first'}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {openingBoard ? <Loader2 size={14} className="animate-spin" /> : <LayoutPanelLeft size={14} />}
+            Open in storyboard editor
           </button>
           <PromptCountInput id="storyboard-prompt-count" value={promptCount} onChange={setPromptCount} />
           <button

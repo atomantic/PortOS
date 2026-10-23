@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -18,7 +19,10 @@ afterEach(async () => {
   for (const owner of owners.splice(0)) await cleanupSecurityScanGroup(owner);
   await rm(root, { recursive: true, force: true });
 });
-const gone = pid => { try { process.kill(pid, 0); return false; } catch (err) { return err.code === 'ESRCH'; } };
+// Where PID 1 does not reap orphans (some containers), a killed orphan stays a
+// zombie that still answers signal 0; on Linux its /proc state says it exited.
+const zombie = pid => { try { return /^[ZX]$/.test(readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\) /s, '')[0]); } catch { return false; } };
+const gone = pid => { try { process.kill(pid, 0); return process.platform === 'linux' && zombie(pid); } catch (err) { return err.code === 'ESRCH'; } };
 
 it.skipIf(process.platform === 'win32')('reaps a real inherited worker after the scanner exits without waiting for its pipes', async () => {
   // This fixture is a local Node process only. It has no provider/network code.

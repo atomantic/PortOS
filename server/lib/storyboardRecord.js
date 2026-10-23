@@ -51,11 +51,18 @@ const refOrNull = (value) => trimTo(value, STORYBOARD_LIMITS.refId) || null;
 
 /**
  * The production a board was made from, when one keeps scenes of its own that
- * panels send art back to: a FableLoom episode (`loomId`, `episodeId`). Each
- * such panel names its scene in `sourceSceneId`.
+ * panels send art back to: a FableLoom episode (`loomId`, `episodeId`) or a
+ * Series Pipeline issue (`issueId`). Each such panel names its scene in
+ * `sourceSceneId`, and a pipeline panel made from a shot that shot in
+ * `sourceShotId`.
  */
 function sanitizeSource(raw) {
-  if (!raw || typeof raw !== 'object' || raw.kind !== 'fableloom') return null;
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.kind === 'pipeline') {
+    const issueId = refOrNull(raw.issueId);
+    return issueId ? { kind: 'pipeline', issueId } : null;
+  }
+  if (raw.kind !== 'fableloom') return null;
   const loomId = refOrNull(raw.loomId);
   const episodeId = refOrNull(raw.episodeId);
   return loomId && episodeId ? { kind: 'fableloom', loomId, episodeId } : null;
@@ -129,6 +136,7 @@ function sanitizePanel(raw) {
     selectedTakeId,
     make: sanitizePanelMake(raw.make, takeIds),
     sourceSceneId: refOrNull(raw.sourceSceneId),
+    sourceShotId: refOrNull(raw.sourceShotId),
   };
 }
 

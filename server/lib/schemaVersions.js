@@ -270,7 +270,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `pin` to one of them.
   // v5 = board-level `source` (the FableLoom episode it was made from) and a
   // panel's `sourceSceneId`, which "Use as scene art" sends art back through.
-  storyboards: 5,
+  // v6 = a `source` of kind `pipeline` (a Series Pipeline issue) and a
+  // panel's `sourceShotId`; a v5 peer would drop both.
+  storyboards: 6,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

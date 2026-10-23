@@ -170,7 +170,7 @@ export default function StoryboardDetail() {
     onMove: (target) => write(() => moveStoryboardPanel(id, panelId, target)),
     onSendToScene: async () => {
       const res = await write(() => sendStoryboardPanelToFableLoom(id, panelId));
-      if (res) toast.success('Scene art updated in FableLoom');
+      if (res) toast.success(board.source?.kind === 'pipeline' ? 'Shot start frame updated in the pipeline' : 'Scene art updated in FableLoom');
     },
     onRecipe: (recipe) => write(() => updateStoryboardRecipe(id, recipe)),
     onNodePatch: (nodeId, patch) => write(() => updateStoryboardPanelNode(id, panelId, nodeId, patch)),
@@ -274,6 +274,11 @@ export default function StoryboardDetail() {
           {board.source?.kind === 'fableloom' && (
             <Link to={`/fableloom/${encodeURIComponent(board.source.loomId)}/${encodeURIComponent(board.source.episodeId)}/board`} className={headerButton}>
               <BookOpen size={16} aria-hidden="true" /> FableLoom episode
+            </Link>
+          )}
+          {board.source?.kind === 'pipeline' && (
+            <Link to={`/pipeline/issues/${encodeURIComponent(board.source.issueId)}/storyboards`} className={headerButton}>
+              <BookOpen size={16} aria-hidden="true" /> Pipeline issue
             </Link>
           )}
         </div>

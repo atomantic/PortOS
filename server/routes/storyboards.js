@@ -22,7 +22,9 @@ import {
 } from '../services/storyboards/make.js';
 import { fitMusicVideoToStoryboard, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
-import { makeStoryboardFromFableLoom, sendPanelArtToFableLoom } from '../services/storyboards/fromFableLoom.js';
+import { makeStoryboardFromFableLoom } from '../services/storyboards/fromFableLoom.js';
+import { openStoryboardForPipelineIssue } from '../services/storyboards/fromPipeline.js';
+import { sendPanelArtToSource } from '../services/storyboards/sourceArt.js';
 import { startVideoFromStoryboard } from '../services/storyboards/toVideo.js';
 import { addBeats, extractBeats } from '../services/storyboards/plot.js';
 import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
@@ -42,10 +44,16 @@ router.post('/from-music-video/:projectId', asyncHandler(async (req, res) => {
   res.status(201).json(await makeStoryboardFromMusicVideo(req.params.projectId));
 }));
 
-// Make storyboard from this FableLoom path; the panel route sends art back to its scene.
+// Make storyboard from this FableLoom path; the scene-art panel route sends art back to its source scene.
 router.post('/from-fableloom/:loomId/:episodeId', asyncHandler(async (req, res) => {
   const { via } = validateRequest(storyboardFromFableLoomSchema, req.body ?? {});
   res.status(201).json(await makeStoryboardFromFableLoom(req.params.loomId, req.params.episodeId, { via }));
+}));
+
+// Open in storyboard editor (Series Pipeline): the issue's linked board, made from its scenes the first time.
+router.post('/from-pipeline/:issueId', asyncHandler(async (req, res) => {
+  const result = await openStoryboardForPipelineIssue(req.params.issueId);
+  res.status(result.created ? 201 : 200).json(result);
 }));
 
 // Fit to song: write the video's shots from its linked board, as previewed.
@@ -126,7 +134,7 @@ router.post('/:id/panels/:panelId/move', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/panels/:panelId/scene-art', asyncHandler(async (req, res) => {
-  res.json(await sendPanelArtToFableLoom(req.params.id, req.params.panelId));
+  res.json(await sendPanelArtToSource(req.params.id, req.params.panelId));
 }));
 
 router.post('/:id/panels/:panelId/takes', asyncHandler(async (req, res) => {
