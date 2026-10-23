@@ -73,6 +73,22 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('rebase and push the default branch', ()
     expect((await execGit(['status', '--porcelain'], repo)).stdout).toBe('');
   });
 
+  it('refuses a local merge containing work recorded only in the merge commit', async () => {
+    const repo = await prepare();
+    await execGit(['checkout', '-b', 'feature/merged'], repo);
+    await commitFile(repo, 'feature.txt', 'feature change\n');
+    await execGit(['checkout', 'main'], repo);
+    await execGit(['merge', '--no-ff', '--no-commit', 'feature/merged'], repo);
+    await commitFile(repo, 'merge-only.txt', 'keep this merge resolution\n');
+    const [local, remote] = await Promise.all([head(repo), head(sandbox.origin)]);
+    expect(await rebaseAndPushDefaultBranch(repo)).toMatchObject({
+      success: false, pushed: false, error: expect.stringContaining('merge commits'),
+    });
+    expect(await head(repo)).toBe(local);
+    expect(await head(sandbox.origin)).toBe(remote);
+    expect(await readFile(join(repo, 'merge-only.txt'), 'utf8')).toBe('keep this merge resolution\n');
+  });
+
   it('leaves another in-progress rebase untouched', async () => {
     const repo = await prepare({ conflict: true });
     await execGit(['fetch', 'origin'], repo);

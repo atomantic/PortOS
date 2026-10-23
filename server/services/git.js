@@ -1200,6 +1200,10 @@ async function rebaseAndPushDefaultBranchAdmitted(dir) {
   if (!(Number(counts.stdout.trim().split(/\s+/)[0]) > 0)) {
     return refused('The default branch has no local commits ahead of origin.');
   }
+  const localMerges = await execGit(['rev-list', '--merges', `${remoteRef}..HEAD`], dir);
+  if (localMerges.stdout.trim()) {
+    return refused('Local history contains merge commits. Reconcile these with an agent or in the terminal to preserve merge resolutions; nothing was rebased or pushed.');
+  }
   // Fetch + rebase is the explicit-origin equivalent of pull --rebase. Avoid
   // pull.ff / upstream configuration and never move dirty work via autostash.
   const rebased = await execGit(['rebase', '--no-autostash', remoteRef], dir, { ignoreExitCode: true });

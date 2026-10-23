@@ -36,7 +36,7 @@ describe('rebase and push checkout ownership', () => {
       if (command === 'rev-parse --abbrev-ref HEAD') return ok('main');
       if (command === 'symbolic-ref --short refs/remotes/origin/HEAD') return ok('origin/main');
       if (command.startsWith('rev-parse --verify')) return ok(SHA);
-      if (args[0] === 'rev-list') return ok('1\t2');
+      if (args[0] === 'rev-list' && args.includes('--count')) return ok('1\t2');
       return ok();
     });
     const result = rebaseAndPushDefaultBranch(tmpdir());
