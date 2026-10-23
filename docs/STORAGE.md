@@ -110,12 +110,92 @@ Draining. Recovery archives stay in the same backed-up, machine-local subtree:
 snapshots retain them as evidence and restores preserve the current subtree
 byte-for-byte, including archives, rather than installing a snapshot's authority.
 
+### Unsettled generic output publications
+
+Use the local operator command below after journal transaction recovery, with a
+normal maintenance hold in place. It never steals an interrupted transaction lock,
+resumes a hold, or settles an exclusive maintenance owner. Run from the install
+checkout. From a reviewed isolated checkout, append
+`--install-root <absolute-install-root>` (the parent of `data/`) to each command.
+This explicit target does not depend on the inherited `PORTOS_DATA_ROOT` pin,
+which worktree code deliberately ignores.
+
+```bash
+# Read-only inventory, including unrelated owners and the exact selected operation.
+node scripts/reconcile-output-publication.mjs diagnose
+node scripts/reconcile-output-publication.mjs diagnose <operation-id>
+
+# Read-only inspection: fingerprint the explicit evidence specification below.
+# Save these private JSON files outside the source tree; do not publish them.
+node scripts/reconcile-output-publication.mjs inspect <operation-id> evidence-spec.json > inspected-request.json
+
+# Review the request, then explicitly acknowledge uncertainty for that owner only.
+node scripts/reconcile-output-publication.mjs reconcile inspected-request.json --confirm-disposition
+```
+
+Generic reservations contain no parent, destination, run, or batch identity. The
+operator must trace the owning workflow and explain how its records relate to
+the **selected** reservation; never assign evidence merely by PID or age. Diagnose
+lists admitted owner IDs and their source modules from `backupAssetOwners.js`.
+Relevant examples:
+
+| Owner | Evidence to inspect |
+|---|---|
+| `toolkit-recording-publication`, `runtime-recording-publication-tails`, `agent-run-recording-publication` | Matching run metadata, output, retained agent spools (`output.txt` / `raw.txt`), and durable failure/warning records. Trace recording creation, spool writes and finalization; terminal metadata alone does not prove a complete transcript. |
+| `cos-agent-archive-and-index-publication` | Agent/archive identity, archive/index records, retained output and the publication failure. |
+| `media-job-completion`, `image-generation-completion-tails`, `generated-video-shared-finalizer` | Exact job/run identity, sidecars/history or inspected database-record evidence, and output integrity or the durable publication failure. A provider completion alone does not prove local publication. |
+
+Other admitted owners require the same record-plus-output/failure inspection of
+their listed source modules. If the relationship cannot be established, keep the
+reservation and recover through its owning service. For DB-primary records, save
+a bounded, private inspection artifact with exact record identity under `data/`;
+do not copy credentials or a whole database into an evidence file. Preserve large
+media separately and use its owning service's integrity/failure evidence here.
+
+Example `evidence-spec.json` (invented paths; replace every explanation after
+actually inspecting the records):
+
+```json
+{
+  "ownerId": "toolkit-recording-publication",
+  "binding": "Describe the exact run identity and evidence linking its interrupted publication to the selected reservation.",
+  "reason": "Explain the inspected failure and why this specific uncertainty is being acknowledged.",
+  "files": [
+    { "path": "runs/example-run/metadata.json", "role": "record", "note": "Describe the inspected run identity and unchanged outcome." },
+    { "path": "runs/example-run/publication-failure.txt", "role": "failure", "note": "Describe the inspected publication failure and retained output limitations." }
+  ]
+}
+```
+
+Evidence uses distinct ordinary data-relative files, without symlinks or journal
+files: a nonempty owner `record` plus nonempty `output` or `failure`, at most
+16 files / 16 MiB total. The request binds SHA-256 hashes and lengths, inspection
+notes, owner, relationship, reason, exact hold, original operation and uncertainty
+stamp. Preserve both evidence files and the inspected request. Empty output,
+process exit and elapsed time never establish saving. A live or unproved admitting
+process refuses disposition; process exit is only a prerequisite, never evidence
+of completeness.
+
+Reconciliation rechecks evidence under the journal transaction lock, fsyncs a
+no-replace `data/workflow-maintenance/publication-<operation-id>-<stamp>.json`
+receipt, then retires only that exact owner. Repeating the **same** request reuses
+the matching receipt, including a receipt-first interruption after normal journal
+recovery. A missing owner cannot mint a receipt. Stale holds/operations/stamps,
+missing/changed evidence, incompatible receipts, exclusive ownership, and failed
+receipt persistence retain ownership. Refusals name the next inspection/recovery
+step; never edit the request's hashes to bypass them. The hold and every other
+operation remain; run/task outcomes and transcript warnings stay unchanged.
+`acknowledged-uncertainty` with `outputCompleteness: "unknown"` records an operator
+disposition, **not** successful saving. These machine-local receipts share the
+backup/restore exclusions described below for abandoned-agent receipts; they
+have no seed, migration, federation or automatic expiry.
+
 ### Explicitly abandoned duplicate agents
 
 A local operator may reconcile a user-killed duplicate that saved no output with
 `node scripts/reconcile-abandoned-agent.mjs <agent-id> <run-id> --confirm-abandoned <reason>`.
-Begin a normal maintenance hold first. When using a reviewed isolated checkout,
-`PORTOS_DATA_ROOT` names the install root (the parent of `data/`). This is an
+Begin a normal maintenance hold first and run from the install checkout;
+worktree code deliberately ignores the `PORTOS_DATA_ROOT` pin. This is an
 explicit abandonment decision, never automatic expiry or a successful-run verdict.
 The command refuses present agent/runner ownership, live recorded PIDs, retained
 agent output (including archives), worktrees/branches, nonempty run output,
