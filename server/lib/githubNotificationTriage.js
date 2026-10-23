@@ -36,7 +36,7 @@ export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unkno
 
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 6;
+export const TRIAGE_RULES_VERSION = 7;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. They stay in the inbox (it
@@ -53,18 +53,26 @@ const MENTION_REASONS = new Set(['mention', 'team_mention']);
 
 const lower = (value) => (typeof value === 'string' ? value.toLowerCase() : null);
 
+// GitHub's own apps. The `[bot]` suffix is reserved for GitHub Apps, and these
+// slugs belong to GitHub; the forge must also report the actor as a Bot.
+const GITHUB_NATIVE_BOTS = new Set(['dependabot[bot]', 'github-actions[bot]']);
+
 /**
  * `yours` for one of the operator's own logins on the host, `trusted` for an
- * actor the forge reports with write access to an owned repo (or, on a Private
- * account, a member of the repo's org), `outside` otherwise, `unknown` when
- * the thread has no human actor (CI, releases).
+ * actor the forge reports with write access to an owned repo, a GitHub-native
+ * bot (Dependabot, a repo's own Actions workflow), a member of the repo's org
+ * on a Private account, or any human on an Enterprise instance whose account
+ * trusts its own users; `outside` otherwise, `unknown` when the thread has no
+ * human actor (CI, releases). `actorType` is the forge's `user.type`.
  */
-export function computeThreadTrust({ actorLogin, ownLogins = [], repoOwned = false, actorHasWriteAccess = false, actorIsOrgMember = false, accountTrust = 'public' }) {
+export function computeThreadTrust({ actorLogin, actorType = null, ownLogins = [], repoOwned = false, actorHasWriteAccess = false, actorIsOrgMember = false, accountTrust = 'public', trustInstanceUsers = false }) {
   const actor = lower(actorLogin);
   if (!actor) return 'unknown';
   if (ownLogins.some((login) => lower(login) === actor)) return 'yours';
+  if (actorType === 'Bot' && GITHUB_NATIVE_BOTS.has(actor)) return 'trusted';
   if (repoOwned && actorHasWriteAccess === true) return 'trusted';
   if (accountTrust === 'private' && actorIsOrgMember === true) return 'trusted';
+  if (trustInstanceUsers === true && actorType === 'User') return 'trusted';
   return 'outside';
 }
 

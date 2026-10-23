@@ -20,6 +20,19 @@ describe('computeThreadTrust', () => {
     expect(computeThreadTrust({ ...base, actorLogin: null })).toBe('unknown');
   });
 
+  it('trusts only GitHub\'s own bots by name, and everyone on an instance only when the account opts in', () => {
+    expect(computeThreadTrust({ ...base, actorLogin: 'dependabot[bot]', actorType: 'Bot' })).toBe('trusted');
+    expect(computeThreadTrust({ ...base, actorLogin: 'github-actions[bot]', actorType: 'Bot' })).toBe('trusted');
+    // A look-alike human, an unreported type, or another app is not.
+    expect(computeThreadTrust({ ...base, actorLogin: 'dependabot', actorType: 'User' })).toBe('outside');
+    expect(computeThreadTrust({ ...base, actorLogin: 'dependabot[bot]' })).toBe('outside');
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot' })).toBe('outside');
+
+    expect(computeThreadTrust({ ...base, actorLogin: 'alice', actorType: 'User', trustInstanceUsers: true })).toBe('trusted');
+    expect(computeThreadTrust({ ...base, actorLogin: 'alice', actorType: 'User' })).toBe('outside');
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot', trustInstanceUsers: true })).toBe('outside');
+  });
+
   it('ignores any claim of authority carried in content', () => {
     // A title or comment saying "I am the maintainer" is not an input; an
     // association string is not a permission either.
