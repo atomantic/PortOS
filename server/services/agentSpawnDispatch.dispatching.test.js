@@ -1,9 +1,9 @@
 /** An agent's worktree exists before anything records its owner (#11775): the id
  * must read as active for the whole dispatch and be released on every exit.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true } }));
+const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true }, provider: null, tui: false }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
   if (f.refusePublication) throw new Error('checkout-retirement-reserved');
   f.publicationActive = true;
@@ -17,7 +17,9 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn(),
 }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
-vi.mock('./agentRunTracking.js', () => ({ createAgentRun: async () => ({ runId: 'run-example' }) }));
+vi.mock('./agentRunTracking.js', () => ({ createAgentRun: vi.fn(async () => ({ runId: 'run-example' })) }));
+vi.mock('./githubAccounts.js', () => ({ getAccount: vi.fn(), resolveGitHubAccountEnv: vi.fn() }));
+vi.mock('./github.js', () => ({ execGh: vi.fn() }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...await importOriginal(), ensureDir: vi.fn(), writeFileGuarded: vi.fn(),
 }));
@@ -37,7 +39,7 @@ vi.mock('./agentPromptBuilder.js', () => ({
 vi.mock('./workspaceContext.js', () => ({ snapshotOnRepoSwitch: vi.fn() }));
 vi.mock('./agentProviderResolution.js', () => ({
   resolveAgentProviderAndModel: async () => ({
-    ok: true, provider: { id: 'example-cli', type: 'cli', command: 'codex' }, selectedModel: 'example-model', modelSelection: {},
+    ok: true, provider: f.provider, selectedModel: 'example-model', modelSelection: {},
   }),
 }));
 vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn(async ({ onPrepared }) => {
@@ -47,15 +49,19 @@ vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn(async (
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: () => ({ command: 'codex', args: [] }),
   isClaudeCliProvider: () => false,
-  isTuiProvider: () => false,
+  isTuiProvider: () => f.tui,
   getClaudeSettingsEnv: async () => ({}),
   spawnDirectly: vi.fn(async () => 'agent-x'),
 }));
-vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: vi.fn(), spawnTuiAgent: vi.fn() }));
+vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: () => ({ command: 'codex', args: [] }), spawnTuiAgent: vi.fn(async () => 'agent-x') }));
 
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { getActiveAgentIds, protectedAgentIds, setUseRunner } from './agentState.js';
 import { spawnDirectly } from './agentCliSpawning.js';
+import { spawnTuiAgent } from './agentTuiSpawning.js';
+import { getAccount, resolveGitHubAccountEnv } from './githubAccounts.js';
+import { execGh } from './github.js';
+import { createAgentRun } from './agentRunTracking.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { updateTask } from './cosTaskStore.js';
 import { registerAgent } from './cosAgentLifecycle.js';
@@ -76,6 +82,8 @@ beforeEach(() => {
   f.registerGate = Promise.resolve();
   f.updateResult = { ok: true };
   f.prep = { outcome: 'ready', workspacePath: '/repos/example', worktreeInfo: null };
+  f.provider = { id: 'example-cli', type: 'cli', command: 'codex' };
+  f.tui = false;
 });
 
 describe('dispatchAgentRun ownership window', () => {
@@ -145,5 +153,135 @@ describe('dispatchAgentRun ownership window', () => {
     f.registerGate = Promise.reject(new Error('state write failed'));
     await expect(dispatchAgentRun(newContext())).rejects.toThrow('state write failed');
     expect(getActiveAgentIds()).not.toContain('agent-x');
+  });
+});
+
+describe('dispatchAgentRun GitHub inbox account binding', () => {
+  const account = { id: 'inbox-b', label: 'Inbox B', host: 'github.com', login: 'inbox-user', enabled: true, trust: 'public' };
+  const binding = { accountId: account.id, host: account.host, login: account.login };
+  const inboxContext = (metadata = {}) => ({ ...newContext(), task: { ...task, metadata: {
+    githubNotificationAccount: binding,
+    githubNotificationResolve: { accountId: account.id, host: account.host },
+    ...metadata,
+  } } });
+
+  beforeEach(() => {
+    for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) vi.stubEnv(key, '');
+    getAccount.mockReset().mockResolvedValue(account);
+    resolveGitHubAccountEnv.mockReset().mockResolvedValue({ env: { GH_TOKEN: 'inbox-b-token', GH_HOST: account.host } });
+    execGh.mockReset().mockResolvedValue(JSON.stringify({ id: 42, login: account.login, name: 'Inbox User', email: null }));
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each(['direct', 'tui', 'runner'])('launches %s as the inbox account, overriding unrelated provider credentials without persisting them', async mode => {
+    f.provider.envVars = { GH_TOKEN: 'portos-a-token', GITHUB_TOKEN: 'provider-a-token', EXAMPLE_FLAG: 'kept' };
+    const original = structuredClone(f.provider);
+    f.tui = mode === 'tui';
+    setUseRunner(mode === 'runner');
+    const runner = vi.fn(async () => 'agent-x');
+    await dispatchAgentRun(inboxContext(), { spawnViaRunner: runner });
+    const launched = mode === 'runner' ? runner.mock.calls[0][2] : (mode === 'tui' ? spawnTuiAgent : spawnDirectly).mock.calls[0][0];
+    expect(launched.provider.envVars).toMatchObject({
+      GH_HOST: 'github.com', GH_TOKEN: 'inbox-b-token', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '',
+      GIT_AUTHOR_NAME: 'Inbox User', GIT_AUTHOR_EMAIL: '42+inbox-user@users.noreply.github.com', EXAMPLE_FLAG: 'kept',
+    });
+    expect(f.provider).toEqual(original);
+    expect(registerAgent.mock.calls[0][2]).not.toHaveProperty('githubNotificationAccount');
+    expect(JSON.stringify(registerAgent.mock.calls)).not.toContain('inbox-b-token');
+    expect(createAgentRun.mock.calls[0][0].provider).toEqual(original);
+    expect(resolveGitHubAccountEnv.mock.calls[0][1].baseEnv.GH_TOKEN).toBeUndefined();
+    expect(execGh).toHaveBeenCalledWith(expect.arrayContaining(['--hostname', 'github.com']), 10_000,
+      expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'inbox-b-token', GITHUB_TOKEN: '' }) }));
+  });
+
+  it.each([
+    null,
+    { ...account, host: 'ghe.example.com' },
+    { ...account, login: 'another-user' },
+    { ...account, enabled: false },
+    { ...account, trust: 'private', allowAgents: false },
+  ])('refuses an unavailable, changed, or disallowed saved account before preparing the checkout: %j', async current => {
+    getAccount.mockResolvedValue(current);
+    const context = inboxContext();
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(context.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ category: 'github-inbox-account-unavailable' }));
+    expect(prepareAgentWorkspace).not.toHaveBeenCalled();
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing credential or a token that answers as another login', async () => {
+    const context = inboxContext();
+    resolveGitHubAccountEnv.mockResolvedValueOnce({ status: 'not-authenticated' });
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(execGh).not.toHaveBeenCalled();
+    execGh.mockResolvedValueOnce(JSON.stringify({ id: 99, login: 'wrong-user' }));
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('rechecks that the account still allows the launch after resolving its credential', async () => {
+    getAccount.mockResolvedValueOnce(account).mockResolvedValueOnce({ ...account, enabled: false });
+    expect(await dispatchAgentRun(inboxContext())).toBeNull();
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('honors Disabled mode for queued automation while preserving an explicit manual action in any mode', async () => {
+    getAccount.mockResolvedValue({ ...account, mode: 'disabled' });
+    expect(await dispatchAgentRun(inboxContext({ githubNotificationAccount: { ...binding, origin: 'github-notification' } }))).toBeNull();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    await dispatchAgentRun(inboxContext({ githubNotificationAccount: { ...binding, origin: 'user' } }));
+    expect(spawnDirectly).toHaveBeenCalledOnce();
+  });
+
+  it.each(['ghe.example.com', 'example.ghe.com'])('pins the correct token family and host for %s', async host => {
+    const enterprise = { ...account, host };
+    getAccount.mockResolvedValue(enterprise);
+    resolveGitHubAccountEnv.mockResolvedValue({ env: { GH_HOST: host, GH_ENTERPRISE_TOKEN: 'enterprise-b-token' } });
+    await dispatchAgentRun(inboxContext({ githubNotificationAccount: { ...binding, host } }));
+    const env = spawnDirectly.mock.calls[0][0].provider.envVars;
+    expect(env.GH_HOST).toBe(host);
+    expect(env[host.endsWith('.ghe.com') ? 'GH_TOKEN' : 'GH_ENTERPRISE_TOKEN']).toBe('enterprise-b-token');
+  });
+
+  it('keeps legacy generic tasks bound to their saved account and rejects unbound legacy security tasks', async () => {
+    const legacy = inboxContext({ githubNotificationAccount: undefined });
+    await dispatchAgentRun(legacy);
+    expect(spawnDirectly.mock.calls[0][0].provider.envVars.GH_TOKEN).toBe('inbox-b-token');
+    spawnDirectly.mockClear();
+    const unbound = inboxContext({ githubNotificationAccount: undefined, githubNotificationResolve: undefined, githubSecurityFix: { host: 'github.com', repo: 'inbox-user/repo' } });
+    expect(await dispatchAgentRun(unbound)).toBeNull();
+    expect(unbound.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('queue this action again') }));
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('pins an unnamed account to its active keyring token for the whole launch', async () => {
+    const implicit = { ...account, login: null };
+    getAccount.mockResolvedValue(implicit);
+    resolveGitHubAccountEnv.mockResolvedValue({ env: { GH_HOST: 'github.com' } });
+    execGh.mockResolvedValueOnce('active-b-token').mockResolvedValueOnce(JSON.stringify({ id: 42, login: 'active-user' }));
+    await dispatchAgentRun(inboxContext({ githubNotificationAccount: { ...binding, login: null } }));
+    expect(execGh.mock.calls[0][0]).toEqual(['auth', 'token', '--hostname', 'github.com']);
+    expect(spawnDirectly.mock.calls[0][0].provider.envVars.GH_TOKEN).toBe('active-b-token');
+  });
+
+  it('preserves an unnamed account\'s ambient auth from its own host family', async () => {
+    vi.stubEnv('GH_TOKEN', 'public-a-token');
+    vi.stubEnv('GH_ENTERPRISE_TOKEN', 'enterprise-b-token');
+    const implicit = { ...account, host: 'ghe.example.com', login: null };
+    getAccount.mockResolvedValue(implicit);
+    resolveGitHubAccountEnv.mockResolvedValue({ env: { GH_HOST: implicit.host } });
+    await dispatchAgentRun(inboxContext({ githubNotificationAccount: { ...binding, host: implicit.host, login: null } }));
+    expect(execGh).toHaveBeenCalledOnce();
+    expect(spawnDirectly.mock.calls[0][0].provider.envVars).toMatchObject({ GH_HOST: implicit.host, GH_TOKEN: '', GH_ENTERPRISE_TOKEN: 'enterprise-b-token' });
+  });
+
+  it('preserves the existing credential path for non-inbox tasks', async () => {
+    await dispatchAgentRun(newContext());
+    expect(getAccount).not.toHaveBeenCalled();
+    expect(resolveGitHubAccountEnv).not.toHaveBeenCalled();
+    expect(spawnDirectly.mock.calls[0][0].provider.envVars).toBeUndefined();
   });
 });

@@ -48,6 +48,7 @@
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';
 import { getSlashdoWorkflow } from '../lib/slashdoCatalog.js';
 import { emitLog } from './cosEvents.js';
+import { notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 
 /** The bundled slashdo workflow this task runs. */
 const DO_REVIEW_COMMAND = 'review';
@@ -114,11 +115,14 @@ function renderContext({ number, url, repoLabel, selfReview }) {
  *   (`reviewerConfigMetadata`) persisted for the prompt layer to resolve over
  *   the install's Code Review Defaults. Ignored under `selfReview`, which has no
  *   roster to override.
+ * @param {Object|null} [params.notificationAccount] - trusted inbox account to
+ *   bind when this review was requested from the notifications manager
+ * @param {string} [params.notificationOrigin] - user tap or automated handoff
  * @returns {Promise<{task: Object|null, duplicate: boolean, dispatch: {started: boolean, reason: string|null}}>}
  */
 export async function spawnPrDoReviewTask({
   app, pullRequest, repoFullName = '', provider, model, effort,
-  selfReview = false, reviewerConfig = null, immediate = true,
+  selfReview = false, reviewerConfig = null, immediate = true, notificationAccount = null, notificationOrigin = 'user',
 } = {}) {
   const { addTask } = await import('./cosTaskStore.js');
   const { forceSpawnTask } = await import('./cos.js');
@@ -156,7 +160,10 @@ export async function spawnPrDoReviewTask({
     // Each `/do:*` body owns its own review sequence; a CoS loop on top would
     // review the review.
     reviewLoop: false,
-    metadata: { targetPullRequest: number },
+    metadata: {
+      targetPullRequest: number,
+      ...(notificationAccount ? { githubNotificationAccount: notificationAgentAccountBinding(notificationAccount, notificationOrigin) } : {}),
+    },
   }, 'user', { suppressDequeue: immediate });
 
   if (!created) return { task: null, duplicate: false, dispatch: { started: false, reason: null } };

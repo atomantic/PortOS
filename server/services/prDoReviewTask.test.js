@@ -94,6 +94,14 @@ describe('spawnPrDoReviewTask', () => {
     expect(result).toMatchObject({ duplicate: false, dispatch: { started: false, reason: null } });
   });
 
+  it('keeps an inbox review bound to the selected account even without a managed app', async () => {
+    await queue({ app: null, immediate: false, notificationAccount: { id: 'inbox-b', host: 'ghe.example.com', login: 'inbox-user' } });
+    expect(queuedTask().metadata).toEqual({
+      targetPullRequest: 17,
+      githubNotificationAccount: { accountId: 'inbox-b', host: 'ghe.example.com', login: 'inbox-user', origin: 'user' },
+    });
+  });
+
   it('reports a refused dispatch as queued-not-started rather than as a running agent', async () => {
     forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (3/3)' });
 

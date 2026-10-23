@@ -10,6 +10,7 @@
  * matching their fixed format. No notification title or body reaches it.
  */
 import { GHSA_RE } from '../lib/githubNotificationParse.js';
+import { notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 import { addTask } from './cosTaskStore.js';
 
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
@@ -81,7 +82,10 @@ export async function queueSecurityFixTask({ account, repo = null, advisories = 
     openPR: false,
     noCodeOutput: true,
     worktreeChangesExpected: false,
-    metadata: { githubSecurityFix: { host: account.host, repo, advisories: ids, origin } },
+    metadata: {
+      githubNotificationAccount: notificationAgentAccountBinding(account, origin),
+      githubSecurityFix: { host: account.host, repo, advisories: ids, origin },
+    },
   }, 'user');
   if (!task?.id) return { error: 'The task could not be queued' };
   return task.duplicate ? { duplicate: true, taskId: task.id } : { taskId: task.id };
