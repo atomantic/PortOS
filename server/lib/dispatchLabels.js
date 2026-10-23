@@ -260,7 +260,7 @@ export function plannerLabelSpec(name) {
 }
 
 /** PR authorship is separate from issue planning and future dispatch hints. */
-export function implementerLabelSpec(name) {
+function implementerLabelSpec(name) {
   if (typeof name !== 'string') return null;
   const canonical = forgeLabelName(name);
   if (!canonical.startsWith('implementer:')) return null;
