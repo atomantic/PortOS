@@ -71,6 +71,18 @@ describe('Windows adapter', () => {
     expect(state.execFile).toHaveBeenCalledTimes(1);
   });
 
+  it('forwards cancellation to the owned child and reports an abort without retry', async () => {
+    restore = pinPlatform('win32');
+    const controller = new AbortController();
+    state.execFile.mockImplementation(async (...args) => {
+      expect(args[2].signal).toBe(controller.signal);
+      controller.abort();
+      throw refusal({ name: 'AbortError', code: 'ABORT_ERR' });
+    });
+    await expect(moveToNativeTrash(PATHS, { signal: controller.signal })).rejects.toMatchObject({ code: 'TRASH_ABORTED' });
+    expect(state.execFile).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects unparsable output as a failure', async () => {
     restore = pinPlatform('win32');
     state.execFile.mockResolvedValue({ stdout: 'Add-Type : compile error', stderr: '' });
