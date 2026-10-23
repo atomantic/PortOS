@@ -200,7 +200,6 @@ export function analyzeStoryOutline(outline, {
   if (byKey.has(startKey)) {
     const queue = [startKey];
     depthByKey.set(startKey, 0);
-    dramaticDepthByKey.set(startKey, 0);
     let cursor = 0;
     while (cursor < queue.length) {
       const key = queue[cursor];
@@ -210,10 +209,28 @@ export function analyzeStoryOutline(outline, {
       for (const transition of asArray(byKey.get(key)?.transitions)) {
         if (byKey.has(transition.targetKey) && !depthByKey.has(transition.targetKey)) {
           depthByKey.set(transition.targetKey, depthByKey.get(key) + 1);
-          // Extra camera cuts do not make the audience introduction narratively later.
-          const sameScene = groupByKey.has(key) && groupByKey.get(key) === groupByKey.get(transition.targetKey);
-          dramaticDepthByKey.set(transition.targetKey, dramaticDepthByKey.get(key) + (sameScene ? 0 : 1));
           queue.push(transition.targetKey);
+        }
+      }
+    }
+  }
+
+  // 0-1 BFS: extra camera cuts cost nothing; relax previously discovered
+  // beats so a later same-scene shortcut can lower their dramatic depth.
+  if (byKey.has(startKey)) {
+    dramaticDepthByKey.set(startKey, 0);
+    const deque = [startKey];
+    while (deque.length) {
+      const key = deque.shift();
+      const base = dramaticDepthByKey.get(key);
+      for (const transition of asArray(byKey.get(key)?.transitions)) {
+        const target = transition.targetKey;
+        if (!byKey.has(target)) continue;
+        const sameScene = groupByKey.has(key) && groupByKey.get(key) === groupByKey.get(target);
+        const cost = sameScene ? 0 : 1;
+        if (!dramaticDepthByKey.has(target) || base + cost < dramaticDepthByKey.get(target)) {
+          dramaticDepthByKey.set(target, base + cost);
+          if (cost === 0) deque.unshift(target); else deque.push(target);
         }
       }
     }
