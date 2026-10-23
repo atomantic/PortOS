@@ -1108,17 +1108,17 @@ async function resolveMemoryAction(id, operation) {
   if (result?.success === false || result?.error) {
     const notFound = /not found/i.test(String(result.error || ''));
     if (notFound) {
-      // The memory is already gone (deleted elsewhere); the user's intent is
-      // satisfied, so retire the stale queue projection instead of erroring.
+      // The memory is already gone, so its queue projections are stale either way.
       await reviewService.dismissByReferenceId(id).catch((err) => {
         console.error(`⚠️ Review queue: stale memory projection cleanup failed: ${err.message}`);
       });
       await notifications.removeByMetadata('memoryId', id).catch(() => {});
-      return { success: true, alreadyResolved: true };
+      // Rejecting a deleted memory is the desired end state; approving one is not.
+      if (operation === 'reject') return { success: true, alreadyResolved: true };
     }
     throw new ServerError(result.error || `Memory ${operation} failed`, {
-      status: 409,
-      code: 'CONFLICT',
+      status: notFound ? 404 : 409,
+      code: notFound ? 'NOT_FOUND' : 'CONFLICT',
     });
   }
   return result;

@@ -1351,6 +1351,14 @@ describe('reviewQueue.resolveQueueItem', () => {
     expect(notifications.removeByMetadata).toHaveBeenCalledWith('memoryId', 'gone-1');
   });
 
+  it('keeps approving an already-deleted memory a 404 while still clearing its stale rows', async () => {
+    memoryService.approveMemory.mockResolvedValue({ success: false, error: 'Memory not found' });
+    reviewService.dismissByReferenceId.mockResolvedValue(undefined);
+    notifications.removeByMetadata.mockResolvedValue(undefined);
+    await expect(resolveQueueItem('memory:gone-2', 'approve')).rejects.toMatchObject({ status: 404 });
+    expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('gone-2');
+  });
+
   it('dispatches draft rows to approveDraft', async () => {
     messageDrafts.approveDraft.mockResolvedValue({ id: 'd1', status: 'approved' });
     await resolveQueueItem('drafts:d1');
