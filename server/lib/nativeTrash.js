@@ -173,9 +173,18 @@ function parseReport(text) {
 // another deletion strategy.
 async function runReportingScript(file, args, options, label) {
   let stdout;
+  let closed;
   try {
-    ({ stdout } = await execFileAsync(file, args, { ...options, timeout: NATIVE_TRASH_DEADLINE_MS }));
+    const execution = execFileAsync(file, args, { ...options, timeout: NATIVE_TRASH_DEADLINE_MS });
+    // AbortError may arrive before child close. Keep the operation pending until
+    // its owned process is terminal so callers can safely clean up source files.
+    if (execution.child) closed = new Promise(resolve => execution.child.once('close', resolve));
+    ({ stdout } = await execution);
   } catch (error) {
+    if (options.signal?.aborted) {
+      await closed;
+      throw codedError(`${label} recycle aborted`, 'TRASH_ABORTED');
+    }
     if (error.killed) throw codedError(`${label} recycle exceeded the ${NATIVE_TRASH_DEADLINE_MS}ms deadline`, 'TRASH_DEADLINE');
     throw Object.assign(codedError(`${label} recycle refused`, 'TRASH_REFUSED'), { exitCode: error.code, report: parseReport(error.stdout) });
   }
@@ -184,11 +193,13 @@ async function runReportingScript(file, args, options, label) {
   return report;
 }
 
-export async function moveToNativeTrash(paths) {
+export async function moveToNativeTrash(paths, { signal } = {}) {
+  const cancellation = signal ? { signal } : {};
+  signal?.throwIfAborted();
   switch (process.platform) {
     case 'darwin':
       for (const path of paths) {
-        await runReportingScript('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MACOS_TRASH_SCRIPT, path], {}, 'macOS');
+        await runReportingScript('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MACOS_TRASH_SCRIPT, path], cancellation, 'macOS');
       }
       return;
     case 'win32':
@@ -196,7 +207,7 @@ export async function moveToNativeTrash(paths) {
       await runReportingScript(
         windowsPowerShell51Path(),
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', WINDOWS_ENCODED_SCRIPT],
-        { env: { ...process.env, PORTOS_TRASH_PATHS: paths.join('\n') } },
+        { ...cancellation, env: { ...process.env, PORTOS_TRASH_PATHS: paths.join('\n') } },
         'Windows',
       );
       return;
