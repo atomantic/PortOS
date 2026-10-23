@@ -964,7 +964,7 @@ describe('codeReview helpers', () => {
       // the batching path. The vendor has a smaller effective context window.
       const sections = ['a.js', 'b.js', 'c.js'].map(name => fileDiff(name, 350))
       global.fetch = vi.fn()
-        .mockResolvedValueOnce(mockTextResponse('Prompt is too long /private/local/path', 400))
+        .mockResolvedValueOnce(mockTextResponse('Prompt is too long /private/local/path', { ok: false, status: 400 }))
         .mockResolvedValue(completion('No findings.'))
       const result = await runLocalCodeReview({ ...batchOptions, diff: sections.join('') })
       expect(result).toMatchObject({ ok: true, verdict: 'clean', coverage: { complete: true, reviewedFiles: [0, 1, 2], remainingFiles: [], calls: 4 } })
@@ -980,8 +980,38 @@ describe('codeReview helpers', () => {
       expect(result.findings).toContain('Preserve the finding.')
     })
 
+    it('subdivides a below-threshold refusal without resetting the exact-input or call budget', async () => {
+      const sections = ['a.js', 'b.js'].map(name => fileDiff(name, 200))
+      global.fetch = vi.fn().mockResolvedValueOnce(mockTextResponse('Prompt is too long', { ok: false, status: 400 })).mockResolvedValue(completion('No findings.'))
+      const result = await runLocalCodeReview({ ...batchOptions, maxBatches: 3, diff: sections.join('') })
+      expect(result).toMatchObject({ ok: true, verdict: 'clean', coverage: { headSha, complete: true, reviewedFiles: [0, 1], calls: 3, maxBatches: 3 } })
+      expect(global.fetch).toHaveBeenCalledTimes(3)
+    })
+
+    it('counts the compatibility retry as a completion and charges probe time before dispatch', async () => {
+      global.fetch = vi.fn().mockResolvedValue(mockTextResponse('does not support thinking', { ok: false, status: 400 }))
+      const result = await runLocalCodeReview({ ...batchOptions, model: 'retry-budget-model', maxBatches: 1, diff: fileDiff('a.js', 100) })
+      expect(result).toMatchObject({ ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', coverage: { calls: 1, remainingFiles: [0] } })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      let now = 100
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+      try {
+        global.fetch = vi.fn(async () => { now += 101; return mockJsonResponse({ data: [{ id: 'served-model' }] }) })
+        const probed = await runLocalCodeReview({ backend: 'mtplx', diff: fileDiff('a.js', 100), timeoutMs: 100 })
+        expect(probed).toMatchObject({ ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', coverage: { calls: 0 } })
+        expect(global.fetch).toHaveBeenCalledTimes(1)
+      } finally { clock.mockRestore() }
+    })
+
+    it('binds ordinary single-batch clean results to the supplied candidate and immutable input', async () => {
+      const diff = fileDiff('ordinary.js', 100)
+      const result = await runLocalCodeReview({ ...batchOptions, diff })
+      expect(result).toMatchObject({ ok: true, verdict: 'clean', coverage: { headSha, complete: true, reviewedFiles: [0], remainingFiles: [], calls: 1 } })
+      expect(result.coverage.diffSha256).toMatch(/^[a-f0-9]{64}$/)
+    })
+
     it('identifies a single-file context refusal without treating it as provider health or a clean verdict', async () => {
-      global.fetch = vi.fn().mockResolvedValue(mockTextResponse('Prompt is too long /private/local/path', 400))
+      global.fetch = vi.fn().mockResolvedValue(mockTextResponse('Prompt is too long /private/local/path', { ok: false, status: 400 }))
       const result = await runLocalCodeReview({ ...batchOptions, diff: fileDiff('a.js') })
       expect(result).toMatchObject({ ok: false, code: 'REVIEW_CONTEXT_CAPACITY', coverage: { complete: false, remainingFiles: [0] } })
       expect(result).not.toHaveProperty('verdict')
@@ -1115,7 +1145,7 @@ describe('codeReview helpers', () => {
     })
     it('posts to the backend chat-completions endpoint and returns the response content', async () => {
       const r = await runLocalCodeReview({ backend: 'ollama', model: 'codellama', diff: 'diff --git a b' })
-      expect(r).toEqual({ ok: true, backend: 'ollama', model: 'codellama', effort: null, verdict: 'clean', findings: 'No findings.' })
+      expect(r).toMatchObject({ ok: true, backend: 'ollama', model: 'codellama', effort: null, verdict: 'clean', findings: 'No findings.' })
       expect(global.fetch).toHaveBeenCalledTimes(1)
       const [url, init] = global.fetch.mock.calls[0]
       expect(url).toMatch(/\/v1\/chat\/completions$/)

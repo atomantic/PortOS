@@ -233,7 +233,7 @@ describe('configured provider reviewers', () => {
     for (const failure of [{ error: `${diagnostic} Synthetic vendor advice follows.` }, { error: 'Synthetic log prelude'.repeat(30), stderr: diagnostic }, { stderr: diagnostic, text: '', partial: false }, { stderr: diagnostic, text: 'incomplete', partial: true }]) {
       runCliProviderPrompt.mockResolvedValue({ ...failure, stderr: `${diagnostic}\nsynthetic-private-path-or-credential` });
       const result = await runLocalCodeReview({ backend, diff: 'example diff' });
-      expect(result).toEqual({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED', error: expect.stringContaining('supported tool-free vendor configuration') });
+      expect(result).toMatchObject({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED', error: expect.stringContaining('supported tool-free vendor configuration') });
       expect(isReviewerConfigFault(result.code)).toBe(true);
       expect(JSON.stringify(result)).not.toContain('synthetic-private');
     }
@@ -251,6 +251,7 @@ describe('configured provider reviewers', () => {
     expect(result.error).toContain(error.includes('timed out') ? 'timed out after 1000ms' : error);
     expect(isReviewerConfigFault(result.code)).toBe(false);
     expect(result).not.toHaveProperty('findings');
+    expect(result.coverage).toMatchObject({ complete: false, remainingFiles: [0] });
   });
 
   // #7720: a bootstrap-credentialed harness has a maintained no-tool recipe and
@@ -367,6 +368,8 @@ describe('configured provider reviewers', () => {
   });
 
   it('gives a remote API reviewer its own timeout budget instead of the local diff-size formula', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100);
+    try {
     const diff = 'x'.repeat(42 * 1024);
     const budgetOf = () => callProviderAISimple.mock.calls.at(-1)[0].timeout;
 
@@ -384,6 +387,7 @@ describe('configured provider reviewers', () => {
 
     await runLocalCodeReview({ backend, diff, timeoutMs: 5_000 });
     expect(budgetOf()).toBe(5_000);
+    } finally { clock.mockRestore(); }
   });
 
   it('names the effective remote budget and the diff size in a timeout failure', async () => {

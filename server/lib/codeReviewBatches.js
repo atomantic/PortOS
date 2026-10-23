@@ -24,6 +24,15 @@ export const reviewContextCapacityFailure = () => ({
   error: 'The selected reviewer refused the input because it exceeds its context capacity.',
 });
 
+/** Reserve one actual completion immediately before dispatch (including retries). */
+export function takeCodeReviewCallBudget(budget, fallbackMs) {
+  if (!budget) return fallbackMs;
+  const remainingMs = budget.deadline - Date.now();
+  if (remainingMs <= 0 || budget.calls >= budget.maxCalls) return null;
+  budget.calls++;
+  return remainingMs;
+}
+
 /** Keep byte-exact file sections, including quoted/renamed/binary headers.
  * Headers are opaque git file identifiers, not paths for filesystem access.
  * A non-git unified diff remains one indivisible section.
@@ -41,8 +50,8 @@ function diffFiles(diff) {
  * runBatch MUST return a validated verdict; transport success is insufficient.
  * Optional/required policy and iteration limits remain with the caller.
  */
-export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, maxBatchBytes = CODE_REVIEW_BATCH_BYTES, maxBatches = CODE_REVIEW_MAX_BATCHES, runBatch }) {
-  const started = Date.now();
+export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, maxBatchBytes = CODE_REVIEW_BATCH_BYTES, maxBatches = CODE_REVIEW_MAX_BATCHES, startedAt = Date.now(), runBatch }) {
+  const budget = { deadline: startedAt + budgetMs, budgetMs, calls: 0, maxCalls: maxBatches };
   const files = diffFiles(diff);
   const queue = [];
   for (const file of files) {
@@ -55,13 +64,13 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
   const reviewed = new Set();
   const batches = [];
   const findings = [];
-  let calls = 0;
+  let cleanFindings = 'No findings.';
   let failure = null;
   let identity = {};
   while (queue.length) {
     const batch = queue.shift();
-    const remainingMs = budgetMs - (Date.now() - started);
-    if (remainingMs <= 0 || calls >= maxBatches) {
+    const remainingMs = budget.deadline - Date.now();
+    if (remainingMs <= 0 || budget.calls >= maxBatches) {
       failure ||= { code: 'REVIEW_BUDGET_EXHAUSTED' };
       break;
     }
@@ -71,8 +80,7 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
       continue;
     }
     const input = batch.files.map(file => file.diff).join('');
-    calls++;
-    const result = await runBatch(input, remainingMs);
+    const result = await runBatch(input, remainingMs, budget);
     identity = { ...identity, ...Object.fromEntries(['backend', 'model', 'effort', 'effortUnsupported'].filter(key => result[key] !== undefined).map(key => [key, result[key]])) };
     const capacity = isReviewContextCapacityFailure(result) || result.code === 'REVIEW_CONTEXT_CAPACITY';
     batches.push({ files: batch.files.map(file => file.id), diffSha256: digest(input), outcome: result.ok ? result.verdict : capacity ? 'context_capacity' : 'inconclusive', attempted: true });
@@ -82,7 +90,7 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
       continue;
     }
     if (!result.ok) {
-      failure ||= capacity ? reviewContextCapacityFailure() : { code: result.code || 'REVIEW_BATCH_FAILED' };
+      failure ||= capacity ? reviewContextCapacityFailure() : { code: result.code || 'REVIEW_BATCH_FAILED', error: result.error, diagnostics: result.diagnostics };
       // An input-specific capacity refusal does not prevent reviewing other files.
       // Other failures stop spending, preserving any earlier actionable findings.
       if (!capacity) break;
@@ -90,24 +98,26 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
     }
     for (const file of batch.files) reviewed.add(file.id);
     if (result.verdict === 'findings') findings.push(result.findings);
+    else cleanFindings = result.findings;
   }
   const complete = reviewed.size === files.length;
   const coverage = {
     headSha, diffSha256: digest(diff), complete,
     files: files.map(({ id, file, bytes }) => ({ id, file, bytes })),
     reviewedFiles: [...reviewed], remainingFiles: files.filter(file => !reviewed.has(file.id)).map(file => file.id),
-    batches, calls, maxBatches, budgetMs,
+    batches, calls: budget.calls, maxBatches, budgetMs,
   };
   return {
     ...identity, ok: complete, coverage,
-    ...(findings.length ? { verdict: 'findings', findings: findings.join('\n\n') } : complete ? { verdict: 'clean', findings: 'No findings.' } : {}),
+    ...(findings.length ? { verdict: 'findings', findings: findings.join('\n\n') } : complete ? { verdict: 'clean', findings: cleanFindings } : {}),
     ...(!complete ? {
       code: failure?.code || 'REVIEW_INCOMPLETE',
+      ...(failure?.diagnostics ? { diagnostics: failure.diagnostics } : {}),
       error: failure?.code === 'REVIEW_CONTEXT_CAPACITY'
         ? 'The selected reviewer could not cover every file within its context capacity; review coverage is incomplete.'
         : failure?.code === 'REVIEW_BUDGET_EXHAUSTED'
           ? 'The configured review budget ended before every file received a verdict; review coverage is incomplete.'
-          : 'A review batch returned no usable verdict; review coverage is incomplete.',
+          : failure?.error || 'A review batch returned no usable verdict; review coverage is incomplete.',
     } : {}),
   };
 }
