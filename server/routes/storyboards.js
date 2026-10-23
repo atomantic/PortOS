@@ -20,7 +20,7 @@ import {
 import {
   getMakeEmptyPlan, getPanelMake, runPanelNode, startMakeEmpty, updatePanelNode, updateRecipe,
 } from '../services/storyboards/make.js';
-import { fitMusicVideoToStoryboard } from '../services/storyboards/fitMusicVideo.js';
+import { fitMusicVideoToStoryboard, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
 import { addBeats, extractBeats } from '../services/storyboards/plot.js';
 import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
@@ -43,6 +43,14 @@ router.post('/from-music-video/:projectId', asyncHandler(async (req, res) => {
 // Fit to song: write the video's shots from its linked board, as previewed.
 router.post('/fit-music-video/:projectId', asyncHandler(async (req, res) => {
   res.json(await fitMusicVideoToStoryboard(req.params.projectId, validateRequest(storyboardFitSchema, req.body || {})));
+}));
+
+// A fitted shot and its panel: Update takes the edited panel's action; panel art sends the still back.
+router.post('/music-video/:projectId/shots/:sceneId/update-from-panel', asyncHandler(async (req, res) => {
+  res.json(await updateShotFromPanel(req.params.projectId, req.params.sceneId));
+}));
+router.post('/music-video/:projectId/shots/:sceneId/panel-art', asyncHandler(async (req, res) => {
+  res.json(await sendShotStillToPanel(req.params.projectId, req.params.sceneId));
 }));
 
 // The saved recipe library sits before /:id; a board id always starts "sb-".

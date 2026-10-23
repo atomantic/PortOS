@@ -16,6 +16,8 @@ vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 const { default: storyboardRoutes } = await import('../../routes/storyboards.js');
 const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js');
 const projects = await import('../musicVideo/projects.js');
+const { PATHS } = await import('../../lib/paths.js');
+const { mkdir, writeFile } = await import('node:fs/promises');
 
 const app = express();
 app.use(express.json());
@@ -75,5 +77,36 @@ describe('fit a music video to its storyboard', () => {
     const bare = await linkedProject({ audioAnalysis: null });
     const unanalyzed = await request(app).post(`/api/storyboards/fit-music-video/${bare.project.id}`).send({ boardUpdatedAt: bare.board.updatedAt });
     expect(unanalyzed.body.code).toBe('SONG_NOT_ANALYZED');
+  });
+
+  it('flags an edited panel on its shot until Update, sends the still back as panel art, and names a deleted panel', async () => {
+    const { project, board } = await linkedProject();
+    const fitted = await request(app).post(`/api/storyboards/fit-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
+    const [first, second] = fitted.body.project.scenes;
+    const panelId = first.panelId;
+
+    await request(app).patch(`/api/storyboards/${board.id}/panels/${panelId}`).send({ action: 'She steps off the night bus' });
+    const updated = await request(app).post(`/api/storyboards/music-video/${project.id}/shots/${first.sceneId}/update-from-panel`);
+    expect(updated.status).toBe(200);
+    expect(updated.body.scene).toMatchObject({ visualIntent: 'She steps off the night bus', startSec: 0, endSec: 10 });
+    expect(updated.body.scene.panelRev).not.toBe(first.panelRev);
+
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(`${PATHS.images}/still-a.png`, Buffer.from('89504e470d0a1a0a', 'hex'));
+    await projects.mutateProjectRecord(project.id, (record) => ({
+      project: { ...record, scenes: record.scenes.map((s) => (s.sceneId === first.sceneId ? { ...s, referenceImageId: 'still-a.png' } : s)) },
+    }));
+    const art = await request(app).post(`/api/storyboards/music-video/${project.id}/shots/${first.sceneId}/panel-art`);
+    expect(art.status).toBe(200);
+    const panel = art.body.board.beats[0].panels.find((p) => p.id === panelId);
+    expect(panel.takes.find((take) => take.id === panel.selectedTakeId)).toMatchObject({ source: 'gallery', image: 'still-a.png' });
+    // Sending it again reselects the same take rather than adding another.
+    const again = await request(app).post(`/api/storyboards/music-video/${project.id}/shots/${first.sceneId}/panel-art`);
+    expect(again.body.board.beats[0].panels.find((p) => p.id === panelId).takes).toHaveLength(1);
+
+    await request(app).delete(`/api/storyboards/${board.id}/panels/${second.panelId}`);
+    const gone = await request(app).post(`/api/storyboards/music-video/${project.id}/shots/${second.sceneId}/update-from-panel`);
+    expect(gone.status).toBe(409);
+    expect(gone.body.code).toBe('PANEL_MISSING');
   });
 });

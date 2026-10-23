@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitStoryboardToSong, storyboardFitSong } from './storyboardFit.js';
+import { fitStoryboardToSong, storyboardFitSong, storyboardShotPanel } from './storyboardFit.js';
 
 const panel = (id, seconds, action = `Panel ${id}`) => ({ id: `panel-${id}`, action, dialogue: '', framing: null, camera: '', seconds, castIds: [], environmentIds: [], objectIds: [] });
 const beat = (id, musicalRole, panels, extra = {}) => ({ id: `beat-${id}`, title: '', what: '', musicalRole, panels, ...extra });
@@ -67,6 +67,15 @@ describe('fitStoryboardToSong', () => {
     const rev = (p) => fitStoryboardToSong({ beats: [beat('a', null, [p])] }, song()).shots[0].panelRev;
     expect(rev(panel('a1', 3))).toBe(rev(panel('a1', 9)));
     expect(rev(panel('a1', 3))).not.toBe(rev(panel('a1', 3, 'Something else')));
+  });
+
+  it('reads a fitted shot\'s panel as current, changed or missing', () => {
+    const shot = fitStoryboardToSong(board, song()).shots[1];
+    expect(storyboardShotPanel(board, shot)).toMatchObject({ state: 'current', number: 2, beatIndex: 1 });
+    const edited = { beats: board.beats.map((b) => ({ ...b, panels: b.panels.map((p) => (p.id === 'panel-b1' ? { ...p, action: 'New' } : p)) })) };
+    expect(storyboardShotPanel(edited, shot).state).toBe('changed');
+    expect(storyboardShotPanel({ beats: [] }, shot).state).toBe('missing');
+    expect(storyboardShotPanel(board, { sceneId: 'mvs-hand' })).toBeNull();
   });
 
   it('needs an analyzed song', () => {

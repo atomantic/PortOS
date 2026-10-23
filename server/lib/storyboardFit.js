@@ -57,11 +57,31 @@ function sectionAt(sections, at) {
 
 // What a shot drew from its panel; a later change to any of it marks the shot's panel changed.
 const PANEL_REV_FIELDS = ['action', 'dialogue', 'framing', 'camera', 'castIds', 'environmentIds', 'objectIds'];
-function panelRev(panel) {
+export function storyboardPanelRev(panel) {
   const text = JSON.stringify(PANEL_REV_FIELDS.map((key) => panel[key] ?? null));
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i += 1) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
   return (hash >>> 0).toString(36);
+}
+
+/**
+ * A fitted shot's panel on the linked board: `current`, `changed` (edited
+ * since the fit or the last Update) or `missing` (deleted, or another board
+ * linked), with the panel, its beat and its number on the board. Null for a
+ * shot not fitted from a panel.
+ */
+export function storyboardShotPanel(board, scene) {
+  if (!scene?.panelId) return null;
+  let number = 0;
+  for (const [beatIndex, beat] of (board?.beats || []).entries()) {
+    for (const panel of beat.panels) {
+      number += 1;
+      if (panel.id === scene.panelId) {
+        return { state: storyboardPanelRev(panel) === scene.panelRev ? 'current' : 'changed', panel, beat, beatIndex, number };
+      }
+    }
+  }
+  return { state: 'missing', panel: null, beat: null, beatIndex: null, number: null };
 }
 
 const roleMatches = (role, label) => {
@@ -160,7 +180,7 @@ export function fitStoryboardToSong(board, song, { starts = {}, minShotSec = STO
       shots.push({
         beatId: beat.id,
         panelId: panel?.id || null,
-        panelRev: panel ? panelRev(panel) : null,
+        panelRev: panel ? storyboardPanelRev(panel) : null,
         label: `${title.slice(0, LABEL_MAX - suffix.length)}${suffix}`,
         sectionIndex,
         sectionLabel,
