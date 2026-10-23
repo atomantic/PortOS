@@ -9,6 +9,7 @@ import { realpath } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
 import { execGitSafe } from '../lib/execGit.js';
 import { parseGitRemote, detectForgeCli, pickGhAccountForOwner } from '../lib/gitForge.js';
+import { githubApiHost } from '../lib/workTracker.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { listForgePinnedApps } from './agentAppWorkspace.js';
 
@@ -174,26 +175,37 @@ async function getGhCommitIdentity(host, token, timeoutMs, signal) {
  * @returns {Promise<{cli: string, env: object, host: string|null, owner: string|null,
  *                    account: string|null, identity: {name: string, email: string}|null}>}
  */
-export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal, forgeAccount = null } = {}) {
+export function resolveForgeForRepo(dir, opts = {}) {
+  return resolveForgeWithPin(dir, opts);
+}
+
+// A shared pin state lets the bounded child-overlay lookup distinguish an
+// unpinned timeout (ambient is fine) from an unresolved or explicit pin.
+async function resolveForgeWithPin(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal, forgeAccount = null } = {}, pinState = {}) {
   const explicitPin = (typeof forgeAccount === 'string' && forgeAccount.trim()) ? forgeAccount.trim() : null;
+  pinState.account = explicitPin || await resolveConfiguredAccount(dir);
+  return resolveForgeCredentials(dir, { timeoutMs, signal, pinned: pinState.account }).catch((error) => {
+    if (pinState.account) throw error;
+    return { cli: 'gh', env: process.env, host: null, owner: null, account: null, identity: null };
+  });
+}
+
+async function resolveForgeCredentials(dir, { timeoutMs, signal, pinned }) {
   const remote = await execGitSafe(['remote', 'get-url', 'origin'], dir);
   const parsed = parseGitRemote(remote.stdout?.trim());
   if (!parsed) {
-    if (explicitPin) throw new ServerError('The pinned GitHub account cannot be resolved without a repository origin.', {
+    if (pinned) throw new ServerError('The pinned GitHub account cannot be resolved without a repository origin.', {
       status: 409, code: 'FORGE_ACCOUNT_UNAVAILABLE',
     });
     return { cli: 'gh', env: process.env, host: null, owner: null, account: null, identity: null };
   }
 
-  const host = parsed.host.toLowerCase();
+  const host = githubApiHost(parsed.host.toLowerCase());
   const cli = detectForgeCli(host);
   const base = { cli, env: process.env, host, owner: parsed.owner, identity: null };
   const ambient = { ...base, account: null };
 
   if (cli !== 'gh' || signal?.aborted) return ambient;
-
-  const pinned = explicitPin || await resolveConfiguredAccount(dir);
-  if (signal?.aborted) return ambient;
 
   // A pinned account skips the `gh auth status` listing entirely: the user named
   // the account, so the only question left is whether a token can be minted for
@@ -240,7 +252,7 @@ export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_T
  *
  * Returns `{}` when no host-specific account and token were resolved, so the child
  * keeps whatever gh auth it would have used. An unavailable explicit pin or a
- * timed-out lookup refuses the spawn rather than silently using another login.
+ * timed-out pinned lookup refuses the spawn rather than silently using another login.
  * @param {string} dir - Repo (or worktree) root
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs=10000] - Cap on the git+gh probe before giving up
@@ -254,12 +266,14 @@ export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccoun
   // gh subprocess keeps its own timeout as a second bound for direct callers.
   let timer;
   const controller = new AbortController();
+  const pinState = {};
   const resolved = await Promise.race([
-    resolveForgeForRepo(dir, { timeoutMs, signal: controller.signal, forgeAccount }),
-    new Promise((_, reject) => {
+    resolveForgeWithPin(dir, { timeoutMs, signal: controller.signal, forgeAccount }, pinState),
+    new Promise((resolve, reject) => {
       timer = setTimeout(() => {
         controller.abort();
-        reject(new ServerError('GitHub account resolution timed out. Retry after checking gh auth status.', {
+        if (pinState.account === null) return resolve(null);
+        reject(new ServerError('Pinned GitHub account resolution timed out. Retry after checking gh auth status.', {
           status: 503, code: 'FORGE_AUTH_TIMEOUT',
         }));
       }, timeoutMs);

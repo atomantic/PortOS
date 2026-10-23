@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-vi.mock('../lib/childProcess.js', () => ({ spawn: vi.fn() }));
+vi.mock('../lib/childProcess.js', async (original) => ({ ...(await original()), spawn: vi.fn() }));
 // The managed-app registry read is the only thing forge auth needs from the app
 // layer; doubling it keeps this suite off the filesystem and makes the pinned
 // vs. inferred account split explicit per test.
@@ -93,7 +93,7 @@ describe('forge credential resolution', () => {
     expect(spawn).toHaveBeenCalledTimes(3);
   });
 
-  it('refuses a stalled lookup rather than launching an agent as an unverified account', async () => {
+  it('bounds a stalled unpinned lookup so an agent can keep ambient auth', async () => {
     vi.useFakeTimers();
     respond({ stdout: 'git@github.com:example-owner/project.git\n' });
     const stalled = new EventEmitter();
@@ -102,14 +102,14 @@ describe('forge credential resolution', () => {
     stalled.kill = vi.fn();
     spawn.mockImplementationOnce(() => stalled);
     const pending = resolveForgeTokenEnv('/example/repo', { timeoutMs: 25 });
-    const refused = expect(pending).rejects.toMatchObject({ code: 'FORGE_AUTH_TIMEOUT' });
+    const refused = expect(pending).resolves.toEqual({});
     await vi.advanceTimersByTimeAsync(25);
     await refused;
     expect(stalled.kill).toHaveBeenCalledWith('SIGKILL');
 
     // A close emitted after the timeout must not change the settled result.
     stalled.emit('close', 1);
-    await expect(pending).rejects.toMatchObject({ code: 'FORGE_AUTH_TIMEOUT' });
+    await expect(pending).resolves.toEqual({});
   });
 
   it('aborts a token probe that starts near the end of the whole lookup budget', async () => {
@@ -135,7 +135,7 @@ describe('forge credential resolution', () => {
     spawn.mockImplementationOnce(() => token);
 
     const pending = resolveForgeTokenEnv('/example/repo', { timeoutMs: 10 });
-    const refused = expect(pending).rejects.toMatchObject({ code: 'FORGE_AUTH_TIMEOUT' });
+    const refused = expect(pending).resolves.toEqual({});
     await vi.advanceTimersByTimeAsync(9);
     expect(spawn).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1);
@@ -153,7 +153,7 @@ describe('forge credential resolution', () => {
     spawn.mockImplementationOnce(() => git);
 
     const pending = resolveForgeTokenEnv('/example/repo', { timeoutMs: 10 });
-    const refused = expect(pending).rejects.toMatchObject({ code: 'FORGE_AUTH_TIMEOUT' });
+    const refused = expect(pending).resolves.toEqual({});
     await vi.advanceTimersByTimeAsync(10);
     await refused;
 
@@ -166,14 +166,14 @@ describe('forge credential resolution', () => {
 });
 
 describe('per-app forge account pinning', () => {
-  // `git remote get-url origin` → `git rev-parse --git-common-dir` (only when an
-  // app pins an account) → `gh auth token` → `gh api user`. `gh auth status` is
+  // `git rev-parse --git-common-dir` (only when an app pins an account)
+  // → `git remote get-url origin` → `gh auth token` → `gh api user`. `gh auth status` is
   // deliberately absent: a named account is not something to second-guess
   // against the owner.
   function pinnedAccount({ tokenCode = 0, identity = '4242\tacme-bot\tAcme Bot\n', identityCode = 0 } = {}) {
     listForgePinnedApps.mockResolvedValue([{ repoPath: '/example/repo', forgeAccount: 'acme-bot' }]);
-    respond({ stdout: 'git@github.com:acme/widget.git\n' });
     respond({ stdout: '/example/repo/.git\n' });
+    respond({ stdout: 'git@github.com:acme/widget.git\n' });
     respond({ stdout: tokenCode === 0 ? 'acme-bot-token\n' : '', code: tokenCode });
     respond({ stdout: identity, code: identityCode });
   }
@@ -217,10 +217,10 @@ describe('per-app forge account pinning', () => {
 
   it('maps an agent worktree back to the checkout the pin is registered against', async () => {
     listForgePinnedApps.mockResolvedValue([{ repoPath: '/example/repo', forgeAccount: 'acme-bot' }]);
-    respond({ stdout: 'git@github.com:acme/widget.git\n' });
     // A CoS worktree lives under PortOS's own data dir and never matches an
     // app repoPath; --git-common-dir is what points back at the checkout.
     respond({ stdout: '/example/repo/.git\n' });
+    respond({ stdout: 'git@github.com:acme/widget.git\n' });
     respond({ stdout: 'acme-bot-token\n' });
     respond({ stdout: '4242\tacme-bot\t\n' });
     const env = await resolveForgeTokenEnv('/portos/data/cos/worktrees/agent-1');
@@ -239,8 +239,8 @@ describe('per-app forge account pinning', () => {
     symlinkSync(real, link);
     try {
       listForgePinnedApps.mockResolvedValue([{ repoPath: real, forgeAccount: 'acme-bot' }]);
-      respond({ stdout: 'git@github.com:acme/widget.git\n' });
       respond({ stdout: `${link}/.git\n` });
+      respond({ stdout: 'git@github.com:acme/widget.git\n' });
       respond({ stdout: 'acme-bot-token\n' });
       respond({ stdout: '4242\tacme-bot\tAcme Bot\n' });
       await expect(resolveForgeTokenEnv(link)).resolves.toMatchObject({ GH_HOST: 'github.com', GH_TOKEN: 'acme-bot-token' });
@@ -258,8 +258,8 @@ describe('per-app forge account pinning', () => {
 
   it('ignores a pin registered against a different repository', async () => {
     listForgePinnedApps.mockResolvedValue([{ repoPath: '/other/repo', forgeAccount: 'acme-bot' }]);
-    respond({ stdout: 'git@github.com:example-owner/project.git\n' });
     respond({ stdout: '/example/repo/.git\n' });
+    respond({ stdout: 'git@github.com:example-owner/project.git\n' });
     respond({ stderr: 'Logged in to github.com account example-owner\n' });
     respond({ stdout: 'test-owner-token\n' });
     await expect(resolveForgeTokenEnv('/example/repo')).resolves.toEqual({ GH_HOST: 'github.com', GH_TOKEN: 'test-owner-token' });
@@ -366,4 +366,37 @@ it('refuses an explicit account pin when its repository cannot be resolved', asy
   await expect(resolveForgeExecOptions('/example/repo', { forgeAccount: 'acme-bot' }))
     .rejects.toMatchObject({ code: 'FORGE_ACCOUNT_UNAVAILABLE' });
   expect(spawn).toHaveBeenCalledTimes(1);
+});
+
+it('refuses a timed-out explicit pin instead of launching with ambient credentials', async () => {
+  vi.useFakeTimers();
+  respond({ stdout: 'git@ghe.example.com:acme/widget.git' });
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn();
+  spawn.mockImplementationOnce(() => child);
+  const pending = resolveForgeTokenEnv('/example/repo', { forgeAccount: 'acme-bot', timeoutMs: 10 });
+  const refused = expect(pending).rejects.toMatchObject({ code: 'FORGE_AUTH_TIMEOUT' });
+  await vi.advanceTimersByTimeAsync(10);
+  await refused;
+  expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+});
+
+it('keeps the public SSH-over-443 alias on github.com credentials', async () => {
+  respond({ stdout: 'git@ssh.github.com:acme/widget.git' });
+  respond({ stdout: 'public-token' });
+  respond({ stdout: '4242\tacme-bot\tAcme Bot\n' });
+  const env = await resolveForgeTokenEnv('/example/repo', { forgeAccount: 'acme-bot' });
+  expect(env).toMatchObject({ GH_HOST: 'github.com', GH_TOKEN: 'public-token' });
+  expect(env.GH_ENTERPRISE_TOKEN).toBeUndefined();
+  expect(spawn.mock.calls[1][1]).toEqual(['auth', 'token', '-u', 'acme-bot', '-h', 'github.com']);
+});
+
+it('keeps unpinned transient credential failures on ambient auth', async () => {
+  respond({ stdout: 'git@github.com:acme/widget.git' });
+  spawn.mockImplementationOnce(() => { throw new Error('gh temporarily unavailable'); });
+  const options = await resolveForgeExecOptions('/example/repo');
+  expect(options.env).toBe(process.env);
+  expect(options.customEnv).toBeNull();
 });

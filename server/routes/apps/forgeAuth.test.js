@@ -58,6 +58,19 @@ describe('app forge-auth routes', () => {
     expect(startForgeScopeRefresh).toHaveBeenCalledWith(expect.objectContaining({ expectedAccount: 'owner-acct' }));
   });
 
+  it('normalizes host case and rejects an unresolved origin separately', async () => {
+    resolveAppForgeTarget.mockResolvedValue({ target: { forge: 'github', webHost: 'GHE.EXAMPLE.COM' } });
+    const response = await request(app).post('/api/apps/app-001/forge-auth/refresh').send({ scopes: ['workflow'] });
+    expect(response.status).toBe(202);
+    expect(startForgeScopeRefresh).toHaveBeenCalledWith(expect.objectContaining({ host: 'ghe.example.com' }));
+    startForgeScopeRefresh.mockClear();
+    resolveForgeForRepo.mockResolvedValue({ host: null, account: null });
+    const missing = await request(app).post('/api/apps/app-001/forge-auth/refresh').send({ scopes: ['workflow'] });
+    expect(missing.status).toBe(409);
+    expect(missing.body.code).toBe('FORGE_REFRESH_UNSUPPORTED');
+    expect(startForgeScopeRefresh).not.toHaveBeenCalled();
+  });
+
   it('refuses a changed origin instead of refreshing an account on another host', async () => {
     resolveForgeForRepo.mockResolvedValue({ host: 'github.com', account: 'owner-acct' });
     const response = await request(app).post('/api/apps/app-001/forge-auth/refresh').send({ scopes: ['workflow'] });
