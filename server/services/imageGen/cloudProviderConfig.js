@@ -133,7 +133,10 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     label: 'Runway Imagegen', errorCode: 'RUNWAY_IMAGEGEN_DISABLED',
     knownModels: RUNWAY_IMAGE_MODEL_IDS, unknownModelCode: 'RUNWAY_IMAGE_MODEL_UNKNOWN',
     modelId: (c, override) => override || (getRunwayImageModel(c.model) ? c.model : RUNWAY_IMAGE_DEFAULT_MODEL),
-    params: (c, override) => ({ model: override || (getRunwayImageModel(c.model) ? c.model : RUNWAY_IMAGE_DEFAULT_MODEL), resolution: c.resolution || '720p' }),
+    params: (c, override) => {
+      const model = getRunwayImageModel(override || c.model) || getRunwayImageModel(RUNWAY_IMAGE_DEFAULT_MODEL);
+      return { model: override || model.id, resolution: model.ratios[c.resolution] ? c.resolution : model.defaultResolution };
+    },
   }),
   [IMAGE_GEN_MODE.FAL]: Object.freeze({
     ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.FAL],

@@ -792,3 +792,5 @@ describe('ImageGenTab local runtime card', () => {
     await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'flux2-klein-4b', expect.anything()));
   });
 });
+
+vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));

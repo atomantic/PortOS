@@ -519,14 +519,14 @@ describe('Image Gen Routes', () => {
     });
 
     // referenceStrengths is the multi-reference companion to the
-    // multipart referenceImage1..4 uploads. The schema accepts the array on a
+    // multipart referenceImage1..16 uploads. The schema accepts the array on a
     // JSON body too so a future internal caller (no files attached) doesn't
     // 400 just by listing weights.
-    it('accepts a referenceStrengths array (0..1, max 4 entries)', async () => {
+    it('accepts up to 16 referenceStrengths entries within 0..1', async () => {
       imageGen.generateImage.mockResolvedValue({ generationId: 'gen-ref', filename: 'r.png', path: '/data/images/r.png' });
       const response = await request(app)
         .post('/api/image-gen/generate')
-        .send({ prompt: 'multi-ref', referenceStrengths: [0.8, 0.4] });
+        .send({ prompt: 'multi-ref', referenceStrengths: Array(16).fill(0.5) });
       expect(response.status).toBe(200);
     });
 
@@ -537,10 +537,10 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(400);
     });
 
-    it('rejects more than 10 referenceStrengths entries', async () => {
+    it('rejects more than 16 referenceStrengths entries', async () => {
       const response = await request(app)
         .post('/api/image-gen/generate')
-        .send({ prompt: 'multi-ref', referenceStrengths: Array(11).fill(0.5) });
+        .send({ prompt: 'multi-ref', referenceStrengths: Array(17).fill(0.5) });
       expect(response.status).toBe(400);
     });
 

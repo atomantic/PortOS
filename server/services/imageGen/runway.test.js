@@ -78,6 +78,18 @@ describe('Runway image workflow', () => {
     expect(sidecar.referenceTags.map((r) => r.filename)).toEqual(['hero.png', 'rival.png']);
     expect(JSON.stringify(sidecar)).not.toContain(root);
   });
+  it('renders an unseeded third-party model with more than three untagged references', async () => {
+    const paths = Array.from({ length: 5 }, (_, i) => join(PATHS.images, `reference-${i}.png`));
+    await Promise.all(paths.map((path) => writeFile(path, output)));
+    const job = await runway.generateImage({ prompt: 'A cast in a garden', model: 'muse_image', seed: 42, referenceImagePaths: paths });
+    expect(await terminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(calls[0].body).toMatchObject({ model: 'muse_image', ratio: '1600:1600' });
+    expect(calls[0].body).not.toHaveProperty('seed');
+    expect(calls[0].body.referenceImages).toHaveLength(5);
+    expect(calls[0].body.referenceImages.every((ref) => Object.keys(ref).join() === 'uri')).toBe(true);
+    expect(calls[0].body.promptText).toContain('Image 5: visual reference');
+    expect(calls[0].body.promptText).not.toContain('@ref_');
+  });
   it('reports the supplied and added prompt lengths before spending instead of silently cutting text', async () => {
     await expect(runway.generateImage({ prompt: 'x'.repeat(990), negativePrompt: 'a long negative' })).rejects.toMatchObject({
       status: 400, code: 'RUNWAY_IMAGE_PROMPT_TOO_LONG',

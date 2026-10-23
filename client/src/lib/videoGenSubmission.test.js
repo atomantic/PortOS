@@ -255,6 +255,15 @@ describe('buildVideoGenSubmission — local IC-LoRA, chunks and misc', () => {
 describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
   const preset = { label: 'Film noir', prompt: 'cinematic noir', negativePrompt: '' };
 
+  it('drops carried style metadata when switching to Runway character performance', () => {
+    const payload = buildVideoGenSubmission(baseArgs({
+      hostedLane: 'runway', mode: 'character-performance', runwayModelId: 'act_two',
+      stylePreset: preset, negativePrompt: 'blur', noMusic: true,
+    }));
+    expect(payload).toMatchObject({ prompt: '', negativePrompt: '' });
+    expect(payload).not.toHaveProperty('promptAdditions');
+  });
+
   it('lists the style preset, then the No music line the local lane appends', () => {
     const payload = buildVideoGenSubmission(baseArgs({ currentModel: {}, stylePreset: preset, noMusic: true }));
     expect(payload.prompt).toBe('cinematic noir. a fox running through a forest\n\nno music, no soundtrack');

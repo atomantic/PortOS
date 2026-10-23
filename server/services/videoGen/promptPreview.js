@@ -18,7 +18,7 @@ import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
 import { falVideoSentPrompt } from './fal.js';
 
-export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', 'icReference'];
+export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
 
 const asWritten = (body, extra = {}) => ({
@@ -70,6 +70,9 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
     const { runwayVideoSentPrompt } = await import('./runway.js');
     return { backend, ...runwayVideoSentPrompt({
       modelId: body.runwayModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      videoMode: body.mode, hasVideo: !!uploads.runwayVideo, hasCharacterVideo: !!uploads.runwayCharacterVideo,
+      targetAspectRatio: body.runwayTargetAspect, ratio: body.runwayRatio,
+      bodyControl: body.runwayBodyControl, expressionIntensity: body.runwayExpressionIntensity, seed: body.runwaySeed,
       seconds: body.runwayDuration, width: body.width, height: body.height, resolution: body.runwayResolution, promptAdditions,
       hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
     }).record };

@@ -1,3 +1,4 @@
+import { getRunwayImageModel } from './runwayImageModels.js';
 /**
  * Per-backend image-gen capability literals.
  *
@@ -227,6 +228,7 @@ export const supportsCloudModelOverride = (mode) => MODEL_OVERRIDE_CAPABLE_MODES
  * (fal.ai); an unknown or absent model falls back to the mode-level value.
  */
 export const maxInputImages = (mode, modelId = null) => {
+  if (mode === IMAGE_GEN_MODE.RUNWAY) return getRunwayImageModel(modelId)?.maxReferences ?? 3;
   if (mode === IMAGE_GEN_MODE.FAL) {
     const family = falImageFamily(modelId);
     if (family) return family.maxInputImages;

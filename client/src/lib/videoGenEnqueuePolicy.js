@@ -27,7 +27,7 @@ const byovReason = ({ byovRuntimeMissing, byovLabel, byovRuntime }) => (byovRunt
   : `Checking ${byovRuntime} runtime status…`);
 
 const ENQUEUE_ROWS = [
-  { scope: 'always', active: (c) => !c.prompt.trim() },
+  { scope: 'always', active: (c) => !c.promptOptional && !c.prompt.trim() },
   { scope: 'always', active: (c) => c.remixHandoffPending },
   { scope: 'always', active: (c) => c.promptOverLimit },
   { scope: 'remote', active: (c) => !!c.remoteBlocked, reason: (c) => c.remoteBlocked },

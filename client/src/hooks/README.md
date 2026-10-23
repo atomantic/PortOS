@@ -313,3 +313,5 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCalendarWindowEvents` | `useCalendarWindowEvents(startDate, endDate)` — sequential 200-event offset pages for a complete calendar window, account/event deduplication, retry and date/sync supersession. | Day/Week/Month grids; pair with CalendarWindowStatus to disclose incomplete availability. |
 
 | `useMusicVideoReviewDraft.js` | Sequential exact-version availability checks for implicit imported draft selection; stale requests abort, unavailable newer drafts are disclosed, explicit review versions remain pinned. |
+
+| `useRunwayCatalog.js` | Shared Runway model catalog capabilities and cached model selection. |

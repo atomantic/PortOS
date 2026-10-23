@@ -238,8 +238,10 @@ router.post('/:id/approve', asyncHandler(async (req, res) => {
 router.post('/:id/reject', asyncHandler(async (req, res) => {
   const options = validateRequest(memoryRetireSchema, req.body ?? {});
   const result = await memory.rejectMemory(req.params.id, options);
+  // Rejecting a memory that is already gone is the desired end state.
+  if (!result.success && result.error === 'Memory not found') return res.json({ success: true, alreadyResolved: true });
   if (!result.success) {
-    throw new ServerError(result.error, { status: result.error === 'Memory not found' ? 404 : 400 });
+    throw new ServerError(result.error, { status: 400 });
   }
   res.json(result);
 }));

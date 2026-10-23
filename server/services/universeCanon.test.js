@@ -120,6 +120,40 @@ describe('universeCanon — setCanonEntryLock', () => {
   });
 });
 
+describe('universeCanon — removeCanonEntryImageRef', () => {
+  it('removes the ref, clears primary + identity-pack use, and survives where PATCH is reverted', async () => {
+    const w = await seedUniverseWithCharacters([
+      {
+        name: 'Alex', physicalDescription: 'jacket',
+        imageRefs: ['alex-a.png', 'alex-b.png'], primaryImageRef: 'alex-b.png',
+        identityPack: { assets: [
+          { role: 'front', imageRef: 'alex-b.png', approved: true },
+          { role: 'profile', imageRef: 'alex-a.png', approved: true },
+        ] },
+      },
+    ]);
+    const id = w.characters[0].id;
+    // The stale-write guard still restores a shorter list sent via PATCH.
+    const patched = await svc.updateUniverse(w.id, { characters: [{ ...w.characters[0], imageRefs: [] }] });
+    expect(patched.characters[0].imageRefs).toEqual(['alex-a.png', 'alex-b.png']);
+
+    const { entry } = await canonSvc.removeCanonEntryImageRef(w.id, 'character', id, 'alex-b.png');
+    expect(entry.imageRefs).toEqual(['alex-a.png']);
+    expect(entry.primaryImageRef).toBeNull();
+    expect(entry.identityPack.assets.map((a) => a.imageRef)).toEqual(['alex-a.png']);
+    const reread = (await svc.listUniverses())[0];
+    expect(reread.characters[0].imageRefs).toEqual(['alex-a.png']);
+  });
+
+  it('404s on an unknown entry or an unattached image', async () => {
+    const w = await seedUniverseWithCharacters([{ name: 'Alex', physicalDescription: 'jacket', imageRefs: ['a.png'] }]);
+    await expect(canonSvc.removeCanonEntryImageRef(w.id, 'character', 'nope', 'a.png'))
+      .rejects.toMatchObject({ status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' });
+    await expect(canonSvc.removeCanonEntryImageRef(w.id, 'character', w.characters[0].id, 'other.png'))
+      .rejects.toMatchObject({ status: 404, code: 'UNIVERSE_CANON_IMAGE_REF_NOT_FOUND' });
+  });
+});
+
 describe('universeCanon — removeCanonEntry', () => {
   it('drops only the target entry, persists, and scrubs neither its image refs nor its catalog link', async () => {
     // Removal is scoped to the canon array: it must not purge imageRefs (the
