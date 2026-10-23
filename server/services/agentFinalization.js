@@ -1209,9 +1209,11 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const refused = ['content-refusal', 'content-filtered'].includes(interruption?.category);
   const reportedOutcome = !isPrivateSecurity && !refused
     ? await persistCompletionSummary(agent.id, { workspacePath: agent.metadata?.workspacePath, existingRecord: agent }) : null;
-  const reportedHold = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
+  // Only an explicit hold suppresses orphan recovery; a failed delivery check
+  // must retain the caller's normal failure/retry handling.
+  const deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
   const executionSuccess = success && exitCode === 0;
-  let effectiveSuccess = isPrivateSecurity || refused || reportedHold ? false : success;
+  let effectiveSuccess = isPrivateSecurity || refused || deliveryHeld ? false : success;
   const errorAnalysis = refused ? {
     category: interruption.category, origin: interruption.source || 'provider',
     message: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
@@ -1231,8 +1233,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     : agent.result?.validationPassed ?? null;
   const taskOutcome = reportedOutcome ? resolveTaskOutcome({ reported: reportedOutcome,
     success: effectiveSuccess, validationPassed }) : null;
-  const deliveryHeld = ['blocked', 'incomplete'].includes(taskOutcome?.status);
-  if (deliveryHeld) effectiveSuccess = false;
+  if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
 
   if (agent.metadata?.runId) {
     const bufferedOutput = Array.isArray(agent.output)

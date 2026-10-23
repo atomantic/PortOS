@@ -139,6 +139,20 @@ describe('retireDeadAgent (#8440)', () => {
     expect(updateTask).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { success: false, status: 'completed', exitCode: 1 },
+    { success: true, status: 'no-action-needed', exitCode: 0 },
+  ])('keeps failure recovery enabled for a synthesized incomplete outcome ($status, success=$success)', async ({ success, status, exitCode }) => {
+    const reportedOutcome = { status, reason: 'Invented delivery report.' };
+    const result = await retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome: reportedOutcome } },
+      task: TASK, success, exitCode, duration: 100 });
+    expect(result).toEqual({ success: false, deliveryHeld: false,
+      taskOutcome: expect.objectContaining({ status: 'incomplete' }) });
+    expect(completeAgent).toHaveBeenCalledWith(AGENT.id, expect.objectContaining({ success: false,
+      taskOutcome: result.taskOutcome }));
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   it('leaves recovery retryable when parking the held task cannot be persisted', async () => {
     const taskOutcome = { status: 'blocked', reason: 'Invented prerequisite.' };
     updateTask.mockResolvedValueOnce({ error: 'storage-unavailable' });
