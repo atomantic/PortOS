@@ -19,6 +19,7 @@ afterAll(() => owned.drain());
 // gate waits for cancellation, so a fast restart cannot finish the scenario early.
 owned.it('drains the active lifecycle watcher after a sibling fails, preserving an external owner', async ({ signal }) => {
   const host = mkdtempSync(join(tmpdir(), 'watch-cancel-'));
+  let cleanupConfirmed = true;
   try {
     const run = createVitestTempFixture(host, 'server', '');
     const fixture = join(host, 'fixture');
@@ -42,22 +43,25 @@ owned.it('drains the active lifecycle watcher after a sibling fails, preserving 
     run.args[run.args.indexOf('--maxWorkers') + 1] = '2';
     run.args.push('--bail=1', '--testNamePattern', 'server watch-config restart|controlled sibling failure');
     const result = await runFixtureToCompletion(run, 120000, { signal });
+    cleanupConfirmed = result.closeConfirmed;
+    if (!cleanupConfirmed) throw result.error;
     if (signal.aborted) return;
     // Deliberately bounded diagnostics: no nested output, paths, PIDs or env.
     const state = JSON.stringify({ ready: existsSync(ready), finished: existsSync(finished), status: result.status, error: result.error?.name ?? null });
-    expect(result.error, state).toBeUndefined();
+    expect(Boolean(result.error), state).toBe(false);
     expect(result.status, state).toBe(1);
-    expect(result.stderr, state).toContain('controlled sibling failure');
+    expect(result.stderr.includes('controlled sibling failure'), state).toBe(true);
     expect(existsSync(finished), state).toBe(true);
-    expect(result.stderr, state).not.toMatch(/test temp leak:|test process leak:|Unhandled|ENOTEMPTY|ENOENT/);
+    expect(/test temp leak:|test process leak:|Unhandled|ENOTEMPTY|ENOENT/.test(result.stderr), state).toBe(false);
     expect(readFileSync(join(live, 'keep'), 'utf8')).toBe('synthetic external owner');
   } finally {
-    rmSync(host, { recursive: true, force: true });
+    if (cleanupConfirmed) rmSync(host, { recursive: true, force: true });
   }
 }, 135000);
 
 owned.it('retains the lifecycle host and fails when watcher settlement is unconfirmed', async ({ signal }) => {
   const host = mkdtempSync(join(tmpdir(), 'watch-unconfirmed-'));
+  let cleanupConfirmed = true;
   try {
     const run = createVitestTempFixture(host, 'server', '');
     const fixture = join(host, 'fixture');
@@ -84,14 +88,17 @@ afterAll(() => {
 `);
     run.args.push('--testNamePattern', 'server watch-config restart');
     const result = await runFixtureToCompletion(run, 120000, { signal });
+    cleanupConfirmed = result.closeConfirmed;
+    if (!cleanupConfirmed) throw result.error;
     if (signal.aborted) return;
     const state = JSON.stringify({ status: result.status, retained: existsSync(retained), error: result.error?.name ?? null });
-    expect(result.error, state).toBeUndefined();
+    expect(Boolean(result.error), state).toBe(false);
     expect(result.status, state).toBe(1);
-    expect(result.stderr, state).toContain('synthetic close unconfirmed');
+    expect(result.stderr.includes('synthetic close unconfirmed'), state).toBe(true);
+    expect(existsSync(retained), state).toBe(true);
     expect(JSON.parse(readFileSync(retained, 'utf8'))).toEqual({ present: true, original: true });
-    expect(result.stderr, state).toContain('test temp leak: vrt-');
+    expect(result.stderr.includes('test temp leak: vrt-'), state).toBe(true);
   } finally {
-    rmSync(host, { recursive: true, force: true });
+    if (cleanupConfirmed) rmSync(host, { recursive: true, force: true });
   }
 }, 135000);

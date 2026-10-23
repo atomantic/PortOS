@@ -152,7 +152,8 @@ function killProcessTree(child, { sweepGroup = false } = {}) {
  * import graph on a loaded host can take over a minute, so `createVitestTempFixture`'s
  * fixed `timeout` (kept for spawnSync callers) is dropped. Resolves like spawnSync's
  * result; `error` is set only when the ceiling is reached or `signal` aborts, after
- * the whole detached process group is killed. Pass the calling test's `signal`:
+ * the detached process group is signalled. `closeConfirmed` is false when the
+ * close watchdog settles first; retain the host and report the error then. Pass the calling test's `signal`:
  * a fail-fast cancellation otherwise leaves the body awaiting the nested run while
  * the worker tears down, so its `finally` never removes the host (#12924).
  */
@@ -170,13 +171,19 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     let done = false;
+    let closeConfirmed = false;
     const finish = (status) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       killProcessTree(child, { sweepGroup: true }); // reap any worker the run left behind
-      resolve({ status, stdout, stderr, error });
+      if (!closeConfirmed) {
+        const unconfirmed = new Error('fixture run process close unconfirmed');
+        error = error ? new AggregateError([error, unconfirmed], 'fixture run failed and process close is unconfirmed', { cause: error }) : unconfirmed;
+        error.code = 'FIXTURE_CLOSE_UNCONFIRMED';
+      }
+      resolve({ status, stdout, stderr, error, closeConfirmed });
     };
     const timer = setTimeout(() => {
       error = new Error(`fixture run exceeded ${ceilingMs}ms`);
@@ -191,8 +198,12 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
     };
     if (signal?.aborted) abort();
     else signal?.addEventListener('abort', abort, { once: true });
-    child.once('error', (spawnError) => { error = spawnError; finish(null); });
-    child.once('close', finish);
+    child.once('error', (spawnError) => {
+      error = spawnError;
+      // Failed spawns also emit close. Do not release the host on error alone.
+      setTimeout(() => finish(null), 2000);
+    });
+    child.once('close', status => { closeConfirmed = true; finish(status); });
     // Output ends at 'close', which a surviving worker holding the pipes defers:
     // sweep the group as soon as the leader exits, with a bounded wait for the pipes.
     child.once('exit', () => {

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:child_process', () => ({ spawn: vi.fn(), spawnSync: vi.fn() }));
 import { spawn } from 'node:child_process';
-import { runWatchConfigRestart } from './vitestTempRootFixture.js';
+import { runFixtureToCompletion, runWatchConfigRestart } from './vitestTempRootFixture.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -63,6 +63,18 @@ describe('watch fixture process settlement', () => {
     child.emit('exit', null, 'SIGKILL');
     child.emit('close', null, 'SIGKILL');
     await expect(result).resolves.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('keeps a nested run close watchdog failure distinct from confirmed cancellation', async () => {
+    fixture({ ready: false });
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const pending = runFixtureToCompletion({ args: [], options: {} }, 60000, { signal: controller.signal });
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await pending;
+    expect(result.closeConfirmed).toBe(false);
+    expect(result.error).toMatchObject({ code: 'FIXTURE_CLOSE_UNCONFIRMED', cause: { name: 'AbortError' } });
   });
 
   it('reports unconfirmed close as cleanup failure even after cancellation', async () => {
