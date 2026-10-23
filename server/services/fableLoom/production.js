@@ -515,7 +515,7 @@ async function prepareImageJob(run, asset) {
   const capability = fableLoomImageCapabilities({
     mode,
     model: mode === IMAGE_GEN_MODE.LOCAL ? provisionalModel : { id: cloud?.modelId || null },
-    inputBudget: maxInputImages(mode) || 4,
+    inputBudget: maxInputImages(mode, cloud?.modelId) || 4,
   });
   const conditioned = await conditionRequest(run, asset, 'image', capability);
   if (run.mode === 'exact_inputs') assertExactConditioning(recordedConditioning, conditioned?.visualConditioning);
