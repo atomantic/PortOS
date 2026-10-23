@@ -1152,7 +1152,7 @@ function monthlyUsageHistory(providers) {
       estimatedCost: totals.estimatedCost,
       tokens: totals.tokensIn + totals.tokensOut + totals.cacheReadTokens + totals.cacheWriteTokens,
       source: totals.source,
-      partial: today < end || firstDay > `${month}-01`,
+      partial: month === today.slice(0, 7) || firstDay > `${month}-01`,
     };
   }).filter(Boolean);
 }

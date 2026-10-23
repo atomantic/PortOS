@@ -76,6 +76,7 @@ describe('usage.js — summary', () => {
   });
 
   it('reports calendar months independently of the filter, preserving rollups and cache tokens', async () => {
+    vi.setSystemTime(new Date('2025-06-30T23:59:59Z'));
     readJSONFile.mockResolvedValueOnce(makeUsage({
       '2025-06-01': { byProvider: { example: { tokensIn: 10, tokensOut: 20, cacheReadTokens: 30, cacheWriteTokens: 40, source: 'measured' } } },
       '2025-06-10': { tokens: 5 },
