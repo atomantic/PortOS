@@ -167,7 +167,11 @@ export function liveFindings({ phases, inFlight, blocked, collectionEndpoint }) 
     }
   }
   for (const { phase, endpoint, reason, count } of blocked) findings.push({ phase, endpoint, reason: 'blocked-' + reason, count });
-  for (const [endpoint, count] of Object.entries(inFlight)) findings.push({ phase: 'end', endpoint, reason: 'in-flight-at-end', count });
+  // An open engine.io long-poll is the transport waiting by design; it stays in
+  // the report's inFlight rows but is not a defect.
+  for (const [endpoint, count] of Object.entries(inFlight)) {
+    if (endpoint !== '/socket.io/') findings.push({ phase: 'end', endpoint, reason: 'in-flight-at-end', count });
+  }
   return findings;
 }
 

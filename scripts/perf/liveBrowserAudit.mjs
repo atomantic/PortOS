@@ -29,11 +29,15 @@ const settled = () => document.getElementById('main-content') !== null
 // Useful content also requires no HTTP request still in flight (route chunks,
 // API reads, media): right after an in-app navigation the previous page's
 // settled DOM is still mounted, so the DOM check alone would pass early.
+// Socket.IO polling is excluded: an engine.io long-poll is held open by design
+// (it is transport, not page content) and would otherwise stall the gate
+// whenever the websocket upgrade is slow. Its bytes are still accounted.
 async function waitForUsefulContent(page, traffic, signal) {
   const deadline = performance.now() + STAGE_TIMEOUT_MS;
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   for (;;) {
-    if (traffic.pending() === 0 && await page.evaluate(settled)) return;
+    const contentPending = Object.keys(traffic.pendingByEndpoint()).some(endpoint => endpoint !== '/socket.io/');
+    if (!contentPending && await page.evaluate(settled)) return;
     if (performance.now() > deadline) throw new Error('useful content not reached');
     await delay(50, undefined, { signal });
   }

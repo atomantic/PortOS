@@ -69,7 +69,7 @@ describe('live audit redaction', () => {
         sibling: { '/api/image-gen/gallery': row({ requests: 1, httpErrors: 1 }) },
       },
       blocked: [{ phase: 'cold', reason: 'foreign-origin', endpoint: ':foreign-origin', count: 1 }],
-      inFlight: { '/api/settings': 1 },
+      inFlight: { '/api/settings': 1, '/socket.io/': 1 },
       collectionEndpoint: '/api/image-gen/gallery',
     });
     expect(findings.map(f => `${f.phase} ${f.reason}`)).toEqual(['sibling http-error', 'sibling sibling-collection-refetch',

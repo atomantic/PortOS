@@ -208,7 +208,7 @@ Chromium executable. Phases:
 - `cold` — fresh browser context, cache disabled, full load of `--route`.
   `usefulContentMs` ends when the route's collection response has finished, no
   loading skeleton (`role=status aria-busy=true`) remains, and no HTTP request
-  is in flight; then a two-second tail catches eager follow-ups.
+  other than Socket.IO polling (held open by design) is in flight; then a two-second tail catches eager follow-ups.
 - `sibling` — in-app navigation (a visible link, else the data router via
   history) to `--sibling`, with the same completed-data rule. Refetching the
   route's collection here is a finding.
@@ -218,10 +218,15 @@ Chromium executable. Phases:
 Per phase and endpoint pattern the report holds requests, completion, failure,
 cancellation, HTTP errors, duplicates, overlapping duplicates, encoded/decoded
 bytes and WebSocket frames/payload bytes, plus phase `totals`, `inFlight`
-requests at the end and `blocked` requests. Findings: `http-error`,
-`request-failed`, `overlapping-duplicate-request`, `sibling-collection-refetch`,
-`blocked-foreign-origin`, `blocked-mutation`, `in-flight-at-end` and
-`browser-stage-<phase>`. Exit 0 = measured with no findings, 1 = findings or a
+requests at the end and `blocked` requests. Findings:
+
+- traffic: `http-error`, `request-failed`, `overlapping-duplicate-request`,
+  `sibling-collection-refetch`, `blocked-foreign-origin`, `blocked-mutation`,
+  `in-flight-at-end` (Socket.IO polling excluded), and `collection-http-status` (the route's collection
+  response was not 2xx);
+- runner: `browser-stage-<phase>` (a measurement stage broke), `browser-setup`
+  (the context or page could not be prepared), `context-cleanup` and `cleanup`
+  (the context or browser did not close). Exit 0 = measured with no findings, 1 = findings or a
 failed stage, 2 = UNVERIFIED.
 
 ### Transport and authority
