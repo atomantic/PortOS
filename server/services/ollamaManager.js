@@ -41,10 +41,6 @@ import { compareSemver } from '../lib/versionUtils.js'
 import { createSingleFlight } from '../lib/singleFlight.js'
 import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
 import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
-import {
-  awaitStagingRelease, blobStoreSignature, createImportStaging, findImportStaging, removeImportStaging,
-  runSupervisedOllamaCreate, stagedFilesComplete, sweepImportStaging, updateImportStaging
-} from './ollamaSafetensorsImport.js'
 
 const execFileAsync = promisify(execFile)
 const AVAILABILITY_CACHE_TTL_MS = 30_000
@@ -1637,6 +1633,11 @@ const heldImportResult = (modelId, error, reason) => ({
 })
 
 async function runSafetensorsImport({ modelId, repo, subdir, files, headers, onProgress }) {
+  // Ordinary daemon and model reads need none of the staged-import lifecycle.
+  const {
+    awaitStagingRelease, blobStoreSignature, createImportStaging, findImportStaging, removeImportStaging,
+    runSupervisedOllamaCreate, stagedFilesComplete, sweepImportStaging, updateImportStaging
+  } = await import('./ollamaSafetensorsImport.js')
   let tempRoot = null
   let reuse = false
   // A staging directory from an earlier attempt (a stalled create, or a

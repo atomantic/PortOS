@@ -284,6 +284,10 @@ describe('instance identity stays a leaf (#6836)', () => {
 // [entry, target, why, specifier] — same first three columns as NARROWED above,
 // plus the specifier the call site must still name in its `await import()`.
 const DEFERRED = [
+  ['services/ollamaManager.js', 'services/ollamaSafetensorsImport.js',
+    'loads staging and child supervision only for a curated Safetensors import', './ollamaSafetensorsImport.js'],
+  ['services/aiProvider.js', 'services/providerExecutionReadiness.js',
+    'loads managed runtime readiness only for an actual inference call', './providerExecutionReadiness.js'],
   ['services/codeReview.js', 'services/lmStudioManager.js',
     'reads the live endpoint only for a selected LM Studio review', './lmStudioManager.js'],
   ['services/codeReview.js', 'services/ollamaManager.js',
@@ -346,6 +350,8 @@ describe('deferred imports stay deferred (#6156)', () => {
   // Positive control, mirroring the one above: these targets are real modules
   // with real graphs, so a resolver gap can't be what makes the negatives pass.
   it('still sees the deferred modules from their own entry points', () => {
+    expect(reaches('services/ollamaSafetensorsImport.js', 'lib/openFileHolders.js')).toBe(true);
+    expect(reaches('services/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
     expect(reaches('services/persistentMindAdapter.js', 'services/cosToolRegistry.js')).toBe(true);
     expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
   });
