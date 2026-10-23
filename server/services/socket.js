@@ -930,6 +930,9 @@ function setupFableLoomRunForwarding() {
   fableLoomRunEvents.on('editorial', run => {
     broadcastToSet(fableLoomSubscribers, 'fableloom:editorial:run', run);
   });
+  fableLoomRunEvents.on('shots', run => {
+    broadcastToSet(fableLoomSubscribers, 'fableloom:shots:run', run);
+  });
   fableLoomRunEvents.on('production', run => {
     broadcastToSet(fableLoomSubscribers, 'fableloom:production:run', run);
   });

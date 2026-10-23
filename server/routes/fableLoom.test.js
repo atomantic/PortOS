@@ -54,6 +54,8 @@ vi.mock('../services/fableLoom/index.js', () => ({
   reviewEpisodeContinuity: vi.fn(),
 }));
 
+vi.mock('../services/fableLoom/shotRuns.js', () => ({ startEpisodeShotRun: vi.fn(), getEpisodeShotRun: vi.fn(), cancelEpisodeShotRun: vi.fn() }));
+import * as shotRuns from '../services/fableLoom/shotRuns.js';
 import * as fableLoom from '../services/fableLoom/index.js';
 import routes from './fableLoom.js';
 
@@ -614,4 +616,19 @@ describe('FableLoom routes', () => {
       expect(fableLoom.reviewEpisodeContinuity).toHaveBeenCalledWith('loom-1', 'ep-1');
     });
   });
+});
+
+it('starts detached shot planning, validates resume, and exposes reattach/cancel', async () => {
+  const run = { id: 'shots-example', status: 'running' };
+  shotRuns.startEpisodeShotRun.mockResolvedValue(run);
+  shotRuns.getEpisodeShotRun.mockResolvedValue(run);
+  shotRuns.cancelEpisodeShotRun.mockResolvedValue({ ...run, status: 'canceling' });
+  const base = '/api/fableloom/loom-1/episodes/ep-1/shots';
+  const started = await request(makeApp()).post(`${base}/start`).send({ resume: true });
+  expect(started.status).toBe(202);
+  expect(started.body).toEqual(run);
+  expect(shotRuns.startEpisodeShotRun).toHaveBeenCalledWith('loom-1', 'ep-1', expect.objectContaining({ resume: true }));
+  expect((await request(makeApp()).post(`${base}/start`).send({ resume: 'yes' })).status).toBe(400);
+  expect((await request(makeApp()).get(`${base}/status`)).body).toEqual(run);
+  expect((await request(makeApp()).post(`${base}/cancel`)).body.status).toBe('canceling');
 });

@@ -540,6 +540,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   }),
   'fableloom:editorial:run': loomRunSnapshot(false),
   'fableloom:production:run': loomRunSnapshot(true),
+  'fableloom:shots:run': loomRunSnapshot(false),
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),

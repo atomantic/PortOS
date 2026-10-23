@@ -1027,6 +1027,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/fableloom/:id/playtest',
   'POST /api/fableloom/:id/episodes/:episodeId/weave',
   'POST /api/fableloom/:id/episodes/:episodeId/shots/plan',
+  'POST /api/fableloom/:id/episodes/:episodeId/shots/start',
   'POST /api/fableloom/:id/episodes/:episodeId/outline/generate',
   'POST /api/fableloom/:id/episodes/:episodeId/outline/review',
   'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/branch',

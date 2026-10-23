@@ -1100,3 +1100,5 @@ recent-retirements display list. Its keys hash the exact archive path and releas
 identity; values preserve the original receipt timestamp. This operational
 recovery evidence prevents an interrupted journal replay from becoming fresh
 retirement evidence after the display row has aged out. It has no TTL purge.
+
+FableLoom shot-planning run checkpoints live in machine-local `data/fableloom-shot-runs/` JSON journals (atomic writes, one latest run per story/episode). They preserve drafts, review verdicts and feedback across restarts; they do not federate. Reading an interrupted run marks it failed without starting a provider call. Explicit resume uses the saved provider/guidance and rejects changed source revisions. Story records remain PostgreSQL-primary.

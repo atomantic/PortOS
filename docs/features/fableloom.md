@@ -418,3 +418,14 @@ opens its own session, so whether an earlier clip is still addressable is
 Reactor's decision: a rejected ID fails that render with a message naming the
 continuation (episodes re-establish the shot fresh instead). A continuation and
 a starting image are mutually exclusive.
+
+
+### Recoverable timed-shot planning
+
+The shot planner starts a background run with `POST /api/fableloom/:id/episodes/:episodeId/shots/start`.
+`GET .../shots/status` reattaches to its latest state; `POST .../shots/cancel` stops after the active provider call.
+The UI receives `fableloom:shots:run` snapshots and reloads status on reconnect. The legacy `POST .../shots/plan` remains synchronous for existing callers.
+
+Draft and review run on one source scene at a time with the episode's compact graph digest. A final text consistency review receives the complete shot plan and graph, without the complete teleplay. Provider timeout settings remain authoritative; large inputs show a warning. Stage failures name the stage, round, scene and provider.
+
+Each draft and review is saved before the next call. After a restart the run is reported failed with those steps preserved; no AI work starts at boot. Resume sends `{ "resume": true }` to the start endpoint, retaining the original route, direction and apply choice, and reuses completed steps. Changed episodes require a fresh plan. New previews explicitly start a fresh run. Applying still requires a complete, validated, reviewed plan matching the episode revision; cancellation prevents application after an in-flight call.
