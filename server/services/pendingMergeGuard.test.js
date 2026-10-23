@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,7 @@ import { preparePendingMergeGuard, pendingMergeGuardCurrent } from './pendingMer
 
 const roots = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
@@ -26,7 +27,7 @@ for (const arg of process.argv.slice(2)) { switch (arg) {
   case '--guards-only': break;
   case '--merged-with': break;
 } }
-console.log(JSON.stringify({ args: process.argv.slice(2), memo: process.env.PORTOS_TEST_MEMO }));
+console.log(JSON.stringify({ args: process.argv.slice(2), memo: process.env.PORTOS_TEST_MEMO, token: process.env.PORTOS_API_TOKEN || null }));
 // Stand in for a structural guard which is red only on the combined inputs.
 const base = execFileSync('git', ['show', process.argv[4] + ':base-contract'], { encoding: 'utf8' });
 if (base.trim() === 'strict' && ${fail}) {
@@ -55,11 +56,12 @@ if (base.trim() === 'strict' && ${fail}) {
 
 describe('pending merged-tree validation', () => {
   it('fetches the live base, pins both full SHAs, and preserves the clean claim checkout', async () => {
+    vi.stubEnv('PORTOS_API_TOKEN', 'example-secret-not-for-tests');
     const { input, git, worktreePath, headSha, baseSha } = await fixture();
     const result = await preparePendingMergeGuard(input);
     expect(result).toMatchObject({ ok: true, evidence: { headSha, baseSha, baseBranch: 'main' } });
     const log = await readFile(result.evidence.logPath, 'utf8');
-    expect(log).toContain(JSON.stringify({ args: ['--guards-only', '--merged-with', baseSha], memo: 'off' }));
+    expect(log).toContain(JSON.stringify({ args: ['--guards-only', '--merged-with', baseSha], memo: 'off', token: null }));
     expect(await git(['rev-parse', 'HEAD'], worktreePath)).toBe(headSha);
     expect(await git(['status', '--porcelain'], worktreePath)).toBe('');
     expect(await pendingMergeGuardCurrent(result.evidence, input.prView, input.readDefault)).toBe(true);

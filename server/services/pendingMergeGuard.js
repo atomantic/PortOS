@@ -7,6 +7,10 @@ import { execGit } from '../lib/execGit.js';
 const run = promisify(execFile);
 const SHA = /^[0-9a-f]{40}$/;
 const SCRIPT = 'scripts/pregate.js';
+const GUARD_ENV_KEYS = new Set([
+  'PATH', 'Path', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'SystemRoot', 'SystemDrive',
+  'ComSpec', 'PATHEXT', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LANGUAGE', 'TZ', 'PORTOS_PREGATE_MAX_WORKERS',
+]);
 const readOptional = path => readFile(path, 'utf8').catch(error => {
   if (error.code === 'ENOENT') return null;
   throw error;
@@ -54,7 +58,10 @@ export async function preparePendingMergeGuard({ app, entry, binding, prView, re
   const gitPath = (await execGit(['rev-parse', '--git-path', `portos-merged-guards-${headSha}-${base.sha}.log`], worktreePath)).stdout.trim();
   const evidence = { headSha, baseSha: base.sha, baseBranch: base.name, logPath: resolve(worktreePath, gitPath) };
   const result = await run(process.execPath, [SCRIPT, '--guards-only', '--merged-with', base.sha], {
-    cwd: worktreePath, env: { ...process.env, PORTOS_TEST_MEMO: 'off' },
+    cwd: worktreePath, env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => GUARD_ENV_KEYS.has(key) || key.startsWith('LC_'))),
+      PORTOS_TEST_MEMO: 'off',
+    },
     timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
   }).then(value => ({ ...value, ok: true }), error => ({
     ok: false, stdout: error.stdout || '', stderr: error.stderr || error.message,

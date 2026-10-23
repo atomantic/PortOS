@@ -25,6 +25,8 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { scrubSecretTokens } from '../lib/secretText.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -655,9 +657,6 @@ async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeE
     ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
   }).catch(() => ({ ok: false, code: 'security-action-assessment-error' }));
   const assessed = assessment.ok ? NOT_ASSESSED : await describeWithheldAssessment(assessment, expectedHeadSha);
-  // Re-read the durable owner's policy inside admission, after remote
-  // assessment and immediately before merge. Waiting CI is not authority to
-  // ignore a later manual hold or a changed review requirement.
   if (assessment.ok && guard) {
     const { pendingMergeGuardCurrent } = await import('./pendingMergeGuard.js');
     const livePr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
@@ -666,6 +665,9 @@ async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeE
       return { merge: { guardDeferred: true }, assessed };
     }
   }
+  // Re-read the durable owner's policy inside admission, after remote
+  // assessment and immediately before merge. Waiting CI is not authority to
+  // ignore a later manual hold or a changed review requirement.
   const ownerPolicy = await currentHandoffOwnerPolicy(binding);
   if (ownerPolicy) return { merge: ownerPolicy, assessed };
   const merge = assessment.ok
@@ -676,8 +678,6 @@ async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeE
   return { merge, assessed };
 }
 
-// Answers `{ step }` when the entry is finished this sweep, otherwise
-// `{ assessed }` for the settle path.
 async function readPendingDefault({ origin, repoSpec, forgeExec }) {
   const name = await getDefaultBranch(repoSpec, forgeExec);
   if (!name) return null;
@@ -687,13 +687,19 @@ async function readPendingDefault({ origin, repoSpec, forgeExec }) {
   return sha ? { name, sha: sha.trim() } : null;
 }
 
+// Answers `{ step }` when the entry is finished this sweep, otherwise
+// `{ assessed }` for the settle path.
 async function attemptAdmittedMerge(entry, binding, prView, ctx) {
   const ownerPolicy = await currentHandoffOwnerPolicy(binding);
   if (ownerPolicy) return { step: await holdForOwner(ctx.app, entry, binding, ownerPolicy.ownerBlocked) };
   const { preparePendingMergeGuard } = await import('./pendingMergeGuard.js');
   const guard = await preparePendingMergeGuard({ app: ctx.app, entry, binding, prView,
     readDefault: () => readPendingDefault(ctx), env: ctx.forgeExec.env,
-  }).catch(() => ({ ok: false, reason: 'merged-tree-validation-unavailable' }));
+  }).catch(error => {
+    const detail = redactPii(scrubSecretTokens(String(error.message))).replace(/[\r\n]+/g, ' ').slice(0, 500);
+    console.error(`❌ Pending PR #${entry.prNumber} merged-tree validation unavailable: ${detail}`);
+    return { ok: false, reason: 'merged-tree-validation-unavailable', evidence: { detail } };
+  });
   if (!guard.ok) {
     const retained = { ...entry, mergedTreeGuard: { ...guard.evidence, reason: guard.reason }, attention: guard.reason };
     if (guard.reason === 'merged-tree-guards-failed') {

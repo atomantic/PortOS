@@ -687,6 +687,16 @@ describe('merge-only PR watcher', () => {
       expect(addNotificationMock).toHaveBeenCalledTimes(1);
     });
 
+    it('retains an actionable diagnostic when validation prerequisites throw', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockRejectedValue(new Error('git fetch failed: repository unavailable'));
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ handoff,
+        mergedTreeGuard: { reason: 'merged-tree-validation-unavailable', detail: 'git fetch failed: repository unavailable' } });
+      expect(mergePrMock).not.toHaveBeenCalled();
+      expect(admissionState.state.mergeAdmissions).toEqual({});
+    });
+
     it('runs the guard outside admission and merges the unchanged reviewed head inside it', async () => {
       const { app } = setup();
       prepareGuardMock.mockImplementation(async () => {
