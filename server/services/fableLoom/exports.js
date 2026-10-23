@@ -1,0 +1,391 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { PATHS } from '../../lib/paths.js';
+import { atomicWrite, ensureDir, rmGuarded } from '../../lib/fileCore.js';
+import { readJSONFile } from '../../lib/jsonIo.js';
+import { canonicalStringify } from '../../lib/objects.js';
+import { isPathInsideDir } from '../../lib/pathSafety.js';
+import { createZip } from '../../lib/zipWriter.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { ServerError } from '../../lib/errorHandler.js';
+import { exportOptionsSchema } from '../../lib/fableLoomValidation.js';
+import { computeGraphLayers } from '../../lib/fableLoomGraph.js';
+import {
+  FABLELOOM_EXPORT_LIMITS, FABLELOOM_EXPORT_SCHEMA_VERSION,
+  fableLoomExportAssetRequests, fableLoomExportOccupancy, inspectFableLoomExport,
+  projectFableLoomExportManifest, projectFableLoomExportNode,
+} from '../../lib/fableLoomExport.js';
+import { getUniverse } from '../universeBuilder.js';
+import { loadHistory } from '../videoGen/history.js';
+import { getLoom } from './records.js';
+import { prepareFableLoomExportMedia, readFableLoomExportSource } from './exportMedia.js';
+
+const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+const active = new Map();
+const downloads = new Map();
+let admissionTail = Promise.resolve();
+let workerTail = Promise.resolve();
+const root = () => join(PATHS.data, 'cache', 'fableloom-exports');
+const jobDirectory = id => join(root(), id);
+const jobFile = id => join(jobDirectory(id), 'job.json');
+const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const json = value => canonicalStringify(value) + '\n';
+const error = (code, message, status = 422) => new ServerError(message, { status, code });
+const missing = () => error('NOT_FOUND', 'Export job not found for this loom.', 404);
+const invalidState = () => error('EXPORT_STATE_INVALID', 'Export state is unreadable or from an unsupported version.', 503);
+const absentJob = Symbol('absent-export-job');
+const save = job => atomicWrite(jobFile(job.jobId), job);
+function serializeAdmission(action) {
+  const pending = admissionTail.then(action);
+  admissionTail = pending.catch(() => {});
+  return pending;
+}
+const portableLabel = value => typeof value === 'string'
+  && /^[A-Za-z0-9][A-Za-z0-9._/@:-]{0,199}$/.test(value)
+  && !/^(file:|[A-Za-z]:)/i.test(value) && !value.includes('://') ? value : null;
+
+function publicJob(job) {
+  return {
+    jobId: job.jobId, status: job.status, progress: job.progress, findings: job.findings,
+    expiresAt: new Date(job.createdAt + FABLELOOM_EXPORT_LIMITS.maxAgeMs).toISOString(),
+    ...(job.error ? { error: job.error } : {}),
+    ...(job.sizeReport ? { sizeReport: job.sizeReport } : {}),
+    ...(job.status === 'completed' ? {
+      downloadUrl: `/api/fableloom/${encodeURIComponent(job.loomId)}/export/${job.jobId}/download`,
+    } : {}),
+  };
+}
+
+async function readJob(id, loomId = null) {
+  if (!uuid.test(id)) throw missing();
+  const job = await readJSONFile(jobFile(id), absentJob, { strict: true, logError: false }).catch(() => {
+    throw invalidState();
+  });
+  if (job === absentJob) return null;
+  if (!job || job.version !== 1 || job.jobId !== id || typeof job.loomId !== 'string'
+    || !Number.isSafeInteger(job.createdAt)
+    || !Number.isFinite(new Date(job.createdAt + FABLELOOM_EXPORT_LIMITS.maxAgeMs).getTime())
+    || !Array.isArray(job.findings) || !job.progress
+    || ![job.progress.completed, job.progress.total].every(n => Number.isSafeInteger(n) && n >= 0)
+    || job.progress.completed > job.progress.total
+    || !['queued', 'validating', 'packing', 'completed', 'failed'].includes(job.status)) {
+    throw invalidState();
+  }
+  if (job.status === 'completed' && (!job.sizeReport
+    || !['mediaBytes', 'totalBytes', 'archiveBytes', 'mediaFiles'].every(k => Number.isSafeInteger(job.sizeReport[k]) && job.sizeReport[k] >= 0)
+    || job.sizeReport.archiveBytes === 0 || job.sizeReport.archiveBytes > FABLELOOM_EXPORT_LIMITS.maxPackageBytes
+    || !/^fableloom-[a-f0-9]{16}-v1\.zip$/.test(job.filename))) {
+    throw invalidState();
+  }
+  if (job.status === 'failed' && (typeof job.error?.code !== 'string' || typeof job.error?.message !== 'string')) throw invalidState();
+  if (loomId !== null && job.loomId !== loomId) throw missing();
+  if (!active.has(id) && !['completed', 'failed'].includes(job.status)) {
+    await rmGuarded(join(jobDirectory(id), 'work'), { recursive: true, force: true });
+    job.status = 'failed';
+    job.error = { code: 'EXPORT_INTERRUPTED', message: 'The server restarted during export. Start a new export.' };
+    await save(job);
+  }
+  return job;
+}
+
+async function prune() {
+  await ensureDir(root());
+  const entries = await readdir(root(), { withFileTypes: true });
+  const retained = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !uuid.test(entry.name) || active.has(entry.name)) continue;
+    const job = await readJob(entry.name);
+    if (!job) throw error('EXPORT_STATE_INVALID', 'An incomplete export directory needs recovery.', 503);
+    if (Date.now() - job.createdAt >= FABLELOOM_EXPORT_LIMITS.maxAgeMs && !downloads.has(entry.name)) {
+      await rmGuarded(jobDirectory(entry.name), { recursive: true, force: true });
+    } else retained.push(job);
+  }
+  retained.sort((a, b) => a.createdAt - b.createdAt || a.jobId.localeCompare(b.jobId));
+  while (retained.length + active.size >= FABLELOOM_EXPORT_LIMITS.maxJobs && retained.length) {
+    const index = retained.findIndex(job => !downloads.has(job.jobId));
+    if (index < 0) break;
+    const [oldest] = retained.splice(index, 1);
+    await rmGuarded(jobDirectory(oldest.jobId), { recursive: true, force: true });
+  }
+  if (active.size + retained.length >= FABLELOOM_EXPORT_LIMITS.maxJobs) {
+    throw error('EXPORT_QUEUE_FULL', 'Four exports are queued, running or being downloaded. Wait for one to finish.', 429);
+  }
+}
+
+function assetProvenance(loom, node, request) {
+  const assets = node.playbackAssets;
+  const perAsset = assets?.visualConditioningByAsset || {};
+  // Rendering a video replaces the node's latest manifest. Image attachment
+  // preserves exactly the current still's manifest in the per-asset map.
+  const imageConditioning = node.visualConditioning?.capability?.kind === 'image'
+    ? node.visualConditioning : Object.values(perAsset).find(m => m?.capability?.kind === 'image');
+  const typedVideo = perAsset[request.sourceId]?.capability?.kind === 'video'
+    ? perAsset[request.sourceId] : null;
+  const hasTypedPlayback = assets?.entryVideoHistoryId || assets?.holdLoopVideoHistoryIds?.length
+    || Object.keys(assets?.exitByTransition || {}).length;
+  const legacyVideo = !hasTypedPlayback && node.videoHistoryId === request.sourceId
+    && node.visualConditioning?.capability?.kind === 'video' ? node.visualConditioning : null;
+  const conditioning = request.kind === 'image' ? imageConditioning : typedVideo || legacyVideo;
+  const approved = request.kind === 'image' ? node.visualCanon?.storyboardImageApproved === true
+    : typeof loom.productionStatus?.deliveryApprovedAt === 'string'
+      && Number.isFinite(Date.parse(loom.productionStatus.deliveryApprovedAt));
+  const conditioningStatus = ['locked', 'draft', 'degraded'].includes(conditioning?.status)
+    ? conditioning.status : 'unknown';
+  const draftFlags = [
+    ...(!approved ? ['unapproved'] : []),
+    ...(conditioningStatus !== 'locked' ? [conditioningStatus] : []),
+  ];
+  return {
+    approved, conditioningStatus, draftFlags,
+    provider: portableLabel(conditioning?.render?.provider || conditioning?.capability?.backend),
+    model: portableLabel(conditioning?.render?.modelId || conditioning?.capability?.modelId),
+    parametersHash: hash(json(conditioning?.render?.parameters || {})),
+  };
+}
+
+/** Only this store retains media buffers; source-ID caches receive small descriptors. */
+function createMediaStore(maxBytes = FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
+  const files = new Map();
+  let byteLength = 0;
+  return {
+    add({ bytes, extension, durationMs }) {
+      if (bytes.length > FABLELOOM_EXPORT_LIMITS.maxAssetBytes) {
+        throw error('EXPORT_MEDIA_SIZE', 'Prepared media exceeds the 64 MiB asset limit.');
+      }
+      const sha256 = hash(bytes);
+      const file = `media/${sha256}.${extension}`;
+      if (!files.has(file)) {
+        if (byteLength + bytes.length > maxBytes) {
+          throw error('EXPORT_PACKAGE_SIZE', 'Media exceeds the 256 MiB package limit. Export fewer episodes.');
+        }
+        files.set(file, bytes);
+        byteLength += bytes.length;
+      }
+      return { file, sha256, durationMs };
+    },
+    entries: () => files.entries(),
+    get byteLength() { return byteLength; },
+    get size() { return files.size; },
+  };
+}
+
+const packageReadme = `# FableLoom portable package
+
+Package schema: 1.0.0. Playback runtime: 1.0.0 (see runtime-v1.md).
+
+Serve these files on your own static host. PortOS is an authoring tool and is
+never the public server, relay, or live resolver for this package.
+
+manifest.json contains the ordered episodes and reachable scene graphs. Media
+references name only media/<sha256>.<extension>, with durationMs and loopable.
+Entry clips auto-advance cut scenes; decision holds repeat until a valid choice.
+Exit clips are optional and keyed by transition id; absent exits cut directly.
+Occupancy intervals are milliseconds relative to that packaged clip.
+
+provenance.json records each media use, provider/model, parameter hash, approval
+state and draftFlags. An allowDraft export does not certify production approval.
+
+The source media profile strips metadata, encodes stills as PNG and stream-copies
+H.264 yuv420p / optional AAC into MP4. It does not resize, normalize loudness or
+transcode unsupported codecs. The player, character and voice opt-ins are not
+available in this package version. Your host owns free-text resolution, TTS and
+transport, following runtime-v1.md; no PortOS URL or credential is needed.
+`;
+
+async function build(job, snapshot, episodes, history, universe) {
+  job.status = 'validating';
+  job.findings = inspectFableLoomExport(snapshot, episodes, universe);
+  if (job.findings.some(f => f.severity === 'error')) {
+    throw error('EXPORT_VALIDATION_FAILED', 'Resolve the graph, outline and production findings before exporting.');
+  }
+  const requests = episodes.flatMap(episode => {
+    const reachable = computeGraphLayers(episode).depthById;
+    return episode.nodes.filter(n => reachable.has(n.id)).flatMap(node => (
+      fableLoomExportAssetRequests(node).map(request => ({ ...request, episode, node }))
+    ));
+  });
+  for (const request of requests) {
+    const provenance = assetProvenance(snapshot, request.node, request);
+    if (!request.sourceId) job.findings.push({
+      gate: 'media', severity: 'error', code: 'EXPORT_MEDIA_MISSING',
+      episodeId: request.episode.id, nodeId: request.node.id,
+      message: `A required ${request.role} asset is missing.`,
+    });
+    if (provenance.draftFlags.length) job.findings.push({
+      gate: 'approval', severity: job.options.allowDraft ? 'warning' : 'error',
+      code: 'EXPORT_ASSET_DRAFT', episodeId: request.episode.id, nodeId: request.node.id,
+      message: `The ${request.role} asset is unapproved or has draft, degraded or unknown provenance.`,
+    });
+  }
+  if (job.findings.some(f => f.severity === 'error')) {
+    throw error('EXPORT_VALIDATION_FAILED', 'Resolve missing media or approval findings, or explicitly allow draft assets.');
+  }
+  job.status = 'packing';
+  job.progress = { completed: 0, total: requests.length };
+  await save(job);
+  const directory = join(jobDirectory(job.jobId), 'work');
+  await ensureDir(directory);
+  const cache = new Map();
+  const media = createMediaStore();
+  const nodeAssets = new Map();
+  const provenance = [];
+  for (const request of requests) {
+    const key = `${request.kind}:${request.sourceId}`;
+    let prepared = cache.get(key);
+    if (!prepared) {
+      const filename = request.kind === 'image' ? request.sourceId : history.find(h => h.id === request.sourceId)?.filename;
+      if (!filename) throw error('EXPORT_MEDIA_MISSING', 'A referenced video history item is missing.');
+      const bytes = await readFableLoomExportSource(request.kind === 'image' ? PATHS.images : PATHS.videos, filename);
+      prepared = media.add(await prepareFableLoomExportMedia(bytes, request.kind, directory));
+      cache.set(key, prepared);
+    }
+    const occupancy = request.kind === 'video' ? fableLoomExportOccupancy(request.node, request.sourceId) : null;
+    if (request.node.interactionWindow?.enabled && request.role === 'hold'
+      && (!occupancy || !occupancy.safeForLiveVoice)) {
+      throw error('EXPORT_OCCUPANCY_UNSAFE', 'Live holds require a verified speech-safe audio occupancy manifest.');
+    }
+    if (occupancy && (occupancy.durationMs > prepared.durationMs
+      || ['characterDialogue', 'music', 'effects'].some(key => occupancy[key].some(i => i.endMs > prepared.durationMs)))) {
+      throw error('EXPORT_OCCUPANCY_INVALID', 'An audio occupancy interval exceeds its clip duration.');
+    }
+    const binding = {
+      ...request,
+      playback: { file: prepared.file, sha256: prepared.sha256, durationMs: prepared.durationMs,
+        loopable: request.role === 'hold', ...(occupancy ? { audioOccupancy: occupancy } : {}) },
+    };
+    const nodeKey = `${request.episode.id}:${request.node.id}`;
+    if (!nodeAssets.has(nodeKey)) nodeAssets.set(nodeKey, []);
+    nodeAssets.get(nodeKey).push(binding);
+    provenance.push({
+      episodeId: request.episode.id, nodeId: request.node.id, role: request.role,
+      ...(request.transitionId ? { transitionId: request.transitionId } : {}),
+      ...(request.index !== undefined ? { index: request.index } : {}),
+      file: prepared.file, sha256: prepared.sha256, ...assetProvenance(snapshot, request.node, request),
+    });
+    job.progress.completed++;
+    await save(job);
+  }
+  const portos = JSON.parse(await readFile(new URL('../../../package.json', import.meta.url), 'utf8'));
+  const manifest = projectFableLoomExportManifest(snapshot, episodes.map(episode => ({
+    id: episode.id, number: episode.number, title: episode.title, synopsis: episode.synopsis, startNodeId: episode.startNodeId,
+    nodes: episode.nodes.filter(n => nodeAssets.has(`${episode.id}:${n.id}`))
+      .map(node => projectFableLoomExportNode(node, snapshot, nodeAssets.get(`${episode.id}:${node.id}`))),
+  })), portos.version);
+  const entries = [
+    { name: 'manifest.json', data: json(manifest) },
+    { name: 'provenance.json', data: json({ schemaVersion: FABLELOOM_EXPORT_SCHEMA_VERSION, assets: provenance }) },
+    { name: 'README.md', data: packageReadme },
+    { name: 'runtime-v1.md', data: await readFile(new URL('../../../docs/features/fableloom-runtime-v1.md', import.meta.url)) },
+    ...[...media.entries()].map(([name, data]) => ({ name, data })),
+  ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const totalBytes = entries.reduce((n, e) => n + Buffer.byteLength(e.data), 0);
+  if (totalBytes > FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
+    throw error('EXPORT_PACKAGE_SIZE', 'Package exceeds the 256 MiB limit. Export fewer episodes.');
+  }
+  const archive = createZip(entries);
+  if (archive.length > FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
+    throw error('EXPORT_PACKAGE_SIZE', 'ZIP exceeds the 256 MiB limit. Export fewer episodes.');
+  }
+  await atomicWrite(join(jobDirectory(job.jobId), 'package.zip'), archive);
+  job.filename = `fableloom-${hash(json(manifest)).slice(0, 16)}-v1.zip`;
+  job.sizeReport = { mediaBytes: media.byteLength, totalBytes, archiveBytes: archive.length, mediaFiles: media.size };
+  job.status = 'completed';
+}
+
+async function run(job, context, permit) {
+  let settled = false;
+  try {
+    try {
+      await build(job, context.snapshot, context.episodes, context.history, context.universe);
+    } catch (failure) {
+      job.status = 'failed';
+      job.error = failure.code?.startsWith('EXPORT_')
+        ? { code: failure.code, message: failure.message }
+        : { code: 'EXPORT_MEDIA_INVALID', message: 'A source media file is missing, unreadable or invalid. Check its attached media and start a new export.' };
+    }
+    await rmGuarded(join(jobDirectory(job.jobId), 'work'), { recursive: true, force: true });
+    await save(job);
+    settled = true;
+  } finally {
+    active.delete(job.jobId);
+    if (settled) await permit.finish();
+    else permit.markUnsettled();
+  }
+}
+
+export async function startFableLoomExport(loomId, input = {}) {
+  const options = exportOptionsSchema.parse(input);
+  if (options.includePlayer || options.includeCharacters || options.includeVoice || options.mediaProfile !== 'source') {
+    throw error('EXPORT_OPTION_UNSUPPORTED', 'This exporter supports the source profile without player, character or voice packages.', 400);
+  }
+  const jobId = randomUUID();
+  const permit = maintenance.admit('media', jobId);
+  try {
+    const context = await serializeAdmission(async () => {
+      const loom = await getLoom(loomId);
+      if (!loom) throw error('NOT_FOUND', 'Loom not found.', 404);
+      const ids = new Set(options.episodeIds ?? loom.episodes.map(e => e.id));
+      if (!ids.size || loom.episodes.filter(e => ids.has(e.id)).length !== ids.size) {
+        throw error('EXPORT_EPISODES_INVALID', 'Select existing episodes from this loom.', 400);
+      }
+      await prune();
+      const snapshot = structuredClone(loom);
+      const episodes = snapshot.episodes.filter(e => ids.has(e.id));
+      const sourceHistory = await loadHistory();
+      if (!Array.isArray(sourceHistory)) throw error('EXPORT_MEDIA_INVALID', 'Video history is unreadable.');
+      const videoIds = new Set(episodes.flatMap(e => e.nodes.flatMap(n => fableLoomExportAssetRequests(n)
+        .filter(a => a.kind === 'video').map(a => a.sourceId))));
+      const history = sourceHistory.filter(h => h && videoIds.has(h.id)).map(({ id, filename }) => ({ id, filename }));
+      const universe = snapshot.universeId ? structuredClone(await getUniverse(snapshot.universeId)) : null;
+      const job = { version: 1, jobId, loomId, createdAt: Date.now(), status: 'queued', options,
+        progress: { completed: 0, total: 0 }, findings: [] };
+      await save(job);
+      active.set(jobId, job);
+      return { job, snapshot, episodes, history, universe };
+    });
+    const pending = workerTail.then(() => permit.run(() => run(context.job, context, permit)));
+    workerTail = pending.catch(() => { console.error('❌ FableLoom export persistence failed; maintenance ownership is retained.'); });
+    return { jobId };
+  } catch (failure) {
+    await permit.finish();
+    throw failure;
+  }
+}
+
+export async function getFableLoomExport(loomId, jobId) {
+  if (!await getLoom(loomId)) throw missing();
+  const job = await readJob(jobId, loomId);
+  if (!job || job.loomId !== loomId) throw missing();
+  if (Date.now() - job.createdAt >= FABLELOOM_EXPORT_LIMITS.maxAgeMs) {
+    throw error('EXPORT_EXPIRED', 'This export has expired. Start a new export.', 410);
+  }
+  return publicJob(job);
+}
+
+export async function getFableLoomExportDownload(loomId, jobId) {
+  return serializeAdmission(async () => {
+    const job = await getFableLoomExport(loomId, jobId);
+    if (job.status !== 'completed') throw error('EXPORT_NOT_READY', 'The export has not completed successfully.', 409);
+    const [path, base] = await Promise.all([
+      realpath(join(jobDirectory(jobId), 'package.zip')).catch(() => null),
+      realpath(jobDirectory(jobId)).catch(() => null),
+    ]);
+    const info = path ? await stat(path).catch(() => null) : null;
+    if (!path || !base || !info?.isFile() || !isPathInsideDir(base, path) || info.size !== job.sizeReport.archiveBytes) {
+      throw error('EXPORT_ARTIFACT_INVALID', 'The export artifact is unavailable. Start a new export.', 409);
+    }
+    const stored = await readJob(jobId);
+    downloads.set(jobId, (downloads.get(jobId) || 0) + 1);
+    let released = false;
+    return { path, filename: stored.filename, release: () => {
+      if (released) return;
+      released = true;
+      const remaining = downloads.get(jobId) - 1;
+      if (remaining) downloads.set(jobId, remaining);
+      else downloads.delete(jobId);
+    } };
+  });
+}
+
+export const __testing = { createMediaStore, drain: async () => { await admissionTail; await workerTail; } };

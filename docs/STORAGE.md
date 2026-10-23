@@ -371,6 +371,16 @@ goal data together; interrupted intents remain retryable after restore.
 
 ## `ephemeral-file` — queues / uploads / transient state
 
+- FableLoom portable exports — `data/cache/fableloom-exports/<jobId>/` holds
+  atomic job status, temporary media snapshots and the derived ZIP. The authored
+  loom remains db-primary; these jobs are regenerable, keyed downloads with no
+  search, sync cursor or relational authority. Jobs expire after 24 hours, retain
+  at most four artifacts (256 MiB per ZIP, 64 MiB per source/prepared asset), and
+  prepare one package at a time. A restart makes interrupted jobs visibly failed;
+  it never resumes generation or publishes partial work. They never federate,
+  need no seed/migration, and the existing anchored `/cache/` backup exclusion
+  applies. See [FableLoom export v1](./features/fableloom-export-v1.md).
+
 **Definition.** Regenerable, short-lived runtime state. Losing it costs at most an in-flight job or a cache rebuild — never durable user data. It should never be the only home for anything the user expects to persist.
 
 **When to use.** Upload staging, in-flight job queues, caches, and scratch state. If a record must survive a reinstall or be queryable across records, it is **not** `ephemeral-file` — promote it.

@@ -132,6 +132,7 @@ export * as editorial from './editorial/index.js';
 export * from './familySettingsMap.js';
 export * from './fableLoomBoard.js';
 export * from './fableLoomGraph.js';
+export * from './fableLoomExport.js';
 export * from './cameraMovements.js';
 export * from './fableLoomCameraMovements.js';
 export * from './fableLoomPlayback.js';

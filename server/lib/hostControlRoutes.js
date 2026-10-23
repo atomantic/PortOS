@@ -1014,6 +1014,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Autopilots and support requests that queue CoS agents.
   'POST /api/pipeline/series/:id/autopilot/start',
   'POST /api/fableloom/:id/editorial/autopilot/start',
+  // Export preparation decodes authored media; download releases the resulting
+  // private package. Both preserve authenticated delegated agent authority.
+  'POST /api/fableloom/:id/export',
+  'GET /api/fableloom/:id/export/:jobId/download',
   'POST /api/image-video/models/support-request',
 
   // FableLoom authoring and production (#10668) can dispatch CLI/TUI agents,
