@@ -25,7 +25,7 @@ describe('CoS repositories on the dev file backend', () => {
   it('reload task rows written before a restart', async () => {
     const first = await __makeMemoryCosTaskBackend({ persist: true });
     const task = { id: 'task-example-1', status: 'pending', priority: 'MEDIUM', priorityValue: 2, description: 'Example', metadata: {} };
-    await first.apply('user', { upserts: [{ task, position: 0 }], deletes: [] });
+    await first.apply('user', { upserts: [{ task, position: 0 }], deletes: [], expectedVersions: { user: 0 } });
     const restarted = await __makeMemoryCosTaskBackend({ persist: true });
     expect((await restarted.loadWorkingSet('user')).rows.map((row) => row.task.id)).toEqual([task.id]);
     expect(await restarted.readVersion('user')).toBe(1);

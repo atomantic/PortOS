@@ -129,9 +129,9 @@ const baseState = () => ({ agents: {} });
 // Test-side access to what is stored, bypassing the store's cache and the
 // failure/after-write hooks above (they wrap only the store's own saves).
 const seed = async (source, tasks) => {
-  const { rows } = await actualRepository.loadTaskWorkingSet(source);
+  const { rows, version } = await actualRepository.loadTaskWorkingSet(source);
   const plan = planListSave({ previous: rows, next: tasks, source });
-  await actualRepository.applyTaskListSave(source, plan);
+  await actualRepository.applyTaskListSave(source, { ...plan, expectedVersions: { [source]: version } });
   __resetTaskCache();
 };
 const stored = async (source) => (await actualRepository.loadTaskWorkingSet(source)).rows.map((row) => row.task);
