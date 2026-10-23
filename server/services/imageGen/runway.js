@@ -12,7 +12,7 @@ import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import {
-  RUNWAY_IMAGE_DEFAULT_MODEL, getRunwayImageModel, buildRunwayImageRequest, runwayReferenceTags,
+  RUNWAY_IMAGE_DEFAULT_MODEL, getRunwayImageModel, buildRunwayImageRequest, runwayReferencePayload, runwayReferenceTags,
 } from '../../lib/runwayImageModels.js';
 import {
   broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent,
@@ -74,18 +74,19 @@ export async function checkConnection({ model = RUNWAY_IMAGE_DEFAULT_MODEL } = {
   return { connected: Boolean(apiKey), mode: MODE, model, ...(apiKey ? {} : { reason: noKeyReason }) };
 }
 
-export function runwayImageSentPrompt({ prompt = '', negativePrompt, inputImages, initImageStrength, visualConditioning, promptAdditions = [] }) {
+export function runwayImageSentPrompt({ prompt = '', negativePrompt, inputImages, initImageStrength, visualConditioning, promptAdditions = [], referenceMode = 'tagged' }) {
   const references = runwayReferenceTags(inputImages.paths.map((path) => {
     const asset = visualConditioning?.assets?.find((item) => item.filename === basename(path));
     return { filename: basename(path), ...(asset || {}), path };
   }));
-  const roles = references.map((ref) => {
+  const ordered = referenceMode === 'ordered';
+  const roles = references.map((ref, index) => {
     const role = ref.path === inputImages.initPath
       ? `source image to edit — ${describeFidelity(initImageStrength)}`
       : ref.role || 'visual reference';
-    return `@${ref.tag}: ${role}${ref.label ? ` for ${ref.label}` : ''}.`;
+    return `${ordered ? `Reference image ${index + 1}` : `@${ref.tag}`}: ${role}${ref.label ? ` for ${ref.label}` : ''}.`;
   }).join('\n');
-  const added = [promptAddition('reference-tags', 'Tagged Runway reference images', roles), promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt ? `Avoid: ${negativePrompt}` : '')];
+  const added = [promptAddition('reference-tags', ordered ? 'Ordered Runway reference images' : 'Tagged Runway reference images', roles), promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt ? `Avoid: ${negativePrompt}` : '')];
   const fullPrompt = [prompt, ...added.map((item) => item?.text).filter(Boolean)].join('\n\n');
   return { fullPrompt, references, record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }), added }) };
 }
@@ -135,8 +136,8 @@ async function generateImagePrepared({
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
-  if (inputImages.paths.length !== (initImagePath ? 1 : 0) + referenceImagePaths.length) throw new ServerError('Runway reference inputs are unavailable or exceed the three-image limit', { status: 400, code: 'RUNWAY_IMAGE_INPUT_INVALID' });
-  const { fullPrompt, references, record: sentRecord } = runwayImageSentPrompt({ prompt, negativePrompt, inputImages, initImageStrength, visualConditioning, promptAdditions });
+  if (inputImages.paths.length !== (initImagePath ? 1 : 0) + referenceImagePaths.length) throw new ServerError("Runway reference inputs are unavailable or exceed the selected model's reference limit", { status: 400, code: 'RUNWAY_IMAGE_INPUT_INVALID' });
+  const { fullPrompt, references, record: sentRecord } = runwayImageSentPrompt({ prompt, negativePrompt, inputImages, initImageStrength, visualConditioning, promptAdditions, referenceMode: family.referenceMode });
   if (fullPrompt.length > family.promptMaxChars) {
     throw new ServerError(
       `Runway's complete prompt is ${fullPrompt.length}/${family.promptMaxChars} characters: ${prompt.length} supplied, plus ${fullPrompt.length - prompt.length} from reference tags and the negative prompt. Shorten the supplied or negative prompt; the full text is available in Show full prompt. Nothing was submitted or truncated.`,
@@ -150,6 +151,7 @@ async function generateImagePrepared({
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: MODE,
     model: endpointId,
+    referenceMode: family.referenceMode,
     ratio: request.body.ratio, resolution: request.resolution,
     referenceTags: references.map(({ path: _path, ...ref }) => ref),
     inputProvenance: 'provider-inputs',
@@ -168,7 +170,7 @@ async function generateImagePrepared({
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
   broadcastSse(job, { type: 'status', message: 'Submitting to Runway…' });
   runRunway(job, jobId, {
-    apiKey, request, references,
+    apiKey, request, references, family,
     outputPath, filename, meta, cleanC2PA, denoise,
   }).catch((err) => {
     console.error(`❌ Runway image run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
@@ -182,7 +184,7 @@ async function generateImagePrepared({
 }
 
 async function runRunway(job, jobId, {
-  apiKey, request, references,
+  apiKey, request, references, family,
   outputPath, filename, meta, cleanC2PA = false, denoise = false,
 }) {
   const entry = createRunwayTaskEntry(apiKey);
@@ -192,7 +194,7 @@ async function runRunway(job, jobId, {
   let wroteOutput = false;
   try {
     const referenceImages = [];
-    for (const ref of references) referenceImages.push({ uri: await encodeInputImage(ref.path), tag: ref.tag });
+    for (const ref of references) referenceImages.push(runwayReferencePayload(family, { uri: await encodeInputImage(ref.path), tag: ref.tag }));
     if (entry.aborted) return finalizeCanceled(job, jobId);
     entry.taskId = await submitRunwayTask({ apiKey, endpoint: 'text_to_image', body: { ...request.body, ...(referenceImages.length ? { referenceImages } : {}) } });
     // THROTTLED waits on this accepted task. A failed/moderated task is terminal, never resubmitted.

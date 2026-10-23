@@ -8,7 +8,8 @@ describe('Runway image wire contracts', () => {
     for (const [resolution, ratios] of Object.entries(model.ratios)) {
       for (const ratio of ratios) {
         const request = buildRunwayImageRequest({ modelId: model.id, prompt: '  @char1 in a garden  ', resolution, ratio, seed: 42, referenceImages: [ref] });
-        expect(request.body).toEqual({ model: model.id, promptText: '  @char1 in a garden  ', ratio, seed: 42, referenceImages: [ref] });
+        const tagged = model.referenceMode === 'tagged';
+        expect(request.body).toEqual({ model: model.id, promptText: '  @char1 in a garden  ', ratio, ...(tagged ? { seed: 42 } : {}), referenceImages: [tagged ? ref : { uri: ref.uri }] });
         expect(request.estimatedCredits).toBe(model.credits[resolution]);
       }
     }
@@ -20,6 +21,20 @@ describe('Runway image wire contracts', () => {
     expect(() => buildRunwayImageRequest({ prompt: 'x'.repeat(1001) })).toThrow('1001');
     expect(() => buildRunwayImageRequest({ prompt: 'garden', ratio: '1:1' })).toThrow('ratio');
     expect(() => buildRunwayImageRequest({ prompt: 'garden', seed: 4294967296 })).toThrow('32-bit');
+  });
+  it('sends Seedream text-only stills with the nearest sized canvas, mapped tier and no seed', () => {
+    const pro = buildRunwayImageRequest({ modelId: 'seedream5_pro', prompt: 'garden', width: 1920, height: 1080, seed: 7 });
+    expect(pro.body).toEqual({ model: 'seedream5_pro', promptText: 'garden', ratio: '1376:768' });
+    expect(pro).toMatchObject({ resolution: '1k', referenceMode: 'ordered', estimatedCredits: 5 });
+    expect(buildRunwayImageRequest({ modelId: 'seedream5_pro', prompt: 'garden', width: 1920, height: 1080, resolution: '1080p' })).toMatchObject({ body: { ratio: '2720:1530' }, resolution: '2k', estimatedCredits: 9 });
+    expect(buildRunwayImageRequest({ modelId: 'seedream5_lite', prompt: 'garden', width: 1920, height: 1080 })).toMatchObject({ body: { ratio: '4096:2304' }, resolution: 'standard', estimatedCredits: 4 });
+    expect(() => buildRunwayImageRequest({ modelId: 'seedream5_lite', prompt: 'garden', ratio: '1024:1024' })).toThrow('ratio');
+    expect(buildRunwayImageRequest({ modelId: 'seedream5_pro', prompt: 'x'.repeat(4000) }).body.promptText).toHaveLength(4000);
+  });
+  it('keeps ordered Seedream references in order, untagged and capped per model', () => {
+    const refs = ['a', 'b', 'c', 'd'].map((n) => ({ uri: `https://example.com/${n}.png`, tag: n }));
+    expect(buildRunwayImageRequest({ modelId: 'seedream5_pro', prompt: 'garden', referenceImages: refs }).body.referenceImages).toEqual(refs.map(({ uri }) => ({ uri })));
+    expect(() => buildRunwayImageRequest({ modelId: 'seedream5_pro', prompt: 'garden', referenceImages: [...refs, ...refs] })).toThrow('0–6 reference');
   });
   it('keeps binding tags stable across ordering, distinguishes supplemental anchors and obeys the tag grammar', () => {
     const a = { bindingId: 'character-example-a', role: 'character-neutral' };
