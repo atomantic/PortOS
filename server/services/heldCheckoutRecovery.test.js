@@ -111,7 +111,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const [gitPath, head] = (await Promise.all([
       execGit(['rev-parse', '--show-toplevel'], path), execGit(['rev-parse', 'HEAD'], path),
     ])).map(result => result.stdout.trim());
-    return { path, release: { path: gitPath, head, branch, locked: true, lockReason } };
+    // Git also expands Windows short-name aliases; separator normalization alone
+    // cannot make the native input match the registered checkout identity.
+    return { path: gitPath, release: { path: gitPath, head, branch, locked: true, lockReason } };
   }
 
   // Git emits forward slashes on Windows even when the fixture uses native paths.
