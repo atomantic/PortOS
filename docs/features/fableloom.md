@@ -117,6 +117,11 @@ scene-local clothes cannot silently reappear between episodes.
   choices sit under its panel, and picking one moves the path (`?via=` holds
   the picked transition ids). The path stops at an ending, a loop back or a
   scene with no way on; tapping a panel opens that scene in the graph.
+  **Make storyboard from this path** copies the path into Create ›
+  Storyboards (one beat per dramatic scene, one panel per scene with its image
+  prompt, length, camera move and image), where the panel maker's recipes make
+  new art; a panel's **Use as scene art** sends its selected image back to its
+  scene. Boards made from the episode are linked beside the button.
 - **Episode setup → Story beats → teleplay** — the production gate: draft one
   concise log-line per eventual camera cut, edit paths and audience-channel
   states, run the deterministic validator, and optionally ask the AI story

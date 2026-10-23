@@ -95,3 +95,10 @@ export const sendShotStillToStoryboardPanel = (projectId, sceneId, options) =>
 // panels as previewed (lib/storyboardVideo.js) → { project }. 409 when the board changed since.
 export const startVideoFromStoryboard = (id, input, options) =>
   request(`/storyboards/${enc(id)}/video`, { ...json('POST', input), ...options });
+
+// A new board from one FableLoom episode path (`via`: the transition ids picked at forks) → board.
+// Use as scene art: the panel's selected image becomes its scene's image → { board, node }.
+export const makeStoryboardFromFableLoom = (loomId, episodeId, via, options) =>
+  request(`/storyboards/from-fableloom/${enc(loomId)}/${enc(episodeId)}`, { ...json('POST', { via }), ...options });
+export const sendStoryboardPanelToFableLoom = (id, panelId, options) =>
+  request(`/storyboards/${enc(id)}/panels/${enc(panelId)}/scene-art`, { method: 'POST', ...options });

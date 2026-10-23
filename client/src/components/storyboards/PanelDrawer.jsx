@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import {
-  ChevronLeft, ChevronRight, Clapperboard, Drama, ImagePlus, Loader2, Mountain, Package, Palette, PenLine, Plus,
+  ChevronLeft, ChevronRight, Clapperboard, Drama, ImagePlus, ImageUp, Loader2, Mountain, Package, Palette, PenLine, Plus,
   StickyNote, Trash2, Users, Wand2, X,
 } from 'lucide-react';
 import Drawer from '../Drawer';
@@ -35,8 +35,9 @@ const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1
 const iconButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-30 disabled:pointer-events-none';
 const labelClass = 'block text-[11px] text-gray-500 mb-0.5';
 
-function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddTake, onSelectTake, onRemoveTake, onSketch }) {
+function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddTake, onSelectTake, onRemoveTake, onSketch, onSendToScene }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [sending, setSending] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const take = selectedTake(panel);
@@ -83,6 +84,12 @@ function ArtSection({ panel, aspectRatio, sketchNonce, moodBoardId, busy, onAddT
         {moodBoardId ? (
           <button type="button" className={actionButton} onClick={() => setPinsOpen(true)} disabled={busy}>
             <Palette size={16} aria-hidden="true" /> Mood board
+          </button>
+        ) : null}
+        {onSendToScene && take?.image ? (
+          <button type="button" className={actionButton} disabled={sending}
+            onClick={async () => { setSending(true); await onSendToScene(); setSending(false); }}>
+            {sending ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <ImageUp size={16} aria-hidden="true" />} Use as scene art
           </button>
         ) : null}
         {take ? (
@@ -136,6 +143,7 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers }) {
         onSelectTake={handlers.onSelectTake}
         onRemoveTake={handlers.onRemoveTake}
         onSketch={handlers.onSketch}
+        onSendToScene={board.source?.kind === 'fableloom' && panel.sourceSceneId ? handlers.onSendToScene : null}
       />
       <div>
         <label htmlFor={fieldId('action')} className={labelClass}>Action</label>

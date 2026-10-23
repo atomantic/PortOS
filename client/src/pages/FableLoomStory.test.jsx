@@ -8,6 +8,8 @@ const toastMocks = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning
 vi.mock('../components/ui/Toast', () => ({ default: toastMocks }));
 
 vi.mock('../services/api', () => ({
+  listStoryboards: vi.fn(async () => []),
+  makeStoryboardFromFableLoom: vi.fn(),
   addLoomEpisode: vi.fn(),
   addLoomNode: vi.fn(),
   deleteLoomEpisode: vi.fn(),
@@ -254,6 +256,10 @@ describe('FableLoomStory episode outline route', () => {
 describe('FableLoomStory episode board route', () => {
   it('lays one path out as panels, moves it by a fork pick in the URL, and opens a scene in the graph', async () => {
     const user = userEvent.setup();
+    api.listStoryboards.mockResolvedValueOnce([
+      { id: 'sb-made', name: 'Earlier board', source: { kind: 'fableloom', loomId: 'loom-1', episodeId: 'ep-1' } },
+      { id: 'sb-other', name: 'Unrelated board', source: null },
+    ]);
     api.getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [
       { id: 'node-1', title: 'Threshold', prose: 'You stand before the first door.', transitions: [
         { id: 'tr-left', targetNodeId: 'node-2', intent: 'Go left' },
@@ -277,8 +283,31 @@ describe('FableLoomStory episode board route', () => {
     expect(await screen.findByRole('button', { name: 'Open scene 2: Right Hall' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open scene 2: Left Hall' })).not.toBeInTheDocument();
 
+    expect(screen.getByRole('link', { name: 'Earlier board' })).toHaveAttribute('href', '/storyboards/sb-made');
+    expect(screen.queryByRole('link', { name: 'Unrelated board' })).not.toBeInTheDocument();
+
     await user.click(screen.getByRole('button', { name: 'Open scene 2: Right Hall' }));
     expect(await screen.findByText('Editing scene: Right Hall')).toBeInTheDocument();
+  });
+
+  it('makes a storyboard from the picked path and opens it', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [
+      { id: 'node-1', title: 'Threshold', prose: 'You stand before the first door.', isEnding: true, transitions: [] },
+    ] })] }));
+    api.makeStoryboardFromFableLoom.mockResolvedValueOnce({ id: 'sb-new' });
+    render(
+      <MemoryRouter initialEntries={['/fableloom/loom-1/ep-1/board?via=tr-right']}>
+        <Routes>
+          <Route path="/fableloom/:loomId/:episodeId/board" element={<FableLoomStory view="board" />} />
+          <Route path="/storyboards/:id" element={<p>Storyboard page</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Make storyboard from this path' }));
+    expect(api.makeStoryboardFromFableLoom).toHaveBeenCalledWith('loom-1', 'ep-1', ['tr-right']);
+    expect(await screen.findByText('Storyboard page')).toBeInTheDocument();
   });
 });
 
