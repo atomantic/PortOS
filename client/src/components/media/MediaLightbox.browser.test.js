@@ -15,6 +15,28 @@ const { chromium } = require(require.resolve('playwright-core', { paths: [
 ] }));
 const chrome = resolveTestChrome();
 
+async function waitForVideoData(video) {
+  await video.evaluate(element => new Promise((resolve, reject) => {
+    const finish = error => {
+      clearTimeout(deadline);
+      element.removeEventListener('loadeddata', ready);
+      element.removeEventListener('error', ready);
+      if (error) reject(error);
+      else resolve();
+    };
+    const ready = () => {
+      if (element.error) finish(new Error(`Synthetic video failed to decode (code=${element.error.code})`));
+      else if (element.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) finish();
+    };
+    const deadline = setTimeout(() => finish(new Error(
+      `Synthetic video data timed out (readyState=${element.readyState}, networkState=${element.networkState})`,
+    )), 30000);
+    element.addEventListener('loadeddata', ready);
+    element.addEventListener('error', ready);
+    ready();
+  }));
+}
+
 // The document's activeElement stays VIDEO throughout native control traversal.
 // CDP reads its user-agent shadow root without changing the player or tab order.
 async function nativeFocusReader(page) {
@@ -98,6 +120,7 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
             import { createRoot } from 'react-dom/client';
             import MediaLightbox from '/src/components/media/MediaLightbox.jsx';
             import MediaCard from '/src/components/media/MediaCard.jsx';
+            import clip from '/src/test/fixtures/lightbox-controls.webm?url';
             import '/src/index.css';
             import { getTheme } from '/src/themes/portosThemes.js';
             const theme = getTheme(new URLSearchParams(location.search).get('theme') || 'classic-midnight');
@@ -108,25 +131,6 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
             canvas.width = 640; canvas.height = 360;
             const ctx = canvas.getContext('2d');
             ctx.fillStyle = '#547fa2'; ctx.fillRect(0, 0, 640, 360);
-            const audio = new AudioContext();
-            await audio.resume();
-            const oscillator = audio.createOscillator();
-            const output = audio.createMediaStreamDestination();
-            oscillator.connect(output); oscillator.start();
-            const stream = canvas.captureStream(10);
-            stream.addTrack(output.stream.getAudioTracks()[0]);
-            const chunks = [];
-            const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-            const recorded = new Promise(resolve => { recorder.onstop = resolve; });
-            recorder.ondataavailable = event => chunks.push(event.data);
-            recorder.start();
-            // Several frames plus audio make seek and volume real controls.
-            const paint = setInterval(() => ctx.fillRect(0, 0, 640, 360), 50);
-            await new Promise(resolve => setTimeout(resolve, 1200));
-            recorder.stop(); await recorded;
-            clearInterval(paint); stream.getTracks().forEach(track => track.stop());
-            oscillator.stop(); await audio.close();
-            const clip = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
             const image = canvas.toDataURL();
             function Fixture() {
               const [item, setItem] = useState(null);
@@ -173,7 +177,9 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       await page.goto(`${origin}lightbox-test`);
       await page.locator('#opener').click();
       const video = page.locator('video');
-      await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
+      await waitForVideoData(video);
+      expect(await video.evaluate(v => Number.isFinite(v.duration) && v.duration > 0)).toBe(true);
+      expect(await video.evaluate(v => [v.videoWidth, v.videoHeight])).toEqual([640, 360]);
       await video.evaluate(v => { v.pause(); v.currentTime = 0; });
       if (fullScreen) await page.getByRole('button', { name: 'Full screen', exact: true }).click();
       const close = page.locator('button[title="Close (Esc)"]');
@@ -320,8 +326,6 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
         await page.route('**/api/**', route => route.fulfill({ json: { providers: [], items: [] } }));
         await phases.run('goto', () => page.goto(`${origin}lightbox-test?theme=${theme}`));
         for (const opener of ['#gallery', '#opener']) {
-          // The fixture renders only after it records its synthetic clip, so the
-          // click waits for that too.
           await phases.run('open', () => page.locator(opener).click());
           const aside = page.locator('aside');
           const prompt = aside.locator('#media-prompt');
