@@ -818,6 +818,9 @@ describe('buildLightContextPrompt', () => {
 
       expect(prompt.userPrompt).toContain('Custom security mission');
       expect(prompt.systemPrompt).toContain('## Codex Security Audit Runtime');
+      expect(prompt.systemPrompt).toContain('Before vulnerability discovery or active testing');
+      expect(prompt.systemPrompt).toContain('"paths": ["."]');
+      expect(prompt.systemPrompt).not.toContain('completing repository-wide discovery, request the scanner');
       expect(prompt.systemPrompt).toContain('/security-scan');
       expect(prompt.systemPrompt).toContain('subscription ChatGPT authentication');
       expect(prompt.systemPrompt).toContain('saved grants retain their original limits');
