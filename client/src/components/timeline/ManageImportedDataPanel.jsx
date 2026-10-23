@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Trash2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
 import { formatCount, formatDateNumeric } from '../../utils/formatters';
 
 // Per-source counts with a typed-confirmation erase (#12987). Deleting is
@@ -12,34 +13,55 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
   const [target, setTarget] = useState(null);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [removing, setRemoving] = useState(null);
+  const pending = useRef(false);
+  const generation = useRef(0);
 
   useEffect(() => {
     let active = true;
-    api.getTimelineSources({ silent: true }).then((r) => { if (active) setSources(r?.sources || []); }).catch(() => {});
+    const current = ++generation.current;
+    api.getTimelineSources({ silent: true }).then((r) => {
+      if (active && generation.current === current) { setSources(r?.sources || []); setError(null); }
+    }).catch((err) => { if (active && generation.current === current) setError(err.message || 'Could not load imported data.'); });
     return () => { active = false; };
   }, [reloadKey]);
 
   const cancel = () => { setTarget(null); setTyped(''); };
 
   const erase = async () => {
+    const source = target;
+    if (pending.current || !source || typed !== source) return;
+    pending.current = true;
+    generation.current++;
     setBusy(true);
-    const result = await api.eraseTimelineSource(target).catch(() => null);
+    setError(null);
+    const result = await api.eraseTimelineSource(source, { silent: true })
+      .catch((err) => { setError(err.message || 'Could not delete imported data.'); return null; });
+    pending.current = false;
     setBusy(false);
     if (!result) return;
-    toast.success(`Deleted ${formatCount(result.deleted)} ${target} event(s)`);
-    setSources((list) => list.filter((s) => s.source !== target));
+    toast.success(`Deleted ${formatCount(result.deleted)} ${source} event(s)`);
+    setRemoving(source);
     cancel();
+  };
+
+  const finishRemoval = (source) => {
+    setSources((list) => list.filter((row) => row.source !== source));
+    setRemoving(null);
     onChanged?.();
   };
 
-  if (sources.length === 0) return null;
+  if (sources.length === 0 && !error) return null;
 
   return (
     <div className="rounded border border-port-border bg-port-card p-3 text-xs">
       <div className="mb-2 font-medium text-gray-300">Manage imported data</div>
-      <ul className="space-y-2">
+      {error && <p role="alert" className="mb-2 text-port-error">{error}</p>}
+      <div role="list" tabIndex={-1}>
         {sources.map((s) => (
-          <li key={s.source}>
+          <CollapsibleListItem key={s.source} removing={removing === s.source} onExited={() => finishRemoval(s.source)}>
+            <div role="listitem">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-mono text-gray-200">{s.source}</span>
               <span className="text-gray-400">
@@ -48,7 +70,8 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
               </span>
               <button
                 type="button"
-                onClick={() => { setTarget(s.source); setTyped(''); }}
+                disabled={busy || !!removing}
+                onClick={() => { setTarget(s.source); setTyped(''); setError(null); }}
                 className="ml-auto inline-flex items-center gap-1 rounded border border-port-border px-2 py-1 text-port-error hover:border-port-error"
               >
                 <Trash2 size={12} /> Delete
@@ -61,6 +84,7 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
                 </label>
                 <input
                   id={`erase-${s.source}`}
+                  disabled={busy}
                   value={typed}
                   onChange={(e) => setTyped(e.target.value)}
                   className="rounded border border-port-border bg-port-bg px-2 py-1 text-gray-200"
@@ -73,12 +97,13 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
                 >
                   {busy && <Loader2 size={12} className="animate-spin" />} Confirm delete
                 </button>
-                <button type="button" onClick={cancel} className="px-2 py-1 text-gray-400 hover:text-gray-200">Cancel</button>
+                <button type="button" disabled={busy} onClick={cancel} className="px-2 py-1 text-gray-400 hover:text-gray-200">Cancel</button>
               </div>
             )}
-          </li>
+          </div>
+          </CollapsibleListItem>
         ))}
-      </ul>
+      </div>
     </div>
   );
 }
