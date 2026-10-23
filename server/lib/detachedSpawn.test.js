@@ -308,18 +308,38 @@ describe('spawnDetached', () => {
 
   it.skipIf(IS_POSIX)('refuses a real Windows launcher released after the PID deadline', async () => {
     const controlDir = await tmpControlDir();
+    // This fixture owns removal: an unconfirmed native close must retain its
+    // cancellation evidence instead of falling through the generic afterEach.
+    dirs.splice(dirs.indexOf(controlDir), 1);
     const nativeSpawn = childProcess.spawn;
     const releaseFile = join(controlDir, 'release-launcher');
     let launcher;
     let launcherClosed;
+    let closed = false;
     const spawnMock = vi.spyOn(childProcess, 'spawn').mockImplementationOnce((bin, args, options) => {
       const delayedArgs = [...args];
       delayedArgs[delayedArgs.length - 1] = `while (!(Test-Path -LiteralPath ${quoteForShell(releaseFile, 'powershell')})) { Start-Sleep -Milliseconds 20 }; ${args.at(-1)}`;
       launcher = nativeSpawn(bin, delayedArgs, options);
-      launcherClosed = onClose(launcher).catch((error) => ({ error }));
+      launcherClosed = new Promise((resolve) => launcher.once('close', (code, signal) => {
+        closed = true;
+        resolve({ code, signal });
+      }));
       return launcher;
     });
-    let watchdog;
+    const waitForClose = async (timeoutMs) => {
+      let watchdog;
+      try {
+        return await Promise.race([
+          launcherClosed,
+          new Promise((_, reject) => {
+            watchdog = setTimeout(() => reject(new Error('Cancelled Windows launcher close is unconfirmed')), timeoutMs);
+          }),
+        ]);
+      } finally {
+        clearTimeout(watchdog);
+      }
+    };
+    let firstFailure;
     try {
       // Hold PowerShell before its first production bootstrap statement until
       // the failed handoff has durably published cancellation.
@@ -329,25 +349,34 @@ describe('spawnDetached', () => {
       const error = await onClose(handle).catch((err) => err);
       expect(error.message).toContain('cleanup=unconfirmed');
       await writeFile(releaseFile, '1');
-      const result = await Promise.race([
-        launcherClosed,
-        new Promise((_, reject) => {
-          watchdog = setTimeout(() => reject(new Error('Cancelled Windows launcher did not close')), 10000);
-        }),
-      ]);
-      if (result.error) throw result.error;
+      const result = await waitForClose(WINDOWS_WARMUP_PID_TIMEOUT_MS);
       expect(result.code).toBe(1);
       expect(await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'launcher-bootstrap.log')).toMatch(/^cancelled /);
       expect(await stat(join(controlDir, 'supervisor-bootstrap.log')).catch(() => null)).toBeNull();
       expect(await stat(join(controlDir, 'pid')).catch(() => null)).toBeNull();
       expect(await readStdoutLog(controlDir)).toBe('');
+    } catch (error) {
+      firstFailure = error;
+    }
+    let cleanupFailure;
+    try {
+      if (launcher && !closed) {
+        // ChildProcess.kill holds a native handle, never a recycled PID. Confirm
+        // its close before removing the control files, even after a failed test.
+        launcher.kill();
+        await waitForClose(5000);
+      }
+      // A failed assertion may mean a supervisor escaped the expected refusal;
+      // preserve cancellation and diagnostics even when the launcher is closed.
+      if (!firstFailure) await rm(controlDir, { recursive: true, force: true });
+    } catch (error) {
+      cleanupFailure = error;
     } finally {
-      clearTimeout(watchdog);
-      // ChildProcess.kill uses the held native handle, never a recycled PID.
-      if (launcher && launcher.exitCode === null) launcher.kill();
       spawnMock.mockRestore();
     }
-  }, 15000);
+    if (firstFailure && cleanupFailure) throw new AggregateError([firstFailure, cleanupFailure], 'Windows launcher assertion and cleanup failed');
+    if (firstFailure || cleanupFailure) throw firstFailure || cleanupFailure;
+  }, WINDOWS_WARMUP_HOOK_TIMEOUT_MS);
 
   it('propagates a non-zero exit code', async () => {
     const controlDir = await tmpControlDir();
