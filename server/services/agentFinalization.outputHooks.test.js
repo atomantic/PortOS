@@ -372,7 +372,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     }
   });
 
-  it('holds an unverified no-op but leaves legacy prose as unknown delivery', async () => {
+  it('holds an unverified no-op', async () => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     try {
       const task = { id: 'user-example', taskType: 'user', metadata: {} };
@@ -380,6 +380,15 @@ describe('recovery output-hook dispatch (#3182)', () => {
         finalSummary: JSON.stringify({ summary: 'Invented no-op.', taskOutcome: { status: 'no-action-needed', reason: 'No changes made.' } }) });
       expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ executionSuccess: true, success: false,
         taskOutcome: { status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' } }));
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+    }
+  });
+
+  it('leaves legacy prose as unknown delivery when the agent has no saved outcome', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    try {
+      const task = { id: 'user-example', taskType: 'user', metadata: {} };
       await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0, outputBuffer: '',
         finalSummary: 'Status: BLOCKED - invented contradictory instructions' });
       expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ executionSuccess: true, taskOutcome: null }));
@@ -406,21 +415,22 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
 
-  it('retains an outcome-only sentinel on repeat finalization after cleanup', async () => {
+  it.each([null, 'Invented terminal report.'])('retains an outcome-only sentinel on repeat finalization after cleanup with finalSummary=%s', async finalSummary => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const workspacePath = await mkdtemp(join(tmpdir(), 'outcome-replay-'));
     const sentinelPath = join(workspacePath, '.agent-done-agent-example');
     const taskOutcome = { status: 'blocked', reason: 'Invented prerequisite remains unmet.' };
-    const finish = () => finalizeAgent({ agentId: 'agent-example', task: TASK, success: true,
-      exitCode: 0, duration: 1000, workspacePath, outputBuffer: '' });
+    const finish = (finalSummary = null) => finalizeAgent({ agentId: 'agent-example', task: TASK, success: true,
+      exitCode: 0, duration: 1000, workspacePath, finalSummary, outputBuffer: '' });
     try {
       await writeFile(sentinelPath, JSON.stringify({ taskOutcome }));
       await finish();
       await rm(sentinelPath);
-      await finish();
+      await finish(finalSummary);
       expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, executionSuccess: true, taskOutcome }));
       expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({ taskOutcome }) }), TASK.taskType);
+      expect(persistedAgent.metadata.taskSummary).toBe(finalSummary);
     } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
 

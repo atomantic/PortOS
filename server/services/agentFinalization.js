@@ -2301,10 +2301,9 @@ async function persistCompletionSummary(agentId, { workspacePath, finalSummary =
     }
     if (summary) source = 'terminal-result';
   }
-  if (!summary && !taskOutcome) {
+  if (!taskOutcome) {
     // Cleanup may already have removed the sentinel on a finalization replay.
-    // Only retain a completion whose source was recorded for this same agent;
-    // older heuristic transcript summaries are not evidence of a final reply.
+    // A new prose summary cannot clear the same agent's saved delivery outcome.
     const existing = existingRecord || await getAgentRecord(agentId);
     if (existing?.id === agentId) {
       taskOutcome = normalizeTaskOutcome(existing.result?.taskOutcome)
@@ -2312,7 +2311,8 @@ async function persistCompletionSummary(agentId, { workspacePath, finalSummary =
           ? normalizeTaskOutcome(existing.metadata?.taskOutcome) : null);
       if (taskOutcome) taskOutcomeSource = existing.metadata?.taskOutcomeSource || 'saved-result';
     }
-    if (existing?.id === agentId
+    // Only retain summaries with a recorded source, never heuristic transcripts.
+    if (!summary && existing?.id === agentId
       && ['sentinel', 'terminal-result'].includes(existing.metadata?.taskSummarySource)
       && typeof existing.metadata?.taskSummary === 'string'
       && existing.metadata.taskSummary.trim()) return taskOutcome;
