@@ -155,6 +155,38 @@ async function historicalCheckoutAbsent(release, trees) {
   return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
 }
 
+/** Completion audits have a server-captured checkout generation, but may never
+ * have entered the scheduled retirement queue. Reuse its archive verifier
+ * without creating an obligation or inventing a branch-deletion receipt.
+ */
+export async function findMissingCheckoutPreservation({ repoPath, release }, opts = {}) {
+  if (!Number.isFinite(Date.parse(release?.createdAt)) || Date.parse(release.createdAt) > Date.now()
+    || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(release?.head || '')) return null;
+  const absent = async () => {
+    const trees = await listWorktrees(repoPath);
+    const ref = await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repoPath, { ignoreExitCode: true });
+    return ref.exitCode === 1 && await historicalCheckoutAbsent(release, trees);
+  };
+  if (!await absent()) return null;
+  const root = heldCheckoutArchiveRoot(opts.cosDir);
+  const info = await lstat(root).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!info?.isDirectory()) return null;
+  const entries = await readdir(root, { withFileTypes: true });
+  if (entries.length > 1000) return null;
+  let selected = null;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const proof = await verifyHeldArchive(repoPath, join(root, entry.name), release).catch(() => null);
+    if (!proof) continue;
+    // Multiple valid snapshots cannot identify the original private contents.
+    if (selected) return null;
+    selected = proof;
+  }
+  if (!selected) return null;
+  const proof = selected;
+  return { ...proof, recheck: async () => await absent() && await proof.recheck() };
+}
+
 /** Read existing archives only. Verification stays outside both writer locks;
  * the final ownership/absence recheck and schedule compare-and-set are fenced.
  */

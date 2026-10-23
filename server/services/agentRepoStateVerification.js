@@ -317,7 +317,7 @@ const skipped = (skipReason, { issues = [], observed = null } = {}) => ({ verifi
 function branchLedger(agentId, location) {
   const record = async (status, reason, extra = {}) => {
     const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
-    await recordCleanupOutcome(agentId, { status, reason, ...location, ...extra });
+    return recordCleanupOutcome(agentId, { status, reason, ...location, ...extra });
   };
   const blockWith = async (reason, { skipReason = reason, record: extra, issues, observed } = {}) => {
     await record('blocked', reason, extra);
@@ -437,7 +437,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   if (!observed) return blockWith('probe-incomplete', { skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE });
 
   if (observed.worktreePresent === false && observed.localBranchPresent === false) {
-    return settleAbsentCheckout({ app, sourceWorkspace, branchName, originalPrUrl, observed, record });
+    return settleAbsentCheckout({ agentId, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen });
   }
   const issues = classifyRepoStateIssues(expectation, { ...observed, branchName });
   if (issues.length === 0) {
@@ -497,13 +497,34 @@ async function resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchNam
  * Missing originals are an accounting gap, not a reason to hire an agent
  * to rediscover absence. Never invent a preservation receipt.
  */
-async function settleAbsentCheckout({ app, sourceWorkspace, branchName, originalPrUrl, observed, record }) {
+async function settleAbsentCheckout({ agentId, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen }) {
   const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
   const proofUrl = originalPrUrl || observed.prUrl;
   const forge = proofUrl && observed.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
     { forgeAccount: app?.forgeAccount ?? null }).catch(() => null) : null;
   const integrated = forge && (await execGit(['merge-base', '--is-ancestor', forge.prHead, forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
+  const completed = metadata.completedCheckouts?.find(row => row.version === 1 && row.agentId === agentId
+    && row.repoPath === sourceWorkspace && row.branch === branchName && row.path === worktreePath
+    && Number.isFinite(Date.parse(row.startedAt)) && Date.parse(row.capturedAt) >= Date.parse(row.startedAt));
+  if (!staysOpen && integrated && completed && completed.head === forge.prHead && observed.remoteBranchPresent === false) {
+    const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+    const release = { branch: branchName, path: worktreePath, head: completed.head,
+      locked: false, lockReason: null, createdAt: completed.capturedAt };
+    const proof = await findMissingCheckoutPreservation({ repoPath: sourceWorkspace, release }).catch(() => null);
+    if (proof) {
+      const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
+      const verified = await withClaimOwnershipLock(async () => {
+        if (await resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchName, worktreePath }) || !await proof.recheck()) return false;
+        const { recheck: _recheck, ...evidence } = proof;
+        const saved = await record('verified', 'already-absent-preservation-verified', { head: completed.head,
+          prUrl: proofUrl, committedIntegrationVerified: true,
+          preservation: { ...evidence, capturedAt: completed.capturedAt, verifiedAt: new Date().toISOString() } });
+        return saved === true;
+      }).catch(() => false);
+      if (verified) return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
+    }
+  }
   const reason = integrated ? 'already-absent-preservation-unverified' : 'absent-checkout-integration-unverified';
   await record(integrated ? 'already-absent' : 'blocked', reason, { prUrl: originalPrUrl, committedIntegrationVerified: !!integrated });
   return skipped(reason);
