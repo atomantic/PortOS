@@ -31,7 +31,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), memo: process.env.PORT
 // Stand in for a structural guard which is red only on the combined inputs.
 const base = execFileSync('git', ['show', process.argv[4] + ':base-contract'], { encoding: 'utf8' });
 if (base.trim() === 'strict' && ${fail}) {
-  console.error('FAIL server/routeValidationConventions.test.js > combined route inventory');
+  console.error('FAIL server/routeValidationConventions.test.js > combined route inventory ' + 'ghp_' + 'x'.repeat(24) + ' ' + 'x'.repeat(600));
   process.exitCode = 1;
 }
 `);
@@ -73,6 +73,8 @@ describe('pending merged-tree validation', () => {
     const { input, git, worktreePath, headSha, baseSha } = await fixture({ fail: true });
     const result = await preparePendingMergeGuard(input);
     expect(result).toMatchObject({ ok: false, reason: 'merged-tree-guards-failed', evidence: { headSha, baseSha } });
+    expect(result.evidence.failedTest).toContain('[REDACTED]');
+    expect(result.evidence.failedTest.length).toBeLessThanOrEqual(500);
     expect(await readFile(result.evidence.logPath, 'utf8')).toContain('FAIL server/routeValidationConventions.test.js > combined route inventory');
     expect(await git(['rev-parse', 'HEAD'], worktreePath)).toBe(headSha);
     expect(await git(['status', '--porcelain'], worktreePath)).toBe('');
@@ -85,6 +87,12 @@ describe('pending merged-tree validation', () => {
     await writeFile(join(worktreePath, 'uncommitted'), 'preserve me');
     expect(await preparePendingMergeGuard(input)).toEqual({ ok: false, reason: 'merged-tree-checkout-unverified' });
     expect(await readFile(join(worktreePath, 'uncommitted'), 'utf8')).toBe('preserve me');
+  });
+
+  it('identifies a detached handed-off checkout as unverified without running its guard', async () => {
+    const { input, git, worktreePath, headSha } = await fixture();
+    await git(['checkout', '--detach', headSha], worktreePath);
+    expect(await preparePendingMergeGuard(input)).toEqual({ ok: false, reason: 'merged-tree-checkout-unverified' });
   });
 
   it('leaves an ordinary managed app without the supported command unchanged', async () => {

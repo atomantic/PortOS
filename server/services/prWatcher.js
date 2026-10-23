@@ -25,8 +25,6 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
-import { scrubSecretTokens } from '../lib/secretText.js';
-import { redactPii } from '../lib/piiRedactionPatterns.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -692,20 +690,24 @@ async function readPendingDefault({ origin, repoSpec, forgeExec }) {
 async function attemptAdmittedMerge(entry, binding, prView, ctx) {
   const ownerPolicy = await currentHandoffOwnerPolicy(binding);
   if (ownerPolicy) return { step: await holdForOwner(ctx.app, entry, binding, ownerPolicy.ownerBlocked) };
-  const { preparePendingMergeGuard } = await import('./pendingMergeGuard.js');
+  const { preparePendingMergeGuard, summarizeMergeGuardOutput } = await import('./pendingMergeGuard.js');
   const guard = await preparePendingMergeGuard({ app: ctx.app, entry, binding, prView,
     readDefault: () => readPendingDefault(ctx), env: ctx.forgeExec.env,
   }).catch(error => {
-    const detail = redactPii(scrubSecretTokens(String(error.message))).replace(/[\r\n]+/g, ' ').slice(0, 500);
+    const detail = summarizeMergeGuardOutput(error.message);
     console.error(`❌ Pending PR #${entry.prNumber} merged-tree validation unavailable: ${detail}`);
     return { ok: false, reason: 'merged-tree-validation-unavailable', evidence: { detail } };
   });
   if (!guard.ok) {
-    const retained = { ...entry, mergedTreeGuard: { ...guard.evidence, reason: guard.reason }, attention: guard.reason };
-    if (guard.reason === 'merged-tree-guards-failed') {
+    const retained = { ...entry, mergedTreeGuard: { ...guard.evidence, reason: guard.reason } };
+    if (['merged-tree-validation-unavailable', 'merged-tree-default-branch-unavailable'].includes(guard.reason)) {
+      return { step: await advanceTicks(ctx, entry, retained, binding, { reason: guard.reason }) };
+    }
+    if (guard.reason !== 'merged-tree-base-moved') {
       retained.recoveryBlocked = guard.reason;
+      retained.attention = guard.reason;
       await notifyPendingMergeTimeout(ctx.app, entry, null,
-        `PR #${entry.prNumber} failed merged-tree guards${guard.evidence?.failedTest ? `: ${guard.evidence.failedTest}` : ''}. Its receipt, checkout, and mergedTreeGuard log are retained. Repair and submit a fresh verified handoff.`);
+        `PR #${entry.prNumber} cannot pass merged-tree validation: ${guard.reason}${guard.evidence?.failedTest ? ` — ${guard.evidence.failedTest}` : ''}. Its receipt, checkout, and any mergedTreeGuard log are retained. Repair and submit a fresh verified handoff.`);
     }
     return { step: { outcome: retained, tally: { waiting: 1 } } };
   }

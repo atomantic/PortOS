@@ -41,7 +41,8 @@ vi.mock('./untrustedContent.js', () => ({
 }));
 const prepareGuardMock = vi.fn();
 const guardCurrentMock = vi.fn();
-vi.mock('./pendingMergeGuard.js', () => ({
+vi.mock('./pendingMergeGuard.js', async importOriginal => ({
+  summarizeMergeGuardOutput: (await importOriginal()).summarizeMergeGuardOutput,
   preparePendingMergeGuard: (...args) => prepareGuardMock(...args),
   pendingMergeGuardCurrent: (...args) => guardCurrentMock(...args),
 }));
@@ -695,6 +696,31 @@ describe('merge-only PR watcher', () => {
         mergedTreeGuard: { reason: 'merged-tree-validation-unavailable', detail: 'git fetch failed: repository unavailable' } });
       expect(mergePrMock).not.toHaveBeenCalled();
       expect(admissionState.state.mergeAdmissions).toEqual({});
+    });
+
+    it('notifies once and retains the owner when an unavailable prerequisite exhausts its retry budget', async () => {
+      const { app } = setup();
+      app.pendingMergePrs[0].ticks = MAX_PENDING_MERGE_TICKS - 1;
+      prepareGuardMock.mockRejectedValue(new Error('git fetch failed: repository unavailable'));
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ handoff,
+        ticks: MAX_PENDING_MERGE_TICKS, attention: 'merged-tree-validation-unavailable' });
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+      expect(mergePrMock).not.toHaveBeenCalled();
+    });
+
+    it('notifies and holds a checkout refusal for repair instead of retrying forever', async () => {
+      const { app } = setup();
+      prepareGuardMock.mockResolvedValue({ ok: false, reason: 'merged-tree-checkout-unverified' });
+      await processPendingMergePrs(app);
+      expect(readPendingMergePrs(mockApps.get(app.id))[0]).toMatchObject({ handoff,
+        recoveryBlocked: 'merged-tree-checkout-unverified' });
+      await processPendingMergePrs(mockApps.get(app.id));
+      expect(prepareGuardMock).toHaveBeenCalledTimes(1);
+      expect(addNotificationMock).toHaveBeenCalledTimes(1);
+      expect(mergePrMock).not.toHaveBeenCalled();
     });
 
     it('runs the guard outside admission and merges the unchanged reviewed head inside it', async () => {

@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { promisify, stripVTControlCharacters } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
 import { execGit } from '../lib/execGit.js';
+import { scrubSecretTokens } from '../lib/secretText.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
 
 const run = promisify(execFile);
 const SHA = /^[0-9a-f]{40}$/;
@@ -16,6 +18,9 @@ const readOptional = path => readFile(path, 'utf8').catch(error => {
   throw error;
 });
 
+export const summarizeMergeGuardOutput = text => redactPii(scrubSecretTokens(stripVTControlCharacters(String(text))))
+  .replace(/\s+/g, ' ').trim().slice(0, 500);
+
 // Capability, not upstream slug: forks inherit the guard, ordinary managed apps
 // and older PortOS checkouts without merged-tree support keep their behavior.
 export async function supportsPendingMergeGuard(repoPath) {
@@ -26,13 +31,15 @@ export async function supportsPendingMergeGuard(repoPath) {
 async function verifyCheckout(repoPath, worktreePath, branch, headSha) {
   if (!worktreePath || resolve(repoPath) === resolve(worktreePath)) return false;
   const read = async (args, cwd = worktreePath) => (await execGit(args, cwd)).stdout.trim();
-  const [common, primaryCommon, head, ref, status] = await Promise.all([
+  const checked = await Promise.all([
     read(['rev-parse', '--path-format=absolute', '--git-common-dir']),
     read(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath),
     read(['rev-parse', '--verify', 'HEAD^{commit}']),
     read(['symbolic-ref', '--quiet', '--short', 'HEAD']),
     read(['status', '--porcelain=v1', '--untracked-files=all']),
-  ]);
+  ]).catch(() => null);
+  if (!checked) return false;
+  const [common, primaryCommon, head, ref, status] = checked;
   return common === primaryCommon && head === headSha && ref === branch && !status;
 }
 
@@ -47,7 +54,8 @@ export async function preparePendingMergeGuard({ app, entry, binding, prView, re
   }
   if (!await supportsPendingMergeGuard(worktreePath)) return { ok: false, reason: 'merged-tree-command-unavailable' };
   const base = await readDefault();
-  if (!base || !SHA.test(base.sha) || prView.baseRefName !== base.name) {
+  if (!base || !SHA.test(base.sha)) return { ok: false, reason: 'merged-tree-default-branch-unavailable' };
+  if (prView.baseRefName !== base.name) {
     return { ok: false, reason: 'merged-tree-default-branch-unverified' };
   }
   // Fetch the named ref, then pin the command to the fetched object. Concurrent
@@ -69,7 +77,9 @@ export async function preparePendingMergeGuard({ app, entry, binding, prView, re
   await writeFile(evidence.logPath, `HEAD ${headSha}\nBASE ${base.sha}\n${result.stdout}\n${result.stderr}`, { mode: 0o600 });
   if (!result.ok) {
     const failedTest = stripVTControlCharacters(`${result.stdout}\n${result.stderr}`).match(/\bFAIL\s+([^\r\n]+)/)?.[1];
-    return { ok: false, reason: 'merged-tree-guards-failed', evidence: { ...evidence, failedTest: failedTest || null } };
+    return { ok: false, reason: 'merged-tree-guards-failed', evidence: {
+      ...evidence, failedTest: failedTest ? summarizeMergeGuardOutput(failedTest) : null,
+    } };
   }
   if (!await verifyCheckout(app.repoPath, worktreePath, entry.prBranch, headSha)) {
     return { ok: false, reason: 'merged-tree-checkout-changed', evidence };
