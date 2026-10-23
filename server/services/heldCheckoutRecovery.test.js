@@ -20,7 +20,8 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, onRemove: null, scheduleWrites: 0, failScheduleWrite: null }));
+const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -28,7 +29,8 @@ vi.mock('../lib/execGit.js', async importOriginal => {
     // Pauses an archive mid-write, after its first snapshot and before its re-read.
     if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
     if (injected.onEvidence && args[0] === 'bundle' && args[1] === 'verify') await injected.onEvidence();
-    if (injected.onRemove && args[0] === 'worktree' && args[1] === 'remove') await injected.onRemove();
+    if (retirementFaults.onRemove && args[0] === 'worktree' && args[1] === 'remove') await retirementFaults.onRemove();
+    if (retirementFaults.onBranchDelete && args[0] === 'push' && args.some(arg => arg.startsWith(':refs/heads/'))) await retirementFaults.onBranchDelete();
     if (args.includes('credential.helper=!gh auth git-credential') && args.includes('fetch')) {
       injected.fetches.push({ args, options });
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
@@ -48,7 +50,7 @@ vi.mock('./taskScheduleStore.js', async (importOriginal) => ({
   ...await importOriginal(),
   loadSchedule: async () => injected.schedule,
   updateSchedule: async mutate => {
-    if (++injected.scheduleWrites === injected.failScheduleWrite) throw new Error('synthetic receipt persistence failure');
+    if (++retirementFaults.scheduleWrites === retirementFaults.failScheduleWrite) throw new Error('synthetic receipt persistence failure');
     return (await mutate(injected.schedule)).result;
   },
 }));
@@ -66,7 +68,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   const noOwners = async () => [];
 
   beforeEach(async () => {
-    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, onRemove: null, scheduleWrites: 0, failScheduleWrite: null });
+    Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -140,10 +143,43 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     appId: 'app-1', cosDir, claimOwners: { agents: [], readAgents },
   });
 
+  it('retires a superseded branch without a worktree through its full branch archive without claiming checkout preservation', async () => {
+    const branch = 'feature/no-worktree';
+    const head = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'superseded branch-only commit'], repo)).stdout.trim();
+    await execGit(['branch', branch, head], repo);
+    const missingCheckout = { branch, path: join(external, 'lost-original'), head, locked: false, lockReason: null };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...missingCheckout, reason: 'retirement-provenance-unverified' }] });
+    let archiveDir;
+    retirementFaults.onBranchDelete = async () => {
+      for (const name of await readdir(join(PATHS.cos, 'branch-retirement-archives'))) {
+        const dir = join(PATHS.cos, 'branch-retirement-archives', name);
+        const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
+        if (manifest.repoPath === repo && manifest.branch === branch && manifest.expectedHead === head) {
+          archiveDir = dir;
+          expect(manifest.recoveryHeads).toContain(head);
+          expect(manifest.bundleSha256).toMatch(/^[a-f0-9]{64}$/);
+        }
+      }
+      expect(archiveDir).toBeTruthy();
+      expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo)).stdout.trim()).toBe(head);
+    };
+    const entry = { branch, tip: head, worktreePath: null, dirtyPaths: [], verdict: { branch, tip: head, verdict: 'SUPERSEDED', dirtyPaths: [] } };
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [branch], skipped: [] });
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    const restored = join(scratch, 'branch-restore.git');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['bundle', 'unbundle', join(archiveDir, 'commits.bundle')], restored);
+    expect((await execGit(['cat-file', '-e', `${head}^{commit}`], restored)).exitCode).toBe(0);
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired || []).toEqual([]);
+    expect(outcome.retirementObligations).toContainEqual(expect.objectContaining(missingCheckout));
+    expect(await archives()).toEqual([]);
+  });
+
   it('archives every superseded checkout byte and persists its exact generation before removal, then records retirement', async () => {
     const { entry, release } = await supersededCheckout();
     let prepared;
-    injected.onRemove = async () => {
+    retirementFaults.onRemove = async () => {
       const outcome = await getBranchReconcileOutcome('app-1');
       const row = outcome.retirementObligations.find(row => row.branch === release.branch);
       prepared = row.preservationReceipt;
@@ -168,7 +204,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   it.each(['archive failure', 'preservation receipt failure', 'new owner', 'ignored bytes change', 'private administration change', 'checkout identity change', 'app scope change'])('keeps superseded originals on %s', async failure => {
     const { entry, release } = await supersededCheckout();
     let owners = [];
-    if (failure === 'preservation receipt failure') injected.failScheduleWrite = 3;
+    if (failure === 'preservation receipt failure') retirementFaults.failScheduleWrite = 3;
     else injected.onBundle = async () => {
       injected.onBundle = null;
       if (failure === 'archive failure') throw new Error('synthetic archive failure');
@@ -217,7 +253,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const older = { archiveDir: first.retirementObligations[0].preservationReceipt.archiveDir };
     owners = [];
     await writeFile(join(release.path, 'ignored.txt'), 'new private ignored work');
-    injected.failScheduleWrite = injected.scheduleWrites + 4;
+    retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 4;
     expect((await reapSuperseded(entry)).reaped).toEqual([]);
     const outcome = await getBranchReconcileOutcome('app-1');
     const archiveDir = outcome.retirementObligations[0].preservationReceipt.archiveDir;
@@ -242,7 +278,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('keeps a durable preservation obligation when final retirement receipt persistence fails', async () => {
     const { entry, release } = await supersededCheckout();
-    injected.failScheduleWrite = 4;
+    retirementFaults.failScheduleWrite = 4;
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'retirement-receipt-unverified' }] });
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.retired || []).toEqual([]);

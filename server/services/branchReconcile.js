@@ -1263,6 +1263,9 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
         const backup = await backupSupersededBranch(repoPath, b, { defaultBranch, ...(cosDir ? { cosDir } : {}) })
           .catch((err) => ({ error: err.message }));
         if (!backup?.error) {
+          // No checkout is being removed. The scoped ref receiver still archives
+          // branch configuration, reflogs and complete objects before deletion.
+          if (!b.worktreePath) return backup;
           const tree = (await listWorktrees(repoPath)).find(holder => holder.path === b.worktreePath);
           if (!tree || tree.head !== b.tip || tree.branch !== `refs/heads/${b.branch}`) return { error: 'worktree-holder-changed' };
           const { preserveSupersededCheckout } = await import('./heldCheckoutRecovery.js');
