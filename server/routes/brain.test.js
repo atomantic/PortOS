@@ -119,11 +119,6 @@ vi.mock('../services/brainSyncLog.js', () => ({
   getChangesSince: vi.fn()
 }));
 
-// Mock the brain sync service
-vi.mock('../services/brainSync.js', () => ({
-  applyRemoteChanges: vi.fn()
-}));
-
 // Mock the brain anti-entropy reconcile service (#1077). Only the two read
 // endpoints are exposed over HTTP; applyBrainSnapshot is orchestrator-only.
 vi.mock('../services/brainReconcile.js', () => ({
@@ -169,7 +164,6 @@ import { getBrainGraphSearchIndex, getBrainGraphOverview, getBrainGraphNeighborh
 import { syncAllBrainData, getEmbeddingCoverage } from '../services/brainMemoryBridge.js';
 import { getChangesSince } from '../services/brainSyncLog.js';
 import { getBrainChecksum, getBrainSnapshot } from '../services/brainReconcile.js';
-import { applyRemoteChanges } from '../services/brainSync.js';
 import * as journal from '../services/brainJournal.js';
 
 describe('Brain Routes', () => {
@@ -1383,43 +1377,6 @@ describe('Brain Routes', () => {
       const response = await request(app).get('/api/brain/reconcile/snapshot');
       expect(response.status).toBe(200);
       expect(response.body).toEqual(snap);
-    });
-  });
-
-  describe('POST /api/brain/sync', () => {
-    it('should apply remote changes and return stats', async () => {
-      const mockResult = { inserted: 2, updated: 1, deleted: 0, skipped: 1 };
-      applyRemoteChanges.mockResolvedValue(mockResult);
-
-      const response = await request(app)
-        .post('/api/brain/sync')
-        .send({
-          changes: [
-            { seq: 1, op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, ts: '2026-01-01T00:00:00.000Z' },
-            { seq: 2, op: 'update', type: 'ideas', id: 'i1', record: { title: 'B' }, ts: '2026-01-01T00:00:00.000Z' }
-          ]
-        });
-
-      expect(response.status).toBe(200);
-      expect(response.body.inserted).toBe(2);
-      expect(response.body.updated).toBe(1);
-      expect(applyRemoteChanges).toHaveBeenCalledTimes(1);
-    });
-
-    it('should return 400 when changes array is empty', async () => {
-      const response = await request(app)
-        .post('/api/brain/sync')
-        .send({ changes: [] });
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should return 400 when changes is missing', async () => {
-      const response = await request(app)
-        .post('/api/brain/sync')
-        .send({});
-
-      expect(response.status).toBe(400);
     });
   });
 

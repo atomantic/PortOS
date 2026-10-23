@@ -12,9 +12,6 @@ vi.mock('../services/brainMemoryBridge.js', () => ({
 vi.mock('../services/brainSyncLog.js', () => ({
   getChangesSince: vi.fn(),
 }));
-vi.mock('../services/brainSync.js', () => ({
-  applyRemoteChanges: vi.fn(),
-}));
 vi.mock('../services/brainReconcile.js', () => ({
   getBrainChecksum: vi.fn(),
   getBrainSnapshot: vi.fn(),
@@ -38,7 +35,6 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import * as brainParity from '../services/brainParity.js';
-import * as brainSync from '../services/brainSync.js';
 import * as brainSyncLog from '../services/brainSyncLog.js';
 import * as brainReconcile from '../services/brainReconcile.js';
 import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
@@ -106,32 +102,6 @@ describe('brain pulls honor the per-peer brain category', () => {
 
     expect(res.status).toBe(200);
     expect(brainReconcile.getBrainSnapshot).toHaveBeenCalledOnce();
-  });
-});
-
-describe('POST /api/brain/sync', () => {
-  it.each(['not-a-date', 42, { value: '2026-10-15' }])('rejects malformed record clocks before applying changes: %j', async (updatedAt) => {
-    const res = await request(buildApp()).post('/api/brain/sync').send({ changes: [{
-      seq: 1, op: 'update', type: 'people', id: 'peer-person',
-      record: { name: 'Remote person', updatedAt }, ts: '2026-10-15T00:00:00Z',
-    }] });
-
-    expect(res.status).toBe(400);
-    expect(brainSync.applyRemoteChanges).not.toHaveBeenCalled();
-  });
-
-  it('preserves legacy clock formats and unknown record fields', async () => {
-    brainSync.applyRemoteChanges.mockResolvedValue({ updated: 1 });
-    const change = {
-      seq: 1, op: 'update', type: 'people', id: 'peer-person',
-      record: { name: 'Remote person', updatedAt: '2026-10-15T12:00:00+02:00', futureField: { keep: true } },
-      ts: '2026-10-15T10:00:00Z',
-    };
-
-    const res = await request(buildApp()).post('/api/brain/sync').send({ changes: [change] });
-
-    expect(res.status).toBe(200);
-    expect(brainSync.applyRemoteChanges).toHaveBeenCalledWith([change]);
   });
 });
 

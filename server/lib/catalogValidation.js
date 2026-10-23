@@ -645,8 +645,8 @@ export const catalogExportQuerySchema = z.object({
   format: z.enum(['json', 'markdown', 'yaml']).optional(),
 }).strict();
 
-// Sync envelope shape — used by POST /api/catalog/sync/apply when a peer
-// forwards changes pulled from another instance. Each kind is optional so
+// Catalog sync envelope shape. Receivers apply pulled changes in-process
+// via catalogSync.applyRemoteChanges. Each kind is optional so
 // callers can apply a partial envelope (e.g. ingredients-only).
 //
 // Read-path caps MIRROR the create-path caps above: rawText 2MB, payload
