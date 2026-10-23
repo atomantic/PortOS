@@ -6,8 +6,11 @@ const getSelfLoginMock = vi.fn()
 const getOriginInfoMock = vi.fn()
 const runModelAbuseScanMock = vi.fn()
 const isTrustedMock = vi.fn()
+const createActorTrustMock = vi.fn()
+const resolveForgeExecOptionsMock = vi.fn()
 
-vi.mock('./forgeActorTrust.js', () => ({ createGithubActorTrust: async () => ({ isTrusted: (...args) => isTrustedMock(...args) }) }))
+vi.mock('./forgeActorTrust.js', () => ({ createGithubActorTrust: (...args) => createActorTrustMock(...args) }))
+vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: (...args) => resolveForgeExecOptionsMock(...args) }))
 
 vi.mock('./github.js', () => ({
   execGh: (...args) => execGhMock(...args),
@@ -35,6 +38,8 @@ vi.mock('../lib/workTracker.js', async (importActual) => {
 import { linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js'
 import {
   listExternalOpenPullRequests,
+  resolvePrReviewerTargetScope,
+  isReviewablePullRequest,
   runPrReviewerSecurityScan,
   securityScanFingerprint,
   summarizeSecurityScanReport,
@@ -108,6 +113,8 @@ const routeGh = ({ prs = [], commits = {}, issues = {}, diffs = {} } = {}) => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  createActorTrustMock.mockImplementation(async () => ({ isTrusted: (...args) => isTrustedMock(...args) }))
+  resolveForgeExecOptionsMock.mockResolvedValue({ cwd: app.repoPath, env: {}, customEnv: null })
   isTrustedMock.mockImplementation(async login => ['maintainer', 'example', 'trusted-collaborator'].includes(login.toLowerCase()))
   ensureForgeReachableMock.mockResolvedValue({ ok: true })
   getOriginInfoMock.mockResolvedValue({ host: 'github.com', fullName: 'example/repo' })
@@ -140,7 +147,7 @@ describe('pr-reviewer model-abuse preflight', () => {
     expect(execGhMock).toHaveBeenCalledWith([
       'pr', 'list', '--repo', 'github.com/example/repo', '--base', 'main', '--state', 'open',
       '--limit', '200', '--json', 'number,author,url,headRefOid,updatedAt,title,body',
-    ])
+    ], undefined, { cwd: app.repoPath, env: {} })
     expect(execGhMock.mock.calls.some(([args]) => args[0] === 'pr' && args[1] !== 'list')).toBe(false)
   })
 
@@ -202,7 +209,7 @@ describe('pr-reviewer model-abuse preflight', () => {
     })
     expect(execGhMock).toHaveBeenLastCalledWith([
       'api', '--hostname', 'github.com', 'repos/example/repo/issues/101',
-    ])
+    ], undefined, { cwd: app.repoPath, env: {} })
   })
 
   it('fails the programmatic issue lookup fact closed when a linked issue cannot be read', async () => {
@@ -463,5 +470,80 @@ describe('screened-content fingerprint contract', () => {
     const stamped = await scanOnce()
     expect(screenedPullRequestFingerprint(coordinatorRead({ commits: undefined }), DIFF)).toBeNull()
     expect(stamped).toEqual(expect.any(String))
+  })
+})
+
+
+describe('account-scoped review intake', () => {
+  it('keeps every forge read on the pinned account without serializing credentials', async () => {
+    const { createGithubActorTrust } = await vi.importActual('./forgeActorTrust.js')
+    createActorTrustMock.mockImplementation(createGithubActorTrust)
+    resolveForgeExecOptionsMock.mockImplementation(async (cwd, { forgeAccount }) => {
+      const env = { GH_TOKEN: `synthetic-token-${forgeAccount}` }
+      return { cwd, env, customEnv: env }
+    })
+    getSelfLoginMock.mockImplementation((host, options) => execGhMock(
+      ['api', 'user', '--hostname', host, '--jq', '.login'], undefined, options,
+    ))
+    execGhMock.mockImplementation(async (args, timeout, options) => {
+      const account = options.env.GH_TOKEN.replace('synthetic-token-', '')
+      if (args[0] === 'repo') return 'main'
+      if (args[0] === 'api' && args.includes('user')) return account
+      if (args[0] === 'api' && args.at(-1).endsWith('/permission')) {
+        const login = args.at(-1).split('/').at(-2)
+        return JSON.stringify({ user: { login }, permission: 'read' })
+      }
+      if (args[0] === 'api') return JSON.stringify(openIssue())
+      if (args[1] === 'list') return JSON.stringify([
+        listedPr(11, account, 'a'.repeat(40)),
+        listedPr(12, 'contributor-a', 'b'.repeat(40), { title: 'Fixes #101' }),
+      ])
+      if (args[1] === 'diff') return 'diff --git a/example.js b/example.js\n+export const fixed = true'
+      if (args[1] === 'view') return JSON.stringify({ commits: [{ messageHeadline: 'fix: example' }] })
+      throw new Error('unexpected synthetic forge request')
+    })
+
+    for (const forgeAccount of ['example-reviewer-a', 'example-reviewer-b']) {
+      execGhMock.mockClear()
+      const scopedApp = { ...app, forgeAccount }
+      // The generator passes a spread/narrowed target across the intake/scan
+      // boundary; credentials must be resolved from the app again there.
+      const scope = await resolvePrReviewerTargetScope(scopedApp)
+      expect(scope.selfLogin).toBe(forgeAccount)
+      expect(await isReviewablePullRequest(scope, { author: forgeAccount, baseBranch: 'main' })).toBe(false)
+      expect(await isReviewablePullRequest(scope, { author: 'contributor-a', baseBranch: 'main' })).toBe(true)
+      const target = await listExternalOpenPullRequests(scopedApp)
+      expect(target.prs.map(pr => pr.number)).toEqual([12])
+      const result = await runPrReviewerSecurityScan({ app: scopedApp, target: { ...target } })
+      expect(result).toMatchObject({ ok: true, passed: true })
+      expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith(app.repoPath, { forgeAccount })
+      const env = { GH_TOKEN: `synthetic-token-${forgeAccount}` }
+      expect(ensureForgeReachableMock).toHaveBeenLastCalledWith('pr-reviewer security scan', { hostname: 'github.com', env })
+      expect(execGhMock.mock.calls.length).toBeGreaterThanOrEqual(7)
+      for (const [, , options] of execGhMock.mock.calls) expect(options).toEqual({ cwd: app.repoPath, env })
+      for (const value of [scope, target, result, runModelAbuseScanMock.mock.calls]) {
+        expect(JSON.stringify(value)).not.toMatch(/synthetic-token|GH_TOKEN|"env"|"cwd"/)
+      }
+      expect(runModelAbuseScanMock).toHaveBeenLastCalledWith({ content: expect.any(String), source: 'github-pr' })
+    }
+  })
+
+  it('does not read as the ambient account when a pin cannot be resolved', async () => {
+    resolveForgeExecOptionsMock.mockRejectedValue(Object.assign(new Error('Synthetic account unavailable'), { code: 'FORGE_ACCOUNT_UNAVAILABLE' }))
+    await expect(listExternalOpenPullRequests({ ...app, forgeAccount: 'example-reviewer-b' }))
+      .rejects.toMatchObject({ code: 'FORGE_ACCOUNT_UNAVAILABLE' })
+    expect(execGhMock).not.toHaveBeenCalled()
+    expect(getSelfLoginMock).not.toHaveBeenCalled()
+  })
+
+  it('withholds private repository intake when the pinned account lacks access', async () => {
+    const env = { GH_TOKEN: 'synthetic-unavailable-token' }
+    resolveForgeExecOptionsMock.mockResolvedValue({ cwd: app.repoPath, env, customEnv: env })
+    execGhMock.mockRejectedValue(new Error('Synthetic private repository unavailable'))
+    expect(await listExternalOpenPullRequests({ ...app, forgeAccount: 'example-reviewer-b' }))
+      .toMatchObject({ ok: false, code: 'security-scan-default-branch-unresolved' })
+    expect(execGhMock).toHaveBeenCalledTimes(1)
+    expect(execGhMock.mock.calls[0][2]).toEqual({ cwd: app.repoPath, env })
+    expect(getSelfLoginMock).not.toHaveBeenCalled()
   })
 })

@@ -979,6 +979,28 @@ describe('getSelfLogin', () => {
     expect(execGhMock).toHaveBeenCalledTimes(2);
   });
 
+  it('isolates scoped viewers on one host from each other and the ambient cache', async () => {
+    const first = { cwd: '/example/repo', env: { GH_TOKEN: 'synthetic-token-a' } };
+    const second = { cwd: '/example/repo', env: { GH_TOKEN: 'synthetic-token-b' } };
+    execGhMock.mockImplementation(async (args, timeout, options) => {
+      if (options.env === first.env) return 'example-reviewer-a';
+      if (options.env === second.env) return 'example-reviewer-b';
+      return 'ambient-viewer';
+    });
+    expect(await getSelfLogin('github.com')).toBe('ambient-viewer');
+    expect(await getSelfLogin('github.com', first)).toBe('example-reviewer-a');
+    expect(await getSelfLogin('github.com', second)).toBe('example-reviewer-b');
+    execGhMock.mockRejectedValueOnce(new Error('Synthetic scoped account unavailable'));
+    expect(await getSelfLogin('github.com', second)).toBeNull();
+    expect(await getSelfLogin('github.com', second)).toBe('example-reviewer-b');
+    expect(await getSelfLogin('github.com')).toBe('ambient-viewer');
+    expect(execGhMock).toHaveBeenCalledTimes(5);
+    expect(execGhMock).toHaveBeenCalledWith(
+      ['api', 'user', '--hostname', 'github.com', '--jq', '.login'],
+      undefined, { ...second, backoffKey: 'github.com' },
+    );
+  });
+
   it('returns null with no host and never shells out', async () => {
     expect(await getSelfLogin()).toBe(null);
     expect(await getSelfLogin('')).toBe(null);

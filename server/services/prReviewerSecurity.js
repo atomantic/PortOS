@@ -11,6 +11,7 @@
 import { createHash } from 'node:crypto';
 import { execGh, ensureForgeReachable } from './github.js';
 import { getSelfLogin } from './prWatcher.js';
+import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { createGithubActorTrust } from './forgeActorTrust.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubApiHost, githubRepoSpec } from '../lib/workTracker.js';
@@ -72,12 +73,7 @@ export function extractLinkedIssueNumbers(pr, repoFullName) {
  * issues contribute intent — a closed issue is not a live requirement, and the
  * pre-action recheck recomputes the fingerprint from the same open set.
  */
-async function resolveEligibilityFacts(pr, repoFullName, hostname, readIssue = async (number) => {
-  const raw = await execGh([
-    'api', '--hostname', hostname, `repos/${repoFullName}/issues/${number}`,
-  ]).catch(() => null);
-  return safeJSONParse(raw, null);
-}) {
+async function resolveEligibilityFacts(pr, repoFullName, readIssue) {
   const linkedIssueNumbers = extractLinkedIssueNumbers(pr, repoFullName);
   if (linkedIssueNumbers.length === 0) {
     return {
@@ -146,7 +142,7 @@ export async function assessPullRequestForAction({ pr, diff, repoFullName, readP
     return failure('security-action-evidence-unavailable');
   }
   const readIntent = (row) => resolveEligibilityFacts(
-    { ...row, authorLogin: row.author?.login }, repoFullName, null, readIssue,
+    { ...row, authorLogin: row.author?.login }, repoFullName, readIssue,
   );
   const intent = await readIntent(pr);
   if (!intent.inputComplete || !intent.facts.issueLookupComplete) return failure('security-action-intent-unavailable');
@@ -181,6 +177,14 @@ export async function assessPullRequestForAction({ pr, diff, repoFullName, readP
   return { ok: true, stillCurrent };
 }
 
+// These closures stay local to an intake; target/pipeline records never carry
+// credential-bearing execution options, including when callers spread them.
+const forgeReader = ({ cwd, env }) => args => execGh(args, undefined, { cwd, env });
+const issueReader = (runGh, hostname, repoFullName) => async number => {
+  const raw = await runGh(['api', '--hostname', hostname, `repos/${repoFullName}/issues/${number}`]).catch(() => null);
+  return safeJSONParse(raw, null);
+};
+
 /**
  * The three facts that decide which of a repo's open PRs pr-reviewer may target:
  * the `gh` repo selector, the default branch it reviews against, and the login
@@ -191,21 +195,28 @@ export async function assessPullRequestForAction({ pr, diff, repoFullName, readP
  * rule and drifting from it.
  */
 export async function resolvePrReviewerTargetScope(app) {
+  const forgeExec = await resolveForgeExecOptions(app?.repoPath, { forgeAccount: app?.forgeAccount });
+  return readPrReviewerTargetScope(app, forgeExec);
+}
+
+async function readPrReviewerTargetScope(app, forgeExec) {
+  const runGh = forgeReader(forgeExec);
   const origin = await getOriginInfo(app?.repoPath).catch(() => null);
   const repoSpec = githubRepoSpec(origin);
   if (!repoSpec) return failure('security-scan-not-a-github-repo');
 
   const forge = await ensureForgeReachable('pr-reviewer security scan', {
     hostname: githubApiHost(origin.host),
+    ...(forgeExec.customEnv ? { env: forgeExec.customEnv } : {}),
   });
   if (!forge.ok) return failure('security-scan-forge-unreachable');
 
-  const defaultBranch = await execGh([
+  const defaultBranch = await runGh([
     'repo', 'view', repoSpec, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name',
   ]).catch(() => null);
   if (!defaultBranch?.trim()) return failure('security-scan-default-branch-unresolved');
 
-  const selfLogin = await getSelfLogin(githubApiHost(origin.host));
+  const selfLogin = await getSelfLogin(githubApiHost(origin.host), { cwd: forgeExec.cwd, env: forgeExec.env });
   if (!selfLogin) return failure('security-scan-self-login-unavailable');
 
   return {
@@ -215,7 +226,7 @@ export async function resolvePrReviewerTargetScope(app) {
     hostname: githubApiHost(origin.host),
     defaultBranch: defaultBranch.trim(),
     selfLogin,
-    actorTrust: await createGithubActorTrust({ runGh: execGh, host: githubApiHost(origin.host), repoFullName: origin.fullName, currentUser: selfLogin }),
+    actorTrust: await createGithubActorTrust({ runGh, host: githubApiHost(origin.host), repoFullName: origin.fullName, currentUser: selfLogin }),
   };
 }
 
@@ -236,11 +247,17 @@ export async function isReviewablePullRequest(scope, pullRequest) {
 }
 
 export async function listExternalOpenPullRequests(app) {
-  const scope = await resolvePrReviewerTargetScope(app);
+  const forgeExec = await resolveForgeExecOptions(app?.repoPath, { forgeAccount: app?.forgeAccount });
+  return readExternalOpenPullRequests(app, forgeExec);
+}
+
+async function readExternalOpenPullRequests(app, forgeExec) {
+  const runGh = forgeReader(forgeExec);
+  const scope = await readPrReviewerTargetScope(app, forgeExec);
   if (!scope.ok) return scope;
   const { repoSpec, repoFullName, hostname, defaultBranch, actorTrust } = scope;
 
-  const raw = await execGh([
+  const raw = await runGh([
     'pr', 'list', '--repo', repoSpec,
     '--base', defaultBranch, '--state', 'open',
     '--limit', String(SECURITY_SCAN_MAX_OPEN_PRS),
@@ -273,8 +290,9 @@ export async function listExternalOpenPullRequests(app) {
 
   const trusted = await mapWithConcurrency(listedPrs, ELIGIBILITY_LOOKUP_CONCURRENCY, pr => actorTrust.isTrusted(pr.authorLogin));
   const externalPrs = listedPrs.filter((_, index) => !trusted[index]);
+  const readIssue = issueReader(runGh, hostname, repoFullName);
   const prs = await mapWithConcurrency(externalPrs, ELIGIBILITY_LOOKUP_CONCURRENCY, async (pr) => {
-    const { facts, linkedIssues, inputComplete } = await resolveEligibilityFacts(pr, repoFullName, hostname);
+    const { facts, linkedIssues, inputComplete } = await resolveEligibilityFacts(pr, repoFullName, readIssue);
     return { ...pr, eligibilityFacts: facts, linkedIssues, inputComplete };
   });
 
@@ -351,8 +369,8 @@ const reportFor = (pr, diff, commits, verdict) => ({
  * hit count, so at the 200-PR cap it trips the 500,000 potential-node ceiling
  * and the whole listing is refused. Read the log per PR, in the scan.
  */
-async function fetchPullRequestCommits(number, repoSpec) {
-  const raw = await execGh([
+async function fetchPullRequestCommits(number, repoSpec, runGh) {
+  const raw = await runGh([
     'pr', 'view', String(number), '--repo', repoSpec, '--json', 'commits',
   ]).catch(() => null);
   const parsed = safeJSONParse(raw, null);
@@ -366,7 +384,9 @@ async function fetchPullRequestCommits(number, repoSpec) {
  * generic and are useful to the human-facing status view only.
  */
 export async function runPrReviewerSecurityScan({ app, target = null, largeInputFallback = null } = {}) {
-  const resolvedTarget = target || await listExternalOpenPullRequests(app);
+  const forgeExec = await resolveForgeExecOptions(app?.repoPath, { forgeAccount: app?.forgeAccount });
+  const runGh = forgeReader(forgeExec);
+  const resolvedTarget = target || await readExternalOpenPullRequests(app, forgeExec);
   if (!resolvedTarget.ok) return resolvedTarget;
   const scanKey = securityScanFingerprint(resolvedTarget);
   if (!scanKey) return failure('security-scan-target-unidentifiable');
@@ -393,8 +413,8 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
   for (const pr of resolvedTarget.prs) {
     if (pr.inputComplete === false || pr.linkedIssues?.some(issue => issue.truncated)) return failure('security-scan-linked-issue-too-large', { reviewedPrs, scanKey });
     const [diff, commits] = await Promise.all([
-      execGh(['pr', 'diff', String(pr.number), '--repo', resolvedTarget.repoSpec]).catch(() => null),
-      fetchPullRequestCommits(pr.number, resolvedTarget.repoSpec),
+      runGh(['pr', 'diff', String(pr.number), '--repo', resolvedTarget.repoSpec]).catch(() => null),
+      fetchPullRequestCommits(pr.number, resolvedTarget.repoSpec, runGh),
     ]);
     if (diff === null) return failure('security-scan-diff-unavailable', { reviewedPrs, scanKey });
     // Fail closed on an unreadable commit log: screening a PR as though it had
