@@ -21,6 +21,7 @@ const mock = vi.hoisted(() => ({
   syncGitHubNotifications: vi.fn(),
   applyGitHubNotificationAction: vi.fn(),
   resolveGitHubNotificationWithAgent: vi.fn(),
+  actOnGitHubNotificationPullRequest: vi.fn(),
   clearFinishedGitHubNotifications: vi.fn(),
   getGitHubDeploymentReview: vi.fn(),
   reviewGitHubDeployment: vi.fn(),
@@ -417,6 +418,39 @@ describe('GitHub inbox tab', () => {
     mock.getGitHubNotifications.mockResolvedValue({ notifications: [NOTIFICATION], sync: {} });
   });
 
+  it('uses the shared PR merge choices and applies a successful merge to the inbox immediately', async () => {
+    const notification = { ...NOTIFICATION, ruleKind: 'dependabot-pr', trust: 'trusted',
+      pullRequestAction: { action: 'do-review', taskId: 'previous-review' },
+      pullRequest: { number: 7, mergeEligible: true, doReviewEligible: true, reviewEligible: false } };
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [notification], sync: {} });
+    mock.actOnGitHubNotificationPullRequest.mockResolvedValue({ merged: true,
+      notification: { ...notification, pullRequest: null, decision: 'suggest-mark-read' } });
+    await renderInbox();
+    expect(screen.getByRole('button', { name: 'Do:Review' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Resolve with agent' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    expect(mock.actOnGitHubNotificationPullRequest).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Merge method for #7'), { target: { value: 'squash' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Merge #7' }));
+    await waitFor(() => expect(mock.actOnGitHubNotificationPullRequest).toHaveBeenCalledWith('github-com', '101',
+      { action: 'merge', method: 'squash', deleteBranch: false }, { silent: true }));
+    expect(await screen.findByRole('button', { name: 'Mark done' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Merge' })).toBeNull();
+  });
+
+  it('keeps a refused merge visible and offers screened review only where the server allows it', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [{ ...NOTIFICATION,
+      pullRequest: { number: 7, mergeEligible: true, doReviewEligible: false, reviewEligible: true } }], sync: {} });
+    mock.actOnGitHubNotificationPullRequest.mockRejectedValue(new Error('Checks are still pending'));
+    await renderInbox();
+    expect(screen.getByRole('button', { name: 'Untrusted:Review' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Do:Review' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge #7' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Checks are still pending');
+    expect(screen.getByRole('button', { name: 'Merge #7' })).toBeTruthy();
+  });
+
   it('opens by default, syncs on arrival, and links only to the stored GitHub page', async () => {
     await renderInbox('');
     expect(await screen.findByText('Example change')).toBeTruthy();
@@ -685,6 +719,28 @@ describe('GitHub automations tab', () => {
     mock.syncGitHubNotifications.mockResolvedValue({ results: [] });
     mock.getGitHubAutomationActivity.mockResolvedValue({ actions: [] });
     mock.getGitHubLearnedRules.mockResolvedValue({ rules: [] });
+  });
+
+  it('configures Dependabot merges with the shared merge options and can apply the saved rule now', async () => {
+    mock.getGitHubAutomations.mockResolvedValue({ ...OVERVIEW, accounts: [{ ...OVERVIEW.accounts[0], mode: 'autopilot',
+      agentRules: [], repos: ['octocat/hello'], openByKind: [{ kind: 'dependabot-pr', repo: 'octocat/hello', total: 2, actionable: 2 }] }] });
+    mock.updateGitHubAccount.mockImplementation(async (id, data) => ({ id, ...data }));
+    render(
+      <MemoryRouter initialEntries={['/devtools/github/automations?ruleAccount=github-com&ruleKind=dependabot-pr&ruleRepo=octocat%2Fhello']}>
+        <Routes><Route path="/devtools/github/:tab" element={<GitHub />} /></Routes>
+      </MemoryRouter>,
+    );
+    const form = await screen.findByRole('form', { name: 'New automation rule' });
+    expect(screen.getByLabelText('Then').value).toBe('merge');
+    expect(screen.queryByText('Run with')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Merge method for automation'), { target: { value: 'squash' } });
+    fireEvent.click(screen.getByLabelText('Delete branch'));
+    fireEvent.click(screen.getByLabelText('Apply to these 2 now'));
+    fireEvent.submit(form);
+    await waitFor(() => expect(mock.updateGitHubAccount).toHaveBeenCalledWith('github-com', { agentRules: [expect.objectContaining({
+      kind: 'dependabot-pr', repo: 'octocat/hello', action: 'merge', mergeMethod: 'squash', deleteBranch: true,
+    })] }));
+    await waitFor(() => expect(mock.syncGitHubNotifications).toHaveBeenCalledWith('github-com', { silent: true }));
   });
 
   it('switches an account to Assist, undoes an action and forgets a learned rule', async () => {

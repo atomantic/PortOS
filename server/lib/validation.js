@@ -957,8 +957,8 @@ export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assis
 // account/org (`owner/*`) or every repo (`*`), and on which provider/model/effort
 // when it starts an agent. Repo > owner > all. Mirrors AGENT_RULE_KINDS and
 // AGENT_RULE_ACTIONS in lib/githubNotificationTriage.js.
-export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'mention', 'release', 'other']);
-export const GITHUB_AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave']);
+export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other']);
+export const GITHUB_AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave', 'do-review', 'untrusted-review', 'merge']);
 export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100}))$/;
 const emptyToNullString = (value) => (value === '' ? null : value);
 // A legacy `agent: true/false` (rules saved before #13192) is accepted and
@@ -969,6 +969,8 @@ export const githubAgentRuleSchema = z.object({
   repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, owner/* for an account or organization, or * for every repo'),
   agent: z.boolean().optional(),
   action: z.enum(GITHUB_AGENT_RULE_ACTIONS).optional(),
+  mergeMethod: z.enum(['merge', 'squash', 'rebase']).optional(),
+  deleteBranch: z.boolean().optional(),
   provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
   model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
   effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
@@ -977,6 +979,12 @@ export const githubAgentRuleSchema = z.object({
   if (!action) ctx.addIssue({ code: 'custom', path: ['action'], message: 'Choose what to do with these notifications' });
   else if (rule.kind === 'security-alert' && action !== 'agent' && action !== 'leave') {
     ctx.addIssue({ code: 'custom', path: ['action'], message: 'Security alerts are never marked done or muted by a rule' });
+  }
+  if (['do-review', 'untrusted-review', 'merge'].includes(action) && !['dependabot-pr', 'pull-request', 'own-pr', 'review-request'].includes(rule.kind)) {
+    ctx.addIssue({ code: 'custom', path: ['action'], message: 'PR actions require a pull-request notification rule' });
+  }
+  if (action === 'merge' && rule.kind !== 'dependabot-pr') {
+    ctx.addIssue({ code: 'custom', path: ['action'], message: 'Automatic merge is available for verified Dependabot pull requests' });
   }
 }).transform(({ agent, ...rule }) => ({ ...rule, action: rule.action ?? (agent ? 'agent' : 'leave') }));
 export const githubAgentRulesSchema = z.array(githubAgentRuleSchema).max(200).superRefine((rules, ctx) => {
@@ -998,6 +1006,12 @@ const githubAgentPinFields = {
 };
 export const githubAgentDefaultsSchema = z.object(githubAgentPinFields).strict();
 export const githubNotificationAgentRunSchema = z.object(githubAgentPinFields).strict();
+export const githubNotificationPullRequestActionSchema = z.object({
+  action: z.enum(['merge', 'do-review', 'untrusted-review']),
+  method: z.enum(['merge', 'squash', 'rebase']).optional(),
+  deleteBranch: z.boolean().optional(),
+  ...githubAgentPinFields,
+}).strict();
 
 export const githubAccountCreateSchema = z.object({
   label: z.string().trim().max(80).optional(),

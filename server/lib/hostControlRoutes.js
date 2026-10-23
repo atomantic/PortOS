@@ -1093,6 +1093,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/github/secrets/:name/sync',
   // Resolve with agent queues CoS agent work against the thread's app.
   'POST /api/github/notifications/:accountId/:threadId/agent',
+  'POST /api/github/notifications/:accountId/:threadId/pull-request',
   // Notifications inbox (#12952): thread actions (and the learned rules an
   // operator action trains), audit apply and the undo routes write to the
   // account with `gh`; the schedule arms a CoS System task; account

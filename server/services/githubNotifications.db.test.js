@@ -47,13 +47,13 @@ const { createAccount, updateAccount } = await import('./githubAccounts.js');
 const { __testing: { listAutopilotCandidates, candidateFilter } } = await import('./githubNotificationAutopilot.js');
 const {
   syncAccountNotifications, syncAllNotifications, listNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
-  listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, getAutomationsOverview, setNotificationCadence,
+  listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, actOnPullRequest, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
 const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
 const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
-const { AGENT_RULE_ACTIONS, AGENT_RULE_KINDS, KIND_SQL, autopilotHandoff, threadAgentKind } = await import('../lib/githubNotificationTriage.js');
+const { AGENT_RULE_ACTIONS, AGENT_RULE_KINDS, KIND_SQL, TRIAGE_RULES_VERSION, autopilotHandoff, threadAgentKind, pullRequestAutomationFilter, pullRequestAutomationRule } = await import('../lib/githubNotificationTriage.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -152,6 +152,129 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     vi.mocked(runUntrustedContentAnalysis).mockReset();
     account = await createAccount({ host: 'github.com', login: `octocat${accountIds.length}`, label: 'Example' });
     accountIds.push(account.id);
+  });
+
+  // Regression: CI can finish without a new notification or conditional-listing change.
+  it('rechecks pending Dependabot PRs on later syncs and merges only the passing exact head without a model call', async () => {
+    await updateAccount(account.id, { mode: 'autopilot', agentRules: [{ id: 'deps', kind: 'dependabot-pr', repo: '*', action: 'merge', mergeMethod: 'squash', deleteBranch: false }] });
+    vi.mocked(getAllApps).mockResolvedValue([]);
+    const repo = `${account.login}/hello`;
+    const notice = thread('2011', { owner: account.login, reason: 'subscribed' });
+    mockGh(args => githubListing(args, [notice]), {
+      [`repos/${repo}/pulls/2011`]: { author: 'dependabot[bot]', authorType: 'Bot', state: 'open' },
+    });
+    const fallback = vi.mocked(execGh).getMockImplementation();
+    const head = 'd'.repeat(40);
+    let passing = false;
+    let merged = false;
+    let verifiedBot = true;
+    const merges = [];
+    vi.mocked(execGh).mockImplementation(async (args, ...rest) => {
+      if (args[0] !== 'pr') return fallback(args, ...rest);
+      if (args[1] === 'merge') { merges.push(args); merged = true; return ''; }
+      return JSON.stringify({ number: 2011, state: merged ? 'MERGED' : 'OPEN', author: { login: verifiedBot ? 'app/dependabot' : 'mallory', is_bot: verifiedBot },
+        headRefOid: head, headRefName: 'dependabot/example', baseRefName: 'main', isDraft: false,
+        mergeStateStatus: passing ? 'CLEAN' : 'BLOCKED', mergeable: 'MERGEABLE', reviewDecision: '',
+        statusCheckRollup: [{ name: 'CI', status: passing ? 'COMPLETED' : 'IN_PROGRESS', conclusion: passing ? 'SUCCESS' : '' }] });
+    });
+    await syncAccountNotifications(account.id);
+    const pending = (await listNotifications({ accountId: account.id })).notifications[0];
+    expect(pending).toMatchObject({ ruleKind: 'dependabot-pr', pullRequest: { number: 2011, mergeEligible: true }, pullRequestAttempt: { reason: 'GITHUB_PR_NOT_READY' } });
+    expect(merges).toEqual([]);
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
+    // A pre-existing informational verdict cannot discard a PR the merge rule is waiting on.
+    await query("UPDATE github_notifications SET decision = 'suggest-done' WHERE account_id = $1 AND thread_id = '2011'", [account.id]);
+    passing = true;
+    verifiedBot = false;
+    await syncAccountNotifications(account.id);
+    expect(merges).toEqual([]);
+    expect(await getNotification(account.id, '2011')).toMatchObject({ state: 'open' });
+    verifiedBot = true;
+    await syncAccountNotifications(account.id);
+    expect(merges).toEqual([['pr', 'merge', '2011', '--repo', `github.com/${repo}`, '--squash', '--match-head-commit', head]]);
+    const result = await getNotification(account.id, '2011');
+    expect(result).toMatchObject({ decision: 'suggest-mark-read', pullRequest: null, pullRequestAction: { merged: true, headSha: head } });
+    expect(result.events.some(event => event.kind === 'merged')).toBe(true);
+    await syncAccountNotifications(account.id);
+    expect(merges).toHaveLength(1);
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the current forge state for inbox merges, preserves refusals and requires a confirmed merge', async () => {
+    const repo = `${account.login}/hello`;
+    mockGh(() => listing([thread('2012', { owner: account.login, reason: 'subscribed' })]), {
+      [`repos/${repo}/pulls/2012`]: { author: 'dependabot[bot]', authorType: 'Bot', state: 'open' },
+    });
+    vi.mocked(getAllApps).mockResolvedValue([]);
+    await syncAccountNotifications(account.id);
+    const head = 'e'.repeat(40);
+    const ready = { number: 2012, state: 'OPEN', author: { login: 'app/dependabot', is_bot: true }, headRefOid: head,
+      headRefName: 'dependabot/example', baseRefName: 'main', isDraft: false, mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE',
+      reviewDecision: 'APPROVED', statusCheckRollup: [{ name: 'CI', conclusion: 'SUCCESS' }] };
+    let current = ready;
+    let refuseMerge = false;
+    const merges = [];
+    const fallback = vi.mocked(execGh).getMockImplementation();
+    vi.mocked(execGh).mockImplementation(async (args, ...rest) => {
+      if (args[0] !== 'pr') return fallback(args, ...rest);
+      if (args[1] === 'merge') {
+        merges.push(args);
+        if (refuseMerge) throw new Error('Head commit changed');
+        return '';
+      }
+      return JSON.stringify(current);
+    });
+    for (const patch of [{ isDraft: true }, { state: 'CLOSED' }, { headRefOid: null }, { statusCheckRollup: [] },
+      { statusCheckRollup: [{ name: 'CI', conclusion: 'FAILURE' }] }, { mergeStateStatus: 'UNKNOWN' }, { reviewDecision: 'CHANGES_REQUESTED' }]) {
+      current = { ...ready, ...patch };
+      await expect(actOnPullRequest(account.id, '2012', { action: 'merge' })).rejects.toMatchObject({ code: 'GITHUB_PR_NOT_READY' });
+    }
+    expect(merges).toEqual([]);
+    current = ready;
+    refuseMerge = true;
+    await expect(actOnPullRequest(account.id, '2012', { action: 'merge' })).rejects.toMatchObject({ code: 'GITHUB_PR_MERGE_FAILED' });
+    refuseMerge = false;
+    await expect(actOnPullRequest(account.id, '2012', { action: 'merge' })).rejects.toMatchObject({ code: 'GITHUB_PR_MERGE_UNCONFIRMED' });
+    expect(await getNotification(account.id, '2012')).toMatchObject({ state: 'open', decision: 'needs-you', pullRequestAction: null });
+    expect(merges.every(args => args.includes(head))).toBe(true);
+  });
+
+  it('reaches an older ready PR after a full batch of newer PRs remains pending', async () => {
+    account = await updateAccount(account.id, { mode: 'autopilot', agentRules: [{ id: 'deps', kind: 'dependabot-pr', repo: '*', action: 'merge' }] });
+    vi.mocked(getAllApps).mockResolvedValue([]);
+    const repo = `${account.login}/hello`;
+    for (let index = 0; index < 51; index += 1) {
+      const number = 2200 + index;
+      await query(`INSERT INTO github_notifications (account_id, thread_id, repo_full_name, repo_owner, reason, subject_type,
+        subject_api_url, gh_updated_at, state, decision, trust, suspect, evidence)
+        VALUES ($1, $2, $3, $4, 'subscribed', 'PullRequest', $5, $6, 'open', 'needs-you', 'trusted', FALSE,
+          '{"actor":"dependabot[bot]","actorType":"Bot","repoOwned":true,"subjectState":"open"}'::jsonb)`,
+      [account.id, String(number), repo, account.login, `https://api.github.com/repos/${repo}/pulls/${number}`, new Date(1_790_812_800_000 + index * 1000)]);
+    }
+    const merged = new Set();
+    vi.mocked(execGh).mockImplementation(async args => {
+      const number = Number(args[2]);
+      if (args[1] === 'merge') { merged.add(number); return ''; }
+      return JSON.stringify({ number, state: merged.has(number) ? 'MERGED' : 'OPEN', author: { login: 'app/dependabot', is_bot: true },
+        headRefOid: 'f'.repeat(40), headRefName: 'dependabot/example', baseRefName: 'main', isDraft: false,
+        mergeStateStatus: number === 2200 ? 'CLEAN' : 'BLOCKED', mergeable: 'MERGEABLE', statusCheckRollup: [{ name: 'CI', conclusion: 'SUCCESS' }] });
+    });
+    const { automateNotificationPullRequests } = await import('./githubNotificationPullRequest.js');
+    const env = { GH_TOKEN: 'synthetic-account-token' };
+    expect(await automateNotificationPullRequests(account, env)).toMatchObject({ merged: 0 });
+    expect(await automateNotificationPullRequests(account, env)).toMatchObject({ merged: 1 });
+    expect([...merged]).toEqual([2200]);
+  });
+
+  it('keeps normal Assist sorting when a saved PR merge rule only runs in Autopilot', async () => {
+    await updateAccount(account.id, { mode: 'assist', agentRules: [{ id: 'deps', kind: 'dependabot-pr', repo: '*', action: 'merge' }] });
+    vi.mocked(getAllApps).mockResolvedValue([]);
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: true, value: { verdict: 'surface' } });
+    mockGh(() => listing([thread('2301', { owner: account.login, reason: 'subscribed' })]), {
+      [`repos/${account.login}/hello/pulls/2301`]: { author: 'dependabot[bot]', authorType: 'Bot', state: 'open' },
+    });
+    expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ sorted: 1 });
+    expect(runUntrustedContentAnalysis).toHaveBeenCalledTimes(1);
   });
 
   it('reads the whole inbox, keeps threads a since-cursor listing leaves out, and marks a thread gone from GitHub done', async () => {
@@ -1120,7 +1243,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
 
     const retriaged1601 = await getNotification(account.id, '1601');
     expect(retriaged1601.evidence.commenterTrust).toBe('trusted');
-    expect(retriaged1601.evidence.rulesVersion).toBe(7);
+    expect(retriaged1601.evidence.rulesVersion).toBe(TRIAGE_RULES_VERSION);
 
     const untouched1603 = await getNotification(account.id, '1603');
     expect(untouched1603.evidence.rulesVersion).toBe(6);
@@ -1144,6 +1267,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
         { reason: 'ci_activity', subject_type: 'CheckSuite', trust: 'unknown', decision: 'duplicate', evidence: evidence({ rule: 'ci-default-branch' }) },
       ],
       'own-pr': [{ reason: 'author', subject_type: 'PullRequest', trust: 'yours', decision: 'needs-you', evidence: evidence({ rule: 'default', repoManaged: false }) }],
+      'dependabot-pr': [{ reason: 'subscribed', subject_type: 'PullRequest', trust: 'trusted', decision: 'needs-you', evidence: evidence({ rule: 'default', actor: 'dependabot[bot]', actorType: 'Bot' }) }],
+      'pull-request': [{ reason: 'subscribed', subject_type: 'PullRequest', trust: 'trusted', decision: 'needs-you', evidence: evidence({ rule: 'default' }) }],
       mention: [{ reason: 'mention', subject_type: 'PullRequest', trust: 'trusted', decision: 'needs-you', evidence: evidence({ rule: 'default' }) }],
       release: [{ reason: 'subscribed', subject_type: 'Release', trust: 'unknown', decision: 'needs-you', evidence: evidence({ rule: 'default' }) }],
       other: [
@@ -1197,9 +1322,16 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
             [account.id, ids, ...filter.params],
           );
           const sqlIds = new Set(selected.map((entry) => entry.thread_id));
+          const prFilter = pullRequestAutomationFilter(agentRules, 3);
+          const { rows: prSelected } = await query(
+            `SELECT thread_id FROM github_notifications WHERE account_id = $1 AND thread_id = ANY($2::text[]) AND (${prFilter.sql})`,
+            [account.id, ids, ...prFilter.params],
+          );
+          const prSqlIds = new Set(prSelected.map(entry => entry.thread_id));
           for (const { row } of rows) {
             const js = Boolean(autopilotHandoff({ account: autopilot, row }));
             if (js !== sqlIds.has(row.thread_id)) disagreements.push(`${ruleKind}/${action}/${repo} on ${row.thread_id} (${threadAgentKind(row)}): js=${js} sql=${!js}`);
+            if (Boolean(pullRequestAutomationRule(autopilot, row)) !== prSqlIds.has(row.thread_id)) disagreements.push(`PR action scope ${ruleKind}/${action}/${repo} on ${row.thread_id}`);
           }
         }
       }

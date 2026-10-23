@@ -444,7 +444,7 @@ describe('generic notification-resolve lane (#13191)', () => {
     expect(autopilotHandoff({ account: ciAgent, row: ci })).toEqual({ lane: 'notification-resolve', repo: 'acme/app', pin: { effort: 'high' }, rule: { id: 'c', action: 'agent' } });
     expect(autopilotHandoff({ account: { ...ciAgent, agentRules: [{ kind: 'ci-activity', repo: 'acme/app', action: 'done' }] }, row: ci })).toBeNull();
     // Outside content is still refused (recorded as a skip), and a finished thread is not a candidate.
-    expect(autopilotHandoff({ account: { ...autopilot, agentRules: [{ kind: 'other', repo: '*', action: 'agent' }] }, row: { ...ownPr, trust: 'outside' } }))
+    expect(autopilotHandoff({ account: { ...autopilot, agentRules: [{ kind: 'pull-request', repo: '*', action: 'agent' }] }, row: { ...ownPr, trust: 'outside' } }))
       .toMatchObject({ refused: 'outside-content' });
     expect(autopilotHandoff({ account: ciAgent, row: { ...ci, decision: 'duplicate' } })).toBeNull();
   });

@@ -17,7 +17,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn(),
 }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
-vi.mock('./agentRunTracking.js', () => ({ createAgentRun: async () => ({ runId: 'run-example' }) }));
+vi.mock('./agentRunTracking.js', () => ({ createAgentRun: vi.fn(async () => ({ runId: 'run-example' })) }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...await importOriginal(), ensureDir: vi.fn(), writeFileGuarded: vi.fn(),
 }));
@@ -47,15 +47,20 @@ vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn(async (
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: () => ({ command: 'codex', args: [] }),
   isClaudeCliProvider: () => false,
-  isTuiProvider: () => false,
+  isTuiProvider: vi.fn(() => false),
   getClaudeSettingsEnv: async () => ({}),
   spawnDirectly: vi.fn(async () => 'agent-x'),
 }));
-vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: vi.fn(), spawnTuiAgent: vi.fn() }));
+vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: vi.fn(() => ({ command: 'codex', args: [] })), spawnTuiAgent: vi.fn() }));
+
+vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn() }));
 
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { getActiveAgentIds, protectedAgentIds, setUseRunner } from './agentState.js';
-import { spawnDirectly } from './agentCliSpawning.js';
+import { spawnDirectly, isTuiProvider } from './agentCliSpawning.js';
+import { spawnTuiAgent } from './agentTuiSpawning.js';
+import { createAgentRun } from './agentRunTracking.js';
+import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { updateTask } from './cosTaskStore.js';
 import { registerAgent } from './cosAgentLifecycle.js';
@@ -72,6 +77,7 @@ const isProtected = () => getActiveAgentIds().includes('agent-x') && protectedAg
 beforeEach(() => {
   vi.clearAllMocks();
   setUseRunner(false);
+  isTuiProvider.mockReturnValue(false);
   f.publicationActive = f.refusePublication = false;
   f.registerGate = Promise.resolve();
   f.updateResult = { ok: true };
@@ -145,5 +151,34 @@ describe('dispatchAgentRun ownership window', () => {
     f.registerGate = Promise.reject(new Error('state write failed'));
     await expect(dispatchAgentRun(newContext())).rejects.toThrow('state write failed');
     expect(getActiveAgentIds()).not.toContain('agent-x');
+  });
+});
+
+
+describe('notification account at the agent dispatch boundary', () => {
+  it.each(['direct', 'runner', 'tui'])('pins the selected account for %s without persisting credentials', async mode => {
+    const selected = { id: 'account-example', host: 'ghe.example.com', login: 'example-reviewer' };
+    resolveForgeTokenEnv.mockResolvedValue({ GH_HOST: selected.host, GH_ENTERPRISE_TOKEN: 'synthetic-selected-token' });
+    isTuiProvider.mockReturnValue(mode === 'tui');
+    setUseRunner(mode === 'runner');
+    const viaRunner = vi.fn(async () => 'agent-x');
+    const context = { ...newContext(), task: { ...task, metadata: { githubAccount: selected } } };
+    await dispatchAgentRun(context, { spawnViaRunner: viaRunner });
+    const provider = mode === 'runner' ? viaRunner.mock.calls[0][2].provider
+      : (mode === 'tui' ? spawnTuiAgent : spawnDirectly).mock.calls[0][0].provider;
+    expect(resolveForgeTokenEnv).toHaveBeenCalledWith('/repos/example', { githubAccount: selected });
+    expect(provider.envVars).toMatchObject({ GH_HOST: selected.host, GH_TOKEN: '', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: 'synthetic-selected-token', GITHUB_ENTERPRISE_TOKEN: '' });
+    expect(JSON.stringify(createAgentRun.mock.calls)).not.toContain('synthetic-selected-token');
+    expect(JSON.stringify(registerAgent.mock.calls)).not.toContain('synthetic-selected-token');
+    expect(context.task.metadata).toEqual({ githubAccount: selected });
+  });
+
+  it('does not start a process or persist an agent when the selected credential is unavailable', async () => {
+    resolveForgeTokenEnv.mockRejectedValue(new Error('Selected account unavailable'));
+    const context = { ...newContext(), task: { ...task, metadata: { githubAccount: { id: 'missing-account' } } } };
+    await expect(dispatchAgentRun(context)).rejects.toThrow('Selected account unavailable');
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(spawnTuiAgent).not.toHaveBeenCalled();
+    expect(registerAgent).not.toHaveBeenCalled();
   });
 });

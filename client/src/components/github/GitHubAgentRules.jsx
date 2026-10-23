@@ -5,6 +5,8 @@ import useRunWithPicker from '../../hooks/useRunWithPicker';
 import { formatCount } from '../../utils/formatters';
 import { AGENT_RULE_KINDS, RULE_ACTIONS, actionsForKind, ruleActionOf } from './githubTriageLabels';
 import { describeAgentPin } from './GitHubAgentPinForm';
+import { MergeOptions, DEFAULT_MERGE_METHOD, MERGE_METHOD_LABELS } from '../apps/tabs/PullRequestActionControls';
+import { isPullRequestAgentAction } from '../../../../lib/pullRequestActions.js';
 
 const ALL_REPOS = '*';
 const OTHER_REPO = '__other__';
@@ -20,7 +22,8 @@ const actionLabel = (action) => RULE_ACTIONS.find((option) => option.value === a
 
 function pinLabel(rule, providers) {
   const action = ruleActionOf(rule);
-  return action === 'agent' ? `Start an agent · ${describeAgentPin(rule, providers)}` : actionLabel(action);
+  if (action === 'merge') return `${actionLabel(action)} · ${MERGE_METHOD_LABELS[rule.mergeMethod || DEFAULT_MERGE_METHOD]}${rule.deleteBranch ? ' · delete branch' : ''}`;
+  return action === 'agent' || isPullRequestAgentAction(action) ? `${actionLabel(action)} · ${describeAgentPin(rule, providers)}` : actionLabel(action);
 }
 
 // Open threads a rule for this kind and repo would match now, from the
@@ -42,7 +45,7 @@ function ruleMatchCount({ openByKind, rules, editingId, kind, repo, action }) {
 }
 
 // Whether a run of this account now would carry out the rule's action.
-const actsNow = (mode, action) => (action === 'agent' ? mode === 'autopilot' : (action === 'done' || action === 'mute') && (mode === 'assist' || mode === 'autopilot'));
+const actsNow = (mode, action) => (action === 'agent' || action === 'merge' || isPullRequestAgentAction(action) ? mode === 'autopilot' : (action === 'done' || action === 'mute') && (mode === 'assist' || mode === 'autopilot'));
 
 function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, saving }) {
   const formId = useId();
@@ -55,6 +58,8 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
   const [otherRepo, setOtherRepo] = useState(knownRepo ? '' : ownerRule ? rule.repo.slice(0, -2) : rule?.repo || '');
   const [chosenAction, setAction] = useState(rule ? ruleActionOf(rule) : 'agent');
   const [applyNow, setApplyNow] = useState(false);
+  const [mergeMethod, setMergeMethod] = useState(rule?.mergeMethod || DEFAULT_MERGE_METHOD);
+  const [deleteBranch, setDeleteBranch] = useState(rule?.deleteBranch === true);
   const options = actionsForKind(kind);
   // A kind that cannot take the chosen action falls back to its first one.
   const action = options.some((option) => option.value === chosenAction) ? chosenAction : options[0].value;
@@ -67,13 +72,14 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
   const submit = (event) => {
     event.preventDefault();
     if (!repoValid || clash) return;
-    const agent = action === 'agent';
+    const agent = action === 'agent' || isPullRequestAgentAction(action);
     onSubmit({
       id: rule?.id || newRuleId(),
       kind,
       repo,
       action,
       ...(agent ? { provider: picker.pin.provider || null, model: picker.pin.model || null, effort: picker.pin.effort || null } : {}),
+      ...(action === 'merge' ? { mergeMethod, deleteBranch } : {}),
     }, { applyNow: canApplyNow && applyNow });
   };
 
@@ -111,13 +117,17 @@ function RuleForm({ rule, repos, rules, account, takenKeys, onCancel, onSubmit, 
           <input id={`${formId}-other`} value={otherRepo} onChange={(event) => setOtherRepo(event.target.value)} placeholder={repoChoice === OTHER_OWNER ? 'owner' : 'owner/repo'} autoComplete="off" className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 font-mono text-sm text-white" />
         </label>
       )}
-      {action === 'agent' && (
+      {(action === 'agent' || isPullRequestAgentAction(action)) && (
         <div className="space-y-1">
           <span className="flex items-center gap-1.5 text-xs text-gray-400"><Bot size={12} aria-hidden="true" /> Run with</span>
           <ProviderModelSelector {...picker.selectorProps} compact />
         </div>
       )}
       <p className="text-xs text-gray-500">{AGENT_RULE_KINDS.find((option) => option.value === kind)?.hint}</p>
+      {action === 'merge' && <div className="flex flex-wrap items-center gap-2">
+        <MergeOptions idPrefix={formId} subject="automation" method={mergeMethod} onMethodChange={setMergeMethod}
+          deleteBranch={deleteBranch} onDeleteBranchChange={setDeleteBranch} disabled={saving} />
+      </div>}
       {matches !== null && (
         <p className="text-xs text-gray-300">
           {matches === 1 ? 'Matches 1 open thread now.' : `Matches ${formatCount(matches)} open threads now.`}
@@ -151,7 +161,7 @@ export default function GitHubAgentRules({ account, onSave, saving, prefill = nu
   const [editingState, setEditing] = useState(null);
   // A row's Add automation rule opens a new rule for its kind and repo.
   // It starts on Mark done, the usual reason to add one from a row.
-  const editing = editingState || (prefill ? { id: null, kind: prefill.kind, repo: prefill.repo, action: prefill.kind === 'security-alert' ? 'agent' : 'done' } : null);
+  const editing = editingState || (prefill ? { id: null, kind: prefill.kind, repo: prefill.repo, action: prefill.kind === 'dependabot-pr' ? 'merge' : prefill.kind === 'security-alert' ? 'agent' : 'done' } : null);
   const close = () => {
     setEditing(null);
     onPrefillDone?.();
@@ -187,7 +197,7 @@ export default function GitHubAgentRules({ account, onSave, saving, prefill = nu
       {account.mode !== 'autopilot' && rules.length > 0 && (
         <p className="text-xs text-port-warning">
           {account.mode === 'assist'
-            ? 'Assist follows the done and mute rules; only Autopilot starts agents.'
+            ? 'Assist follows the done and mute rules; Autopilot also runs reviews and merges ready Dependabot PRs.'
             : `Assist and Autopilot follow these rules. This account is in ${account.mode === 'disabled' ? 'Disabled' : 'Observe'}, so nothing happens on its own yet.`}
         </p>
       )}

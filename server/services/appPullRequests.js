@@ -61,8 +61,9 @@ function normalizeGithubPullRequest(pr) {
     number: Number(pr?.number),
     title: typeof pr?.title === 'string' ? pr.title : '',
     url: typeof pr?.url === 'string' ? pr.url : '',
-    state: 'open',
+    state: typeof pr?.state === 'string' ? pr.state.toLowerCase() : 'open',
     author: typeof pr?.author?.login === 'string' ? pr.author.login : null,
+    authorIsBot: pr?.author?.is_bot === true,
     createdAt: typeof pr?.createdAt === 'string' ? pr.createdAt : null,
     updatedAt: typeof pr?.updatedAt === 'string' ? pr.updatedAt : null,
     isDraft: pr?.isDraft === true,
@@ -85,6 +86,14 @@ function normalizeGithubPullRequest(pr) {
     maintainerCanModify: typeof pr?.maintainerCanModify === 'boolean' ? pr.maintainerCanModify : null,
     forkHead: forkHeadFromGithubPr(pr),
   };
+}
+
+/** Read one current head with the same check/review projection as the app list. */
+export async function readGithubPullRequest({ repoSpec, number, env, cwd }) {
+  const raw = await execGh(['pr', 'view', String(number), '--repo', repoSpec, '--json', `${GH_PR_FIELDS},state`], undefined, { env, cwd });
+  const row = safeJSONParse(raw, null);
+  if (!row || Number(row.number) !== number || !['OPEN', 'CLOSED', 'MERGED'].includes(row.state)) return null;
+  return normalizeGithubPullRequest(row);
 }
 
 function normalizeGitlabPipeline(mr) {

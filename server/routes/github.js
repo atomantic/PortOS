@@ -2,7 +2,7 @@ import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
   githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
-  githubNotificationCadenceSchema, githubAuditApplySchema, githubNotificationAgentRunSchema } from '../lib/validation.js';
+  githubNotificationCadenceSchema, githubAuditApplySchema, githubNotificationAgentRunSchema, githubNotificationPullRequestActionSchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
 import * as githubNotifications from '../services/githubNotifications.js';
@@ -199,6 +199,11 @@ router.post('/notifications/:accountId/:threadId/agent', asyncHandler(async (req
   const body = validateRequest(githubNotificationAgentRunSchema, req.body ?? {});
   const perRun = Object.keys(body).length ? body : undefined;
   res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req), perRun));
+}));
+
+router.post('/notifications/:accountId/:threadId/pull-request', asyncHandler(async (req, res) => {
+  const body = validateRequest(githubNotificationPullRequestActionSchema, req.body ?? {});
+  res.json(await githubNotifications.actOnPullRequest(req.params.accountId, threadIdParam(req), body));
 }));
 
 /**

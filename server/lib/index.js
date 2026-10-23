@@ -448,6 +448,7 @@ export * from './gitRemote.js';
 export * from './gitStaleLock.js';
 export * from './githubNotificationAudit.js';
 export * from './githubNotificationParse.js';
+export * from './githubNotificationPullRequest.js';
 export * from './githubNotificationTriage.js';
 export * from './repoUrl.js';
 export * from './glabArgs.js';

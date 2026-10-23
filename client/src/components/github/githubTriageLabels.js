@@ -1,3 +1,5 @@
+import { PULL_REQUEST_ACTION_LABELS, PULL_REQUEST_RULE_KINDS } from '../../../../lib/pullRequestActions.js';
+
 // Display labels for the GitHub inbox's triage (server/lib/githubNotificationTriage.js).
 // `needs-you` has no chip: it is the inbox's default state.
 export const DECISION_VIEW = {
@@ -87,6 +89,8 @@ export const AGENT_RULE_KINDS = [
   { value: 'issue-activity', label: 'Issue activity', hint: 'Outside activity on an issue in one of your apps goes to its issue watcher.' },
   { value: 'ci-activity', label: 'CI activity', hint: 'A workflow run or check suite notice. By default Autopilot and Assist mark these done. An agent looks into a failure only in a repo of yours.' },
   { value: 'own-pr', label: 'Your pull requests', hint: 'Activity on a pull request you opened. An agent takes it only when everyone in the thread is you or trusted.' },
+  { value: 'dependabot-pr', label: 'Dependabot pull requests', hint: 'Verified Dependabot pull requests. Merge when checks pass rechecks the current head, CI and review requirements every scheduled run, then merges directly without an AI call.' },
+  { value: 'pull-request', label: 'Other pull requests', hint: 'Subscribed pull-request activity. Run Do:Review or the screened Untrusted:Review task used by your apps.' },
   { value: 'mention', label: 'Mentions', hint: 'You or your team were mentioned. An agent takes it only when everyone in the thread is you or trusted.' },
   { value: 'release', label: 'Releases', hint: 'A new release in a repo you watch.' },
   { value: 'other', label: 'Everything else', hint: 'Any other notification: comments, discussions, commits and subscriptions. An agent takes it only when everyone in the thread is you or trusted.' },
@@ -95,13 +99,18 @@ export const AGENT_RULE_KINDS = [
 // What an automation rule does (GITHUB_AGENT_RULE_ACTIONS on the server).
 export const RULE_ACTIONS = [
   { value: 'agent', label: 'Start a CoS agent' },
+  ...Object.entries(PULL_REQUEST_ACTION_LABELS).map(([value, label]) => ({ value, label: value === 'merge' ? 'Merge when checks pass' : label })),
   { value: 'done', label: 'Mark done' },
   { value: 'mute', label: 'Mute the thread' },
   { value: 'leave', label: 'Leave in the inbox' },
 ];
 
 // Security alerts are never marked done or muted by a rule.
-export const actionsForKind = (kind) => (kind === 'security-alert' ? RULE_ACTIONS.filter((option) => option.value === 'agent' || option.value === 'leave') : RULE_ACTIONS);
+export const actionsForKind = kind => RULE_ACTIONS.filter(({ value }) => {
+  if (kind === 'security-alert') return value === 'agent' || value === 'leave';
+  if (value === 'merge') return kind === 'dependabot-pr';
+  return !['do-review', 'untrusted-review'].includes(value) || PULL_REQUEST_RULE_KINDS.includes(kind);
+});
 
 // A rule's action; a legacy `agent` boolean reads as agent / leave.
 export const ruleActionOf = (rule) => rule?.action || (rule?.agent === true ? 'agent' : 'leave');

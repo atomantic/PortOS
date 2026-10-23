@@ -231,6 +231,15 @@ export async function resolveGitHubAccountEnv(account, { baseEnv = process.env }
   };
 }
 
+/** Non-secret dispatch selector, including the viewer of an implicit account. */
+export async function githubReviewAccountSelector(account, env) {
+  const login = account.login || (await execGh(['api', 'user', '--hostname', account.host, '--jq', '.login'], STATUS_TIMEOUT_MS, { env })).trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(login || '')) {
+    throw new ServerError('Could not identify the GitHub review account', { status: 409, code: 'GITHUB_ACCOUNT_UNAVAILABLE' });
+  }
+  return { id: account.id, host: account.host, login };
+}
+
 /**
  * Probe `gh` for one account: is it installed, is the host reachable, and is
  * the configured login actually the one the API answers as.

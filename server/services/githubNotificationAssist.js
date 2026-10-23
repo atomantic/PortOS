@@ -16,7 +16,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
 import {
-  AGENT_RULE_KINDS, ASSIST_VERDICTS, KIND_SQL, PINNED_TRIAGE_RULES, agentRuleScopeSql, assistAction, decisionFromVerdict, ruleAction, ruleActionScope, selectNotificationProvider,
+  AGENT_RULE_KINDS, ASSIST_VERDICTS, KIND_SQL, PINNED_TRIAGE_RULES, agentRuleScopeSql, assistAction, decisionFromVerdict, ruleAction, ruleActionScope, selectNotificationProvider, pullRequestAutomationFilter,
 } from '../lib/githubNotificationTriage.js';
 import { resolveUntrustedContentPolicy } from '../lib/untrustedContent.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -80,12 +80,14 @@ async function sortThread(account, env, row, selection) {
 }
 
 async function sortUndecided(account, env) {
+  const prActions = pullRequestAutomationFilter(account.mode === 'autopilot' ? account.agentRules : [], 2);
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
        AND decision = 'needs-you' AND evidence->>'rule' = 'default'
+       AND NOT (${prActions.sql})
        AND (NOT (evidence ? 'ai') OR (evidence->'ai'->>'retryAfter')::timestamptz <= NOW())
      ORDER BY gh_updated_at DESC LIMIT ${MAX_SORTS_PER_RUN}`,
-    [account.id],
+    [account.id, ...prActions.params],
   );
   if (!rows.length) return 0;
   const state = await readSettingsStrict();
@@ -137,14 +139,16 @@ export async function assistAccountNotifications(account, env, { act }) {
     const n = 4 + index * 3;
     return `(${KIND_SQL} = '${kind}' AND ${agentRuleScopeSql(n)})`;
   }).join(' OR ');
+  const prActions = pullRequestAutomationFilter(account.mode === 'autopilot' ? account.agentRules : [], 4 + scopes.length * 3);
   const { rows } = await query(
-    `SELECT thread_id, decision, trust, suspect, state, reason, subject_type, repo_full_name, evidence->>'rule' AS rule FROM github_notifications
+    `SELECT thread_id, decision, trust, suspect, state, reason, subject_type, repo_full_name, evidence, evidence->>'rule' AS rule FROM github_notifications
      WHERE account_id = $1 AND state = 'open' AND NOT suspect AND NOT (evidence ? 'assisted')
        AND decision IS DISTINCT FROM 'handed-off'
+       AND NOT (COALESCE(evidence->>'subjectState', '') NOT IN ('closed', 'merged') AND (${prActions.sql}))
        AND (decision = ANY($2::text[])
          OR (reason <> 'security_alert' AND NOT (COALESCE(evidence->>'rule', '') = ANY($3::text[])) AND (${ruleSql})))
      ORDER BY gh_updated_at DESC LIMIT ${MAX_ACTIONS_PER_RUN}`,
-    [account.id, ACTIONABLE_DECISIONS, PINNED_TRIAGE_RULES, ...scopes.flatMap(({ all, except, only }) => [all, except, only])],
+    [account.id, ACTIONABLE_DECISIONS, PINNED_TRIAGE_RULES, ...scopes.flatMap(({ all, except, only }) => [all, except, only]), ...prActions.params],
   );
   let acted = 0;
   for (const row of rows) {

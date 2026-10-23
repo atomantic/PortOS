@@ -48,6 +48,7 @@
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';
 import { getSlashdoWorkflow } from '../lib/slashdoCatalog.js';
 import { emitLog } from './cosEvents.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 /** The bundled slashdo workflow this task runs. */
 const DO_REVIEW_COMMAND = 'review';
@@ -119,6 +120,7 @@ function renderContext({ number, url, repoLabel, selfReview }) {
 export async function spawnPrDoReviewTask({
   app, pullRequest, repoFullName = '', provider, model, effort,
   selfReview = false, reviewerConfig = null, immediate = true,
+  githubAccount = null,
 } = {}) {
   const { addTask } = await import('./cosTaskStore.js');
   const { forceSpawnTask } = await import('./cos.js');
@@ -156,11 +158,18 @@ export async function spawnPrDoReviewTask({
     // Each `/do:*` body owns its own review sequence; a CoS loop on top would
     // review the review.
     reviewLoop: false,
-    metadata: { targetPullRequest: number },
+    metadata: { targetPullRequest: number, ...(githubAccount ? { githubAccount } : {}) },
   }, 'user', { suppressDequeue: immediate });
 
   if (!created) return { task: null, duplicate: false, dispatch: { started: false, reason: null } };
   if (created.duplicate) {
+    const existingAccount = created.metadata?.githubAccount;
+    if (githubAccount && (!existingAccount || existingAccount.id !== githubAccount.id || existingAccount.host !== githubAccount.host
+      || existingAccount.login?.toLowerCase() !== githubAccount.login.toLowerCase())) {
+      throw new ServerError('A review for this PR is already queued under a different GitHub account; finish it before requesting this account', {
+        status: 409, code: 'GITHUB_REVIEW_ACCOUNT_CONFLICT',
+      });
+    }
     emitLog('info', `🔍 /do:review for ${repoLabel} #${number} is already queued as ${created.id}`, {
       taskId: created.id, appId: app?.id || null, prNumber: number,
     });

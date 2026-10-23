@@ -9,11 +9,40 @@ vi.mock('../lib/childProcess.js', async (original) => ({ ...(await original()), 
 // layer; doubling it keeps this suite off the filesystem and makes the pinned
 // vs. inferred account split explicit per test.
 vi.mock('./agentAppWorkspace.js', () => ({ listForgePinnedApps: vi.fn(async () => []) }));
+vi.mock('./githubAccounts.js', () => ({ getAccount: vi.fn(), resolveGitHubAccountEnv: vi.fn() }));
 
 import { spawn } from '../lib/childProcess.js';
 import { listForgePinnedApps } from './agentAppWorkspace.js';
 import { resolveForgeForRepo, resolveForgeTokenEnv } from './forgeAuth.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
+import { getAccount, resolveGitHubAccountEnv } from './githubAccounts.js';
+
+describe('notification account credentials', () => {
+  it('uses the selected Enterprise account rather than the PortOS checkout or inherited token', async () => {
+    getAccount.mockResolvedValue({ enabled: true, host: 'ghe.example.com', login: 'example-reviewer' });
+    resolveGitHubAccountEnv.mockResolvedValue({ env: { GH_HOST: 'ghe.example.com', GH_ENTERPRISE_TOKEN: 'synthetic-notification-token' } });
+    expect(await resolveForgeTokenEnv('/example/portos', { githubAccount: { id: 'example-account', host: 'ghe.example.com', login: 'example-reviewer' } })).toEqual({
+      GH_HOST: 'ghe.example.com', GH_ENTERPRISE_TOKEN: 'synthetic-notification-token',
+    });
+    const [selected, { baseEnv }] = resolveGitHubAccountEnv.mock.calls[0];
+    expect(selected).toMatchObject({ login: 'example-reviewer', host: 'ghe.example.com' });
+    const pathEntry = env => Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1];
+    expect(pathEntry(baseEnv)).toBe(pathEntry(process.env));
+    expect(baseEnv.HOME).toBe(process.env.HOME);
+    for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) expect(Object.hasOwn(baseEnv, key)).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses disabled or unavailable account credentials without falling back', async () => {
+    getAccount.mockResolvedValue({ enabled: false, host: 'github.com', login: 'example-reviewer' });
+    await expect(resolveForgeTokenEnv('/example/portos', { githubAccount: { id: 'example-account', host: 'ghe.example.com', login: 'example-reviewer' } })).rejects.toThrow('disabled');
+    expect(spawn).not.toHaveBeenCalled();
+    getAccount.mockResolvedValue({ enabled: true, host: 'ghe.example.com', login: 'example-reviewer' });
+    resolveGitHubAccountEnv.mockResolvedValue({ status: 'not-authenticated' });
+    await expect(resolveForgeTokenEnv('/example/portos', { githubAccount: { id: 'example-account', host: 'ghe.example.com', login: 'example-reviewer' } })).rejects.toThrow('unavailable');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
 
 // Exercise remote discovery and authentication without a real credential store.
 function respond({ stdout = '', stderr = '', code = 0 } = {}) {
