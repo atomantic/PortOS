@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it as vitestIt, onTestFailed, vi } from 'vitest';
 import { mkdir, writeFile, rm, readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -30,29 +30,43 @@ vi.mock('../lib/execGit.js', async importOriginal => {
 });
 let activePhase;
 let phaseStarted;
+let phases = [];
 function phase(name) {
   const now = performance.now();
-  if (activePhase) console.log(`⏱️ Recovery ${activePhase}: ${Math.round(now - phaseStarted)}ms`);
+  if (activePhase) {
+    const completed = `⏱️ Recovery ${activePhase}: ${Math.round(now - phaseStarted)}ms`;
+    phases.push(completed);
+    console.log(completed);
+  }
   activePhase = name;
   phaseStarted = now;
   console.log(`⏱️ Recovery starting ${name}`);
+}
+function diagnosticSummary() {
+  const lines = [];
+  if (activePhase) lines.push(`⏱️ Recovery last phase ${activePhase}: ${Math.round(performance.now() - phaseStarted)}ms`);
+  const commands = [...diagnostics.commands].sort((a, b) => b[1].ms - a[1].ms);
+  lines.push(`⏱️ Recovery Git: ${commands.reduce((total, [, row]) => total + row.count, 0)} calls`);
+  for (const [name, row] of commands.slice(0, 5)) {
+    lines.push(`⏱️ Git ${name}: ${row.count} calls, ${Math.round(row.ms)}ms total, ${Math.round(row.maxMs)}ms max`);
+  }
+  for (const { command, started } of diagnostics.pending) {
+    lines.push(`⏱️ Pending Git ${command}: ${Math.round(performance.now() - started)}ms`);
+  }
+  return lines;
 }
 beforeEach(async () => {
   await drain();
   diagnostics.commands.clear();
   diagnostics.pending.clear();
   activePhase = null;
+  phases = [];
+  // Pregate replaces console methods with no-ops. Failed runs still need the
+  // completed phases and the in-flight command without another diagnostic run.
+  onTestFailed(() => { process.stderr.write(`${[...phases, ...diagnosticSummary()].join('\n')}\n`); });
 });
 afterEach(() => {
-  if (activePhase) console.log(`⏱️ Recovery last phase ${activePhase}: ${Math.round(performance.now() - phaseStarted)}ms`);
-  const commands = [...diagnostics.commands].sort((a, b) => b[1].ms - a[1].ms);
-  console.log(`⏱️ Recovery Git: ${commands.reduce((total, [, row]) => total + row.count, 0)} calls`);
-  for (const [name, row] of commands.slice(0, 5)) {
-    console.log(`⏱️ Git ${name}: ${row.count} calls, ${Math.round(row.ms)}ms total, ${Math.round(row.maxMs)}ms max`);
-  }
-  for (const { command, started } of diagnostics.pending) {
-    console.log(`⏱️ Pending Git ${command}: ${Math.round(performance.now() - started)}ms`);
-  }
+  for (const line of diagnosticSummary()) console.log(line);
 });
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-worktree-recovery-' });
