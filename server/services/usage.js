@@ -1149,6 +1149,7 @@ function monthlyUsageHistory(providers) {
     });
     return {
       month,
+      estimatedCost: totals.estimatedCost,
       tokens: totals.tokensIn + totals.tokensOut + totals.cacheReadTokens + totals.cacheWriteTokens,
       source: totals.source,
       partial: today < end || firstDay > `${month}-01`,
