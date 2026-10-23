@@ -8,13 +8,17 @@ vi.mock('../../lib/fileUtils.js', async (original) => {
   return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
 });
 const runStagedLLM = vi.hoisted(() => vi.fn());
-vi.mock('../stageRunner.js', () => ({ runStagedLLM, resolveStageRoute: async () => ({ provider: { id: 'test-provider', timeout: 300000 } }) }));
+const aiStatus = vi.hoisted(() => ({ update: vi.fn(), complete: vi.fn(), error: vi.fn() }));
+const startAIOp = vi.hoisted(() => vi.fn());
+const resolveStageRoute = vi.hoisted(() => vi.fn());
+vi.mock('../aiStatusEvents.js', () => ({ startAIOp }));
+vi.mock('../stageRunner.js', () => ({ runStagedLLM, resolveStageRoute }));
 vi.mock('../universeBuilder.js', () => ({ getUniverse: async () => ({ id: 'example-universe' }) }));
 vi.mock('../pipeline/series.js', () => ({ getSeries: async () => null }));
 const { createLoom, addEpisode, addNode, updateNode, getLoom } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const { runEpisodeShotAutopilot, applyEpisodeShots } = await import('./shots.js');
-beforeEach(() => { rmSync(join(TEST_DATA_ROOT, 'fableloom'), { recursive: true, force: true }); _resetFableLoomBackend(); runStagedLLM.mockReset(); });
+beforeEach(() => { rmSync(join(TEST_DATA_ROOT, 'fableloom'), { recursive: true, force: true }); _resetFableLoomBackend(); runStagedLLM.mockReset(); startAIOp.mockReset().mockReturnValue(aiStatus); Object.values(aiStatus).forEach(mock => mock.mockClear()); resolveStageRoute.mockReset().mockResolvedValue({ provider: { id: 'test-provider', timeout: 300000 } }); });
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 const shot = (title, dialogue = []) => ({ title, durationSeconds: 8, action: 'A courier watches the gate.', framing: 'Medium static shot', dialogue, imagePrompt: 'Courier at the gate', videoPrompt: 'Courier waits.' });
 async function setup() {
@@ -226,7 +230,10 @@ it('repairs cross-scene consistency findings within the remaining rounds and kee
     }
     return { content: { summary: 'Scene checked.', risks: [] } };
   });
-  await expect(runEpisodeShotAutopilot(loom.id, ep, { checkpoint })).resolves.toMatchObject({ attempt: 2 });
+  await expect(runEpisodeShotAutopilot(loom.id, ep, { checkpoint, operationId: 'example-operation' })).resolves.toMatchObject({ attempt: 2 });
+  expect(startAIOp).toHaveBeenCalledTimes(1);
+  expect(aiStatus.complete).toHaveBeenCalledTimes(1);
+  expect(aiStatus.error).not.toHaveBeenCalled();
   expect(checkpoint.consistency).toHaveLength(2);
   expect(checkpoint.consistency[0].review.risks).toEqual(['Preserve the lamp placement between scenes.']);
   expect(checkpoint.scenes[groups[0].sceneId].rounds[0].feedback).toContain('lamp');
@@ -262,4 +269,18 @@ it('detaches a disconnected compatibility waiter while its durable worker comple
   });
   finishCall(await implementation('fableloom-plan-shots', { source: JSON.stringify({ scenes: [{ id: groups[0].sceneId }] }) }));
   expect((await completed).result.validation.stats.ready).toBe(true);
+});
+
+it('finalizes operation status once for failures before provider execution and round exhaustion', async () => {
+  const { loom, ep, groups } = await setup();
+  resolveStageRoute.mockRejectedValueOnce(new Error('Example route unavailable'));
+  await expect(runEpisodeShotAutopilot(loom.id, ep, { operationId: 'route-operation' })).rejects.toThrow('Example route unavailable');
+  expect(aiStatus.error).toHaveBeenCalledExactlyOnceWith('Example route unavailable');
+  expect(aiStatus.complete).not.toHaveBeenCalled();
+  aiStatus.error.mockClear();
+  groups[0].shots[0].dialogue = [{ speaker: 'Courier', text: 'too many words '.repeat(30) }];
+  mockPlan(groups);
+  await expect(runEpisodeShotAutopilot(loom.id, ep, { operationId: 'invalid-operation', maxRounds: 1 })).rejects.toThrow('exhausted 1 rounds');
+  expect(aiStatus.error).toHaveBeenCalledTimes(1);
+  expect(aiStatus.complete).not.toHaveBeenCalled();
 });

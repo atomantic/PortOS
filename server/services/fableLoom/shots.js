@@ -82,10 +82,21 @@ export async function applyEpisodeShots(id, episodeId, { sourceFingerprint, grou
 }
 
 /** Checkpoints are supplied only by the local run service, never by HTTP callers. */
-export async function runEpisodeShotAutopilot(id, episodeId, {
-  providerId, model, effort, operationId, guidance = '', maxRounds = 3, apply = false,
+export async function runEpisodeShotAutopilot(id, episodeId, options = {}) {
+  const status = options.operationId ? startAIOp({ op: 'fableloom-shots', label: 'Planning timed shots', operationId: options.operationId, localOnly: true, silent: true }) : null;
+  return planEpisodeShotAttempt(id, episodeId, options, status).then(result => {
+    status?.complete(options.apply ? 'Timed shots applied' : 'Shot plan ready to preview', { shellReady: false });
+    return result;
+  }).catch(error => {
+    status?.error(error.message);
+    throw error;
+  });
+}
+
+async function planEpisodeShotAttempt(id, episodeId, {
+  providerId, model, effort, guidance = '', maxRounds = 3, apply = false,
   checkpoint = {}, saveCheckpoint = async () => {}, isCanceled = () => false,
-} = {}) {
+} = {}, status = null) {
   const { loom, episode } = await requireSource(id, episodeId);
   const sourceFingerprint = fingerprint(loom, episode);
   if (checkpoint.sourceFingerprint && checkpoint.sourceFingerprint !== sourceFingerprint) {
@@ -94,7 +105,6 @@ export async function runEpisodeShotAutopilot(id, episodeId, {
   checkpoint.sourceFingerprint = sourceFingerprint;
   checkpoint.scenes ||= {};
   checkpoint.consistency ||= [];
-  const status = operationId ? startAIOp({ op: 'fableloom-shots', label: 'Planning timed shots', operationId, localOnly: true, silent: true }) : null;
   const universe = loom.universeId ? await getUniverse(loom.universeId) : null;
   const cast = (universe?.characters || []).map(({ id, name, physicalDescription }) => ({ id, name, physicalDescription }));
   // The rest of the episode supplies graph context, never another scene's teleplay.
@@ -121,7 +131,6 @@ export async function runEpisodeShotAutopilot(id, episodeId, {
       onRunReady: (meta) => status?.update('ready', 'Shot autopilot is running', meta),
     }).catch((error) => {
       const message = `${stage} round ${round}${sceneId ? ` scene ${sceneId}` : ''} on provider ${selectedProvider.id}: ${error.message}`;
-      status?.error(message);
       throw new ServerError(message, { status: error.status || 502, code: error.code || 'SHOT_STAGE_FAILED' });
     });
   };
@@ -203,13 +212,12 @@ export async function runEpisodeShotAutopilot(id, episodeId, {
         delete scene.group;
       }
       await persist();
-      return runEpisodeShotAutopilot(id, episodeId, { providerId, model, effort, operationId, guidance, maxRounds, apply, checkpoint, saveCheckpoint, isCanceled });
+      return planEpisodeShotAttempt(id, episodeId, { providerId, model, effort, guidance, maxRounds, apply, checkpoint, saveCheckpoint, isCanceled }, status);
     }
     throw new ServerError(`Shot consistency review needs revision. Completed steps preserved.\n${feedback}`, { status: 422, code: 'SHOT_PLAN_INVALID' });
   }
   const result = { sourceFingerprint, groups: compiled.groups, validation: compiled.validation, review, attempt: Math.max(...Object.values(checkpoint.scenes).map((scene) => scene.rounds.length)) };
   checkCanceled();
   const applied = apply ? await applyEpisodeShots(id, episodeId, result, { isCanceled }) : {};
-  status?.complete(apply ? 'Timed shots applied' : 'Shot plan ready to preview', { shellReady: false });
   return { ...result, ...applied };
 }
