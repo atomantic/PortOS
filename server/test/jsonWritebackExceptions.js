@@ -95,6 +95,10 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Non-lossy: saveResult quarantines an unreadable store to a .corrupt-<ts> sibling before writing, and deleteResult refuses."
   },
   {
+    "key": "ollamaSafetensorsImport.js :: markerPath ( tempRoot )",
+    "reason": "Rebuildable canary: the staging marker lives in an OS temp import directory. An unreadable marker rewritten with only the new phase loses its model id, which the sweep treats like a marker-less directory: age-gated cleanup of re-downloadable weights, never a user record."
+  },
+  {
     "key": "pm2.js :: dumpPath",
     "reason": "No failed-read write-back: dropFromSavedList returns before the write when the dump is absent, unparseable, or not an array."
   },
