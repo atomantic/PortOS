@@ -172,7 +172,8 @@ CI run that never needed it — they keep the documented skip.
 
 `scripts/pregate.js` runs the same planner over the committed and uncommitted
 diff and hands its plan to the same runners, so a scoped plan is reproduced
-locally stage for stage: hidden-content scan, lint, server and client tests,
+locally: hidden-content scan, early server and client structural guards, lint,
+server and client tests,
 the client build and its API Explorer bundle pin, the boot smoke, the browser
 suites (smoke profile, prerequisites required rather than skipped), and the
 serial `portos_test` DB suite last and alone. Each stage receives the
@@ -186,6 +187,15 @@ base and HEAD SHAs, and the hash of the exact working tree validated. The
 shipped prompt-history guard runs locally when selected; the Windows job and
 the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
 contract: `docs/CONTRIBUTING.md`.
+
+The early guards use the same always-run and diff-selected structural selection
+as CI and `--guards-only`. They run before broad tests and resource probes.
+Successful guards are reused within this invocation only when the working tree,
+index, HEAD and refs remain unchanged; otherwise the broad runner executes them
+again. The receipt records guard outcomes and reuse proofs. Persistent test
+memo rules, required stages and worker caps remain the same. Downgraded full
+plans and `--guards-only` run the guard selection once; `--full` runs it before
+the full suites.
 
 The fixed `pregate:merged` package script advertises support for
 `node scripts/pregate.js --guards-only --merged-with <base-sha>` to the quality
@@ -203,6 +213,7 @@ locks, or archive failures retain the checkout and report the remaining paths.
 Repositories without
 this capability retain their existing snapshot merge behavior; arbitrary scripts
 are never executed as a substitute.
+
 
 ### Pregate attestation
 

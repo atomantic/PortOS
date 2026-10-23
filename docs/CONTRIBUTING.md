@@ -91,7 +91,8 @@ Pregate first checks installed package versions against all four workspace lockf
 
 Pregate proves only the stages it runs, and it says which it did not. A scoped
 plan runs every suite CI would run for it, in CI's dependency order and with
-CI's environment: the hidden-content scan, lint, server and client tests, the
+CI's environment: the hidden-content scan, early structural guards, lint,
+server and client tests, the
 client build plus the API Explorer bundle pin, the boot smoke, the
 cross-workspace browser suites (smoke profile), and the serial `portos_test`
 DB suite last and alone — never concurrently with the other suites, and never
@@ -119,6 +120,13 @@ version, platform and worker budget, and the hash of the exact working tree
 that was validated — untracked and uncommitted files included, so a later
 commit of that state yields the same `HEAD^{tree}`. A green summary never
 claims a suite it skipped; required CI checks still apply.
+
+Always-run and diff-selected structural guards run before broad test stages
+and browser/database prerequisite probes. Their successful results are reused
+only within that run while the working tree, index, HEAD and refs are unchanged;
+the receipt records guard outcomes and reuse proofs. This leaves the persistent
+test memo's stricter rules intact. `--guards-only` and downgraded full plans
+run that same guard selection once.
 
 Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
 it: the running stage — including the test runner's npm and Vitest

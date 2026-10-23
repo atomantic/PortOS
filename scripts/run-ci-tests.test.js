@@ -24,6 +24,7 @@ import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
 import { vitestShardSlice } from './lib/testMemoRunner.js';
+import { guardInputSnapshot } from './lib/pregateReport.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
@@ -219,6 +220,31 @@ describe('test memo through the real runner', () => {
       rmSync(fixture, { recursive: true, force: true });
     }
   }, 120_000);
+});
+
+it.each(['files', 'full'])('validates the guard proof before the actual %s Vitest selection with the persistent memo off', (mode) => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-early-guards-'));
+  try {
+    installFakeNpm(fixture, 'if (process.env.PORTOS_PREGATE_GUARDS) throw new Error("Guard proof leaked to test process");\n' + REPORTING_NPM);
+    const guard = 'server/lib/index.test.js';
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
+        CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify([guard, 'scripts/example.test.js']),
+        CI_TEST_SOURCES: '["scripts/lib/directInvocation.js"]',
+        PORTOS_PREGATE_GUARDS: JSON.stringify({ files: [guard], snapshot: mode === 'files' ? guardInputSnapshot(join(import.meta.dirname, '..')) : 'stale' }),
+        PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    if (mode === 'files') expect(result.stdout).toContain('Reused 1 structural guards');
+    else expect(result.stdout).not.toContain('Reused');
+    const { selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
+    if (mode === 'files') expect(selection.include).not.toContain('lib/index.test.js');
+    else expect(selection.include).toContain('lib/index.test.js');
+    expect(selection.include).toContain('../scripts/example.test.js');
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 it('rejects empty browser coverage except explicitly deferred smoke-only inputs', () => {

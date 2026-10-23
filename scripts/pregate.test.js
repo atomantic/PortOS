@@ -84,6 +84,7 @@ describe('resolvePlanStages', () => {
       CI_TEST_MODE: 'related',
       CI_TEST_FILES: '["server/lib/a.test.js"]',
       CI_TEST_SOURCES: '["server/lib/a.js"]',
+      PORTOS_PREGATE_GUARDS: '',
     });
   });
 
@@ -119,6 +120,28 @@ describe('resolvePlanStages', () => {
       { skipLint: true },
     );
     expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'server tests']);
+  });
+
+  it.each(['related', 'full'])('runs shared guards before every costly %s stage without changing the broad selection', (mode) => {
+    const tracked = ['server/lib/index.test.js', ALWAYS_RUN_TESTS[0], 'client/src/fooConventions.test.js'];
+    const plan = planWith({
+      server: { mode, files: tracked.slice(0, 2), sources: ['server/lib/helper.js'] },
+      client: { mode, files: tracked.slice(2), sources: [] },
+      lint: { mode: 'full', files: [] },
+      build: true, smoke: true, db: true, browser: { files: BROWSER_SUITES.slice(0, 1) },
+    });
+    const stages = resolvePlanStages(plan, { guardPlan: downgradeFullPlan(plan, tracked, ['server/lib/helper.js']) });
+    expect(stages.map(stage => stage.name)).toEqual([
+      'hidden-content scan', 'server structural guards', 'client structural guards',
+      'client/server lint', 'server tests', 'client tests', 'client build',
+      'API Explorer bundle pin', 'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
+    ]);
+    for (const scope of ['server', 'client']) {
+      expect(stages.find(stage => stage.name === `${scope} tests`).env).toMatchObject({
+        CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify(plan[scope].files), CI_TEST_SOURCES: JSON.stringify(plan[scope].sources),
+      });
+    }
+    expect(stages.filter(stage => stage.guard).flatMap(stage => stage.files).sort()).toEqual(tracked.sort());
   });
 });
 
@@ -190,6 +213,7 @@ describe('pregate hidden-content invocation', () => {
     // before the test snapshots its bytes, or the CLI's ordinary Git reads
     // appear to mutate the index even when they only notice the copy.
     git('update-index', '--refresh');
+    base = git('rev-parse', 'HEAD');
   });
 
   afterEach(async () => {
@@ -198,6 +222,115 @@ describe('pregate hidden-content invocation', () => {
 
   afterAll(async () => {
     if (template?.scratch) await destroyGitSandbox(template.scratch);
+  });
+
+  function prepareGuardFixture({ browser = false } = {}) {
+    write('server/lib/index.js', 'export {};\n');
+    write('server/lib/README.md', '# Shared helpers\n');
+    // This fixture guard pins the catalog failure at the CLI boundary; the real
+    // catalog suite separately owns the complete barrel/README contract.
+    write('server/lib/index.test.js', `
+      import { appendFileSync, existsSync, readFileSync } from 'fs';
+      appendFileSync('.cache/events', 'catalog\\n');
+      if (existsSync('server/lib/helper.js') &&
+          (!readFileSync('server/lib/index.js', 'utf8').includes('helper') ||
+           !readFileSync('server/lib/README.md', 'utf8').includes('helper'))) {
+        throw new Error('Missing helper barrel/catalog registration');
+      }
+    `);
+    write('server/lib/expensive.test.js', 'export {};\n');
+    write('scripts/run-ci-tests.js', `
+      import { appendFileSync } from 'fs';
+      import { resolve } from 'path';
+      import { pathToFileURL } from 'url';
+      const files = JSON.parse(process.env.CI_TEST_FILES);
+      const excluded = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || '{}').files || [];
+      const broad = process.env.CI_TEST_MODE !== 'files' || files.includes('server/lib/expensive.test.js');
+      appendFileSync('.cache/events', JSON.stringify({ broad, excluded }) + '\\n');
+      if (files.includes('server/lib/index.test.js') && !excluded.includes('server/lib/index.test.js')) {
+        await import(pathToFileURL(resolve('server/lib/index.test.js')));
+      }
+    `);
+    write('scripts/run-ci-lint.js', `
+      import { appendFileSync, existsSync, writeFileSync } from 'fs';
+      appendFileSync('.cache/events', 'lint\\n');
+      if (existsSync('.cache/mutate')) writeFileSync('server/lib/helper.js', 'export const helper = 2;\\n');
+    `);
+    write('scripts/smoke-boot.js', `
+      import { appendFileSync } from 'fs';
+      appendFileSync('.cache/events', 'smoke\\n');
+    `);
+    if (browser) {
+      write(BROWSER_SUITES[0], 'export {};\n');
+      write('scripts/lib/pregateResources.js', `
+        import { writeFileSync } from 'fs';
+        writeFileSync('.cache/probe-started', 'unexpected probe');
+        throw new Error('Resource probe ran before structural refusal');
+      `);
+    }
+    git('add', '--all');
+    git('commit', '-qm', 'structural gate fixture');
+    base = git('rev-parse', 'HEAD');
+    mkdirSync(join(root, '.cache'), { recursive: true });
+    write('.cache/events', '');
+    write('server/lib/helper.js', 'export const helper = 1;\n');
+    if (browser) write(BROWSER_SUITES[0], 'export const changed = true;\n');
+  }
+
+  it('prints the selected guard, broad and browser stages without starting any process', () => {
+    prepareGuardFixture({ browser: true });
+    const result = run('--plan-only');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Planning against');
+    expect(result.stdout).toContain('changed file');
+    expect(result.stdout).toContain('server structural guards');
+    expect(result.stdout).toContain('server tests');
+    expect(result.stdout).toContain('Browser suites: 1 selected');
+    expect(readFileSync(join(root, '.cache/events'), 'utf8')).toBe('');
+    expect(existsSync(join(root, '.cache/probe-started'))).toBe(false);
+    expect(existsSync(join(root, PREGATE_REPORT_PATH))).toBe(false);
+  });
+
+  // A structural refusal must precede both related-test dispatch and Chrome's
+  // prerequisite probe, with the unfinished broad stages preserved in the receipt.
+  it('refuses a missing helper catalog registration before broad tests or browser probes start', () => {
+    prepareGuardFixture({ browser: true });
+    const result = run('--skip-lint');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Missing helper barrel/catalog registration');
+    const events = readFileSync(join(root, '.cache/events'), 'utf8');
+    expect(events).not.toContain('"broad":true');
+    expect(existsSync(join(root, '.cache/probe-started'))).toBe(false);
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.passed).toBe(false);
+    expect(report.stages.find(stage => stage.guard)).toMatchObject({ status: 'failed', files: ['server/lib/index.test.js'] });
+    expect(report.stages.filter(stage => ['server tests', 'browser suites'].includes(stage.name)))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'server tests', status: 'not-run' }),
+        expect.objectContaining({ name: 'browser suites', status: 'not-run' }),
+      ]));
+  });
+
+  // Unlike the persistent module memo, this reuse includes tree scanners. A
+  // modification between stages invalidates it even when the test file is stable.
+  it.each([false, true])('rechecks guard inputs before broad dispatch (changed: %s)', (changed) => {
+    prepareGuardFixture();
+    write('server/lib/index.js', "export { helper } from './helper.js';\n");
+    write('server/lib/README.md', '# Shared helpers\nhelper\n');
+    if (changed) write('.cache/mutate', 'mutate during lint');
+    const result = run();
+    expect(result.status, result.stderr).toBe(0);
+    const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
+    expect(events.filter(event => event === 'catalog')).toHaveLength(changed ? 2 : 1);
+    expect(events.indexOf('catalog')).toBeLessThan(events.indexOf('lint'));
+    expect(events.at(-1)).toBe('smoke');
+    const broad = events.filter(event => event.startsWith('{')).map(event => JSON.parse(event)).find(event => event.broad);
+    expect(broad.excluded).toEqual(changed ? [] : ['server/lib/index.test.js']);
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
+    expect(report.treeStable).toBe(!changed);
+    expect(report.stages.find(stage => stage.name === 'server tests').guardReuse?.files)
+      .toEqual(changed ? undefined : ['server/lib/index.test.js']);
   });
 
   // A branch and base can each be green while their combined route inventory fails.
@@ -856,25 +989,6 @@ describe('the gate end to end', () => {
     }
   });
 
-  // `--base HEAD` rather than the default remote branch: CI clones at depth 2
-  // with no `origin/main` ref, so the default would abort here on a fetch the
-  // gate is right to demand of a human and wrong to demand of this test. HEAD
-  // is its own merge base in any checkout, and the run still exercises every
-  // stage — argument parsing, merge-base resolution, spawning the real planner,
-  // mapping its plan to stages — on an empty diff.
-  it('plans this checkout and names its stages without running them', () => {
-    const output = execFileSync(
-      process.execPath,
-      [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only', '--base', 'HEAD'],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
-    );
-    expect(output).toMatch(/Planning against HEAD/);
-    expect(output).toMatch(/changed file/);
-    // An empty diff still selects the always-run guards, so the gate must name
-    // real work rather than reporting there is nothing to do.
-    expect(output).toMatch(/server tests/);
-  });
-
   it('refuses a base this checkout cannot resolve instead of planning against nothing', () => {
     const run = () => execFileSync(
       process.execPath,
@@ -958,12 +1072,7 @@ describe('describeBrowserSelection', () => {
       .not.toContain('Fidelity cases');
   });
 
-  it('shows the selection in --plan-only output', () => {
-    const out = execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only', '--skip-lint', '--base', 'HEAD'], {
-      cwd: REPO_ROOT, encoding: 'utf8',
-    });
-    expect(out).toContain('Browser suites:');
-  });
+
 });
 
 describe('resource suite stages', () => {

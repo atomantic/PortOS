@@ -18,6 +18,7 @@ import {
   memoSummaryLine, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
+import { guardInputSnapshot } from './lib/pregateReport.js';
 import { TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -427,6 +428,9 @@ async function main() {
   const workspace = workspaceOf(scope);
   const { script } = TEST_SCOPES[scope];
 
+  const guardProof = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || 'null');
+  // A proof is for this runner only, never a nested invocation from its tests.
+  delete process.env.PORTOS_PREGATE_GUARDS;
   const mode = process.env.CI_TEST_MODE || 'full';
   const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
   const repoFiles = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
@@ -463,7 +467,7 @@ async function main() {
   // finish flushing. Setting exitCode lets Node drain normally once main()
   // returns.
   const memoDir = resolveMemoDir();
-  if (mode === 'full' && !memoDir && !shard) {
+  if (mode === 'full' && !memoDir && !shard && !guardProof) {
     process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope });
     return;
   }
@@ -483,6 +487,15 @@ async function main() {
       for (const { test, via } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key)`);
     }
   }
+  // Pregate supplies only guards that passed earlier in this invocation, after
+  // rechecking their repository snapshot. Keep normal memo selection/sharding.
+  const excluded = new Set(guardProof && Array.isArray(guardProof.files)
+    && guardProof.files.every(file => typeof file === 'string')
+    && typeof guardProof.snapshot === 'string' && guardInputSnapshot(repoRoot) === guardProof.snapshot
+    ? guardProof.files : []);
+  const reused = plan.run.filter(test => excluded.has(test));
+  plan.run = plan.run.filter(test => !excluded.has(test));
+  if (reused.length > 0) console.log(`♻️ Reused ${reused.length} structural guards from this pregate run (inputs unchanged).`);
   if (plan.run.length === 0) {
     console.log(`No ${scope} tests left to run${shard ? ' in this shard' : ''}.`);
     process.exitCode = 0;

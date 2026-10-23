@@ -16,8 +16,8 @@
  * boot smoke, the browser suites and the serial `portos_test` suite), so a
  * green pregate means the Linux jobs are green for the same reasons — never
  * a second, drifting opinion about which tests matter. Stages run in CI's
- * dependency order, with the DB suite last and alone: it is serial and its
- * per-case budgets assume no concurrent suite (docs/CONTRIBUTING.md).
+ * dependency order after early structural guards, with the DB suite last and
+ * alone: its per-case budgets assume no concurrent suite (docs/CONTRIBUTING.md).
  *
  *   node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
  *                           [--skip-db] [--skip-browser] [--skip-build] [--skip-smoke]
@@ -63,7 +63,7 @@ import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
-import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
+import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -191,13 +191,13 @@ export function describeStageCommand(stage) {
  * The hidden-content scan always runs first, even if lint/tests select no
  * work, and the shipped prompt-history guard (CI's `prompt-history` job: one
  * git-history read, seconds locally) follows it when selected. Order after
- * that follows CI's own dependency order: lint, unit tests, the client build
- * and its bundle pin, the boot smoke, the browser suites, and the DB suite
+ * that runs the shared structural guards first, then CI's dependency order:
+ * lint, unit tests, the client build and its bundle pin, the boot smoke, the browser suites, and the DB suite
  * last and alone. `skip` holds the suites that stay with CI
  * (see `uncoveredSuites`); `databaseEnv` is the pinned `portos_test`
  * environment from scripts/lib/pregateResources.js.
  */
-export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, databaseEnv = {} } = {}) {
+export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, databaseEnv = {}, guardPlan = null } = {}) {
   const base = baseSha ? { CI_BASE_SHA: baseSha } : {};
   const stages = [{
     name: 'hidden-content scan',
@@ -209,6 +209,21 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
 
   if (plan.promptHistory) {
     stages.push({ name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {} });
+  }
+
+  const scopeEnv = { server: { PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_TEST_QUIET: '1' }, client: {} };
+  if (guardPlan) {
+    for (const scope of ['server', 'client']) {
+      const selected = plan[scope];
+      const files = selected.mode === 'skip' ? [] : guardPlan[scope].files
+        .filter(file => selected.mode === 'full' || selected.files.includes(file));
+      if (files.length === 0) continue;
+      stages.push({
+        name: `${scope} structural guards`, suite: scope, guard: true, files,
+        script: 'run-ci-tests.js', args: [scope],
+        env: { ...scopeEnv[scope], ...base, CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: '[]', PORTOS_PREGATE_GUARDS: '' },
+      });
+    }
   }
 
   if (!skipLint && plan.lint.mode !== 'skip') {
@@ -223,7 +238,6 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
 
   // Same env the Linux unit jobs set: the registered browser suites belong to
   // the browser stage below, and passing output stays signal-dense.
-  const scopeEnv = { server: { PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_TEST_QUIET: '1' }, client: {} };
   ['server', 'client'].forEach((scope) => {
     const scoped = plan[scope];
     if (scoped.mode === 'skip') return;
@@ -237,6 +251,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
         CI_TEST_MODE: scoped.mode,
         CI_TEST_FILES: JSON.stringify(scoped.files),
         CI_TEST_SOURCES: JSON.stringify(scoped.sources),
+        PORTOS_PREGATE_GUARDS: '',
         // Same base the planner just used. The import-growth guard fails
         // closed without it; omitting it here would make pregate compare
         // against a different ref than CI.
@@ -322,6 +337,7 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
 }
 
 const git = (args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
+
 
 const gitPaths = (args, cwd = REPO_ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8' })
   .split('\0')
@@ -742,23 +758,24 @@ async function main() {
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
 
   const downgraded = plan.full && !options.full && !options.guardsOnly;
+  const guardPlan = downgradeFullPlan(plan, git(['ls-files', '-z']).split('\0').filter(Boolean), changedFiles);
   if (options.guardsOnly) {
-    plan = downgradeFullPlan(plan, git(['ls-files', '-z']).split('\0').filter(Boolean), changedFiles);
+    plan = guardPlan;
     Object.assign(plan, { lint: { mode: 'skip', files: [] }, browser: { files: [] }, db: false, windows: false, build: false, smoke: false, promptHistory: false, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false });
   }
   if (downgraded) {
-    plan = downgradeFullPlan(plan, git(['ls-files']).split('\n').filter(Boolean), changedFiles);
+    plan = guardPlan;
     console.log('⚠️ CI will run the FULL suite for this diff — running always-run and diff-selected structural guards only. Pass --full to run everything, including the build, smoke, browser and DB suites.');
   }
 
-  describeBrowserSelection(plan.browser.files).forEach((line) => console.log(line));
+  describeBrowserSelection(plan.browser.files).forEach((line) => { console.log(line); });
 
   /** Stages for the suites that stay here, after the uncovered ones are announced. */
   const planStages = (prerequisites, databaseEnv) => {
     const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites });
-    announceUncovered(uncovered);
     const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
-    const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, skip, databaseEnv });
+    const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, skip, databaseEnv,
+      guardPlan: options.guardsOnly || downgraded ? null : guardPlan });
     return { uncovered, stages: options.guardsOnly
       ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
         .map(stage => ({ ...stage, env: { ...stage.env, PORTOS_TEST_MEMO: 'off' } }))
@@ -767,7 +784,9 @@ async function main() {
 
   if (options.planOnly) {
     // Prerequisites are probed at run time; here every selected suite is a stage.
-    planStages({}, {}).stages.forEach((stage) => {
+    const { uncovered, stages } = planStages({}, {});
+    announceUncovered(uncovered);
+    stages.forEach((stage) => {
       console.log(`• ${stage.name}: ${describeStageCommand(stage)}`);
     });
     process.exit(0);
@@ -801,8 +820,7 @@ async function main() {
   }
   console.log('✅ Dependency consistency preflight passed (installed package versions match workspace locks).');
 
-  const { prerequisites, databaseEnv } = await probeResourceSuites(plan, { options, downgraded });
-  const { uncovered, stages } = planStages(prerequisites, databaseEnv);
+  let { uncovered, stages } = planStages({}, {});
 
   const headSha = git(['rev-parse', 'HEAD']);
   // The receipt hashes the tree the stages validate. It is taken once the
@@ -817,12 +835,27 @@ async function main() {
   };
 
   const startedAt = new Date().toISOString();
-  const results = stages.map((stage) => ({ ...stage, command: describeStageCommand(stage), status: 'not-run', durationMs: 0 }));
+  const stageResult = (stage) => ({ ...stage, command: describeStageCommand(stage), status: 'not-run', durationMs: 0 });
+  const results = stages.map(stageResult);
   let exitCode = 0;
   let failure = null;
   const owner = installOwnerCancellation();
-  for (const result of results) {
+  const passedGuards = new Map();
+  let probed = false;
+  for (let index = 0; index < results.length; index += 1) {
     if (failure || owner.signal) break;
+    let result = results[index];
+    // Even prerequisite probes may start Chrome. Defer them until every early
+    // guard has passed, retaining not-run resource stages on an early failure.
+    if (!probed && !result.guard && !['scan', 'prompt-history'].includes(result.suite)) {
+      const { prerequisites, databaseEnv } = await probeResourceSuites(plan, { options, downgraded });
+      ({ uncovered, stages } = planStages(prerequisites, databaseEnv));
+      announceUncovered(uncovered);
+      results.splice(index, results.length - index, ...stages.slice(index).map(stageResult));
+      probed = true;
+      result = results[index];
+      if (!result || owner.signal) break;
+    }
     if (result.suite !== 'scan') {
       try {
         hashTree();
@@ -831,6 +864,12 @@ async function main() {
         exitCode = 2;
         break;
       }
+    }
+    const beforeGuards = result.guard ? guardInputSnapshot(REPO_ROOT) : null;
+    const passed = passedGuards.get(result.suite);
+    if (!result.guard && passed && guardInputSnapshot(REPO_ROOT) === passed.snapshot) {
+      result.guardReuse = passed;
+      result.env = { ...result.env, PORTOS_PREGATE_GUARDS: JSON.stringify(passed) };
     }
     console.log(`▶️ ${result.name}`);
     const started = Date.now();
@@ -864,6 +903,9 @@ async function main() {
     } else {
       result.status = 'passed';
       result.exitCode = 0;
+      if (beforeGuards && guardInputSnapshot(REPO_ROOT) === beforeGuards) {
+        passedGuards.set(result.suite, { snapshot: beforeGuards, files: result.files });
+      }
       console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);
     }
   }
