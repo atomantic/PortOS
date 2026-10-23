@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { BIBLE_LIMITS } from './storyBible.js';
+import { BIBLE_LIMITS, FORM_ID_PATTERN } from './storyBible.js';
 import {
   INGREDIENT_TYPE_IDS,
   RELATION_KIND_IDS,
@@ -383,6 +383,7 @@ export const catalogMediaLibraryVariantSchema = z.object({
   age: z.number().int().min(0).max(150).optional(),
   era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
   wardrobeId: z.string().trim().min(1).max(59).optional(),
+  formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),
   label: z.string().trim().max(120).optional(),
 }).strict();
 export const catalogMediaLibraryPatchSchema = z.object({
@@ -405,6 +406,7 @@ export const catalogMediaLibraryQuerySchema = z.object({
   age: z.coerce.number().int().min(0).max(150).optional(),
   era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
   wardrobeId: z.string().trim().min(1).max(59).optional(),
+  formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),
   tag: z.string().trim().min(1).max(40).optional(),
   kind: z.enum(MEDIA_KINDS).optional(),
   guide: z.enum(['true', 'false']).optional(),
@@ -423,10 +425,13 @@ export const catalogPortraitSetSchema = z.object({
 // is required for `look` and refused for every other variant, so a stray id
 // never silently renders a plain sheet. 59 = the 64-char media role cap minus
 // the `look:` prefix the render tags its image with.
+// `formId` renders the sheet for one of the record's alternate forms (another
+// age, era or look/style); absent renders the canonical present-story form.
 export const CATALOG_LOOK_VARIANT_ID = 'look';
 export const catalogSheetRenderSchema = z.object({
   variant: z.string().trim().min(1).max(48).optional(),
   wardrobeId: z.string().trim().min(1).max(59).optional(),
+  formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),
   overridePrompt: z.string().max(8000).optional(),
   overrideNegativePrompt: z.string().max(2000).optional(),
   modelId: z.string().trim().max(64).optional(),
@@ -436,6 +441,9 @@ export const catalogSheetRenderSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is required for a look render' });
   } else if (!isLook && body.wardrobeId) {
     ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is only accepted for a look render' });
+  }
+  if (isLook && body.formId) {
+    ctx.addIssue({ code: 'custom', path: ['formId'], message: 'formId is not accepted for a look render' });
   }
 });
 

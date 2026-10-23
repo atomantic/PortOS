@@ -15,6 +15,13 @@ import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
  * is not listed among the sheet variants, and it always renders through the
  * catalog path — even for a universe-linked character — tagged
  * `role: 'look:<wardrobeId>'`.
+ *
+ * A `formId` render draws one of the record's `payload.forms` (another age,
+ * era or look/style) instead of its canonical present-story form: the form's
+ * age and description stand in for the record's own age/era and appearance
+ * text, and the image is tagged `role: 'sheet:<variant>@<formId>'`. Like a
+ * look it always renders through the catalog path, so the universe canon
+ * pointer keeps holding the canonical sheet.
  */
 
 import { ServerError } from '../lib/errorHandler.js';
@@ -102,6 +109,44 @@ function lookVariantFor(ingredient, payload, wardrobeId) {
   };
 }
 
+// Which payload fields a form's age and description replace, per type.
+const FORM_FIELDS = Object.freeze({
+  character: { age: 'age', description: 'physicalDescription' },
+  place: { age: 'era', description: 'description' },
+  object: { age: null, description: 'description' },
+});
+const MEDIA_ROLE_MAX = 64;
+
+function formFor(ingredient, payload, formId) {
+  if (!formId) return null;
+  const forms = Array.isArray(payload.forms) ? payload.forms : [];
+  const form = forms.find((f) => f && typeof f === 'object' && f.id === formId);
+  if (!form) {
+    throw new ServerError(`"${ingredient.name}" has no age or look with id "${formId}"`,
+      { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const age = typeof form.age === 'string' ? form.age.trim() : '';
+  const description = typeof form.description === 'string' ? form.description.trim() : '';
+  if (!age && !description) {
+    throw new ServerError(`Describe how "${form.label}" looks before rendering its sheet`,
+      { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return { ...form, age, description };
+}
+
+// The payload a form's sheet builds from: the record with its age/look swapped in.
+function payloadForForm(type, payload, form) {
+  if (!form) return payload;
+  const fields = FORM_FIELDS[type] || FORM_FIELDS.object;
+  const out = { ...payload };
+  if (form.description) out[fields.description] = form.description;
+  if (form.age) {
+    if (fields.age) out[fields.age] = form.age;
+    else out[fields.description] = [out[fields.description], form.age].filter(Boolean).join(' — ');
+  }
+  return out;
+}
+
 // Load + guard the record, resolve its variant and any universe it links to.
 async function resolveSheetTarget(id, options) {
   const ingredient = await getIngredient(id);
@@ -115,7 +160,7 @@ async function resolveSheetTarget(id, options) {
   }
   const isLook = options.variant === CATALOG_LOOK_VARIANT_ID;
   const variants = variantsForType(ingredient.type);
-  const variant = isLook
+  let variant = isLook
     ? lookVariantFor(ingredient, payload, options.wardrobeId)
     : options.variant
       ? variants.find((v) => v.id === options.variant)
@@ -125,6 +170,14 @@ async function resolveSheetTarget(id, options) {
       `Sheet variant "${options.variant ?? ''}" is not available for a ${ingredient.type}`,
       { status: 400, code: 'VALIDATION_ERROR' },
     );
+  }
+  const form = formFor(ingredient, payload, options.formId);
+  if (form) {
+    const role = `sheet:${variant.id}@${form.id}`;
+    if (role.length > MEDIA_ROLE_MAX) {
+      throw new ServerError(`Sheet role "${role}" exceeds ${MEDIA_ROLE_MAX} characters`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    variant = { ...variant, label: `${variant.label} · ${form.label}`, role };
   }
 
   const refs = await listLiveRefsForIngredient(id);
@@ -138,13 +191,13 @@ async function resolveSheetTarget(id, options) {
   // A local consolidation retains embedded source variants. Render its
   // authoritative merged payload instead of delegating to a stale canon copy.
   const identityIds = await getIngredientIdentityIds(ingredient.id);
-  if (ingredient.type === 'character' && !isLook && identityIds.length === 1) {
+  if (ingredient.type === 'character' && !isLook && !form && identityIds.length === 1) {
     for (const universe of universes) {
       const entry = (universe.characters || []).find((c) => c.ingredientId === ingredient.id);
       if (entry) return { ingredient, payload, variant, delegate: { universeId: universe.id, entryId: entry.id } };
     }
   }
-  return { ingredient, payload, variant, universe: universes[0] ?? null };
+  return { ingredient, payload: payloadForForm(ingredient.type, payload, form), variant, universe: universes[0] ?? null };
 }
 
 async function buildCatalogSheet(target, options) {

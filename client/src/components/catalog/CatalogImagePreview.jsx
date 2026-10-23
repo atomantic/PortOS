@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react';
 import { X } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import Modal from '../ui/Modal';
+import { imageThumbnailSrc } from '../../lib/imageThumbnailSrc';
 import usePreviewRoute from '../../hooks/usePreviewRoute';
 
 const PreviewContext = createContext(null);
@@ -61,7 +62,12 @@ export function CatalogImagePreviewProvider({ name, children }) {
 export default function CatalogImagePreview({ src, fallbackSrc, alt, className = '', loading = 'lazy' }) {
   const setPreview = useContext(PreviewContext);
   const item = imageFromSrc(src);
-  const thumbnail = <MediaImage src={src} fallbackSrc={fallbackSrc} alt={alt} className={className} loading={loading} />;
+  // Inline tiles load the 512px WebP derivative, not the multi-MB original;
+  // the enlarged preview below still opens the original.
+  const thumbSrc = imageThumbnailSrc(src);
+  const thumbnail = thumbSrc
+    ? <MediaImage src={thumbSrc} fallbackSrc={[src, fallbackSrc]} assetSrc={src} alt={alt} className={className} loading={loading} />
+    : <MediaImage src={src} fallbackSrc={fallbackSrc} alt={alt} className={className} loading={loading} />;
   if (!item || !setPreview) return thumbnail;
   return (
     <button type="button" onClick={() => setPreview({ ...item, alt })} aria-label={`Enlarge ${alt}`}

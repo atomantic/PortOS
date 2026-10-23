@@ -3,7 +3,8 @@ import { Compass, Star } from 'lucide-react';
 import { updateCatalogIngredientMediaLibrary, attachCatalogIngredientMediaFromMoodBoard } from '../../services/apiCatalog';
 
 // Casting reference library: tag each reference/sheet/still/clip of a cast
-// member with the variant it shows (age, era, look) plus tags, mark up to four
+// member with the variant it shows (which of the record's saved ages/looks —
+// `forms`, canonical when untagged — plus age, era) and tags, mark up to four
 // as render guides, and filter the library by those fields. The media grid
 // below still owns attach/upload/detach/portrait.
 export const MAX_CAST_GUIDES = 4;
@@ -12,8 +13,8 @@ const LIBRARY_KINDS = new Set(['portrait', 'reference', 'video']);
 const eraFor = (m) => m.library?.variant?.era
   || (Number.isInteger(m.library?.variant?.age) ? (m.library.variant.age < 13 ? 'child' : m.library.variant.age < 20 ? 'teen' : m.library.variant.age < 65 ? 'adult' : 'elder') : '');
 
-export default function CatalogReferenceLibrary({ ingredientId, media = [], readOnly = false, onChanged }) {
-  const [filter, setFilter] = useState({ age: '', era: '', tag: '', guides: false });
+export default function CatalogReferenceLibrary({ ingredientId, media = [], forms = [], readOnly = false, onChanged }) {
+  const [filter, setFilter] = useState({ form: '', age: '', era: '', tag: '', guides: false });
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [boardId, setBoardId] = useState('');
@@ -23,7 +24,9 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], read
   const guideCount = rows.filter((m) => m.library?.guide === true).length;
   const ages = [...new Set(rows.map((m) => m.library?.variant?.age).filter(Number.isInteger))].sort((a, b) => a - b);
   const tags = [...new Set(rows.flatMap((m) => m.library?.tags || []))].sort();
-  const visible = rows.filter((m) => (filter.age === '' || m.library?.variant?.age === Number(filter.age))
+  const formKey = (m) => m.library?.variant?.formId || 'canonical';
+  const visible = rows.filter((m) => (!filter.form || formKey(m) === filter.form)
+    && (filter.age === '' || m.library?.variant?.age === Number(filter.age))
     && (!filter.era || eraFor(m) === filter.era)
     && (!filter.tag || (m.library?.tags || []).includes(filter.tag))
     && (!filter.guides || m.library?.guide === true));
@@ -59,7 +62,16 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], read
       <header className="flex flex-wrap items-center gap-2 text-sm">
         <h3 className="font-semibold">Reference library</h3>
         <span data-testid="guide-count" className="text-gray-400">{guideCount}/{MAX_CAST_GUIDES} render guides</span>
-        <label className="ml-auto flex items-center gap-1">Age
+        {forms.length > 0 && (
+          <label className="ml-auto flex items-center gap-1">Form
+            <select aria-label="Filter by age or look" value={filter.form} onChange={(e) => setFilter({ ...filter, form: e.target.value })} className="bg-port-card">
+              <option value="">All</option>
+              <option value="canonical">Canonical</option>
+              {forms.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+            </select>
+          </label>
+        )}
+        <label className={`${forms.length > 0 ? '' : 'ml-auto '}flex items-center gap-1`}>Age
           <select aria-label="Filter by age" value={filter.age} onChange={(e) => setFilter({ ...filter, age: e.target.value })} className="bg-port-card">
             <option value="">All</option>
             {ages.map((a) => <option key={a} value={a}>{a}</option>)}
@@ -100,6 +112,13 @@ export default function CatalogReferenceLibrary({ ingredientId, media = [], read
                 </div>
                 {!readOnly && (
                   <div className="flex flex-wrap items-center gap-1">
+                    {forms.length > 0 && (
+                      <select aria-label={`Age or look for ${m.mediaKey}`} value={lib.variant?.formId || ''} className="bg-port-bg"
+                        onChange={(e) => save(m, { variant: { ...(lib.variant || {}), formId: e.target.value || undefined } })}>
+                        <option value="">Canonical</option>
+                        {forms.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+                      </select>
+                    )}
                     <input aria-label={`Age for ${m.mediaKey}`} type="number" min="0" max="150" defaultValue={lib.variant?.age ?? ''} className="w-14 bg-port-bg"
                       onBlur={(e) => {
                         const age = e.target.value === '' ? undefined : Number(e.target.value);

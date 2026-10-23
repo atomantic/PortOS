@@ -37,6 +37,10 @@ export function normalizeLibrary(value) {
   if (CAST_ERAS.includes(variant.era)) v.era = variant.era;
   const wardrobeId = cleanStr(variant.wardrobeId, 59);
   if (wardrobeId) v.wardrobeId = wardrobeId;
+  // The record's `payload.forms[]` entry this asset shows; absent = the
+  // canonical present-story form.
+  const formId = cleanStr(variant.formId, 24);
+  if (formId) v.formId = formId;
   const label = cleanStr(variant.label, 120);
   if (label) v.label = label;
   if (Object.keys(v).length) out.variant = v;
@@ -50,7 +54,7 @@ export function normalizeLibrary(value) {
 
 const mediaEra = (m) => m?.library?.variant?.era || eraForAge(m?.library?.variant?.age);
 
-/** Filter live media rows by `{ age, era, wardrobeId, tag, kind, guide }`. */
+/** Filter live media rows by `{ age, era, wardrobeId, formId, tag, kind, guide }`. */
 export function filterLibraryMedia(media, filters = {}) {
   const list = Array.isArray(media) ? media : [];
   return list.filter((m) => {
@@ -60,6 +64,7 @@ export function filterLibraryMedia(media, filters = {}) {
     if (Number.isInteger(filters.age) && lib.variant?.age !== filters.age) return false;
     if (filters.era && mediaEra(m) !== filters.era) return false;
     if (filters.wardrobeId && lib.variant?.wardrobeId !== filters.wardrobeId) return false;
+    if (filters.formId && lib.variant?.formId !== filters.formId) return false;
     if (filters.tag && !(lib.tags || []).includes(String(filters.tag).toLowerCase())) return false;
     if (filters.guide === true && lib.guide !== true) return false;
     return true;
@@ -75,6 +80,7 @@ function score(m, want) {
   const wantEra = want.era || eraForAge(want.age);
   if (wantEra && mediaEra(m) === wantEra) s += 30;
   if (want.wardrobeId && v.wardrobeId === want.wardrobeId) s += 20;
+  if (want.formId && v.formId === want.formId) s += 40;
   if (m.library?.guide) s += 10;
   if (m.kind === 'portrait') s += 5;
   return s;

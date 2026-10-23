@@ -414,6 +414,20 @@ describe('CatalogIngredient — character sheet', () => {
       await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
     });
 
+    // Catches an added age/look never reaching the saved payload.
+    it('saves an added age or look as payload.forms', async () => {
+      updateCatalogIngredient.mockImplementation(async (_id, body) => ({ ...CHAR_FIXTURE, ...body }));
+      await renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: /Add age or look/ }));
+      fireEvent.change(screen.getAllByLabelText('Name')[1], { target: { value: 'Age 7' } });
+      fireEvent.change(screen.getByLabelText('How it looks'), { target: { value: 'yellow raincoat' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalled());
+      expect(updateCatalogIngredient.mock.calls[0][1].payload.forms).toEqual([
+        expect.objectContaining({ id: expect.stringMatching(/^form-/), label: 'Age 7', description: 'yellow raincoat' }),
+      ]);
+    });
+
     it('keeps edits typed during a save and submits them on the next save', async () => {
       let finishSave;
       updateCatalogIngredient.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
@@ -987,7 +1001,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(await screen.findByRole('tab', { name: /Sheets/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByAltText('standard reference sheet').getAttribute('src')).toBe('/data/image-refs/hero-standard.png');
     expect(screen.getByAltText('expressions reference sheet').getAttribute('src')).toBe('/data/image-refs/hero-expressions.png');
-    await waitFor(() => expect(screen.getByAltText('Standard turnaround').getAttribute('src')).toBe('/data/images/sheet-1.png'));
+    await waitFor(() => expect(screen.getByAltText('Standard turnaround').getAttribute('src')).toBe('/data/image-thumbnails/sheet-1.webp'));
     // Sheets don't carry the profile form or the general media panel.
     expect(screen.queryByLabelText('Name')).toBeNull();
     expect(screen.queryByAltText('mood.png')).toBeNull();
@@ -1002,7 +1016,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       id: 'example', type, name: 'Example subject', payload: { primaryImageRef: 'cover.png' },
     }));
     await renderPage(route);
-    expect(screen.getByAltText('Example subject cover')).toHaveAttribute('src', '/data/images/cover.png');
+    expect(screen.getByAltText('Example subject cover')).toHaveAttribute('src', '/data/image-thumbnails/cover.webp');
     fireEvent.click(screen.getByRole('button', { name: 'Enlarge Example subject cover' }));
     const preview = screen.getByRole('dialog', { name: 'Example subject cover' });
     expect(within(preview).getByAltText('Example subject cover')).toHaveAttribute('data-fallback-src', '/data/image-refs/cover.png');
@@ -1017,11 +1031,11 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       media: [{ kind: 'portrait', mediaKey: 'chosen.png' }, { kind: 'reference', mediaKey: 'chosen.png' }],
     });
     const page = await renderPage('/casting/cat-chr-hero/profile');
-    expect(screen.getByAltText('Example Hero cover')).toHaveAttribute('src', '/data/images/chosen.png');
+    expect(screen.getByAltText('Example Hero cover')).toHaveAttribute('src', '/data/image-thumbnails/chosen.webp');
     page.unmount();
     await renderPage('/casting/cat-chr-hero/references');
-    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('src', '/data/images/primary.png');
-    expect(screen.getAllByRole('img').filter((image) => image.getAttribute('src') === '/data/images/chosen.png')).toHaveLength(1);
+    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('src', '/data/image-thumbnails/primary.webp');
+    expect(screen.getAllByRole('img').filter((image) => image.getAttribute('src') === '/data/image-thumbnails/chosen.webp')).toHaveLength(1);
   });
 
   it('keeps archive-only reference media visible on References without using it as a profile cover', async () => {
@@ -1033,7 +1047,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(screen.queryByAltText('Example Hero cover')).not.toBeInTheDocument();
     profile.unmount();
     await renderPage('/casting/cat-chr-hero/references');
-    expect(screen.getByAltText('Archived source image')).toHaveAttribute('src', '/data/images/archived-source.png');
+    expect(screen.getByAltText('Archived source image')).toHaveAttribute('src', '/data/image-thumbnails/archived-source.webp');
     expect(screen.getByRole('button', { name: 'Enlarge Archived source image' })).toBeInTheDocument();
   });
 
@@ -1134,8 +1148,8 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     }));
     await renderPage('/casting/cat-chr-hero/references');
     expect(screen.getAllByAltText('Example Hero canon reference')).toHaveLength(1);
-    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('src', '/data/images/existing.png');
-    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('data-fallback-src', '/data/image-refs/existing.png');
+    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('src', '/data/image-thumbnails/existing.webp');
+    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('data-fallback-src', '/data/images/existing.png,/data/image-refs/existing.png');
     expect(screen.getByText('Primary canon reference')).toBeInTheDocument();
     expect(screen.queryByText(/No media yet/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Detach', exact: true })).not.toBeInTheDocument();
@@ -1151,9 +1165,9 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     });
     await renderPage('/casting/cat-chr-hero/references');
     const images = screen.getAllByRole('img').map((image) => image.getAttribute('src'));
-    expect(images.filter((src) => src === '/data/images/mood.png')).toHaveLength(1);
-    expect(images.filter((src) => src === '/data/images/canon-only.png')).toHaveLength(1);
-    expect(images).not.toContain('/data/images/sheet-1.png');
+    expect(images.filter((src) => src === '/data/image-thumbnails/mood.webp')).toHaveLength(1);
+    expect(images.filter((src) => src === '/data/image-thumbnails/canon-only.webp')).toHaveLength(1);
+    expect(images).not.toContain('/data/image-thumbnails/sheet-1.webp');
   });
 
   it('previews the chosen variant and posts it on Generate, then attaches the finished sheet', async () => {
@@ -1229,10 +1243,10 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage('/casting/cat-chr-hero/references');
     await waitFor(() => expect(screen.getByAltText('portrait')).toBeTruthy());
     const srcs = screen.getAllByRole('img').map((img) => img.getAttribute('src'));
-    expect(srcs).toContain('/data/images/mood.png');
-    expect(srcs).not.toContain('/data/images/sheet-1.png');
-    expect(srcs).not.toContain('/data/images/plate-1.png');
-    expect(srcs).not.toContain('/data/images/look-1.png');
+    expect(srcs).toContain('/data/image-thumbnails/mood.webp');
+    expect(srcs).not.toContain('/data/image-thumbnails/sheet-1.webp');
+    expect(srcs).not.toContain('/data/image-thumbnails/plate-1.webp');
+    expect(srcs).not.toContain('/data/image-thumbnails/look-1.webp');
     expect(screen.queryByLabelText('Name')).toBeNull();
   });
 
@@ -1247,7 +1261,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       expect(await screen.findByRole('tab', { name: /Looks/ })).toHaveAttribute('aria-selected', 'true');
       const card = screen.getByRole('article', { name: 'Look: Red scarf' });
       expect(card.textContent).toContain('Long red wool scarf.');
-      await waitFor(() => expect(screen.getByAltText('Red scarf').getAttribute('src')).toBe('/data/images/look-1.png'));
+      await waitFor(() => expect(screen.getByAltText('Red scarf').getAttribute('src')).toBe('/data/image-thumbnails/look-1.webp'));
 
       fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
       expect(await screen.findByRole('button', { name: '+ Universe style' })).toBeTruthy();
@@ -1299,7 +1313,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
 
       await act(async () => { await router.navigate('/casting/cat-chr-hero/references'); });
       await waitFor(() => expect(screen.getAllByRole('img').map((img) => img.getAttribute('src')))
-        .toContain('/data/images/look-1.png'));
+        .toContain('/data/image-thumbnails/look-1.webp'));
     });
   });
 

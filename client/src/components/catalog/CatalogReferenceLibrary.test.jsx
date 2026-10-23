@@ -52,6 +52,20 @@ describe('CatalogReferenceLibrary', () => {
       .toHaveBeenCalledWith('cat-chr-1', { boardId: 'mb-1', itemIds: ['a', 'b'], inferAge: true }));
   });
 
+  it('tags a reference with one of the saved ages/looks and filters by it', async () => {
+    const forms = [{ id: 'form-kid', label: 'Age 7' }];
+    const tagged = [
+      { mediaKey: 'kid.png', kind: 'reference', library: { variant: { formId: 'form-kid' } } },
+      { mediaKey: 'now.png', kind: 'reference', library: {} },
+    ];
+    render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={tagged} forms={forms} />);
+    fireEvent.change(screen.getByLabelText('Filter by age or look'), { target: { value: 'canonical' } });
+    expect(screen.getAllByTestId('library-row')).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText('Age or look for now.png'), { target: { value: 'form-kid' } });
+    await waitFor(() => expect(api.updateCatalogIngredientMediaLibrary)
+      .toHaveBeenCalledWith('cat-chr-1', { mediaKey: 'now.png', kind: 'reference', variant: { formId: 'form-kid' } }));
+  });
+
   it('hides editing controls when read-only', () => {
     render(<CatalogReferenceLibrary ingredientId="cat-chr-1" media={media} readOnly />);
     expect(screen.queryByRole('button', { name: /guide/i })).toBeNull();

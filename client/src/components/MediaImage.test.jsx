@@ -34,6 +34,17 @@ describe('MediaImage', () => {
     expect(img.getAttribute('src')).toBe('/data/images/foo.png');
   });
 
+  // Catches a thumbnail miss stranding a sheet that lives only under image-refs.
+  it('walks a fallback chain in order before showing the placeholder', () => {
+    render(<MediaImage src="/data/image-thumbnails/s.webp" fallbackSrc={['/data/images/s.png', '/data/image-refs/s.png']} alt="sheet" />);
+    fireEvent.error(screen.getByAltText('sheet'));
+    expect(screen.getByAltText('sheet').getAttribute('src')).toBe('/data/images/s.png');
+    fireEvent.error(screen.getByAltText('sheet'));
+    expect(screen.getByAltText('sheet').getAttribute('src')).toBe('/data/image-refs/s.png');
+    fireEvent.error(screen.getByAltText('sheet'));
+    expect(screen.getByText(/Syncing/i)).toBeTruthy();
+  });
+
   it('shows the "Syncing" placeholder after an onError fires (asset 404s before pull lands)', () => {
     render(<MediaImage src="/data/images/missing.png" alt="ghost" />);
     fireEvent.error(screen.getByAltText('ghost'));

@@ -9,7 +9,7 @@
  */
 
 import {
-  isLegacyAbsentValue, preserveLegacyCharacterFields, preserveLegacyObjectFields,
+  isLegacyAbsentValue, preserveLegacyCharacterFields, preserveLegacyObjectFields, preserveLegacyPlaceFields,
 } from '../../lib/storyBible.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
@@ -73,6 +73,7 @@ export function preserveLegacyUniverseFields(remote, local, senderUniversesVersi
   // Only touch the lists the remote carries — a raw share-bucket record may
   // omit one, and an `undefined`-valued key would clobber it in a patch merge.
   if ('characters' in out) out.characters = preserveLegacyCharacterFields(out.characters, local.characters, sender);
+  if ('places' in out) out.places = preserveLegacyPlaceFields(out.places, local.places, sender);
   if ('objects' in out) out.objects = preserveLegacyObjectFields(out.objects, local.objects, sender);
   return out;
 }
