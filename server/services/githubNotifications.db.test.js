@@ -193,8 +193,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await syncAccountNotifications(account.id);
     expect(merges).toEqual([['pr', 'merge', '2011', '--repo', `github.com/${repo}`, '--squash', '--match-head-commit', head]]);
     const result = await getNotification(account.id, '2011');
-    expect(result).toMatchObject({ decision: 'suggest-mark-read', pullRequest: null, pullRequestAction: { merged: true, headSha: head } });
-    expect(result.events.some(event => event.kind === 'merged')).toBe(true);
+    expect(result).toMatchObject({ state: 'done', pullRequest: null, pullRequestAction: { merged: true, headSha: head } });
+    expect(result.events.map(event => event.kind)).toEqual(expect.arrayContaining(['merged', 'done']));
     await syncAccountNotifications(account.id);
     expect(merges).toHaveLength(1);
     expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
@@ -213,6 +213,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       reviewDecision: 'APPROVED', statusCheckRollup: [{ name: 'CI', conclusion: 'SUCCESS' }] };
     let current = ready;
     let refuseMerge = false;
+    let landMerge = false;
     const merges = [];
     const fallback = vi.mocked(execGh).getMockImplementation();
     vi.mocked(execGh).mockImplementation(async (args, ...rest) => {
@@ -220,6 +221,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       if (args[1] === 'merge') {
         merges.push(args);
         if (refuseMerge) throw new Error('Head commit changed');
+        if (landMerge) current = { ...ready, state: 'MERGED' };
         return '';
       }
       return JSON.stringify(current);
@@ -237,6 +239,11 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await expect(actOnPullRequest(account.id, '2012', { action: 'merge' })).rejects.toMatchObject({ code: 'GITHUB_PR_MERGE_UNCONFIRMED' });
     expect(await getNotification(account.id, '2012')).toMatchObject({ state: 'open', decision: 'needs-you', pullRequestAction: null });
     expect(merges.every(args => args.includes(head))).toBe(true);
+    // A confirmed merge finishes the thread: it comes back done, with no further click.
+    landMerge = true;
+    const done = await actOnPullRequest(account.id, '2012', { action: 'merge' });
+    expect(done).toMatchObject({ merged: true, notification: { state: 'done', unread: false } });
+    expect((await getNotification(account.id, '2012')).events.map(event => event.kind)).toEqual(expect.arrayContaining(['merged', 'done']));
   });
 
   it('reaches an older ready PR after a full batch of newer PRs remains pending', async () => {
