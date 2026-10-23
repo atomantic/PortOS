@@ -213,6 +213,14 @@ async function verifiedReviewCoordinator(agent, repository) {
   if (!pr || repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== repository
     || String(meta.reviewLoopPRNumber) !== String(pr.number)
     || meta.reviewLoopPRHost !== pr.host || meta.reviewLoopPROwner !== pr.owner || meta.reviewLoopPRRepo !== pr.repo) return false;
+  if (target.detached) {
+    if (meta.forkHead || meta.reviewLoopForkTarget || target.fork || agent.metadata.isWorktree !== true
+      || repositoryKey(await getOriginInfo(agent.metadata.workspacePath).catch(() => null)) !== repository) return false;
+    const { verifyDetachedReviewMergeTarget } = await import('./detachedReviewMergeTarget.js');
+    const headSha = await verifyDetachedReviewMergeTarget({ target,
+      workspacePath: agent.metadata.workspacePath, sourceWorkspace: agent.metadata.sourceWorkspace });
+    return headSha ? { headSha } : false;
+  }
   if (!await checkoutOnBranch(agent.metadata.workspacePath, resolveTaskTargetBranch(meta), repository)) return false;
   if (!meta.forkHead && !meta.reviewLoopForkTarget && !target.fork && !target.workspacePath) return true;
   if (target.workspacePath !== agent.metadata.workspacePath || !agent.metadata.sourceWorkspace
@@ -343,7 +351,7 @@ export async function resolveMergeHandoffOwner(agentId) {
     const { ownsClaimBranch } = await import('../lib/claimContinuation.js');
     return { ...owner, owns: (branch) => ownsClaimBranch(agent, branch), workspacePath: null };
   }
-  if (await verifiedReviewCoordinator(agent, repository) === true) {
+  if (await verifiedReviewCoordinator(agent, repository)) {
     return { ...owner, owns: (branch) => branch === meta.reviewLoopMergeTarget.branch, workspacePath: meta.workspacePath };
   }
   if (await verifiedWorktreeDelivery(agent, repository)) {
@@ -420,6 +428,10 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
         && isTruthyMeta(task.metadata?.reviewLoopFollowUp) && task.metadata?.forkHead)) {
         return { admitted: false, reason: 'fork-review-target-unverified', retryable: false,
           message: 'Leave the PR/worktree intact. Verify the live PR head, base, fork remote and upstream; old or changed targets require a fresh supported follow-up.' };
+      }
+      if (agent.metadata?.reviewLoopMergeTarget?.detached) {
+        return { admitted: false, reason: 'detached-review-target-unverified', retryable: false,
+          message: 'Leave the PR/worktree intact. A detached review checkout must match its registered launch head and live PR; create a fresh supported follow-up for a changed target.' };
       }
       return refuse('claim-owner-unverified');
     }

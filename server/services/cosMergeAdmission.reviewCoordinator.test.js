@@ -5,7 +5,7 @@ import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js'
 import { forkLocalBranch } from '../lib/forkHead.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 
-const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, branch: 'feature/fix', workspaceRepo: 'example/repo', originHost: 'github.com', row: null, head: null, upstream: null, remote: null, pushRemote: null }));
+const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, branch: 'feature/fix', workspaceRepo: 'example/repo', originHost: 'github.com', row: null, head: null, upstream: null, remote: null, pushRemote: null, detached: false }));
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: '/synthetic/agents',
   withStateLock: createFileWriteQueue(),
@@ -32,6 +32,7 @@ vi.mock('../lib/spawnCwd.js', async importOriginal => ({ ...(await importOrigina
 vi.mock('./taskConflict.js', () => ({ detectConflicts: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async args => {
   let stdout;
+  if (args[0] === 'symbolic-ref' && f.branch === null) return { stdout: '', exitCode: 1 };
   if (args[0] === 'symbolic-ref') stdout = f.branch;
   if (args[0] === 'rev-parse') stdout = args.includes('--is-inside-work-tree') ? 'true' : f.head;
   if (args[0] === 'remote') stdout = args.includes('--push') ? f.pushRemote : f.remote;
@@ -42,7 +43,8 @@ vi.mock('../lib/execGit.js', () => ({ execGit: async args => {
 vi.mock('./git.js', () => ({ parsePullRequestUrl, isRepo: async () => true, getRepoBranches: async () => ({ baseBranch: 'main' }) }));
 vi.mock('./worktreeManager.js', () => ({ removeWorktree: vi.fn(), classifyWorktreeDirt: vi.fn(),
   listWorktrees: async () => [], findAdoptableWorktreeForBranch: async () => null, releaseIdleSiblingNextHolder: async () => null,
-  createWorktree: vi.fn(async (_agent, _workspace, _task, options) => ({ worktreePath: '/repos/worktree', branchName: forkLocalBranch(options.existingBranch, options.forkHead) })),
+  createWorktree: vi.fn(async (_agent, _workspace, _task, options) => ({ worktreePath: '/repos/worktree', branchName: forkLocalBranch(options.existingBranch, options.forkHead),
+    ...(f.detached ? { detached: true, headSha: f.head } : {}) })),
 }));
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { createWorktree } from './worktreeManager.js';
@@ -71,7 +73,7 @@ const persist = () => { f.disk = structuredClone(f.state); };
 beforeEach(() => {
   f.state = { agents: {}, mergeAdmissions: {}, stats: { agentsSpawned: 0 } };
   vi.clearAllMocks();
-  f.tasks = {}; f.branch = 'feature/fix'; f.workspaceRepo = 'example/repo'; f.originHost = 'github.com';
+  f.tasks = {}; f.branch = 'feature/fix'; f.workspaceRepo = 'example/repo'; f.originHost = 'github.com'; f.detached = false;
   f.head = 'a'.repeat(40); f.remote = forkHead.remoteUrl; f.pushRemote = f.remote;
   f.upstream = { remote: 'fork-contributor', merge: 'refs/heads/feature/fix' };
   f.row = { url: 'https://github.com/example/repo/pull/42', number: 42, state: 'OPEN', headRefName: f.branch,
@@ -136,6 +138,51 @@ describe('registered review-loop merge coordinator', () => {
         .toMatchObject({ admitted: false });
       expect(f.disk.mergeAdmissions).toEqual({});
     });
+  });
+});
+
+describe('registered detached review checkout', () => {
+  async function detachedLaunch() {
+    f.detached = true;
+    f.row.isCrossRepository = false;
+    const task = await launch();
+    f.branch = null;
+    return task;
+  }
+
+  it('admits the registered launch head and preserves release after the checkout or PR changes', async () => {
+    await detachedLaunch();
+    const lease = await admission('acquire');
+    expect(lease).toMatchObject({ admitted: true });
+    expect(f.disk.mergeAdmissions[lease.repository].headSha).toBe(f.head);
+    expect(await admission('check', lease.token)).toMatchObject({ admitted: true });
+    f.row.headRefOid = 'b'.repeat(40);
+    expect(await admission('check', lease.token)).toMatchObject({ admitted: false, retryable: false });
+    expect(await admission('release', lease.token, { outcome: 'resync' })).toMatchObject({ released: true });
+    expect(f.disk.mergeAdmissions).toEqual({});
+  });
+
+  it.each(['unregistered', 'changed-workspace', 'changed-origin', 'attached', 'local-head', 'remote-head',
+    'wrong-pr', 'closed', 'fork', 'leave-open', 'task-changed', 'unreadable'])('refuses %s without retrying a permanent binding failure', async mode => {
+    const task = await detachedLaunch();
+    const agent = f.state.agents['review-agent'];
+    if (mode === 'unregistered') delete agent.metadata.reviewLoopMergeTarget.detached;
+    if (mode === 'changed-workspace') agent.metadata.workspacePath = '/repos/other';
+    if (mode === 'changed-origin') f.workspaceRepo = 'example/other';
+    if (mode === 'attached') f.branch = 'feature/fix';
+    if (mode === 'local-head') f.head = 'b'.repeat(40);
+    if (mode === 'remote-head') f.row.headRefOid = 'b'.repeat(40);
+    if (mode === 'wrong-pr') f.row.url = 'https://github.com/example/repo/pull/43';
+    if (mode === 'closed') f.row.state = 'CLOSED';
+    if (mode === 'fork') f.row.isCrossRepository = true;
+    if (mode === 'leave-open') task.metadata.reviewLoopLeaveOpen = true;
+    if (mode === 'task-changed') task.metadata.reviewLoopPRBranch = 'other';
+    if (mode === 'unreadable') f.row = null;
+    persist();
+    const result = await admission('acquire', undefined, { headSha: f.head });
+    expect(result.admitted).toBe(false);
+    if (mode !== 'unregistered') expect(result).toMatchObject({ retryable: false, reason: 'detached-review-target-unverified' });
+    expect(f.disk.mergeAdmissions).toEqual({});
   });
 });
 
