@@ -94,17 +94,21 @@ const _selfLoginCache = new Map();
  * Resolve the gh-authenticated user's login on `host` (e.g. "alice" on
  * github.com, "alice_corp" on an enterprise host). Returns null when `host` is
  * falsy or gh isn't authenticated there — callers that need it for an author
- * gate must treat null as "can't gate, don't fire blindly".
+ * gate must treat null as "can't gate, don't fire blindly". Optional scoped
+ * `{ cwd, env }` execution options bypass the ambient host-only cache.
  */
-export async function getSelfLogin(host) {
+export async function getSelfLogin(host, forgeExec) {
   if (!host) return null;
-  if (_selfLoginCache.has(host)) return _selfLoginCache.get(host);
+  // Scoped credentials can select another account on the same host. Never
+  // consume or populate the ambient cache (or key it by a secret).
+  const cacheable = !forgeExec;
+  if (cacheable && _selfLoginCache.has(host)) return _selfLoginCache.get(host);
   // `--hostname` is required: without it `gh api` targets github.com regardless
   // of cwd, resolving the wrong identity for an enterprise repo.
   const login = await execGh(
     ['api', 'user', '--hostname', host, '--jq', '.login'],
     undefined,
-    { backoffKey: host }
+    { ...forgeExec, backoffKey: host }
   ).catch((err) => {
     // Log rather than swallow (#3358): without this a firewalled/unauthenticated
     // gh is indistinguishable from "this host has no login", and every self/others
@@ -117,7 +121,7 @@ export async function getSelfLogin(host) {
   // later self/others gate on this host into 'self-login-unavailable' until
   // process restart; leaving it unset lets the next tick retry once auth recovers.
   const trimmed = login && login.trim();
-  if (trimmed) _selfLoginCache.set(host, trimmed);
+  if (cacheable && trimmed) _selfLoginCache.set(host, trimmed);
   return trimmed || null;
 }
 
