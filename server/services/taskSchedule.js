@@ -21,7 +21,7 @@
 
 import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsValidation.js';
 import { unresolvedRetirements, retainRetirementObligations, sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
-import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
+import { findGoneInventoryRows, isObligationRow } from './branchReconcileInventoryPrune.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
@@ -834,9 +834,16 @@ async function pruneGoneInventory(appId, outcome) {
   if (!appId || !outcome?.remaining?.length) return outcome;
   const app = await getAppById(appId).catch(() => null);
   if (!app?.repoPath) return outcome;
-  const gone = await findGoneInventoryRows(app.repoPath, outcome.remaining).catch(() => []);
+  const gone = await findGoneInventoryRows(app.repoPath, outcome.remaining, { includeObligations: true }).catch(() => []);
   if (!gone.length) return outcome;
-  return await dropInventoryRows(appId, gone).catch(() => null) ?? outcome;
+  const obsolete = gone.filter(row => !isObligationRow(row));
+  const current = obsolete.length ? await dropInventoryRows(appId, obsolete).catch(() => null) ?? outcome : outcome;
+  // Missing originals do not prove preservation. Keep obligations, but do not
+  // present their historical tuple as a checkout that can still be retired.
+  return { ...current, remaining: current.remaining.map(row => ({
+    ...row,
+    ...(row.path && gone.some(missing => sameRetirementCheckout(missing, row)) && { checkoutMissing: true }),
+  })) };
 }
 
 const RETIRED_CHECKOUTS_KEPT = 20;
