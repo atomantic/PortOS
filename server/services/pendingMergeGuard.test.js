@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as childProcess from '../lib/childProcess.js';
 import { execGit } from '../lib/execGit.js';
 import { preparePendingMergeGuard, pendingMergeGuardCurrent } from './pendingMergeGuard.js';
 
@@ -99,6 +100,44 @@ describe('pending merged-tree validation', () => {
     const { input, git, worktreePath, headSha } = await fixture();
     await git(['checkout', '--detach', headSha], worktreePath);
     expect(await preparePendingMergeGuard(input)).toEqual({ ok: false, reason: 'merged-tree-checkout-unverified' });
+  });
+
+  it('drains sibling checkout probes before refusing a detached checkout', async () => {
+    const { input, git, repoPath, worktreePath, headSha } = await fixture();
+    await git(['checkout', '--detach', headSha], worktreePath);
+    const spawn = childProcess.spawn;
+    const closes = [];
+    let heldChild;
+    let detachedProbeClosed;
+    const detachedClosed = new Promise(resolve => { detachedProbeClosed = resolve; });
+    const spy = vi.spyOn(childProcess, 'spawn').mockImplementation((command, args, options) => {
+      // A live sibling owns the primary repo as its cwd, just as a slow Git
+      // probe does on Windows. Release it explicitly rather than sleeping.
+      const held = command === 'git' && options.cwd === repoPath && args.includes('--git-common-dir');
+      const child = held
+        ? spawn(process.execPath, ['-e', 'process.stdin.resume()'], options)
+        : spawn(command, args, options);
+      closes.push(new Promise(resolve => child.once('close', resolve)));
+      if (held) heldChild = child;
+      if (command === 'git' && args[0] === 'symbolic-ref') child.once('close', detachedProbeClosed);
+      return child;
+    });
+    let settled = false;
+    const checking = preparePendingMergeGuard(input).then(result => {
+      settled = true;
+      return result;
+    });
+    try {
+      await detachedClosed;
+      await new Promise(resolve => setImmediate(resolve));
+      expect(heldChild.exitCode).toBeNull();
+      expect(settled).toBe(false);
+    } finally {
+      heldChild?.stdin.end();
+      await Promise.allSettled([...closes, checking]);
+      spy.mockRestore();
+    }
+    expect(await checking).toEqual({ ok: false, reason: 'merged-tree-checkout-unverified' });
   });
 
   it('leaves an ordinary managed app without the supported command unchanged', async () => {

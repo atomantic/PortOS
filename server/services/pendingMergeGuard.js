@@ -31,15 +31,17 @@ async function supportsPendingMergeGuard(repoPath) {
 export async function verifyPendingMergeCheckout(repoPath, worktreePath, branch, headSha) {
   if (!worktreePath || resolve(repoPath) === resolve(worktreePath)) return false;
   const read = async (args, cwd = worktreePath) => (await execGit(args, cwd)).stdout.trim();
-  const checked = await Promise.all([
+  // A refused probe must still drain its siblings: a live Git process can
+  // retain the checkout cwd while the caller handles that refusal.
+  const checked = await Promise.allSettled([
     read(['rev-parse', '--path-format=absolute', '--git-common-dir']),
     read(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoPath),
     read(['rev-parse', '--verify', 'HEAD^{commit}']),
     read(['symbolic-ref', '--quiet', '--short', 'HEAD']),
     read(['status', '--porcelain=v1', '--untracked-files=all']),
-  ]).catch(() => null);
-  if (!checked) return false;
-  const [common, primaryCommon, head, ref, status] = checked;
+  ]);
+  if (checked.some(result => result.status === 'rejected')) return false;
+  const [common, primaryCommon, head, ref, status] = checked.map(result => result.value);
   return common === primaryCommon && head === headSha && ref === branch && !status;
 }
 
