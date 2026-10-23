@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, LayoutGrid, LayoutPanelLeft, ListMusic, Loader2, Play, Plus, Rows3, ScrollText } from 'lucide-react';
+import { ArrowLeft, Clapperboard, LayoutGrid, LayoutPanelLeft, ListMusic, Loader2, Play, Plus, Rows3, ScrollText } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -31,6 +31,7 @@ import SongBriefDrawer from '../components/storyboards/SongBriefDrawer';
 import StoryboardPlayer from '../components/storyboards/StoryboardPlayer';
 import PanelCard from '../components/storyboards/PanelCard';
 import PanelDrawer from '../components/storyboards/PanelDrawer';
+import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer';
 import { beatSeconds, findPanel } from '../components/storyboards/storyboardArt';
 
 const VIEW_TABS = [
@@ -48,7 +49,7 @@ export default function StoryboardDetail() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const view = VIEW_IDS.has(searchParams.get('view')) ? searchParams.get('view') : 'beats';
-  // Drawers over the board (`?plot=open`, `?brief=open`), deep-linkable.
+  // Drawers over the board (`?plot=open`, `?brief=open`, `?video=open`), deep-linkable.
   const setDrawerParam = (key, on) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
     if (on) next.set(key, 'open');
@@ -58,6 +59,7 @@ export default function StoryboardDetail() {
   const plotOpen = searchParams.get('plot') === 'open';
   const setPlotOpen = (on) => setDrawerParam('plot', on);
   const briefOpen = searchParams.get('brief') === 'open';
+  const videoOpen = searchParams.get('video') === 'open';
   const viewQuery = (next) => (next === 'beats' ? '' : `?view=${next}`);
   const viewSuffix = viewQuery(view);
   // undefined = loading, null = missing.
@@ -259,6 +261,11 @@ export default function StoryboardDetail() {
           <button type="button" onClick={() => setDrawerParam('brief', true)} className={headerButton}>
             <ListMusic size={16} aria-hidden="true" /> Song brief
           </button>
+          {board.beats.length > 0 && (
+            <button type="button" onClick={() => setDrawerParam('video', true)} className={headerButton}>
+              <Clapperboard size={16} aria-hidden="true" /> Make video
+            </button>
+          )}
           {board.beats.some((beat) => beat.panels.length) && <MakeEmptyPanels boardId={id} />}
         </div>
       </header>
@@ -327,6 +334,8 @@ export default function StoryboardDetail() {
         )}
       </div>
 
+      <VideoDraftDrawer open={videoOpen} storyboard={board} onClose={() => setDrawerParam('video', false)}
+        onSaved={(created) => navigate(`/creative-director/${created.id}/overview`)} />
       <SongBriefDrawer open={briefOpen} board={board} onClose={() => setDrawerParam('brief', false)} />
       <PlotBeatsDrawer open={plotOpen} board={board} onClose={() => setPlotOpen(false)} onBoard={apply} />
       <PanelDrawer

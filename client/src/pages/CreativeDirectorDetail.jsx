@@ -286,6 +286,7 @@ function CreativeDirectorProject({ id, basePath }) {
           <h2 className="text-lg font-medium">Video production</h2>
           <p className="text-port-text-muted">Start authorizes the saved choices within your limits. Enabled review checkpoints pause for your approval.</p>
           <p className="whitespace-pre-wrap">{project.userStory || 'Add a brief to describe this video.'}</p>
+          {project.storyboardId && <p className="text-sm"><Link to={`/storyboards/${project.storyboardId}`} className="text-port-accent hover:underline">Shots started from a storyboard</Link></p>}
           <p className="text-sm">Exact target: {project.targetDurationSeconds} seconds (requested: {project.videoDraft?.durationRange?.min}–{project.videoDraft?.durationRange?.max} seconds) · {project.aspectRatio} · {project.quality}</p>
           <p className="text-sm">Review: {project.videoDraft?.reviewPolicy || 'review'} · Checkpoints: {(project.videoDraft?.checkpoints || []).join(', ')}</p>
           <VideoCutPanel project={project} />

@@ -90,3 +90,8 @@ export const updateShotFromStoryboardPanel = (projectId, sceneId, options) =>
   request(`/storyboards/music-video/${enc(projectId)}/shots/${enc(sceneId)}/update-from-panel`, { method: 'POST', ...options });
 export const sendShotStillToStoryboardPanel = (projectId, sceneId, options) =>
   request(`/storyboards/music-video/${enc(projectId)}/shots/${enc(sceneId)}/panel-art`, { method: 'POST', ...options });
+
+// A Video (Creative Director) draft from a board: the draft drawer's choices, its shots the
+// panels as previewed (lib/storyboardVideo.js) → { project }. 409 when the board changed since.
+export const startVideoFromStoryboard = (id, input, options) =>
+  request(`/storyboards/${enc(id)}/video`, { ...json('POST', input), ...options });

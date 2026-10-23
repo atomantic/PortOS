@@ -12,6 +12,7 @@ import {
 import { RECIPE_LIMITS as R, RECIPE_NODE_TYPES, RECIPE_PORT_LABELS } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
 import { isStoryboardTempTrackFilename } from './storyboardRecord.js';
+import { creativeDirectorProjectCreateSchema } from './creativeDirectorValidation.js';
 
 const text = (max) => z.string().max(max);
 const ref = z.string().trim().min(1).max(L.refId);
@@ -138,6 +139,13 @@ const addedPanel = z.object({
 }).strict();
 export const storyboardBeatsAddSchema = z.object({
   beats: z.array(z.object({ ...beatFields, panels: z.array(addedPanel).max(L.panelsPerBeat) }).strict()).min(1).max(L.beats),
+}).strict();
+
+// Start a Video from a storyboard: the Video draft drawer's choices plus the
+// board revision the shot preview was drawn from. The draft is always a Video.
+export const storyboardVideoStartSchema = z.object({
+  boardUpdatedAt: z.string().min(1).max(64),
+  project: z.preprocess((value) => (value && typeof value === 'object' ? { ...value, workspace: 'video' } : value), creativeDirectorProjectCreateSchema),
 }).strict();
 
 // Fit to song: the board revision the preview was built from, and the beat starts the user picked.

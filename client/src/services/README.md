@@ -87,7 +87,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMeatspace.js` | MeatSpace health, genome, POST, memory-practice, and atomic POST training-run APIs. |
 | `apiMortalLoom.js` | Mortality tracking. |
 | `apiMoodBoard.js` | Mood boards (inspiration canvas + items), `listMoodBoardNames()` for pickers, `composeMoodBoardPrompt()` which stores the board's composite style prompt. |
-| `apiStoryboards.js` | Storyboards (Create › Storyboards): board/beat/panel CRUD and moves, panel art takes (add, select, remove), the panel maker (board recipe, per-panel node values, node runs, Make empty panels), beats from a plot summary (preview, then add), the saved recipe library, Make storyboard from a music video and Fit to song (write a video's shots from its linked board), and a fitted shot's Update from its edited panel and Use as panel art; every board write returns the whole board. |
+| `apiStoryboards.js` | Storyboards (Create › Storyboards): board/beat/panel CRUD and moves, panel art takes (add, select, remove), the panel maker (board recipe, per-panel node values, node runs, Make empty panels), beats from a plot summary (preview, then add), the saved recipe library, Make storyboard from a music video and Fit to song (write a video's shots from its linked board), a fitted shot's Update from its edited panel and Use as panel art, and Start a Video draft from a board; every board write returns the whole board. |
 | `apiTribe.js` | Tribe people (relationship rings + contacts), plus `getTribeDuplicateIdentifiers()` (`GET /tribe/duplicate-identifiers`): a non-blocking report of emails/phones shared by more than one person. |
 | `apiTimeline.js` | Human-activity timeline: `/timeline/day`. |
 | `apiCalendar.js` | Calendar events. |
