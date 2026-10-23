@@ -17,6 +17,7 @@ import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
+import * as gitExecution from '../lib/execGit.js';
 import {
   materializeGitRepo,
   resetGitSandbox,
@@ -24,6 +25,21 @@ import {
   SKIP_HEAVY_INTEGRATION,
 } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+const lockWriteFault = vi.hoisted(() => ({ path: null }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, open: async (path, ...args) => {
+    const handle = await actual.open(path, ...args);
+    if (path === lockWriteFault.path) {
+      const write = handle.writeFile.bind(handle);
+      handle.writeFile = async bytes => {
+        await write(bytes.subarray(0, 8));
+        throw Object.assign(new Error('fixture disk full'), { code: 'ENOSPC' });
+      };
+    }
+    return handle;
+  } };
+});
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-reap-archives-') }));
 afterAll(cleanupTempDataRoots);
 import { PATHS } from '../lib/paths.js';
@@ -105,13 +121,132 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => 
   beforeEach(async () => { ({ dir } = await initRepo()); });
   afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
+  it('archives exact configuration and recreates the retired name without inherited settings', async () => {
+    const branch = 'claim/issue-42.topic';
+    await execGit(['branch', branch], dir);
+    const head = (await execGit(['rev-parse', branch], dir)).stdout.trim();
+    await execGit(['remote', 'add', 'origin', '.'], dir);
+    await execGit(['update-ref', 'refs/remotes/origin/main', head], dir);
+    for (const [key, value] of [
+      ['remote', 'origin'], ['merge', 'refs/heads/old'], ['rebase', 'true'],
+      ['pushRemote', 'origin'], ['description', 'first line\nsecond line'], ['mergeOptions', '--no-ff'], ['mergeOptions', '--no-edit'],
+    ]) await execGit(['config', '--add', `branch.${branch}.${key}`, value], dir);
+    await execGit(['config', 'branch.other.remote', 'keep'], dir);
+    await execGit(['config', `branch.${branch}.child.remote`, 'also-keep'], dir);
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const original = await readFile(join(common, 'config'));
+    expect(await deleteCompletedLocalBranch(dir, branch, head)).toBe(true);
+    const archives = join(PATHS.cos, 'branch-retirement-archives');
+    const archive = (await Promise.all((await readdir(archives)).map(async id => ({
+      path: join(archives, id), manifest: JSON.parse(await readFile(join(archives, id, 'manifest.json'), 'utf8')),
+    })))).find(entry => entry.manifest.repoPath === dir);
+    expect(await readFile(join(archive.path, 'config'))).toEqual(original);
+    expect(archive.manifest.configuration.identity.sha256).toBe(createHash('sha256').update(original).digest('hex'));
+    if (process.platform !== 'win32') expect((await lstat(join(archive.path, 'config'))).mode & 0o077).toBe(0);
+    expect(await readFile(join(common, 'config'))).toEqual(await readFile(join(archive.path, 'config.retired')));
+    expect((await execGit(['config', 'branch.other.remote'], dir)).stdout.trim()).toBe('keep');
+    expect((await execGit(['config', `branch.${branch}.child.remote`], dir)).stdout.trim()).toBe('also-keep');
+    const fresh = join(dir, 'fresh');
+    await execGit(['worktree', 'add', '--no-track', '-b', branch, fresh, 'origin/main'], dir);
+    expect((await execGit(['config', '--get-regexp', '^branch\\.claim/issue-42\\.topic\\.[^.]+$'], fresh, { ignoreExitCode: true })).exitCode).toBe(1);
+    expect((await execGit(['rev-parse', '--verify', '@{upstream}'], fresh, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    await execGit(['branch', '--track', 'explicit', 'origin/main'], dir);
+    expect((await execGit(['config', 'branch.explicit.merge'], dir)).stdout.trim()).toBe('refs/heads/main');
+  });
+
+  it('holds the ref and live settings when configuration changes after preservation', async () => {
+    await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'old'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    expect(await deleteCompletedLocalBranch(dir, 'done', head, {
+      beforeMutation: () => execGit(['config', 'branch.done.remote', 'new'], dir),
+    })).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect((await execGit(['config', 'branch.done.remote'], dir)).stdout.trim()).toBe('new');
+  });
+
+  it('preserves configuration when the receiver recreates the deleted branch at the same head', async () => {
+    await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'keep'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    await writeFile(join(common, 'hooks', 'post-receive'), `#!/bin/sh\ngit update-ref refs/heads/done ${head}\n`, { mode: 0o755 });
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect((await execGit(['config', 'branch.done.remote'], dir)).stdout.trim()).toBe('keep');
+  });
+
+  it('preserves changed configuration even when a receiver hook bypasses the native config lock', async () => {
+    await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'keep'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    await writeFile(join(common, 'hooks', 'post-receive'), '#!/bin/sh\ncat >> config <<\'EOF\'\n[branch "done"]\nremote = new\nEOF\n', { mode: 0o755 });
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['config', 'branch.done.remote'], dir)).stdout.trim()).toBe('new');
+  });
+
+  it('refuses branch settings supplied by an included file', async () => {
+    await execGit(['branch', 'done'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const included = join(dir, 'branch-settings');
+    await writeFile(included, '[branch "done"]\n\tremote = keep\n');
+    await execGit(['config', 'include.path', included], dir);
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect(await readFile(included, 'utf8')).toBe('[branch "done"]\n\tremote = keep\n');
+  });
+
+  it('retains configuration on an uncertain receiver outcome', async () => {
+    await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'keep'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const execute = gitExecution.execGit;
+    const receiver = vi.spyOn(gitExecution, 'execGit').mockImplementation((args, ...rest) => args[0] === 'push'
+      ? Promise.resolve({ exitCode: null, signal: 'SIGTERM', terminated: true, stdout: '', stderr: '' })
+      : execute(args, ...rest));
+    try { expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false); }
+    finally { receiver.mockRestore(); }
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect((await execGit(['config', 'branch.done.remote'], dir)).stdout.trim()).toBe('keep');
+  });
+
+  it('releases its partially written lock after disk failure without changing live configuration', async () => {
+    await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'keep'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    const original = await readFile(join(common, 'config'));
+    lockWriteFault.path = join(common, 'config.lock');
+    try { expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false); }
+    finally { lockWriteFault.path = null; }
+    expect(existsSync(join(common, 'config.lock'))).toBe(false);
+    expect(await readFile(join(common, 'config'))).toEqual(original);
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    await execGit(['config', 'branch.done.remote', 'retry'], dir);
+  });
+
+  it.each(['config.lock', 'refs/heads/done.lock'])('preserves another writer\'s %s and live settings', async lock => {
+    await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'keep'], dir);
+    const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
+    const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
+    await writeFile(join(common, lock), 'another writer');
+    expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
+    expect(await readFile(join(common, lock), 'utf8')).toBe('another writer');
+    expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect((await execGit(['config', 'branch.done.remote'], dir)).stdout.trim()).toBe('keep');
+  });
+
   it('uses an exact-head lease and native holder refusal for a late attachment', async () => {
     await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'keep'], dir);
     const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
     const path = join(dir, 'late-holder');
     await execGit(['worktree', 'add', path, 'done'], dir);
     expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
     expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect((await execGit(['config', 'branch.done.remote'], dir)).stdout.trim()).toBe('keep');
     await execGit(['worktree', 'remove', path], dir);
     expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(true);
   });
@@ -198,7 +333,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => 
     expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
   });
 
-  it.each(['reflog', 'commits.bundle', 'manifest.json'])('refuses an archive whose %s changes before retirement', async name => {
+  it.each(['reflog', 'commits.bundle', 'manifest.json', 'config', 'config.retired'])('refuses an archive whose %s changes before retirement', async name => {
     await execGit(['branch', 'done'], dir);
     const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
     const common = (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir)).stdout.trim();
@@ -220,10 +355,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('local completed ref retirement', () => 
 
   it('preserves the repository receiver deletion policy', async () => {
     await execGit(['branch', 'done'], dir);
+    await execGit(['config', 'branch.done.remote', 'keep'], dir);
     const head = (await execGit(['rev-parse', 'done'], dir)).stdout.trim();
     await execGit(['config', 'receive.denyDeletes', 'true'], dir);
     expect(await deleteCompletedLocalBranch(dir, 'done', head)).toBe(false);
     expect((await execGit(['rev-parse', 'done'], dir)).stdout.trim()).toBe(head);
+    expect((await execGit(['config', 'branch.done.remote'], dir)).stdout.trim()).toBe('keep');
   });
 });
 
