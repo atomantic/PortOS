@@ -753,6 +753,18 @@ because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
 
+**Windows shards are time-weighted.** Hash slicing equalizes file *count*, but the
+git-spawning worktree suites cost ~8x more on Windows than on Linux, so one shard drew
+most of them (measured file time 1067 s / 610 s / 696 s, a 35% overrun on the slowest).
+For the Windows server suite only, `scripts/lib/shardWeights.js` lists the files over
+~12 s with their measured seconds; they are dealt largest-first to the least-loaded
+shard, and the remaining files keep their hash order and are cut into runs sized so each
+shard's modeled total lands on the mean (±3% in `shardWeights.test.js`). Every shard
+derives the split from the same full file list, so it is still an exact partition, and a
+stale or missing entry costs balance, never coverage. A guard test fails on a listed
+path that no longer exists. Linux shards stay on the hash split. Refresh the table from a
+full Windows run's per-file durations when a new suite becomes a hotspot.
+
 `scripts/run-ci-tests.test.js` pins the wiring: every runner job builds its
 matrix from the planner, hands `CI_SHARD` to the runner, and gates its
 once-only steps on shard 1.

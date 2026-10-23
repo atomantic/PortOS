@@ -21,7 +21,9 @@
  * Sharding: a matrix shard takes its slice of the FULL selected list with
  * Vitest's own algorithm (`vitestShardSlice`) before the memo subtracts
  * anything, so every file lands in exactly one shard whatever each shard's
- * store holds. Vitest itself is never given `--shard`.
+ * store holds. Vitest itself is never given `--shard`. Where a platform has a
+ * measured heavy-file table (`shardWeights.js`) the split is time-weighted
+ * instead; it is still a partition of the same full list.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -31,6 +33,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
+import { shardWeightsFor, weightedShardSlice } from './shardWeights.js';
 import { resolveTestChrome } from './testChrome.js';
 import { WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
@@ -81,7 +84,10 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const selected = mode === 'related'
     ? uniqueSorted([...relatedTests(verdicts, repoSources), ...repoFiles])
     : candidates;
-  const slice = shard ? vitestShardSlice(selected, { repoRoot, scope, ...shard }) : selected;
+  const weights = shard ? shardWeightsFor(scope, platform ?? process.platform) : null;
+  const slice = !shard ? selected
+    : weights ? weightedShardSlice(selected, { ...shard, weights, hashInput: (rel) => vitestShardHashInput(rel, { repoRoot, scope }) })
+      : vitestShardSlice(selected, { repoRoot, scope, ...shard });
 
   const skipped = [];
   const reasons = new Map();

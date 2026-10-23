@@ -145,6 +145,21 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
   });
 
+  it('weights the Windows server split by measured file time and leaves other platforms on the hash split', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-repo-'));
+    writeRepo(root, FILES);
+    const heavy = ['heldCheckoutRecovery', 'branchReconcile.ownership', 'worktreeReap'].map((name) => `server/services/${name}.test.js`);
+    const repoFiles = [...heavy, ...Array.from({ length: 30 }, (_, i) => `server/lib/filler${i}.test.js`)];
+    const slicesFor = (platform) => [1, 2, 3].map((index) => plan({ platform, repoFiles, listTests: () => [], shard: { index, count: 3 } }).slice);
+
+    const windows = slicesFor('win32');
+    expect(windows.flat().sort()).toEqual([...repoFiles].sort());
+    // The three heaviest files each lead a different shard instead of landing wherever the hash puts them.
+    expect(heavy.map((file) => windows.findIndex((slice) => slice.includes(file))).sort()).toEqual([0, 1, 2]);
+
+    expect(slicesFor('linux')).toEqual([1, 2, 3].map((index) => vitestShardSlice(repoFiles.slice().sort(), { repoRoot: root, scope: 'server', index, count: 3 })));
+  });
+
   it('reuses a full-run shard memo in a scoped partition and reruns changed or unseeded files', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-memo-repo-'));
     memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-store-'));
