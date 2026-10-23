@@ -55,6 +55,20 @@ export function request(endpoint, options = {}) {
   return trackRequest(performRequest(endpoint, options));
 }
 
+// Shell bootstrap reads (settings, voice config, capabilities) are fetched by
+// several concurrently mounted components. Share one in-flight request per key;
+// the entry clears on settle so later calls (e.g. after a socket push) refetch.
+// Each caller gets its own clone so one consumer's mutation can't leak into another.
+const inflightReads = new Map();
+export function singleFlightRead(key, start) {
+  let pending = inflightReads.get(key);
+  if (!pending) {
+    pending = start().finally(() => inflightReads.delete(key));
+    inflightReads.set(key, pending);
+  }
+  return pending.then((value) => (value && typeof value === 'object' ? structuredClone(value) : value));
+}
+
 async function performRequest(endpoint, options = {}) {
   // `hostControlOptional` marks a background read whose caller renders its own
   // "needs operator authority" state, so a host-control refusal does not toast.

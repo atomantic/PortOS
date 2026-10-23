@@ -14,6 +14,8 @@ vi.mock('../components/ui/Toast', () => {
 
 import toast from '../components/ui/Toast';
 import { throwApiError, request, uploadBody, isServerUnreachable } from './apiCore.js';
+import { getSettings, getCapabilities } from './apiSystem.js';
+import { getVoiceConfig } from './apiVoice.js';
 
 const makeResponse = ({ status = 400, ok = false, json = null } = {}) => ({
   status,
@@ -156,4 +158,24 @@ it('streams Blob uploads with a browser boundary and retains legacy JSON callers
   expect(options.body.get('file').name).toBe('clip.mp4');
   expect(await options.body.get('file').text()).toBe('video bytes');
   expect(JSON.parse(uploadBody('YWJj', 'old.mp4'))).toEqual({ data: 'YWJj', filename: 'old.mp4' });
+});
+
+describe('shell bootstrap reads are single-flight', () => {
+  it('shares one request across concurrent consumers, then refetches after settle', async () => {
+    global.fetch.mockImplementation(async () => makeResponse({ status: 200, ok: true, json: { n: 1 } }));
+    const [a, b] = await Promise.all([getSettings(), getSettings({ silent: true })]);
+    await Promise.all([getVoiceConfig(), getVoiceConfig(), getCapabilities(), getCapabilities()]);
+    expect(global.fetch.mock.calls.map(([url]) => url)).toEqual(['/api/settings', '/api/voice/config', '/api/capabilities']);
+    expect(a).toEqual({ n: 1 });
+    expect(a).not.toBe(b);
+    await getSettings();
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not cache a failure', async () => {
+    global.fetch.mockResolvedValueOnce(makeResponse({ status: 500, json: { error: 'boom' } }));
+    await expect(getSettings({ silent: true })).rejects.toMatchObject({ status: 500 });
+    global.fetch.mockResolvedValueOnce(makeResponse({ status: 200, ok: true, json: { ok: 1 } }));
+    await expect(getSettings({ silent: true })).resolves.toEqual({ ok: 1 });
+  });
 });

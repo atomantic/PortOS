@@ -1,4 +1,4 @@
-import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
+import { uploadBody, request, singleFlightRead, API_BASE, throwApiError } from './apiCore.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 
 export const rectifyModelDuplicates = (payload, options = {}) => request('/system-resources/duplicates/rectify', {
@@ -31,7 +31,7 @@ export const getSystemActivity = (options) => request('/system/activity', option
 // nvidia-smi samples. Polled only while the live-activity inspector is visible.
 export const getGpuTelemetry = (options) => request('/system/gpu-telemetry', options);
 export const getNetworkExposure = (options) => request('/network-exposure/status', options);
-export const getCapabilities = (options) => request('/capabilities', options);
+export const getCapabilities = (options) => singleFlightRead('/capabilities', () => request('/capabilities', options));
 // Machine-local hardware facts used for UI fit and recommendation surfaces.
 // This endpoint deliberately stays outside peer-synced health payloads.
 export const getSystemCapabilities = (options) => request('/system/capabilities', options);
@@ -85,7 +85,7 @@ export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/
 });
 
 // Settings
-export const getSettings = (options) => request('/settings', options);
+export const getSettings = (options) => singleFlightRead('/settings', () => request('/settings', options));
 export const getInstanceFeatures = (options) => request('/settings/features', options);
 export const getCredentialInventory = (options) => request('/settings/credentials', options);
 // `enabled` accepts `null` — the tri-state override going back to "inherit" for
