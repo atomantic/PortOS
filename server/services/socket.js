@@ -579,6 +579,8 @@ function setupCosEventForwarding() {
   }
 }
 
+const isClientRefusal = (error) => error.status >= 400 && error.status < 500 && error.severity !== 'critical';
+
 // Set up error event forwarding
 function setupErrorEventForwarding() {
   // Forward error events to error subscribers. Use `safeContext` (second arg
@@ -587,6 +589,10 @@ function setupErrorEventForwarding() {
   // directly (bypassing `emitErrorEvent`), `safeContext` is undefined; in that
   // case sanitize the raw context defensively rather than passing it through.
   errorEvents.on('error', (error, safeContext) => {
+    // A 4xx refusal is answered to its own caller: the browser's request()
+    // already toasts its failures, and most refusals come from agents and
+    // scripts calling the API, which would otherwise red-toast every open tab.
+    if (isClientRefusal(error)) return;
     const context = safeContext !== undefined
       ? safeContext
       : sanitizeContext(error.context);
