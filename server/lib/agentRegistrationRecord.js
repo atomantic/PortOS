@@ -24,7 +24,7 @@ import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.j
 // pure helper (server/AGENTS.md, "Import scoping").
 import { normalizeReviewers } from './reviewerConfig.js';
 import { quotaBurnAgentMetadata } from './quotaBurnOrigin.js';
-import { claimOwnershipBinding } from './claimContinuation.js';
+import { claimOwnershipBinding, reconcileAssignmentForTask } from './claimContinuation.js';
 import { explicitPrCompletion } from './prDisposition.js';
 import { repositoryCleanupMergeTarget } from './recoveryMergeTarget.js';
 
@@ -300,6 +300,7 @@ export function buildAgentRegistration({
     // Repository-cleanup recovery (#12251): the parent PR this run was filed to
     // land, snapshotted so a later task edit reads as a changed target.
     recoveryMergeTarget: repositoryCleanupMergeTarget(task),
+    reconcileAssignment: reconcileAssignmentForTask(task),
     configSimplify: isTruthyMeta(task.metadata?.simplify),
     configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
     configReviewers: normalizeReviewers(task.metadata),

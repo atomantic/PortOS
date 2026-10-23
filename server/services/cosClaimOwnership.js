@@ -17,7 +17,7 @@
  *     while the worker mutates it; the run's completion releases it.
  */
 import { resolve } from 'path';
-import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 
 import { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
@@ -176,7 +176,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
     return reason ? { admitted: false, reason } : { admitted: true };
   };
   const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  if (!agentId) return withCheckoutPublication(repoPath, admit)
+  if (!agentId || deps.reserve === false) return withCheckoutPublication(repoPath, admit)
     .catch(() => ({ admitted: false, reason: 'checkout-retirement-reserved' }));
 
   const { cosEvents } = await import('./cosEvents.js');
@@ -187,8 +187,21 @@ export async function checkReconcileOwnership(input, deps = {}) {
     if (!admission.admitted) return admission;
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { admitted: false, reason: 'owner-unknown' };
-    const patch = reserveReconcileBranch(agent, branch);
-    if (!patch) return admission;
+    let reservation = null;
+    if (agent.metadata?.reconcileAssignment) {
+      const { getTaskById } = await import('./cosTaskStore.js');
+      const task = await getTaskById(agent.taskId).catch(() => null);
+      const proof = reconcileAssignedTarget(agent, task, { branch, workspacePath: worktreePath });
+      const { getOriginInfo } = await import('../lib/gitRemote.js');
+      const origin = await getOriginInfo(repoPath).catch(() => null);
+      if (!proof || proof.assignment.appId !== appId || !samePath(proof.assignment.repoPath, repoPath)
+        || origin?.host !== proof.assignment.origin.host || origin?.fullName !== proof.assignment.origin.fullName) {
+        return { admitted: false, reason: 'reconcile-target-unverified' };
+      }
+      reservation = { reconcileMergeReservation: reconcileMergeTarget(agent, task, proof.target)?.target || null };
+    }
+    const patch = { ...reserveReconcileBranch(agent, branch), ...reservation };
+    if (!Object.keys(patch).length) return admission;
     if (patch.refused) return { admitted: false, reason: patch.refused };
     state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
     await save();

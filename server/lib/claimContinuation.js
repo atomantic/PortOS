@@ -14,7 +14,9 @@
  * git listing and the agent list stay with the caller.
  */
 
-import { resolve } from 'path';
+import { isAbsolute, resolve } from 'path';
+import { isPlainObject } from './objects.js';
+import { prStaysOpen } from './prDisposition.js';
 import { isPathInsideDir } from './pathSafety.js';
 import { isHumanClaimWorktree, worktreeAgentId } from './worktreeOwnership.js';
 import { hasClaimFlowContract } from './claimFlowTaskTypes.js';
@@ -120,6 +122,7 @@ export function releaseClaimBranch(agent, branch) {
   const released = ownershipList(agent, 'claimReleasedBranches');
   return {
     claimBranches: ownershipList(agent, 'claimBranches').filter((b) => b !== branch),
+    ...(agent.metadata?.reconcileMergeReservation?.branch === branch ? { reconcileMergeReservation: null } : {}),
     claimReleasedBranches: released.includes(branch) ? released : [...released, branch].slice(-MAX_BOUND_CLAIM_BRANCHES),
   };
 }
@@ -146,6 +149,49 @@ export function reserveReconcileBranch(agent, branch) {
   };
 }
 
+/** Scheduler-derived reconciliation assignment; never inferred from prompt text.
+ * Kept as structured task metadata across persistence and snapshotted at launch.
+ * A reservation selects one exact target; the assignment itself grants no lease.
+ */
+export function reconcileAssignmentForTask(task) {
+  const meta = task?.metadata;
+  const assignment = meta?.reconcileAssignment;
+  if (task?.taskType !== 'internal' || meta?.analysisType !== 'branch-reconcile'
+    || !isPlainObject(assignment) || assignment.appId !== meta.app
+    || typeof assignment.appId !== 'string' || !assignment.appId
+    || typeof assignment.repoPath !== 'string' || !isAbsolute(assignment.repoPath) || !isPlainObject(assignment.origin)
+    || typeof assignment.origin.host !== 'string' || !assignment.origin.host
+    || typeof assignment.origin.fullName !== 'string' || !assignment.origin.fullName
+    || !Array.isArray(assignment.targets) || !assignment.targets.length
+    || assignment.targets.some(target => !isPlainObject(target)
+      || typeof target.branch !== 'string' || !target.branch
+      || (target.workspacePath !== null && (typeof target.workspacePath !== 'string' || !isAbsolute(target.workspacePath)))
+      || typeof target.merge !== 'boolean')) return null;
+  return structuredClone(assignment);
+}
+
+/** Match an exact target against both the registered and live assignment. */
+export function reconcileAssignedTarget(agent, task, target) {
+  const assignment = reconcileAssignmentForTask(task);
+  const meta = agent?.metadata;
+  if (!assignment || agent.status !== 'running' || agent.taskId !== task.id
+    || ['completed', 'failed', 'cancelled'].includes(task.status)
+    || JSON.stringify(assignment) !== JSON.stringify(meta?.reconcileAssignment)
+    || !samePath(meta.sourceWorkspace || meta.workspacePath, assignment.repoPath)
+    || !isPlainObject(target)) return null;
+  const assigned = assignment.targets.find(row => row.branch === target.branch
+    && samePath(row.workspacePath, target.workspacePath));
+  return assigned ? { assignment, target: assigned } : null;
+}
+
+/** Assignment scope is not merge permission: retirement/review/handoff stay held. */
+export function reconcileMergeTarget(agent, task, target) {
+  const proof = reconcileAssignedTarget(agent, task, target);
+  return proof?.target.merge && !agent.metadata.configReadOnly && !isTruthyMeta(task.metadata.readOnly)
+    && agent.metadata.prCompletionPolicy !== 'leave-open' && !prStaysOpen(task) && !isTruthyMeta(task.metadata.reviewLoopLeaveOpen)
+    && ![false, 'false'].includes(task.metadata.autoMerge) ? proof : null;
+}
+
 /** Where the coordinator prompt's recheck command carries the run's own agent id. */
 export const RECONCILE_AGENT_ID_PLACEHOLDER = '{agentId}';
 const RECONCILE_AGENT_ID_FIELD = `,"agentId":"${RECONCILE_AGENT_ID_PLACEHOLDER}"`;
@@ -167,6 +213,7 @@ export function injectReconcileAgentId(text, agentId) {
 // A release may also come from a run that holds the branch by reservation rather
 // than as a claim run (a branch-reconcile coordinator).
 function releaseRefusal(agent, branch) {
+  if (isLiveAgent(agent) && agent.metadata?.reconcileMergeReservation?.branch === branch) return null;
   if (isLiveAgent(agent) && ownershipList(agent, 'claimBranches').includes(branch)) {
     return isClaimOwnershipBranch(branch) ? null : 'branch-invalid';
   }
@@ -252,7 +299,7 @@ function scanClaimHolders({ agents, holderPath, branchName, sourceWorkspace, ign
       return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
     }
     if (!inRepository(agent, sourceWorkspace)) continue;
-    if (ownsClaimBranch(agent, branchName)) return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
+    if (agent.metadata?.reconcileMergeReservation?.branch === branchName || ownsClaimBranch(agent, branchName)) return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
     if (claimHolder && mayPickClaimBranch(agent, branchName)) possible.push(agent.id);
   }
   return possible.length ? { occupancy: 'ambiguous', holderIds: possible.filter(Boolean) } : { occupancy: null, holderIds: [] };

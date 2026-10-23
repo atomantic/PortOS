@@ -284,12 +284,37 @@ async function verifiedCleanupRecovery(agent, repository, agents) {
   return repositoryKey(await getOriginInfo(parent.metadata.sourceWorkspace).catch(() => null)) === repository;
 }
 
+// A source-checkout coordinator owns only its scheduler-assigned targets. A
+// successful ownership check selects one target; acquire/check re-read all live
+// holds under the state lock, so an old reservation cannot outlive a policy or
+// checkout change. No caller-supplied admission fields participate in this proof.
+async function verifiedReconcileCoordinator(agent, repository, agents) {
+  if (!agent.metadata?.reconcileMergeReservation) return false;
+  const { reconcileMergeTarget } = await import('../lib/claimContinuation.js');
+  const task = await liveTask(agent);
+  const proof = reconcileMergeTarget(agent, task, agent.metadata.reconcileMergeReservation);
+  if (!proof || repositoryKey(proof.assignment.origin) !== repository
+    || !await checkoutOnBranch(proof.target.workspacePath, proof.target.branch, repository)) return false;
+  const { checkReconcileOwnership } = await import('./cosClaimOwnership.js');
+  const admission = await checkReconcileOwnership({ agentId: agent.id, appId: proof.assignment.appId,
+    branch: proof.target.branch, worktreePath: proof.target.workspacePath }, {
+    reserve: false, getAgents: async () => Object.values(agents),
+    getAppById: async (appId) => {
+      const { getAppById } = await import('./apps.js');
+      const app = await getAppById(appId);
+      return app?.repoPath === proof.assignment.repoPath ? app : null;
+    },
+  });
+  return admission.admitted ? { reconcileTarget: proof.target } : false;
+}
+
 // Claim parents carry their registered claim binding; every other participant
 // must prove its registered target against live task and checkout state.
 async function verifiedParticipant(agent, repository, agents) {
   if (isTruthyMeta(agent.metadata?.claimPicksOwnBranch) || agent.metadata?.claimBranch) return true;
   if (isCleanupRecovery(agent)) return verifiedCleanupRecovery(agent, repository, agents);
-  return await verifiedReviewCoordinator(agent, repository) || verifiedWorktreeDelivery(agent, repository);
+  return await verifiedReviewCoordinator(agent, repository) || await verifiedWorktreeDelivery(agent, repository)
+    || verifiedReconcileCoordinator(agent, repository, agents);
 }
 
 /**
@@ -324,6 +349,9 @@ export async function resolveMergeHandoffOwner(agentId) {
   if (await verifiedWorktreeDelivery(agent, repository)) {
     return { ...owner, owns: (branch) => branch === meta.prDeliveryTarget.branch, workspacePath: meta.prDeliveryTarget.workspacePath };
   }
+  const reconcile = await verifiedReconcileCoordinator(agent, repository, snapshot.agents);
+  if (reconcile) return { ...owner, owns: branch => branch === reconcile.reconcileTarget.branch,
+    workspacePath: reconcile.reconcileTarget.workspacePath };
   return { refused: 'handoff-owner-unverified' };
 }
 
@@ -402,7 +430,10 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
       }
       const held = state.mergeAdmissions[repository];
       if (participant.headSha && held?.agentId === agentId && !expired(held) && held.headSha !== participant.headSha) return refuse('lease-head-changed');
+      if (held?.agentId === agentId && !expired(held)
+        && JSON.stringify(held.reconcileTarget) !== JSON.stringify(participant.reconcileTarget)) return refuse('lease-target-changed');
       return admit(state, save, repository, { kind: 'agent', ...binding(agent),
+        ...(participant.reconcileTarget ? { reconcileTarget: participant.reconcileTarget } : {}),
         ...(participant.headSha ? { headSha: participant.headSha } : {}) }, measure);
     }
     const lease = state.mergeAdmissions[repository];
@@ -412,6 +443,7 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     // An expired holder must stop and re-acquire before merging; releasing
     // its own still-unclaimed lease stays permitted.
     if (action === 'check' && participant.headSha && lease.headSha !== participant.headSha) return refuse('lease-head-changed');
+    if (action === 'check' && JSON.stringify(lease.reconcileTarget) !== JSON.stringify(participant.reconcileTarget)) return refuse('lease-target-changed');
     if (action === 'check') return expired(lease) ? refuse('lease-expired') : { admitted: true, token, repository };
     if (action !== 'release' || !MERGE_ADMISSION_OUTCOMES.includes(outcome)) return refuse('outcome-required');
     delete state.mergeAdmissions[repository];

@@ -670,6 +670,17 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     emitLog('info', `🔀 branch-reconcile parked for ${app.name}: all ${allActionable.length} branch(es) were attempted without further progress`, { appId: app.id });
     return { skip: true };
   }
+  // Only this deterministic scan writes the assignment. Schedule/run overrides
+  // cannot supply it; registration snapshots it before any coordinator executes.
+  const { getOriginInfo } = await import('../lib/gitRemote.js');
+  const origin = await getOriginInfo(app.repoPath).catch(() => null);
+  metadata.reconcileAssignment = origin ? {
+    appId: app.id, repoPath: app.repoPath,
+    origin: { host: origin.host, fullName: origin.fullName },
+    targets: actionable.map(branch => ({ branch: branch.branch, workspacePath: branch.worktreePath || null,
+      merge: actions.autoMerge !== false && !branch.retirement
+        && ['NEEDS_PR', 'IN_REVIEW', 'CONFLICTED', 'ABANDONED_WIP'].includes(branch.state) })),
+  } : null;
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,
