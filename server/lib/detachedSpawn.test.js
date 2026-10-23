@@ -347,12 +347,19 @@ describe('spawnDetached', () => {
         controlDir, cleanup: true, pidTimeoutMs: 0,
       });
       const error = await onClose(handle).catch((err) => err);
+      expect(handle.pid).toBeNull();
+      expect(error.message).toContain('failed to acquire PID');
       expect(error.message).toContain('cleanup=unconfirmed');
+      expect(await readFile(join(controlDir, 'launch-cancelled'), 'utf8')).toBe('1');
       await writeFile(releaseFile, '1');
       const result = await waitForClose(WINDOWS_WARMUP_PID_TIMEOUT_MS);
       expect(result.code).toBe(1);
       expect(await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'launcher-bootstrap.log')).toMatch(/^cancelled /);
+      // Cancellation before supervisor creation has no supervisor exit sentinel.
+      // Native launcher close plus the cancelled stage proves terminal refusal;
+      // absent job files alone would not prove that a pending launcher stopped.
       expect(await stat(join(controlDir, 'supervisor-bootstrap.log')).catch(() => null)).toBeNull();
+      expect(await stat(join(controlDir, 'exit')).catch(() => null)).toBeNull();
       expect(await stat(join(controlDir, 'pid')).catch(() => null)).toBeNull();
       expect(await readStdoutLog(controlDir)).toBe('');
     } catch (error) {
@@ -680,20 +687,6 @@ describe('spawnDetached', () => {
     expect(diagnostic).toMatch(/^failed hresult=-?\d+ elapsed-ms=\d+; timeline=reading-job@\d+ms>starting-job@\d+ms>failed@\d+ms$/);
     process.stdout.write(`🪟 Windows detached expected refusal ${launch}: ${diagnostic}\n`);
   }, 45_000);
-
-  it.runIf(!IS_POSIX)('cancels a cold supervisor after PID acquisition times out', async () => {
-    const controlDir = await tmpControlDir();
-    const handle = await spawnDetached(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-      controlDir, pidTimeoutMs: 0,
-    });
-    await expect(onClose(handle)).rejects.toThrow(/failed to acquire PID/);
-    // Wait for the actual supervisor acknowledgement, not a guessed sleep.
-    expect(await waitUntil(async () => (
-      await readFile(join(controlDir, 'exit'), 'utf8').catch(() => '')
-    ).length > 0, { timeoutMs: 30000 })).toBe(true);
-    const pid = Number.parseInt(await readFile(join(controlDir, 'pid'), 'utf8').catch(() => ''), 10);
-    expect(Number.isFinite(pid) && isAliveForTest(pid)).toBe(false);
-  }, 45000);
 
   // The whole POINT of the Windows launcher: pm2 kills on Windows with
   // `taskkill /pid <app> /T /F`, which walks the parent tree, so a job spawned
