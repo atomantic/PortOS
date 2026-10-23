@@ -111,9 +111,9 @@ export async function runEpisodeShotAutopilot(id, episodeId, {
     const selectedProvider = resolved.provider;
     const inputCharacters = Object.values(variables).reduce((total, value) => total + String(value).length, 0);
     checkpoint.current = { stage, round, sceneId, providerId: selectedProvider.id,
-      inputCharacters, timeoutMs: selectedProvider.timeout,
-      warning: inputCharacters > 12000 && (selectedProvider.timeout || 300000) <= 300000
-        ? 'Large shot-planning input; this provider timeout may be too short. Completed steps will be preserved on failure.' : null };
+      inputCharacters, providerTimeoutMs: selectedProvider.timeout,
+      warning: inputCharacters > 12000
+        ? 'Large shot-planning input; check the effective stage/provider timeout. Completed steps will be preserved on failure.' : null };
 
     await persist();
     return runStagedLLM(stage, variables, { ...route, source: stage,
