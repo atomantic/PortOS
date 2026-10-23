@@ -442,7 +442,7 @@ export async function appendMindEvent(input) {
   return result;
 }
 
-/** Resolve once every queued append has landed. Used by the read path + tests. */
+/** Resolve once every queued append has landed. Used by tests; reads take their own queue turn via `withLedgerTurn`. */
 export function flushRunEvents() {
   return appendQueue.then(() => undefined, () => undefined);
 }
