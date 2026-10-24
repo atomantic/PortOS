@@ -1,0 +1,67 @@
+import { createTestPhaseDiagnostics } from './testPhaseDiagnostics.js';
+import { DB_RUN_ADVISORY_LOCK_KEY } from './dbRunExclusivity.js';
+
+// No SQL text, identities, addresses or record values leave the test database.
+const SNAPSHOT_SQL = `SELECT a.pid = $1 AS fixture, count(*) OVER ()::int AS session_count,
+  a.state, a.wait_event_type, a.wait_event,
+  floor(extract(epoch FROM (clock_timestamp() - a.xact_start)) * 1000)::float8 AS transaction_ms,
+  cardinality(pg_blocking_pids(a.pid)) AS blockers,
+  (SELECT count(*)::int FROM pg_locks l WHERE l.pid = a.pid AND NOT l.granted) AS waiting_locks,
+  EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'advisory'
+    AND l.classid = 0 AND l.objid = $2 AND l.granted) AS run_lock
+  FROM pg_stat_activity a
+  WHERE current_database() = 'portos_test' AND a.datname = 'portos_test'
+    AND a.backend_type = 'client backend' AND a.pid <> pg_backend_pid()
+  ORDER BY fixture DESC, run_lock DESC, a.pid LIMIT 16`;
+const fields = ['fixture', 'session_count', 'state', 'wait_event_type', 'wait_event', 'transaction_ms', 'blockers', 'waiting_locks', 'run_lock'];
+
+/** Opt-in observation; the caller owns the observer connection and its query deadline. */
+export function createDbPhaseDiagnostics({ onTestFailed, observer, fixturePid, enabled = false,
+  write = line => process.stdout.write(`${line}\n`), intervalMs = 1000 } = {}) {
+  const track = createTestPhaseDiagnostics(onTestFailed);
+  if (!enabled) return { phase: track, drain: async () => {} };
+  const evidence = [];
+  let active;
+  let pending = Promise.resolve();
+  let sampling = false;
+  const record = event => {
+    if (evidence.length === 64) evidence.shift();
+    evidence.push(event);
+    write(`DB phases: ${JSON.stringify(event)}`);
+  };
+  const metrics = () => ({ elapsedMs: Math.round(performance.now() - active.started),
+    cpuMs: Math.round(Object.values(process.cpuUsage(active.cpu)).reduce((sum, value) => sum + value, 0) / 1000) });
+  onTestFailed(({ task }) => {
+    const summary = `DB phase evidence: ${JSON.stringify({ active: active && { phase: active.name, ...metrics() }, recent: evidence })}`;
+    for (const error of task.result.errors) {
+      error.message += `\n${summary}`;
+      if (error.stack) error.stack += `\n${summary}`;
+    }
+  });
+  const sample = (name, count) => {
+    if (sampling || count.value === 3) return;
+    count.value++;
+    sampling = true;
+    pending = Promise.resolve().then(() => observer.query(SNAPSHOT_SQL, [fixturePid, DB_RUN_ADVISORY_LOCK_KEY])).then(({ rows }) => {
+      record({ phase: name, sessions: rows.map(row => Object.fromEntries(fields.map(key => [key, row[key]]))) });
+    }, () => record({ phase: name, snapshot: 'unavailable' })).finally(() => { sampling = false; });
+  };
+  return {
+    phase: (name, operation) => track(name, async () => {
+      active = { name, started: performance.now(), cpu: process.cpuUsage() };
+      record({ phase: name, state: 'start' });
+      const count = { value: 0 };
+      sample(name, count);
+      const timer = setInterval(() => sample(name, count), intervalMs);
+      timer.unref?.();
+      try { return await operation(); }
+      finally {
+        clearInterval(timer);
+        record({ phase: name, state: 'settled', ...metrics() });
+        active = undefined;
+        await pending;
+      }
+    }),
+    drain: () => pending,
+  };
+}
