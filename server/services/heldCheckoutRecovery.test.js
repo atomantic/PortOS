@@ -1287,6 +1287,32 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
+  it('retains measured capacity and the exact lock when the final refreshed review exceeds its budget', async () => {
+    const c = await reviewedCheckout('final-review-capacity', { normalMerge: true });
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    const before = await getBranchReconcileOutcome('app-1');
+    const file = join(c.path, 'ignored.txt');
+    const bytes = 25 * 1024 * 1024 + 1;
+    let mutations = 0;
+    let changedHash;
+    const result = await c.confirm(prepared.review, { beforeMutation: async () => {
+      if (++mutations === 2) {
+        await truncate(file, bytes);
+        changedHash = await sha256File(file);
+      }
+    } });
+    expect(result).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String),
+      archiveDir: expect.any(String), archiveLimit: { scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes } });
+    expect(changedHash).toBeTruthy();
+    expect(await sha256File(file)).toBe(changedHash);
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+  });
+
   it('retires a merged receipt checkout without an inventory grant, preserving ignored bytes and original commits', async () => {
     const c = await receiptCheckout('receipt', { gitlink: true });
     const result = await c.retireReceipt();

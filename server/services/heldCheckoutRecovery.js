@@ -1099,7 +1099,8 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
       review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, unlocked: release.locked }, opts) : null,
     ]);
-    if (fresh && (!fresh.ok || fresh.review.digest !== review.digest)) return fresh.reason || 'retirement-review-changed';
+    if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
+    if (fresh && fresh.review.digest !== review.digest) return 'retirement-review-changed';
     // The byte comparisons stay last so nothing else ages between them and removal.
     const [current, administration] = await archiveSnapshots(tree, repoPath, null, archiveWork(opts.signal))
       .catch(error => { capacityRefusal = archiveLimitRefusal(error); return []; });
