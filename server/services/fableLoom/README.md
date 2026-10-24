@@ -20,6 +20,7 @@ intent to a transition and moves them through the graph until an ending.
 | `store.js` | PostgreSQL/file backend facade (`fableloom_stories`; collectionStore escape hatch for tests). |
 | `exports.js` | Immutable authored snapshots, readiness/approval gates, deterministic portable ZIP packages and bounded persistent export jobs. |
 | `exportMedia.js` | Root-confined bounded media reads, metadata-free PNG stills and H.264/AAC MP4 stream copies; no network or generation. |
+| `exportVoice.js` | Root-confined reads of one approved voice-reference basename from that profile's source directory. Transcripts, engines and local paths stay out of the package. |
 | `db.js` | PostgreSQL leaf I/O. |
 
 Pure graph analysis (validation, BFS layering, prompt rendering) lives in

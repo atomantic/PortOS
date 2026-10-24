@@ -11,7 +11,9 @@ import { errorMiddleware } from '../../lib/errorHandler.js';
 import { readZipArchive } from '../../lib/zipArchive.js';
 import * as ffmpeg from '../../lib/ffmpeg.js';
 import { findFfmpeg, findFfprobe, runFfmpegProcess } from '../../lib/ffmpeg.js';
-import { FABLELOOM_EXPORT_LIMITS } from '../../lib/fableLoomExport.js';
+import {
+  FABLELOOM_EXPORT_LIMITS, fableLoomExportCastIds, inspectFableLoomExportCharacters,
+} from '../../lib/fableLoomExport.js';
 import { execFileSync } from '../../lib/childProcess.js';
 
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), {
@@ -20,6 +22,7 @@ vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(),
 vi.mock('./records.js', () => ({ getLoom: vi.fn() }));
 vi.mock('../videoGen/history.js', () => ({ loadHistory: vi.fn() }));
 vi.mock('../universeBuilder.js', () => ({ getUniverse: vi.fn() }));
+vi.mock('../voice/profiles.js', () => ({ listVoiceProfiles: vi.fn() }));
 vi.mock('./index.js', () => ({}));
 vi.mock('./shotRuns.js', () => ({}));
 
@@ -27,6 +30,7 @@ import { PATHS } from '../../lib/paths.js';
 import { getLoom } from './records.js';
 import { loadHistory } from '../videoGen/history.js';
 import { getUniverse } from '../universeBuilder.js';
+import { listVoiceProfiles } from '../voice/profiles.js';
 import * as media from './exportMedia.js';
 import {
   __testing, startFableLoomExport, getFableLoomExport, getFableLoomExportDownload,
@@ -109,6 +113,76 @@ async function archive(id) {
   } finally { artifact.release(); }
 }
 
+const packageSentinels = [
+  privateMarker, sourcePath, 'SECRET_TOKEN_SENTINEL', 'SESSION_TRANSCRIPT_SENTINEL',
+  'SECRET_CAST_SENTINEL', 'SECRET_ENGINE_SENTINEL', 'kokoro:SECRET_PRESET',
+  'SECRET_APPROVED_AT', '/example-private/checkpoint', 'example-voice',
+];
+function assertPackageClean(packed) {
+  for (const marker of packageSentinels) {
+    expect(packed.bytes.includes(Buffer.from(marker)), marker).toBe(false);
+    for (const bytes of packed.files.values()) expect(bytes.includes(Buffer.from(marker)), marker).toBe(false);
+  }
+}
+function approvedCharacter(overrides = {}) {
+  return {
+    id: 'example-character', name: 'Ada Example',
+    personality: 'Calm and precise.', speechAccent: 'Neutral example accent.',
+    speechPattern: 'Short sentences.', mannerisms: 'Pauses before answers.',
+    background: privateMarker, secrets: 'SECRET_TOKEN_SENTINEL', psychology: privateMarker,
+    voiceId: 'kokoro:SECRET_PRESET', prompt: privateMarker,
+    adapters: [{ filename: sourcePath }], loras: [sourcePath], imageRefs: [sourcePath],
+    sessions: ['SESSION_TRANSCRIPT_SENTINEL'],
+    voiceCanon: {
+      version: 2, approved: true, sourcePolicy: 'designed',
+      description: 'Warm mid register.', defaultDelivery: 'Measured.',
+      emotionalRange: ['steady'], avoid: ['never shout'],
+      pronunciations: [{ term: 'Fable', pronunciation: 'FAY-bul', recordingPath: sourcePath }],
+      recordingPath: sourcePath,
+    },
+    ...overrides,
+  };
+}
+function useCast(characters = [approvedCharacter()]) {
+  loom.protagonistCharacterId = 'example-character';
+  getUniverse.mockResolvedValue({
+    id: 'example-universe',
+    characters: [...characters, { id: 'unbound-extra', name: 'SECRET_CAST_SENTINEL', personality: privateMarker }],
+  });
+}
+async function writeVoiceReference(bytes, filename = 'reference.wav') {
+  const dir = join(PATHS.voiceProfiles, 'example-voice', 'source');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, filename), bytes);
+  return hash(bytes);
+}
+function voiceProfile({ sha256, filename = 'reference.wav', id = 'example-voice', kind = 'designed', sourceAssets } = {}) {
+  return {
+    id, kind, engine: 'SECRET_ENGINE_SENTINEL', voiceId: 'kokoro:SECRET_PRESET',
+    binding: { universeId: 'example-universe', characterId: 'example-character' },
+    approval: { status: 'approved', approvedAt: 'SECRET_APPROVED_AT' },
+    routes: { interactive: { enabled: true } },
+    inference: { checkpointPath: '/example-private/checkpoint' },
+    sourceAssets: sourceAssets || [{
+      filename, sha256, transcript: 'SESSION_TRANSCRIPT_SENTINEL',
+      performerConsentConfirmed: false, licensePosture: 'generated-original-voice', path: sourcePath,
+    }],
+  };
+}
+async function expectVoiceRefusal(profiles, code, options = { includeCharacters: true, includeVoice: true }) {
+  listVoiceProfiles.mockResolvedValue(profiles);
+  const result = await terminal(await begin({ episodeIds: ['episode-one'], ...options }));
+  expect(result).toMatchObject({ status: 'failed', error: { code: 'EXPORT_VALIDATION_FAILED' } });
+  expect(result.findings).toContainEqual(expect.objectContaining({ code, severity: 'error' }));
+  expect(result).not.toHaveProperty('downloadUrl');
+  expect(JSON.stringify(result)).not.toContain(sourcePath);
+  expect(JSON.stringify(result)).not.toContain('SESSION_TRANSCRIPT_SENTINEL');
+  expect(JSON.stringify(result)).not.toContain('example-voice');
+  expect(JSON.stringify(result)).not.toContain('/example-private/checkpoint');
+  await expect(stat(join(PATHS.data, 'cache/fableloom-exports', jobIds.at(-1), 'package.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+  return result;
+}
+
 beforeAll(async () => {
   await mkdir(PATHS.images, { recursive: true });
   await mkdir(PATHS.videos, { recursive: true });
@@ -139,6 +213,8 @@ beforeEach(async () => {
     sessionTranscripts: privateMarker, peerId: privateMarker, providerConfig: { apiKey: privateMarker } };
   getLoom.mockImplementation(async id => id === loom.id || id === 'another-loom' ? loom : null);
   getUniverse.mockResolvedValue({ characters: [{ id: 'example-character' }] });
+  listVoiceProfiles.mockResolvedValue([]);
+  await rm(PATHS.voiceProfiles, { recursive: true, force: true });
   loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({
     id, filename: 'independent-name.mp4', absolutePath: sourcePath, prompt: privateMarker, apiKey: privateMarker,
   })));
@@ -160,6 +236,16 @@ describe('portable FableLoom export boundary', () => {
     expect(manifest).toMatchObject({ schemaVersion: '1.0.0', runtimeVersion: '1.0.0',
       loom: { name: 'The quiet gate', episodes: [{ id: 'episode-two' }] } });
     expect(manifest.loom.episodes).toHaveLength(1);
+    expect(manifest.characters).toBeUndefined();
+    expect([...first.files.keys()].some(name => name.startsWith('characters/'))).toBe(false);
+    const defaultProvenance = JSON.parse(first.files.get('provenance.json'));
+    expect(defaultProvenance.characters).toBeUndefined();
+    expect(defaultProvenance.voices).toBeUndefined();
+    const defaultReadme = first.files.get('README.md').toString();
+    expect(defaultReadme).toContain('does not grant PortOS access');
+    expect(defaultReadme).toContain('Voice reference audio was not included');
+    expect(defaultReadme).toContain('Your host owns free-text');
+    expect(listVoiceProfiles).not.toHaveBeenCalled();
     const [start, end] = manifest.loom.episodes[0].nodes;
     expect(start.playbackAssets.holds[0]).toMatchObject({ loopable: true, durationMs: 1000,
       audioOccupancy: { safeForLiveVoice: true } });
@@ -391,13 +477,201 @@ describe('portable FableLoom export boundary', () => {
   });
 
   it('refuses unsupported and malformed options before creating jobs', async () => {
-    for (const input of [{ includePlayer: true }, { includeCharacters: true }, { includeVoice: true },
+    for (const input of [{ includePlayer: true },
       { mediaProfile: 'webm' }, { includeWebm: true }, { includeWebm: 'yes' }, { mediaProfile: { width: 100 } }, { allowDraft: 'yes' },
       { episodeIds: [] }, { episodeIds: ['episode-one', 'episode-one'] }, { destination: sourcePath }]) {
       const response = await request(app()).post('/api/fableloom/example-loom/export').send(input);
       expect(response.status, JSON.stringify(input)).toBe(400);
     }
+    const voiceOnly = await request(app()).post('/api/fableloom/example-loom/export').send({ includeVoice: true });
+    expect(voiceOnly.status).toBe(400);
+    expect(voiceOnly.body.code).toBe('EXPORT_VOICE_REQUIRES_CHARACTERS');
+    expect(listVoiceProfiles).not.toHaveBeenCalled();
     await expect(startFableLoomExport(loom.id, { episodeIds: ['unknown-episode'] })).rejects.toMatchObject({ code: 'EXPORT_EPISODES_INVALID' });
+  });
+
+  it('limits the cast to the protagonist and reachable staged characters', () => {
+    const episodes = [{
+      startNodeId: 'a',
+      nodes: [
+        { id: 'a', visualCanon: { characterAppearances: [{ characterId: 'hero' }, { characterId: 'on-stage' }] },
+          interactionWindow: { protagonistCharacterId: 'speaker' },
+          transitions: [{ targetNodeId: 'b' }] },
+        { id: 'b', transitions: [] },
+        { id: 'orphan', visualCanon: { characterAppearances: [{ characterId: 'secret-extra' }] }, transitions: [] },
+      ],
+    }];
+    const loomCast = { protagonistCharacterId: 'hero', format: 'prose' };
+    expect(fableLoomExportCastIds(loomCast, episodes)).toEqual(['hero', 'on-stage', 'speaker']);
+    const universe = { characters: [
+      { id: 'hero', name: 'Ada Example', personality: 'Calm.', background: privateMarker,
+        secrets: 'SECRET_TOKEN_SENTINEL', voiceId: 'kokoro:SECRET_PRESET',
+        adapters: [sourcePath], sessions: ['SESSION_TRANSCRIPT_SENTINEL'],
+        voiceCanon: { version: 2, approved: true, sourcePolicy: 'designed', description: 'Warm.',
+          defaultDelivery: 'Measured.', emotionalRange: ['steady'], avoid: ['never shout'],
+          pronunciations: [{ term: 'Fable', pronunciation: 'FAY-bul', recordingPath: sourcePath }],
+          recordingPath: sourcePath } },
+      { id: 'on-stage', name: 'Draft', voiceCanon: { approved: false, description: 'rough' } },
+      { id: 'speaker', name: 'Speaker' },
+      { id: 'secret-extra', name: 'SECRET_CAST_SENTINEL', personality: privateMarker },
+    ]};
+    const blocked = inspectFableLoomExportCharacters(loomCast, episodes, universe);
+    expect(blocked.characters.map(character => character.id)).toEqual(['hero', 'on-stage', 'speaker']);
+    expect(blocked.findings.map(finding => finding.characterId)).toEqual(['on-stage', 'speaker']);
+    expect(blocked.findings.every(finding => finding.severity === 'error' && finding.code === 'EXPORT_CHARACTER_DRAFT')).toBe(true);
+    const hero = blocked.characters.find(character => character.id === 'hero');
+    expect(hero.approval).toEqual({ voiceCanonVersion: 2, approved: true, sourcePolicy: 'designed', draftFlags: [] });
+    expect(hero.pronunciations).toEqual([{ term: 'Fable', pronunciation: 'FAY-bul' }]);
+    expect(hero.playTurn).toMatchObject({ promptId: 'fableloom-play-turn', contractVersion: '1.0.0' });
+    expect(hero.role).toBe('protagonist');
+    const drafted = inspectFableLoomExportCharacters(loomCast, episodes, universe, { allowDraft: true });
+    expect(drafted.findings.every(finding => finding.severity === 'warning')).toBe(true);
+    expect(drafted.characters.find(character => character.id === 'on-stage').approval.draftFlags).toEqual(['unapproved']);
+    expect(drafted.characters.find(character => character.id === 'speaker').approval.draftFlags).toEqual(['unknown']);
+    const packed = JSON.stringify(drafted.characters);
+    for (const marker of [privateMarker, sourcePath, 'SECRET_TOKEN_SENTINEL', 'SESSION_TRANSCRIPT_SENTINEL', 'SECRET_CAST_SENTINEL', 'kokoro:', 'recordingPath']) {
+      expect(packed.includes(marker), marker).toBe(false);
+    }
+  });
+
+  it('fails closed when character approval, membership or identifiers are not portable', async () => {
+    const unapproved = await terminal(await begin({ episodeIds: ['episode-one'], includeCharacters: true }));
+    expect(unapproved).toMatchObject({ status: 'failed', error: { code: 'EXPORT_VALIDATION_FAILED' } });
+    expect(unapproved.findings).toContainEqual(expect.objectContaining({
+      code: 'EXPORT_CHARACTER_DRAFT', severity: 'error', characterId: 'example-character',
+    }));
+    expect(listVoiceProfiles).not.toHaveBeenCalled();
+    getUniverse.mockResolvedValue({ characters: [] });
+    const missing = await terminal(await begin({ episodeIds: ['episode-one'], includeCharacters: true }));
+    expect(missing.findings).toContainEqual(expect.objectContaining({ code: 'EXPORT_CHARACTER_MISSING', severity: 'error' }));
+    loom.episodes = [episode('episode-one')];
+    loom.episodes[0].nodes[0].interactionWindow.protagonistCharacterId = 'not/portable';
+    const badId = await terminal(await begin({ episodeIds: ['episode-one'], includeCharacters: true }));
+    const idFinding = badId.findings.find(finding => finding.code === 'EXPORT_CHARACTER_ID');
+    expect(idFinding).toMatchObject({ severity: 'error', message: 'Character identifiers must be portable identifiers.' });
+    expect(idFinding).not.toHaveProperty('characterId');
+    expect(badId).not.toHaveProperty('downloadUrl');
+    await expect(stat(join(PATHS.data, 'cache/fableloom-exports', jobIds.at(-1), 'package.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+    loom.episodes = [episode('episode-one')];
+    loom.episodes[0].nodes[0].interactionWindow.protagonistCharacterId = '';
+    const empty = await terminal(await begin({ episodeIds: ['episode-one'], includeCharacters: true }));
+    expect(empty.findings).toContainEqual(expect.objectContaining({ code: 'EXPORT_CAST_MISSING', severity: 'error' }));
+    await expect(getFableLoomExportDownload(loom.id, jobIds.at(-1))).rejects.toMatchObject({ code: 'EXPORT_NOT_READY' });
+  });
+
+  it('refuses unapproved, ambiguous, unconsented and unlabeled voice references even when drafts are allowed', async () => {
+    useCast();
+    const digest = 'ab'.repeat(32);
+    await expectVoiceRefusal([], 'EXPORT_VOICE_UNAPPROVED', { includeCharacters: true, includeVoice: true, allowDraft: true });
+    await expectVoiceRefusal([
+      voiceProfile({ sha256: digest, id: 'example-voice' }),
+      voiceProfile({ sha256: 'cd'.repeat(32), id: 'example-voice-two' }),
+    ], 'EXPORT_VOICE_AMBIGUOUS');
+    await expectVoiceRefusal([voiceProfile({
+      sha256: digest, kind: 'cloned',
+      sourceAssets: [{ filename: 'reference.wav', sha256: digest, performerConsentConfirmed: false,
+        licensePosture: 'generated-original-voice', transcript: 'SESSION_TRANSCRIPT_SENTINEL', path: sourcePath }],
+    })], 'EXPORT_VOICE_CONSENT_MISSING');
+    await expectVoiceRefusal([voiceProfile({
+      sha256: digest,
+      sourceAssets: [{ filename: 'notes.txt', sha256: digest, transcript: 'SESSION_TRANSCRIPT_SENTINEL' }],
+    })], 'EXPORT_VOICE_REFERENCE_MISSING');
+    const invalidProfile = await expectVoiceRefusal([voiceProfile({
+      sha256: digest, id: 'Not A Profile',
+    })], 'EXPORT_VOICE_REFERENCE_INVALID');
+    expect(JSON.stringify(invalidProfile)).not.toContain('Not A Profile');
+    const wrongUniverse = voiceProfile({ sha256: digest });
+    wrongUniverse.binding.universeId = 'other-universe';
+    await expectVoiceRefusal([wrongUniverse], 'EXPORT_VOICE_UNAPPROVED');
+  });
+
+  it('keeps a voice-reference hash mismatch and an escaping symlink out of the package', async () => {
+    useCast();
+    const bytes = Buffer.from('approved-reference-audio');
+    const recorded = await writeVoiceReference(bytes);
+    await expectVoiceRefusal([voiceProfile({ sha256: 'aa'.repeat(32) })], 'EXPORT_VOICE_REFERENCE_MISMATCH');
+    expect(JSON.stringify(await getFableLoomExport(loom.id, jobIds.at(-1)))).not.toContain(recorded);
+    await rm(PATHS.voiceProfiles, { recursive: true, force: true });
+    const outsideDir = join(PATHS.data, 'outside-voice');
+    await mkdir(outsideDir, { recursive: true });
+    await writeFile(join(outsideDir, 'reference.wav'), bytes);
+    await mkdir(join(PATHS.voiceProfiles, 'example-voice'), { recursive: true });
+    await symlink(outsideDir, join(PATHS.voiceProfiles, 'example-voice', 'source'));
+    const escaped = await expectVoiceRefusal([voiceProfile({ sha256: hash(bytes) })], 'EXPORT_VOICE_REFERENCE_INVALID');
+    expect(JSON.stringify(escaped)).not.toContain('outside-voice');
+    expect(JSON.stringify(escaped)).not.toContain('reference.wav');
+  });
+
+  videoIt('exports approved character inputs without voice bytes', async () => {
+    useCast();
+    const packed = await archive(await begin({ episodeIds: ['episode-one'], includeCharacters: true }));
+    const character = JSON.parse(packed.files.get('characters/example-character.json'));
+    expect(character).toMatchObject({
+      schemaVersion: '1.0.0', id: 'example-character', name: 'Ada Example', role: 'protagonist',
+      persona: { personality: 'Calm and precise.', speechAccent: 'Neutral example accent.',
+        speechPattern: 'Short sentences.', mannerisms: 'Pauses before answers.' },
+      speech: { description: 'Warm mid register.', defaultDelivery: 'Measured.', emotionalRange: ['steady'] },
+      pronunciations: [{ term: 'Fable', pronunciation: 'FAY-bul' }],
+      safety: { neverSay: ['never shout'] },
+      playTurn: { promptId: 'fableloom-play-turn', contractVersion: '1.0.0', inputs: { characterId: 'example-character', role: 'protagonist' } },
+      approval: { voiceCanonVersion: 2, approved: true, sourcePolicy: 'designed', draftFlags: [] },
+    });
+    expect(Object.keys(character.pronunciations[0]).sort()).toEqual(['pronunciation', 'term']);
+    const manifest = JSON.parse(packed.files.get('manifest.json'));
+    expect(manifest.characters).toEqual([{ id: 'example-character', role: 'protagonist', file: 'characters/example-character.json' }]);
+    const provenance = JSON.parse(packed.files.get('provenance.json'));
+    expect(provenance.characters).toEqual([{
+      id: 'example-character', file: 'characters/example-character.json',
+      approved: true, draftFlags: [], voiceCanonVersion: 2,
+    }]);
+    expect(provenance.voices).toBeUndefined();
+    expect([...packed.files.keys()].filter(name => name.startsWith('media/'))).toHaveLength(2);
+    expect([...packed.files.keys()].some(name => name.endsWith('.wav'))).toBe(false);
+    const readme = packed.files.get('README.md').toString();
+    expect(readme).toContain('characters/<id>.json');
+    expect(readme).toContain('Voice reference audio was not included');
+    expect(readme).toContain('does not grant PortOS access');
+    expect(readme).toContain('Your host owns free-text');
+    assertPackageClean(packed);
+    expect(listVoiceProfiles).not.toHaveBeenCalled();
+  });
+
+  videoIt('exports approved voice references with provenance and stable hashes', async () => {
+    useCast();
+    const bytes = Buffer.from('approved-reference-audio');
+    const digest = await writeVoiceReference(bytes);
+    listVoiceProfiles.mockResolvedValue([voiceProfile({ sha256: digest })]);
+    const options = { episodeIds: ['episode-one'], includeCharacters: true, includeVoice: true };
+    const first = await archive(await begin(options));
+    const second = await archive(await begin(options));
+    expect(second.bytes.equals(first.bytes)).toBe(true);
+    const provenance = JSON.parse(first.files.get('provenance.json'));
+    expect(provenance.voices).toEqual([{
+      characterId: 'example-character', file: `media/${digest}.wav`, sha256: digest, bytes: bytes.length,
+      approved: true, draftFlags: [], consentConfirmed: false,
+      licensePosture: 'generated-original-voice', sourcePolicy: 'designed',
+    }]);
+    expect(first.files.get(`media/${digest}.wav`).equals(bytes)).toBe(true);
+    expect(hash(first.files.get(`media/${digest}.wav`))).toBe(digest);
+    const readme = first.files.get('README.md').toString();
+    expect(readme).toContain('your own TTS');
+    expect(readme).toContain('does not grant PortOS access');
+    expect(readme).toContain('no PortOS URL, credential, or callback');
+    assertPackageClean(first);
+    useCast([approvedCharacter({ voiceCanon: { approved: false, description: 'rough' } })]);
+    const drafted = await archive(await begin({ episodeIds: ['episode-one'], includeCharacters: true, allowDraft: true }));
+    const draftCharacter = JSON.parse(drafted.files.get('characters/example-character.json'));
+    expect(draftCharacter.approval).toMatchObject({ approved: false, draftFlags: ['unapproved'] });
+    expect(JSON.parse(drafted.files.get('provenance.json')).voices).toBeUndefined();
+    expect([...drafted.files.keys()].some(name => name.endsWith('.wav'))).toBe(false);
+    assertPackageClean(drafted);
+    listVoiceProfiles.mockResolvedValue([]);
+    const voiceDraft = await terminal(await begin({
+      episodeIds: ['episode-one'], includeCharacters: true, includeVoice: true, allowDraft: true,
+    }));
+    expect(voiceDraft).toMatchObject({ status: 'failed', error: { code: 'EXPORT_VALIDATION_FAILED' } });
+    expect(voiceDraft.findings).toContainEqual(expect.objectContaining({ code: 'EXPORT_VOICE_UNAPPROVED', severity: 'error' }));
+    expect(voiceDraft.findings).toContainEqual(expect.objectContaining({ code: 'EXPORT_CHARACTER_DRAFT', severity: 'warning' }));
   });
 
   it('never follows a remote, traversing or escaping symlink source and keeps failures path-free', async () => {

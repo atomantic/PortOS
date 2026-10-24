@@ -9,8 +9,9 @@ feedback—when that story's audience role permits it. A loom holds one or more 
 rehearse the same experience at any of those three production stages.
 
 The [runtime v1 contract](fableloom-runtime-v1.md) documents traversal, live-input
-gates and the mapping from portable events to private hosted sessions. External
-package export is tracked in #13104; the contract alone does not provide an exporter.
+gates and the mapping from portable events to private hosted sessions. The
+[portable export](fableloom-export-v1.md) packages authored episodes for an
+external host and, only when asked, cast inputs and approved voice references.
 
 ## Planning a series
 

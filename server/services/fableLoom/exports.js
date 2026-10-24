@@ -14,12 +14,14 @@ import { computeGraphLayers } from '../../lib/fableLoomGraph.js';
 import {
   FABLELOOM_EXPORT_LIMITS, FABLELOOM_EXPORT_SCHEMA_VERSION,
   fableLoomExportAssetRequests, fableLoomExportOccupancy, inspectFableLoomExport,
-  projectFableLoomExportManifest, projectFableLoomExportNode,
+  inspectFableLoomExportCharacters, projectFableLoomExportManifest, projectFableLoomExportNode,
+  selectFableLoomExportVoice,
 } from '../../lib/fableLoomExport.js';
 import { getUniverse } from '../universeBuilder.js';
 import { loadHistory } from '../videoGen/history.js';
 import { getLoom } from './records.js';
 import { checkExportCancelled, readFableLoomExportSource } from './exportMedia.js';
+import { readFableLoomVoiceReference } from './exportVoice.js';
 import { createFableLoomMediaCache } from './exportMediaCache.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -173,12 +175,34 @@ function createMediaStore(maxBytes = FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
   };
 }
 
-const packageReadme = `# FableLoom portable package
+function packageReadme(options) {
+  const characters = options.includeCharacters ? `
+characters/<id>.json is included for each canonical cast member: the loom
+protagonist, when set, and characters staged on reachable scenes. Each file
+carries persona and speech notes, pronunciation anchors, safety/never-say
+notes, and play-turn inputs for contract 1.0.0 (prompt id fableloom-play-turn).
+Scene prose and choices stay in manifest.json. The reader's message and
+conversation stay with your host. Do not send these files to PortOS.
+` : `
+Character inputs were not included. A later export can add them with
+includeCharacters. This package has no persona notes or pronunciation anchors.
+`;
+  const voice = options.includeVoice ? `
+provenance.json "voices" lists approved reference audio at media/<sha256>.<ext>,
+with a content hash and portable provenance (approval, consent, license posture,
+and voice-canon source policy). Use it only as a reference for your own TTS or
+voice engine. It is not an engine adapter, LoRA, transcript, credential, or
+PortOS session.
+` : `
+Voice reference audio was not included. Supply TTS on your own host.
+`;
+  return `# FableLoom portable package
 
 Package schema: 1.0.0. Playback runtime: 1.0.0 (see runtime-v1.md).
 
 Serve these files on your own static host. PortOS is an authoring tool and is
-never the public server, relay, or live resolver for this package.
+never the public server, relay, or live resolver for this package. This package
+does not grant PortOS access and includes no PortOS URL, credential, or callback.
 
 manifest.json contains the ordered episodes and reachable scene graphs. Media
 references name only media/<sha256>.<extension>, with durationMs and loopable.
@@ -188,22 +212,32 @@ Occupancy intervals are milliseconds relative to that packaged clip.
 
 provenance.json records each media use, provider/model, parameter hash, approval
 state and draftFlags. An allowDraft export does not certify production approval.
-
+${characters}${voice}
 The source profile remuxes H.264/AAC. Web profiles resize without upscaling,
 encode H.264/AAC with bitrate caps, normalize the authored audio mix and include
 poster PNGs. Explicitly requested WebM alternatives use VP9/Opus. Encoding
 profiles, encoder identities and byte counts are recorded in provenance.json.
-The player, character and voice opt-ins are not
-available in this package version. Your host owns free-text resolution, TTS and
-transport, following runtime-v1.md; no PortOS URL or credential is needed.
+The reference player is not in this package. Your host owns free-text
+resolution, TTS and transport, following runtime-v1.md.
 `;
+}
+
+// Voice profiles live in Postgres. Keep that module off the default export path.
+async function loadVoiceProfiles(universeId, characterId) {
+  const { listVoiceProfiles } = await import('../voice/profiles.js');
+  return listVoiceProfiles({ universeId, characterId });
+}
 
 async function build(job, snapshot, episodes, history, universe, signal) {
   checkExportCancelled(signal);
   job.status = 'validating';
   job.findings = inspectFableLoomExport(snapshot, episodes, universe);
+  const characterProjection = job.options.includeCharacters
+    ? inspectFableLoomExportCharacters(snapshot, episodes, universe, { allowDraft: job.options.allowDraft })
+    : null;
+  if (characterProjection) job.findings.push(...characterProjection.findings);
   if (job.findings.some(f => f.severity === 'error')) {
-    throw error('EXPORT_VALIDATION_FAILED', 'Resolve the graph, outline and production findings before exporting.');
+    throw error('EXPORT_VALIDATION_FAILED', 'Resolve the graph, outline, production and character findings before exporting.');
   }
   const requests = episodes.flatMap(episode => {
     const reachable = computeGraphLayers(episode).depthById;
@@ -224,8 +258,67 @@ async function build(job, snapshot, episodes, history, universe, signal) {
       message: `The ${request.role} asset is unapproved or has draft, degraded or unknown provenance.`,
     });
   }
+  const voicePlans = [];
+  if (job.options.includeVoice) {
+    const universeId = typeof universe?.id === 'string' && universe.id
+      ? universe.id
+      : (typeof snapshot.universeId === 'string' ? snapshot.universeId : '');
+    for (const character of characterProjection?.characters || []) {
+      checkExportCancelled(signal);
+      let profiles;
+      try {
+        profiles = await loadVoiceProfiles(universeId, character.id);
+      } catch {
+        job.findings.push({
+          gate: 'approval', severity: 'error', code: 'EXPORT_VOICE_UNAVAILABLE', characterId: character.id,
+          message: `Approved voice profiles could not be read for character "${character.id}".`,
+        });
+        continue;
+      }
+      const selection = selectFableLoomExportVoice(profiles, {
+        universeId, characterId: character.id, sourcePolicy: character.approval?.sourcePolicy || null,
+      });
+      if (!selection.ok) {
+        job.findings.push({
+          gate: selection.gate, severity: 'error', code: selection.code, characterId: character.id,
+          message: selection.message,
+        });
+        continue;
+      }
+      for (const asset of selection.assets) {
+        let bytes;
+        try {
+          bytes = await readFableLoomVoiceReference(selection.profileId, asset.filename);
+        } catch (failure) {
+          job.findings.push({
+            gate: 'media', severity: 'error',
+            code: typeof failure.code === 'string' && failure.code.startsWith('EXPORT_')
+              ? failure.code : 'EXPORT_VOICE_REFERENCE_INVALID',
+            characterId: character.id,
+            message: typeof failure.code === 'string' && failure.code.startsWith('EXPORT_')
+              ? failure.message : 'Approved voice reference audio could not be read.',
+          });
+          continue;
+        }
+        const sha256 = hash(bytes);
+        if (sha256 !== asset.sha256) {
+          job.findings.push({
+            gate: 'media', severity: 'error', code: 'EXPORT_VOICE_REFERENCE_MISMATCH', characterId: character.id,
+            message: `Character "${character.id}" voice reference does not match its recorded content hash.`,
+          });
+          continue;
+        }
+        voicePlans.push({
+          characterId: character.id, bytes, sha256,
+          extension: asset.filename.slice(asset.filename.lastIndexOf('.') + 1).toLowerCase(),
+          consentConfirmed: asset.consentConfirmed, licensePosture: asset.licensePosture,
+          sourcePolicy: character.approval?.sourcePolicy || null,
+        });
+      }
+    }
+  }
   if (job.findings.some(f => f.severity === 'error')) {
-    throw error('EXPORT_VALIDATION_FAILED', 'Resolve missing media or approval findings, or explicitly allow draft assets.');
+    throw error('EXPORT_VALIDATION_FAILED', 'Resolve missing media, approval, character or voice findings, or explicitly allow draft assets.');
   }
   job.status = 'packing';
   job.progress = { completed: 0, total: requests.length };
@@ -281,16 +374,44 @@ async function build(job, snapshot, episodes, history, universe, signal) {
     job.progress.completed++;
     await save(job);
   }
+  const voiceProvenance = voicePlans.map(plan => {
+    const prepared = media.add({ bytes: plan.bytes, extension: plan.extension, durationMs: null });
+    return {
+      characterId: plan.characterId, file: prepared.file, sha256: prepared.sha256, bytes: prepared.bytes,
+      approved: true, draftFlags: [], consentConfirmed: plan.consentConfirmed,
+      licensePosture: plan.licensePosture, sourcePolicy: plan.sourcePolicy,
+    };
+  });
   const portos = JSON.parse(await readFile(new URL('../../../package.json', import.meta.url), 'utf8'));
   const manifest = projectFableLoomExportManifest(snapshot, episodes.map(episode => ({
     id: episode.id, number: episode.number, title: episode.title, synopsis: episode.synopsis, startNodeId: episode.startNodeId,
     nodes: episode.nodes.filter(n => nodeAssets.has(`${episode.id}:${n.id}`))
       .map(node => projectFableLoomExportNode(node, snapshot, nodeAssets.get(`${episode.id}:${node.id}`))),
   })), portos.version);
+  if (characterProjection) {
+    manifest.characters = characterProjection.characters.map(character => ({
+      id: character.id, role: character.role, file: `characters/${character.id}.json`,
+    }));
+  }
+  const provenanceDocument = {
+    schemaVersion: FABLELOOM_EXPORT_SCHEMA_VERSION,
+    assets: provenance,
+    ...(characterProjection ? {
+      characters: characterProjection.characters.map(character => ({
+        id: character.id, file: `characters/${character.id}.json`,
+        approved: character.approval.approved, draftFlags: character.approval.draftFlags,
+        voiceCanonVersion: character.approval.voiceCanonVersion,
+      })),
+    } : {}),
+    ...(job.options.includeVoice ? { voices: voiceProvenance } : {}),
+  };
   const entries = [
     { name: 'manifest.json', data: json(manifest) },
-    { name: 'provenance.json', data: json({ schemaVersion: FABLELOOM_EXPORT_SCHEMA_VERSION, assets: provenance }) },
-    { name: 'README.md', data: packageReadme },
+    { name: 'provenance.json', data: json(provenanceDocument) },
+    { name: 'README.md', data: packageReadme(job.options) },
+    ...(characterProjection ? characterProjection.characters.map(character => ({
+      name: `characters/${character.id}.json`, data: json(character),
+    })) : []),
     { name: 'runtime-v1.md', data: await readFile(new URL('../../../docs/features/fableloom-runtime-v1.md', import.meta.url)) },
     ...[...media.entries()].map(([name, data]) => ({ name, data })),
   ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
@@ -336,8 +457,11 @@ async function run(job, context, permit) {
 
 export async function startFableLoomExport(loomId, input = {}) {
   const options = exportOptionsSchema.parse(input);
-  if (options.includePlayer || options.includeCharacters || options.includeVoice || (options.mediaProfile === 'source' && options.includeWebm)) {
-    throw error('EXPORT_OPTION_UNSUPPORTED', 'Player, character and voice packages are unavailable. WebM requires a web media profile.', 400);
+  if (options.includePlayer || (options.mediaProfile === 'source' && options.includeWebm)) {
+    throw error('EXPORT_OPTION_UNSUPPORTED', 'The reference player is unavailable. WebM requires a web media profile.', 400);
+  }
+  if (options.includeVoice && !options.includeCharacters) {
+    throw error('EXPORT_VOICE_REQUIRES_CHARACTERS', 'Voice export requires character opt-in (includeCharacters).', 400);
   }
   const jobId = randomUUID();
   const permit = maintenance.admit('media', jobId);
