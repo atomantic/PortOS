@@ -90,6 +90,9 @@ async function buildTemplate() {
   await execGit(['init', '-b', 'main', repo], scratch);
   await keepMaintenanceAttached(repo);
   await configureIdentity(repo);
+  // Fixture assertions compare authored bytes; host Git for Windows defaults
+  // must not rewrite them during checkout/rebase. This config stays temporary.
+  await execGit(['config', 'core.autocrlf', 'false'], repo);
   await writeFile(join(repo, 'initial.txt'), 'initial');
   await execGit(['add', '-A'], repo);
   await execGit(['commit', '-m', 'initial'], repo);
