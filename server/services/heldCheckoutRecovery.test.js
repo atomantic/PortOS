@@ -870,11 +870,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(existsSync(handoff.path)).toBe(true);
     expect(await archives()).toEqual([]);
   });
-  async function reviewedCheckout(name, { superseded = false, gitlink = false, normalMerge = false, featurePath = 'feature.txt', multipleCommits = false } = {}) {
+  async function reviewedCheckout(name, { superseded = false, gitlink = false, normalMerge = false, featurePath = 'feature.txt', featureBody = 'original feature\n', multipleCommits = false } = {}) {
     let firstCommit;
     let changeBase;
     const { path, release } = await heldCheckout(name, { branch: `feature/${name}`, beforeLock: async tree => {
-      await writeFile(join(tree, featurePath), 'original feature\n');
+      await writeFile(join(tree, featurePath), featureBody);
       await execGit(['--literal-pathspecs', 'add', featurePath], tree);
       if (gitlink) {
         const commit = (await execGit(['rev-parse', 'HEAD'], tree)).stdout.trim();
@@ -931,6 +931,28 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }, { ...checkout.opts, ...opts });
     return checkout;
   }
+
+  it('preserves the checkout when escaped review evidence exceeds the recovery manifest limit', async () => {
+    const c = await reviewedCheckout('manifest-byte-limit', {
+      superseded: true, featurePath: 'tabs.txt', featureBody: '\t'.repeat(4 * 1024 * 1024 - 512) + '\n',
+    });
+    await execGit(['rm', 'tabs.txt'], repo);
+    await execGit(['commit', '-m', 'remove superseded feature'], repo);
+    c.forge.defaultHead = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    expect(Buffer.byteLength(prepared.review.comparison.localPatch)).toBeLessThan(4 * 1024 * 1024);
+    expect(Buffer.byteLength(prepared.review.comparison.difference)).toBeLessThan(4 * 1024 * 1024);
+    const before = await getBranchReconcileOutcome('app-1');
+    const original = await sha256File(join(c.path, 'tabs.txt'));
+    expect(await c.confirm(prepared.review)).toEqual({ ok: false, reason: 'retirement-archive-manifest-limit-exceeded' });
+    expect(await sha256File(join(c.path, 'tabs.txt'))).toBe(original);
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await archives()).toEqual([]);
+    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+  });
 
   it('refuses file-count overflow before preview, reviewed retirement or unattended archive publication', async () => {
     const c = await reviewedCheckout('file-count-overflow', { normalMerge: true });

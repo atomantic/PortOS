@@ -38,6 +38,7 @@ export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'hel
 
 const evidenceHash = value => createHash('sha256').update(value).digest('hex');
 const MAX_ARCHIVE_FILES = 1000;
+const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 
 function checkArchiveBudget(content, administration) {
   if (content.files.length + administration.files.length > MAX_ARCHIVE_FILES) throw new Error('archive-file-budget-exceeded');
@@ -64,7 +65,7 @@ async function archiveFile(root, path) {
 
 async function archiveManifest(dir) {
   const path = await archiveFile(dir, join(dir, 'manifest.json'));
-  if ((await lstat(path)).size > 16 * 1024 * 1024) throw new Error('archive-manifest-budget-exceeded');
+  if ((await lstat(path)).size > MAX_MANIFEST_BYTES) throw new Error('archive-manifest-budget-exceeded');
   const bytes = await readFile(path);
   return { manifest: JSON.parse(bytes), digest: evidenceHash(bytes) };
 }
@@ -281,7 +282,9 @@ function checkArchiveSize(scope, fileBytes, totalBytes) {
   } });
 }
 
-const archiveLimitRefusal = error => error.message === 'archive-file-budget-exceeded'
+const archiveLimitRefusal = error => error.message === 'archive-manifest-budget-exceeded'
+  ? { ok: false, reason: 'retirement-archive-manifest-limit-exceeded' }
+  : error.message === 'archive-file-budget-exceeded'
   ? { ok: false, reason: 'retirement-archive-file-limit-exceeded' }
   : error.message === 'retirement-archive-limit-exceeded'
     ? { ok: false, reason: error.message, archiveLimit: error.archiveLimit } : null;
@@ -758,7 +761,7 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
   if (administrationAfter.fingerprint !== administration.fingerprint) throw new Error('administration changed while archiving');
   if (after.fingerprint !== snapshot.fingerprint) throw new Error('checkout content changed while archiving');
 
-  await atomicWrite(join(dir, 'manifest.json'), {
+  const manifest = {
     repoPath, defaultBranch, path: tree.path, head: tree.head, branch,
     release, review, administration: { ...administration, files: administration.files.map(({ source: _source, ...file }) => file) }, archivedAt: new Date().toISOString(),
     bundleSha256: await sha256File(bundle),
@@ -774,7 +777,12 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
       files.length ? 'cp -R files/. <checkout>/' : null,
       symlinks.length ? 'recreate manifest.captured.symlinks with ln -s' : null,
     ].filter(Boolean),
-  });
+  };
+  // Check the exact payload atomicWrite receives: escaped review text can make
+  // the manifest larger than its individually bounded Git diff inputs.
+  const serialized = JSON.stringify(manifest, null, 2);
+  if (Buffer.byteLength(serialized) > MAX_MANIFEST_BYTES) throw new Error('archive-manifest-budget-exceeded');
+  await atomicWrite(join(dir, 'manifest.json'), serialized);
   await chmod(join(dir, 'manifest.json'), 0o600);
   return { dir, fingerprint: snapshot.fingerprint, administrationFingerprint: administration.fingerprint };
 }
