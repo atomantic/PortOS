@@ -504,6 +504,44 @@ describe('GitHub inbox tab', () => {
     expect(screen.getByRole('button', { name: 'Merge #7' })).toBeTruthy();
   });
 
+  it('holds notification actions while a PR merge is pending', async () => {
+    const notification = { ...NOTIFICATION, pullRequest: { number: 7, mergeEligible: true } };
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [notification], sync: {} });
+    let finishMerge;
+    mock.actOnGitHubNotificationPullRequest.mockImplementationOnce(() => new Promise(resolve => { finishMerge = resolve; }));
+    await renderInbox();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Merge #7' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    });
+    try {
+      expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+      expect(mock.applyGitHubNotificationAction).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => { finishMerge({ merged: true, notification: { ...notification, pullRequest: null } }); });
+    }
+  });
+
+  it('holds an armed PR merge while a notification action is pending', async () => {
+    const notification = { ...NOTIFICATION, pullRequest: { number: 7, mergeEligible: true } };
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [notification], sync: {} });
+    let finishDone;
+    mock.applyGitHubNotificationAction.mockImplementationOnce(() => new Promise(resolve => { finishDone = resolve; }));
+    await renderInbox();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Merge #7' }));
+    });
+    try {
+      expect(screen.getByRole('button', { name: 'Merge #7' })).toBeDisabled();
+      expect(mock.actOnGitHubNotificationPullRequest).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => { finishDone({ ...notification, state: 'done' }); });
+    }
+  });
+
   it('links reviews to their owning task queues through completion and preflight handoff', async () => {
     mock.getGitHubNotifications.mockResolvedValue({ notifications: [
       { ...NOTIFICATION, pullRequest: { number: 7, doReviewEligible: true },
