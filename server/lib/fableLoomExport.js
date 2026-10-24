@@ -142,7 +142,7 @@ const textList = (value, itemMax, max) => {
  * on reachable scenes (visual bindings and interaction speakers). Unreachable
  * scenes and the rest of the universe stay out — a universe is not the cast.
  */
-export function fableLoomExportCastIds(loom, episodes) {
+function fableLoomExportCastIds(loom, episodes) {
   const ids = new Set();
   if (typeof loom?.protagonistCharacterId === 'string' && loom.protagonistCharacterId) {
     ids.add(loom.protagonistCharacterId);

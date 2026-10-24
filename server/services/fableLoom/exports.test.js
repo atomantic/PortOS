@@ -12,7 +12,7 @@ import { readZipArchive } from '../../lib/zipArchive.js';
 import * as ffmpeg from '../../lib/ffmpeg.js';
 import { findFfmpeg, findFfprobe, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import {
-  FABLELOOM_EXPORT_LIMITS, fableLoomExportCastIds, inspectFableLoomExportCharacters,
+  FABLELOOM_EXPORT_LIMITS, inspectFableLoomExportCharacters,
 } from '../../lib/fableLoomExport.js';
 import { execFileSync } from '../../lib/childProcess.js';
 
@@ -502,7 +502,6 @@ describe('portable FableLoom export boundary', () => {
       ],
     }];
     const loomCast = { protagonistCharacterId: 'hero', format: 'prose' };
-    expect(fableLoomExportCastIds(loomCast, episodes)).toEqual(['hero', 'on-stage', 'speaker']);
     const universe = { characters: [
       { id: 'hero', name: 'Ada Example', personality: 'Calm.', background: privateMarker,
         secrets: 'SECRET_TOKEN_SENTINEL', voiceId: 'kokoro:SECRET_PRESET',
