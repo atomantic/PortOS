@@ -341,11 +341,11 @@ async function inspectContext(job, snapshot, episodes, universe, signal) {
       }
     }
   }
-  return { requests, voicePlans, characterProjection };
+  return { requests, voicePlans, characterProjection, media };
 }
 
 async function build(job, snapshot, episodes, history, universe, signal) {
-  const { requests, voicePlans, characterProjection } = await inspectContext(job, snapshot, episodes, universe, signal);
+  const { requests, voicePlans, characterProjection, media } = await inspectContext(job, snapshot, episodes, universe, signal);
   if (job.findings.some(f => f.severity === 'error')) {
     throw error('EXPORT_VALIDATION_FAILED', 'Resolve graph, outline, production, media, approval, character or voice findings before exporting.');
   }
