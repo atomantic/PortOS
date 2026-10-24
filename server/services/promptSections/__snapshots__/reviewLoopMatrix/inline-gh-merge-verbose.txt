@@ -80,7 +80,7 @@ PR Details:
 
 ### CLI Reviewer Procedure (codex)
 
-Follow the slashdo local-agent review loop's per-CLI invocation and review-only prompt contract verbatim; verify isolation flags with the installed CLI's help before supplying review data. Do not invent prompts or unsupported flags. Run each reviewer once per round, capture findings, and apply fixes yourself unless reviewer-applies is set.
+Drive each spawnable CLI reviewer EXACTLY as the slashdo local-agent review loop specifies — use its per-CLI invocation and review-only prompt contract verbatim; verify isolation flags with the installed CLI's help before supplying review data. Do not use throwaway provider prompts or invent unsupported flags. Run the reviewer once per round, capture its findings, and (unless reviewer-applies is set) apply the fixes yourself.
 
 ## Local agent review loop
 
