@@ -1599,8 +1599,11 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
       const hold = await checkHold(tree.head);
       if (hold) throw new Error(hold);
       const ignoredPaths = [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)];
+      const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
+      const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
       return {
         head: tree.head, path: tree.path, branch: detached ? null : branchName,
+        ...(checkoutIdentity && { checkoutIdentity }),
         verify: async holder => {
           if (!holder || holder.head !== tree.head || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
           if (!detached && holder.branch !== tree.branch) return 'worktree-holder-changed';
@@ -2407,9 +2410,12 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
         return { fence: { repoPath: parentRepo, path: worktreePath, branch: branchName } };
       },
       archive: async () => {
+        const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
+        const checkoutIdentity = await readRetirementCheckoutIdentity(worktreePath).catch(() => null);
         const { releaseCheckoutWithoutArchive } = await import('./heldCheckoutRecovery.js');
         return releaseCheckoutWithoutArchive({ repoPath: parentRepo, path: worktreePath, branch: branchName }, async () => ({
           archive: {
+            ...(checkoutIdentity && { checkoutIdentity }),
             verify: async (latest) => {
               if (!latest || latest.head !== wt.head || latest.branch !== wt.branch) return 'worktree-holder-changed';
               const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout, () => null);
@@ -2439,6 +2445,7 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
           const { recordWorkspaceCheckoutRetirement } = await import('./taskSchedule.js');
           await recordWorkspaceCheckoutRetirement(parentRepo, {
             path: wt.path, branch: branchName, head: wt.head, branchDeleted: Boolean(deleted),
+            ...(preservation?.checkoutIdentity && { checkoutIdentity: preservation.checkoutIdentity }),
           }).catch(error => { console.warn(`⚠️ External retirement receipt not recorded for ${entry.name}: ${error.message}`); });
         }
         return ok;

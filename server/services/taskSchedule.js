@@ -902,7 +902,7 @@ export async function getBranchReconcileInventory(appId) {
 const missingPreservationObligation = row => ({ ...row, reason: 'retirement-provenance-unverified' });
 const missingPreservationStatus = {
   status: 'incomplete', reason: 'retirement-provenance-unverified',
-  nextAction: 'Trace the missing original checkout/ref and recover its exact archive receipt; disappearance and merged commits do not prove preservation.',
+  nextAction: 'Trace the missing original checkout/ref. Disappearance and merged commits do not prove the retirement service removed it. A service receipt settles it. Do not copy the checkout into an archive.',
 };
 
 async function missingInventoryRows(appId, rows, options) {
@@ -992,7 +992,10 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     const receiptId = branchDeleted === true && archiveKept
       ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted }) : null;
     if (receiptId && receipts[receiptId]) {
-      // Keep the original timestamp AND any newer inventory incarnation.
+      // Keep the original timestamp. Fill a missing checkout identity so a
+      // later inventory row can match the receipt that already settled this tuple.
+      const prior = evidence[receiptId];
+      if (prior && checkoutIdentity && !prior.checkoutIdentity) evidence[receiptId] = { ...prior, checkoutIdentity };
       const changed = JSON.stringify(receipts) !== JSON.stringify(outcome.retirementReceiptIdentities || {})
         || JSON.stringify(evidence) !== JSON.stringify(outcome.retirementReceiptEvidence || {});
       if (changed) record.branchReconcileOutcome = { ...outcome, retirementReceiptIdentities: receipts, retirementReceiptEvidence: evidence };
