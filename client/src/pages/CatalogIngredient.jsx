@@ -858,7 +858,9 @@ function IngredientEditor() {
 
         {activeTab === 'looks' && (
           <CatalogLooksPanel
+            key={record.id}
             ingredientId={record.id}
+            initialUniverseId={refsByKind.universe?.length === 1 ? universeRef?.refId : ''}
             wardrobes={wardrobes}
             lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m))).map(protectMedia)}
             candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m)).map(protectMedia)}
