@@ -593,11 +593,14 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // the repository contains only its default branch. Keep known holds visible.
   const dispatchedOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
     status: 'running', reason: 'batch-pending',
+    // Shared-origin branches without a local ref/checkout may belong to another
+    // install. Keep their report visible without making local completion wait
+    // for that machine's work. Unknown remote state still fails closed below.
+    remoteInventory: result.orphanRemotes ?? { reaped: [], reported: [] },
     remaining: [
       ...idlePark.remaining,
       ...allActionable.map(b => ({ ...(b.retirement?.release || { branch: b.branch }), reason: b.retirement ? 'retirement-review-pending' : 'actionable' })),
       ...(result.orphanRemotes?.remoteUnavailable ? [{ reason: 'remote-state-unavailable' }] : []),
-      ...(result.orphanRemotes?.reported || []).map(b => ({ branch: typeof b === 'string' ? b : b.branch, reason: 'remote-branch-held' })),
     ],
     nextAction: 'Continue the bounded sweep and rescan after the final batch.',
   });

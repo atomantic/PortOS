@@ -770,7 +770,7 @@ export async function isPerpetualParkActive(taskType, appId = null) {
 }
 
 /** Persist the latest deterministic sweep evidence independently of agent success. */
-export async function recordBranchReconcileOutcome(appId, { status, reason, remaining, nextAction, retirementObligations: additionalObligations = [] }) {
+export async function recordBranchReconcileOutcome(appId, { status, reason, remaining, nextAction, remoteInventory, retirementObligations: additionalObligations = [] }) {
   const outcome = await updateSchedule(async (schedule) => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const now = new Date().toISOString();
@@ -808,6 +808,7 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
     const retained = retirementObligations.filter(obligation => !current?.some(row => sameRetirementObservation(row, obligation)));
     record.branchReconcileOutcome = {
       ...previous, status, reason, nextAction, updatedAt: now, retirementObligations,
+      ...(remoteInventory !== undefined && { remoteInventory }),
       remaining: retained.length ? [...(current || []), ...retained] : current,
       observedAt: remaining === undefined ? record.branchReconcileOutcome?.observedAt ?? null : now,
       ...(retirementObligations.some(row => row.reason === 'retirement-provenance-unverified') && missingPreservationStatus),

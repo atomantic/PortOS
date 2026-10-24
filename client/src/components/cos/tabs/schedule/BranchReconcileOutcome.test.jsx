@@ -23,6 +23,17 @@ function open() {
 describe('BranchReconcileOutcome checkout retirement', () => {
   beforeEach(() => { retire.mockReset(); prepare.mockReset(); });
 
+  it('shows peer remote inventory separately from drained local work without offering retirement', () => {
+    render(<BranchReconcileOutcome outcomes={{ 'app-1': { status: 'drained', remaining: [], remoteInventory: {
+      reported: [{ branch: 'feature/peer-only', reason: 'unmerged-remote-only' }],
+    } } }} apps={[{ id: 'app-1', name: 'Example App' }]} />);
+    expect(screen.getByText(/Example App · No remaining work in last scan · 0 remaining/)).toBeInTheDocument();
+    expect(screen.getByText('Remote-only inventory · 1 informational')).toBeInTheDocument();
+    expect(screen.getByText('feature/peer-only: unmerged-remote-only')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Archive and retire/ })).toBeNull();
+    expect(retire).not.toHaveBeenCalled();
+  });
+
   it('sends the exact inventory row as the scoped release and hides the row until a fresh inventory arrives', async () => {
     retire.mockResolvedValue({ ok: true, archiveDir: '/example/archive', branchDeleted: true });
     const { rerender } = open();
