@@ -2,11 +2,6 @@ vi.mock('../lib/retirementCheckoutObservation.js', () => ({ isCurrentRetirementC
 import { isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('./branchReconcileInventoryPrune.js', async importOriginal => ({
-  ...await importOriginal(), findGoneInventoryRows: vi.fn(async () => []),
-}));
-import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
-
 vi.mock('./cosEvents.js', () => ({
   cosEvents: { emit: vi.fn() },
   emitLog: vi.fn()
@@ -217,7 +212,6 @@ import { parseCronToNextRun } from './eventScheduler.js'
 import { addNotification, exists as notificationExists, removeByMetadata } from './notifications.js'
 import { isInstanceFeatureEnabled } from './instanceFeatures.js'
 import { inputsUnchangedSince } from './taskInputGate.js'
-import { getAppById } from './apps.js'
 
 const mockSchedule = ({ tasks = {}, executions = {}, templates = [], onDemandRequests = [] } = {}) => {
   readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates, onDemandRequests })
