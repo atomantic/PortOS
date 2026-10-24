@@ -9,6 +9,7 @@ import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow, PR_OPENED_BY } from '../../lib/slashdoInvocation.js';
 import { shellQuote } from '../../lib/shellQuote.js';
+import { LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE } from '../../lib/localReviewBridge.js';
 import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
@@ -623,9 +624,9 @@ function buildPendingMergeHandoffLines(agentId) {
   const command = agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-handoff',
     payload: JSON.stringify({ agentId, prUrl: 'PR_URL', headSha: 'HEAD_SHA', worktreePath: 'WORKTREE_PATH' }) });
   return [
-    '**PortOS pending-merge handoff (GitHub, same-repository PR, only for measured CI backlog):** By default this run owns CI, confirmed merge and safe cleanup. Early finish requires the app setting `mergeHandoffMinQueuedRuns` and a fresh server-observed queued workflow count meeting that threshold; absent settings or unknown backlog keep ownership here. The server coordinator then owns the exact reviewed head, failure recovery, merge confirmation and cleanup across restarts. When a configured local review round returns clean, record the head it reviewed beside REVIEW_STATUS (any later commit, fix, rebase or conflict resolution means that head was not reviewed, so rerun the affected review first):',
+    '**PortOS pending-merge handoff (GitHub, same-repository PR, only for measured CI backlog):** By default this run owns CI, confirmed merge and safe cleanup. Early finish requires the app setting `mergeHandoffMinQueuedRuns` and a fresh server-observed queued workflow count meeting that threshold; absent settings or unknown backlog keep ownership here. The server coordinator then owns the exact published head, failure recovery, merge confirmation and cleanup across restarts. When a configured local review round returns clean, record the head it reviewed beside REVIEW_STATUS (retain that historical reviewed head after later commits; completed pre-PR local review is scoped to this PR delivery, so feedback/CI pushes do not automatically respawn it):',
     '```bash', RECORD_REVIEW_HEAD, '```',
-    'For handoff evidence, before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)` and retain that exact value across shell calls. When the completed loop has a nonempty all-optional roster and its only non-clean outcomes are availability, quota/provider, timeout, transport, malformed/empty, or no-verdict failures, record the aggregate status below. This handoff-specific record overrides instructions to leave REVIEW_STATUS=clean for optional unavailability; it does not label any reviewer verdict clean. Never use it for pending review, a required reviewer, accepted unresolved findings or rejection, failed validation, or unpushed fixes. Do not overwrite review-blocked. Any later commit, rebase or conflict resolution requires new review attempts; never replace the attempted head with the later head. If writing fails, do not hand off:',
+    'For handoff evidence, before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)` and retain that exact value across shell calls. When the completed loop has a nonempty all-optional roster and its only non-clean outcomes are availability, quota/provider, timeout, transport, malformed/empty, or no-verdict failures, record the aggregate status below. This handoff-specific record overrides instructions to leave REVIEW_STATUS=clean for optional unavailability; it does not label any reviewer verdict clean. Never use it for pending review, a required reviewer, accepted unresolved findings or rejection, failed validation, or unpushed fixes. Do not overwrite review-blocked. Later PR commits do not require new local review attempts; never replace the attempted head with the later head. Preserve the PR-bound completed lifecycle receipt across restarts. If writing fails, do not hand off:',
     '```bash', RECORD_OPTIONAL_INCONCLUSIVE, '```',
     'Once the published head (`git rev-parse HEAD` equals the PR head) has passed local validation and every configured review is satisfied or explicitly optional-inconclusive, and the PR is ready (not draft), request a handoff only if backlog policy is configured — unless review is `review-blocked` or the PR is being left open, whose stop rules still apply. Replace PR_URL, HEAD_SHA (the full 40-character head) and WORKTREE_PATH (this checkout):',
     '```bash', command, '```',
@@ -677,6 +678,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
   const lines = [
     ...(resumeOverride ? [resumeOverride, ''] : []),
     ...(pin ? [pin, ''] : []),
+    ...(!isMergeOnGreen ? [`**One-time local review lifecycle (overrides claim/delegated head-invalidation guidance):** Before Phase 5 or any local reviewer, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and apply its resume gate in the actual claim worktree. Use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the durable receipt for the resolved base and exact PR/MR. Keep each successful reviewer's private outcome through interrupted/blocked phases. Once this delivery's local phase completes, GitHub/GitLab feedback or CI pushes do not restart it. Preserve original reviewed-head and model evidence; required current-head hosted approvals/CI remain mandatory.`, ''] : []),
     buildClaimOwnershipSection(agentId), '',
     ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"'), '', buildMergeAdmissionSection(agentId, { portosMergedTreeGuards }), ''] : []),
     '## Claim Workflow Handoff',
@@ -985,6 +987,7 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
       ? `2. ${buildAutoMergeCommitStep(baseBranch)}`
       : `2. \`${cmd}${reviewerArg}\`${reviewSuffix}`,
     ...(effortNote ? [`   ${effortNote}`] : []),
+    ...(willOpenPR && runsReviewLoop && !copilotOnly ? [`   Before any local reviewer, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the PR-bound receipt. This lifecycle rule overrides delegated pre-PR resets: later feedback/CI pushes do not repeat successful local review. Preserve original model/head receipts and current-head hosted gates.`] : []),
     ...merge.lines,
     ...buildSentinelWriteSteps(sentinelStep, sentinelPath, sentinelTail)
   ].join('\n');
@@ -1024,7 +1027,7 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
   const base = hasBaseBranch ? promptRef(baseBranch, '<base-branch>') : '"$BASE_BRANCH"';
   const gitlab = forgeCli === 'glab';
   return [
-    `${step}. Publish the branch and open the pull request yourself, capturing its URL and number:`,
+    `${step}. Publish the branch and open the pull request yourself, capturing its URL and number. On resume, resolve an existing PR/MR for this exact branch/base before replaying creation; when the lifecycle receipt matches that URL, skip this initial-publication shell block and continue the PR-side workflow; preserve its original local review and attribution. Once published, later feedback/CI pushes use the PR-side workflow and do not repeat the pre-PR local phase:`,
     '',
     '   ```bash',
     ...(hasBaseBranch ? [] : [
@@ -1094,6 +1097,7 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
     gitlab
       ? '   Write a real `--description`: a **Summary** section and a **Test plan** section, with no AI-attribution footer. If `glab` reports the merge request already exists, adopt its URL and IID before continuing.'
       : '   Write a real `--body`: a **Summary** section and a **Test plan** section, no AI-attribution footer. Do NOT use `--fill`. If `gh` reports the pull request already exists, adopt it instead of failing: `PR_URL=$(gh pr view --json url -q .url)`.',
+    ...(localReviewStateRequired ? [`   After creating or recovering the PR/MR, bind the receipt with \`node ${shellQuote(LOCAL_REVIEW_LIFECYCLE_SCRIPT)} publish ${base} "$PR_URL"\`. A failed creation may retry without repeating a successful unchanged pre-PR phase. A failed receipt write blocks merge; recover the write without another reviewer call.`] : []),
     gitlab
       ? '   The GitLab MR URL and IID are captured in `$PR_URL` and `$PR_NUMBER`; use those variables for every review, merge, and verification command below.'
       : `   On a GitLab remote use \`glab mr create --source-branch ${branch} --target-branch ${base} --title "…" --description "…"\` and read the MR URL/IID back with \`glab mr view\`.`,

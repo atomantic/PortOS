@@ -34,6 +34,17 @@ describe('review-enabled completion merge gate', () => {
     expect(section).toContain('8. Write the structured completion JSON envelope');
   });
 
+  it('keeps local review completed across CI fixes while hosted review stays current-head', () => {
+    const section = render('gh', ['codex', 'copilot']);
+    expect(section).toContain('feedback or CI commits do not restart a completed local phase');
+    expect(section).toContain('repeat the configured review loop for `copilot` against the new HEAD');
+    expect(section).not.toContain('repeat the pre-PR local review phase');
+    expect(section).toContain('local-review-lifecycle.mjs');
+    const claim = buildClaimFlowCompletionSection({ reviewersCsv: 'codex', agentId: 'parent' });
+    expect(claim).toContain('One-time local review lifecycle');
+    expect(claim).toContain('Keep each successful reviewer');
+  });
+
   it('retains immediate merging for a registered claim requiring local admission', () => {
     const section = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(section).toContain('Local admission forbids GitHub deferred auto-merge');
@@ -52,7 +63,7 @@ describe('review-enabled completion merge gate', () => {
     const section = render('gh', ['codex']);
 
     expect(section).toContain('**Required local-review merge gate:**');
-    expect(section).toContain('If `LOCAL_OVERALL_STATUS=review-blocked`, do NOT run this merge path');
+    expect(section).toContain('A recorded `LOCAL_OVERALL_STATUS=review-blocked` or unresolved accepted finding still blocks merge');
   });
 });
 

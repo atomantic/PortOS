@@ -997,3 +997,5 @@ positive/negative influence lists. It preserves canon, media and local settings.
 Automatic migration 440 fills only a blank, unlocked Reality; customized or
 deleted records remain untouched. Future automatic upgrades need their own
 migration with explicit recognition of the outgoing shipped defaults.
+
+- [localReviewLifecycle.js](./localReviewLifecycle.js) — durable pre-PR phase completion bound to one PR delivery.

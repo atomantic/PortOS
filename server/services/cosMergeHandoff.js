@@ -10,6 +10,7 @@
  * at the deferred merge instant, and it can merge before unenforced checks run.
  */
 import { randomUUID } from 'node:crypto';
+import { localReviewLifecycle } from '../lib/localReviewLifecycle.js';
 import { followUpRoster } from './mergeFollowUpPolicy.js';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -58,7 +59,7 @@ async function checkoutAtHead(workspace, branch, head, repository, repositoryKey
 // The worktree-private status the review phase writes: `REVIEW_STATUS=<verdict>`
 // plus `REVIEW_HEAD=<sha>`, the commit its final round reviewed. status null =
 // no file (no local reviewers ran); 'unreadable' covers an unreadable or empty file.
-async function readReviewEvidence(workspace) {
+async function readReviewEvidence(workspace, prUrl) {
   const gitPath = await execGit(['rev-parse', '--git-path', 'portos-review-status'], workspace).catch(() => null);
   const relative = gitPath?.stdout?.trim();
   if (!relative) return { status: 'unreadable', head: null };
@@ -70,20 +71,19 @@ async function readReviewEvidence(workspace) {
   return {
     status: statuses.length === 1 ? statuses[0] : 'unreadable',
     head: heads.length === 1 ? heads[0].toLowerCase() : null,
+    delivery: prUrl ? await localReviewLifecycle(workspace, { prUrl }).catch(() => null) : null,
   };
 }
 
-// A clean verdict counts only for the head it reviewed; merge-on-green runs no
-// reviewers, so there only a recorded block or unreadable status refuses. When
-// every local reviewer is optional the in-session merge treats them as
-// non-blocking, so a clean status needs no head: capped rounds that all returned
-// (fixed) findings never record one. Explicit optional-inconclusive evidence
-// instead names the attempted head; it never represents a clean reviewer verdict.
-function reviewEvidenceAccepted({ status, head: reviewedHead }, head, policy, { reviewers = [], optionalReviewers = [] } = {}) {
+// Legacy evidence remains head-bound. A matching durable PR-delivery receipt
+// proves that its pre-PR phase completed, without asserting review of later code.
+// Explicit review blocks and current-head handoff/CI pins remain independent.
+function reviewEvidenceAccepted({ status, head: reviewedHead, delivery }, head, policy, { reviewers = [], optionalReviewers = [] } = {}) {
   if (policy === PR_COMPLETIONS.MERGE_ON_GREEN) return status === null || status === 'clean';
   const allOptional = reviewers.length > 0 && reviewers.every((reviewer) => optionalReviewers.includes(reviewer));
-  if (status === 'optional-inconclusive') return allOptional && reviewedHead === head;
-  return status === 'clean' && (allOptional || reviewedHead === head);
+  const completedDelivery = delivery?.reusable && ['clean', 'partial'].includes(delivery.receipt?.status);
+  if (status === 'optional-inconclusive') return allOptional && (reviewedHead === head || completedDelivery);
+  return status === 'clean' && (allOptional || reviewedHead === head || completedDelivery);
 }
 
 /** Read-only target check shared by orphan review and its eventual workspace launch.
@@ -247,7 +247,7 @@ export async function inspectCompletedOwnerReview({ agentId = null, repoPath, br
     if (!reviewed) return held('awaiting-forge-review');
     return { disposition: 'review-required', reason: 'forge-review-submitted', agentId: agent.id, originalTask: task, roster, reviewTarget: target };
   }
-  const review = await readReviewEvidence(worktreePath);
+  const review = await readReviewEvidence(worktreePath, target.prUrl);
   if (review.status === 'unreadable') return held('review-evidence-unreadable');
   if (reviewEvidenceAccepted(review, headSha, PR_COMPLETIONS.REVIEW_THEN_MERGE, roster)) return { ...held('review-recorded-handoff-missing'), agentId: agent.id, originalTask: task, roster, reviewTarget: target };
   return { disposition: 'review-required', reason: 'required-review-missing', agentId: agent.id, originalTask: task, roster, reviewTarget: target };
@@ -304,7 +304,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   if (!workspace || !await checkoutAtHead(workspace, view.headRefName, head, repository, repositoryKey)) {
     return refuse('checkout-head-unverified');
   }
-  const review = await readReviewEvidence(workspace);
+  const review = await readReviewEvidence(workspace, prUrl);
   const roster = await followUpRoster(task, policy);
   if (!reviewEvidenceAccepted(review, head, policy, roster)) return refuse('review-evidence-incomplete');
 

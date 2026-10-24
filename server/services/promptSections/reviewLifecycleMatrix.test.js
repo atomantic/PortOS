@@ -270,7 +270,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('4. **Wait for CI to finish**');
     expect(section).toContain('never merge on checks that were expected but never appeared');
     expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --match-head-commit <verified-head>');
-    expect(section).toContain('repeat the configured review loop for `ollama`, `copilot`, `codex`, `@example-user` against the new HEAD');
+    expect(section).toContain('repeat the configured review loop for `copilot`, `@example-user` against the new HEAD');
     expect(section).toContain(`8. ${INLINE_EXIT_STEP}`);
     expect(section).not.toContain('6. Exit. Do **not** run `/do:push`');
     expect(section).not.toContain('### Local Review Before Opening the PR/MR');
