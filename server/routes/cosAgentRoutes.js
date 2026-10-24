@@ -46,6 +46,7 @@ const externalMergeAdmissionSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('acquire'), appId: z.string().min(1).max(200),
     worktreePath: z.string().min(1).max(4096), prUrl: z.string().url().max(2048),
+    baseBranch: z.string().min(1).max(255),
     headSha: z.string().regex(/^[a-f0-9]{40}$/), baseSha: z.string().regex(/^[a-f0-9]{40}$/),
   }).strict(),
   z.object({ action: z.literal('check'), token: z.string().uuid() }).strict(),

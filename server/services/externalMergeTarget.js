@@ -12,7 +12,7 @@ const refused = reason => ({ reason });
 const canonical = path => typeof path === 'string' && isAbsolute(path) ? realpath(path).catch(() => null) : null;
 const gitValue = async (path, args) => (await execGit(args, path, { timeout: 10000 }).catch(() => null))?.stdout?.trim();
 
-export async function inspectExternalMergeTarget(input, agents) {
+export async function inspectExternalMergeCheckout(input, agents) {
   const [{ getAppById }, { repositoryKey }] = await Promise.all([import('./apps.js'), import('./cosMergeAdmission.js')]);
   const app = await getAppById(input.appId).catch(() => null);
   const [repoPath, worktreePath] = await Promise.all([canonical(app?.repoPath), canonical(input.worktreePath)]);
@@ -70,6 +70,20 @@ export async function inspectExternalMergeTarget(input, agents) {
   if (review.head !== head || !['clean', 'optional-inconclusive'].includes(review.status)) {
     return refused('review-evidence-incomplete');
   }
+  return { repository, target: { appId: app.id, repoPath, worktreePath, gitDir, commonDir,
+    checkoutIdentity: `${identity.dev}:${identity.ino}`, branch, prUrl: input.prUrl,
+    headSha: head, baseSha: input.baseSha, baseBranch: input.baseBranch } };
+}
+
+// Network and credential probes must never occupy the shared CoS state queue.
+export async function inspectExternalMergeTarget(input, agents) {
+  const proof = await inspectExternalMergeCheckout(input, agents);
+  if (proof.reason) return proof;
+  const { repository, target } = proof;
+  const { repoPath, branch, headSha: head } = target;
+  const [{ getAppById }, { repositoryKey }] = await Promise.all([import('./apps.js'), import('./cosMergeAdmission.js')]);
+  const app = await getAppById(input.appId);
+  const pr = parsePullRequestUrl(input.prUrl);
   const [{ execGh }, { resolveForgeExecOptions }] = await Promise.all([import('./github.js'), import('./forgeExecOptions.js')]);
   const options = await resolveForgeExecOptions(repoPath, { forgeAccount: app.forgeAccount });
   const raw = await execGh(['pr', 'view', String(pr.number), '--repo', `${pr.host}/${pr.owner}/${pr.repo}`,
@@ -80,9 +94,8 @@ export async function inspectExternalMergeTarget(input, agents) {
   if (!actual || repositoryKey({ host: actual.host, fullName: `${actual.owner}/${actual.repo}` }) !== repository
     || actual.number !== pr.number || live.number !== pr.number || live.state !== 'OPEN'
     || live.isDraft !== false || live.isCrossRepository !== false || live.headRefName !== branch
-    || live.headRefOid !== head || live.baseRefOid !== input.baseSha || !live.baseRefName || live.baseRefName === branch) {
+    || live.headRefOid !== head || live.baseRefOid !== input.baseSha || live.baseRefName !== input.baseBranch || live.baseRefName === branch) {
     return refused('external-pr-changed');
   }
-  return { repository, target: { appId: app.id, repoPath, worktreePath, gitDir, commonDir,
-    checkoutIdentity: `${identity.dev}:${identity.ino}`, branch, prUrl: live.url, headSha: head, baseSha: live.baseRefOid } };
+  return { repository, target: { ...target, prUrl: live.url } };
 }

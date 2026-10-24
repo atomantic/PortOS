@@ -23,7 +23,7 @@ vi.mock('../services/cosState.js', () => ({
 }));
 vi.mock('../services/apps.js', () => ({ getAppById: async id => fixture.apps[id] ?? null }));
 vi.mock('../services/github.js', () => ({ execGh: async args => {
-  await fixture.beforeForge?.();
+  await fixture.beforeForge?.(args[args.indexOf('--repo') + 1]);
   return JSON.stringify(fixture.prs[args[args.indexOf('--repo') + 1]] ?? null);
 } }));
 vi.mock('../services/forgeExecOptions.js', () => ({ resolveForgeExecOptions: async cwd => ({ cwd, env: {} }) }));
@@ -64,7 +64,7 @@ async function makeRepository(name) {
   await git(repoPath, 'worktree', 'add', '-b', 'feature', worktreePath);
   const headSha = await git(worktreePath, 'rev-parse', 'HEAD');
   const reviewFile = await git(worktreePath, 'rev-parse', '--path-format=absolute', '--git-path', 'portos-review-status');
-  const input = { appId: name, worktreePath, prUrl: `https://github.com/example/${name}/pull/7`, headSha, baseSha: headSha };
+  const input = { appId: name, worktreePath, prUrl: `https://github.com/example/${name}/pull/7`, headSha, baseSha: headSha, baseBranch: 'main' };
   return { repoPath, worktreePath, reviewFile, input, key: `github.com/example/${name}` };
 }
 
@@ -153,11 +153,12 @@ describe('outside merge admission through the authenticated HTTP boundary', () =
     });
   });
 
-  it.each(['head', 'base', 'repository', 'review', 'owner', 'checkout'])('withholds check when the %s proof changes and retains owned release', async mode => {
+  it.each(['head', 'base', 'base-branch', 'repository', 'review', 'owner', 'checkout'])('withholds check when the %s proof changes and retains owned release', async mode => {
     const { body: granted } = await acquire();
     expect(granted.admitted).toBe(true);
     if (mode === 'head') fixture.prs[example.key].headRefOid = 'f'.repeat(40);
     if (mode === 'base') fixture.prs[example.key].baseRefOid = 'f'.repeat(40);
+    if (mode === 'base-branch') fixture.prs[example.key].baseRefName = 'release';
     if (mode === 'repository') fixture.apps.repo.repoPath = other.repoPath;
     if (mode === 'review') await writeFile(example.reviewFile, `REVIEW_STATUS=clean\nREVIEW_HEAD=${'f'.repeat(40)}\n`);
     if (mode === 'checkout') fixture.state.mergeAdmissions[example.key].target.checkoutIdentity = 'different-checkout';
@@ -165,6 +166,36 @@ describe('outside merge admission through the authenticated HTTP boundary', () =
     persist();
     expect((await check(granted.token)).body.admitted).toBe(false);
     expect((await release(granted.token)).body.released).toBe(true);
+  });
+
+  it('keeps forge waits outside the state queue and rejects intervening same-repository ownership', async () => {
+    const { claimMergeAdmission } = await import('../services/cosMergeAdmission.js');
+    fixture.state.agents.parent = { id: 'parent', taskId: 'task-parent', startedAt: '2026-01-01T00:00:00Z', status: 'running',
+      metadata: { sourceWorkspace: example.repoPath, claimPicksOwnBranch: true, claimBranches: ['claim/issue-99'] } };
+    persist();
+    let entered, resume;
+    const started = new Promise(resolve => { entered = resolve; });
+    const paused = new Promise(resolve => { resume = resolve; });
+    fixture.beforeForge = async repository => { if (repository === example.key) { entered(); await paused; } };
+    const pending = acquire().then(response => response);
+    await started;
+    try {
+      // These must settle while the outside network proof is still paused.
+      expect((await acquire(other)).body.admitted).toBe(true);
+      const cos = await claimMergeAdmission({ agentId: 'parent', action: 'acquire' });
+      expect(cos.admitted).toBe(true);
+      const busy = await acquire(example, { session: sessionB });
+      expect(busy.body).toMatchObject({ admitted: false, reason: 'owner-active-or-unverified' });
+      expect((await claimMergeAdmission({ agentId: 'parent', action: 'release', token: cos.token, outcome: 'leave-open' })).released).toBe(true);
+    } finally { resume(); }
+    expect((await pending).body).toMatchObject({ admitted: false, reason: 'lease-target-changed' });
+    expect(fixture.state.mergeAdmissions[example.key]).toBeUndefined();
+  });
+
+  it('rechecks local review evidence after the forge request returns', async () => {
+    fixture.beforeForge = () => writeFile(example.reviewFile, `REVIEW_STATUS=blocked\nREVIEW_HEAD=${example.input.headSha}\n`);
+    expect((await acquire()).body).toMatchObject({ admitted: false, reason: 'review-evidence-incomplete' });
+    expect(fixture.state.mergeAdmissions).toEqual({});
   });
 
   it('recovers an interrupted owner only after the bounded deadline and invalidates its token', async () => {

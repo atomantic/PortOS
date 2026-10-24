@@ -81,7 +81,7 @@ leases, not a forge-side fence against a merge already in flight at expiry.
 
 Before acquiring, finish all configured reviews, required CI for the exact PR
 head, and this repository's combined-tree structural guards **outside** the
-lease. Keep the checked head and base SHAs. The worktree-private
+lease. Keep the checked head and base SHAs and the base branch name. The worktree-private
 `portos-review-status` file must name that exact `REVIEW_HEAD` and the workflow's
 `REVIEW_STATUS=clean`, or `optional-inconclusive` when all configured reviewers
 are optional and unavailable. The latter records an attempted head, never a
@@ -97,6 +97,7 @@ Write the acquisition request to a private JSON file (mode `0600`). For example:
   "worktreePath": "/example/repository-worktree",
   "prUrl": "https://github.com/example/repo/pull/7",
   "headSha": "1111111111111111111111111111111111111111",
+  "baseBranch": "main",
   "baseSha": "2222222222222222222222222222222222222222"
 }
 ```
@@ -108,7 +109,7 @@ node <portos-root>/scripts/portos-api.js post /api/cos/merge-admission/external 
 The app must already exist in the local app registry. The server verifies its
 origin and the checkout's real Git common directory, separate linked checkout,
 branch, identity, local review receipt, live same-repository open PR, head and
-base. An active/uncertain CoS owner, checkout lock, retirement fence, changed
+base branch/SHA. An active/uncertain CoS owner, checkout lock, retirement fence, changed
 proof or unreadable state withholds admission. Fork PRs and detached/primary
 checkouts are outside this bounded flow. Repository keys are shared with CoS
 parents and the pending-merge sweep, so all three contend on the same lease;

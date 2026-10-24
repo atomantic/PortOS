@@ -27,6 +27,14 @@ const MERGE_ADMISSION_HISTORY_LIMIT = 25;
 const MERGE_HANDOFF_RECEIPT_LIMIT = 25;
 const serverOwner = randomUUID();
 const sweepTokens = new Set();
+// Detect a same-repository acquire/release ABA while an outside forge proof is
+// in flight. A restart ends those in-flight requests, so revisions stay local.
+const repositoryRevisions = new Map();
+const revision = repository => repositoryRevisions.get(repository) ?? 0;
+async function saveLeaseState(state, save, repository) {
+  await save(state);
+  repositoryRevisions.set(repository, revision(repository) + 1);
+}
 const refuse = (reason) => ({ admitted: false, reason, retryAfterMs });
 export const repositoryKey = (origin) => origin?.host && origin?.fullName
   ? `${origin.host.replace(/^ssh\.github\.com$/i, 'github.com')}/${origin.fullName}`.toLowerCase()
@@ -37,7 +45,7 @@ const binding = (agent) => ({ agentId: agent.id, startedAt: agent.startedAt, tas
 const sameAgent = (lease, agent) => agent?.id === lease.agentId && agent?.startedAt === lease.startedAt
   && agent?.taskId === lease.taskId;
 const validExternalMergeTarget = (target) => isPlainObject(target)
-  && ['appId', 'repoPath', 'worktreePath', 'gitDir', 'commonDir', 'checkoutIdentity', 'branch', 'prUrl'].every(key =>
+  && ['appId', 'repoPath', 'worktreePath', 'gitDir', 'commonDir', 'checkoutIdentity', 'branch', 'prUrl', 'baseBranch'].every(key =>
     typeof target[key] === 'string' && target[key].length > 0)
   && /^[a-f0-9]{40}$/.test(target.headSha || '') && /^[a-f0-9]{40}$/.test(target.baseSha || '');
 const validLease = (lease, repository) => isPlainObject(lease) && lease.repository === repository
@@ -182,7 +190,7 @@ async function admit(state, save, repository, owner, measure) {
   const lease = { ...owner, repository, token: randomUUID(), acquiredAt: new Date().toISOString() };
   state.mergeAdmissions[repository] = lease;
   if (owner.kind === 'sweep') sweepTokens.add(lease.token);
-  await save(state);
+  await saveLeaseState(state, save, repository);
   return { admitted: true, token: lease.token, repository };
 }
 
@@ -476,22 +484,20 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
       lastMergeAdmission: released,
       mergeAdmissionHistory: [...history, released].slice(-MERGE_ADMISSION_HISTORY_LIMIT),
     } };
-    await save(state);
+    await saveLeaseState(state, save, repository);
     return { admitted: false, released: true, outcome };
   }, ['acquire', 'check', 'release'].includes(action) ? action : 'unknown');
 }
 
 /** A verified operator session owns only the target validated by the server. */
 export async function externalMergeAdmission(input, resolveOwner) {
-  return transaction(async (state, save, measure) => {
+  const { action, token, outcome } = input;
+  const operation = ['acquire', 'check', 'release'].includes(action) ? `external-${action}` : 'unknown';
+  const validMap = state => Object.entries(state.mergeAdmissions).every(([key, held]) => validLease(held, key));
+  const prepared = await transaction(async (state, save, measure) => {
     const externalOwner = await resolveOwner();
     if (!/^[a-f0-9]{64}$/.test(externalOwner || '')) return refuse('external-owner-unverified');
-    // Validate the whole map before looking up an opaque handle: corruption is
-    // never evidence that a competing owner disappeared.
-    if (Object.entries(state.mergeAdmissions).some(([key, held]) => !validLease(held, key))) {
-      return refuse('lease-unreadable');
-    }
-    const { action, token, outcome } = input;
+    if (!validMap(state)) return refuse('lease-unreadable');
     const owned = Object.values(state.mergeAdmissions).find(held => held.kind === 'external'
       && held.externalOwner === externalOwner && held.token === token);
     if (action !== 'acquire' && !owned) return refuse('lease-owner-mismatch');
@@ -499,30 +505,53 @@ export async function externalMergeAdmission(input, resolveOwner) {
     if (action === 'release') {
       if (!MERGE_ADMISSION_OUTCOMES.includes(outcome)) return refuse('outcome-required');
       delete state.mergeAdmissions[owned.repository];
-      await save(state);
+      await saveLeaseState(state, save, owned.repository);
       return { admitted: false, released: true, outcome };
     }
     if (action !== 'acquire' && action !== 'check') return refuse('action-invalid');
     if (owned && expired(owned)) return refuse('lease-expired');
-    const { inspectExternalMergeTarget } = await import('./externalMergeTarget.js');
-    const proof = await measure('origin', () => inspectExternalMergeTarget(
-      action === 'acquire' ? input : owned.target, Object.values(state.agents)));
-    if (proof.reason) return refuse(proof.reason);
-    if (await resolveOwner() !== externalOwner) return refuse('external-owner-changed');
-    if (owned && expired(owned)) return refuse('lease-expired');
-    const { repository, target } = proof;
-    if (owned && (repository !== owned.repository || JSON.stringify(target) !== JSON.stringify(owned.target))) {
-      return refuse('lease-target-changed');
-    }
-    if (action === 'check') return { admitted: true, token, repository, headSha: target.headSha, baseSha: target.baseSha };
+    const requested = action === 'acquire' ? input : owned.target;
+    const pr = parsePullRequestUrl(requested.prUrl);
+    const repository = pr && repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` });
+    if (!repository) return refuse('repository-unreadable');
     const held = state.mergeAdmissions[repository];
-    if (held?.kind === 'external' && held.externalOwner === externalOwner && !expired(held)) {
-      if (JSON.stringify(held.target) !== JSON.stringify(target)) return refuse('lease-target-changed');
-      return { admitted: true, token: held.token, repository, headSha: target.headSha, baseSha: target.baseSha };
+    // Busy repositories do no forge work. The final transaction repeats this
+    // decision after proof, including a revision fence for intervening holders.
+    if (held && !(held.kind === 'external' && held.externalOwner === externalOwner && !expired(held))
+      && !await measure('ownerRecovery', () => inactive(held, state))) return refuse('owner-active-or-unverified');
+    return { requested, repository, externalOwner, revision: revision(repository), agents: Object.values(state.agents) };
+  }, operation);
+  if (!prepared.requested) return prepared;
+  const { inspectExternalMergeTarget, inspectExternalMergeCheckout } = await import('./externalMergeTarget.js');
+  const proof = await inspectExternalMergeTarget(prepared.requested, prepared.agents);
+  if (proof.reason) return refuse(proof.reason);
+  const provedAt = clock.now();
+  return transaction(async (state, save, measure) => {
+    if (await resolveOwner() !== prepared.externalOwner) return refuse('external-owner-changed');
+    if (!validMap(state)) return refuse('lease-unreadable');
+    const { repository, target } = proof;
+    if (repository !== prepared.repository || revision(repository) !== prepared.revision) return refuse('lease-target-changed');
+    const held = state.mergeAdmissions[repository];
+    if (action === 'check' && (held?.kind !== 'external' || held.externalOwner !== prepared.externalOwner || held.token !== token)) {
+      return refuse('lease-owner-mismatch');
     }
-    const admission = await admit(state, save, repository, { kind: 'external', externalOwner, target }, measure);
-    return admission.admitted ? { ...admission, headSha: target.headSha, baseSha: target.baseSha } : admission;
-  }, ['acquire', 'check', 'release'].includes(input.action) ? `external-${input.action}` : 'unknown');
+    if (action === 'check' && expired(held)) return refuse('lease-expired');
+    // Revalidate local registration, review and live CoS ownership after the
+    // network await. Neither a revoked credential nor a replaced checkout may
+    // spend the earlier proof; a queued proof also has a bounded lifetime.
+    const current = await measure('origin', () => inspectExternalMergeCheckout(target, Object.values(state.agents)));
+    if (current.reason) return refuse(current.reason);
+    if (JSON.stringify(current.target) !== JSON.stringify(target)) return refuse('lease-target-changed');
+    if (await resolveOwner() !== prepared.externalOwner) return refuse('external-owner-changed');
+    if (clock.now() - provedAt >= ADMISSION_QUEUE_TIMEOUT_MS) return refuse('external-proof-expired');
+    if (held?.kind === 'external' && held.externalOwner === prepared.externalOwner && !expired(held)) {
+      if (JSON.stringify(held.target) !== JSON.stringify(target)) return refuse('lease-target-changed');
+      return { admitted: true, token: held.token, repository, headSha: target.headSha, baseSha: target.baseSha, baseBranch: target.baseBranch };
+    }
+    if (action === 'check') return refuse('lease-expired');
+    const admission = await admit(state, save, repository, { kind: 'external', externalOwner: prepared.externalOwner, target }, measure);
+    return admission.admitted ? { ...admission, headSha: target.headSha, baseSha: target.baseSha, baseBranch: target.baseBranch } : admission;
+  }, operation);
 }
 
 /** A sweep holds admission only around its final read/assessment/merge attempt. */
@@ -541,7 +570,7 @@ export async function withPendingMergeAdmission(origin, work) {
         const lease = state.mergeAdmissions[repository];
         if (!validLease(lease, repository) || lease.token !== admission.token) return refuse('lease-owner-mismatch');
         delete state.mergeAdmissions[repository];
-        await save(state);
+        await saveLeaseState(state, save, repository);
         return { released: true };
       }, 'sweep-release');
       if (!released.released) console.error(`❌ Pending merge admission release withheld: ${released.reason}`);
