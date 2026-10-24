@@ -976,8 +976,10 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await resolveWithAgent(account.id, '1505');
     expect(vi.mocked(addTask).mock.calls[1][0]).toMatchObject({ provider: 'acct-p', model: 'acct-m', effort: undefined });
     // Autopilot never starts the generic lane on its own.
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: true, value: { verdict: 'surface' } });
     await updateAccount(account.id, { mode: 'autopilot' });
     await syncAccountNotifications(account.id);
+    expect(runUntrustedContentAnalysis).toHaveBeenCalledTimes(2);
     expect(addTask).toHaveBeenCalledTimes(2);
 
     // A succeeded run marks its thread done on GitHub and logs the task. The
