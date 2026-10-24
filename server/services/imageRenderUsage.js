@@ -6,7 +6,13 @@ import { PATHS } from '../lib/paths.js';
 
 const ledgerDir = () => join(PATHS.data, 'image-render-usage');
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
-const timestamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+const timestamp = value => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value)) return null;
+  const day = value.slice(0, 10);
+  const calendar = Date.parse(`${day}T00:00:00Z`);
+  if (!Number.isFinite(calendar) || new Date(calendar).toISOString().slice(0, 10) !== day) return null;
+  return Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+};
 const digest = value => createHash('sha256').update(value).digest('hex');
 
 // Project only accounting evidence. Never persist prompts, filenames, paths or

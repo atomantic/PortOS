@@ -73,8 +73,10 @@ describe('saved Codex image usage recovery', () => {
       { kind: 'image', status: 'failed', params: { mode: 'codex' }, result: { filename: 'failed.png', generationId: otherId } },
     ] }));
     await sidecar('no-identity', meta({ id: null, codexSessionId: null }));
+    await sidecar('no-timezone', meta({ createdAt: '2026-06-01T12:00:00' }));
+    await sidecar('impossible-date', meta({ createdAt: '2026-02-30T12:00:00Z' }));
     const plan = await planImageRenderBackfill(root);
-    expect(plan.coverage).toMatchObject({ eligibleOutputs: 1, queueOnly: 1, unrecoverable: 1, jobIdentityOutputs: 1, earliest: '2026-06-01T01:02:03.000Z' });
+    expect(plan.coverage).toMatchObject({ eligibleOutputs: 1, queueOnly: 1, unrecoverable: 3, jobIdentityOutputs: 1, earliest: '2026-06-01T01:02:03.000Z' });
   });
 
   it('fails closed on a damaged ledger and reports malformed sidecars without inventing usage', async () => {
