@@ -43,7 +43,7 @@ const { triggerOnDemandTask } = await import('./taskSchedule.js');
 const { addNotification } = await import('./notifications.js');
 const { addTask } = await import('./cosTaskStore.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
-const { createAccount, updateAccount } = await import('./githubAccounts.js');
+const { createAccount, listAccounts, updateAccount } = await import('./githubAccounts.js');
 const { __testing: { listAutopilotCandidates, candidateFilter } } = await import('./githubNotificationAutopilot.js');
 const {
   syncAccountNotifications, syncAllNotifications, listNotifications, listActionableNotifications, applyNotificationAction, clearFinishedNotifications, getNotification, runScheduledNotificationCheck, describeScheduledCheck,
@@ -150,6 +150,11 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
   beforeEach(async () => {
     vi.mocked(execGh).mockReset();
     vi.mocked(runUntrustedContentAnalysis).mockReset();
+    for (const previous of await listAccounts()) {
+      if (previous.enabled && previous.mode !== 'disabled') {
+        await updateAccount(previous.id, { mode: 'disabled' });
+      }
+    }
     account = await createAccount({ host: 'github.com', login: `octocat${accountIds.length}`, label: 'Example' });
     accountIds.push(account.id);
   });
@@ -1448,6 +1453,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(describeScheduledCheck(await runScheduledNotificationCheck())).toMatch(/^checked \d+ of \d+ account\(s\)/);
     const second = await runScheduledNotificationCheck();
     expect(second.find((result) => result.accountId === account.id)).toMatchObject({ skipped: 'poll-interval' });
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
   });
@@ -1483,7 +1489,9 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await syncAccountNotifications(account.id)).toMatchObject({ skipped: 'disabled' });
     const scheduled = await runScheduledNotificationCheck();
     expect(scheduled.find((result) => result.accountId === account.id)).toBeUndefined();
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
     expect((await syncAllNotifications()).find((result) => result.accountId === account.id)).toBeUndefined();
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
     const { rows } = await query('SELECT 1 FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, '811']);
     expect(rows).toHaveLength(0);
   });
