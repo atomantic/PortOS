@@ -1442,6 +1442,12 @@ export const API_ACCESS_ERROR_CATEGORIES = new Set([
 ]);
 
 export async function maybeCreateInvestigationTask(agentId, task, analysis) {
+  // The original cleanup receipt and bounded review task already own this
+  // failure. Investigation would allocate another task and fresh spawn budget.
+  if (task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
+    emitLog('info', 'Cleanup recovery failure retained by its existing owner', { agentId, taskId: task.id, category: analysis?.category });
+    return;
+  }
   if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) {
     emitLog('warn', `Review-only task ${task.id} needs attention; automatic investigation suppressed`, { agentId, taskId: task.id });
     return;
