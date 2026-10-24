@@ -3,16 +3,19 @@
  * redirects temp APIs before Vitest creates its module-transform cache.
  * The server's exclusive capture projects share this single global owner.
  */
-import { lstatSync, readdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { PROCESS_OWNERS_DIR } from './lib/testProcessAttribution.js';
+import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describeOwnedBrowserObservation, describeStageFixtureRoot, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
-import { OWNER_FILE, killTestProcessesUnder } from './lib/vitestStaleRunRoots.js';
+import { OWNER_FILE, PENDING_FILE, killTestProcessesUnder, verifyPendingTestProcesses } from './lib/vitestStaleRunRoots.js';
 
 export function setup({ vitest }) {
   const root = process.env.PORTOS_TEST_TEMP_ROOT;
   // Vitest runs global teardown before closing its worker pool. Its close hook
   // runs after pool.close(), so live runner workers are not mistaken for leaks.
-  vitest.onClose(() => cleanupRunTempRoot(root));
+  vitest.onClose(() => cleanupRunTempRoot(root, { reportPath: process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH, durable: true }));
 }
 
 // Vitest's nanoid transform scratch still exists when global teardown runs.
@@ -91,18 +94,46 @@ export function isEffectivelyEmpty(path) {
   return children.every((child) => isEffectivelyEmpty(join(path, child)));
 }
 
-export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT) {
+export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { contain = killTestProcessesUnder, reportPath, durable = false, platform = process.platform, verifyPending = verifyPendingTestProcesses } = {}) {
   if (!root) return;
   // A process a suite failed to tear down would outlive the run (#10840).
-  const kinds = new Map();
-  const processes = process.platform === 'win32' ? 0 : killTestProcessesUnder(root, {
-    onKilled: ({ kind, parent }) => {
-      const key = `kind=${kind} parent=${parent}`;
-      kinds.set(key, (kinds.get(key) ?? 0) + 1);
+  const outcomes = [];
+  let total = 0;
+  let unsettled = 0;
+  let inspected = true;
+  const processes = platform === 'win32' ? 0 : contain(root, {
+    onInspection: value => { inspected = value; if (!value) unsettled++; },
+    onOutcome: outcome => {
+      total++;
+      if (outcome.settlement !== 'terminated') unsettled++;
+      if (outcomes.length < 64) outcomes.push(outcome);
     },
   });
-  if (processes) console.warn(`⚠️ test process leak: stopped ${processes} process${processes === 1 ? '' : 'es'} still running under the run temp root`);
-  for (const [kind, count] of kinds) console.warn(`⚠️ stopped owned test processes: ${kind} count=${count}`);
+  const pendingVerified = platform === 'win32' || verifyPending(root);
+  if (!pendingVerified) unsettled++;
+  if (total || !inspected || !pendingVerified) {
+    const report = { version: 1, inspected, pendingVerified, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
+    const retainedPath = join(fileURLToPath(new URL('../.cache/test-process-diagnostics/', import.meta.url)), `${randomUUID()}.json`);
+    const destinations = reportPath ? [reportPath, ...(durable ? [retainedPath] : [])] : [retainedPath];
+    let retained = true;
+    try {
+      for (const destination of destinations) {
+        mkdirSync(dirname(destination), { recursive: true });
+        writeFileSync(destination, JSON.stringify(report));
+      }
+    } catch {
+      retained = false;
+      console.error('❌ owned test process evidence could not be persisted');
+      unsettled++;
+    }
+    console.warn(`⚠️ test process leak: signal/settlement evidence=${retained ? 'retained' : 'unavailable'} inspected=${inspected}; found=${total} terminated=${processes} unsettled=${unsettled}`);
+    for (const outcome of outcomes) console.warn(`⚠️ owned test process: ${Object.entries(outcome).map(([key, value]) => `${key}=${value}`).join(' ')}`);
+  }
+  if (unsettled) {
+    process.exitCode = 1;
+    console.error('❌ owned test process settlement unverified; retaining run temp root');
+    return;
+  }
   let entries;
   try {
     entries = readdirSync(root);
@@ -110,7 +141,7 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT) {
     return;
   }
   entries = entries
-    .filter((name) => name !== OWNER_FILE && name !== OWNERS_FILE)
+    .filter((name) => name !== OWNER_FILE && name !== PENDING_FILE && name !== OWNERS_FILE && name !== PROCESS_OWNERS_DIR)
     .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
     .filter((name) => !TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)))
     .filter((name) => !isDotnetRegistrationCache(root, name))
