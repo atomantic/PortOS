@@ -37,7 +37,9 @@ describe.skipIf(process.platform === 'win32')('sibling configuration sweep', () 
         const release = join(host, 'release');
         const observations = join(host, 'sweep.json');
         const first = fixture(host, 'first', `
-          writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ root: first, worker: process.pid, runner: process.ppid }));
+          const { renameSync } = await import('node:fs');
+          writeFileSync(${JSON.stringify(ready + '.pending')}, JSON.stringify({ root: first, worker: process.pid, runner: process.ppid }));
+          renameSync(${JSON.stringify(ready + '.pending')}, ${JSON.stringify(ready)});
           await (await import(${JSON.stringify(fixtureModule)})).waitForFixtureReady(${JSON.stringify(release)}, { signal: AbortSignal.timeout(25000) });
         `, config => `
           import { writeFileSync } from 'node:fs';
