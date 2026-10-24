@@ -187,7 +187,7 @@ retirement endpoint only after review. That endpoint rechecks the digest and
 removes a merged clean checkout without copying it. A successful agent report without
 ok:true and branchDeleted:true remains incomplete across restarts and later empty inventory scans.
 Repository-cleanup recovery uses the same scoped API review and additive obligation;
-its completion checks the persisted task identity and exact archive receipt without
+its completion checks the persisted task identity and exact retirement receipt without
 starting another repository sweep. Intentional human handoffs, live owners,
 locks, unmanaged trees and refused previews stay visible with their own reasons.
 A missing remote proof commit can be fetched during preview without advancing
@@ -231,7 +231,7 @@ the same hour idle; an open PR at the checkout's own tip stays a live delivery.
 After a claim checkout retires, its issue markers are never written; a GitHub
 read showing the issue closed, or open with no `in-progress` label and no
 assignee, settles the reservation report, and any other answer keeps it held. Older records cannot release a reused claim. Initialized submodules currently retain
-the checkout because their complete content is not supported by the archive.
+the checkout. The explicit initialized-checkout endpoint removes a merged clean tree in place.
 A held merged receipt names a recovery task when policy and source ownership
 permit it; intentional human handoffs stay with their existing owner. The recovery
 task prepares preservation prerequisites; the coordinator makes one final retirement

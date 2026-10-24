@@ -101,7 +101,7 @@ export async function settleRetirementReviewRun(agent) {
   await recordBranchReconcileOutcome(target.appId, {
     status: 'incomplete', reason: 'retirement-receipt-unverified',
     retirementObligations: [{ ...target.release, createdAt: target.createdAt, reason: 'retirement-receipt-unverified' }],
-    nextAction: 'Inspect the scoped cleanup recovery and archive evidence; an agent success report cannot release this obligation.',
+    nextAction: 'Inspect the scoped cleanup recovery and retirement receipt; an agent success report cannot release this obligation.',
   });
   emitLog('warn', 'Cleanup recovery completed without a verified retirement receipt; exact checkout obligation retained', {
     appId: target.appId, taskId: agent.taskId, branch: target.release.branch,

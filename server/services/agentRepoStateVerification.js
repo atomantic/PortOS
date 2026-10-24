@@ -816,7 +816,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
 
   const retirementInstructions = retirement
     ? (await import('./branchReconcileRetirement.js')).retirementReviewInstructions({ branch: branchName, retirement }, appId)
-    : `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory/review/retire workflow; report cleanup pending until the archive receipt exists.`;
+    : `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory/review/retire workflow. Report cleanup pending until the retirement service returns ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
   const context = [
     'An agent finished successfully but the repository did not end up in the expected state.',
     '',

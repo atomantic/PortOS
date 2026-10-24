@@ -1233,7 +1233,7 @@ export async function inspectCheckoutRetirementOwnership({ repoPath, release, re
 }
 
 /**
- * Archive and retire one held checkout under an operator's scoped release.
+ * Remove one held checkout under an operator's scoped release. Nothing is copied.
  *
  * @param {{ repoPath: string, release: { path: string, head: string, branch: string|null, locked: boolean, lockReason: string|null } }} input
  * @param {{ cosDir?: string, readAgents?: () => Promise<object[]|null> }} [opts]
