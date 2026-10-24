@@ -1018,6 +1018,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Export preparation decodes authored media; download releases the resulting
   // private package. Both preserve authenticated delegated agent authority.
   'POST /api/fableloom/:id/export',
+  'DELETE /api/fableloom/:id/export/:jobId',
   'GET /api/fableloom/:id/export/:jobId/download',
   'POST /api/image-video/models/support-request',
 

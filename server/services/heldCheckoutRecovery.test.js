@@ -161,6 +161,64 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     appId: 'app-1', cosDir, claimOwners: { agents: [], readAgents },
   });
 
+  // Both automatic retirement entry points used to omit their receipt, so the
+  // next persisted scan manufactured a missing-source obligation after archival.
+  it.each(['cleanupMerged', 'early reaper'])('settles a normally merged checkout before the next scan through %s', async entryPoint => {
+    const branch = 'feature/merged-receipt';
+    const path = join(repo, '.claude', 'worktrees', 'merged-receipt');
+    await mkdir(dirname(path), { recursive: true });
+    await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
+    await writeFile(join(path, '.gitignore'), 'ignored.txt\n');
+    await execGit(['add', '.gitignore'], path);
+    await execGit(['commit', '-m', 'fixture ignore rule'], path);
+    await execGit(['merge', '--ff-only', branch], repo);
+    await writeFile(join(path, 'ignored.txt'), 'synthetic ignored checkout bytes');
+    const holder = (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
+    const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release,
+      checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'checkout-retained' }] });
+    const options = { appId: 'app-1', activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: noOwners } };
+    if (entryPoint === 'cleanupMerged') {
+      const result = await (await import('./branchReconcile.js')).cleanupMerged(repo, 'main', [{ branch, worktreePath: holder.path }], options);
+      expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
+    } else {
+      const result = await (await import('./worktreeManager.js')).reapMergedWorktrees(repo, options);
+      expect(result.reaped).toEqual([expect.objectContaining({ branch, branchDeleted: true })]);
+      expect(result.skipped).toEqual([]);
+    }
+    expect(existsSync(path)).toBe(false);
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    const first = await getBranchReconcileOutcome('app-1');
+    expect(first.retired).toEqual([expect.objectContaining({ branch, path: holder.path, head: holder.head, branchDeleted: true, archiveDir: expect.any(String) })]);
+    const manifest = JSON.parse(await readFile(join(first.retired[0].archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest.captured.files).toContainEqual(expect.objectContaining({ path: 'ignored.txt', sha256: expect.any(String) }));
+    await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+    const next = await getBranchReconcileOutcome('app-1');
+    expect(next).toMatchObject({ remaining: [], retirementObligations: [] });
+    expect(next.retired).toEqual(first.retired);
+  });
+
+  it('settles a normally retired branch-only row while retaining unrelated unexplained disappearance', async () => {
+    const branch = 'feature/merged-branch-only';
+    await execGit(['branch', branch, 'main'], repo);
+    const head = (await execGit(['rev-parse', branch], repo)).stdout.trim();
+    const vanished = { branch: 'feature/unexplained-disappearance', head, reason: 'branch-held' };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ branch, head, reason: 'branch-held' }, vanished] });
+    const result = await (await import('./branchReconcile.js')).cleanupMerged(repo, 'main', [{ branch }], {
+      appId: 'app-1', activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: noOwners },
+    });
+    expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
+    const first = await getBranchReconcileOutcome('app-1');
+    expect(first.retired).toEqual([expect.objectContaining({ branch, head, branchDeleted: true, archiveDir: expect.any(String) })]);
+    expect(first.remaining).toEqual([vanished]);
+    const manifest = JSON.parse(await readFile(join(first.retired[0].archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest).toMatchObject({ repoPath: repo, branch, expectedHead: head, bundleSha256: expect.any(String) });
+    await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+    const next = await getBranchReconcileOutcome('app-1');
+    expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: vanished.branch, head, reason: 'retirement-provenance-unverified' })]);
+    expect(next.remaining).toEqual(next.retirementObligations);
+  });
+
   it('retires a superseded branch without a worktree through its full branch archive without claiming checkout preservation', async () => {
     const branch = 'feature/no-worktree';
     const head = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'superseded branch-only commit'], repo)).stdout.trim();
@@ -1475,6 +1533,45 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
       expect(await archives()).toEqual([]);
     });
+
+  it('preserves the checkout and inventory when private administration is recreated behind an unchanged Git pointer', async () => {
+    const c = await reviewedCheckout('replaced-administration');
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    const identity = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release, allowLocked: true });
+    expect(identity).not.toBeNull();
+    const checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release,
+      checkoutIdentity, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }] });
+    const before = await getBranchReconcileOutcome('app-1');
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true); // Tuple-only clients use the stored full identity.
+    const pointer = await readFile(join(c.path, '.git'));
+    const index = await readFile(join(c.admin, 'index'));
+    const tracked = await readFile(join(c.path, 'initial.txt'));
+    const preserved = join(scratch, 'preserved-administration');
+    await rename(c.admin, preserved);
+    await cp(preserved, c.admin, { recursive: true });
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout.split('\n')
+      .filter(line => line === `branch refs/heads/${c.release.branch}`)).toHaveLength(1);
+    expect(await readRetirementCheckoutIdentity(c.path)).toBe(checkoutIdentity);
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    expect(await readFile(join(c.path, '.git'))).toEqual(pointer);
+    expect(await readFile(join(c.admin, 'index'))).toEqual(index);
+    expect(await readFile(join(c.path, 'initial.txt'))).toEqual(tracked);
+    expect(await readFile(join(preserved, 'index'))).toEqual(index);
+    expect(await readFile(join(c.admin, 'portos-review-status'), 'utf8')).toBe('private synthetic review marker');
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(c.path, 'untracked.txt'), 'utf8')).toBe('untracked work\n');
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await registered(c.path)).toBe(true);
+    expect(await archives()).toEqual([]);
+    const after = await getBranchReconcileOutcome('app-1');
+    expect(after.remaining).toEqual(before.remaining);
+    expect(after.retired).toEqual(before.retired);
+    expect(after.retirementObligations).toEqual(before.retirementObligations);
+  });
 
   it.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('refuses changed %s evidence between review and confirmation', async change => {
     const c = await reviewedCheckout('changed-review', { gitlink: true });

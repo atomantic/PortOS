@@ -1002,7 +1002,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
       updatedAt: retiredAt,
       remaining: Array.isArray(outcome.remaining)
         ? outcome.remaining.filter(entry => retirementObligations.some(row => sameRetirementObservation(row, entry))
-          || (entry.path !== path && !(branchDeleted && branch && entry.branch === branch)))
+          || !(sameRetirementObservation(entry, receipt) || (!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt))))
         : outcome.remaining ?? null,
       retired,
     };

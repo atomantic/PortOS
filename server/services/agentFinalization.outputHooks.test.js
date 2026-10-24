@@ -1,6 +1,8 @@
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-finalization-output-') }));
 afterAll(cleanupTempDataRoots);
+const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
+vi.mock('./claimDisposition.js', () => claimVerifier);
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, tryReadFile: vi.fn(actual.tryReadFile) };
@@ -450,6 +452,61 @@ describe('recovery output-hook dispatch (#3182)', () => {
       metadata: expect.objectContaining({ blockedCategory: 'task-recovery-exhausted',
         blockedReason: expect.stringContaining('Options:') }) }), TASK.taskType);
     expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['normal', 'restart'])('settles a selected claim no-op from the shared verifier during %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { app: 'app-example', claimFlow: true, claimTarget: '42' } };
+    const taskOutcome = { status: 'no-action-needed', reason: 'Selected issue no longer requires a change.' };
+    const claimDisposition = { status: 'verified', taskId: task.id, issues: [{ issue: 42, disposition: 'not-planned' }] };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = taskOutcome;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue(claimDisposition);
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: 'Claim stood down.', taskOutcome }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(claimVerifier.verifyClaimDisposition).toHaveBeenLastCalledWith(expect.objectContaining({ task,
+        agent: expect.objectContaining({ id: persistedAgent.id, taskId: task.id }), reportedOutcome: taskOutcome, success: true }));
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true,
+        validationPassed: true, taskOutcome, claimDisposition }));
+      expect(hook).not.toHaveBeenCalled();
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it.each(['normal', 'restart'])('keeps an unreadable tracker unverified during %s completion even with a saved validation pass', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { app: 'app-example', claimFlow: true, claimTarget: '42' } };
+    const taskOutcome = { status: 'no-action-needed', reason: 'Agent says done.' };
+    persistedAgent.taskId = task.id;
+    persistedAgent.result = { validationPassed: true };
+    persistedAgent.metadata.taskOutcome = taskOutcome;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockRejectedValue(new Error('Invented forge outage'));
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: 'Claim stood down.', taskOutcome }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false,
+        validationPassed: null, taskOutcome: { status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' },
+        claimDisposition: { status: 'unverified', reason: 'tracker-unavailable' } }));
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it('preserves a failed delivery gate during claim no-op recovery', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.result = { validationPassed: false };
+    persistedAgent.metadata.taskOutcome = { status: 'no-action-needed', reason: 'Issue was closed.' };
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'verified' });
+    try {
+      await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false,
+        validationPassed: false, taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' } }));
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
   it('holds an unverified no-op', async () => {

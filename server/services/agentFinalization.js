@@ -1,6 +1,7 @@
 import { storeCompletionData, completionReplayInput } from './agentCompletionData.js';
 import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
+import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { retryHoldMetadata, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
@@ -133,7 +134,7 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null }) {
   if (terminatedByUser) return null;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
@@ -153,6 +154,9 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   if (isProgrammaticIoTaskType(scheduledType)) {
     return resolveProgrammaticIoVerdict({ success, hookResult });
   }
+  // Only the server-owned selected-issue verifier supplies this proof. Ordinary
+  // claim shipping keeps its existing PR/fidelity gates and undeclared criterion.
+  if (success && hasClaimFlowContract(task) && claimDisposition?.status === 'verified') return true;
   // Interactive/user tasks declare no machine-checkable criterion; neither does
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
@@ -1170,6 +1174,13 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
   });
 }
 
+async function completionClaimDisposition({ task, agent, agentId, reportedOutcome, success }) {
+  if (!success || reportedOutcome?.status !== 'no-action-needed' || !hasClaimFlowContract(task)) return null;
+  return import('./claimDisposition.js').then(async ({ verifyClaimDisposition }) =>
+    verifyClaimDisposition({ task, agent: agent || await getAgentRecord(agentId), reportedOutcome, success }))
+    .catch(() => ({ status: 'unverified', reason: 'tracker-unavailable' }));
+}
+
 /**
  * Retire an agent whose process is gone — the one step list both recovery
  * paths now share (issue #8440). Before this, the orphan sweep
@@ -1237,9 +1248,15 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   });
 
   if (Number(task?.metadata?.auditDispositionVersion) === 1 && recoveredHook?.auditDisposition?.status !== 'complete') effectiveSuccess = false;
-  const validationPassed = isProgrammaticIoTaskType(resolveTaskHookType(task))
+  const claimDisposition = await completionClaimDisposition({ task, agent, reportedOutcome, success: effectiveSuccess && executionSuccess });
+  const recoveredValidation = isProgrammaticIoTaskType(resolveTaskHookType(task))
     ? resolveProgrammaticIoVerdict({ success: effectiveSuccess, hookResult: recoveredHook })
     : agent.result?.validationPassed ?? null;
+  // A disposition never erases a recorded failed delivery gate. A saved pass,
+  // however, cannot replace a fresh selected-issue proof on no-op recovery.
+  const validationPassed = claimDisposition && recoveredValidation !== false
+    ? claimDisposition.status === 'verified' ? true : null
+    : recoveredValidation;
   const taskOutcome = reportedOutcome ? resolveTaskOutcome({ reported: reportedOutcome,
     success: effectiveSuccess, validationPassed }) : null;
   if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
@@ -1278,6 +1295,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     ...(savedCleanup ? { cleanupDeliveryVerified: true } : {}),
     taskOutcome,
     validationPassed,
+    ...(claimDisposition ? { claimDisposition } : {}),
     exitCode,
     duration,
     orphaned: true,
@@ -1917,6 +1935,8 @@ export async function finalizeAgent({
   // exit-code `success`, so task-learning telemetry can distinguish "ran clean
   // but produced nothing" from a genuine success. Best-effort — a validation
   // check failure must never block finalize (falls back to the null sentinel).
+  const claimDisposition = await completionClaimDisposition({ task, agentId,
+    reportedOutcome: reportedTaskOutcome, success: verdict.success && executionSuccess && !terminatedByUser });
   const validationPassed = await evaluateSuccessCriteria({
     task,
     terminatedByUser,
@@ -1926,6 +1946,7 @@ export async function finalizeAgent({
     hookResult,
     branchProvenEmpty,
     emptyBranchInconclusiveEvidence: prEvidence.emptyBranchInconclusiveEvidence,
+    claimDisposition,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
@@ -1985,6 +2006,7 @@ export async function finalizeAgent({
   }), executionSuccess, taskOutcome,
     requireCheckoutSettlement: deliverySuccess && taskUpdate.status === 'completed' && cleanupEligible
       && resolvePrCompletion(task.metadata) === PR_COMPLETIONS.REVIEW_THEN_MERGE,
+    ...(claimDisposition ? { claimDisposition } : {}),
     ...(['task-approval', 'task-recovery-exhausted'].includes(taskUpdate.metadata?.blockedCategory)
       || taskUpdate.metadata?.retryPendingCleanup === agentId || taskUpdate.metadata?.deliveryRecoveryAgentId === agentId
       ? { deliveryRecoveryOwned: true } : {}),

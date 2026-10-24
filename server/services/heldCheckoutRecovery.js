@@ -651,7 +651,7 @@ async function recoveryObjectHeads(administration, { repoPath, tree, missingRoot
   return heads;
 }
 
-/** Supersession is a content verdict, never a substitute for full preservation.
+/** Shared app-scoped preservation for merged and superseded checkouts.
  * Persist the original generation before archiving, then its exact preservation
  * receipt before the caller can remove anything under the retirement fence.
  */
@@ -665,11 +665,18 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
   const target = { repoPath, branch: release.branch, path: release.path, head: release.head };
   const identity = await readCompletedCheckoutIdentity(target);
   if (!identity) throw new Error('checkout-incarnation-unavailable');
+  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
+  if (!checkoutIdentity) throw new Error('checkout-incarnation-unavailable');
+  const previous = await schedule.getBranchReconcileOutcome(appId);
+  if (unresolvedRetirements(previous).some(row => sameRelease(row, release)
+    && JSON.stringify(row.checkoutIncarnation) !== JSON.stringify(identity.incarnation))) {
+    throw new Error('retirement-checkout-generation-unverified');
+  }
   const identityCurrent = async () => JSON.stringify(await readCompletedCheckoutIdentity(target)) === JSON.stringify(identity);
   const pending = await schedule.recordBranchReconcileOutcome(appId, {
     status: 'incomplete', reason: 'retirement-receipt-unverified',
-    retirementObligations: [{ ...release, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }],
-    nextAction: 'Require complete preservation and an exact retirement receipt for the superseded checkout.',
+    retirementObligations: [{ ...release, checkoutIdentity, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }],
+    nextAction: 'Require complete preservation and an exact retirement receipt for the checkout.',
   });
   const obligation = pending?.retirementObligations?.find(row => sameRelease(row, release));
   if (!Number.isFinite(Date.parse(obligation?.createdAt))) throw new Error('retirement-obligation-unavailable');
@@ -699,7 +706,7 @@ export async function preserveSupersededCheckout({ appId, repoPath, tree, defaul
       if (!await receiptCurrent()) throw new Error('retirement-preservation-receipt-changed');
       const ref = await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repoPath, { ignoreExitCode: true });
       if (ref.exitCode !== 1 || !await historicalCheckoutAbsent(release, await listWorktrees(repoPath))) throw new Error('retirement-checkout-recreated');
-      const outcome = await schedule.recordHeldCheckoutRetirement(appId, { ...release, branchDeleted: true, archiveDir: archive.archiveDir });
+      const outcome = await schedule.recordHeldCheckoutRetirement(appId, { ...release, checkoutIdentity, branchDeleted: true, archiveDir: archive.archiveDir });
       if (!outcome?.retired?.some(row => sameRelease(row, release) && row.branchDeleted === true
         && row.archiveDir === archive.archiveDir && Date.parse(row.retiredAt) >= Date.parse(obligation.createdAt))) {
         throw new Error('retirement-receipt-unverified');
@@ -812,6 +819,17 @@ async function ownerReason({ repoPath, tree, branch, readAgents, reviewed = fals
   return mergedObligationSettled && hold === 'pr-completion-review-required' ? null : hold;
 }
 
+/** Optional server inventory identity binds private administration as well as
+ * the pointer file. Callers have already checked the exact released lock under
+ * the retirement fence; allowing a fact-read does not authorize unlocking it. */
+async function matchesObservedCheckoutIncarnation(repoPath, release, worktrees = null) {
+  if (!release.checkoutIncarnation) return true;
+  const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+  const current = await readCompletedCheckoutIdentity({ repoPath, ...release, worktrees,
+    allowLocked: release.locked === true }).catch(() => null);
+  return current && JSON.stringify(current.incarnation) === JSON.stringify(release.checkoutIncarnation);
+}
+
 /** Fresh registration that still matches the release, or the reason it does not. */
 async function matchRelease(repoPath, release) {
   const trees = await listWorktrees(repoPath).catch(() => null);
@@ -826,6 +844,7 @@ async function matchRelease(repoPath, release) {
   if (Boolean(tree.locked) !== release.locked || (tree.lockReason ?? null) !== (release.lockReason ?? null)) {
     return { reason: 'checkout-lock-changed' };
   }
+  if (!await matchesObservedCheckoutIncarnation(repoPath, release, trees)) return { reason: 'checkout-identity-changed' };
   return { tree };
 }
 
@@ -914,6 +933,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   }
   const verifyRemoval = async (holder) => {
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
+    if (!await matchesObservedCheckoutIncarnation(repoPath, release)) return 'checkout-identity-changed';
     if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh] = await Promise.all([
@@ -973,7 +993,8 @@ function bindInventoriedRelease(outcome, release) {
   if (!entry) return null;
   return { path: release.path, head: release.head, branch: release.branch ?? null,
     locked: release.locked, lockReason: release.lockReason ?? null,
-    ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }) };
+    ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }),
+    ...(entry.checkoutIncarnation && { checkoutIncarnation: entry.checkoutIncarnation }) };
 }
 
 // Preview and receipt paths may acquire exact server-verified proof commits

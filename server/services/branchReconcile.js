@@ -1097,7 +1097,7 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       ...(entry.branch && { branch: entry.branch }),
       ...((entry.path || entry.worktreePath) && { path: entry.path || entry.worktreePath }),
       ...(entry.issue && { issue: entry.issue }),
-      ...(entry.head && { head: entry.head }),
+      ...((entry.head || entry.tip) && { head: entry.head || entry.tip }),
       ...(entry.observedAt && { observedAt: entry.observedAt }),
       ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }),
       ...(entry.locked !== undefined && { locked: entry.locked, lockReason: entry.lockReason ?? null }),
@@ -1169,7 +1169,7 @@ async function claimIssueUnreserved(target, issue, forgeExec) {
  * @returns {Promise<{cleaned:string[], skipped:{branch:string,reason:string,retryAt?:string}[]}>}
  *   A skip carries `retryAt` when its hold is known to lift at a specific time.
  */
-export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount = null } = {}) {
+export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount = null, appId = null } = {}) {
   const cleaned = [];
   const skipped = [];
   const claimMarkersHeld = [];
@@ -1178,6 +1178,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       activeAgentIds,
       claimOwners,
       mergedRetirement: true,
+      appId,
       mergeTarget: defaultBranch,
       forgeAccount,
       label: `🔀 branch-reconcile: remove worktree for ${b.branch}`,
@@ -1381,8 +1382,13 @@ async function retireBranch(repoPath, b, opts) {
       const prepared = gated.prepare ? await gated.prepare() : null;
       if (prepared?.error) return { result: { ok: false, reason: prepared.error } };
       if (!gated.archiveTree) return { archive: { prepared, preservation: prepared?.preservation || null } };
-      const { preserveMergedCheckout } = await import('./heldCheckoutRecovery.js');
-      return preserveMergedCheckout(repoPath, gated.archiveTree, gated.mergeTarget).then(preservation => ({ archive: { prepared, preservation } }),
+      const { preserveMergedCheckout, preserveSupersededCheckout } = await import('./heldCheckoutRecovery.js');
+      // Both merged and superseded app checkouts need the same pre-archive
+      // obligation and post-deletion receipt, including after an interrupted sweep.
+      const preserve = opts.appId
+        ? preserveSupersededCheckout({ appId: opts.appId, repoPath, tree: gated.archiveTree, defaultBranch: gated.mergeTarget })
+        : preserveMergedCheckout(repoPath, gated.archiveTree, gated.mergeTarget);
+      return preserve.then(preservation => ({ archive: { prepared, preservation } }),
         error => ({ result: { ok: false, reason: 'archive-failed', detail: error.message } }));
     },
     finish: ({ gated }, { prepared, preservation }) => finishBranchRetirement(repoPath, gated, { prepared, preservation }),
@@ -1390,7 +1396,7 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -1474,7 +1480,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
     archiveTree = tree;
   }
-  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement, claimCompletion };
+  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
 }
 
 /**
@@ -1520,7 +1526,7 @@ export async function checkoutIdleMs(worktreePath) {
  * Removal and branch deletion. `preservation` is the archive and `prepared` the
  * `prepare` backup, each taken after admission with the ownership lock released.
  */
-async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion }, { prepared = null, preservation = null } = {}) {
+async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion, appId }, { prepared = null, preservation = null } = {}) {
   let removal = null;
   if (b.worktreePath) {
     const verifyRemoval = async (holder, worktrees) => {
@@ -1573,10 +1579,29 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
     if (backup?.exitCode !== 0) return { ok: false, reason: 'recovery-ref-failed' };
   }
   const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
-  const deleted = await deleteCompletedLocalBranch(repoPath, b.branch, expectedHead);
-  if (!deleted) return { ok: false, reason: 'branch-ref-changed-or-delete-failed' };
-  if (prepared?.preservation) {
-    const recorded = await prepared.preservation.recordRetirement().then(() => true, () => false);
+  let branchReceipt = null;
+  let branchArchive = null;
+  if (appId && mergedRetirement && !b.worktreePath) {
+    const { getAppById } = await import('./apps.js');
+    const app = await getAppById(appId);
+    if (!app?.repoPath || resolve(app.repoPath) !== resolve(repoPath)) return { ok: false, reason: 'retirement-receipt-scope-unavailable' };
+    branchReceipt = async ({ archiveDir }) => {
+      branchArchive = archiveDir;
+      const { recordHeldCheckoutRetirement } = await import('./taskSchedule.js');
+      const absent = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${b.branch}`], repoPath, { ignoreExitCode: true });
+      if (absent.exitCode !== 1) throw new Error('retirement-branch-recreated');
+      const outcome = await recordHeldCheckoutRetirement(appId, { branch: b.branch, head: expectedHead, branchDeleted: true, archiveDir });
+      if (!outcome?.retired?.some(row => !row.path && row.branch === b.branch && row.head === expectedHead
+        && row.branchDeleted === true && row.archiveDir === archiveDir)) throw new Error('retirement-receipt-unverified');
+    };
+  }
+  const deleted = await deleteCompletedLocalBranch(repoPath, b.branch, expectedHead,
+    ...(branchReceipt ? [{ onRetired: branchReceipt }] : [])).catch(() => false);
+  if (!deleted) return branchArchive ? { ok: false, reason: 'retirement-receipt-unverified', archiveDir: branchArchive }
+    : { ok: false, reason: 'branch-ref-changed-or-delete-failed' };
+  const receipt = prepared?.preservation || preservation;
+  if (receipt?.recordRetirement) {
+    const recorded = await receipt.recordRetirement().then(() => true, () => false);
     if (!recorded) return { ok: false, reason: 'retirement-receipt-unverified', archiveDir: preservation.archiveDir };
   }
   return { ok: true, prepared, ...(preservation && { archiveDir: preservation.archiveDir }) };
@@ -1787,7 +1812,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   // squash/rebase-equivalent merges). Keeping this pass ahead of gh means a
   // temporary forge outage cannot strand locally-provable completed work.
   const worktreeCleanup = cleanup
-    ? await reapMergedWorktrees(repoPath, { activeAgentIds, claimOwners, includeClaudeTrees: true }).catch(() => ({ reaped: [] }))
+    ? await reapMergedWorktrees(repoPath, { activeAgentIds, claimOwners, includeClaudeTrees: true, ...(appId && { appId }) }).catch(() => ({ reaped: [] }))
     : { reaped: [] };
   const cleanedWorktrees = (worktreeCleanup.reaped || []).filter(entry => typeof entry === 'string' || entry?.branchDeleted)
     .map((entry) => typeof entry === 'string' ? entry : entry?.branch)
@@ -1879,7 +1904,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   const wip = classified.filter((c) => c.state === 'WIP');
 
   const { cleaned: cleanedBranches, skipped, claimMarkersHeld: mergedMarkerHolds = [] } = cleanup
-    ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount })
+    ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount, appId })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
   // Detached worktrees have no branch, so nothing above can see them (#10825).
   const postCleanupWorktrees = await listWorktrees(repoPath).catch(() => []);

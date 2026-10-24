@@ -25,7 +25,8 @@ import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { universeAestheticLine } from '../lib/universeVisualStyle.js';
+import { universeAestheticLine, universeVisualStyleTokens } from '../lib/universeVisualStyle.js';
+import { getBoard } from './moodBoard/db.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { shortId } from '../lib/fileUtils.js';
 import { getIngredient, getIngredientIdentityIds, listLiveRefsForIngredient } from './catalogDB.js';
@@ -102,8 +103,7 @@ function lookVariantFor(ingredient, payload, wardrobeId) {
   return {
     id: CATALOG_LOOK_VARIANT_ID,
     label: 'Look',
-    build: (universe, entry) => buildCharacterLookPrompt(universe, entry, wardrobe),
-    defaultStyle: DEFAULT_CHARACTER_SHEET_STYLE,
+    build: (universe, entry, direction) => buildCharacterLookPrompt(universe, entry, wardrobe, direction),
     negativesLabel: 'Look negatives',
     role: `look:${wardrobe.id}`,
   };
@@ -182,10 +182,19 @@ async function resolveSheetTarget(id, options) {
 
   const refs = await listLiveRefsForIngredient(id);
   const universes = [];
-  for (const ref of refs) {
+  const universeRefs = isLook && options.universeId !== undefined
+    ? (options.universeId ? [{ refKind: 'universe', refId: options.universeId }] : [])
+    : refs;
+  if (isLook && options.universeId === undefined && new Set(universeRefs.filter((r) => r.refKind === 'universe').map((r) => r.refId)).size > 1) {
+    throw new ServerError('Choose which universe supplies this look’s visual direction', { status: 400, code: 'LOOK_UNIVERSE_REQUIRED' });
+  }
+  for (const ref of universeRefs) {
     if (ref.refKind !== 'universe') continue;
     // A ref can outlive its universe (getUniverse throws NOT_FOUND then).
-    const universe = await getUniverse(ref.refId).catch(() => null);
+    const universe = await getUniverse(ref.refId).catch((error) => {
+      if (!isLook && error?.code === 'NOT_FOUND') return null;
+      throw error;
+    });
     if (universe) universes.push(universe);
   }
   // A local consolidation retains embedded source variants. Render its
@@ -200,23 +209,61 @@ async function resolveSheetTarget(id, options) {
   return { ingredient, payload: payloadForForm(ingredient.type, payload, form), variant, universe: universes[0] ?? null };
 }
 
+// Presence is checked without rewriting authored text. Board pins alone are
+// not a style definition: use the board's explicitly composed style prompt.
+async function lookDirection(universe, options) {
+  const boardId = options.moodBoardId ?? universe?.moodBoardId;
+  const board = boardId ? await getBoard(boardId) : null;
+  if (boardId && !board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
+  const hasText = (text) => typeof text === 'string' && !!text.trim();
+  const additions = [];
+  const add = (id, label, text) => {
+    if (hasText(text)) additions.push({ id, label, text });
+  };
+  add('universe-style', `Universe style · ${universe?.name || ''}`, universe ? universeAestheticLine(universe) : '');
+  add('universe-style-notes', 'Universe style notes', universe?.styleNotes);
+  for (const [index, ref] of (universe?.styleReferences || []).entries()) {
+    add(`universe-style-reference-${index}`, ref.title || 'Universe style reference', ref.prompt);
+  }
+  add('mood-board-style', `Mood board style · ${board?.name || ''}`, board?.style?.prompt);
+  const authored = options.visualDirection || {};
+  const hasSourceStyle = additions.length > 0;
+  const fields = { style: 'Overall style / medium', camera: 'Camera', lighting: 'Lighting', environment: 'Environment' };
+  for (const [key, label] of Object.entries(fields)) add(`look-${key}`, label, authored[key]);
+  const missing = Object.entries(fields).filter(([key]) => !hasText(authored[key]) && !(key === 'style' && hasSourceStyle)).map(([, label]) => label);
+  return {
+    additions,
+    styleLine: additions.map((a) => `${a.label}: ${a.text}`).join('\n\n'),
+    negatives: [...universeVisualStyleTokens(universe).avoid, board?.style?.negativePrompt].filter(hasText).join(', '),
+    status: {
+      ready: missing.length === 0,
+      missing,
+      universe: universe ? { id: universe.id, name: universe.name } : null,
+      moodBoard: board ? { id: board.id, name: board.name, hasStyle: hasText(board.style?.prompt) } : null,
+    },
+  };
+}
+
 async function buildCatalogSheet(target, options) {
   const { ingredient, payload, variant, universe } = target;
   const entry = { ...payload, name: ingredient.name };
-  // The builders take a universe object; an empty one means "no universe" and
-  // the template carries the variant's default style line instead.
-  const built = variant.build(universe || {}, entry);
+  // Other sheets retain their default style; looks require explicit direction.
+  const direction = variant.id === CATALOG_LOOK_VARIANT_ID ? await lookDirection(universe, options) : null;
+  const built = variant.build(universe || {}, entry, direction);
+  if (direction?.negatives) built.negativePrompt += `, ${direction.negatives}`;
   const universeStyle = universe ? universeAestheticLine(universe) : '';
-  return buildSheetRenderParams({
+  const result = await buildSheetRenderParams({
     built,
     options,
-    styleLine: universeStyle || variant.defaultStyle,
+    styleLine: direction ? '' : universeStyle || variant.defaultStyle,
     styleChip: universeStyle
       ? { id: 'universe-style', label: 'Universe style' }
       : { id: 'sheet-default-style', label: 'Default sheet style' },
     negativesLabel: variant.negativesLabel,
     renderPin: universe ? recordRenderPin(universe) : {},
   });
+  if (direction) result.params.promptAdditions = [...direction.additions, ...(result.params.promptAdditions || [])];
+  return { ...result, visualDirection: direction?.status };
 }
 
 /** What a catalog sheet render would send, built by the render's own code. */
@@ -227,11 +274,12 @@ export async function previewCatalogSheet(id, options = {}) {
       ...options, variant: target.variant.id,
     });
   }
-  const { params } = await buildCatalogSheet(target, options);
+  const { params, visualDirection } = await buildCatalogSheet(target, options);
   return {
     sentPrompt: params.prompt,
     ...(params.negativePrompt ? { sentNegativePrompt: params.negativePrompt } : {}),
     promptAdditions: params.promptAdditions || [],
+    ...(visualDirection ? { visualDirection } : {}),
   };
 }
 
@@ -244,7 +292,10 @@ export async function renderCatalogSheet(id, options = {}) {
     const result = await renderCharacterReferenceSheet(universeId, entryId, { ...options, variant: target.variant.id });
     return { ...result, delegatedTo: 'universe', universeId, entryId };
   }
-  const { params, modelId, activeMode } = await buildCatalogSheet(target, options);
+  const { params, modelId, activeMode, visualDirection } = await buildCatalogSheet(target, options);
+  if (visualDirection && !visualDirection.ready) {
+    throw new ServerError(`Define the look’s visual direction before rendering: ${visualDirection.missing.join(', ')}`, { status: 400, code: 'LOOK_VISUAL_DIRECTION_REQUIRED' });
+  }
   const role = target.variant.role || `sheet:${target.variant.id}`;
   params.catalogAttach = { ingredientId: id, kind: 'reference', role };
   const queued = await enqueueJob({ kind: 'image', params });
