@@ -48,7 +48,7 @@ A `409` (`CHALLENGE_EXHAUSTED` = the one challenge is spent, or `CHALLENGE_BUDGE
 
 **Pre-PR rule:** keep reviewer fixes committed locally. Do NOT push or open a PR/MR here; the outer workflow publishes after the local review phase completes.
 
-Drive each spawnable CLI reviewer EXACTLY as the slashdo local-agent review loop specifies — use its per-CLI invocation and review-only prompt contract verbatim; verify isolation flags with the installed CLI's help before supplying review data. Do not use throwaway provider prompts or invent unsupported flags. Run the reviewer once per round, capture its findings, and (unless reviewer-applies is set) apply the fixes yourself.
+Follow slashdo's per-CLI invocation and review-only prompt contract verbatim; verify isolation flags with the installed CLI's help before supplying review data. Do not invent flags or provider prompts. Run once per round, capture findings, and apply fixes yourself unless reviewer-applies is set.
 
 ## Local agent review loop
 
