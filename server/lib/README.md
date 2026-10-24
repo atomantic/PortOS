@@ -983,3 +983,15 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `runwaySpecialVideoModels.js` | Aleph 2 video-edit and Act-Two character-performance capabilities, schema compatibility and request validation. |
 
 | `codeReviewBatches.js` | File-boundary code-review batching with byte-exact diff hashes, candidate revision, reviewed/remaining file identifiers, bounded calls and one shared wall-clock budget. Preserves validated findings when coverage is incomplete and classifies explicit context-capacity refusals without retaining vendor event streams. |
+
+| `realityStarterV1.js` | Frozen version 1 of the text-only photographic Reality starter; migration-safe. |
+| `universeStarters.js` | Latest shipped universe starter text patches for explicit restoration. |
+
+Reality starter updates: add a new frozen `realityStarterV<N>.js` text config and
+point `universeStarters.js` at it. Do not change a version imported by an applied
+migration. Universe Builder's **Restore latest starter** action uses that current
+pointer; it replaces only starter idea, logline, premise, style notes and the
+positive/negative influence lists. It preserves canon, media and local settings.
+Automatic migration 440 fills only a blank, unlocked Reality; customized or
+deleted records remain untouched. Future automatic upgrades need their own
+migration with explicit recognition of the outgoing shipped defaults.

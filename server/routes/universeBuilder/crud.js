@@ -9,7 +9,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../../lib/errorHandler.js';
+import { universeStarterPatch } from '../../lib/universeStarters.js';
+import { ServerError, asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest, llmSchema, isPaginationRequested, paginateArray } from '../../lib/validation.js';
 import { recordRenderPinFields } from '../../lib/sharedSchemas.js';
 import { pruneStaleReferenceSheets } from '../../lib/storyBible.js';
@@ -143,6 +144,20 @@ router.get('/names', asyncHandler(async (_req, res) => {
 
 router.get('/summaries', asyncHandler(async (_req, res) => {
   res.json(await svc.listUniverseSummaries());
+}));
+
+// Revision check runs inside the record queue so a concurrent edit is preserved.
+router.post('/:id/restore-starter', asyncHandler(async (req, res) => {
+  const patch = universeStarterPatch(req.params.id);
+  if (!patch) throw new ServerError('No shipped starter exists for this universe', { status: 404 });
+  const { expectedUpdatedAt } = validateRequest(z.object({ expectedUpdatedAt: z.string().datetime() }), req.body ?? {});
+  const restored = await svc.updateUniverse(req.params.id, (latest) => {
+    if (latest.updatedAt !== expectedUpdatedAt) {
+      throw new ServerError('Universe changed. Reload it before restoring the starter.', { status: 409 });
+    }
+    return patch;
+  }, { touchesCanon: false }).catch(err => { throw mapServiceError(err); });
+  res.json(restored);
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {

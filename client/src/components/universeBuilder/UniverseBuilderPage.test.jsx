@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiMocks = vi.hoisted(() => ({
   exportUniverseMarkdown: vi.fn(),
+  getUniverse: vi.fn(),
+  restoreUniverseStarter: vi.fn(),
   importUniverseMarkdown: vi.fn(),
   waitForUniverseWrites: vi.fn(),
 }));
@@ -33,7 +35,6 @@ vi.mock('../../hooks/useUniverseTabs', () => ({ default: hookMocks.useUniverseTa
 vi.mock('../../hooks/useUniverseBucketActions', () => ({ default: hookMocks.useUniverseBucketActions }));
 vi.mock('../../hooks/useUniverseNav', () => ({ useUniverseNav: hookMocks.useUniverseNav }));
 vi.mock('../EntityCombobox', () => ({ default: () => null }));
-vi.mock('../ui/InlineConfirmRow', () => ({ default: () => null }));
 vi.mock('../media/MediaPreview', () => ({ default: () => null }));
 vi.mock('../sharing/OriginBadge', () => ({ default: () => null }));
 vi.mock('../sharing/ShareToButton', () => ({ default: () => null }));
@@ -298,5 +299,78 @@ describe('UniverseBuilderPage Markdown import', () => {
     ));
     expect(apiMocks.importUniverseMarkdown).not.toHaveBeenCalled();
     expect(apiMocks.waitForUniverseWrites).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Reality starter restore', () => {
+  const mount = (id = 'universe-reality') => render(
+    <MemoryRouter initialEntries={[`/universes/${id}`]}>
+      <NavigationProbe />
+      <Routes><Route path="/universes/:universeId" element={<UniverseBuilderPage />} /></Routes>
+    </MemoryRouter>,
+  );
+  const confirm = () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Restore latest starter' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore starter' }));
+  };
+
+  it('offers restore only for shipped Reality and requires confirmation', () => {
+    const view = mount('custom');
+    expect(screen.queryByRole('button', { name: 'Restore latest starter' })).not.toBeInTheDocument();
+    view.unmount();
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore latest starter' }));
+    expect(screen.getByText(/Characters, places, objects and images are kept/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(apiMocks.restoreUniverseStarter).not.toHaveBeenCalled();
+  });
+
+  it('saves dirty edits before restoring and adopts the returned record', async () => {
+    const state = hookMocks.useUniverseDraft({ selectedId: 'universe-reality' });
+    hookMocks.useUniverseDraft.mockReturnValue(state);
+    const result = { ...state.draft, premise: 'Latest shipped text' };
+    apiMocks.getUniverse.mockResolvedValue({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    apiMocks.restoreUniverseStarter.mockResolvedValue(result);
+    mount();
+    confirm();
+    await waitFor(() => expect(state.setDraft).toHaveBeenCalledWith(expect.objectContaining({ id: result.id, premise: result.premise })));
+    expect(state.flushDraftIfDirty).toHaveBeenCalled();
+    expect(apiMocks.restoreUniverseStarter).toHaveBeenCalledWith('universe-reality', '2026-01-01T00:00:00.000Z', { silent: true });
+    expect(state.markDraftSaved).toHaveBeenCalledWith(state.setDraft.mock.calls[0][0]);
+  });
+
+  it('stops when dirty edits cannot save', async () => {
+    const state = hookMocks.useUniverseDraft({ selectedId: 'universe-reality' });
+    state.flushDraftIfDirty.mockResolvedValue(false);
+    hookMocks.useUniverseDraft.mockReturnValue(state);
+    mount();
+    confirm();
+    await waitFor(() => expect(state.flushDraftIfDirty).toHaveBeenCalled());
+    expect(apiMocks.restoreUniverseStarter).not.toHaveBeenCalled();
+  });
+
+  it('keeps the draft and surfaces a concurrent-edit refusal', async () => {
+    const state = hookMocks.useUniverseDraft({ selectedId: 'universe-reality' });
+    hookMocks.useUniverseDraft.mockReturnValue(state);
+    apiMocks.getUniverse.mockResolvedValue({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    apiMocks.restoreUniverseStarter.mockRejectedValue(new Error('Universe changed. Reload it.'));
+    mount();
+    confirm();
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Universe changed. Reload it.'));
+    expect(state.setDraft).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a different universe after navigation', async () => {
+    let resolveRestore;
+    apiMocks.getUniverse.mockResolvedValue({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    apiMocks.restoreUniverseStarter.mockImplementation(() => new Promise(resolve => { resolveRestore = resolve; }));
+    mount();
+    confirm();
+    await waitFor(() => expect(resolveRestore).toBeTypeOf('function'));
+    act(() => navigateRef.current('/universes/custom'));
+    const state = hookMocks.useUniverseDraft.mock.results.at(-1).value;
+    await act(async () => resolveRestore(makeDraft('universe-reality')));
+    expect(state.setDraft).not.toHaveBeenCalled();
   });
 });

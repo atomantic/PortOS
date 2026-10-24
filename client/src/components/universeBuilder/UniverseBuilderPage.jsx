@@ -18,6 +18,8 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import toast from '../ui/Toast';
 import {
   exportUniverseMarkdown,
+  getUniverse,
+  restoreUniverseStarter,
   importUniverseMarkdown,
   waitForUniverseWrites,
   WORLD_CATEGORY_KEY_MAX,
@@ -116,6 +118,9 @@ export default function UniverseBuilder() {
   const selectedId = params.universeId && params.universeId !== 'new' ? params.universeId : null;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
+  const [restoringStarter, setRestoringStarter] = useState(false);
+  const [confirmStarter, setConfirmStarter] = useState(false);
+  const restoreBusyRef = useRef(false);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [waitingForWrites, setWaitingForWrites] = useState(false);
@@ -286,6 +291,37 @@ export default function UniverseBuilder() {
     downloadBlob(markdown, filename, 'text/markdown');
     toast.success(`Downloaded ${filename}`);
   }, [draft.name, draftRef, exporting, flushDraftIfDirty, saving, selectedId]);
+
+  const handleRestoreStarter = async () => {
+    if (restoreBusyRef.current || saving || importing || selectedId !== 'universe-reality') return;
+    const isCurrent = () => mountedRef.current && selectedIdRef.current === selectedId
+      && draftRef.current?.id === selectedId;
+    if (!isCurrent()) return;
+    restoreBusyRef.current = true;
+    setRestoringStarter(true);
+    setConfirmStarter(false);
+    try {
+      if (!await waitForUniverseWrites(selectedId)) throw new Error('Changes are still saving. Try again in a moment.');
+      if (!isCurrent() || !await flushDraftIfDirty() || !isCurrent()) return;
+      if (!await waitForUniverseWrites(selectedId)) throw new Error('Changes are still saving. Try again in a moment.');
+      if (!isCurrent()) return;
+      const latest = await getUniverse(selectedId, { silent: true });
+      if (!isCurrent()) return;
+      const result = await restoreUniverseStarter(selectedId, latest.updatedAt, { silent: true });
+      if (!isCurrent()) return;
+      const restored = { ...result, categories: ensureDraftCategories(result.categories) };
+      draftRef.current = restored;
+      setDraft(restored);
+      markDraftSaved(restored);
+      setWorlds(previous => [result, ...previous.filter(world => world.id !== result.id)]);
+      toast.success('Latest Reality starter restored');
+    } catch (error) {
+      if (isCurrent()) toast.error(error?.message || 'Failed to restore starter');
+    } finally {
+      restoreBusyRef.current = false;
+      if (mountedRef.current) setRestoringStarter(false);
+    }
+  };
 
   const handleImportMarkdown = useCallback(async (event) => {
     const file = event.currentTarget.files?.[0];
@@ -473,8 +509,9 @@ export default function UniverseBuilder() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <section className="flex-1 flex flex-col gap-3 p-4 min-h-0 overflow-y-auto">
+    <div className="flex flex-col h-full" aria-busy={restoringStarter}>
+      {restoringStarter && <p role="status">Restoring latest Reality starter…</p>}
+      <section inert={restoringStarter || undefined} className="flex-1 flex flex-col gap-3 p-4 min-h-0 overflow-y-auto">
         {/* Back to the universe index (list/table at /universes). */}
         <Link
           to="/universes"
@@ -532,6 +569,22 @@ export default function UniverseBuilder() {
                 {exporting ? <Loader2 size={16} className="animate-spin" /> : <BookOpen size={16} />}
                 {waitingForWrites ? 'Saving changes…' : exporting ? 'Exporting…' : 'Export .md'}
               </button>
+              {selectedId === 'universe-reality' && (confirmStarter ? (
+                <InlineConfirmRow
+                  question="Replace starter idea, logline, premise, style notes and positive/negative style with the latest shipped text? Characters, places, objects and images are kept."
+                  confirmText="Restore starter"
+                  tone="warning"
+                  autoFocus
+                  onConfirm={handleRestoreStarter}
+                  onCancel={() => setConfirmStarter(false)}
+                />
+              ) : (
+                <button
+                  onClick={() => setConfirmStarter(true)}
+                  disabled={saving || importing || exporting || loading || draft.id !== selectedId}
+                  className="px-3 py-2 rounded min-h-[40px] border border-port-border hover:bg-port-card-hover disabled:opacity-50"
+                >Restore latest starter</button>
+              ))}
               <ShareToButton kind="universe" ids={[selectedId]} label="Share" />
               <SyncToPeerButton recordKind="universe" recordId={selectedId} label="Sync" />
               {draft.origin ? <OriginBadge origin={draft.origin} /> : null}
