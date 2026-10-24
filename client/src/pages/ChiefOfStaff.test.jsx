@@ -1374,6 +1374,7 @@ describe('ChiefOfStaff active-agent snapshot readiness', () => {
     expect(screen.getAllByText('Example system delivery')).toHaveLength(1);
     expect(screen.queryByText(/No active agents/)).toBeNull();
     expect(within(section).queryByRole('button', { name: /Resume|Remove agent/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Clear all completed agents' })).toBeDisabled();
 
     await act(async () => socketHandler('cos:agent:updated')(archived));
     expect(screen.getByRole('region', { name: 'Finalizing delivery' })).toBeInTheDocument();
@@ -1385,6 +1386,7 @@ describe('ChiefOfStaff active-agent snapshot readiness', () => {
     });
     expect(screen.queryByRole('region', { name: 'Finalizing delivery' })).toBeNull();
     expect(screen.getByText('Example system delivery')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear all completed agents' })).toBeEnabled();
   });
 
   it.each([true, false])('keeps unknown CoS status out of the loaded Agents UI until running=%s arrives', async (running) => {
