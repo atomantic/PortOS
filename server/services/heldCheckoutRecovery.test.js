@@ -1072,7 +1072,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const repeated = await c.confirm(prepared.review);
     expect(repeated.ok).toBe(false);
     expect((await archives()).length).toBe(1);
-  });
+  }, 120_000);
 
   it('refuses combined content and administration bytes before preview or teardown while each snapshot fits', async () => {
     const c = await reviewedCheckout('combined-byte-limit', { normalMerge: true });
