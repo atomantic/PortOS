@@ -14,6 +14,7 @@ import { findFfmpeg, findFfprobe, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import {
   FABLELOOM_EXPORT_LIMITS, inspectFableLoomExportCharacters,
 } from '../../lib/fableLoomExport.js';
+import { FABLELOOM_STATIC_PLAYER_FILES } from './staticPlayerFiles.js';
 import { execFileSync } from '../../lib/childProcess.js';
 
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), {
@@ -477,7 +478,7 @@ describe('portable FableLoom export boundary', () => {
   });
 
   it('refuses unsupported and malformed options before creating jobs', async () => {
-    for (const input of [{ includePlayer: true },
+    for (const input of [
       { mediaProfile: 'webm' }, { includeWebm: true }, { includeWebm: 'yes' }, { mediaProfile: { width: 100 } }, { allowDraft: 'yes' },
       { episodeIds: [] }, { episodeIds: ['episode-one', 'episode-one'] }, { destination: sourcePath }]) {
       const response = await request(app()).post('/api/fableloom/example-loom/export').send(input);
@@ -488,6 +489,28 @@ describe('portable FableLoom export boundary', () => {
     expect(voiceOnly.body.code).toBe('EXPORT_VOICE_REQUIRES_CHARACTERS');
     expect(listVoiceProfiles).not.toHaveBeenCalled();
     await expect(startFableLoomExport(loom.id, { episodeIds: ['unknown-episode'] })).rejects.toMatchObject({ code: 'EXPORT_EPISODES_INVALID' });
+  });
+
+  videoIt('adds the reference player only when requested and keeps that directory free of private data', async () => {
+    const plain = await archive(await begin({ episodeIds: ['episode-one'] }));
+    expect([...plain.files.keys()].some((name) => name.startsWith('player/'))).toBe(false);
+    expect(plain.files.get('README.md').toString('utf8')).toContain('does not include the reference player');
+    const first = await archive(await begin({ episodeIds: ['episode-one'], includePlayer: true }));
+    const second = await archive(await begin({ episodeIds: ['episode-one'], includePlayer: true }));
+    expect(second.bytes.equals(first.bytes)).toBe(true);
+    for (const name of FABLELOOM_STATIC_PLAYER_FILES) expect(first.files.has(`player/${name}`)).toBe(true);
+    const playerText = [...first.files].filter(([name]) => name.startsWith('player/'))
+      .map(([, bytes]) => bytes.toString('utf8')).join('\n');
+    expect(playerText).not.toMatch(/https?:\/\//i);
+    expect(playerText.toLowerCase().replaceAll('portos-allow-hidden-content', '')).not.toContain('portos');
+    expect(playerText).not.toContain(privateMarker);
+    expect(playerText.toLowerCase()).not.toContain('bearer');
+    expect(first.files.get('player/index.html').toString('utf8')).not.toContain('contract-example');
+    expect(first.files.get('README.md').toString('utf8')).toContain('player/index.html is a dependency-free');
+    for (const bytes of first.files.values()) {
+      expect(bytes.includes(Buffer.from(privateMarker))).toBe(false);
+      expect(bytes.includes(Buffer.from(sourcePath))).toBe(false);
+    }
   });
 
   it('limits the cast to the protagonist and reachable staged characters', () => {

@@ -175,11 +175,18 @@ function reviewedIncarnation(input, policies) {
 function completedCleanupForRetirement(policy, input) {
   const agent = policy.agent;
   const result = agent.result;
-  return result?.cleanupPending === true && (result.executionSuccess === true || result.cleanupDeliveryVerified === true) && result.validationPassed !== false
+  const metadata = agent.metadata || {};
+  const legacyCapture = metadata.completionCleanup === undefined && metadata.checkoutSeeds === undefined
+    && metadata.checkoutCapture === undefined && (metadata.completedCheckouts === undefined
+      || (Array.isArray(metadata.completedCheckouts) && metadata.completedCheckouts.every(row => row?.version === 1)));
+  const integratedLegacyCleanup = legacyCapture && result?.executionSuccess === true
+    && input.verifiedPrHead === input.tip && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.integratedCleanupHead || '');
+  return (result?.cleanupPending === true || integratedLegacyCleanup)
+    && (result.executionSuccess === true || result.cleanupDeliveryVerified === true) && result.validationPassed !== false
     && result.taskOutcome?.recovery?.mode === 'cleanup' && input.verifiedPrHead === input.tip && !!input.tip
-    && agent.metadata?.completedCheckouts?.some(row => (row.version === 1 || (row.version === 2 && completedCheckoutReceiptValid(agent, row))) && row.agentId === agent.id
+    && (integratedLegacyCleanup || agent.metadata?.completedCheckouts?.some(row => (row.version === 1 || (row.version === 2 && completedCheckoutReceiptValid(agent, row))) && row.agentId === agent.id
       && row.repoPath === input.repoPath && row.branch === input.branch && row.path === input.checkoutPath
-      && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir);
+      && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir));
 }
 
 /** Operator review settles successful completed review obligations. PR-bound
@@ -201,7 +208,7 @@ export function reviewedRetirementPolicy(input) {
     || (incarnation && p.tip && p.tip !== input.tip))) {
     return { reason: 'retirement-policy-not-legacy-completed' };
   }
-  return { reason: null, policies: policies.map(p => ({
+  return { reason: null, ...(input.integratedCleanupHead && { integratedCleanupHead: input.integratedCleanupHead }), policies: policies.map(p => ({
     id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
     completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
     branch: p.branch, completion: p.completion,

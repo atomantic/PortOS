@@ -22,11 +22,12 @@ authority, including valid delegated agent sessions. Jobs cannot be read or
 downloaded through a different loom. Instance authentication retains its existing
 optional policy; no export endpoint is always-public.
 
-`includePlayer:true`, and `includeWebm:true` on the source profile, are refused
-(`EXPORT_OPTION_UNSUPPORTED`). `includeVoice:true` without
+`includePlayer:true` adds the dependency-free `player/` reference client
+described in the runtime contract. `includeVoice:true` without
 `includeCharacters:true` is refused (`EXPORT_VOICE_REQUIRES_CHARACTERS`).
 Character files and voice reference audio are explicit opt-ins, off by default.
-Unknown media profiles are rejected at validation.
+`includeWebm:true` on the source profile is refused
+(`EXPORT_OPTION_UNSUPPORTED`). Unknown media profiles are rejected at validation.
 `DELETE /api/fableloom/:id/export/:jobId` cancels a queued/running export and
 waits for worker and encoder shutdown before returning its failed status
 (`EXPORT_CANCELLED`). Completed jobs remain completed.
@@ -158,6 +159,9 @@ accepted as completed encodes. Source media remains untouched.
 - `runtime-v1.md` and `README.md`: the versioned playback and hosting contracts.
   The README tells the host that it owns TTS and that the package grants no
   PortOS access.
+- `player/` when `includePlayer` is set: static HTML, CSS and scripts that read
+  `manifest.json` and run runtime v1 in the browser. That directory has no
+  instance data, credential, or authoring-service address.
 
 All JSON object keys and ZIP member order are stable. ZIP timestamps are fixed.
 The same source bytes and authored snapshot, with the same PortOS/media-tool

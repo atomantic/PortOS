@@ -1,6 +1,12 @@
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-finalization-output-') }));
 afterAll(cleanupTempDataRoots);
+const mergedTarget = vi.hoisted(() => ({
+  getOriginInfo: vi.fn(),
+  probeChangeRequestState: vi.fn(),
+}));
+vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: mergedTarget.getOriginInfo }));
+vi.mock('./prProbe.js', () => ({ probeChangeRequestState: mergedTarget.probeChangeRequestState }));
 const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
 vi.mock('./claimDisposition.js', () => claimVerifier);
 vi.mock('../lib/fileUtils.js', async importOriginal => {
@@ -403,6 +409,61 @@ describe('recovery output-hook dispatch (#3182)', () => {
     }
   });
 
+  const reviewTask = () => ({ id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: {
+    reviewLoopFollowUp: true, reviewLoopPRUrl: 'https://github.com/atomantic/PortOS/pull/123',
+    reviewLoopPRBranch: 'fix/example', failureCount: 2,
+  } });
+
+  it.each(['normal', 'restart'])('completes a verified merged review target without retrying during %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    mergedTarget.getOriginInfo.mockResolvedValue({ host: 'github.com', fullName: 'atomantic/PortOS' });
+    mergedTarget.probeChangeRequestState.mockResolvedValue({ readable: true, prState: 'MERGED' });
+    const task = reviewTask();
+    const reported = { status: mode === 'normal' ? 'blocked' : 'incomplete', reason: 'The target is merged; corrections are tracked separately and the checkout is preserved.' };
+    persistedAgent.metadata.workspacePath = '/example/repo';
+    persistedAgent.metadata.taskOutcome = reported;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    const result = mode === 'normal'
+      ? await finalizeAgent({ agentId: 'agent-example', runId: 'run-example', task, success: true,
+        exitCode: 0, duration: 1000, workspacePath: '/example/repo', outputBuffer: '',
+        finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) })
+      : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 1000 });
+    expect(mergedTarget.probeChangeRequestState).toHaveBeenCalledWith('/example/repo', { number: 123, branch: 'fix/example' });
+    expect(result).toMatchObject({ success: true, taskOutcome: { status: 'no-action-needed' } });
+    if (mode === 'normal') expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed',
+      metadata: expect.objectContaining({ failureCount: 2, taskOutcome: expect.objectContaining({ status: 'no-action-needed' }) }) }), 'internal');
+    expect(completeAgent).toHaveBeenCalledWith('agent-example', expect.objectContaining({ success: true, validationPassed: true,
+      taskOutcome: expect.objectContaining({ status: 'no-action-needed' }) }));
+    expect(persistedAgent.metadata).toMatchObject({ taskOutcomeSource: 'forge-verification', reportedTaskOutcome: reported });
+    expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    if (mode === 'normal') expect(processAgentCompletion).toHaveBeenCalledWith('agent-example', task, true, '');
+    else expect(result.deliveryHeld).toBe(false);
+  });
+
+  it.each([
+    { name: 'an open target', state: { readable: true, prState: 'OPEN' } },
+    { name: 'a closed unmerged target', state: { readable: true, prState: 'CLOSED' } },
+    { name: 'an unreadable target', state: { readable: false, prState: null } },
+    { name: 'a different repository', meta: { reviewLoopPRUrl: 'https://github.com/another/project/pull/123' } },
+    { name: 'a leave-open policy', meta: { reviewLoopLeaveOpen: true } },
+    { name: 'an ordinary task', meta: { reviewLoopFollowUp: false } },
+    { name: 'a failed process', execution: { success: false, exitCode: 1 } },
+    { name: 'a provider safety refusal', execution: { executionInterruption: { category: 'content-refusal' } } },
+  ])('does not replace a blocked outcome for $name', async ({ state, meta, execution }) => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    mergedTarget.getOriginInfo.mockResolvedValue({ host: 'github.com', fullName: 'atomantic/PortOS' });
+    mergedTarget.probeChangeRequestState.mockResolvedValue(state || { readable: true, prState: 'MERGED' });
+    const task = reviewTask();
+    Object.assign(task.metadata, meta);
+    const reported = { status: 'blocked', reason: 'An unmet prerequisite remains.' };
+    const result = await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0,
+      duration: 1000, workspacePath: '/example/repo', outputBuffer: '', ...execution,
+      finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+    expect(result).toMatchObject({ success: false, taskOutcome: reported });
+    expect(updateTask).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed' }), 'internal');
+  });
+
   it('retains explicit approval with choices instead of retrying', async () => {
     const taskOutcome = { status: 'blocked', reason: 'Continuing would exceed the authorized budget.',
       recovery: { mode: 'approval', options: ['Increase the budget and retry.', 'Keep the work stopped.'] } };
@@ -414,10 +475,11 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it('hands cleanup-only work to completion recovery without another agent or success claim', async () => {
+  it.each(['worktree', 'pinned-claim'])('hands %s cleanup-only work to completion recovery without another agent or success claim', async mode => {
     const taskOutcome = { status: 'incomplete', reason: 'Verified delivery; owner still holds checkout.', recovery: { mode: 'cleanup' } };
     isProgrammaticIoTaskType.mockReturnValue(false);
-    persistedAgent.metadata.isWorktree = true;
+    persistedAgent.metadata = mode === 'worktree' ? { isWorktree: true }
+      : { isWorktree: false, claimPicksOwnBranch: false, claimBranch: 'claim/issue-42', claimBranches: ['claim/issue-42'] };
     try {
       await finalizeAgent({ agentId: 'agent-example', task: { id: TASK.id, taskType: 'user', metadata: {} },
         success: true, exitCode: 0, finalSummary: JSON.stringify({ summary: 'Cleanup handed off.', taskOutcome }) });
@@ -428,20 +490,26 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
-  it('retains an already persisted cleanup handoff when its run is recovered after a crash', async () => {
+  it.each(['saved', 'pinned-claim'])('retains a %s cleanup handoff when its run is recovered after a crash', async mode => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const workspacePath = await mkdtemp(join(tmpdir(), 'cleanup-restart-'));
+    isProgrammaticIoTaskType.mockReturnValue(false);
     const taskOutcome = { status: 'incomplete', reason: 'Only preservation remains.', recovery: { mode: 'cleanup' } };
-    const task = { ...TASK, metadata: { ...TASK.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } };
-    persistedAgent.metadata = { workspacePath, isWorktree: true };
+    const task = { ...TASK, metadata: { ...TASK.metadata, ...(mode === 'saved'
+      ? { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' } : {}) } };
+    persistedAgent.metadata = { workspacePath, ...(mode === 'saved' ? { isWorktree: true }
+      : { isWorktree: false, claimPicksOwnBranch: false, claimBranch: 'claim/issue-42', claimBranches: ['claim/issue-42'] }) };
     try {
       await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ taskOutcome }));
-      await retireDeadAgent({ agent: persistedAgent, task, success: false, exitCode: 1, duration: 1000 });
+      await retireDeadAgent({ agent: persistedAgent, task, success: mode === 'pinned-claim', exitCode: mode === 'pinned-claim' ? 0 : 1, duration: 1000 });
       expect(updateTask).toHaveBeenLastCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress',
         metadata: expect.objectContaining({ deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-example' }) }), TASK.taskType);
       expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({ success: false, cleanupPending: true }));
-    } finally { await rm(workspacePath, { recursive: true, force: true }); }
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      await rm(workspacePath, { recursive: true, force: true });
+    }
   });
 
   it('stops repeated delivery recovery at the existing budget with concrete choices', async () => {

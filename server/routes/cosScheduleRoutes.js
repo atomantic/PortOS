@@ -302,7 +302,7 @@ router.post('/schedule/branch-reconcile/checkouts/review', asyncHandler(async (r
   const { prepareInventoriedCheckoutRetirement } = await import('../services/heldCheckoutRecovery.js');
   const result = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl });
   if (!result.ok) throw new ServerError(`Checkout review refused: ${result.reason}`, {
-    status: 409, code: 'CHECKOUT_REVIEW_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }) },
+    status: 409, code: 'CHECKOUT_REVIEW_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
   });
   res.json(result);
 }));
@@ -315,7 +315,7 @@ router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (r
   const result = await retireInventoriedCheckout({ appId, release, review });
   if (!result.ok) {
     throw new ServerError(`Checkout kept: ${result.reason}${result.detail ? ` (${result.detail})` : ''}`, {
-      status: result.reason === 'app-not-found' ? 404 : 409, code: 'CHECKOUT_RETIREMENT_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }) },
+      status: result.reason === 'app-not-found' ? 404 : 409, code: 'CHECKOUT_RETIREMENT_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
     });
   }
   res.json(result);

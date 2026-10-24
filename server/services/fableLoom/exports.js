@@ -23,6 +23,7 @@ import { getLoom } from './records.js';
 import { checkExportCancelled, readFableLoomExportSource } from './exportMedia.js';
 import { readFableLoomVoiceReference } from './exportVoice.js';
 import { createFableLoomMediaCache } from './exportMediaCache.js';
+import { FABLELOOM_STATIC_PLAYER_FILES } from './staticPlayerFiles.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const active = new Map();
@@ -176,6 +177,12 @@ function createMediaStore(maxBytes = FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
 }
 
 function packageReadme(options) {
+  const playerNote = options.includePlayer
+    ? `player/index.html is a dependency-free reference player for this package.
+Serve the package directory and open that page. It reads manifest.json, plays a
+cut through to its next scene, and holds a decision until a choice.`
+    : `This package does not include the reference player. Export again with
+includePlayer set to add player/index.html.`;
   const characters = options.includeCharacters ? `
 characters/<id>.json is included for each canonical cast member: the loom
 protagonist, when set, and characters staged on reachable scenes. Each file
@@ -217,9 +224,21 @@ The source profile remuxes H.264/AAC. Web profiles resize without upscaling,
 encode H.264/AAC with bitrate caps, normalize the authored audio mix and include
 poster PNGs. Explicitly requested WebM alternatives use VP9/Opus. Encoding
 profiles, encoder identities and byte counts are recorded in provenance.json.
-The reference player is not in this package. Your host owns free-text
-resolution, TTS and transport, following runtime-v1.md.
+${playerNote}
+Your host owns free-text resolution, TTS and transport, following runtime-v1.md;
+no PortOS URL or credential is needed.
 `;
+}
+
+async function playerEntries() {
+  const entries = [];
+  for (const name of FABLELOOM_STATIC_PLAYER_FILES) {
+    entries.push({
+      name: `player/${name}`,
+      data: await readFile(new URL(`./static-player/${name}`, import.meta.url)),
+    });
+  }
+  return entries;
 }
 
 // Voice profiles live in Postgres. Keep that module off the default export path.
@@ -416,6 +435,7 @@ async function build(job, snapshot, episodes, history, universe, signal) {
     })) : []),
     { name: 'runtime-v1.md', data: await readFile(new URL('../../../docs/features/fableloom-runtime-v1.md', import.meta.url)) },
     ...[...media.entries()].map(([name, data]) => ({ name, data })),
+    ...(job.options.includePlayer === true ? await playerEntries() : []),
   ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const totalBytes = entries.reduce((n, e) => n + Buffer.byteLength(e.data), 0);
   if (totalBytes > FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
@@ -459,8 +479,8 @@ async function run(job, context, permit) {
 
 export async function startFableLoomExport(loomId, input = {}) {
   const options = exportOptionsSchema.parse(input);
-  if (options.includePlayer || (options.mediaProfile === 'source' && options.includeWebm)) {
-    throw error('EXPORT_OPTION_UNSUPPORTED', 'The reference player is unavailable. WebM requires a web media profile.', 400);
+  if (options.mediaProfile === 'source' && options.includeWebm) {
+    throw error('EXPORT_OPTION_UNSUPPORTED', 'WebM requires a web media profile.', 400);
   }
   if (options.includeVoice && !options.includeCharacters) {
     throw error('EXPORT_VOICE_REQUIRES_CHARACTERS', 'Voice export requires character opt-in (includeCharacters).', 400);

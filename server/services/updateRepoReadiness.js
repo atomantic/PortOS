@@ -11,13 +11,15 @@
  *
  * So the auto-updater refuses to start until the checkout is ON the default
  * branch and CLEAN, and this module is what decides that — plus what can be put
- * right mechanically. Two remedies are safe enough to run unattended, because
- * neither can destroy work:
+ * right mechanically. These remedies are safe enough to run unattended, because
+ * each preserves local work:
  *
  *   - checking out the default branch from a CLEAN feature branch (the commits
  *     stay on the branch ref; nothing is discarded), and
  *   - restoring modified auto-generated lockfiles (`npm install` rewrites them
- *     as a side effect, and the update reinstalls anyway).
+ *     as a side effect, and the update reinstalls anyway), and
+ *   - checking out pinned submodule commits when their current checkouts are
+ *     clean ancestors of those pins (including recursively stale children).
  *
  * Everything else — uncommitted work, an unpushed commit, an interrupted
  * rebase/merge, conflict markers — is judgement no script should make on a
@@ -33,6 +35,7 @@ import * as gitService from './git.js';
 import { countAheadBehind, detectOperationInProgress } from './repoSync.js';
 import { classifyWorktreeDirt } from './worktreeManager.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { inspectPinnedSubmoduleDrift } from './gitPinnedSubmodules.js';
 
 /** First line of the repair task — stable so `addTask`'s dedup collapses reruns. */
 export const REPO_REPAIR_TASK_DESCRIPTION = 'Restore the PortOS checkout to a clean default branch so automatic updates can run';
@@ -57,6 +60,7 @@ const REASON_LABELS = {
 const REPAIRABLE_LABELS = {
   'restore-lockfiles': 'auto-generated lockfiles need restoring',
   'checkout-default': 'the checkout needs switching back to the default branch',
+  'update-submodules': 'submodule checkouts need updating to their pinned commits',
 };
 
 const describe = (code) => REASON_LABELS[code] || REPAIRABLE_LABELS[code] || code;
@@ -99,7 +103,7 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {})
     return {
       repoPath: dir,
       branch: null, defaultBranch: null, interrupted: null, ahead: null, behind: null,
-      lockfilePaths: [],
+      lockfilePaths: [], submodulePaths: [],
       ...fields,
       reasons,
       repairable,
@@ -146,7 +150,10 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {})
     return verdict({ defaultBranch, reasons: ['git-unreadable'] });
   }
 
-  const dirt = classifyWorktreeDirt(porcelain);
+  const { repairablePaths: submodulePaths } = porcelain.trim()
+    ? await inspectPinnedSubmoduleDrift(dir)
+    : { repairablePaths: [] };
+  const dirt = classifyWorktreeDirt(porcelain, { ignoredPaths: submodulePaths });
   const conflicted = porcelain.split('\n').some((line) => /^(DD|AU|UD|UA|DU|AA|UU) /.test(line));
   const detached = branch === 'HEAD';
   const onDefaultBranch = Boolean(defaultBranch) && branch === defaultBranch;
@@ -166,6 +173,7 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {})
   if (conflicted) reasons.push('conflicted-files');
   if (dirt.hasRealChanges) reasons.push('uncommitted-changes');
   else if (!dirt.clean) repairable.push('restore-lockfiles');
+  if (submodulePaths.length) repairable.push('update-submodules');
   if (detached) reasons.push('detached-head');
   else if (defaultBranch && !onDefaultBranch) {
     // A clean feature branch is a mechanical checkout away from ready; a dirty
@@ -193,6 +201,7 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {})
     ahead,
     behind,
     lockfilePaths: dirt.lockfilePaths,
+    submodulePaths,
     reasons,
     repairable,
   });
@@ -212,9 +221,16 @@ export async function prepareUpdateRepo({ repoPath = PATHS.root } = {}) {
   // No fetch: the one caller reads with `fetch: true` before its idle gate and
   // then calls this, so a second network hop would only re-answer that read.
   const before = await checkUpdateRepoReadiness({ repoPath: dir, fetch: false });
-  if (before.ready || before.repairable.length === 0) return { verdict: before, actions: [] };
+  if (before.ready || before.reasons.length || before.repairable.length === 0) return { verdict: before, actions: [] };
 
   const actions = [];
+  if (before.repairable.includes('update-submodules')) {
+    const sync = await execGitSafe(['submodule', 'sync', '--recursive'], dir);
+    const update = sync.exitCode === 0 && await execGitSafe([
+      'submodule', 'update', '--init', '--recursive', '--checkout', '--', ...before.submodulePaths,
+    ], dir, { timeout: 120000 });
+    if (update.exitCode === 0) actions.push('updated submodules to their pinned commits');
+  }
   if (before.repairable.includes('restore-lockfiles') && before.lockfilePaths.length) {
     // By explicit path, never `-- .`: the classifier proved these specific
     // paths are auto-generated lockfiles, and a pathspec of `.` would discard

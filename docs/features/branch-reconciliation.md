@@ -68,6 +68,55 @@ immediately before removal; if that recheck refuses, the original lock is
 restored. A retired row leaves the inventory and appears under *Recently
 retired* with its archive path; only the next sweep can report convergence.
 
+### Held archive work budgets
+
+Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse preservation before removal.
+
+Held archives use resource contract `1`, recorded as `resourceContract` in the
+manifest. File count is not admission policy: every ignored/untracked content
+file and worktree-private Git file remains included. Hashing and copying use
+64 KiB chunks, with one copy at a time and at most two concurrent snapshot
+file streams. Git snapshot queries keep their existing finite fan-out: seven
+content queries plus the private Git directory lookup. A source growing during a copy aborts rather than expanding disk use.
+
+The existing limits remain 25 MiB per raw file, 250 MiB combined content and
+private administration, 16 MiB serialized manifest, and the existing Git output
+buffer of `64 * 1024 * 1024` JavaScript code units. Git output overflow and command timeout retain measured usage and recovery guidance, without changing either existing limit. Patch verification bounds its
+raw byte representation at three bytes per decoded code unit (192 MiB), preserving older multibyte
+patch admission. Metadata is charged incrementally against the same 16 MiB ceiling,
+including file entries, symlink targets and gitlinks; this also bounds
+zero-byte-file trees. Transient sorted directory names have a separate 16 MiB
+scan budget, so directory traversal cannot allocate unbounded name lists. These
+byte ceilings retain the prior safety envelope instead of estimating work from a count. A snapshot, archive write (both source
+passes included), or independent verification has a ten-minute elapsed work
+budget. This is a conservative ceiling of twenty existing 30-second Git command
+timeouts; it allows ordinary many-small-file archives while bounding repeated
+filesystem work. Checks run between filesystem operations and 64 KiB chunks;
+a running Git command retains its existing 30-second timeout. Kernel I/O may
+finish before cancellation is observed. No new global setting is written.
+
+Internal callers may pass an `AbortSignal` as `opts.signal`. Cancellation or a
+resource refusal keeps the original checkout, ref and outstanding obligations;
+partial archives and temporary bundle refs are cleaned up. A new attempt starts
+from fresh snapshots rather than treating partial work as preservation evidence.
+After a process crash, an archive without a complete manifest cannot prove
+preservation; an existing completed archive still needs the full independent
+hash and isolated Git object proof. No historical receipt is synthesized.
+
+Capacity responses include measured bytes, Git output code units, or elapsed
+milliseconds. Recover by
+freeing resources or preserving large outputs separately, then retrying the exact
+checkout with fresh evidence; do not remove it or raise global limits to clear a
+refusal. Existing unversioned archives follow an explicit compatibility path
+through the same bounded verification and complete content/private-Git proof.
+Unknown contract versions fail closed. The real-Git benchmark at `d200ec77d2`
+measured 16.9–20.9 seconds for cancellation/cleanup/retry and 20.2 seconds for
+the 1,100-plus-file restore. Integration fixture construction, retirement or
+confirmation, and independent proof retain separate existing 30-second phase
+budgets; cumulative case duration includes its hooks. Existing tests retain their
+default timeout. This does not change initialized-checkout archives or their
+separate operational budgets.
+
 Historical held-checkout archives must also prove that their staged patch
 reconstructs the preserved private index. Verification imports the bundle into
 a fresh, isolated Git repository, starts from the recorded HEAD, applies

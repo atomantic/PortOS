@@ -9,9 +9,10 @@ changes to traversal, admission or event meaning require a new runtime version
 and corresponding hosted regression tests.
 
 This is the runtime foundation for [external package export #13104](https://github.com/atomantic/PortOS/issues/13104).
-It does not yet implement an exporter, downloadable package or reference player.
-PortOS remains a private authoring/rehearsal service. An external host runs its
-own backend, credentials and transport; it never relays public calls into PortOS.
+The exporter copies this document into each package. `includePlayer` also adds
+the dependency-free reference player below. PortOS remains a private
+authoring/rehearsal service. An external host runs its own backend, credentials
+and transport; it never relays public calls into PortOS.
 
 ## Graph and playback
 
@@ -83,6 +84,17 @@ A host can expose `resolveTurn(nodeId, message)` returning
 map stay text to narration. This adapter shape is not the private endpoint's
 response shape. A choice-only/keyword adapter needs no network or LLM.
 
+The reference player implements that adapter with `createSession`,
+`createKeywordResolver`, `liveInputAllowed` and `mediaUrl`. `createSession`
+plays one episode from the packaged manifest. `createKeywordResolver` matches
+one exact intent, trigger, or transition id on the current scene and performs
+no network request. `liveInputAllowed` is the admission policy above.
+`mediaUrl` accepts only a packaged `media/<sha256>.<ext>` path. A host may
+replace the keyword adapter by assigning `resolveTurn` before the page loads.
+`player/contract-example.js` shows a host-owned `POST /story/turn` and is not
+loaded by the page. The host owns that request. An unknown edge or a missing
+target stays on the current scene.
+
 ## Live-input admission and half duplex
 
 `evaluateFableLoomLiveInput({node, phase, asset})` is the shared pure admission
@@ -107,24 +119,47 @@ Abort, expiration and teardown cancel the active turn. Recheck turn/session
 liveness after asynchronous work so stale results cannot change a new episode
 or emit after session end.
 
-### Speech ordering and the current hosted gap
+### Speech completion before commitment
 
-Portable hosts must finish narration playback before committing the chosen
-transition (and before admitting another turn). Bind a playback completion to
-the current turn, scene revision and designated output device. Treat cancellation,
-playback failure and missing completion as explicit outcomes, never an implicit
-successful acknowledgement.
+Portable hosts finish narration playback before committing a chosen transition
+and before admitting another turn. Hosted v1 binds that wait to the current
+turn and the designated output socket.
 
-**Hosted v1 currently guarantees synthesis and audio dispatch before commit,
-not completed playback.** `processHostedUtterance` emits `hosted:turn:tts`
-then immediately changes the node and emits `hosted:story:transition`.
-The legacy `hosted:speech:done` handler merely changes speaking to listening;
-it neither binds the acknowledgement to a turn nor delays a transition. The
-clients currently do not emit that acknowledgement. Repair is tracked in
-[#13112](https://github.com/atomantic/PortOS/issues/13112).
-Do not infer audible completion from a TTS frame or from a committed story frame.
-The regression test pins dispatch-before-commit without claiming playback
-completion.
+The exported reference player waits for a speech outcome bound to the turn,
+node, episode and generation before it commits a move. `completed` or an
+explicit `empty` may commit. `failed`, `cancelled`, `unavailable` and `missing`
+leave the scene in place. A later episode or turn ignores a stale outcome.
+
+When synthesis returns audio and the `audioTarget` role (`host` or `audience`)
+has a connected socket, the server emits `hosted:turn:tts` and leaves the turn
+in `speaking`. A move stays on the current node: `hosted:story:transition` is
+not emitted yet, and further live input is refused. The designated socket — the
+connected `host` or `audience` captured at dispatch — is the only one that can
+finish the wait. It sends `hosted:speech:done` with `{turnId, status}`:
+
+- `ended` commits once, after the server rechecks that the session is still
+  active, the episode and episode-switch generation are unchanged, the scene
+  generation and current node are unchanged, and the transition still targets
+  the same node. A stay returns to `listening`. A move emits
+  `hosted:story:transition` and returns to `idle`.
+- `failed` or `aborted` drops the pending transition and returns to `idle`.
+  Neither is a successful playback.
+
+A second `ended`, a different turn id, a different socket, or the other role
+does not commit. Disconnect of the designated socket, `hosted:turn:abort`,
+episode switch, session teardown, a scene change, and the bounded
+acknowledgement timeout (90 seconds) also drop the pending transition and must
+not emit it afterwards. Each of those drops emits `hosted:turn:phase`
+`{phase: "idle", turnId, reason}` when the room is still active. The output
+playing that turn stops the element, so a later `ended` is not reported as
+completion. An idle phase for a different turn leaves the current playback
+alone. A successful stay (`listening`) and a committed move do not cut audio
+with that idle frame.
+
+If synthesis produces no audio, the turn commits on the narration text
+(text-only fallback). If the designated output is not connected, nothing is
+playing, so the turn commits immediately as well. Do not treat a TTS frame or
+a committed story frame as proof that audio was heard.
 
 ## Transport-neutral event schema
 
@@ -141,7 +176,8 @@ join tokens or instance ids.
 | `player:phase` | `{nodeId, phase, activeHoldIndex}` | Same update/sync pair for a phase-only change. |
 | `turn:phase` | `{phase: "idle" \| "listening" \| "thinking" \| "speaking", turnId?, text?}` | `hosted:turn:phase`. Text is narration, not a new graph. |
 | `turn:speech` | `{turnId, audio, mimeType, target: "host" \| "audience"}` | `hosted:turn:tts`; audio is base64 WAV in the private transport. |
-| `story:transition-committed` | `{transitionId, node, playbackPhase}` | `hosted:story:transition`; node is the server-projected target. |
+| `turn:speech-complete` | `{turnId, status: "ended" \| "failed" \| "aborted"}` | Client sends `hosted:speech:done`. Only `ended` from the designated output commits. |
+| `story:transition-committed` | `{transitionId, node, playbackPhase}` | `hosted:story:transition` after playback `ended` when a connected output was playing; otherwise on text-only fallback. Node is the server-projected target. |
 | `session:ended` | `{reason}` | `hosted:session:ended` (also carries a private session id). |
 | `runtime:error` | `{code, message}` | `hosted:error`. |
 
@@ -165,7 +201,9 @@ of provider configuration, adapters, LoRAs or machine-local paths.
 `server/services/fableLoom/hostedSession.test.js` exercises the shared admission
 policy through real turn admission, including a connected cut with a stale hold
 phase, occupied audio, explicit window presence and the legacy decision default.
-Its deferred synthesis test checks the current hosted phase/event ordering.
-Existing hosted socket and weave suites cover role-scoped transport, teardown,
-stale turns and provider-free deterministic traversal. Speech playback
-acknowledgement conformance remains the explicit gap in #13112.
+Its deferred synthesis test checks dispatch-before-commit when no output
+socket is connected. Hosted session and socket suites pin the completion
+wait: only the designated output's current-turn `ended` commits, and playback
+failure, abort, disconnect, scene change, switch, teardown, and timeout drop
+the pending transition.
+Existing weave suites cover role-scoped transport and provider-free traversal.

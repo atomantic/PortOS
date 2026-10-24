@@ -7,13 +7,15 @@
  */
 
 import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
-import { hostedPlaybackUpdateSchema, hostedTextTurnSchema } from '../lib/fableLoomValidation.js';
+import { hostedPlaybackUpdateSchema, hostedSpeechDoneSchema, hostedTextTurnSchema } from '../lib/fableLoomValidation.js';
 import {
   _getInternalSession,
   abortHostedTurn,
+  acknowledgeHostedSpeech,
   endHostedSession,
   getHostedSession,
   processHostedUtterance,
+  releaseHostedSpeechOutput,
   sanitizeHostedSession,
   startHostedListening,
   switchHostedEpisode,
@@ -320,13 +322,20 @@ export function registerFableLoomHostedNamespace(io) {
       }
     });
 
-    socket.on('hosted:speech:done', (_data) => {
-      // Speech finished playback on output target
-      const live = liveSession();
-      if (live && live.turnPhase === 'speaking') {
-        live.turnPhase = 'listening';
-        ns.to(room).emit('hosted:turn:phase', { phase: 'listening' });
-      }
+    socket.on('hosted:speech:done', (data) => {
+      const parsed = hostedSpeechDoneSchema.safeParse(data);
+      if (!parsed.success) return undefined;
+      // Role and socket id come from the authenticated connection, never from
+      // the payload, so the other device cannot finish this turn's playback.
+      return acknowledgeHostedSpeech(sessionId, {
+        turnId: parsed.data.turnId,
+        status: parsed.data.status,
+        role: socket.hostedRole,
+        socketId: socket.id,
+        io,
+      }).catch((err) => {
+        console.error(`❌ Hosted speech acknowledgement failed: ${err?.message || err}`);
+      });
     });
 
     socket.on('hosted:turn:abort', () => {
@@ -335,6 +344,7 @@ export function registerFableLoomHostedNamespace(io) {
 
     // --- Disconnect lifecycle ---
     socket.on('disconnect', () => {
+      releaseHostedSpeechOutput(sessionId, socket.id, { io });
       if (socket.hostedRole === 'host' && session.hostSocketId === socket.id) {
         session.hostSocketId = null;
       } else if (socket.hostedRole === 'audience' && session.audienceSocketId === socket.id) {
