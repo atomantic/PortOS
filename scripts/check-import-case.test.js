@@ -139,7 +139,7 @@ describe('checkImportCase against a repository', () => {
   it('is wired into the impact job before any job can be skipped on an attestation', () => {
     const workflow = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '.github', 'workflows', 'ci.yml'), 'utf8');
     const impact = workflow.slice(workflow.indexOf('\n  impact:\n'), workflow.indexOf('\n  prompt-history:\n'));
-    expect(impact).toContain('run: node scripts/check-import-case.js');
+    expect(impact).toContain('run: node scripts/ci-impact-diagnostics.js import-case -- node scripts/check-import-case.js');
     expect(impact.indexOf('node scripts/check-import-case.js')).toBeLessThan(impact.indexOf('node scripts/ci-test-plan.js'));
   });
 });
