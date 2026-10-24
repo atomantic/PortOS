@@ -12,6 +12,9 @@ export function abortHostedSpeech(playback) {
   playback.settled = true;
   playback.audio.onended = null;
   playback.audio.onerror = null;
+  // Stop the element. A later `ended` would otherwise sound like a completion
+  // the server has already been told to drop.
+  try { playback.audio.pause(); } catch { /* element already gone */ }
   report(playback.socket, playback.turnId, 'aborted');
 }
 
