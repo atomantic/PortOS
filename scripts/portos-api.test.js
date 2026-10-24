@@ -11,7 +11,7 @@ vi.mock('node:http', async (importOriginal) => {
   const original = await importOriginal();
   return { ...original, request: vi.fn(original.request) };
 });
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createTlsServer } from 'node:https';
@@ -256,5 +256,40 @@ describe('local install URL selection', () => {
       .rejects.toMatchObject({ code: 'ECONNRESET', message: 'socket hang up' });
     expect(mirrorRequests).not.toHaveBeenCalled();
     await expect(main(['whoami'], { ...config, PORTOS_URL: `http://127.0.0.1:${tlsPort}` })).rejects.toMatchObject({ code: 'ECONNRESET', message: 'socket hang up' });
+  });
+});
+
+
+describe('FableLoom export CLI handoff', () => {
+  it('passes exact ordered export options and rejects implicit or incompatible consent', () => {
+    const parsed = parseArgs(['fableloom-export', 'preflight', 'loom/id', '--episodes', 'two,one', '--player', 'true', '--characters', 'true', '--voice', 'true', '--allow-draft', 'true', '--profile', 'web-720p']);
+    expect(parsed.path).toBe('/api/fableloom/loom%2Fid/export/preflight');
+    expect(JSON.parse(parsed.body)).toEqual({ episodeIds: ['two', 'one'], includePlayer: true, includeCharacters: true, includeVoice: true, allowDraft: true, mediaProfile: 'web-720p' });
+    expect(() => parseArgs(['fableloom-export', 'start', 'loom', '--voice', 'true'])).toThrow(/characters/);
+    expect(() => parseArgs(['fableloom-export', 'start', 'loom', '--allow-draft', 'yes'])).toThrow(/true or false/);
+  });
+
+  it('downloads protected ZIP bytes without printing the credential and refuses overwrite', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'portos-export-cli-'));
+    const output = join(dir, 'story.zip');
+    const bytes = Buffer.from([80, 75, 3, 4, 0, 255, 128]);
+    const received = [];
+    const server = createServer((request, response) => {
+      received.push({ path: request.url, authorization: request.headers.authorization });
+      response.writeHead(200, { 'Content-Type': 'application/zip' }); response.end(bytes);
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { PORTOS_URL: `http://127.0.0.1:${server.address().port}`, PORTOS_API_TOKEN: 'synthetic-export-token', PORTOS_AGENT_KEY_FILE: join(dir, 'absent') };
+    try {
+      expect(await main(['fableloom-export', 'download', 'loom', 'job', '--output', output], env)).toBe(0);
+      expect(await readFile(output)).toEqual(bytes);
+      expect(received[0]).toEqual({ path: '/api/fableloom/loom/export/job/download', authorization: 'Bearer synthetic-export-token' });
+      expect(JSON.stringify(log.mock.calls)).not.toContain('synthetic-export-token');
+      await expect(main(['fableloom-export', 'download', 'loom', 'job', '--output', output], env)).rejects.toMatchObject({ code: 'EEXIST' });
+    } finally {
+      server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+      log.mockRestore(); await rm(dir, { recursive: true, force: true });
+    }
   });
 });
