@@ -31,6 +31,7 @@ import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, IS
 import { emitLog } from './cosEvents.js';
 import { getActiveApps } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
+import { preflightClaimReviewers } from './claimReviewerPreflight.js';
 import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
 import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
@@ -1057,7 +1058,7 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
  * reviewers stamps the resolved bundle back onto `metadata` (see below), the
  * same way `applyPlanIdMetadata` writes `planId`.
  */
-export async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks }) {
+export async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks, reviewerTaskType = promptTaskType, reviewerOverrideMetadata = {} }) {
   // Resolve the `{reviewers}` the agent is told to run. When the task itself
   // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
   // (Settings → Code Reviewers) rather than a hardcoded reviewer —
@@ -1072,6 +1073,10 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // receive it without needing a new placeholder.
   const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers);
+  const rendersReviewers = /\{reviewers\}/.test(promptTemplate);
+  const reviewerIdentityNotice = rendersReviewers
+    ? await preflightClaimReviewers(app, claimReviewers, { metadata, appOverrideMetadata: reviewerOverrideMetadata, taskType: reviewerTaskType })
+    : '';
   const {
     reviewers: promptReviewers,
     reviewerModels: promptReviewerModels,
@@ -1091,9 +1096,6 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // sanitizeTaskMetadata, so read it from `metadata`. Empty for non-issue
   // trackers and when swarm is off.
   const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount);
-  // Does this template drive its own reviewers? Gates the two reviewer blocks
-  // appended after the substitutions below, and the persisted bundle.
-  const rendersReviewers = /\{reviewers\}/.test(promptTemplate);
   // Persist what the prompt just named, so `resolveReviewerConfig(task.metadata, …)`
   // at spawn time reads back THIS list instead of re-deriving the install-wide
   // Code Review Defaults — that is what lets the reviewer pin be emitted once,
@@ -1108,7 +1110,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     .replace(/\{modeInstructions\}/g, () => blocks.modeInstructions || '')
     .replace(/\{trackerInstructions\}/g, () => blocks.trackerInstructions);
 
-  return applyAppPlaceholders(withBlocks, app)
+  return reviewerIdentityNotice + applyAppPlaceholders(withBlocks, app)
     // Function form — reviewersCsv can carry a user-set reviewerModels pin,
     // and normalizeReviewerModel allows `$` in that free text (only `[`, `]`,
     // `,`, and line breaks/tabs are forbidden), so a string replacement would
