@@ -387,8 +387,28 @@ describe('FableLoomHostedJoin', () => {
     });
     expect(mockSocket.emit).toHaveBeenCalledWith('hosted:speech:done', { turnId: failedTurn, status: 'failed' });
 
-    const cancelledTurn = '44444444-4444-4444-8444-444444444444';
+    const droppedTurn = '55555555-5555-4555-8555-555555555555';
     play.mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    await act(async () => {
+      handler('hosted:turn:tts')({ target: 'audience', audio: 'QQ==', mimeType: 'audio/wav', turnId: droppedTurn });
+    });
+    await act(async () => {
+      handler('hosted:turn:phase')({ phase: 'idle', turnId: audienceTurn, reason: 'speech_timeout' });
+    });
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('hosted:speech:done', { turnId: droppedTurn, status: 'aborted' });
+    await act(async () => {
+      handler('hosted:turn:phase')({ phase: 'listening', turnId: droppedTurn });
+    });
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('hosted:speech:done', { turnId: droppedTurn, status: 'aborted' });
+    await act(async () => {
+      handler('hosted:turn:phase')({ phase: 'idle', turnId: droppedTurn, reason: 'speech_timeout' });
+    });
+    expect(pause).toHaveBeenCalled();
+    expect(mockSocket.emit).toHaveBeenCalledWith('hosted:speech:done', { turnId: droppedTurn, status: 'aborted' });
+    pause.mockRestore();
+
+    const cancelledTurn = '44444444-4444-4444-8444-444444444444';
     await act(async () => {
       handler('hosted:turn:tts')({ target: 'audience', audio: 'QQ==', mimeType: 'audio/wav', turnId: cancelledTurn });
     });

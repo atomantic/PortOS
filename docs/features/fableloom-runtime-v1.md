@@ -132,7 +132,12 @@ A second `ended`, a different turn id, a different socket, or the other role
 does not commit. Disconnect of the designated socket, `hosted:turn:abort`,
 episode switch, session teardown, a scene change, and the bounded
 acknowledgement timeout (90 seconds) also drop the pending transition and must
-not emit it afterwards.
+not emit it afterwards. Each of those drops emits `hosted:turn:phase`
+`{phase: "idle", turnId, reason}` when the room is still active. The output
+playing that turn stops the element, so a later `ended` is not reported as
+completion. An idle phase for a different turn leaves the current playback
+alone. A successful stay (`listening`) and a committed move do not cut audio
+with that idle frame.
 
 If synthesis produces no audio, the turn commits on the narration text
 (text-only fallback). If the designated output is not connected, nothing is

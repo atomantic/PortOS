@@ -608,6 +608,11 @@ describe('fableLoom hostedSession', () => {
       const socketId = connectOutput(session, 'host');
       const aborted = await speakMove(session, io);
       abortHostedTurn(session.id, { reason: 'client_aborted', io });
+      expect(io.emits.filter((event) => event.event === 'hosted:turn:phase').at(-1)?.payload).toMatchObject({
+        phase: 'idle',
+        turnId: aborted.turnId,
+        reason: 'client_aborted',
+      });
       await acknowledgeHostedSpeech(session.id, {
         turnId: aborted.turnId, role: 'host', socketId, status: 'ended', io,
       });

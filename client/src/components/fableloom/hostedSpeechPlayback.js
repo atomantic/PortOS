@@ -18,6 +18,18 @@ export function abortHostedSpeech(playback) {
   report(playback.socket, playback.turnId, 'aborted');
 }
 
+/**
+ * The server dropped this turn (timeout, abort, switch, scene change) and
+ * said so with an idle phase. Stop only that turn — a later narration, or a
+ * stay that went listening, is still the current playback.
+ */
+export function releaseDroppedHostedSpeech(playback, phase) {
+  if (!playback || playback.settled || phase?.phase !== 'idle') return playback || null;
+  if (!phase.turnId || phase.turnId !== playback.turnId) return playback;
+  abortHostedSpeech(playback);
+  return null;
+}
+
 export function playHostedSpeech(audio, {
   socket,
   previous,

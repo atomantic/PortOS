@@ -898,10 +898,15 @@ export function releaseHostedSpeechOutput(sessionId, socketId, { io } = {}) {
   if (!pendingMatches && !claimedMatches) return { released: false };
   if (pendingMatches) cancelPendingSpeech(session, sessionId, { io, reason: 'output_disconnected' });
   else if (session.activeTurn?.outputSocketId === socketId) {
+    const turnId = session.activeTurn.id;
     session.activeTurn.abortController?.abort('output_disconnected');
     session.activeTurn = null;
     session.turnPhase = 'idle';
-    emitHosted(io, sessionId, 'hosted:turn:phase', { phase: 'idle', reason: 'output_disconnected' });
+    emitHosted(io, sessionId, 'hosted:turn:phase', {
+      phase: 'idle',
+      turnId,
+      reason: 'output_disconnected',
+    });
   }
   return { released: true };
 }
@@ -1150,6 +1155,7 @@ export function abortHostedTurn(sessionId, { reason = 'aborted', io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session) return { ok: true };
 
+  const turnId = session.pendingSpeech?.turnId || session.activeTurn?.id || null;
   takePendingSpeech(session);
   if (session.activeTurn?.abortController) {
     session.activeTurn.abortController.abort(reason);
@@ -1161,6 +1167,7 @@ export function abortHostedTurn(sessionId, { reason = 'aborted', io } = {}) {
     io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:phase', {
       phase: 'idle',
       reason,
+      ...(turnId ? { turnId } : {}),
     });
   }
   return { ok: true };

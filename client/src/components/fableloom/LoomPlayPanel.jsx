@@ -22,7 +22,7 @@ import { playLoomTurn } from '../../services/api';
 import { sceneProseClass } from './fieldStyles';
 import toast from '../ui/Toast';
 import LoomHostedSessionModal from './LoomHostedSessionModal';
-import { abortHostedSpeech, playHostedSpeech } from './hostedSpeechPlayback';
+import { abortHostedSpeech, playHostedSpeech, releaseDroppedHostedSpeech } from './hostedSpeechPlayback';
 import { audienceCanParticipate } from '../../../../server/lib/fableLoomParticipation.js';
 import {
   resolveFableLoomProtagonistPresence,
@@ -142,6 +142,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
 
     socket.on('hosted:turn:phase', (data) => {
       setHostedTurnPhase(data.phase || 'idle');
+      hostedSpeechRef.current = releaseDroppedHostedSpeech(hostedSpeechRef.current, data);
     });
 
     socket.on('hosted:error', (data) => {

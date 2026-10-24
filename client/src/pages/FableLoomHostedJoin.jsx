@@ -19,7 +19,7 @@ import {
   Smartphone,
   Volume2,
 } from 'lucide-react';
-import { abortHostedSpeech, playHostedSpeech } from '../components/fableloom/hostedSpeechPlayback';
+import { abortHostedSpeech, playHostedSpeech, releaseDroppedHostedSpeech } from '../components/fableloom/hostedSpeechPlayback';
 
 // Guest-facing wording for the live-conversation gates; any other code falls
 // back to the server's own message.
@@ -103,6 +103,7 @@ export default function FableLoomHostedJoin() {
 
     s.on('hosted:turn:phase', (data) => {
       setTurnPhase(data.phase || 'idle');
+      speechPlaybackRef.current = releaseDroppedHostedSpeech(speechPlaybackRef.current, data);
       if (data.phase === 'thinking') {
         setIsRecording(false);
       }

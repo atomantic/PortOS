@@ -899,6 +899,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
 
       expect(getHostedSession(session.id).turnPhase).toBe('idle');
       expect(roomEvent('hosted:turn:phase')?.data).toMatchObject({ phase: 'idle', reason: 'client_aborted' });
+      expect(roomEvent('hosted:turn:phase')?.data.turnId).toEqual(expect.any(String));
     });
 
     it('releases the audience slot and tears down listeners on disconnect', () => {

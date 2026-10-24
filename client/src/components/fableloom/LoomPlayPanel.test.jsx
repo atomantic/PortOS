@@ -725,6 +725,23 @@ describe('LoomPlayPanel', () => {
     });
     expect(socket.emit).toHaveBeenCalledWith('hosted:speech:done', { turnId: failedTurn, status: 'failed' });
 
+    const droppedTurn = '44444444-4444-4444-8444-444444444444';
+    play.mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    await act(async () => {
+      listeners['hosted:turn:tts']({ target: 'host', audio: 'QQ==', mimeType: 'audio/wav', turnId: droppedTurn });
+    });
+    await act(async () => {
+      listeners['hosted:turn:phase']({ phase: 'idle', turnId, reason: 'episode_switch' });
+    });
+    expect(socket.emit).not.toHaveBeenCalledWith('hosted:speech:done', { turnId: droppedTurn, status: 'aborted' });
+    await act(async () => {
+      listeners['hosted:turn:phase']({ phase: 'idle', turnId: droppedTurn, reason: 'speech_timeout' });
+    });
+    expect(pause).toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('hosted:speech:done', { turnId: droppedTurn, status: 'aborted' });
+
+    pause.mockRestore();
     play.mockRestore();
     unmount();
     io.mockImplementation(() => ({ on: vi.fn(), emit: vi.fn(), disconnect: vi.fn() }));
