@@ -808,7 +808,10 @@ export async function acknowledgeHostedSpeech(sessionId, {
     return { accepted: false, reason: 'INVALID_STATUS' };
   }
 
-  const claim = takePendingSpeech(session);
+  if (status === 'ended' && pending.acknowledging) return { accepted: false, reason: 'ACKNOWLEDGEMENT_IN_PROGRESS' };
+  // Keep the original deadline while the authoritative scene read is pending.
+  // Its timeout invalidates this turn, so a delayed read cannot commit later.
+  const claim = status === 'ended' ? pending : takePendingSpeech(session);
   if (status !== 'ended') {
     if (session.activeTurn?.id === claim.turnId) {
       session.activeTurn.abortController?.abort(status === 'failed' ? 'playback_failed' : 'playback_aborted');
@@ -825,12 +828,12 @@ export async function acknowledgeHostedSpeech(sessionId, {
     return { accepted: true, committed: false };
   }
 
+  claim.acknowledging = true;
   try {
     const loom = await getLoom(session.loomId);
     if (!speechClaimStillCurrent(session, sessionId, claim)) {
-      // The ack already consumed the wait. If the turn is still the speaking
-      // one, a scene change that lost the race with this commit has to unlock
-      // it — otherwise the room stays in `speaking` with nothing left to ack.
+      // The scene changed while this acknowledgement was being checked.
+      // Release this speaking turn without changing a successor's state.
       if (activeSessions.get(sessionId) === session
         && session.status === 'active'
         && session.turnPhase === 'speaking'
@@ -883,6 +886,8 @@ export async function acknowledgeHostedSpeech(sessionId, {
     }
     console.error(`❌ Hosted speech commit failed: ${err?.message || err}`);
     return { accepted: false, committed: false, reason: 'COMMIT_FAILED' };
+  } finally {
+    if (session.pendingSpeech === claim) takePendingSpeech(session);
   }
 }
 

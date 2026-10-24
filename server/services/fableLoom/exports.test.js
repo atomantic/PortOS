@@ -417,6 +417,46 @@ describe('portable FableLoom export boundary', () => {
     }
   });
 
+  videoIt('normalizes a common positive timestamp origin while retaining the audio delay', async () => {
+    const source = join(PATHS.videos, 'offset-timeline.mp4');
+    expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: [
+      '-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:r=10:d=1',
+      '-itsoffset', '0.3', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=0.4',
+      '-t', '1', '-c:v', 'libx264', '-c:a', 'aac', '-threads', '1', '-output_ts_offset', '5', source,
+    ] })).toEqual({ ok: true });
+    const inspect = file => JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', file], { timeout: 10_000 }).toString()).streams;
+    const original = inspect(source);
+    const originalDelay = Number(original.find(stream => stream.codec_type === 'audio').start_time)
+      - Number(original.find(stream => stream.codec_type === 'video').start_time);
+    expect(originalDelay).toBeGreaterThan(0.25);
+    const audibleStart = file => {
+      const pcm = execFileSync(bin, ['-nostdin', '-v', 'error', '-i', file, '-map', '0:a',
+        '-af', 'aresample=async=1:first_pts=0', '-ar', '48000', '-ac', '1', '-f', 'f32le', '-'],
+      { timeout: 10_000, maxBuffer: 1024 * 1024 });
+      for (let offset = 0; offset < pcm.length; offset += 4) {
+        if (Math.abs(pcm.readFloatLE(offset)) > 0.005) return offset / 4 / 48000;
+      }
+      throw new Error('Expected the authored delayed tone.');
+    };
+    const originalStart = audibleStart(source);
+    loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({ id, filename: 'offset-timeline.mp4' })));
+    for (const mediaProfile of ['source', 'web-720p']) {
+      const result = await archive(await begin({ episodeIds: ['episode-one'], mediaProfile }));
+      const asset = JSON.parse(result.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets.entry;
+      expect(asset.durationMs).toBe(1000);
+      const output = join(PATHS.videos, 'normalized-timeline.mp4');
+      await writeFile(output, result.files.get(asset.file));
+      const streams = inspect(output);
+      const picture = streams.find(stream => stream.codec_type === 'video');
+      const audio = streams.find(stream => stream.codec_type === 'audio');
+      expect(Number(picture.duration)).toBe(1);
+      expect(Number(audio.duration)).toBeGreaterThanOrEqual(0.4);
+      // AAC priming changes packet start timestamps; compare the audible
+      // timeline with allowance for the loudness filter's short look-ahead.
+      expect(Math.abs(audibleStart(output) - originalStart)).toBeLessThan(0.01);
+    }
+  });
+
   videoIt('drains cancelled and failed encoder children before exposing terminal failure without an artifact', async () => {
     const realRun = ffmpeg.runFfmpegProcess;
     const started = Promise.withResolvers();

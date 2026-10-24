@@ -69,15 +69,22 @@ async function probe(path, format = 'mov') {
   // MP4 container duration can include discarded subtitles/data. Only retained
   // picture/audio timelines determine clip length. WebM output has no extra tracks
   // but may omit stream durations, so its own container is a safe fallback.
-  for (const stream of [...video, ...audio]) {
-    const seconds = stream.duration === undefined && format === 'matroska'
-      ? Number(result.format?.duration) : Number(stream.duration);
-    stream.durationMs = Math.round((seconds + Math.max(0, Number(stream.start_time) || 0)) * 1000);
-    if (!Number.isSafeInteger(stream.durationMs) || stream.durationMs <= 0) {
+  const streams = [...video, ...audio];
+  const origin = Math.max(0, Math.min(...streams.map(stream => Number(stream.start_time) || 0)));
+  for (const stream of streams) {
+    const start = Number(stream.start_time) || 0;
+    const containerEnd = stream.duration === undefined && format === 'matroska';
+    const seconds = containerEnd ? Number(result.format?.duration) : Number(stream.duration);
+    // Sample duration proves truncation independently of ffmpeg's timestamp
+    // rebasing. Playback span retains relative stream offsets, not their common origin.
+    stream.durationMs = Math.round((containerEnd ? seconds - Math.max(0, start) : seconds) * 1000);
+    stream.endMs = Math.round(((containerEnd ? seconds : seconds + start) - origin) * 1000);
+    if (!Number.isSafeInteger(stream.durationMs) || stream.durationMs <= 0
+      || !Number.isSafeInteger(stream.endMs) || stream.endMs <= 0) {
       throw refusal('EXPORT_MEDIA_INVALID', 'Retained video/audio duration could not be verified.');
     }
   }
-  return { video: video[0], audio: audio[0], durationMs: Math.max(...[...video, ...audio].map(s => s.durationMs)) };
+  return { video: video[0], audio: audio[0], durationMs: Math.max(...streams.map(stream => stream.endMs)) };
 }
 
 export async function fableLoomExportEncoder(kind) {
