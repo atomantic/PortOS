@@ -23,6 +23,7 @@ import {
   resolveFamilyProvider
 } from './usageReconciler.js';
 import { applyHistoricalUsageCorrections, forgetSiblingReconciledUsageRuns } from './usage.js';
+import { grokTurnRepairId } from './grokUsageRepair.js';
 
 /**
  * Attribute Claude Code, Codex, Grok and Antigravity sessions that PortOS never
@@ -170,7 +171,10 @@ async function listSessions(family, home, from) {
   return sessions;
 }
 
-const BUCKET_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+const BUCKET_FIELDS = [
+  'messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
+  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
+];
 const addBuckets = (target, buckets) => {
   for (const field of BUCKET_FIELDS) target[field] = (target[field] || 0) + (buckets[field] || 0);
 };
@@ -193,12 +197,21 @@ function parseSlice(family, entries, slice, seen) {
   if (family === 'claude') {
     const parsed = parseClaudeTranscript(entries, { from: slice.from, to: slice.to, exclude: seen });
     for (const key of parsed.countedKeys) seen.add(key);
-    return parsed.byModel;
+    return { byModel: parsed.byModel, repairIds: [] };
   }
   // A rollout's totals are cumulative; a windowed read is the slice's delta.
-  if (family === 'codex') return parseCodexRollout(entries, { from: slice.from, to: slice.to }).byModel;
-  if (family === 'grok') return parseGrokTurns(entries, { from: slice.from, to: slice.to }).byModel;
-  return { [UNKNOWN_MODEL]: agyEstimatedBuckets(parseAgyTranscript(entries, { from: slice.from, to: slice.to })) };
+  if (family === 'codex') return { byModel: parseCodexRollout(entries, { from: slice.from, to: slice.to }).byModel, repairIds: [] };
+  if (family === 'grok') {
+    const parsed = parseGrokTurns(entries, { from: slice.from, to: slice.to });
+    return {
+      byModel: parsed.byModel,
+      // Registered in the same correction save as the long-context subset, so
+      // a later repair of turns already at or behind the watermark does not
+      // add that premium a second time.
+      repairIds: (parsed.longTurns || []).map((turn) => grokTurnRepairId(turn.sessionId, turn.key)),
+    };
+  }
+  return { byModel: { [UNKNOWN_MODEL]: agyEstimatedBuckets(parseAgyTranscript(entries, { from: slice.from, to: slice.to })) }, repairIds: [] };
 }
 
 /** One session file's billed buckets per `{ day, model }` inside `[from, to]`, minus run windows. */
@@ -217,8 +230,13 @@ async function parseSession(family, session, from, to, byCwd, seen) {
   const results = [];
   for (const [a, b] of subtractWindows(lo, hi, windowsFor(byCwd, cwd))) {
     for (const slice of splitByUtcDay(a, b)) {
-      for (const [model, buckets] of Object.entries(parseSlice(family, entries, slice, seen))) {
-        if (totalTranscriptTokens(buckets) > 0) results.push({ day: slice.day, model, buckets });
+      const parsed = parseSlice(family, entries, slice, seen);
+      let attachedIds = false;
+      for (const [model, buckets] of Object.entries(parsed.byModel)) {
+        if (totalTranscriptTokens(buckets) <= 0) continue;
+        const repairIds = attachedIds ? [] : (parsed.repairIds || []);
+        attachedIds = true;
+        results.push({ day: slice.day, model, buckets, repairIds });
       }
     }
   }
@@ -254,12 +272,13 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       const perDay = new Map();
       const seen = new Set();
       for (const session of await listSessions(family, home, from)) {
-        for (const { day, model, buckets } of await parseSession(family, session, from, to, byCwd, seen)) {
-          if (!perDay.has(day)) perDay.set(day, { byModel: {} });
+        for (const { day, model, buckets, repairIds } of await parseSession(family, session, from, to, byCwd, seen)) {
+          if (!perDay.has(day)) perDay.set(day, { byModel: {}, repairIds: [] });
           const dayTotals = perDay.get(day);
           addBuckets(dayTotals, buckets);
           dayTotals.byModel[model] ??= {};
           addBuckets(dayTotals.byModel[model], buckets);
+          if (repairIds?.length) dayTotals.repairIds.push(...repairIds);
         }
         // A first scan parses many multi-MB files back to back; let the server breathe.
         await yieldToEventLoop();
@@ -280,7 +299,8 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
           day,
           providerId: provider.id,
           siblings: recordsFromMeasured(provider.id, provider.defaultModel ?? null, measured, 'sibling'),
-          siblingScanned: true
+          siblingScanned: true,
+          repairIds: totals.repairIds || [],
         });
       }
       if (corrections.length) {

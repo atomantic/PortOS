@@ -181,6 +181,8 @@ describe('UsagePage breakdown visualization and responsiveness', () => {
                 tokensOut: 3000,
                 cacheReadTokens: 1000,
                 cacheWriteTokens: 200,
+                images: 2,
+                videoSeconds: 6,
                 estimatedCost: 1.5
               }
             ]
@@ -202,6 +204,8 @@ describe('UsagePage breakdown visualization and responsiveness', () => {
 
     const costDisplays = screen.getAllByText('$1.50');
     expect(costDisplays.length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/2 images/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/6s video/).length).toBeGreaterThan(0);
   });
 });
 

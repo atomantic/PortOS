@@ -1479,3 +1479,39 @@ describe('usage.js — limit-block ledger (#7408)', () => {
     expect(summary.freeTier.blocks[0].volumeSince).toMatchObject({ sessions: 1, messages: 1 });
   });
 });
+
+describe('Grok long-context and Imagine pricing', () => {
+  it('doubles only the long-context subset and prices an image row on its own', () => {
+    const report = buildUsageReport({
+      '2026-10-01': {
+        byProvider: {
+          'grok-cli': {
+            name: 'Grok',
+            tokensIn: 300_000,
+            tokensOut: 10_000,
+            longTokensIn: 200_000,
+            longTokensOut: 1_000,
+            byModel: {
+              'grok-4.7': {
+                tokensIn: 300_000,
+                tokensOut: 10_000,
+                longTokensIn: 200_000,
+                longTokensOut: 1_000,
+                source: 'measured',
+              },
+              'grok-imagine-image-2.0': { images: 1, source: 'measured' },
+            },
+          },
+        },
+      },
+    });
+    const models = Object.fromEntries(report.providers[0].models.map((row) => [row.model, row]));
+    // 300k in + 10k out at $2/$6 = $0.66, plus 200k in + 1k out again = $0.406.
+    expect(models['grok-4.7'].estimatedCost).toBeCloseTo(1.07);
+    expect(models['grok-4.7'].tokensIn).toBe(300_000);
+    expect(models['grok-imagine-image-2.0'].estimatedCost).toBeCloseTo(0.04);
+    expect(models['grok-imagine-image-2.0'].tokensIn).toBe(0);
+    expect(report.totals.tokensIn).toBe(300_000);
+    expect(report.totals.estimatedCost).toBeCloseTo(1.11);
+  });
+});

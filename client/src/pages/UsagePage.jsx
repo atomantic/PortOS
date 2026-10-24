@@ -304,6 +304,9 @@ function CostReportTable({ report }) {
                       <span>{formatNumber(m.tokensIn)} in · {formatNumber(m.tokensOut)} out</span>
                       <span>Cache: {formatNumber((m.cacheReadTokens ?? 0) + (m.cacheWriteTokens ?? 0))}</span>
                     </div>
+                    {usageExtras(m) && (
+                      <div className="text-[10px] text-gray-500">{usageExtras(m)}</div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -358,6 +361,18 @@ function CostReportTable({ report }) {
 const cacheTitle = (row) =>
   `Cache read ${formatCount(row.cacheReadTokens, { fallback: '0' })} · cache write ${formatCount(row.cacheWriteTokens, { fallback: '0' })} tokens`;
 
+// Imagine units and the 200k subset are not visible in the token columns.
+function usageExtras(row) {
+  if (!row) return '';
+  const parts = [];
+  if (row.images > 0) parts.push(`${formatNumber(row.images)} images`);
+  if (row.inputImages > 0) parts.push(`${formatNumber(row.inputImages)} input images`);
+  if (row.videoSeconds > 0) parts.push(`${formatNumber(row.videoSeconds)}s video`);
+  const longTokens = (row.longTokensIn || 0) + (row.longCacheReadTokens || 0) + (row.longCacheWriteTokens || 0);
+  if (longTokens > 0) parts.push(`${formatNumber(longTokens)} long-context`);
+  return parts.join(' · ');
+}
+
 function ProviderCostRows({ provider }) {
   return (
     <>
@@ -390,6 +405,9 @@ function ProviderCostRows({ provider }) {
               : undefined}
           >
             {m.model}
+            {usageExtras(m) && (
+              <div className="font-sans text-[10px] text-gray-500 truncate">{usageExtras(m)}</div>
+            )}
           </td>
           <td className="py-1.5 px-2 text-right text-xs">{formatNumber(m.sessions)}</td>
           <td className="py-1.5 px-2 text-right text-xs" title={cacheTitle(m)}>{formatNumber(m.tokensIn)}</td>
