@@ -346,6 +346,21 @@ describe('resolveBootstrapEnv', () => {
     expect(spawn).toHaveBeenCalledTimes(3);
   });
 
+  it('passes the review deadline and cancellation signal to credential preparation', async () => {
+    const controller = new AbortController();
+    const spawn = vi.spyOn(childProcess, 'execFile').mockImplementation((_command, _args, options, callback) => {
+      expect(options.timeout).toBe(42);
+      expect(options.signal).toBe(controller.signal);
+      options.signal.addEventListener('abort', () => callback(new Error('private diagnostic')), { once: true });
+      return { pid: 123 };
+    });
+    const pending = resolveBootstrapEnv(record('cancelled-credentials', 'unused'), { ...profile, timeoutMs: 42, signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toThrow(/^Bootstrap credential command failed\.$/);
+    await expect(resolveBootstrapEnv(record('already-cancelled', 'unused'), { ...profile, signal: controller.signal })).rejects.toThrow('cancelled');
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects actions before executing and never exposes failed command output', async () => {
     const provider = record('failure-example', 'console.error("example-private-value"); process.exit(1)');
     await expect(resolveBootstrapEnv(provider, { safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE })).rejects.toThrow('only for tool-free');

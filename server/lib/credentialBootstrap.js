@@ -103,7 +103,8 @@ const BOOTSTRAP_ENV_TTL_MS = 60_000;
  * the wrap (see module doc), and returns `{}` here. Nothing about a review
  * requires an `envCommand`.
  */
-export async function resolveBootstrapEnv(provider, { safetyProfile = null } = {}) {
+export async function resolveBootstrapEnv(provider, { safetyProfile = null, timeoutMs = 15_000, signal = undefined } = {}) {
+  if (signal?.aborted) throw new Error('Bootstrap credential command cancelled.');
   const argv = provider?.credentialBootstrap?.envCommand;
   if (!argv) return {};
   if (safetyProfile && !isPublicReviewNoToolProfile(safetyProfile)) {
@@ -127,7 +128,7 @@ export async function resolveBootstrapEnv(provider, { safetyProfile = null } = {
     // output, and never propagate stderr/stdout or the command in an error.
     execFile(spawnConfig.command, spawnConfig.args, {
       cwd, env: childEnv,
-      shell: false, timeout: 15_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+      shell: false, timeout: Math.max(1, Math.min(15_000, timeoutMs)), signal, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
     }, (error, stdout) => {
       if (error) return reject(new Error('Bootstrap credential command failed.'));
       const entries = String(stdout).split(/\r?\n/).flatMap(line => {

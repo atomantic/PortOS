@@ -1,6 +1,7 @@
+import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
-import { sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
+import { sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
 /**
  * Agent Repo-State Verification
  *
@@ -676,13 +677,15 @@ async function prepareRecoveryRetirement({ app, sourceWorkspace, branchName, wor
     return { reason: 'retirement-exact-inventory-unavailable' };
   }
   const tree = matches[0];
+  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
   const release = { branch: branchName, path: tree.path, head: tree.head,
+    ...(checkoutIdentity && { checkoutIdentity, observedAt: new Date().toISOString() }),
     locked: tree.locked === true, lockReason: tree.lockReason ?? null };
   const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
   const outcome = await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-review-pending',
     retirementObligations: [{ ...release, reason: 'retirement-review-pending' }],
     nextAction: 'Review this exact checkout through the retirement API; require its verified archive receipt.' });
-  const obligation = outcome?.retirementObligations?.find(row => sameRetirementCheckout(row, release));
+  const obligation = outcome?.retirementObligations?.find(row => sameRetirementObservation(row, release));
   if (!obligation?.createdAt) return { reason: 'retirement-obligation-unavailable' };
   if (release.locked) {
     await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-worktree-locked',

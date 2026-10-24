@@ -21,6 +21,42 @@ const safeSignal = signal => ['SIGTERM', 'SIGKILL'].includes(signal) ? signal : 
 const safePhase = phase => ['shutdown', 'drain'].includes(phase) ? phase : 'other';
 const safeCode = code => ['EPERM', 'EACCES', 'EINVAL', 'ENOSYS'].includes(code) ? code : 'other';
 
+const PROCESS_STATES = { R: 'runnable', S: 'sleeping', D: 'uninterruptible', Z: 'zombie', T: 'stopped', t: 'traced', X: 'dead', I: 'idle' };
+const validGroup = pgid => Number.isSafeInteger(pgid) && pgid > 1 && pgid !== process.pid;
+
+// Diagnostic only: a non-atomic sample never grants signaling or removal
+// authority. Publish relationships and bounded counts, never OS identities,
+// command lines, paths, or raw ps output. The retained child events remain
+// the reaping boundary even when this sample finds no leader.
+export async function observeBrowserProcessGroup(pgid, timeout) {
+  if (!validGroup(pgid)) return 'unavailable';
+  try {
+    const { stdout } = await execFileAsync('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'uid=', '-o', 'ruid=', '-o', 'stat='], {
+      timeout, maxBuffer: 4 * 1024 * 1024,
+    });
+    const rows = stdout.trim().split('\n').map(line => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+      if (!match) throw new Error('Invalid process observation');
+      return { pid: Number(match[1]), parent: Number(match[2]), group: Number(match[3]),
+        uid: Number(match[4]), ruid: Number(match[5]), state: PROCESS_STATES[match[6][0]] ?? 'other' };
+    });
+    if (!rows.some(row => row.pid === process.pid)) return 'unavailable';
+    const leader = rows.find(row => row.pid === pgid);
+    const members = rows.filter(row => row.group === pgid);
+    const states = Object.fromEntries([...Object.values(PROCESS_STATES), 'other'].map(state => [state, 0]));
+    for (const member of members) states[member.state]++;
+    const count = value => Math.min(999, value);
+    const relationship = (value, expected) => !leader ? 'absent' : value === expected ? 'same' : 'other';
+    return `leader:${leader?.state ?? 'absent'}|parent:${relationship(leader?.parent, process.pid)}`
+      + `|group:${relationship(leader?.group, pgid)}|uid:${relationship(leader?.uid, process.geteuid?.())}`
+      + `|ruid:${relationship(leader?.ruid, process.getuid?.())}`
+      + `|live:${count(members.length - states.zombie)}|zombies:${count(states.zombie)}`
+      + `|foreignUid:${count(members.filter(row => row.uid !== process.geteuid?.()).length)}`
+      + `|states:${Object.entries(states).filter(([, n]) => n).map(([state, n]) => `${state}:${count(n)}`).join('+') || 'empty'}`
+      + `|capped:${members.length > 999}`;
+  } catch { return 'unavailable'; }
+}
+
 export function signalBrowserProcessGroup(pgid, signal, state, phase) {
   if (state.error !== 'none') return;
   const key = signal === 'SIGTERM' ? 'term' : 'kill';
@@ -48,7 +84,7 @@ export async function drainBrowserProcessGroup(pgid, deadline, graceMs, state = 
     const phase = state.error === 'none' ? 'none' : safePhase(state.failedPhase);
     return Object.assign(new Error(`${message} (groupSignalError=${code}, groupFailedSignal=${signal}, groupFailedPhase=${phase})`), { code });
   };
-  if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid === process.pid) {
+  if (!validGroup(pgid)) {
     throw failure('Composition browser group identity unavailable');
   }
   let termAt;

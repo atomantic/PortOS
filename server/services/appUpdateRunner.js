@@ -19,6 +19,7 @@ import * as appUpdater from './appUpdater.js';
 import { logAction } from './history.js';
 import { checkPortosUpdatePreflight } from './updatePreflight.js';
 import { claimAppOperation, endAppOperation, recordOperationStep } from './appOperations.js';
+import { appOperationErrorContext } from '../lib/appOperationErrorContext.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
 /**
@@ -91,24 +92,29 @@ export async function runAppUpdate({
     };
 
     let failure = null;
+    let errorContext = null;
     result = await appUpdater.updateApp(app, emit, {
       syncFork,
       acknowledgeFork,
       acknowledgePersistentMindImageBackup,
     }).catch(err => {
       failure = err;
+      errorContext = appOperationErrorContext(err);
       // Refusals raised inside the update (the PortOS launcher's post-lock
       // re-check, say) carry the same acknowledgement codes the pre-check
       // emits above — the panel's retry buttons key on `code`, so dropping it
       // here would leave a refusal the user could have acted on inert.
-      io.emit('app:update:error', { appId: app.id, code: err.code || null, message: err.message });
+      io.emit('app:update:error', { appId: app.id, code: err.code || null, message: err.message, ...(errorContext ? { context: errorContext } : {}) });
       return null;
     });
 
     // The ledger and the apps-changed broadcast belong to this path now that it
     // is the only way to update an app — a thrown update still gets a row, with
     // success:false, rather than vanishing from the history.
-    await logAction('update', app.id, app.name, { steps: result?.steps ?? [] }, result?.success === true, failure?.message ?? null);
+    await logAction('update', app.id, app.name, {
+      steps: result?.steps ?? operation.steps,
+      ...(errorContext ? { errorCode: failure.code, errorContext } : {}),
+    }, result?.success === true, failure?.message ?? null);
     appsService.notifyAppsChanged('update', app.id);
 
     if (result?.selfUpdateStarted) {

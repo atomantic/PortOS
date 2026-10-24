@@ -37,6 +37,11 @@ export const pushAllBranches = (path) => request('/git/push-all', {
   method: 'POST',
   body: JSON.stringify({ path })
 });
+export const rebaseAndPushDefaultBranch = (path, options = {}) => request('/git/rebase-push', {
+  method: 'POST',
+  body: JSON.stringify({ path }),
+  ...options
+});
 export const getBranches = (path, options = {}) => request('/git/branches', {
   method: 'POST',
   body: JSON.stringify({ path }),

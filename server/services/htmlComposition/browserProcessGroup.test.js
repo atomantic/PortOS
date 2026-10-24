@@ -5,7 +5,7 @@ vi.mock('../../lib/childProcess.js', async () => {
   const { promisify } = await import('node:util');
   return { execFile: Object.assign(vi.fn(), { [promisify.custom]: observation.read }) };
 });
-const { drainBrowserProcessGroup, signalBrowserProcessGroup } = await import('./browserProcessGroup.js');
+const { drainBrowserProcessGroup, observeBrowserProcessGroup, signalBrowserProcessGroup } = await import('./browserProcessGroup.js');
 const group = 12345;
 const snapshot = (...rows) => ({ stdout: [`${process.pid} 1 S`, ...rows].join('\n') });
 let signal;
@@ -123,4 +123,38 @@ it('redacts inherited fields in the successful-quiescence diagnostic', async () 
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
   await drainBrowserProcessGroup(group, 500, 25, { error: '/private/code', failedSignal: '/private/signal', failedPhase: '/private/phase' });
   expect(warning).toHaveBeenCalledExactlyOnceWith('⚠️ Composition browser group quiesced after signal failure (code=other, signal=other, phase=other)');
+});
+
+it.skipIf(process.platform === 'win32')('observes only bounded owned-group relationships, states and credential differences', async () => {
+  const uid = process.geteuid();
+  const ruid = process.getuid();
+  observation.read.mockResolvedValue({ stdout: [
+    `${process.pid} 1 1 ${uid} ${ruid} S`,
+    `${group} ${process.pid} ${group} ${uid} ${ruid} S+`,
+    `23456 ${group} ${group} ${uid + 1} ${ruid + 1} Z`,
+    `34567 1 77777 ${uid + 1} ${ruid + 1} R`,
+  ].join('\n') });
+  expect(await observeBrowserProcessGroup(group, 500)).toBe('leader:sleeping|parent:same|group:same|uid:same|ruid:same|live:1|zombies:1|foreignUid:1|states:sleeping:1+zombie:1|capped:false');
+  expect(signal).not.toHaveBeenCalled();
+  expect(observation.read).toHaveBeenCalledExactlyOnceWith('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'uid=', '-o', 'ruid=', '-o', 'stat='], { timeout: 500, maxBuffer: 4 * 1024 * 1024 });
+});
+
+it.skipIf(process.platform === 'win32')('distinguishes an absent leader from a changed identity without granting signal authority', async () => {
+  observation.read.mockResolvedValue({ stdout: `${process.pid} 1 1 1234 1234 S\n23456 1 ${group} 1234 1234 Z` });
+  expect(await observeBrowserProcessGroup(group, 500)).toContain('leader:absent|parent:absent|group:absent|uid:absent|ruid:absent|live:0|zombies:1');
+  observation.read.mockResolvedValue({ stdout: `${process.pid} 1 1 1234 1234 S\n${group} 1 77777 987654321 987654321 /private/state` });
+  const result = await observeBrowserProcessGroup(group, 500);
+  expect(result).toContain('leader:other|parent:other|group:other|uid:other|ruid:other|live:0|zombies:0');
+  expect(result).not.toMatch(/private|987654321|12345|77777/);
+  expect(signal).not.toHaveBeenCalled();
+});
+
+it('keeps failed or incomplete diagnostic reads distinct from an empty group', async () => {
+  observation.read.mockRejectedValueOnce(new Error('/private/command'));
+  expect(await observeBrowserProcessGroup(group, 500)).toBe('unavailable');
+  observation.read.mockResolvedValueOnce({ stdout: `23456 1 ${group} 1234 1234 S` });
+  expect(await observeBrowserProcessGroup(group, 500)).toBe('unavailable');
+  observation.read.mockResolvedValueOnce({ stdout: '/private/output' });
+  expect(await observeBrowserProcessGroup(group, 500)).toBe('unavailable');
+  expect(signal).not.toHaveBeenCalled();
 });
