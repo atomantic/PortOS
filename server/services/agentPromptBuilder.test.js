@@ -1747,7 +1747,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/### Local Review Before Opening the PR\/MR/);
       expect(prompt).toMatch(/## Merge Gate/);
       expect(prompt).toMatch(/You are done — exit/);
-      expect(prompt).toContain('repeat the pre-PR local review phase');
+      expect(prompt).toContain('The completed local phase survives later feedback pushes');
+      expect(prompt).not.toContain('repeat the pre-PR local review phase');
       expect(prompt).toContain('the pre-PR local review is the only configured review');
       expect(prompt).toContain('Required local-review merge gate');
       expect(prompt).toContain('review-blocked');
@@ -2254,7 +2255,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/--review-with claude/);
       // The Copilot-specific pre-request wording must be replaced when no
       // Copilot reviewer leads the order (the agent invokes the reviewers itself).
-      expect(prompt).toMatch(/invoke each configured reviewer yourself/);
+      expect(prompt).toMatch(/invoke each remaining configured reviewer yourself/);
     });
 
     it('threads an ordered multi-reviewer list + flags into the follow-up block', () => {

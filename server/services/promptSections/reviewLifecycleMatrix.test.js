@@ -42,6 +42,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 
 import { buildReviewLoopFollowUpSection } from './reviewLifecycle.js';
 import { CLI_REVIEW_OUTCOME_GUIDE } from './reviewerOutcome.js';
+import { LOCAL_REVIEW_LIFECYCLE_GUIDE, LOCAL_REVIEW_LIFECYCLE_SCRIPT } from '../../lib/localReviewBridge.js';
 
 const SNAP = (name) => `./__snapshots__/reviewLoopMatrix/${name}.txt`;
 
@@ -138,8 +139,11 @@ const PHASES = {
 // prompt still hands a Windows agent the Windows path its shell needs.
 const BRIDGE_IN_SNAPSHOTS = '/portos/server/scripts/run-local-code-review.mjs';
 const RENDERED_BRIDGE = shellQuote(join('/portos', 'server/scripts/run-local-code-review.mjs'));
+// The lifecycle guide and CLI use the same snapshot-only path normalization.
 const stable = (section) => section.split(RENDERED_BRIDGE).join(BRIDGE_IN_SNAPSHOTS)
-  .split(CLI_REVIEW_OUTCOME_GUIDE).join('<portos-cli-review-outcome-guide>');
+  .split(CLI_REVIEW_OUTCOME_GUIDE).join('<portos-cli-review-outcome-guide>')
+  .split(LOCAL_REVIEW_LIFECYCLE_GUIDE).join('/portos/docs/LOCAL_REVIEW_LIFECYCLE.md')
+  .split(shellQuote(LOCAL_REVIEW_LIFECYCLE_SCRIPT)).join('/portos/server/scripts/local-review-lifecycle.mjs');
 
 const render = ({ phase, forge, leaveOpen, verbose }) => stable(buildReviewLoopFollowUpSection(
   fixture({ reviewLoopPRHost: FORGES[forge].host, reviewLoopLeaveOpen: leaveOpen }),
@@ -270,7 +274,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('4. **Wait for CI to finish**');
     expect(section).toContain('never merge on checks that were expected but never appeared');
     expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --match-head-commit <verified-head>');
-    expect(section).toContain('repeat the configured review loop for `ollama`, `copilot`, `codex`, `@example-user` against the new HEAD');
+    expect(section).toContain('repeat the configured review loop for `copilot`, `@example-user` against the new HEAD');
     expect(section).toContain(`8. ${INLINE_EXIT_STEP}`);
     expect(section).not.toContain('6. Exit. Do **not** run `/do:push`');
     expect(section).not.toContain('### Local Review Before Opening the PR/MR');

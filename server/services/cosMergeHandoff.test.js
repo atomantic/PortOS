@@ -6,8 +6,9 @@ import { join } from 'node:path';
 // Agent → server pending-merge handoff (#12247), end to end through the real
 // admission service and the real pr-watcher coordinator over synthetic stores.
 const f = vi.hoisted(() => ({
-  state: null, tasks: {}, apps: new Map(), checkouts: {}, pr: null, foreign: new Set(), reviewers: [], optionalReviewers: [], queueWriteFailure: false,
+  state: null, tasks: {}, apps: new Map(), checkouts: {}, pr: null, foreign: new Set(), reviewers: [], optionalReviewers: [], queueWriteFailure: false, delivery: null,
 }));
+vi.mock('../lib/localReviewLifecycle.js', () => ({ localReviewLifecycle: async (_cwd, { prUrl }) => f.delivery?.receipt?.prUrl === prUrl ? f.delivery : { reusable: false } }));
 vi.mock('./cosState.js', async () => {
   const { createFileWriteQueue } = await import('../lib/fileWriteQueue.js');
   return {
@@ -111,6 +112,7 @@ beforeEach(async () => {
   f.reviewers = ['codex'];
   f.optionalReviewers = [];
   f.queueWriteFailure = false;
+  f.delivery = null;
   f.pr = {
     number: 7, title: 'Example change', body: 'Closes #101', author: { login: 'example-user' },
     commits: [{ messageHeadline: 'fix: example', messageBody: '' }], state: 'OPEN', isDraft: false,
@@ -348,6 +350,13 @@ describe('pending-merge handoff', () => {
     const overrides = await arrange();
     expect(await handoff(overrides || {})).toMatchObject({ queued: false, reason, retryable: false });
     expect(pending()).toEqual([]);
+  });
+
+  it('accepts original completed pre-PR evidence after feedback pushes only for the bound PR', async () => {
+    const oldHead = 'f'.repeat(40);
+    await writeFile(join(workspace, 'portos-review-status'), `REVIEW_STATUS=clean\nREVIEW_HEAD=${oldHead}\n`);
+    f.delivery = { reusable: true, receipt: { status: 'clean', reviewedHead: oldHead, prUrl: PR_URL } };
+    expect((await handoffPendingMerge({ agentId: 'agent-1', prUrl: PR_URL, headSha: HEAD, worktreePath: workspace })).queued).toBe(true);
   });
 
   it('queues an all-optional roster on a clean status without a REVIEW_HEAD, but not blocked or a required reviewer', async () => {

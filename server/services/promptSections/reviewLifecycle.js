@@ -11,7 +11,7 @@ import { forkLocalBranch, forkRemoteName, normalizeForkHead } from '../../lib/fo
 import { shellQuote } from '../../lib/shellQuote.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { agentApiAuthNote, agentApiCurl } from '../../lib/agentApiToken.js';
-import { LOCAL_REVIEW_BRIDGE_SCRIPT, localReviewAttributionErrorGate } from '../../lib/localReviewBridge.js';
+import { LOCAL_REVIEW_BRIDGE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE, localReviewAttributionErrorGate } from '../../lib/localReviewBridge.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
 import { buildCliReviewerOutcomeInstructions } from './reviewerOutcome.js';
@@ -134,7 +134,7 @@ function remoteReviewBaseRef(baseBranch) {
 }
 
 function localReviewBlockedMergeGuard(handoff = 'follow the enclosing completion handoff without claiming a merge') {
-  return `**Required local-review merge gate:** Before any CI-fix or merge action, load the worktree-private local review state with \`LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"\`, fail closed if it is missing, and source it. If \`LOCAL_OVERALL_STATUS=review-blocked\`, do NOT run this merge path; the PR/MR was already published, so leave it open and ${handoff}. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} Accept only \`clean\` or \`partial\`; any other or missing status, or a \`LOCAL_REVIEWED_HEAD_SHA\` that does not equal \`$(git rev-parse HEAD)\`, fails closed.`;
+  return `**Required local-review merge gate:** Read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and run \`node ${shellQuote(LOCAL_REVIEW_LIFECYCLE_SCRIPT)} check '' "$PR_URL"\`; require readable JSON. A recorded \`LOCAL_OVERALL_STATUS=review-blocked\` or unresolved accepted finding still blocks merge: leave it open and ${handoff}. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} Otherwise require \`reusable:true\` with clean/partial receipt and saved phase state; legacyPublished:true reports unavailable historical evidence and continues hosted gates without fabricating local review. Mismatching/unreadable evidence blocks. Preserve the historical reviewed head; feedback or CI commits do not restart a completed local phase.`;
 }
 
 
@@ -544,6 +544,7 @@ function buildLocalPhaseTexts({ baseBranch, prBranch, localPhaseReviewRequired }
     ? '`git fetch origin`'
     : '`git fetch origin`, then run `git remote set-head origin --auto` to resolve the repository default branch';
   const initialReviewState = [
+    `**Resume gate:** Before dispatch/reset, follow \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` in this worktree: resolve the base and existing PR, restore completed phase evidence, and skip completed local reviewers on resume/feedback pushes. It also governs incomplete/legacy evidence, new deliveries and explicit re-review.`,
     `Before the first local reviewer, run ${localBasePreparation}. Set \`BRANCH=${renderedLocalBranch}\`; resolve \`LOCAL_PRE_REBASE_REMOTE\` from \`branch.$BRANCH.pushRemote\`, then \`remote.pushDefault\`, then \`branch.$BRANCH.remote\`, using \`origin\` if empty or \`.\`. Capture \`LOCAL_PRE_REBASE_HEAD_SHA=$(git rev-parse HEAD)\` and \`LOCAL_PRE_REBASE_REMOTE_SHA=$(git ls-remote --exit-code --heads "$LOCAL_PRE_REBASE_REMOTE" "$BRANCH" 2>/dev/null | awk 'NR == 1 {print $1}')\`. Immediately write all three to \`LOCAL_REVIEW_BASELINE_FILE="$(git rev-parse --git-path portos-local-review-baseline)"\` with \`printf 'LOCAL_PRE_REBASE_REMOTE=%s\\nLOCAL_PRE_REBASE_HEAD_SHA=%s\\nLOCAL_PRE_REBASE_REMOTE_SHA=%s\\n' "$LOCAL_PRE_REBASE_REMOTE" "$LOCAL_PRE_REBASE_HEAD_SHA" "$LOCAL_PRE_REBASE_REMOTE_SHA" > "$LOCAL_REVIEW_BASELINE_FILE"\`; abort if the write fails.`,
     `Use the fetched remote base for the review diff; a branch being behind alone does not require a rebase. Inspect changes on both sides for semantic overlap. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk, using \`git rebase ${renderedBaseBranch}\`. A fetch or base-resolution failure blocks publication. Resolve ordinary rebase conflicts in this same session: inspect every unmerged path, preserve both sides' intent, stage only the resolved files with \`git add <file> ...\`, and run \`git rebase --continue\` until the rebase completes. Abort and stop only when a conflict requires a product decision or cannot be resolved safely; before stopping, run \`git rebase --abort 2>/dev/null || true\`.`,
     `After base preparation, set \`LOCAL_PHASE_START_SHA=$(git rev-parse HEAD)\`; reset and initialize worktree-private \`LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"\` with \`printf 'LOCAL_PHASE_START_SHA=%s\\nLOCAL_OVERALL_STATUS=incomplete\\nLOCAL_STOP_TRIGGERED=false\\nLOCAL_STOP_INDEX=-1\\nLOCAL_STOP_REVIEW_COMMITS=-1\\nLOCAL_PHASE_COMMITS=0\\nLOCAL_REVIEWED_HEAD_SHA=\\n' "$LOCAL_PHASE_START_SHA" > "$LOCAL_REVIEW_STATE_FILE"\`. Abort if reset/initialization fails.`,
@@ -589,7 +590,7 @@ function buildLocalPhaseTexts({ baseBranch, prBranch, localPhaseReviewRequired }
         ? ` The configured reviewer positions are zero-based: ${reviewerPositionLabel}. When a qualifying verdict triggers the configured stop condition, set \`LOCAL_STOP_TRIGGERED=true\` and \`LOCAL_STOP_INDEX\` to that triggering local reviewer's position; when the list exhausts without a qualifying stop or a result is inconclusive, set \`LOCAL_STOP_TRIGGERED=false\` and \`LOCAL_STOP_INDEX=-1\`.`
         : ' Set `LOCAL_STOP_INDEX=-1` whenever no qualifying stop condition fired.';
       return [
-        `4. When the local reviewer list is exhausted (or the stop mode triggers), record \`LOCAL_OVERALL_STATUS\`: use \`review-blocked\` only when a required reviewer could not produce a verdict because of an availability, quota/provider, timeout, transport, malformed, empty, or no-verdict failure; never use it for accepted findings, failed tests/build, unpushed fixes, or state/publication failures, and do not self-review. Set \`LOCAL_STOP_TRIGGERED=true\` when the configured stop condition actually fired on a qualifying verdict, including when that verdict came from the final local reviewer; set it false for list exhaustion, an inconclusive result, or \`review-blocked\`.${localStopIndexNote} Compute \`LOCAL_PHASE_COMMITS=$(git rev-list "$LOCAL_PHASE_START_SHA..HEAD" --count)\`; if a qualifying stop fired, retain the triggering reviewer's \`LOCAL_REVIEWER_COMMITS\` as \`LOCAL_STOP_REVIEW_COMMITS\`, otherwise set \`LOCAL_STOP_REVIEW_COMMITS=-1\`. Record \`LOCAL_REVIEWED_HEAD_SHA=$(git rev-parse HEAD)\`. Persist all phase state for later shell calls in the worktree-private Git state file: \`LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"\`; then run \`printf 'LOCAL_PHASE_START_SHA=%s\\nLOCAL_OVERALL_STATUS=%s\\nLOCAL_STOP_TRIGGERED=%s\\nLOCAL_STOP_INDEX=%s\\nLOCAL_STOP_REVIEW_COMMITS=%s\\nLOCAL_PHASE_COMMITS=%s\\nLOCAL_REVIEWED_HEAD_SHA=%s\\n' "$LOCAL_PHASE_START_SHA" "$LOCAL_OVERALL_STATUS" "$LOCAL_STOP_TRIGGERED" "$LOCAL_STOP_INDEX" "$LOCAL_STOP_REVIEW_COMMITS" "$LOCAL_PHASE_COMMITS" "$LOCAL_REVIEWED_HEAD_SHA" > "$LOCAL_REVIEW_STATE_FILE"\`. A \`review-blocked\` state is a completed local phase that permits publication but blocks the merge gate; ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If that write fails, do NOT push or open the PR/MR. For a final-reviewer stop, follow the same phase-level gate below: \`on-clean\` requires \`LOCAL_OVERALL_STATUS=clean\` with \`LOCAL_STOP_REVIEW_COMMITS=0\`, while \`on-findings\` requires \`LOCAL_OVERALL_STATUS=clean\` with \`LOCAL_STOP_REVIEW_COMMITS>0\`; a \`partial\` status is already a qualifying stop. Return to the Completion Workflow and continue with the push and PR/MR creation step when all executed required reviewers are clean and optional reviewers are clean or inconclusive, when \`LOCAL_OVERALL_STATUS=partial\` records a qualifying configured stop-mode short-circuit, or when \`LOCAL_OVERALL_STATUS=review-blocked\` records only reviewer unavailability. Do NOT push or open the PR/MR before this local phase is complete.`,
+        `4. Complete and persist the local aggregate, stop-mode fields, original reviewed head and delivery receipt as specified in \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` ("Persisting the inline local phase").${localStopIndexNote} Honor a stop including when that verdict came from the final local reviewer. Required-review availability failure is review-blocked, never clean; it permits publication but blocks merge. Accepted unresolved findings, failed tests/build, unpushed fixes or state failures block publication. Do not self-review. Return to the Completion Workflow only after successful persistence; keep fixes local until that workflow publishes. ${REVIEW_UNAVAILABLE_REPORTING_NOTE}`,
       ];
     },
   };
@@ -645,11 +646,11 @@ function buildFollowUpPhaseTexts({ leaveOpen, baseBranch, prBranch, prUrl, prNum
     ? '**Your job is to drive the review-and-fix loop to completion. Do NOT merge — this PR is tracked in JIRA and a human lands it.**'
     : '**Your job is to drive the review-and-fix loop to completion and merge the PR.**';
   const exitStep = `6. Exit. Do **not** run \`/do:push\` or open a new PR${leaveOpen ? '' : ' — the merge handles everything'}. The system will clean up your worktree on exit.`;
-  const initialReviewState = ({ hasCopilot, copilotIsFirst }) => ((hasCopilot && copilotIsFirst)
+  const initialReviewState = ({ hasCopilot, copilotIsFirst }) => (`Before any local reviewer dispatch, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and check this exact PR delivery receipt. Restore and exclude completed pre-PR local reviewers from the active loop; feedback/CI commits never invalidate that completion. Resume only incomplete required reviewers, and retain hosted approval/CI gates. ` + ((hasCopilot && copilotIsFirst)
     ? 'The system has already requested the initial Copilot code review (Copilot leads the order).'
     : hasCopilot
       ? 'Copilot is configured after another reviewer, so the system did NOT pre-request it — request the Copilot review yourself when you reach its turn (after the earlier reviewers’ fixes are pushed), and invoke the other reviewers yourself.'
-      : 'The system did NOT pre-request a reviewer because no Copilot review leads the order — you must request/invoke each configured reviewer yourself against the PR diff.');
+      : 'The system did NOT pre-request a reviewer because no Copilot review leads the order — you must request/invoke each remaining configured reviewer yourself against the PR diff.'));
   return {
     ...prSidePhaseTexts(prNumber),
     heading: '## Review-Loop Follow-up (PRIMARY OBJECTIVE)',
@@ -1109,20 +1110,20 @@ export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>',
     ? localReviewers.map(reviewer => `\`${reviewer}\``).join(', ')
     : '';
   const localReviewAfterCodeFix = localReviewNames
-    ? ` If a CI fix changes code, repeat the pre-PR local review phase for ${localReviewNames} against the new HEAD, using its same required/optional and stop-mode rules; commit and verify any reviewer fixes before pushing or merging.`
+    ? ` The pre-PR local review for ${localReviewNames} is complete for this delivery. CI fixes and forge feedback pushes do not restart it; preserve its original reviewed head and model receipts. Run affected validation and required hosted reviews/checks on the new head.`
     : '';
   const localReviewMergeGuard = localReviewRequired && localReviewNames
     ? localReviewBlockedMergeGuard()
     : '';
   const reviewRecheckNames = Array.isArray(reviewRecheckReviewers)
-    ? reviewRecheckReviewers.filter(Boolean).map(reviewer => `\`${reviewer}\``).join(', ')
+    ? reviewRecheckReviewers.filter(reviewer => typeof reviewer === 'string' && (reviewer === 'copilot' || reviewer.startsWith('@'))).map(reviewer => `\`${reviewer}\``).join(', ')
     : '';
   const reviewRecheckAfterCodeFix = reviewRecheckNames
     ? ` If the CI fix changes code, repeat the configured review loop for ${reviewRecheckNames} against the new HEAD before returning to the CI wait; an earlier clean verdict does not cover changed code.`
     : '';
   const rebaseReviewNotes = [
     localReviewNames
-      ? `after that rebase, repeat the pre-PR local review phase for ${localReviewNames} against the new HEAD, using its same required/optional and stop-mode rules; commit and verify any fixes before pushing or merging`
+      ? `after that rebase, preserve the completed pre-PR local phase for ${localReviewNames}; do not automatically respawn it`
       : '',
     reviewRecheckNames
       ? `repeat the configured review loop for ${reviewRecheckNames} against the rebased HEAD before re-checking CI; an earlier clean verdict does not cover changed code`
@@ -1219,7 +1220,7 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
     // A pre-PR local phase already reviewed; only the PR-SIDE roster is empty.
     local: {
       headingPrefix: '',
-      label: () => `The pre-PR local review for ${localReviewers.map(reviewer => `\`${reviewer}\``).join(', ')} has completed; no PR-side code reviewer is configured. The merge gate still re-runs that local review after any conflict rebase${localReviewRequired ? '; a \`review-blocked\` result leaves the PR/MR open until the required review completes' : ''}.`,
+      label: () => `The pre-PR local review for ${localReviewers.map(reviewer => `\`${reviewer}\``).join(', ')} has completed; no PR-side code reviewer is configured. The completed local phase survives later feedback pushes and conflict rebases without another automatic local reviewer${localReviewRequired ? '; a \`review-blocked\` result leaves the PR/MR open until the required review completes' : ''}.`,
       objective: inline ? 'Land it yourself once CI is green.' : 'Your job is to land it once CI is green.',
       exitNote: inline
         ? 'Do NOT start a second PR-side code review — the pre-PR local review is the only configured review.'
