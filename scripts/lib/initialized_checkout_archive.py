@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import uuid
 
 MAX_FILES = 200000
@@ -406,9 +407,55 @@ def scan(request):
     return work, admin, common
 
 
+def preflight_copy_ownership(rows):
+    """Copies must represent original ownership without changing the caller."""
+    uid = os.geteuid()
+    groups = {os.getegid(), *os.getgroups()}
+    unavailable = next((row for row in rows if uid != 0 and
+                        (row['uid'] != uid or row['gid'] not in groups)), None)
+    if unavailable is None:
+        return None
+    # Darwin inherits a new directory's group from its parent, even when that
+    # group is not in getgroups(). A private empty carrier created by this user
+    # can retain that group across an exclusive same-volume rename. Permit only
+    # uniform directory trees; mixed unsupported groups still refuse preflight.
+    anchor = Path('/private/tmp')
+    if (rows[0]['kind'] == 'directory' and all(row['uid'] == uid and row['gid'] == unavailable['gid'] for row in rows)
+            and anchor.is_dir() and not anchor.is_symlink()
+            and anchor.stat().st_gid == unavailable['gid']
+            and anchor.stat().st_dev == rows[0]['filesystemIdentity']['dev']
+            and os.access(anchor, os.W_OK | os.X_OK)):
+        return anchor
+    fail(f"ownership-preservation-unavailable:uid={unavailable['uid']}:gid={unavailable['gid']}; "
+         'use a preservation executor already authorized for the original ownership; '
+         'do not change source ownership')
+
+
 def copy_tree(source, destination):
     if destination.exists() or destination.is_symlink():
         raise RuntimeError('Destination exists; never overwrite recovery evidence')
+    paths = [source, *source.rglob('*')] if source.is_dir() else [source]
+    rows = []
+    for path in paths:
+        info = path.lstat()
+        rows.append({'uid': info.st_uid, 'gid': info.st_gid,
+                     'kind': 'directory' if stat.S_ISDIR(info.st_mode) else 'other',
+                     'filesystemIdentity': {'dev': info.st_dev}})
+    anchor = preflight_copy_ownership(rows)
+    if anchor:
+        carrier = Path(tempfile.mkdtemp(prefix='portos-owned-archive-root-', dir=anchor))
+        try:
+            if carrier.stat().st_gid != rows[0]['gid'] or carrier.stat().st_uid != os.geteuid():
+                fail('ownership-inheritance-changed')
+            exclusive_rename(carrier, destination)
+        except BaseException:
+            # This is our still-empty private carrier, never source or archive.
+            carrier.rmdir()
+            raise
+    copy_tree_contents(source, destination)
+
+
+def copy_tree_contents(source, destination):
     env = {k: v for k, v in os.environ.items() if not k.startswith('DITTO')}
     env['DITTOABORT'] = '1'
     command(['/usr/bin/ditto', '--rsrc', '--extattr', '--acl', '--qtn',
@@ -444,9 +491,18 @@ def copy_tree(source, destination):
     for original in [source, *source.rglob('*')] if source.is_dir() else [source]:
         target = destination if original == source else destination / original.relative_to(source)
         original_stat = original.lstat()
-        # ditto creates symlinks with the current timestamp. Restore the link's
-        # own timestamps without resolving even a dangling dependency target.
-        if stat.S_ISLNK(original_stat.st_mode):
+        copied_stat = target.lstat()
+        if (original_stat.st_uid, original_stat.st_gid) != (copied_stat.st_uid, copied_stat.st_gid):
+            # ditto cannot retain a nondefault group as an unprivileged caller.
+            # Only NEW copies are changed, without following even dangling links.
+            # chown may clear set-id bits; restore the original mode afterward.
+            os.chown(target, original_stat.st_uid, original_stat.st_gid, follow_symlinks=False)
+            if stat.S_IMODE(target.lstat().st_mode) != stat.S_IMODE(original_stat.st_mode):
+                os.chmod(target, stat.S_IMODE(original_stat.st_mode), follow_symlinks=False)
+        # ditto creates symlinks with the current timestamp and leaves a
+        # pre-created root directory's timestamp changed by its child writes.
+        # Restore only NEW-copy metadata; never resolve a dependency link.
+        if stat.S_ISLNK(original_stat.st_mode) or stat.S_ISDIR(original_stat.st_mode):
             os.utime(target, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
                      follow_symlinks=False)
         expected_flags = original_stat.st_flags
@@ -512,6 +568,9 @@ def inspect(request, full=False):
                 fail('unregistered-private-module')
     sources = {'working': manifest(work), 'administration': manifest(admin, True),
                'common': {name: manifest(common / name, True) for name in COMMON_PARTS if (common / name).exists()}}
+    if request.get('requireOwnership') is True:
+        for rows in [sources['working'], sources['administration'], *sources['common'].values()]:
+            preflight_copy_ownership(rows)
     facts = {'identity': {'working': identity(work), 'administration': identity(admin), 'common': identity(common)},
              'privateGitDir': str(admin), 'commonGitDir': str(common), 'modules': modules, 'parent': parent,
              'repoPath': request['repoPath'], 'release': release}
@@ -610,6 +669,8 @@ def preserve(request):
             fail('quarantine-cross-device')
     rows = before['sources']['working'] + before['sources']['administration']
     rows += [r for section in before['sources']['common'].values() for r in section]
+    for section in [before['sources']['working'], before['sources']['administration'], *before['sources']['common'].values()]:
+        preflight_copy_ownership(section)
     size = sum(r.get('bytes', 0) for r in rows)
     if size > MAX_BYTES or shutil.disk_usage(root).free < size * 2 + 1024 ** 3:
         fail('insufficient-preservation-space')
