@@ -38,7 +38,8 @@ describe('no-install module import extraction', () => {
   });
 
   it('keeps executable JSX expressions outside quoted child prose and attribute strings', () => {
-    const source = `<div title="import(unknown)">"{load(import('./child.js'))}"<span>{import('./nested.js')}</span>{
+    const source = `<div // A child's "import(unknown)" prose has { and > here.
+      title="import(unknown)">"{load(import('./child.js'))}"<span>{import('./nested.js')}</span>{
       <Other value={import('./attribute.js')} />
     }</div>`;
     expect(moduleImports(source)).toEqual({ statics: [],

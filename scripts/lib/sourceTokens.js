@@ -96,7 +96,14 @@ export function tokenize(src, proseBackticks = new Set()) {
       pos += opening[0].length;
       let opened = false;
       while (pos < n) {
-        if (src[pos] === '"' || src[pos] === "'") {
+        if (src.startsWith('//', pos)) {
+          const end = src.indexOf('\n', pos + 2);
+          pos = end < 0 ? n : end + 1;
+        } else if (src.startsWith('/*', pos)) {
+          const end = src.indexOf('*/', pos + 2);
+          if (end < 0) throw new Error('unterminated JSX tag comment');
+          pos = end + 2;
+        } else if (src[pos] === '"' || src[pos] === "'") {
           const quote = src[pos++];
           const end = src.indexOf(quote, pos);
           if (end < 0) throw new Error('unterminated JSX attribute');
