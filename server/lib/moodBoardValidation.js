@@ -40,25 +40,33 @@ export function isVideoItemMediaKey(key) {
 // External/pinned image URL: http(s), a same-origin app path (e.g. a served
 // `/data/images/...` URL), or a `data:image/<fmt>;base64,...` URI (which
 // `localizeImageUrl` decodes and saves into `/data/images/` before the board
-// row commits). Standard URLs stay bounded to 2048 chars; data URLs are bounded
-// to the 12MB raw-image ceiling (`MAX_IMAGE_DATA_URL_BYTES`). A protocol-relative
-// `//host/...` is rejected so the leading-slash branch never resolves off-origin.
+// row commits). Standard URLs stay bounded to 2048 chars. Data URLs are bounded
+// by the decoded 12MB ceiling (`MAX_IMAGE_DATA_URL_BYTES`), measured after
+// stripping whitespace: MIME wrapping is insignificant to the image, and a
+// character cap that counted it would reject a max-size paste before the
+// decoder's own limit. A protocol-relative `//host/...` is rejected so the
+// leading-slash branch never resolves off-origin.
 const MAX_HTTP_OR_APP_IMAGE_URL_LEN = 2048;
 export const MAX_IMAGE_DATA_URL_BYTES = 12 * 1024 * 1024;
-const MAX_IMAGE_DATA_URL_LEN = Math.ceil((MAX_IMAGE_DATA_URL_BYTES * 4) / 3) + 64;
-const DATA_IMAGE_URL_RE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+$/i;
+const MAX_IMAGE_DATA_URL_PAYLOAD_LEN = Math.ceil((MAX_IMAGE_DATA_URL_BYTES * 4) / 3);
+const DATA_IMAGE_URL_RE = /^data:image\/(?:png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=\s]+)$/i;
+const IMAGE_URL_MESSAGE = 'imageUrl must be an http(s) URL, a base64 PNG, JPEG, GIF, or WebP data URL, or an absolute app path';
 
-function isDataImageUrl(value) {
-  return value.length <= MAX_IMAGE_DATA_URL_LEN && DATA_IMAGE_URL_RE.test(value);
+function imageUrlIssue(value) {
+  if (/^https?:\/\//.test(value) || (value.startsWith('/') && !value.startsWith('//'))) {
+    return value.length <= MAX_HTTP_OR_APP_IMAGE_URL_LEN ? null : 'imageUrl must be at most 2048 characters';
+  }
+  const match = DATA_IMAGE_URL_RE.exec(value);
+  if (!match) return IMAGE_URL_MESSAGE;
+  const payload = match[1].replace(/\s+/g, '');
+  if (payload.length > MAX_IMAGE_DATA_URL_PAYLOAD_LEN) return 'Image data URL exceeds the 12MB limit';
+  return null;
 }
 
-const imageUrlSchema = z.string().trim().min(1).max(MAX_IMAGE_DATA_URL_LEN).refine(
-  (v) => (
-    v.length <= MAX_HTTP_OR_APP_IMAGE_URL_LEN
-    && (/^https?:\/\//.test(v) || (v.startsWith('/') && !v.startsWith('//')))
-  ) || isDataImageUrl(v),
-  'imageUrl must be an http(s) URL, a data:image/*;base64 URL, or an absolute app path',
-);
+const imageUrlSchema = z.string().trim().min(1).superRefine((value, ctx) => {
+  const message = imageUrlIssue(value);
+  if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+});
 
 const captionSchema = z.string().max(2000).nullable().optional();
 const sourceSchema = z.string().max(2048).nullable().optional();

@@ -81,6 +81,13 @@ export default function MoodBoardDetail() {
   return <MoodBoardEditor key={id} id={id} />;
 }
 
+function moodBoardAddErrorMessage(err) {
+  const details = Array.isArray(err?.context?.details)
+    ? err.context.details.map((entry) => entry?.message).filter((message) => typeof message === 'string' && message)
+    : [];
+  return details.join('; ') || err?.message || 'Failed to add item';
+}
+
 function MoodBoardEditor({ id }) {
   const navigate = useNavigate();
   const [board, setBoard] = useState(null);
@@ -313,7 +320,7 @@ function MoodBoardEditor({ id }) {
     });
     if (!mountedRef.current) return;
     setAdding(false);
-    if (!item) { toast.error(addError?.message || 'Failed to add item'); return; }
+    if (!item) { toast.error(moodBoardAddErrorMessage(addError)); return; }
     setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []).filter(existing => existing.id !== item.id), item] } : prev));
     resetAddForm();
   };

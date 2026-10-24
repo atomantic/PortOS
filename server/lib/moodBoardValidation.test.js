@@ -85,6 +85,25 @@ describe('moodBoardItemCreateSchema', () => {
   it('rejects non-raster or non-base64 data: URLs', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }).success).toBe(false);
     expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: 'data:text/html;base64,PGh0bWw+' }).success).toBe(false);
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: 'data:image/png,iVBORw0KGgo=' }).success).toBe(false);
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: 'data:image/webp;charset=utf-8;base64,AAAA' }).success).toBe(false);
+  });
+  it('accepts whitespace inside a data URL and rejects a payload past the 12MB ceiling', () => {
+    const payloadLen = Math.ceil((12 * 1024 * 1024 * 4) / 3);
+    const payload = 'A'.repeat(payloadLen);
+    let wrapped = '';
+    let offset = 0;
+    for (let breaks = 0; breaks < 21; breaks += 1) {
+      wrapped += `${payload.slice(offset, offset + 76)}\r\n`;
+      offset += 76;
+    }
+    wrapped += payload.slice(offset);
+    const dataUrl = `data:image/webp;base64,${wrapped}`;
+    expect(dataUrl.length).toBeGreaterThan(payloadLen + 64);
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: dataUrl }).success).toBe(true);
+    const over = moodBoardItemCreateSchema.safeParse({ type: 'image', imageUrl: `data:image/webp;base64,${payload}AAAA` });
+    expect(over.success).toBe(false);
+    expect(over.error.issues[0].message).toBe('Image data URL exceeds the 12MB limit');
   });
   it('accepts an image item with a mediaKey', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'image', mediaKey: 'image:a.png' }).success).toBe(true);
