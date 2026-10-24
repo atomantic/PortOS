@@ -17,6 +17,7 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
   const [jobId, setJobId] = useState(null);
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
+  const [jobError, setJobError] = useState('');
   const [busy, setBusy] = useState(false);
   const mounted = useMounted();
   const identity = JSON.stringify([loom, options]);
@@ -38,17 +39,34 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
   useEffect(() => {
     let active = true;
     setJob(null);
+    setJobError('');
+    let generation = 0;
+    let latestRevision = -1;
     const accept = next => {
-      if (!active || next.loomId !== loom.id || next.jobId !== jobId) return;
+      if (!active || next.loomId !== loom.id || next.jobId !== jobId || next.revision < latestRevision) return;
+      latestRevision = next.revision;
+      setJobError('');
       setJob(previous => previous && previous.revision >= next.revision ? previous : next);
     };
-    const read = () => jobId && api.getLoomExport(loom.id, jobId, { silent: true }).then(accept)
-      .catch(err => { if (active) setError(err.message); });
+    const read = () => {
+      if (!jobId) return;
+      const requestedGeneration = ++generation;
+      const requestedRevision = latestRevision;
+      return api.getLoomExport(loom.id, jobId, { silent: true }).then(next => {
+        if (requestedGeneration === generation) accept(next);
+      }).catch(err => {
+        if (active && requestedGeneration === generation && requestedRevision === latestRevision) setJobError(err.message);
+      });
+    };
     controller.current = read;
     socket.on('fableloom:export:job', accept);
     read();
     return () => { active = false; controller.current = null; socket.off('fableloom:export:job', accept); };
   }, [loom.id, jobId]);
+
+  useEffect(() => {
+    if (open) controller.current?.();
+  }, [open]);
 
   const change = patch => setOptions(previous => ({ ...previous, ...patch }));
   const start = async () => {
@@ -102,10 +120,11 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
       {!!job?.findings?.length && <div><p>Selected job findings</p>{job.findings.map((finding, index) => <p key={index}>{finding.severity}: {finding.message}</p>)}</div>}
       {job?.error && <p role="alert">{job.error.message}</p>}
       {error && <p role="alert">{error}</p>}
+      {jobError && <p role="alert">{jobError}</p>}
     </div>
     <div className="flex flex-wrap gap-3">
       <button disabled={busy || !!running || !preflight?.canBuild || preflight.identity !== identity} onClick={start} className="rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50">Build ZIP</button>
-      {jobId && error && <button onClick={() => { setError(''); controller.current?.(); }} className="rounded border border-port-border px-3 py-2">Refresh selected job</button>}
+      {jobId && (error || jobError) && <button onClick={() => { controller.current?.(); }} className="rounded border border-port-border px-3 py-2">Refresh selected job</button>}
       {job?.jobId === jobId && job?.status === 'completed' && <button disabled={busy} onClick={download} className="rounded border border-port-border px-3 py-2">Download selected ZIP</button>}
     </div>
   </Modal>;

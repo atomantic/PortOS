@@ -87,4 +87,23 @@ describe('story export interaction', () => {
     await act(async () => {});
   });
 
+
+  it('recovers a missed terminal event after a failed initial status read by reopening', async () => {
+    api.getLoomExport.mockRejectedValueOnce(new Error('Status connection failed'))
+      .mockResolvedValue(snapshot('selected', 'completed', 2));
+    const close = vi.fn();
+    const { rerender } = render(<LoomExportModal loom={loom} onClose={close} />);
+    await waitFor(() => expect(screen.getByText('Build ZIP')).toBeEnabled());
+    fireEvent.click(screen.getByText('Build ZIP'));
+    await screen.findByText('Status connection failed');
+    expect(screen.getByText('Refresh selected job')).toBeEnabled();
+    rerender(<LoomExportModal loom={loom} open={false} onClose={close} />);
+    rerender(<LoomExportModal loom={loom} open onClose={close} />);
+    await screen.findByText('Download selected ZIP');
+    expect(api.getLoomExport).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Status connection failed')).toBeNull();
+    expect(api.startLoomExport).toHaveBeenCalledTimes(1);
+    await act(async () => {});
+  });
+
 });
