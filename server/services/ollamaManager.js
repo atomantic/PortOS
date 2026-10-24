@@ -1229,13 +1229,13 @@ const modelDetailsCache = new Map() // name -> { contextLength: number|null, cap
  * @param {string} name
  * @returns {Promise<{ contextLength: number|null, capabilities: string[]|null }>}
  */
-async function getModelDetails(name) {
+async function getModelDetails(name, requestOptions = {}) {
   const miss = { contextLength: null, capabilities: null }
   if (!name) return miss
   if (modelDetailsCache.has(name)) return modelDetailsCache.get(name)
   // /api/show documents the id under `model`; current Ollama also accepts the
   // legacy `name`, so send both (extra fields are ignored) for cross-version safety.
-  const data = await ollamaRequest('/api/show', { method: 'POST', body: JSON.stringify({ model: name, name }) }).catch(() => null)
+  const data = await ollamaRequest('/api/show', { ...requestOptions, method: 'POST', body: JSON.stringify({ model: name, name }) }).catch(() => null)
   // A transient /api/show failure must NOT be cached — that would pin the model
   // with no context label / wrong vision flag until restart. Only cache when the
   // daemon actually answered; a present-but-missing field legitimately caches
@@ -1263,8 +1263,8 @@ async function getModelDetails(name) {
  * @param {string} name
  * @returns {Promise<string[]|null>}
  */
-async function getModelCapabilities(name) {
-  return (await getModelDetails(name)).capabilities
+async function getModelCapabilities(name, requestOptions = {}) {
+  return (await getModelDetails(name, requestOptions)).capabilities
 }
 
 /** Add `contextLength` + `capabilities` to each model (parallel, cached). */

@@ -95,7 +95,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, recordCompletionCleanup, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -560,11 +560,29 @@ describe('completeAgent idempotence (#3384)', () => {
     const result = await completeAgent(agentId, { success, cleanupPending: !success });
     expect(result.result.success).toBe(success);
     expect(result.metadata.repoStateVerification.status).toBe('pending');
+    expect(result.metadata.completionCleanup).toMatchObject({ status: 'abandoned', reason: 'completion-context-unavailable' });
     expect(result.metadata.completedCheckouts).toEqual([receipt]);
     const archived = JSON.parse(await readFile(join(mockCosState.agentsDir, result.completedAt.slice(0, 10), agentId, 'metadata.json'), 'utf8'));
     expect(archived.metadata.completedCheckouts).toEqual([receipt]);
     await completeAgent(agentId, { success: true });
     expect(captureCompletedCheckouts).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops replay inputs from durable terminal ledgers without erasing independent preservation holds', async () => {
+    const id = 'claim-terminal-ledger';
+    const startedAt = '2026-01-01T00:00:00Z';
+    mockCosState.state.agents[id] = { id, status: 'running', startedAt, output: [], metadata: {
+      claimPicksOwnBranch: true, completionCleanup: { version: 1, status: 'pending',
+        context: { task: { id: 'original' }, outputBuffer: 'large legacy output' },
+        replay: { version: 1, kind: 'replay', bytes: 123, sha256: 'a'.repeat(64) }, stages: {} } } };
+    const completed = await completeAgent(id, { success: true });
+    expect(await recordCompletionCleanup(id, startedAt, { status: 'failed', stages: {
+      pipeline: { status: 'failed', retryable: false, reason: 'external-state-unknown' } } })).toBe(true);
+    const archived = JSON.parse(await readFile(join(mockCosState.agentsDir, completed.completedAt.slice(0, 10), id, 'metadata.json'), 'utf8'));
+    expect(archived.metadata.completionCleanup.status).toBe('failed');
+    expect(archived.metadata.completionCleanup).not.toHaveProperty('context');
+    expect(archived.metadata.completionCleanup).not.toHaveProperty('replay');
+    expect(archived.metadata.repoStateVerification.status).toBe('pending');
   });
 
   it('records transient capture failure as a durable unknown obligation without rerunning finalization', async () => {

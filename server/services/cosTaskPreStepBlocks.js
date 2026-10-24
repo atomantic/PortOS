@@ -1,4 +1,4 @@
-import { unresolvedRetirements, sameRetirementCheckout } from '../lib/reconcileRetirementEvidence.js';
+import { unresolvedRetirements, sameRetirementCheckout, sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 /**
@@ -593,11 +593,14 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // the repository contains only its default branch. Keep known holds visible.
   const dispatchedOutcome = await taskSchedule.recordBranchReconcileOutcome(app.id, {
     status: 'running', reason: 'batch-pending',
+    // Shared-origin branches without a local ref/checkout may belong to another
+    // install. Keep their report visible without making local completion wait
+    // for that machine's work. Unknown remote state still fails closed below.
+    remoteInventory: result.orphanRemotes ?? { reaped: [], reported: [] },
     remaining: [
       ...idlePark.remaining,
       ...allActionable.map(b => ({ ...(b.retirement?.release || { branch: b.branch }), reason: b.retirement ? 'retirement-review-pending' : 'actionable' })),
       ...(result.orphanRemotes?.remoteUnavailable ? [{ reason: 'remote-state-unavailable' }] : []),
-      ...(result.orphanRemotes?.reported || []).map(b => ({ branch: typeof b === 'string' ? b : b.branch, reason: 'remote-branch-held' })),
     ],
     nextAction: 'Continue the bounded sweep and rescan after the final batch.',
   });
@@ -686,7 +689,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,
-    createdAt: dispatchedOutcome.retirementObligations.find(row => sameRetirementCheckout(row, branch.retirement.release))?.createdAt,
+    createdAt: dispatchedOutcome.retirementObligations.find(row => sameRetirementObservation(row, branch.retirement.release))?.createdAt,
   }));
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [

@@ -22,6 +22,19 @@ function harness(inspection = required()) {
 }
 
 describe('completed cleanup review dispatch', () => {
+  it.each([
+    [{ id: 'review-1', blocked: 'Review coordinator retry budget exhausted or unreadable' }, 'blocked', 'Review coordinator retry budget exhausted or unreadable'],
+    [{ id: 'review-1', deferred: true }, 'deferred', 'required-code-review-deferred'],
+  ])('retains refused successors without claiming dispatch: %j', async (task, phase, reason) => {
+    const deps = harness();
+    deps.spawn.mockResolvedValue(task);
+    expect(await inspectOrQueueCompletedReview(input, deps)).toEqual({ disposition: 'held', reason, taskId: 'review-1' });
+    expect(deps.reservation()).toMatchObject({ phase, taskId: 'review-1', reason });
+    expect(deps.lifecycle.recordCleanupOutcome).toHaveBeenCalledWith('owner', expect.objectContaining({ status: 'blocked', reason, taskId: 'review-1' }));
+    for (let i = 0; i < 3; i++) await inspectOrQueueCompletedReview(input, deps);
+    expect(deps.spawn).toHaveBeenCalledOnce();
+  });
+
   it('creates one exact configured review owner across 70 scans and joins existing successors without reserving', async () => {
     const deps = harness();
     expect(await inspectOrQueueCompletedReview(input, deps)).toMatchObject({ disposition: 'queued-review', taskId: 'review-1' });

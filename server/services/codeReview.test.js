@@ -901,6 +901,132 @@ describe('codeReview helpers', () => {
       expect(r.error).toMatch(/Unsupported reviewer backend/)
     })
 
+    // These service-boundary regressions catch lost coverage/findings and extra
+    // provider spending; no test invokes a paid provider or live local daemon.
+    const fileDiff = (name, size = 700) => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-old\n+${'x'.repeat(size)}\n`
+    const headSha = 'a'.repeat(40)
+    const batchOptions = { backend: 'lmstudio', model: 'pinned', effort: 'high', maxBatchBytes: 1024, headSha }
+    const findingReply = JSON.stringify({ verdict: 'findings', findings: [{ severity: 'blocking', location: 'a.js:1', outcome: 'Record can be lost.', fix: 'Serialize the write.' }] })
+    const completion = content => mockJsonResponse({ choices: [{ message: { content } }] })
+
+    it('reviews an oversized diff exactly once per whole file under the same model, effort and candidate', async () => {
+      const sections = [fileDiff('a.js'), fileDiff('b.js'), fileDiff('renamed file.js')]
+      global.fetch = vi.fn().mockResolvedValue(completion('No findings.'))
+      const result = await runLocalCodeReview({ ...batchOptions, diff: sections.join('') })
+      expect(result).toMatchObject({ ok: true, model: 'pinned', effort: 'high', verdict: 'clean', coverage: {
+        headSha, complete: true, reviewedFiles: [0, 1, 2], remainingFiles: [], calls: 3,
+      } })
+      expect(result.coverage.files.map(file => file.bytes).reduce((a, b) => a + b)).toBe(Buffer.byteLength(sections.join('')))
+      expect(result.coverage.diffSha256).toMatch(/^[a-f0-9]{64}$/)
+      expect(global.fetch).toHaveBeenCalledTimes(3)
+      global.fetch.mock.calls.forEach(([, init], i) => {
+        const body = JSON.parse(init.body)
+        expect(body).toMatchObject({ model: 'pinned', reasoning_effort: 'high' })
+        expect(body.messages[1].content).toContain(sections[i].trim())
+        expect(body.messages[1].content).not.toContain(sections[(i + 1) % 3].trim())
+      })
+    })
+
+    it('preserves completed findings when a later batch has no validated verdict', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(findingReply)).mockResolvedValueOnce(completion(''))
+      const result = await runLocalCodeReview({ ...batchOptions, diff: ['a.js', 'b.js', 'c.js'].map(name => fileDiff(name)).join('') })
+      expect(result).toMatchObject({ ok: false, verdict: 'findings', coverage: { complete: false, reviewedFiles: [0], remainingFiles: [1, 2], calls: 2 } })
+      expect(result.findings).toContain('Record can be lost.')
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not grant another iteration budget to each batch or call after the shared deadline', async () => {
+      let now = 100
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+      try {
+        global.fetch = vi.fn(async () => { now += 101; return completion(findingReply) })
+        const result = await runLocalCodeReview({ ...batchOptions, timeoutMs: 100, diff: fileDiff('a.js') + fileDiff('b.js') })
+        expect(result).toMatchObject({ ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', verdict: 'findings', coverage: { reviewedFiles: [0], remainingFiles: [1], calls: 1, budgetMs: 100 } })
+        expect(global.fetch).toHaveBeenCalledTimes(1)
+      } finally { clock.mockRestore() }
+      global.fetch = vi.fn().mockResolvedValue(completion('No findings.'))
+      const capped = await runLocalCodeReview({ ...batchOptions, maxBatches: 1, diff: fileDiff('a.js') + fileDiff('b.js') })
+      expect(capped).toMatchObject({ ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', coverage: { remainingFiles: [1], calls: 1 } })
+      expect(capped).not.toHaveProperty('verdict')
+    })
+
+    it('accounts for an indivisible oversized file without sending or silently trimming it', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion('No findings.'))
+      const result = await runLocalCodeReview({ ...batchOptions, diff: fileDiff('huge.js', 2000) + fileDiff('small.js') })
+      expect(result).toMatchObject({ ok: false, code: 'REVIEW_CONTEXT_CAPACITY', coverage: { reviewedFiles: [1], remainingFiles: [0], calls: 1 } })
+      expect(result).not.toHaveProperty('verdict')
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).messages[1].content).not.toContain('huge.js')
+    })
+
+    it('subdivides a vendor context refusal only at file boundaries and removes raw diagnostics', async () => {
+      // Two 450-byte files fit the conservative bound together; a third forces
+      // the batching path. The vendor has a smaller effective context window.
+      const sections = ['a.js', 'b.js', 'c.js'].map(name => fileDiff(name, 350))
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce(mockTextResponse('Prompt is too long /private/local/path', { ok: false, status: 400 }))
+        .mockResolvedValue(completion('No findings.'))
+      const result = await runLocalCodeReview({ ...batchOptions, diff: sections.join('') })
+      expect(result).toMatchObject({ ok: true, verdict: 'clean', coverage: { complete: true, reviewedFiles: [0, 1, 2], remainingFiles: [], calls: 4 } })
+      expect(result.coverage.batches[0]).toMatchObject({ files: [0, 1], outcome: 'context_capacity' })
+      expect(JSON.stringify(result)).not.toContain('/private/local/path')
+    })
+
+    it('keeps valid findings about context errors actionable rather than classifying their quoted text as refusal', async () => {
+      const content = JSON.stringify({ verdict: 'findings', findings: [{ severity: 'recommended', location: 'review.js:1', outcome: 'Prompt is too long is currently misclassified.', fix: 'Preserve the finding.' }] })
+      global.fetch = vi.fn().mockResolvedValue(completion(content))
+      const result = await runLocalCodeReview({ ...batchOptions, diff: fileDiff('a.js') + fileDiff('b.js') })
+      expect(result).toMatchObject({ ok: true, verdict: 'findings', coverage: { complete: true } })
+      expect(result.findings).toContain('Preserve the finding.')
+    })
+
+    it('subdivides a below-threshold refusal without resetting the exact-input or call budget', async () => {
+      const sections = ['a.js', 'b.js'].map(name => fileDiff(name, 200))
+      global.fetch = vi.fn().mockResolvedValueOnce(mockTextResponse('Prompt is too long', { ok: false, status: 400 })).mockResolvedValue(completion('No findings.'))
+      const result = await runLocalCodeReview({ ...batchOptions, maxBatches: 3, diff: sections.join('') })
+      expect(result).toMatchObject({ ok: true, verdict: 'clean', coverage: { headSha, complete: true, reviewedFiles: [0, 1], calls: 3, maxBatches: 3 } })
+      expect(global.fetch).toHaveBeenCalledTimes(3)
+    })
+
+    it('counts the compatibility retry as a completion and charges probe time before dispatch', async () => {
+      global.fetch = vi.fn().mockResolvedValue(mockTextResponse('does not support thinking', { ok: false, status: 400 }))
+      const result = await runLocalCodeReview({ ...batchOptions, model: 'retry-budget-model', maxBatches: 1, diff: fileDiff('a.js', 100) })
+      expect(result).toMatchObject({ ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', coverage: { calls: 1, remainingFiles: [0] } })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      let now = 100
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+      try {
+        global.fetch = vi.fn(async () => { now += 101; return mockJsonResponse({ data: [{ id: 'served-model' }] }) })
+        const probed = await runLocalCodeReview({ backend: 'mtplx', diff: fileDiff('a.js', 100), timeoutMs: 100 })
+        expect(probed).toMatchObject({ ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', coverage: { calls: 0 } })
+        expect(global.fetch).toHaveBeenCalledTimes(1)
+      } finally { clock.mockRestore() }
+    })
+
+    it('binds ordinary single-batch clean results to the supplied candidate and immutable input', async () => {
+      const diff = fileDiff('ordinary.js', 100)
+      const result = await runLocalCodeReview({ ...batchOptions, diff })
+      expect(result).toMatchObject({ ok: true, verdict: 'clean', coverage: { headSha, complete: true, reviewedFiles: [0], remainingFiles: [], calls: 1 } })
+      expect(result.coverage.diffSha256).toMatch(/^[a-f0-9]{64}$/)
+    })
+
+    it('retains provider quota health reporting through an incomplete batch aggregate', async () => {
+      global.fetch = vi.fn().mockResolvedValue(mockTextResponse('quota exceeded', { ok: false, status: 429 }))
+      const result = await runLocalCodeReview({ backend: 'lmstudio', model: 'quota-model', diff: fileDiff('a.js', 100) })
+      expect(result).toMatchObject({ ok: false, code: 'REVIEW_BATCH_FAILED' })
+      expect(await reportReviewerFailure('provider:example', result)).toBe(true)
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:example']).toMatchObject({ reason: 'quota' })
+    })
+
+    it('identifies a single-file context refusal without treating it as provider health or a clean verdict', async () => {
+      global.fetch = vi.fn().mockResolvedValue(mockTextResponse('Prompt is too long /private/local/path', { ok: false, status: 400 }))
+      const result = await runLocalCodeReview({ ...batchOptions, diff: fileDiff('a.js') })
+      expect(result).toMatchObject({ ok: false, code: 'REVIEW_CONTEXT_CAPACITY', coverage: { complete: false, remainingFiles: [0] } })
+      expect(result).not.toHaveProperty('verdict')
+      expect(JSON.stringify(result)).not.toContain('/private/local/path')
+      expect(await reportReviewerFailure('provider:example', result)).toBe(false)
+    })
+
     describe('with no model pinned', () => {
       // A single-model daemon (MTPLX, llama.cpp — or LM Studio with one model
       // loaded) answers "which model?" unambiguously, so an unset
@@ -1027,7 +1153,7 @@ describe('codeReview helpers', () => {
     })
     it('posts to the backend chat-completions endpoint and returns the response content', async () => {
       const r = await runLocalCodeReview({ backend: 'ollama', model: 'codellama', diff: 'diff --git a b' })
-      expect(r).toEqual({ ok: true, backend: 'ollama', model: 'codellama', effort: null, verdict: 'clean', findings: 'No findings.' })
+      expect(r).toMatchObject({ ok: true, backend: 'ollama', model: 'codellama', effort: null, verdict: 'clean', findings: 'No findings.' })
       expect(global.fetch).toHaveBeenCalledTimes(1)
       const [url, init] = global.fetch.mock.calls[0]
       expect(url).toMatch(/\/v1\/chat\/completions$/)

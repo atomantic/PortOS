@@ -92,7 +92,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const shared = [
     '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-    'scripts/lib/vitestWatch.js',
+    'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
     'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
     'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
@@ -105,7 +105,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const client = [
     'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
     'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
-    'client/vitest.config.js', 'client/src/test/timeouts.js',
+    'client/vitest.config.js', 'client/src/test/timeouts.js', 'scripts/vitestProcessEnvironment.js',
     'scripts/dev-start.js', 'scripts/publish-client-build.js',
     'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
     'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',

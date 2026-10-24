@@ -56,7 +56,7 @@ afterAll(cleanupTempDataRoots);
 let scratch;
 afterEach(async () => { activeAgents.clear(); if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
 describe('completion to archive retirement (real Git and persisted service state)', () => {
-  it('rotates beyond ten persisted pending handoffs even when repository verification finished earlier', async () => {
+  it('drains context-less legacy handoffs instead of sweeping nonretryable failures forever', async () => {
     scratch = await mkdtemp(join(tmpdir(), 'portos-completion-sweep-'));
     fixture.root = PATHS.data; await mkdir(fixture.root, { recursive: true });
     fixture.task = { id: 'sweep-task', taskType: 'user', status: 'completed', metadata: {} };
@@ -72,10 +72,12 @@ describe('completion to archive retirement (real Git and persisted service state
     expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 10, pendingAtStart: 11 });
     fixture.agents = JSON.parse(await readFile(join(fixture.root, 'agents-state.json'), 'utf8')).agents;
     expect(fixture.agents['sweep-agent-10'].metadata.completionCleanup.updatedAt).toBe(waiting);
-    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 10, pendingAtStart: 11 });
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1, pendingAtStart: 1 });
     fixture.agents = JSON.parse(await readFile(join(fixture.root, 'agents-state.json'), 'utf8')).agents;
     expect(fixture.agents['sweep-agent-10'].metadata.completionCleanup.lastAttemptAt).toEqual(expect.any(String));
     expect(fixture.agents['sweep-agent-10'].metadata.completionCleanup.stages.pipeline).toMatchObject({ status: 'failed', retryable: false });
+    expect(fixture.agents['sweep-agent-10'].metadata.completionCleanup.status).toBe('abandoned');
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0, pendingAtStart: 0 });
     expect(fixture.task.status).toBe('completed');
   });
 
@@ -164,5 +166,9 @@ describe('completion to archive retirement (real Git and persisted service state
     expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
     expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).status).toBe('completed');
     await verify(); expect((await getBranchReconcileOutcome(fixture.app.id)).retired).toHaveLength(1);
-  });
+  // This public-boundary scenario makes 182 real Git calls across capture,
+  // fresh reviews, archive verification, retirement and independent restore.
+  // Measured wall time reaches 29s before host contention; keep its own budget
+  // separate from the default 30s unit budget without weakening any proof.
+  }, 60_000);
 });

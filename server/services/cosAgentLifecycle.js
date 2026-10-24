@@ -258,8 +258,13 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
     if (agent.startedAt !== startedAt) return metadata;
     matched = true;
     const prior = metadata.completionCleanup || { version: 1, stages: {} };
-    return { ...metadata, completionCleanup: { ...prior, ...patch,
-      stages: { ...prior.stages, ...patch.stages }, updatedAt: new Date().toISOString() } };
+    const completionCleanup = { ...prior, ...patch,
+      stages: { ...prior.stages, ...patch.stages }, updatedAt: new Date().toISOString() };
+    if (['completed', 'failed', 'abandoned'].includes(completionCleanup.status)) {
+      delete completionCleanup.context;
+      delete completionCleanup.replay;
+    }
+    return { ...metadata, completionCleanup };
   });
   return saved && matched;
 }
@@ -390,24 +395,19 @@ export async function completeAgent(agentId, result = {}) {
     const { requireCheckoutSettlement: _requireCheckoutSettlement, ...persistedResult } = result;
     result = persistedResult;
 
+    const cleanup = agent.metadata?.completionCleanup;
+    const cleanupContext = cleanup?.replay || cleanup?.context;
+    const metadata = { ...agent.metadata,
+      completionCleanup: { version: 1, stages: {}, ...cleanup, startedAt: agent.startedAt,
+        status: cleanupContext ? cleanup.status || 'pending' : 'abandoned',
+        ...(!cleanupContext && { reason: 'completion-context-unavailable' }) },
+      ...(completedCheckouts ? { checkoutCapture: checkoutCapture || { status: 'captured' } } : {}),
+      ...((result.success || result.cleanupPending === true) && (agent.metadata?.isWorktree || hasClaimCheckoutBindings(agent.metadata))
+        ? { repoStateVerification: { status: 'pending' } } : {}),
+    };
     state.agents[agentId] = {
-      ...state.agents[agentId],
-      status: 'completed',
-      completedAt: new Date().toISOString(),
-      // Success-criteria validation verdict (issue #2344): normalize to an
-      // explicit null sentinel when a completion path didn't declare/evaluate a
-      // machine-checkable criterion, so persisted telemetry never conflates
-      // "not declared" with "declared and failed" (false). Distinct from
-      // result.success (the runner's exit-code verdict).
-      result: { validationPassed: null, ...result },
-      metadata: { ...state.agents[agentId].metadata,
-        completionCleanup: { version: 1, status: 'pending', stages: {}, ...state.agents[agentId].metadata?.completionCleanup, startedAt: agent.startedAt },
-        ...(completedCheckouts ? { checkoutCapture: checkoutCapture || { status: 'captured' } } : {}),
-      },
-      ...((result.success || result.cleanupPending === true) && (state.agents[agentId].metadata?.isWorktree || hasClaimCheckoutBindings(state.agents[agentId].metadata))
-        ? { metadata: { ...state.agents[agentId].metadata,
-          completionCleanup: { version: 1, status: 'pending', stages: {}, ...state.agents[agentId].metadata?.completionCleanup, startedAt: agent.startedAt }, checkoutCapture: checkoutCapture || { status: 'captured' },
-          repoStateVerification: { status: 'pending' } } } : {}),
+      ...agent, status: 'completed', completedAt: new Date().toISOString(),
+      result: { validationPassed: null, ...result }, metadata,
     };
     if (completedCheckouts) state.agents[agentId].metadata = { ...state.agents[agentId].metadata, completedCheckouts };
 

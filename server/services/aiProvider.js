@@ -1,3 +1,4 @@
+import { awaitWithAbort } from '../lib/abortTimeout.js';
 /**
  * Shared AI provider utilities for LLM calls.
  * Used by insightsService, identity, goalCheckIn, taste-questionnaire, etc.
@@ -461,6 +462,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     // subscription quota for an answer nobody is waiting for. The HTTP path
     // manages its own AbortController from `timeout`.
     signal = null,
+    deadlineMs = null,
     // Internal: the status op an outer attempt already opened. `startAIOp` mints
     // a fresh id per call and the client tracks ops BY ID, so a fallback leg that
     // opened its own would leave the outer one's loading toast spinning forever
@@ -468,6 +470,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     // one op: "falling back to X…" → "done".
     __statusOp = null,
   } = options;
+  if (signal?.aborted || (Number.isFinite(deadlineMs) && Date.now() >= deadlineMs)) return { error: 'Provider request deadline expired.' };
   if (provider.type !== 'api' && !isSubscriptionText(provider)) {
     return { error: 'This operation requires an API-based provider' };
   }
@@ -540,14 +543,19 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   // doesn't get a bare connection refusal.
   // Provider selection and parsing need none of the managed daemon graph.
   const { ensureManagedRuntimeReady } = await import('./providerExecutionReadiness.js');
-  const ready = await ensureManagedRuntimeReady(provider, {
+  const ready = await awaitWithAbort(ensureManagedRuntimeReady(provider, {
     onStarting: (label) => statusOp.update('provider:starting', `Starting ${label} if needed…`, { providerId: provider.id }),
-  });
+  }), signal).catch(() => ({ success: false, error: 'Provider readiness cancelled.' }));
   if (!ready.success) {
     statusOp.error(ready.error);
     return { error: ready.error };
   }
 
+  if (signal?.aborted || (Number.isFinite(deadlineMs) && Date.now() >= deadlineMs)) {
+    statusOp.error('Provider request deadline expired.');
+    return { error: 'Provider request deadline expired.' };
+  }
+  if (Number.isFinite(deadlineMs)) opts.timeout = Math.min(opts.timeout, deadlineMs - Date.now());
   const first = await postChatCompletion(provider, model, body, opts);
   if (!first.error) {
     statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(first.tokens));

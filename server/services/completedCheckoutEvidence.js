@@ -40,14 +40,14 @@ async function filesystemIdentity(path, type) {
   return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
 }
 
-export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head, worktrees = null, repoCommon = null }) {
+export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head, worktrees = null, repoCommon = null, allowLocked = false }) {
   const { listWorktrees } = await import('./worktreeManager.js');
   const repository = await realpath(repoPath);
   const checkout = await realpath(path);
   if (checkout === repository || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head || '')) return null;
   const trees = worktrees || await listWorktrees(repository);
   const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
-  if (holders.length !== 1 || holders[0].locked === true || await realpath(holders[0].path) !== checkout || holders[0].head !== head) return null;
+  if (holders.length !== 1 || (!allowLocked && holders[0].locked === true) || await realpath(holders[0].path) !== checkout || holders[0].head !== head) return null;
   const pointer = await filesystemIdentity(join(checkout, '.git'), 'file');
   const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], checkout)).stdout.trim());
   const administration = await filesystemIdentity(gitdir, 'directory');

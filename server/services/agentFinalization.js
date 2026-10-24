@@ -1,3 +1,4 @@
+import { storeCompletionData, completionReplayInput } from './agentCompletionData.js';
 import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
@@ -1969,9 +1970,13 @@ export async function finalizeAgent({
   // so its place in the chain is purely about progress reporting on partial
   // failure.
   await stampLiExecutionVerdict(taskUpdate, task, { success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict.errorAnalysis });
-  await updateAgent(agentId, { metadata: { completionCleanup: cleanupOwner?.metadata?.completionCleanup || { version: 1, status: 'pending', stages: {},
-    context: { task, effectiveSuccess: deliverySuccess, outputBuffer,
-      prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence), branchProvenEmpty: prEvidence.branchProvenEmpty } } } });
+  const priorCleanup = cleanupOwner?.metadata?.completionCleanup;
+  const settledCleanup = ['completed', 'failed', 'abandoned'].includes(priorCleanup?.status);
+  const replay = priorCleanup?.replay || (!settledCleanup && cleanupOwner?.startedAt ? await storeCompletionData(cleanupOwner, 'replay', completionReplayInput({ task,
+    effectiveSuccess: deliverySuccess, outputBuffer,
+    prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence), branchProvenEmpty: prEvidence.branchProvenEmpty })) : undefined);
+  await updateAgent(agentId, { metadata: { completionCleanup: { ...cleanupOwner?.metadata?.completionCleanup,
+    version: 1, status: priorCleanup?.status || 'pending', stages: priorCleanup?.stages || {}, replay, context: undefined } } });
   if (cleanupEligible) await prepareCompletionTaskHandoff(await getAgentRecord(agentId),
     Object.fromEntries(Object.entries(taskUpdate.metadata || {}).filter(([key, value]) =>
       key !== 'privateSecurityScope' && JSON.stringify(value) !== JSON.stringify(preHookTask.metadata?.[key]))));
@@ -2362,7 +2367,8 @@ async function persistCompletionSummary(agentId, { workspacePath, finalSummary =
       && existing.metadata.taskSummary.trim()) return taskOutcome;
   }
   await updateAgent(agentId, { metadata: {
-    ...(ingested ? { completionSentinel: ingested.receipt, completionSentinelContents: ingested.contents } : {}),
+    ...(ingested ? { completionSentinel: ingested.receipt, completionSentinelData: await storeCompletionData(
+      existingRecord || await getAgentRecord(agentId), 'sentinel', ingested.contents), completionSentinelContents: undefined } : {}),
     taskSummary: summary,
     taskSummarySource: source,
     taskOutcome,

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { storeCompletionData, readCompletionData, completionReplayInput } from './agentCompletionData.js';
 /**
  * Agent Completion Cleanup
  *
@@ -353,6 +355,7 @@ async function runCompletionCleanupSteps(context, { onStepError }) {
 async function performCompletionCleanupSteps(context, onStepError) {
   const state = context.agentState;
   const durable = state?.status === 'completed' && typeof state.startedAt === 'string';
+  if (durable && ['completed', 'failed', 'abandoned'].includes(state.metadata?.completionCleanup?.status)) return;
   const stages = { ...state?.metadata?.completionCleanup?.stages };
   const { recordCompletionCleanup } = durable ? await import('./cosAgentLifecycle.js') : {};
   const persist = async patch => {
@@ -360,16 +363,23 @@ async function performCompletionCleanupSteps(context, onStepError) {
   };
   // A crash after terminal ingestion but before any step leaves this exact
   // continuation on disk. Replays do not rerun completed external side effects.
-  await persist({ version: 1, status: 'pending', startedAt: state?.startedAt,
-    context: state?.metadata?.completionCleanup?.context || {
-      task: context.task, effectiveSuccess: context.effectiveSuccess, prOwnership: context.prOwnership,
-      prClaimVerified: context.prClaimVerified, branchProvenEmpty: context.branchProvenEmpty, outputBuffer: context.outputBuffer,
-    } });
+  const priorReplay = state?.metadata?.completionCleanup?.replay;
+  const replayInput = durable && priorReplay ? await readCompletionData(state, priorReplay)
+    : state?.metadata?.completionCleanup?.context || completionReplayInput(context);
+  const replay = durable ? priorReplay || await storeCompletionData(state, 'replay', replayInput) : undefined;
+  context = { ...context, ...replayInput };
+  await persist({ version: 1, status: 'pending', startedAt: state?.startedAt, replay, context: undefined });
   let firstError;
   const runStep = async (key, name, step, retryable = false) => {
     const prior = stages[key];
     if (prior?.status === 'done') return prior.value;
-    if (prior && !retryable) return; // An uncertain external hand-off needs its owning service's evidence.
+    if (prior && !retryable) {
+      if (prior.status === 'running') {
+        stages[key] = { ...prior, status: 'abandoned', reason: 'external-handoff-unverified' };
+        await persist({ stages: { [key]: stages[key] } });
+      }
+      return; // Unknown external effects are terminal here, never republished.
+    }
     try {
       stages[key] = { status: 'running', retryable };
       await persist({ stages: { [key]: stages[key] } });
@@ -394,8 +404,7 @@ async function performCompletionCleanupSteps(context, onStepError) {
   if (['completed', 'failed'].includes(state?.status)) {
     await runStep('sentinel', 'Completion sentinel removal', () => removeCompletionSentinel(context), true);
   }
-  const deliveryContext = { ...context,
-    effectiveSuccess: state?.metadata?.completionCleanup?.context?.effectiveSuccess ?? context.effectiveSuccess };
+  const deliveryContext = context;
   await runStep('jira', 'JIRA hand-off', () => {
     if (context.task?.metadata?.jiraTicketId && state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
     return completeJiraHandOff(deliveryContext);
@@ -430,7 +439,10 @@ async function performCompletionCleanupSteps(context, onStepError) {
   if (['done', 'held'].includes(stages.worktree?.status)) {
     await runStep('report', 'Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
   }
-  await persist({ status: Object.values(stages).every(stage => stage.status === 'done') && !preserveAuditEvidence ? 'completed' : 'pending' });
+  const unfinished = preserveAuditEvidence || Object.values(stages).some(stage => stage.status === 'held'
+    || (stage.status === 'failed' && stage.retryable) || stage.status === 'running');
+  const failed = Object.values(stages).some(stage => ['failed', 'abandoned'].includes(stage.status));
+  await persist({ status: unfinished ? 'pending' : failed ? 'failed' : 'completed' });
   if (firstError && onStepError === STEP_ERROR_POLICY.PROPAGATE) throw firstError;
 }
 
@@ -439,9 +451,18 @@ async function performCompletionCleanupSteps(context, onStepError) {
  */
 export async function replayAgentCompletionCleanup(agentState) {
   const receipt = agentState?.metadata?.completionCleanup;
-  if (agentState?.status !== 'completed' || receipt?.version !== 1 || receipt.status === 'completed') return;
-  const saved = receipt.context;
-  if (!saved || receipt.startedAt !== agentState.startedAt || saved.task?.id !== agentState.taskId) return;
+  if (agentState?.status !== 'completed' || receipt?.version !== 1 || receipt.status !== 'pending') return;
+  const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
+  let saved;
+  try { saved = receipt.replay ? await readCompletionData(agentState, receipt.replay) : receipt.context; }
+  catch {
+    await recordCompletionCleanup(agentState.id, agentState.startedAt, { reason: 'completion-replay-unavailable' });
+    return;
+  }
+  if (!saved || receipt.startedAt !== agentState.startedAt || saved.task?.id !== agentState.taskId) {
+    await recordCompletionCleanup(agentState.id, agentState.startedAt, { status: 'abandoned', reason: 'completion-context-unavailable' });
+    return;
+  }
   if (agentState.metadata.checkoutCapture?.status === 'pending') {
     const lifecycle = await import('./cosAgentLifecycle.js');
     if (await lifecycle.retryCompletionCheckoutCapture(agentState.id).catch(() => false)) {
@@ -637,6 +658,13 @@ export async function removeCompletionSentinel({ agentId, agent, agentState, tas
   // No sentinel is harmless. An occupied marker without ingestion evidence is
   // not acknowledged, even for a completed record predating this protocol.
   if (!receipt && !await tryReadFile(resolveDoneSentinelPath(workspace, agentId))) return;
+  const payload = agentState?.metadata?.completionSentinelData;
+  if (payload) {
+    const contents = await readCompletionData(agentState, payload);
+    if (typeof contents !== 'string' || createHash('sha256').update(contents).digest('hex') !== receipt?.sha256) {
+      throw new Error('completion-ingestion-data-unverified');
+    }
+  }
   await acknowledgeCompletionSentinel({ agentId, workspace, receipt });
 }
 

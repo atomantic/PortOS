@@ -1,3 +1,6 @@
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-finalization-output-') }));
+afterAll(cleanupTempDataRoots);
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, tryReadFile: vi.fn(actual.tryReadFile) };
@@ -23,7 +26,7 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
   getGoalFidelityConfig: vi.fn(async () => null),
 }));
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -321,6 +324,32 @@ describe('recovery output-hook dispatch (#3182)', () => {
       taskOutcome: explicit ? { status: 'incomplete', reason: 'Delivery checks did not pass.' } : null, auditAssessment: { status: 'not-recorded' },
     }));
     isProgrammaticIoTaskType.mockReturnValue(true);
+  });
+
+  it('keeps exact large ingestion and replay bytes in run artifacts rather than hot agent metadata', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { readCompletionData } = await import('./agentCompletionData.js');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'completion-large-ingestion-'));
+    const payload = 'payload-'.repeat(150000);
+    const outputBuffer = 'provider-output-'.repeat(100000);
+    const sentinel = JSON.stringify({ summary: 'Delivered.', payload });
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-example'), sentinel);
+      await finalizeAgent({ agentId: 'agent-example', task: { ...TASK, prompt: payload, history: payload },
+        success: true, exitCode: 0, duration: 1000, workspacePath, outputBuffer });
+      expect(JSON.stringify(persistedAgent.metadata).length).toBeLessThan(15000);
+      expect(JSON.parse(JSON.stringify(persistedAgent.metadata))).not.toHaveProperty('completionSentinelContents');
+      expect(JSON.parse(JSON.stringify(persistedAgent.metadata.completionCleanup))).not.toHaveProperty('context');
+      expect(await readCompletionData(persistedAgent, persistedAgent.metadata.completionSentinelData)).toBe(sentinel);
+      const replay = await readCompletionData(persistedAgent, persistedAgent.metadata.completionCleanup.replay);
+      expect(replay.outputBuffer).toBe(outputBuffer);
+      expect(replay.task.id).toBe(TASK.id);
+      expect(replay.task).not.toHaveProperty('prompt');
+      expect(replay.task).not.toHaveProperty('history');
+      await expect(readCompletionData({ ...persistedAgent, startedAt: '2020-01-01T00:00:00Z' },
+        persistedAgent.metadata.completionCleanup.replay)).rejects.toThrow('completion-data-run-changed');
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
 
   it.each([

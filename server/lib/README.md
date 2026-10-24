@@ -25,9 +25,11 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `appOperationErrorContext.js` | `appOperationErrorContext` projects bounded forge scope repair fields for failed update events and history; all other error context is withheld. |
 | `checkoutRetirementAdmission.js` | Durable common-repository publication/cut admission for explicit initialized-checkout quarantine; pending reservations survive restart and block managed checkout mutations until verified recovery. |
-| `branchRetirementArchive.js` | `preserveBranchRetirement` privately archives exact shared configuration, the branch reflog and a verified standalone recovery bundle. Retirement retains Git's receiver lease/holder guards, then removes only the unchanged branch configuration under native config/ref locks. Changed evidence, recreated refs, external configuration sources and uncertain deletion retain live settings and leave retirement unresolved. |
-| `reconcileRetirementEvidence.js` | Matches exact checkout retirement and recovered-preservation receipts and retains unresolved cleanup obligations. Server-created generation timestamps prevent an old archive receipt from completing a recreated checkout at the same branch, path and head; verified historical preservation does not assert branch deletion. |
+| `branchRetirementArchive.js` | `preserveBranchRetirement` privately archives exact shared configuration, the branch reflog and a verified standalone recovery bundle (current tip and every old/new reflog commit) before local branch retirement. Retirement retains Git's receiver lease/holder guards, then removes only the unchanged branch configuration under native config/ref locks. Changed refs, reflogs, evidence, recreated refs, external configuration, unsupported storage, missing objects and uncertain deletion retain the branch and its live settings. |
+| `reconcileRetirementEvidence.js` | Matches exact checkout receipts and recovered-preservation receipts, preserves observation identity across delayed scans, and retains each unresolved checkout incarnation. Legacy observations keep their original generation timestamps. A recreated checkout at the same branch, path and head starts after every older receipt; verified historical preservation does not assert branch deletion. |
+| `retirementCheckoutObservation.js` | Reads a checkout's filesystem identity and verifies its live branch/head before the schedule writer admits a recreated checkout's obligation. |
 | `backupSharedAdmission.js` | Durable cross-process backup cuts and publication leases, with fail-closed owner recovery. |
 | `runtimeFilePublication.js` | Admitted runtime recording updates with rollback of the prior file pair on failure. |
 | `maintenanceAdmission.js` | Durable machine-local workflow drain, cross-process admission permits, continuation ownership and stale-resume fencing. |
@@ -517,7 +519,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). `insecureFetch` size-cap rejections carry `code: RESPONSE_TOO_LARGE`. |
-| `abortTimeout.js` | `withAbortTimeout(timeoutMs, fn)` — runs `fn(signal)` under an `AbortController` that aborts after `timeoutMs` and always clears the timer on settle. Generic lifecycle helper for callers that need the insecure-agent `peerFetch` (so can't use `fetchWithTimeout`) or one signal across parallel fetches. |
+| `abortTimeout.js` | `awaitWithAbort(promise, signal)` cancels a caller's wait while owning eventual rejection of shared preparation; `withAbortTimeout(timeoutMs, fn)` — runs `fn(signal)` under an `AbortController` that aborts after `timeoutMs` and always clears the timer on settle. Generic lifecycle helper for callers that need the insecure-agent `peerFetch` (so can't use `fetchWithTimeout`) or one signal across parallel fetches. |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
 | `tailnetPeer.js` | `isTailnetPeer(peer)` — fail-closed security predicate for "is this peer reachable only over the tailnet". Deliberately separate from `instances.js`'s `peerRequiresTailscale()` probe-deferral heuristic so a polling-noise tweak can't widen a privacy boundary; required by the unattended-routing gate in ADR 2026-08-20-federated-visual-prompts. |
 | `federatedMediaRequest.js` | Builds and validates the versioned federated-media submission body for a visual kind, so every call site that persists a remote-job marker projects local params onto the wire identically. |
@@ -978,3 +980,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `runwayCatalogSnapshot.js` | Shared Runway model catalog capabilities and cached model selection. |
 
 | `runwaySpecialVideoModels.js` | Aleph 2 video-edit and Act-Two character-performance capabilities, schema compatibility and request validation. |
+
+| `codeReviewBatches.js` | File-boundary code-review batching with byte-exact diff hashes, candidate revision, reviewed/remaining file identifiers, bounded calls and one shared wall-clock budget. Preserves validated findings when coverage is incomplete and classifies explicit context-capacity refusals without retaining vendor event streams. |

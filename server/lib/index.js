@@ -16,6 +16,7 @@
 // brain and digital-twin) can be disambiguated as `brainValidation.X` /
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
+export * from './appOperationErrorContext.js';
 export * from './appPromptPlaceholders.js';
 export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
@@ -954,6 +955,7 @@ export * from './brainLinkLocalFields.js';
 
 export * from './branchRetirementArchive.js';
 export * from './reconcileRetirementEvidence.js';
+export * from './retirementCheckoutObservation.js';
 
 export * from './checkoutRetirementAdmission.js';
 export * from './moltworldExplore.js';
@@ -965,3 +967,5 @@ export * from './runwayCatalogSnapshot.js';
 
 export * from './runwaySpecialVideoModels.js';
 export * from './issueClaimEvidence.js';
+
+export * from './codeReviewBatches.js';

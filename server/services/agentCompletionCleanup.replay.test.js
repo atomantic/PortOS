@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 
-const fixture = vi.hoisted(() => ({ recordPath: null, failWrite: false }));
+const fixture = vi.hoisted(() => ({ recordPath: null, runRoot: null, failWrite: false }));
+vi.mock('./cosAgentIndex.js', () => ({ getAgentDir: id => join(fixture.runRoot, id) }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn() }));
@@ -19,6 +20,9 @@ vi.mock('./cosAgentLifecycle.js', () => ({
     if (agent.status !== 'completed' || agent.startedAt !== startedAt) return false;
     const prior = agent.metadata.completionCleanup || {};
     agent.metadata.completionCleanup = { ...prior, ...patch, stages: { ...prior.stages, ...patch.stages } };
+    if (['completed', 'failed', 'abandoned'].includes(agent.metadata.completionCleanup.status)) {
+      delete agent.metadata.completionCleanup.context; delete agent.metadata.completionCleanup.replay;
+    }
     await writeFile(fixture.recordPath, JSON.stringify(agent));
     return true;
   },
@@ -31,6 +35,7 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorC
 vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn() }));
 
 import { runAgentCompletionCleanup, replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
+import { storeCompletionData, readCompletionData } from './agentCompletionData.js';
 import { readCompletionSentinel } from './agentCompletionSentinel.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { handleCreativeDirectorCompletion } from './creativeDirector/completionHook.js';
@@ -49,6 +54,7 @@ describe('durable post-ingestion cleanup replay', () => {
     vi.clearAllMocks();
     fixture.failWrite = false;
     root = await mkdtemp(join(tmpdir(), 'portos-completion-replay-'));
+    fixture.runRoot = join(root, 'runs');
     workspace = join(root, 'repo');
     await materializeGitRepo(workspace);
     marker = join(workspace, '.agent-done-agent-one');
@@ -79,10 +85,12 @@ describe('durable post-ingestion cleanup replay', () => {
     await expect(finish(pipelineTask)).rejects.toThrow('pipeline unavailable');
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(1);
     const record = await saved();
-    expect(record.metadata.completionCleanup).toMatchObject({ status: 'pending', stages: {
+    expect(record.metadata.completionCleanup).toMatchObject({ status: 'failed', stages: {
       sentinel: { status: 'done' }, pipeline: { status: 'failed', retryable: false }, worktree: { status: 'done' },
     } });
     expect(record.result.success).toBe(true);
+    expect(record.metadata.completionCleanup).not.toHaveProperty('context');
+    expect(record.metadata.completionCleanup).not.toHaveProperty('replay');
     await replayAgentCompletionCleanup(record);
     expect(updateTask).toHaveBeenCalledTimes(1); // Unknown external hand-off is not republished.
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(1);
@@ -161,6 +169,22 @@ describe('durable post-ingestion cleanup replay', () => {
     await replayAgentCompletionCleanup(await saved());
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(2);
     expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses acknowledgement when its run-bound ingestion artifact is corrupt, retaining the original marker and checkout', async () => {
+    const record = await saved();
+    record.metadata.completionSentinelData = await storeCompletionData(record, 'sentinel', record.metadata.completionSentinelContents);
+    delete record.metadata.completionSentinelContents;
+    await writeFile(fixture.recordPath, JSON.stringify(record));
+    const reference = record.metadata.completionSentinelData;
+    await writeFile(join(fixture.runRoot, record.id, 'completion', `sentinel-${reference.sha256}.json`), 'corrupt');
+    await expect(finish()).rejects.toThrow('completion-data-size-changed');
+    expect(await readFile(marker, 'utf8')).toContain('original payload');
+    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+    expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'pending', stages: {
+      sentinel: { status: 'failed', retryable: true }, worktree: { status: 'held' },
+    } });
+    await expect(readCompletionData(record, reference)).rejects.toThrow('completion-data-size-changed');
   });
 
   it('retains the marker if durable continuation persistence fails', async () => {

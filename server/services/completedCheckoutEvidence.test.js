@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
-import { captureCompletedCheckouts, hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
+import { captureCompletedCheckouts, hasCompletedCheckoutEvidence, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 
 describe('completed claim checkout evidence', () => {
   let scratch, repoPath, path, head, agent;
@@ -45,6 +45,15 @@ describe('completed claim checkout evidence', () => {
     expect(await hasCompletedCheckoutEvidence([completed(receipts)], target())).toBe(true);
     // An ordinary worktree run's workspace is its own checkout, never the repository.
     expect(await captureCompletedCheckouts({ ...agent, metadata: { isWorktree: true, workspacePath: repoPath, worktreeBranch: branch } }, { success: true })).toEqual([]);
+  });
+
+  it('allows a scoped identity fact-read of a locked checkout without changing default capture refusal or its lock', async () => {
+    await execGit(['worktree', 'lock', '--reason', 'owned operator checkout', path], repoPath);
+    expect(await readCompletedCheckoutIdentity(target())).toBeNull();
+    const identity = await readCompletedCheckoutIdentity({ ...target(), allowLocked: true });
+    expect(identity).toMatchObject({ branch, head, incarnation: { pointer: { ino: expect.any(String) } } });
+    expect(await captureCompletedCheckouts(agent, { success: true })).toEqual([]);
+    expect((await execGit(['worktree', 'list', '--porcelain'], repoPath)).stdout).toContain('locked owned operator checkout');
   });
 
   it('rejects a new checkout reusing the completed branch, path and exact head', async () => {

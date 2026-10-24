@@ -152,7 +152,8 @@ function killProcessTree(child, { sweepGroup = false } = {}) {
  * import graph on a loaded host can take over a minute, so `createVitestTempFixture`'s
  * fixed `timeout` (kept for spawnSync callers) is dropped. Resolves like spawnSync's
  * result; `error` is set only when the ceiling is reached or `signal` aborts, after
- * the whole detached process group is killed. Pass the calling test's `signal`:
+ * the detached process group is signalled. `closeConfirmed` is false when the
+ * close watchdog settles first; retain the host and report the error then. Pass the calling test's `signal`:
  * a fail-fast cancellation otherwise leaves the body awaiting the nested run while
  * the worker tears down, so its `finally` never removes the host (#12924).
  */
@@ -170,13 +171,19 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     let done = false;
+    let closeConfirmed = false;
     const finish = (status) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       killProcessTree(child, { sweepGroup: true }); // reap any worker the run left behind
-      resolve({ status, stdout, stderr, error });
+      if (!closeConfirmed) {
+        const unconfirmed = new Error('fixture run process close unconfirmed');
+        error = error ? new AggregateError([error, unconfirmed], 'fixture run failed and process close is unconfirmed', { cause: error }) : unconfirmed;
+        error.code = 'FIXTURE_CLOSE_UNCONFIRMED';
+      }
+      resolve({ status, stdout, stderr, error, closeConfirmed });
     };
     const timer = setTimeout(() => {
       error = new Error(`fixture run exceeded ${ceilingMs}ms`);
@@ -191,8 +198,12 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
     };
     if (signal?.aborted) abort();
     else signal?.addEventListener('abort', abort, { once: true });
-    child.once('error', (spawnError) => { error = spawnError; finish(null); });
-    child.once('close', finish);
+    child.once('error', (spawnError) => {
+      error = spawnError;
+      // Failed spawns also emit close. Do not release the host on error alone.
+      setTimeout(() => finish(null), 2000);
+    });
+    child.once('close', status => { closeConfirmed = true; finish(status); });
     // Output ends at 'close', which a surviving worker holding the pipes defers:
     // sweep the group as soon as the leader exits, with a bounded wait for the pipes.
     child.once('exit', () => {
@@ -207,9 +218,12 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
  * a restart ("Restarting due to config changes"), and hand the restarted run's
  * observations to `inspect`. The fixture test records `{ root, owner }` into a
  * numbered marker per run, so readiness is event-driven and bounded by
- * WATCH_READY_MS. The process tree is always killed before returning.
+ * WATCH_READY_MS. Caller cancellation stops readiness; returning waits for the
+ * killed watcher to close. FIXTURE_CLOSE_UNCONFIRMED means retain the host.
  */
-export async function runWatchConfigRestart(host, workspace, inspect) {
+export async function runWatchConfigRestart(host, workspace, inspect, { signal } = {}) {
+  const callerCancellation = () => Object.assign(fixtureAborted(signal, 'watch fixture cancelled by caller'), { code: 'FIXTURE_CALLER_CANCELLED' });
+  if (signal?.aborted) throw callerCancellation();
   const marks = join(host, 'marks');
   mkdirSync(marks);
   const { args, options } = createVitestTempFixture(host, workspace, `
@@ -237,10 +251,21 @@ export async function runWatchConfigRestart(host, workspace, inspect) {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  // Register before any signal: removal of the host must follow process AND
+  // pipe settlement, not merely the synchronous kill request.
+  const abort = new AbortController();
+  let closed = false;
+  let spawnError;
+  const completion = new Promise(resolve => {
+    child.once('close', () => { closed = true; resolve(); });
+  });
+  child.once('error', error => { spawnError = error; abort.abort(error); });
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
-  const abort = new AbortController();
+  const onAbort = () => abort.abort(callerCancellation());
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
   const timer = setTimeout(() => abort.abort(new Error('watch fixture readiness timed out')), WATCH_READY_MS);
   child.once('exit', () => abort.abort(new Error('watch fixture exited before readiness')));
   const readMark = async (n) => {
@@ -248,6 +273,7 @@ export async function runWatchConfigRestart(host, workspace, inspect) {
     await waitForFixtureReady(file, { signal: abort.signal });
     return JSON.parse(readFileSync(file, 'utf8'));
   };
+  let failure;
   try {
     const first = await readMark(1);
     // run-1 is written from inside the first test, possibly before the watcher has
@@ -267,10 +293,32 @@ export async function runWatchConfigRestart(host, workspace, inspect) {
     }
     return await inspect({ first, restarted, pid: child.pid });
   } catch (error) {
-    error.message += `\n${output}`;
-    throw error;
+    // Readiness wraps this controller's reason in AbortError. Recover that
+    // exact reason so a later caller cancellation cannot relabel an earlier
+    // timeout or premature exit as an expected cancellation.
+    failure = spawnError ?? (error.name === 'AbortError' && error.cause === abort.signal.reason
+      ? abort.signal.reason : error);
+    failure.message += `\n${output}`;
+    throw failure;
   } finally {
     clearTimeout(timer);
-    killProcessTree(child);
+    signal?.removeEventListener('abort', onAbort);
+    killProcessTree(child, { sweepGroup: true });
+    if (!closed) {
+      let closeTimer;
+      try {
+        await Promise.race([completion, new Promise((_, reject) => {
+          closeTimer = setTimeout(() => reject(new Error('watch fixture process close unconfirmed')), 2000);
+        })]);
+      } catch (error) {
+        const cleanupError = failure
+          ? new AggregateError([failure, error], 'watch fixture failed and process close is unconfirmed', { cause: failure })
+          : error;
+        cleanupError.code = 'FIXTURE_CLOSE_UNCONFIRMED';
+        throw cleanupError;
+      } finally {
+        clearTimeout(closeTimer);
+      }
+    }
   }
 }

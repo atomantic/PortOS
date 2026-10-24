@@ -1,8 +1,9 @@
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
-import { delimiter, join, resolve } from 'path';
+import { delimiter, dirname, join, resolve } from 'path';
 import { safeJSONParse, PATHS, sleep, rmGuarded } from '../lib/fileUtils.js';
 import { isGitLockError, listWorktrees } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
@@ -41,6 +42,42 @@ export {
   parsePullRequestUrl,
   extractAgentSummary
 };
+
+const checkoutMutations = new Map();
+const checkoutMutationContext = new AsyncLocalStorage();
+
+// Existing writers register so an exclusive rebase/push cannot overlap them.
+// Nested calls retain their own publication lifetime, even if they outlive a parent.
+async function withCheckoutMutation(dir, work, { exclusive = false } = {}) {
+  let key;
+  try { key = realpathSync(dir); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    key = resolve(dir);
+  }
+  // API paths may name a subdirectory or a symlink into the same checkout.
+  for (let root = key; ; root = dirname(root)) {
+    if (existsSync(join(root, '.git'))) { key = root; break; }
+    if (dirname(root) === root) break;
+  }
+  const active = checkoutMutations.get(key);
+  const parent = checkoutMutationContext.getStore();
+  const inherited = parent?.active && parent.key === key && parent.state === active;
+  if (!inherited && (active?.exclusive || (exclusive && active))) {
+    throw new ServerError('A Git operation is already running for this checkout', { status: 409, code: 'GIT_BUSY' });
+  }
+  const state = active || { count: 0, exclusive };
+  state.count++;
+  checkoutMutations.set(key, state);
+  const context = { key, state, active: true };
+  try {
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return await withCheckoutPublication(dir, () => checkoutMutationContext.run(context, work));
+  } finally {
+    context.active = false;
+    if (--state.count === 0) checkoutMutations.delete(key);
+  }
+}
 
 /**
  * Get git status for a directory.
@@ -139,8 +176,7 @@ export async function getDiffStats(dir) {
  * that exact file, and a crafted `*` can't expand to the whole tree.
  */
 export async function stageFiles(dir, files) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => stageFilesAdmitted(dir, files));
+  return withCheckoutMutation(dir, () => stageFilesAdmitted(dir, files));
 }
 
 async function stageFilesAdmitted(dir, files) {
@@ -153,8 +189,7 @@ async function stageFilesAdmitted(dir, files) {
  * Unstage files (same literal-pathspec handling as stageFiles).
  */
 export async function unstageFiles(dir, files) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => unstageFilesAdmitted(dir, files));
+  return withCheckoutMutation(dir, () => unstageFilesAdmitted(dir, files));
 }
 
 async function unstageFilesAdmitted(dir, files) {
@@ -171,8 +206,7 @@ async function unstageFilesAdmitted(dir, files) {
  * Same `:(literal)` pathspec handling as stageFiles. Omitted = commit the index as-is.
  */
 export async function commit(dir, message, { paths = [] } = {}) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => commitAdmitted(dir, message, { paths }));
+  return withCheckoutMutation(dir, () => commitAdmitted(dir, message, { paths }));
 }
 
 // Snapshot only read-only identities. Detached/unborn HEAD cannot verify an
@@ -336,8 +370,7 @@ function fetchOriginAdmitted(dir, { prune = false } = {}) {
  * would swap files on disk and trigger HMR/server restarts).
  */
 export async function updateBranches(dir) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => updateBranchesAdmitted(dir));
+  return withCheckoutMutation(dir, () => updateBranchesAdmitted(dir));
 }
 
 async function updateBranchesAdmitted(dir) {
@@ -402,8 +435,7 @@ export async function getBranchComparison(dir, baseBranch = 'main', headBranch =
  * Push to origin
  */
 export async function push(dir, branch = null) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => pushAdmitted(dir, branch));
+  return withCheckoutMutation(dir, () => pushAdmitted(dir, branch));
 }
 
 async function pushAdmitted(dir, branch = null) {
@@ -418,8 +450,7 @@ async function pushAdmitted(dir, branch = null) {
  * Never uses --force. Returns per-branch results.
  */
 export async function pushAll(dir) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => pushAllAdmitted(dir));
+  return withCheckoutMutation(dir, () => pushAllAdmitted(dir));
 }
 
 async function pushAllAdmitted(dir) {
@@ -454,8 +485,7 @@ async function pushAllAdmitted(dir) {
  * Create and switch to a new branch
  */
 export async function createBranch(dir, branchName) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => createBranchAdmitted(dir, branchName));
+  return withCheckoutMutation(dir, () => createBranchAdmitted(dir, branchName));
 }
 
 async function createBranchAdmitted(dir, branchName) {
@@ -467,8 +497,7 @@ async function createBranchAdmitted(dir, branchName) {
  * Switch to an existing branch
  */
 export async function checkout(dir, branchName) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => checkoutAdmitted(dir, branchName));
+  return withCheckoutMutation(dir, () => checkoutAdmitted(dir, branchName));
 }
 
 async function checkoutAdmitted(dir, branchName) {
@@ -898,8 +927,7 @@ export async function getBranches(dir, { strict = false } = {}) {
  * Pull changes from remote for current branch
  */
 export async function pull(dir) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => pullAdmitted(dir));
+  return withCheckoutMutation(dir, () => pullAdmitted(dir));
 }
 
 async function pullAdmitted(dir) {
@@ -1002,8 +1030,7 @@ async function updatePinnedSubmodules(dir) {
  * @returns {Promise<{success: boolean, branch: string, output: string, conflict: boolean, rebased?: boolean, error?: string}>}
  */
 export async function updateDefaultBranch(dir) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => updateDefaultBranchAdmitted(dir));
+  return withCheckoutMutation(dir, () => updateDefaultBranchAdmitted(dir));
 }
 
 async function updateDefaultBranchAdmitted(dir) {
@@ -1140,8 +1167,65 @@ async function updateDefaultBranchAdmitted(dir) {
  * Sync branch - pull then push
  */
 export async function syncBranch(dir, branch = null) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => syncBranchAdmitted(dir, branch));
+  return withCheckoutMutation(dir, () => syncBranchAdmitted(dir, branch));
+}
+
+/** Reconcile local default-branch commits with origin without stashing or force-pushing. */
+export async function rebaseAndPushDefaultBranch(dir) {
+  return withCheckoutMutation(dir, () => rebaseAndPushDefaultBranchAdmitted(dir), { exclusive: true });
+}
+
+async function rebaseAndPushDefaultBranchAdmitted(dir) {
+  const refused = (error) => ({ success: false, pulled: false, pushed: false, error });
+  const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], dir)).stdout.trim();
+  if ([...SEQUENCER_STATE.map(([marker]) => marker), 'MERGE_HEAD', 'sequencer']
+    .some(marker => existsSync(join(gitDir, marker)))) {
+    return refused('Finish the Git operation already in progress before rebasing and pushing.');
+  }
+  const branch = await getBranch(dir);
+  const defaultBranch = await getDefaultBranch(dir, { strict: true });
+  if (!defaultBranch || branch !== defaultBranch) {
+    return refused('Check out the default branch before rebasing and pushing.');
+  }
+  assertSafeRef(branch);
+  if (!(await getStatus(dir)).clean) {
+    return refused('Commit or stash local changes before rebasing and pushing.');
+  }
+  await fetchOrigin(dir);
+  if (await getBranch(dir) !== branch || !(await getStatus(dir)).clean) {
+    return refused('The checkout changed while fetching. Check its branch and local changes before retrying.');
+  }
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  const counts = await execGit(['rev-list', '--left-right', '--count', `HEAD...${remoteRef}`], dir);
+  if (!(Number(counts.stdout.trim().split(/\s+/)[0]) > 0)) {
+    return refused('The default branch has no local commits ahead of origin.');
+  }
+  const localMerges = await execGit(['rev-list', '--merges', `${remoteRef}..HEAD`], dir);
+  if (localMerges.stdout.trim()) {
+    return refused('Local history contains merge commits. Reconcile these with an agent or in the terminal to preserve merge resolutions; nothing was rebased or pushed.');
+  }
+  // Fetch + rebase is the explicit-origin equivalent of pull --rebase. Avoid
+  // pull.ff / upstream configuration and never move dirty work via autostash.
+  const rebased = await execGit(['rebase', '--no-autostash', remoteRef], dir, { ignoreExitCode: true });
+  if (rebased.exitCode !== 0) {
+    const aborted = Number.isInteger(rebased.exitCode) && !rebased.terminated && await rebaseInProgress(dir)
+      ? await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true }) : null;
+    const recovery = aborted && aborted.exitCode !== 0
+      ? ` Rebase abort failed: ${gitResultError(aborted, 'Inspect the checkout before retrying.')}` : '';
+    return refused(`${gitResultError(rebased, 'Rebase failed; nothing was pushed.')}${recovery}`);
+  }
+  if (await getBranch(dir) !== branch) return refused('The checked-out branch changed; nothing was pushed.');
+  const verifiedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${branch}^{commit}`], dir)).stdout.trim();
+  if (!/^[a-f0-9]{40,64}$/.test(verifiedHead)) return refused('Could not verify the default-branch commit; nothing was pushed.');
+  const pushed = await execGit(['push', 'origin', `${verifiedHead}:refs/heads/${branch}`], dir, { ignoreExitCode: true });
+  return {
+    success: pushed.exitCode === 0,
+    branch,
+    pulled: true,
+    pushed: pushed.exitCode === 0,
+    output: gitResultOutput(rebased) + gitResultOutput(pushed),
+    error: pushed.exitCode === 0 ? null : gitResultError(pushed, 'Push failed; rebased commits remain local.'),
+  };
 }
 
 async function syncBranchAdmitted(dir, branch = null) {
@@ -1212,8 +1296,7 @@ export async function ensureLatest(dir) {
   if (gitCheck.exitCode !== 0 || gitCheck.stdout.trim() !== 'true') {
     throw new Error(gitCheck.stderr?.trim() || 'Could not verify Git working tree');
   }
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => ensureLatestAdmitted(dir));
+  return withCheckoutMutation(dir, () => ensureLatestAdmitted(dir));
 }
 
 function ensureLatestAdmitted(dir) {
@@ -1491,8 +1574,7 @@ export async function getWorktreeBranches(dir) {
  * @param {Set<string>} options.excludeBranches - Additional branches to protect (e.g., active agent branches)
  */
 export async function deleteBranch(dir, branchName, options = {}) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => deleteBranchAdmitted(dir, branchName, options));
+  return withCheckoutMutation(dir, () => deleteBranchAdmitted(dir, branchName, options));
 }
 
 async function deleteBranchAdmitted(dir, branchName, { local = false, remote = false, excludeBranches } = {}) {
@@ -1553,8 +1635,7 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
  * @returns {Promise<{success: boolean, output: string}>}
  */
 export async function mergeBranch(dir, branchName) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => mergeBranchAdmitted(dir, branchName));
+  return withCheckoutMutation(dir, () => mergeBranchAdmitted(dir, branchName));
 }
 
 async function mergeBranchAdmitted(dir, branchName) {
@@ -1677,8 +1758,7 @@ export const isBranchMergedInto = hasBranchMergeEvidence;
  * @returns {Promise<{success: boolean, branch: string}>}
  */
 export async function checkoutRemoteBranch(dir, branchName) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => checkoutRemoteBranchAdmitted(dir, branchName));
+  return withCheckoutMutation(dir, () => checkoutRemoteBranchAdmitted(dir, branchName));
 }
 
 async function checkoutRemoteBranchAdmitted(dir, branchName) {
@@ -1804,8 +1884,7 @@ export async function findActiveAgentInWorkspace(dir, { includePaused = false, f
  *   fetched: boolean}>}
  */
 export async function resetToDefaultBranch(dir) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => resetToDefaultBranchAdmitted(dir));
+  return withCheckoutMutation(dir, () => resetToDefaultBranchAdmitted(dir));
 }
 
 async function resetToDefaultBranchAdmitted(dir) {
@@ -2089,6 +2168,14 @@ export async function getGitInfo(dir) {
     getRepoBranches(dir).catch(() => ({ baseBranch: null, devBranch: null }))
   ]);
 
+  const originComparison = branch && branch !== 'HEAD'
+    ? await execGit(['rev-list', '--left-right', '--count', `HEAD...refs/remotes/origin/${branch}`], dir)
+      .then(({ stdout }) => {
+        const [ahead, behind] = stdout.trim().split(/\s+/).map(Number);
+        return Number.isFinite(ahead) && Number.isFinite(behind) ? { ahead, behind } : null;
+      }).catch(() => null)
+    : null;
+
   return {
     isRepo: isGit,
     branch,
@@ -2096,6 +2183,7 @@ export async function getGitInfo(dir) {
     recentCommits: commits,
     diffStats,
     remote,
+    originComparison,
     baseBranch: repoBranches.baseBranch,
     devBranch: repoBranches.devBranch,
     hasChangelog: hasChangelogDir(dir)

@@ -44,6 +44,23 @@ describe('useAppOperation — PortOS self-update handoff', () => {
 
   afterEach(() => { vi.useRealTimers(); });
 
+  it('retains scope repair after the failed operation leaves the active set and clears it on retry', () => {
+    const { result } = renderHook(() => useAppOperation({ appId: 'app-example' }));
+    const context = { host: 'ghe.example.com', scopes: ['workflow'], command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: true };
+    act(() => {
+      result.current.startUpdate('app-example', 'Example', { syncFork: true });
+      socketHandlers.get('app:update:step')({ appId: 'app-example', step: 'fork-sync', status: 'running', message: 'Syncing fork' });
+      socketHandlers.get('app:update:error')({ appId: 'app-example', code: 'FORGE_TOKEN_SCOPE_MISSING', message: 'scope missing', context });
+      socketHandlers.get('app:operations:active')({ operations: [] });
+    });
+    expect(result.current).toMatchObject({ isOperating: false, errorCode: 'FORGE_TOKEN_SCOPE_MISSING', errorContext: context });
+    expect(result.current.steps).toEqual([expect.objectContaining({ step: 'fork-sync' })]);
+    act(() => result.current.startUpdate('app-example', 'Example', { syncFork: true }));
+    expect(result.current.errorContext).toBeNull();
+    act(() => socketHandlers.get('app:update:error')({ appId: 'app-example', message: 'generic failure', context }));
+    expect(result.current.errorContext).toBeNull();
+  });
+
   it('records the running version before dispatching, without blocking the emit', () => {
     const { result } = renderHook(() => useAppOperation({ appId: PORTOS_APP_ID }));
 
