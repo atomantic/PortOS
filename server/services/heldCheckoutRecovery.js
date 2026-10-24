@@ -169,8 +169,8 @@ async function archiveManifest(dir, work = archiveWork()) {
   return { manifest: JSON.parse(bytes), digest: evidenceHash(bytes) };
 }
 
-/** Reuses the archive's recorded byte hashes and administration fingerprint.
- * Older dirty archives lack patch hashes and cannot prove completeness later.
+/** Reuses recorded byte hashes and independently reconstructs the private index.
+ * Older dirty archives without patch hashes cannot prove completeness later.
  */
 async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
   work.check();
@@ -249,22 +249,45 @@ async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
   // (\\.\nul) is not the Git configuration-file contract.
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' };
-  const prove = args => {
+  const prove = (args, index = null) => {
     work.check();
     return execGit(['--no-optional-locks', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], scratch,
-      { env, maxBuffer: GIT_OUTPUT_BYTES });
+      { env: { ...env, ...(index && { GIT_INDEX_FILE: join(scratch, index) }) }, maxBuffer: GIT_OUTPUT_BYTES });
   };
   try {
-    await prove(['init', '--bare', `--object-format=${release.head.length === 64 ? 'sha256' : 'sha1'}`, '.']);
-    await prove(['bundle', 'unbundle', bundle]);
-    await prove(['fsck', '--full', '--strict', '--no-reflogs', '--no-dangling', ...captured.recoveryHeads]);
-  } catch (error) {
-    if (archiveLimitRefusal(error)) throw error;
-    throw new Error('archive-bundle-object-proof-failed');
-  }
-  finally { await rmGuarded(scratch, { recursive: true, force: true }); }
+    try {
+      await prove(['init', '--bare', `--object-format=${release.head.length === 64 ? 'sha256' : 'sha1'}`, '.']);
+      await prove(['bundle', 'unbundle', bundle]);
+      await prove(['fsck', '--full', '--strict', '--no-reflogs', '--no-dangling', ...captured.recoveryHeads]);
+    } catch (error) {
+      if (archiveLimitRefusal(error)) throw error;
+      throw new Error('archive-bundle-object-proof-failed');
+    }
+    try {
+      // Copy only validated index bytes into our own Git directory. Never run
+      // Git against archived config, commondir, gitdir pointers or object stores.
+      if (!saved.administration.files.some(file => file.path === 'gitdir/index')) throw new Error('missing archived index');
+      for (const file of saved.administration.files.filter(file => file.path === 'gitdir/index'
+        || /^gitdir\/sharedindex\.[a-f0-9]+$/.test(file.path))) {
+        await archiveCopy(await archiveFile(dir, join(dir, 'administration', file.path)),
+          join(scratch, file.path === 'gitdir/index' ? 'archived-index' : basename(file.path)), file.bytes, work);
+      }
+      // Quoted paths make this comparison ASCII and lossless even for opaque
+      // filename bytes. --stage includes modes, object IDs and conflict stages.
+      const entries = ['-c', 'core.quotePath=true', 'ls-files', '--stage'];
+      const expected = await prove(entries, 'archived-index');
+      await prove(['read-tree', release.head]);
+      if (captured.indexDiff) await prove(['apply', '--cached', '--binary', join(dir, 'index.diff')]);
+      const restored = await prove(entries);
+      if (restored.stdout !== expected.stdout) throw new Error('index entries differ');
+    } catch (error) {
+      if (archiveLimitRefusal(error)) throw error;
+      throw new Error('archive-index-reconstruction-failed');
+    }
+  } finally { await rmGuarded(scratch, { recursive: true, force: true }); }
   work.check();
   if ((await archiveManifest(dir, work)).digest !== digest) throw new Error('archive-manifest-changed');
+
   const recheck = async () => {
     const recheckWork = work.renew();
     for (const [path, original] of stamps) {
@@ -1008,13 +1031,30 @@ async function ownerReason({ repoPath, tree, branch, readAgents, reviewed = fals
   return mergedObligationSettled && hold === 'pr-completion-review-required' ? null : hold;
 }
 
+/** Optional server inventory identity binds private administration as well as
+ * the pointer file. Callers have already checked the exact released lock under
+ * the retirement fence; allowing a fact-read does not authorize unlocking it. */
+async function matchesObservedCheckoutIncarnation(repoPath, release, worktrees = null) {
+  if (!release.checkoutIncarnation) return true;
+  const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+  const current = await readCompletedCheckoutIdentity({ repoPath, ...release, worktrees,
+    allowLocked: release.locked === true }).catch(() => null);
+  return current && JSON.stringify(current.incarnation) === JSON.stringify(release.checkoutIncarnation);
+}
+
 /** Fresh registration that still matches the release, or the reason it does not. */
 async function matchRelease(repoPath, release) {
   const trees = await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return { reason: 'worktree-ownership-unreadable' };
-  const index = trees.findIndex(tree => tree.path === release.path);
+  const index = trees.findIndex(tree => resolve(tree.path) === resolve(release.path));
   if (index === -1) return { reason: 'checkout-not-found' };
   const tree = trees[index];
+  // Lexical equality alone can collapse '..' across a symlink. Different
+  // spellings must also resolve to the same existing filesystem checkout.
+  if (tree.path !== release.path) {
+    try { if (realpathSync.native(tree.path) !== realpathSync.native(release.path)) return { reason: 'checkout-identity-changed' }; }
+    catch { return { reason: 'checkout-identity-changed' }; }
+  }
   if (index === 0 || tree.bare) return { reason: 'checkout-primary' };
   if (tree.prunable) return { reason: 'worktree-prunable' };
   if (tree.head !== release.head) return { reason: 'checkout-head-changed' };
@@ -1022,7 +1062,11 @@ async function matchRelease(repoPath, release) {
   if (Boolean(tree.locked) !== release.locked || (tree.lockReason ?? null) !== (release.lockReason ?? null)) {
     return { reason: 'checkout-lock-changed' };
   }
-  return { tree };
+  if (!await matchesObservedCheckoutIncarnation(repoPath, release, trees)) return { reason: 'checkout-identity-changed' };
+  // Carry the persisted release spelling through archive/receipt publication.
+  // Native lexical resolution above proves it names this registration; fresh
+  // head, lock and incarnation checks still bind the filesystem generation.
+  return { tree: { ...tree, path: release.path } };
 }
 
 /** Shared live policy/owner check for the explicit whole-checkout transaction.
@@ -1113,6 +1157,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   const verifyRemoval = async (holder) => {
     if (opts.signal?.aborted) return 'retirement-archive-cancelled';
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
+    if (!await matchesObservedCheckoutIncarnation(repoPath, release)) return 'checkout-identity-changed';
     if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh] = await Promise.all([
@@ -1176,7 +1221,8 @@ function bindInventoriedRelease(outcome, release) {
   if (!entry) return null;
   return { path: release.path, head: release.head, branch: release.branch ?? null,
     locked: release.locked, lockReason: release.lockReason ?? null,
-    ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }) };
+    ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }),
+    ...(entry.checkoutIncarnation && { checkoutIncarnation: entry.checkoutIncarnation }) };
 }
 
 // Preview and receipt paths may acquire exact server-verified proof commits

@@ -7,8 +7,10 @@ const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  return { root: await mkdtemp(join(tmpdir(), 'cos-archive-backup-')), state: null, beforeIndex: null, bypass: false };
+  const base = await mkdtemp(join(tmpdir(), 'cos-archive-backup-'));
+  return { base, root: join(base, 'agents'), state: null, tasks: null, beforeIndex: null, bypass: false };
 });
+vi.mock('./cosTaskStore.js', () => ({ getTaskView: async () => fixture.tasks }));
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: fixture.root,
   loadState: async () => structuredClone(fixture.state),
@@ -18,7 +20,7 @@ vi.mock('./cosState.js', () => ({
 }));
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, atomicWrite: async (path, data) => {
+  return { ...actual, PATHS: { ...actual.PATHS, cos: fixture.base }, atomicWrite: async (path, data) => {
     if (path === join(fixture.root, 'index.json')) await fixture.beforeIndex?.();
     return actual.atomicWrite(path, data);
   } };
@@ -59,13 +61,56 @@ async function seed({ completed = false, indexed = false } = {}) {
 beforeEach(async () => {
   vi.resetModules(); fixture.beforeIndex = null; fixture.bypass = false;
   fixture.state = { agents: {}, config: { completedAgentRetentionMs: 1 }, stats: { tasksCompleted: 0, errors: 0 } };
+  fixture.tasks = { user: { tasks: [] }, cos: { tasks: [] } };
   await rm(fixture.root, { recursive: true, force: true }); await mkdir(fixture.root);
   await writeFile(join(fixture.root, 'index.json'), '{}');
   ({ acquireBackupSnapshotCut: acquireCut } = await import('../lib/backupSnapshotBoundary.js'));
   index = await import('./cosAgentIndex.js');
   api = { ...await import('./cosAgentLifecycle.js'), ...await import('./cosAgentArchive.js') };
 });
-afterAll(() => rm(fixture.root, { recursive: true, force: true }));
+afterAll(() => rm(fixture.base, { recursive: true, force: true }));
+
+it('preserves pending verification before the task hold is written and after archival', async () => {
+  await seed({ completed: true, indexed: true });
+  const agent = fixture.state.agents[id];
+  agent.result.cleanupPending = true;
+  agent.metadata.repoStateVerification = { status: 'pending' };
+  const metadataPath = join(fixture.root, date, id, 'metadata.json');
+  await writeFile(metadataPath, JSON.stringify(agent));
+
+  await expect(api.clearCompletedAgents()).rejects.toMatchObject({ code: 'DELIVERY_CLEANUP_PENDING' });
+  expect(fixture.state.agents[id]).toEqual(agent);
+  delete fixture.state.agents[id];
+  await expect(api.clearCompletedAgents()).rejects.toMatchObject({ code: 'DELIVERY_CLEANUP_PENDING' });
+  await assertIndexedTrees();
+
+  agent.metadata.repoStateVerification.status = 'completed';
+  await writeFile(metadataPath, JSON.stringify(agent));
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 1 });
+});
+
+it.each(['user', 'cos'])('preserves cleanup-owner evidence in the %s queue until delivery settles', async source => {
+  await seed({ completed: true, indexed: true });
+  // An archived owner is absent from resident state but still required after restart.
+  delete fixture.state.agents[id];
+  const task = { id: 'task-example', status: 'in_progress', metadata: {
+    deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: id,
+  } };
+  fixture.tasks[source].tasks.push(task);
+  const beforeState = structuredClone(fixture.state);
+  const beforeIndex = await readIndex();
+
+  await expect(api.clearCompletedAgents()).rejects.toMatchObject({ status: 409, code: 'DELIVERY_CLEANUP_PENDING' });
+  expect(fixture.state).toEqual(beforeState);
+  expect(await readIndex()).toEqual(beforeIndex);
+  await assertIndexedTrees();
+
+  task.status = 'completed';
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 1 });
+  expect(await readIndex()).toEqual({});
+  expect(await readdir(fixture.root)).not.toContain(date);
+});
+
 const cases = [
   { name: 'completion', setup: () => seed(), run: () => api.completeAgent(id, { success: true }) },
   { name: 'zombie archive', setup: () => seed(), run: () => api.cleanupZombieAgents() },

@@ -115,6 +115,21 @@ Unknown contract versions fail closed. The real-Git regression measured
 budgets. Existing tests retain their default timeout. This does not change
 initialized-checkout archives or their separate operational budgets.
 
+Historical held-checkout archives must also prove that their staged patch
+reconstructs the preserved private index. Verification imports the bundle into
+a fresh, isolated Git repository, starts from the recorded HEAD, applies
+`index.diff` to a new index, and compares every path, mode, stage and object ID
+with the archived index. Split-index support uses only validated archived index
+files; archived Git configuration, pointers and object stores are never execution
+targets. Matching patch hashes alone cannot establish this proof: an older writer
+could have hashed bytes already damaged during decoding.
+
+A missing, unsupported or mismatched index retains the historical preservation
+obligation with `archive-index-reconstruction-failed`. Locate a complete archive
+for that exact checkout generation or recover the original data from backup, then
+retry reconciliation. Failure never fabricates a retirement receipt or authorizes
+deletion of a checkout, branch or archive.
+
 ## Explicit initialized-checkout preservation
 
 Automatic cleanup continues to retain initialized submodules. The separate

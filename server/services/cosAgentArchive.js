@@ -16,6 +16,8 @@ import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
+import { isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
 
 // Archive stale completed agents from state.json.
@@ -86,6 +88,20 @@ export async function archiveStaleAgents() {
 // Clear completed agents from state, cache, and disk
 export async function clearCompletedAgents() {
   return withBackupAssetPublication(() => withStateLock(async () => {
+    // Completion is persisted before its task hold; both records protect restart evidence.
+    const { getTaskView } = await import('./cosTaskStore.js');
+    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+    const [tasks, agents] = await Promise.all([
+      getTaskView({ kind: 'queue' }),
+      readBranchCompletionPolicies({ repairIndex: false }),
+    ]);
+    if ([...(tasks.user?.tasks || []), ...(tasks.cos?.tasks || [])]
+      .some(task => task.status === 'in_progress' && isDeliveryCleanupHeld(task.metadata))
+      || agents.some(agent => agent.status === 'completed' && agent.metadata?.repoStateVerification?.status === 'pending')) {
+      throw new ServerError('Wait for delivery verification and cleanup before clearing completed agents.', {
+        status: 409, code: 'DELIVERY_CLEANUP_PENDING',
+      });
+    }
     const state = await loadState();
     const idx = await loadAgentIndex();
 

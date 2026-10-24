@@ -1,6 +1,6 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
-import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, PRICING_AS_OF } from '../lib/modelPricing.js';
+import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, PRICING_AS_OF } from '../lib/modelPricing.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
@@ -981,7 +981,7 @@ function usageRowCost(modelId, counts, rates, free) {
     cacheReadTokens: counts?.longCacheReadTokens,
     cacheWriteTokens: counts?.longCacheWriteTokens,
   }) : 0;
-  return tokens + premium + estimateGrokImagineCost(modelId, counts);
+  return tokens + premium + estimateGrokImagineCost(modelId, counts) + estimateAgyImageCost(modelId, counts);
 }
 
 export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null } = {}) {
