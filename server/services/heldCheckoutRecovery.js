@@ -542,30 +542,42 @@ async function integratedPolicyReviewIdentity(repoPath, release, prUrl, forge) {
       ? forge.defaultHead : null };
 }
 
-async function reviewCurrentCheckout({ repoPath, release, prUrl, unlocked = false }, opts = {}) {
-  if (!release.branch || PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
+const reviewForgeOptions = (release, kind, opts) => ({ forgeAccount: opts.forgeAccount,
+  ...(!release.branch && { exactAliasHead: release.head }),
+  ...(kind === 'source-supersession' && { sourceSupersessionHead: release.head }) });
+
+async function reviewCurrentCheckout({ repoPath, release, prUrl, kind, unlocked = false }, opts = {}) {
+  if (kind && kind !== 'source-supersession') return { ok: false, reason: 'retirement-review-kind-unavailable' };
+  if (kind && !release.branch) return { ok: false, reason: 'retirement-source-branch-required' };
+  if (PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
   const matched = await matchRelease(repoPath, unlocked ? { ...release, locked: false, lockReason: null } : release);
   if (!matched.tree) return { ok: false, reason: matched.reason };
   const owner = await ownerReason({ repoPath, tree: matched.tree, branch: release.branch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (owner) return { ok: false, reason: owner };
   const { buildCheckoutRetirementReview, readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
-  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, { forgeAccount: opts.forgeAccount })
+  const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, release.branch, prUrl, reviewForgeOptions(release, kind, opts))
     .catch(error => ({ error }));
   if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
+  if (kind && forge?.sourceSupersessionHead !== release.head) return { ok: false, reason: 'retirement-source-head-unverified' };
+  if (!release.branch && (forge?.prHead !== release.head || !forge.publishedBranch)) return { ok: false, reason: 'retirement-detached-head-unverified' };
+  const policyBranch = release.branch || forge.publishedBranch;
+  const namedOwner = !release.branch && await ownerReason({ repoPath, tree: matched.tree, branch: policyBranch,
+    readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
+  if (namedOwner) return { ok: false, reason: namedOwner };
   const identity = await integratedPolicyReviewIdentity(repoPath, release, prUrl, forge);
   if (!identity) return { ok: false, reason: 'retirement-local-objects-missing' };
-  const policy = await retirementPolicy(repoPath, release.branch, opts, identity);
+  const policy = await retirementPolicy(repoPath, policyBranch, opts, identity);
   if (policy.reason) return { ok: false, reason: policy.reason };
   return archiveSnapshots(matched.tree, repoPath, null, archiveWork(opts.signal))
-    .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl,
+    .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl, kind,
       contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
       reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-local-evidence-unavailable' }));
 }
 
 /** Host-control-gated preview of one inventory row; may fetch missing proof objects. */
-export async function prepareInventoriedCheckoutRetirement({ appId, release, prUrl }, opts = {}) {
+export async function prepareInventoriedCheckoutRetirement({ appId, release, prUrl, kind }, opts = {}) {
   const [{ getAppById }, { getBranchReconcileOutcome }] = await Promise.all([import('./apps.js'), import('./taskSchedule.js')]);
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
@@ -573,16 +585,16 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null };
-  const review = () => withClaimOwnershipLock(() => reviewCurrentCheckout({ repoPath: app.repoPath, release, prUrl }, reviewOptions));
+  const review = () => withClaimOwnershipLock(() => reviewCurrentCheckout({ repoPath: app.repoPath, release, prUrl, kind }, reviewOptions));
   let prepared = await review();
   if (prepared.reason === 'retirement-local-objects-missing') {
     // A remote default may advance while local refs stay put. Acquire only its
     // validated proof objects; then repeat every owner/policy/content check.
-    const fetched = await fetchRetirementProofObjects(app.repoPath, release, prUrl, null, reviewOptions);
+    const fetched = await fetchRetirementProofObjects(app.repoPath, release, prUrl, null, { ...reviewOptions, ...reviewForgeOptions(release, kind, reviewOptions) });
     if (!fetched.ok) return fetched;
     prepared = await review();
   }
-  if (prepared.reason === 'retirement-policy-not-legacy-completed') {
+  if (!kind && release.branch && prepared.reason === 'retirement-policy-not-legacy-completed') {
     // Recover only a previously registered physical generation after fresh
     // merged exact-head proof. Never promote an orphan's execution to success.
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
@@ -1154,7 +1166,7 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
         ? await hasBranchMergeEvidence(repoPath, branch, defaultBranch).catch(() => false)
         : await isAncestor(repoPath, tree.head, defaultBranch);
       if (!merged && !review) return refuse('not-merged-on-recheck');
-      const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl }, opts) : null;
+      const reviewed = review ? await reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind }, opts) : null;
       if (reviewed && (!reviewed.ok || reviewed.review.digest !== review.digest)) return refuse(reviewed.reason || 'retirement-review-changed', reviewed.archiveLimit, reviewed.nextAction);
       if (reviewed?.review.comparison.disposition === 'review-supersession' && review.acceptSuperseded !== true) return refuse('retirement-supersession-not-accepted');
       const owner = await ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled });
@@ -1199,7 +1211,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [reason, fresh] = await Promise.all([
       ownerReason({ repoPath, tree, branch, readAgents, reviewed: Boolean(review), mergedObligationSettled }),
-      review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, unlocked: release.locked }, opts) : null,
+      review ? reviewCurrentCheckout({ repoPath, release, prUrl: review.prUrl, kind: review.kind, unlocked: release.locked }, opts) : null,
     ]);
     if (fresh && !fresh.ok) { capacityRefusal = fresh; return fresh.reason; }
     if (fresh && fresh.review.digest !== review.digest) return 'retirement-review-changed';
@@ -1231,7 +1243,7 @@ async function finishHeldCheckoutRetirement({ repoPath, release, review, reviewe
   if (hold) return { ok: true, archiveDir: archive.dir, branchDeleted: false, branchRetainedReason: hold };
   if (review) {
     const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
-    const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, branch, review.prUrl, { forgeAccount: opts.forgeAccount }).catch(() => null);
+    const forge = await (opts.readForge || readRetirementForgeEvidence)(repoPath, branch, review.prUrl, reviewForgeOptions(release, review.kind, opts)).catch(() => null);
     const identity = await integratedPolicyReviewIdentity(repoPath, release, review.prUrl, forge);
     const policy = identity ? await retirementPolicy(repoPath, branch, opts, identity) : null;
     if (JSON.stringify(policy) !== JSON.stringify(reviewed.review.policy) || JSON.stringify(forge) !== JSON.stringify(reviewed.review.forge)) {

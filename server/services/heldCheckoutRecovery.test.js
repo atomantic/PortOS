@@ -2024,6 +2024,78 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(c.release.path)).toBe(true);
   });
 
+  it.each(['confirmed', 'unconfirmed', 'human-handoff', 'active-owner', 'changed-default', 'changed-source'])('reviews source-superseded local work through the existing archive fence: %s', async scenario => {
+    const c = await reviewedCheckout(`source-${scenario}`, { superseded: scenario !== 'unconfirmed' });
+    c.forge.prHead = c.forge.firstCommit = c.forge.mergeCommit;
+    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.firstCommit}^`], repo)).stdout.trim();
+    c.forge.sourceSupersessionHead = c.release.head;
+    const prepare = () => prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
+      prUrl: c.forge.prUrl, kind: 'source-supersession' }, c.opts);
+    if (scenario === 'human-handoff') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+    if (scenario === 'active-owner') c.opts.readAgents = async () => [{ id: 'live', status: 'running', metadata: { workspacePath: repo, claimBranches: [c.release.branch] } }];
+    const prepared = await prepare();
+    if (['human-handoff', 'active-owner'].includes(scenario)) {
+      expect(prepared.ok).toBe(false);
+      expect(await archives()).toEqual([]);
+      expect(await registered(c.path)).toBe(true);
+      return;
+    }
+    expect(prepared).toMatchObject({ ok: true, review: { kind: 'source-supersession',
+      forge: { sourceSupersessionHead: c.release.head }, comparison: { disposition: 'review-supersession' } } });
+    if (scenario === 'changed-source') await writeFile(join(c.path, 'ignored.txt'), 'new local work\n');
+    if (scenario === 'changed-default') {
+      await writeFile(join(repo, 'later.txt'), 'new default\n');
+      await execGit(['add', 'later.txt'], repo);
+      await execGit(['commit', '-m', 'later default'], repo);
+      c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+    }
+    const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release, review: {
+      prUrl: c.forge.prUrl, digest: prepared.review.digest, kind: 'source-supersession', acceptSuperseded: scenario !== 'unconfirmed',
+    } }, c.opts);
+    if (scenario !== 'confirmed') {
+      expect(result).toMatchObject({ ok: false, reason: scenario === 'unconfirmed' ? 'retirement-supersession-not-accepted' : 'retirement-review-changed' });
+      expect(await registered(c.path)).toBe(true);
+      expect(await archives()).toEqual([]);
+      return;
+    }
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest).toMatchObject({ head: c.release.head, review: { kind: 'source-supersession' } });
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await registered(c.path)).toBe(false);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([expect.objectContaining({ head: c.release.head, archiveDir: result.archiveDir })]));
+    const restored = join(scratch, 'standalone-source.git');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['bundle', 'unbundle', join(result.archiveDir, 'commits.bundle')], restored);
+    await execGit(['fsck', '--full', '--strict', '--no-reflogs', c.release.head], restored);
+    expect((await execGit(['show', `${c.release.head}:feature.txt`], restored)).stdout).toBe('original feature\n');
+  });
+
+  it.each(['confirmed', 'human-handoff', 'published-owner'])('reviews an exact merged detached checkout without borrowing branch retirement: %s', async scenario => {
+    const c = await reviewedCheckout(`detached-review-${scenario}`);
+    const publishedBranch = c.release.branch;
+    await execGit(['switch', '--detach', c.release.head], c.path);
+    c.release.branch = null;
+    c.forge.publishedBranch = publishedBranch;
+    c.forge.exactAliasHead = c.release.head;
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'worktree-unmanaged-location' }] });
+    if (scenario === 'human-handoff') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+    if (scenario === 'published-owner') c.opts.readAgents = async () => [{ id: 'live', status: 'running', metadata: { workspacePath: repo, claimBranches: [publishedBranch] } }];
+    const prepared = await c.prepare();
+    if (scenario !== 'confirmed') {
+      expect(prepared.ok).toBe(false);
+      expect(await registered(c.path)).toBe(true);
+      expect(await archives()).toEqual([]);
+      return;
+    }
+    expect(prepared.ok).toBe(true);
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, branchDeleted: false });
+    expect(await registered(c.path)).toBe(false);
+    expect((await execGit(['rev-parse', publishedBranch], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+  });
+
   it('preserves archive and checkout when fresh forge evidence changes after archiving', async () => {
     const c = await reviewedCheckout('late-forge');
     const prepared = await c.prepare();

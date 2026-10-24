@@ -298,9 +298,9 @@ router.post('/schedule/branch-reconcile/refresh', asyncHandler(async (req, res) 
 
 // Prepare evidence only; the separate confirmation binds its digest to fresh facts.
 router.post('/schedule/branch-reconcile/checkouts/review', asyncHandler(async (req, res) => {
-  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema, req.body);
+  const { appId, prUrl, kind, ...release } = validateRequest(heldCheckoutReviewBodySchema, req.body);
   const { prepareInventoriedCheckoutRetirement } = await import('../services/heldCheckoutRecovery.js');
-  const result = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl });
+  const result = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl, ...(kind && { kind }) });
   if (!result.ok) throw new ServerError(`Checkout review refused: ${result.reason}`, {
     status: 409, code: 'CHECKOUT_REVIEW_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
   });
@@ -324,7 +324,7 @@ router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (r
 // Initial retirement remains explicit. Only existing proof-bound journals can be
 // continued by the deterministic daemon; ordinary cleanup keeps its module guard.
 router.post('/schedule/branch-reconcile/initialized-checkouts/review', asyncHandler(async (req, res) => {
-  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.strict(), req.body);
+  const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema.omit({ kind: true }).strict(), req.body);
   const { reviewInitializedCheckout } = await import('../services/initializedCheckoutRecovery.js');
   const result = await reviewInitializedCheckout({ appId, release, prUrl });
   res.status(result.ok ? 200 : 409).json(result);
