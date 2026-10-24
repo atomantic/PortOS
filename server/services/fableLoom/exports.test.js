@@ -9,6 +9,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies }
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { readZipArchive } from '../../lib/zipArchive.js';
+import * as ffmpeg from '../../lib/ffmpeg.js';
 import { findFfmpeg, findFfprobe, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { FABLELOOM_EXPORT_LIMITS } from '../../lib/fableLoomExport.js';
 import { execFileSync } from '../../lib/childProcess.js';
@@ -190,6 +191,165 @@ describe('portable FableLoom export boundary', () => {
     expect(missingArtifact.text).not.toContain(removed.path);
   });
 
+  videoIt('encodes bounded web media, normalizes audio, retains roles and reuses content/profile cache', async () => {
+    const source = join(PATHS.videos, 'profile-fixture.mp4');
+    expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: [
+      '-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=1600x900:r=15:d=1',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=1', '-af', 'volume=0.1',
+      '-c:v', 'mpeg4', '-c:a', 'aac', '-threads', '1', source,
+    ] })).toEqual({ ok: true });
+    const original = await readFile(source);
+    loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({ id, filename: 'profile-fixture.mp4' })));
+    const encode = vi.spyOn(ffmpeg, 'runFfmpegProcess');
+    const options = { episodeIds: ['episode-one'], mediaProfile: 'web-720p', includeWebm: true };
+    const firstId = await begin(options);
+    const first = await archive(firstId);
+    const firstCount = encode.mock.calls.length;
+    const repeat = await archive(await begin(options));
+    expect(repeat.bytes).toEqual(first.bytes);
+    expect(encode).toHaveBeenCalledTimes(firstCount);
+    // Three distinct history IDs with identical source content encode only once.
+    expect(encode.mock.calls.filter(([args]) => args.args.includes('libx264'))).toHaveLength(1);
+    const manifest = JSON.parse(first.files.get('manifest.json'));
+    const assets = manifest.loom.episodes[0].nodes[0].playbackAssets;
+    expect(assets.holds[0]).toMatchObject({ loopable: true, audioOccupancy: { durationMs: 1000,
+      effects: [{ startMs: 0, endMs: 500 }], safeForLiveVoice: true } });
+    expect(assets.exits.choose.file).toBe(assets.entry.file);
+    expect(first.files.has(assets.entry.poster.file)).toBe(true);
+    expect(assets.entry.alternatives).toHaveLength(1);
+    const inspect = (file) => JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file], { timeout: 10_000 }).toString());
+    const encodedFile = join(PATHS.videos, 'packaged.mp4');
+    await writeFile(encodedFile, first.files.get(assets.entry.file));
+    const measured = inspect(encodedFile);
+    expect(measured.streams.find(s => s.codec_type === 'video')).toMatchObject({ codec_name: 'h264', pix_fmt: 'yuv420p', width: 1280, height: 720 });
+    expect(measured.streams.find(s => s.codec_type === 'audio')).toMatchObject({ codec_name: 'aac', sample_rate: '48000' });
+    expect(Number(measured.streams.find(s => s.codec_type === 'video').bit_rate)).toBeLessThanOrEqual(2_000_000);
+    expect(Number(measured.streams.find(s => s.codec_type === 'audio').bit_rate)).toBeLessThanOrEqual(128_000);
+    const analyzed = await runFfmpegProcess({ bin, timeoutMs: 10_000, returnStderr: true, stderrTailBytes: 8192,
+      args: ['-nostdin', '-i', encodedFile, '-vn', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json', '-f', 'null', '-'] });
+    expect(analyzed.ok).toBe(true);
+    const level = JSON.parse(analyzed.stderr.slice(analyzed.stderr.lastIndexOf('{'), analyzed.stderr.lastIndexOf('}') + 1));
+    expect(Math.abs(Number(level.input_i) + 16)).toBeLessThan(1);
+    expect(Number(level.input_tp)).toBeLessThanOrEqual(-1.4);
+    const webm = join(PATHS.videos, 'packaged.webm');
+    await writeFile(webm, first.files.get(assets.entry.alternatives[0].file));
+    expect(inspect(webm).streams.map(s => s.codec_name)).toEqual(['vp9', 'opus']);
+    const provenance = JSON.parse(first.files.get('provenance.json'));
+    expect(provenance.assets.find(a => a.role === 'entry')).toMatchObject({ bytes: first.files.get(assets.entry.file).length,
+      encoding: { sourceSha256: hash(original), profile: { id: 'web-720p', videoKbps: 2000, includeWebm: true },
+        encoder: { ffmpeg: expect.any(String), buildHash: expect.stringMatching(/^[a-f0-9]{64}$/) } } });
+    const mediaFiles = [...first.files].filter(([name]) => name.startsWith('media/'));
+    for (const [name, bytes] of mediaFiles) expect(name).toContain(hash(bytes));
+    expect((await terminal(firstId)).sizeReport.mediaBytes).toBe(mediaFiles.reduce((n, [, bytes]) => n + bytes.length, 0));
+    const changed = await archive(await begin({ ...options, mediaProfile: 'web-1080p', includeWebm: false }));
+    const changedAssets = JSON.parse(changed.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets;
+    expect(changedAssets.entry.file).not.toBe(assets.entry.file);
+    expect(changedAssets.entry).not.toHaveProperty('alternatives');
+    expect(encode.mock.calls.filter(([args]) => args.args.includes('libx264'))).toHaveLength(2);
+    expect(await readFile(source)).toEqual(original);
+  });
+
+  videoIt('preserves silent soundtracks and clips without audio in web profiles', async () => {
+    const outcomes = [];
+    const realRun = ffmpeg.runFfmpegProcess;
+    vi.spyOn(ffmpeg, 'runFfmpegProcess').mockImplementation(async options => {
+      const result = await realRun(options);
+      outcomes.push({ ok: result.ok, reason: result.reason });
+      return result;
+    });
+    const silentId = await begin({ episodeIds: ['episode-one'], mediaProfile: 'web-720p' });
+    expect((await terminal(silentId)).status, JSON.stringify(outcomes)).toBe('completed');
+    const silent = await archive(silentId);
+    const silentAssets = JSON.parse(silent.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets;
+    const output = join(PATHS.videos, 'without-audio.mp4');
+    expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: ['-nostdin', '-y', '-v', 'error',
+      '-i', join(PATHS.videos, 'independent-name.mp4'), '-an', '-c:v', 'copy', output] })).toEqual({ ok: true });
+    loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({ id, filename: 'without-audio.mp4' })));
+    const noAudio = await archive(await begin({ episodeIds: ['episode-one'], mediaProfile: 'web-720p' }));
+    const noAudioAssets = JSON.parse(noAudio.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets;
+    expect(noAudioAssets.entry.file).not.toBe(silentAssets.entry.file);
+    await writeFile(output, noAudio.files.get(noAudioAssets.entry.file));
+    const streams = JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', output], { timeout: 10_000 }).toString()).streams;
+    expect(streams.map(stream => stream.codec_type)).toEqual(['video']);
+    expect(noAudioAssets.holds[0].audioOccupancy).toEqual(silentAssets.holds[0].audioOccupancy);
+  });
+
+  videoIt('normalizes short non-silent audio without padding its duration', async () => {
+    const source = join(PATHS.videos, 'short-sfx.mp4');
+    expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: [
+      '-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:r=10:d=1',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=0.2', '-af', 'volume=0.1',
+      '-c:v', 'libx264', '-c:a', 'aac', '-threads', '1', source,
+    ] })).toEqual({ ok: true });
+    loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({ id, filename: 'short-sfx.mp4' })));
+    const result = await archive(await begin({ episodeIds: ['episode-one'], mediaProfile: 'web-720p' }));
+    const assets = JSON.parse(result.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets;
+    expect(assets.entry.durationMs).toBe(1000);
+    const output = join(PATHS.videos, 'short-normalized.mp4');
+    await writeFile(output, result.files.get(assets.entry.file));
+    const streams = JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', output], { timeout: 10_000 }).toString()).streams;
+    const audio = streams.find(stream => stream.codec_type === 'audio');
+    expect(Number(audio.duration)).toBeGreaterThanOrEqual(0.2);
+    expect(Number(audio.duration)).toBeLessThan(0.25);
+    const analyzed = await runFfmpegProcess({ bin, timeoutMs: 10_000, returnStderr: true, stderrTailBytes: 8192,
+      args: ['-nostdin', '-i', output, '-vn', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json', '-f', 'null', '-'] });
+    expect(analyzed.ok).toBe(true);
+    const level = JSON.parse(analyzed.stderr.slice(analyzed.stderr.lastIndexOf('{'), analyzed.stderr.lastIndexOf('}') + 1));
+    expect(Number(level.input_tp)).toBeGreaterThan(-3);
+    expect(Number(level.input_tp)).toBeLessThan(0);
+  });
+
+  videoIt('measures retained streams when discarded subtitle tracks outlast picture and audio', async () => {
+    const subtitle = join(PATHS.videos, 'extended.srt');
+    await writeFile(subtitle, '1\n00:00:00,000 --> 00:00:03,000\nExample subtitle\n');
+    const source = join(PATHS.videos, 'extended-subtitle.mp4');
+    expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: ['-nostdin', '-y', '-v', 'error',
+      '-i', join(PATHS.videos, 'independent-name.mp4'), '-i', subtitle, '-map', '0', '-map', '1:0',
+      '-c', 'copy', '-c:s', 'mov_text', source] })).toEqual({ ok: true });
+    const measured = JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', source], { timeout: 10_000 }).toString());
+    expect(Number(measured.streams.find(stream => stream.codec_type === 'subtitle').duration)).toBe(3);
+    loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({ id, filename: 'extended-subtitle.mp4' })));
+    for (const mediaProfile of ['source', 'web-720p']) {
+      const result = await archive(await begin({ episodeIds: ['episode-one'], mediaProfile }));
+      const assets = JSON.parse(result.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets;
+      expect(assets.entry.durationMs).toBe(1000);
+      expect(assets.holds[0].audioOccupancy.durationMs).toBe(1000);
+      const output = join(PATHS.videos, 'retained.mp4');
+      await writeFile(output, result.files.get(assets.entry.file));
+      const streams = JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', output], { timeout: 10_000 }).toString()).streams;
+      expect(streams.map(stream => stream.codec_type)).toEqual(['video', 'audio']);
+    }
+  });
+
+  videoIt('drains cancelled and failed encoder children before exposing terminal failure without an artifact', async () => {
+    const realRun = ffmpeg.runFfmpegProcess;
+    const started = Promise.withResolvers();
+    let drained = false;
+    vi.spyOn(ffmpeg, 'runFfmpegProcess').mockImplementation(async options => {
+      const pending = realRun({ ...options, args: ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i',
+        'color=c=blue:s=32x32:r=10', '-f', 'null', '-'] });
+      started.resolve();
+      const result = await pending;
+      drained = true;
+      return result;
+    });
+    const id = await begin({ episodeIds: ['episode-one'], mediaProfile: 'web-720p' });
+    await started.promise;
+    const cancelled = await request(app()).delete(`/api/fableloom/example-loom/export/${id}`);
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body).toMatchObject({ status: 'failed', error: { code: 'EXPORT_CANCELLED' } });
+    expect(drained).toBe(true);
+    expect(cancelled.body).not.toHaveProperty('downloadUrl');
+    await expect(stat(join(PATHS.data, 'cache/fableloom-exports', id, 'package.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(PATHS.data, 'cache/fableloom-exports', id, 'work'))).rejects.toMatchObject({ code: 'ENOENT' });
+    vi.spyOn(ffmpeg, 'runFfmpegProcess').mockImplementation(options => realRun({ ...options,
+      args: ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=s=32x32:d=0.1', '-c:v', 'not-an-encoder', '-f', 'null', '-'] }));
+    const failedId = await begin({ episodeIds: ['episode-one'], mediaProfile: 'web-720p' });
+    expect(await terminal(failedId)).toMatchObject({ status: 'failed', error: { code: 'EXPORT_TRANSCODE_FAILED' } });
+    await expect(getFableLoomExportDownload(loom.id, failedId)).rejects.toMatchObject({ code: 'EXPORT_NOT_READY' });
+    await expect(stat(join(PATHS.data, 'cache/fableloom-exports', failedId, 'package.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   videoIt('refuses unapproved media by default and records draft flags only after explicit opt-in', async () => {
     const node = loom.episodes[0].nodes[0];
     node.visualCanon.storyboardImageApproved = false;
@@ -232,7 +392,7 @@ describe('portable FableLoom export boundary', () => {
 
   it('refuses unsupported and malformed options before creating jobs', async () => {
     for (const input of [{ includePlayer: true }, { includeCharacters: true }, { includeVoice: true },
-      { mediaProfile: 'webm' }, { mediaProfile: { width: 100 } }, { allowDraft: 'yes' },
+      { mediaProfile: 'webm' }, { includeWebm: true }, { includeWebm: 'yes' }, { mediaProfile: { width: 100 } }, { allowDraft: 'yes' },
       { episodeIds: [] }, { episodeIds: ['episode-one', 'episode-one'] }, { destination: sourcePath }]) {
       const response = await request(app()).post('/api/fableloom/example-loom/export').send(input);
       expect(response.status, JSON.stringify(input)).toBe(400);
