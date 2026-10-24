@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as usage from '../services/usage.js';
+import { getImageRenderUsage } from '../services/imageRenderUsage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
@@ -41,7 +42,7 @@ router.get('/', asyncHandler(async (req, res) => {
   //   (or before a peer's first usage sync) — the UI hides that section rather
   //   than showing a one-row "fleet".
   // - monthly: fixed calendar months with the rolling chart's fleet coverage.
-  const [subscriptionSavings, fleet, monthly] = await Promise.all([
+  const [subscriptionSavings, fleet, monthly, imageRenders] = await Promise.all([
     getSubscriptionSavings({
       report: summary.report,
       providers,
@@ -54,9 +55,13 @@ router.get('/', asyncHandler(async (req, res) => {
     getApiBilledInstanceIds().then((apiBilledInstanceIds) =>
       getFleetUsage({ from, to, providers, apiBilledInstanceIds })),
     getFleetMonthlyUsage({ providers }),
+    getImageRenderUsage({ from, to }).catch(err => {
+      console.error(`❌ Failed to read image render usage: ${err.message}`);
+      return { error: 'Image render usage is unavailable.' };
+    }),
   ]);
   res.json({
-    ...summary, subscriptionSavings, fleet,
+    ...summary, subscriptionSavings, fleet, imageRenders,
     monthlyHistory: monthly.history,
     monthlySeries: monthly.series,
     monthlyInstanceCount: monthly.instanceCount,

@@ -188,7 +188,14 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     setConfirmingClear(false);
     const result = await api.clearCompletedCosAgents({ silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
-    toast.success('Cleared completed agents');
+    if (result.retained > 0) {
+      const retainedWord = result.retained === 1 ? '1 active cleanup owner retained' : `${result.retained} active cleanup owners retained`;
+      toast.success(result.cleared > 0
+        ? `Cleared ${result.cleared} completed agent${result.cleared === 1 ? '' : 's'} (${retainedWord})`
+        : `No completed agents cleared (${retainedWord})`);
+    } else {
+      toast.success('Cleared completed agents');
+    }
     refresh();
   };
 
