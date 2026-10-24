@@ -134,8 +134,9 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null }) {
   if (terminatedByUser) return null;
+  if (success && mergedReviewFollowUp?.status === 'verified') return true;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
   // the same resolution the programmatic-I/O gate uses, reused for the coordinator
@@ -1713,8 +1714,24 @@ export async function finalizeAgent({
   startedAt = null,
 }) {
   const executionSuccess = reportedSuccess && (typeof exitCode !== 'number' || exitCode === 0);
-  const reportedTaskOutcome = !terminatedByUser && !isPrivateSecurityTask(task)
+  let reportedTaskOutcome = !terminatedByUser && !isPrivateSecurityTask(task)
     ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
+  // This task owns one assigned PR, not a new delivery of local corrections.
+  // A successful process may report a hold after discovering that PR merged.
+  // Verify the exact trusted target before that hold can schedule another run.
+  const mergedReviewFollowUp = executionSuccess && !terminatedByUser && !executionInterruption
+    && !isPrivateSecurityTask(task) && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent
+    ? await (await import('./reviewFollowUpCompletion.js')).verifyMergedReviewFollowUp(task, workspacePath)
+      .catch(() => null) : null;
+  if (mergedReviewFollowUp) {
+    const originalOutcome = reportedTaskOutcome;
+    reportedTaskOutcome = {
+      status: originalOutcome?.status === 'completed' ? 'completed' : 'no-action-needed',
+      reason: `The assigned review/merge target is verified MERGED: ${mergedReviewFollowUp.prUrl}. Preserved corrections and checkout retirement remain separate obligations.`,
+    };
+    await updateAgent(agentId, { metadata: { taskOutcome: reportedTaskOutcome, taskOutcomeSource: 'forge-verification',
+      reportedTaskOutcome: originalOutcome, mergedReviewFollowUp } });
+  }
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
   if (deliveryHeld && reportedTaskOutcome.recovery?.mode !== 'cleanup'
     && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent) {
@@ -1947,6 +1964,7 @@ export async function finalizeAgent({
     branchProvenEmpty,
     emptyBranchInconclusiveEvidence: prEvidence.emptyBranchInconclusiveEvidence,
     claimDisposition,
+    mergedReviewFollowUp,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });

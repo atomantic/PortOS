@@ -1,6 +1,12 @@
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-finalization-output-') }));
 afterAll(cleanupTempDataRoots);
+const mergedTarget = vi.hoisted(() => ({
+  getOriginInfo: vi.fn(),
+  probeChangeRequestState: vi.fn(),
+}));
+vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: mergedTarget.getOriginInfo }));
+vi.mock('./prProbe.js', () => ({ probeChangeRequestState: mergedTarget.probeChangeRequestState }));
 const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
 vi.mock('./claimDisposition.js', () => claimVerifier);
 vi.mock('../lib/fileUtils.js', async importOriginal => {
@@ -401,6 +407,55 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally {
       await rm(workspacePath, { recursive: true, force: true });
     }
+  });
+
+  const reviewTask = () => ({ id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: {
+    reviewLoopFollowUp: true, reviewLoopPRUrl: 'https://github.com/atomantic/PortOS/pull/123',
+    reviewLoopPRBranch: 'fix/example', failureCount: 2,
+  } });
+
+  it.each(['blocked', 'incomplete', 'no-action-needed'])('completes a verified merged review target reported as %s without retrying', async status => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    mergedTarget.getOriginInfo.mockResolvedValue({ host: 'github.com', fullName: 'atomantic/PortOS' });
+    mergedTarget.probeChangeRequestState.mockResolvedValue({ readable: true, prState: 'MERGED' });
+    const task = reviewTask();
+    const reported = { status, reason: 'The target is merged; corrections are tracked separately and the checkout is preserved.' };
+    const result = await finalizeAgent({ agentId: 'agent-example', runId: 'run-example', task, success: true,
+      exitCode: 0, duration: 1000, workspacePath: '/example/repo', outputBuffer: '',
+      finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+    expect(mergedTarget.probeChangeRequestState).toHaveBeenCalledWith('/example/repo', { number: 123, branch: 'fix/example' });
+    expect(result).toMatchObject({ success: true, taskOutcome: { status: 'no-action-needed' } });
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed',
+      metadata: expect.objectContaining({ failureCount: 2, taskOutcome: expect.objectContaining({ status: 'no-action-needed' }) }) }), 'internal');
+    expect(completeAgent).toHaveBeenCalledWith('agent-example', expect.objectContaining({ success: true, validationPassed: true,
+      taskOutcome: expect.objectContaining({ status: 'no-action-needed' }) }));
+    expect(persistedAgent.metadata).toMatchObject({ taskOutcomeSource: 'forge-verification', reportedTaskOutcome: reported });
+    expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(processAgentCompletion).toHaveBeenCalledWith('agent-example', task, true, '');
+  });
+
+  it.each([
+    { name: 'an open target', state: { readable: true, prState: 'OPEN' } },
+    { name: 'a closed unmerged target', state: { readable: true, prState: 'CLOSED' } },
+    { name: 'an unreadable target', state: { readable: false, prState: null } },
+    { name: 'a different repository', meta: { reviewLoopPRUrl: 'https://github.com/another/project/pull/123' } },
+    { name: 'a leave-open policy', meta: { reviewLoopLeaveOpen: true } },
+    { name: 'an ordinary task', meta: { reviewLoopFollowUp: false } },
+    { name: 'a failed process', execution: { success: false, exitCode: 1 } },
+    { name: 'a provider safety refusal', execution: { executionInterruption: { category: 'content-refusal' } } },
+  ])('does not replace a blocked outcome for $name', async ({ state, meta, execution }) => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    mergedTarget.getOriginInfo.mockResolvedValue({ host: 'github.com', fullName: 'atomantic/PortOS' });
+    mergedTarget.probeChangeRequestState.mockResolvedValue(state || { readable: true, prState: 'MERGED' });
+    const task = reviewTask();
+    Object.assign(task.metadata, meta);
+    const reported = { status: 'blocked', reason: 'An unmet prerequisite remains.' };
+    const result = await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0,
+      duration: 1000, workspacePath: '/example/repo', outputBuffer: '', ...execution,
+      finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+    expect(result).toMatchObject({ success: false, taskOutcome: reported });
+    expect(updateTask).not.toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed' }), 'internal');
   });
 
   it('retains explicit approval with choices instead of retrying', async () => {
