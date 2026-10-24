@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -10,6 +10,7 @@ import { getGitInfo, rebaseAndPushDefaultBranch } from './git.js';
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('rebase and push the default branch', () => {
   let sandbox;
   afterEach(async () => {
+    vi.unstubAllEnvs();
     if (sandbox) await destroyGitSandbox(sandbox.scratch);
     sandbox = null;
   });
@@ -33,8 +34,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('rebase and push the default branch', ()
     return repo;
   };
 
-  it('reports origin divergence independently of tracking and publishes both sides without a merge commit', async () => {
+  it('reports origin divergence independently of tracking and publishes exact bytes under global CRLF defaults', async () => {
     const repo = await prepare();
+    const globalConfig = join(sandbox.scratch, 'synthetic-global.gitconfig');
+    await writeFile(globalConfig, '[core]\n\tautocrlf = true\n\teol = crlf\n');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig);
     await execGit(['fetch', 'origin'], repo);
     await execGit(['branch', '--unset-upstream'], repo);
     expect(await getGitInfo(repo)).toMatchObject({ originComparison: { ahead: 1, behind: 1 } });
