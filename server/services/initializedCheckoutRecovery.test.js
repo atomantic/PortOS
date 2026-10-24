@@ -201,6 +201,25 @@ const reviewed = async () => {
 };
 
 describe('initialized checkout transaction', () => {
+  it('binds whole-checkout admission to a distinct review before the existing durable retirement flow', async () => {
+    const native = vi.fn(async input => {
+      const result = await fixture.deps.native(input);
+      return input.command === 'inspect' && input.wholeCheckout ? { ...result, wholeCheckout: true } : result;
+    });
+    const service = _createInitializedCheckoutRecovery({ ...fixture.deps, native });
+    const ordinary = await reviewed();
+    const input = { appId: 'app', release, prUrl, wholeCheckout: true };
+    const prepared = await service.review(input);
+    expect(prepared.review).toMatchObject({ mode: 'whole-checkout', snapshot: { wholeCheckout: true } });
+    expect(await service.retire({ ...input, review: ordinary.review })).toEqual({ ok: false, reason: 'retirement-review-changed' });
+    expect(fixture.cut).toBeNull();
+    const review = { prUrl, digest: prepared.review.digest, acceptSuperseded: false };
+    const result = await service.retire({ ...input, review });
+    expect(result).toMatchObject({ ok: true, originalsQuarantined: true, branchDeleted: false });
+    expect((await service.status({ appId: 'app', transactionId: result.transactionId })).phase).toBe('quarantined');
+    expect(native).toHaveBeenCalledWith(expect.objectContaining({ command: 'preserve', expected: expect.objectContaining({ wholeCheckout: true }) }));
+  });
+
   it('refuses unrepresentable ownership during preview before reserving or archiving', async () => {
     fixture.ownershipRefusal = 'ownership-preservation-unavailable:uid=501:gid=0';
     expect(await fixture.service.review({ appId: 'app', release, prUrl })).toEqual({

@@ -131,6 +131,21 @@ describe('CoS Schedule Routes', () => {
     expect(response.body.context).toEqual({ reason: result.reason, archiveLimit: result.archiveLimit, nextAction: result.nextAction });
   });
 
+  it('requires exact proof for whole-checkout preservation without changing the ordinary route contract', async () => {
+    const base = '/api/cos/schedule/branch-reconcile/whole-checkouts';
+    const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
+    const prUrl = 'https://github.com/example/repo/pull/42';
+    initialized.reviewInitializedCheckout.mockResolvedValue({ ok: true, review: { digest: 'b'.repeat(64) } });
+    expect((await request(app).post(`${base}/review`).send({ appId: 'app', ...tuple, prUrl })).status).toBe(200);
+    expect(initialized.reviewInitializedCheckout).toHaveBeenCalledWith({ appId: 'app', release: tuple, prUrl, wholeCheckout: true });
+    expect((await request(app).post(`${base}/retire`).send({ appId: 'app', ...tuple })).status).toBe(400);
+    expect(initialized.retireInitializedCheckout).not.toHaveBeenCalled();
+    const review = { prUrl, digest: 'b'.repeat(64), acceptSuperseded: false };
+    initialized.retireInitializedCheckout.mockResolvedValue({ ok: false, reason: 'active-owner' });
+    expect((await request(app).post(`${base}/retire`).send({ appId: 'app', ...tuple, review })).status).toBe(409);
+    expect(initialized.retireInitializedCheckout).toHaveBeenCalledWith({ appId: 'app', release: tuple, review, wholeCheckout: true });
+  });
+
   it('requires exact review and journal proofs for explicit initialized checkout operations', async () => {
     const base = '/api/cos/schedule/branch-reconcile/initialized-checkouts';
     const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };

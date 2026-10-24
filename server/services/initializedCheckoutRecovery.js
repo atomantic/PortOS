@@ -200,15 +200,16 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (!result.ok) fail(result.reason);
     return result.policy;
   };
-  const makeReview = async ({ appId, release, prUrl }) => {
+  const makeReview = async ({ appId, release, prUrl, wholeCheckout = false }) => {
     const ctx = await context(appId, release);
     const policy = await ensureOwner(ctx, release);
-    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true });
+    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true,
+      ...(wholeCheckout && { wholeCheckout: true }) });
     const facts = await forge(ctx, release, prUrl);
     const base = await comparison(ctx, release, prUrl, snapshot, policy, facts);
     const checkoutIdentity = await readRetirementCheckoutIdentity(release.path);
     if (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity) fail('checkout-identity-changed');
-    const evidence = { ...base, mode: 'initialized-private-modules', snapshot,
+    const evidence = { ...base, mode: wholeCheckout ? 'whole-checkout' : 'initialized-private-modules', snapshot,
       ...(checkoutIdentity && { checkoutIdentity }) };
     delete evidence.digest;
     return { ctx, review: { digest: hash(evidence), ...evidence } };
@@ -589,7 +590,8 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
               || cancellationProof.archiveVerified !== false || cancellationProof.contentAndMetadataUnverified !== true
               || cancellationProof.partialArchivesRetained !== true) fail('retirement-cancellation-proof-invalid');
           } else {
-            const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release: state.release });
+            const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release: state.release,
+              ...(state.review.snapshot.wholeCheckout && { wholeCheckout: true }) });
             if (JSON.stringify(snapshot) !== JSON.stringify(state.review.snapshot)) {
               // Ordinary restore retains its original unchanged-content proof.
               if (state.proof?.manifestSha256 || state.phase === 'preserved') fail('retirement-source-changed');
@@ -876,7 +878,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
       || !isAbsolute(state.repoPath || '') || !isAbsolute(state.release?.path || '')
       || typeof state.release?.branch !== 'string' || !state.release.branch
       || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(state.release?.head || '')
-      || original?.mode !== 'initialized-private-modules' || original.digest !== hash(unsigned)
+      || !['initialized-private-modules', 'whole-checkout'].includes(original?.mode) || original.digest !== hash(unsigned)
       || !sameRelease(original.release, state.release)) fail('retirement-journal-binding-invalid');
     const ctx = await context(state.appId);
     if (ctx.repoPath !== state.repoPath) fail('retirement-transaction-app-mismatch');

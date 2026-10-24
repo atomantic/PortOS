@@ -55,6 +55,10 @@ def git(admin, work, *args, objects=None, input_data=None, expected_returncode=0
         env['GIT_OBJECT_DIRECTORY'] = str(objects)
     return command(['git', '--no-optional-locks', '--git-dir', str(admin),
                     '--work-tree', str(work), '-c', 'core.fsmonitor=false',
+                    # Graphs are disposable acceleration metadata and can retain
+                    # pruned commits. Preserve their exact bytes, but prove real
+                    # refs, reflogs and indexes from the actual object stores.
+                    '-c', 'core.commitGraph=false',
                     '-c', 'core.hooksPath=' + os.devnull, *args], env, input_data,
                    expected_returncode=expected_returncode).strip()
 
@@ -534,6 +538,7 @@ def inspect(request, full=False):
     if locked and lock.read_text().strip() != (release.get('lockReason') or ''):
         fail('release-lock-reason-changed')
     modules = []
+    whole_checkout = request.get('wholeCheckout') is True or request.get('expected', {}).get('wholeCheckout') is True
     for item in git(admin, work, 'ls-files', '--stage', '-z').split('\0'):
         if not item:
             continue
@@ -543,7 +548,15 @@ def inspect(request, full=False):
             continue
         if stage != '0' or os.path.isabs(relative) or '..' in Path(relative).parts:
             fail('unmerged-or-unsafe-module')
-        module_work = safe_path(str(work / relative))
+        candidate = work / relative
+        # An uninitialized gitlink may be absent or contain ordinary local
+        # files. Capture those bytes without pretending it is a repository.
+        # Any actual pointer/store still goes through the strict module checks.
+        if whole_checkout and not os.path.lexists(candidate / '.git'):
+            if os.path.lexists(candidate):
+                safe_path(str(candidate))
+            continue
+        module_work = safe_path(str(candidate))
         module_admin = read_pointer(module_work / '.git', 'gitdir:')
         if not module_admin.is_relative_to(admin / 'modules'):
             fail('external-module-administration')
@@ -555,7 +568,7 @@ def inspect(request, full=False):
                         'administrationPath': str(module_admin.relative_to(admin)),
                         'identity': {'working': identity(module_work), 'administration': identity(module_admin)},
                         'gitlink': oid, **facts})
-    if not modules:
+    if not modules and not whole_checkout:
         fail('initialized-module-required')
     expected_pointers = {'.git', *(m['path'] + '/.git' for m in modules)}
     for current, dirs, files in os.walk(work, followlinks=False):
@@ -576,6 +589,8 @@ def inspect(request, full=False):
     facts = {'identity': {'working': identity(work), 'administration': identity(admin), 'common': identity(common)},
              'privateGitDir': str(admin), 'commonGitDir': str(common), 'modules': modules, 'parent': parent,
              'repoPath': request['repoPath'], 'release': release}
+    if whole_checkout:
+        facts['wholeCheckout'] = True
     facts['administrationFingerprint'] = digest(sources['administration'])
     facts['fingerprint'] = digest({'facts': facts, 'sources': sources})
     return {**facts, **({'sources': sources} if full else {})}
