@@ -828,7 +828,7 @@ export async function recordBranchReconcileOutcome(appId, { status, reason, rema
 /** Compare the whole observed inventory and its generation inside the schedule
  * writer. A verifier result never authorizes a newer/recreated checkout.
  */
-export async function recordRecoveredCheckoutPreservations(appId, expected, observations, stillAbsent) {
+export async function recordRecoveredCheckoutPreservations(appId, expected, observations, stillAbsent, discovery) {
   return updateSchedule(async schedule => {
     const record = ensureExecutionRecord(schedule, 'branch-reconcile', appId);
     const outcome = record.branchReconcileOutcome;
@@ -846,7 +846,7 @@ export async function recordRecoveredCheckoutPreservations(appId, expected, obse
       });
       return { ...release, preservationEvidence: { status: 'unresolved',
         reason: observation.proof && !accepted ? 'preservation-receipt-budget-exceeded' : observation.reason,
-        checkedAt: now, archives: observation.evidence, nextAction: observation.nextAction } };
+        checkedAt: now, archives: observation.evidence, ...(observation.coverage && { coverage: observation.coverage }), nextAction: observation.nextAction } };
     });
     const retirementObligations = unresolvedRetirements({ retirementObligations: diagnosed, recoveredPreservations });
     const remaining = (outcome.remaining || []).flatMap(row => {
@@ -864,6 +864,7 @@ export async function recordRecoveredCheckoutPreservations(appId, expected, obse
             : 'Historical preservation verified; run branch reconciliation again to confirm repository completion.' }
         : {};
     record.branchReconcileOutcome = { ...outcome, retirementObligations, recoveredPreservations, remaining, updatedAt: now,
+      ...(discovery && { preservationDiscovery: discovery }),
       ...diagnosis,
     };
     return { result: record.branchReconcileOutcome, changed: true };
