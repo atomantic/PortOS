@@ -1,4 +1,3 @@
-import { isClaimAgentMetadata } from '../lib/claimFlowTaskTypes.js';
 /**
  * CoS Agent Lifecycle Module
  *

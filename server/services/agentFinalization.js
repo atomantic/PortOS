@@ -1,3 +1,4 @@
+import { isClaimAgentMetadata } from '../lib/claimFlowTaskTypes.js';
 import { storeCompletionData, completionReplayInput } from './agentCompletionData.js';
 import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';

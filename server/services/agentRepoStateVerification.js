@@ -1,3 +1,4 @@
+import { isClaimAgentMetadata } from '../lib/claimFlowTaskTypes.js';
 import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
