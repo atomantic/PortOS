@@ -21,6 +21,7 @@ import { loadHistory } from '../videoGen/history.js';
 import { getLoom } from './records.js';
 import { checkExportCancelled, readFableLoomExportSource } from './exportMedia.js';
 import { createFableLoomMediaCache } from './exportMediaCache.js';
+import { FABLELOOM_STATIC_PLAYER_FILES } from './staticPlayerFiles.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const active = new Map();
@@ -173,7 +174,14 @@ function createMediaStore(maxBytes = FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
   };
 }
 
-const packageReadme = `# FableLoom portable package
+function packageReadme(includePlayer) {
+  const playerNote = includePlayer
+    ? `player/index.html is a dependency-free reference player for this package.
+Serve the package directory and open that page. It reads manifest.json, plays a
+cut through to its next scene, and holds a decision until a choice.`
+    : `This package does not include the reference player. Export again with
+includePlayer set to add player/index.html.`;
+  return `# FableLoom portable package
 
 Package schema: 1.0.0. Playback runtime: 1.0.0 (see runtime-v1.md).
 
@@ -193,10 +201,23 @@ The source profile remuxes H.264/AAC. Web profiles resize without upscaling,
 encode H.264/AAC with bitrate caps, normalize the authored audio mix and include
 poster PNGs. Explicitly requested WebM alternatives use VP9/Opus. Encoding
 profiles, encoder identities and byte counts are recorded in provenance.json.
-The player, character and voice opt-ins are not
-available in this package version. Your host owns free-text resolution, TTS and
-transport, following runtime-v1.md; no PortOS URL or credential is needed.
+${playerNote}
+Character and voice packages are unavailable in this package version. Your host
+owns free-text resolution, TTS and transport, following runtime-v1.md; no PortOS
+URL or credential is needed.
 `;
+}
+
+async function playerEntries() {
+  const entries = [];
+  for (const name of FABLELOOM_STATIC_PLAYER_FILES) {
+    entries.push({
+      name: `player/${name}`,
+      data: await readFile(new URL(`./static-player/${name}`, import.meta.url)),
+    });
+  }
+  return entries;
+}
 
 async function build(job, snapshot, episodes, history, universe, signal) {
   checkExportCancelled(signal);
@@ -290,9 +311,10 @@ async function build(job, snapshot, episodes, history, universe, signal) {
   const entries = [
     { name: 'manifest.json', data: json(manifest) },
     { name: 'provenance.json', data: json({ schemaVersion: FABLELOOM_EXPORT_SCHEMA_VERSION, assets: provenance }) },
-    { name: 'README.md', data: packageReadme },
+    { name: 'README.md', data: packageReadme(job.options.includePlayer === true) },
     { name: 'runtime-v1.md', data: await readFile(new URL('../../../docs/features/fableloom-runtime-v1.md', import.meta.url)) },
     ...[...media.entries()].map(([name, data]) => ({ name, data })),
+    ...(job.options.includePlayer === true ? await playerEntries() : []),
   ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const totalBytes = entries.reduce((n, e) => n + Buffer.byteLength(e.data), 0);
   if (totalBytes > FABLELOOM_EXPORT_LIMITS.maxPackageBytes) {
@@ -336,8 +358,8 @@ async function run(job, context, permit) {
 
 export async function startFableLoomExport(loomId, input = {}) {
   const options = exportOptionsSchema.parse(input);
-  if (options.includePlayer || options.includeCharacters || options.includeVoice || (options.mediaProfile === 'source' && options.includeWebm)) {
-    throw error('EXPORT_OPTION_UNSUPPORTED', 'Player, character and voice packages are unavailable. WebM requires a web media profile.', 400);
+  if (options.includeCharacters || options.includeVoice || (options.mediaProfile === 'source' && options.includeWebm)) {
+    throw error('EXPORT_OPTION_UNSUPPORTED', 'Character and voice packages are unavailable. WebM requires a web media profile.', 400);
   }
   const jobId = randomUUID();
   const permit = maintenance.admit('media', jobId);

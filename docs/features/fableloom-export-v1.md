@@ -22,9 +22,10 @@ authority, including valid delegated agent sessions. Jobs cannot be read or
 downloaded through a different loom. Instance authentication retains its existing
 optional policy; no export endpoint is always-public.
 
-This core version explicitly refuses `includePlayer:true`,
-`includeCharacters:true` and `includeVoice:true`. Their implementation belongs
-to the linked export slices. Unknown media profiles are rejected at validation.
+`includePlayer:true` adds the dependency-free `player/` reference client
+described in the runtime contract. This version still refuses
+`includeCharacters:true` and `includeVoice:true`. Unknown media profiles are
+rejected at validation.
 `DELETE /api/fableloom/:id/export/:jobId` cancels a queued/running export and
 waits for worker and encoder shutdown before returning its failed status
 (`EXPORT_CANCELLED`). Completed jobs remain completed.
@@ -99,6 +100,9 @@ accepted as completed encodes. Source media remains untouched.
   approval and conditioning status, draft flags, and encoding provenance.
 - `media/`: deduplicated, metadata-free media.
 - `runtime-v1.md` and `README.md`: the versioned playback and hosting contracts.
+- `player/` when `includePlayer` is set: static HTML, CSS and scripts that read
+  `manifest.json` and run runtime v1 in the browser. That directory has no
+  instance data, credential, or authoring-service address.
 
 All JSON object keys and ZIP member order are stable. ZIP timestamps are fixed.
 The same source bytes and authored snapshot, with the same PortOS/media-tool

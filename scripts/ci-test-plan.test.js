@@ -1920,7 +1920,8 @@ describe('cross-workspace browser suites (#10312)', () => {
 
     // Server-only media suites do not mount the changed client component.
     const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
-      'server/services/federatedMedia/sourceAudio.browser.test.js'];
+      'server/services/federatedMedia/sourceAudio.browser.test.js',
+      'server/services/fableLoom/static-player/player.browser.test.js'];
     expect(plan.full).toBe(false);
     expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));
     for (const suite of runtimeOnly) expect(plan.browserFiles).not.toContain(suite);
