@@ -29,6 +29,28 @@ const { flushUsageLedger } = await import('./usage.js');
 let home;
 let dataDir;
 
+const IMAGE_CHAT = `${JSON.stringify({
+  type: 'assistant',
+  tool_calls: [{ name: 'image_gen', arguments: '{}' }],
+})}\n`;
+
+async function writeGrokSession({
+  cwd = '/tmp/example-repo',
+  sessionId = 'session-1',
+  summary = { created_at: '2026-10-04T12:00:00.000Z' },
+  chat = IMAGE_CHAT,
+} = {}) {
+  const cwdDir = join(home, '.grok', 'sessions', encodeURIComponent(cwd));
+  const sessionDir = join(cwdDir, sessionId);
+  await mkdir(sessionDir, { recursive: true });
+  if (summary !== null) {
+    const body = typeof summary === 'string' ? summary : JSON.stringify(summary);
+    await writeFile(join(sessionDir, 'summary.json'), body);
+  }
+  if (chat !== null) await writeFile(join(sessionDir, 'chat_history.jsonl'), chat);
+  return cwdDir;
+}
+
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'grok-repair-home-'));
   dataDir = await mkdtemp(join(tmpdir(), 'grok-repair-data-'));
@@ -77,5 +99,64 @@ describe('applyGrokUsageRepair', () => {
     await expect(applyGrokUsageRepair({ home, dataDir: join(dataDir, 'elsewhere') }))
       .rejects.toThrow(/usage\.json/);
     expect(written).toHaveLength(0);
+  });
+
+  it('repairs the real session when a cwd folder also holds prompt_history.jsonl', async () => {
+    // Grok writes that file beside the session-id directories, and other files
+    // can sit next to the cwd folders. Treating either name as a directory
+    // threw ENOTDIR on `<file>/summary.json` and aborted Reconcile now.
+    const cwdDir = await writeGrokSession();
+    await writeFile(join(cwdDir, 'prompt_history.jsonl'), '{"prompt":"not a session"}\n');
+    await writeFile(join(home, '.grok', 'sessions', 'not-a-cwd.txt'), 'stray');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = await applyGrokUsageRepair({ home, dataDir });
+      expect(result).toMatchObject({ added: 2, images: 2, turns: 0, videos: 0, backedUp: true });
+      expect(written.map((row) => row.repairId).sort()).toEqual([
+        'gallery:job-1',
+        'session-image:session-1:0',
+      ]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('planGrokUsageRepairFromDisk bad inputs', () => {
+  it('skips an unreadable session file, gallery sidecar, video history, and scan without dropping the rest', async () => {
+    await writeGrokSession({ sessionId: 'session-good' });
+    await writeGrokSession({ sessionId: 'session-bad', summary: '{not-json' });
+    await writeFile(join(dataDir, 'images', 'broken.metadata.json'), '{not-json');
+    await writeFile(join(dataDir, 'video-history.json'), '{not-json');
+    await writeFile(join(dataDir, 'usage-interactive-scan.json'), '{not-json');
+    await writeFile(join(dataDir, 'providers.json'), '{not-json');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const plan = await planGrokUsageRepairFromDisk({ home, dataDir });
+      expect(plan.additions.map((item) => item.repairId).sort()).toEqual([
+        'gallery:job-1',
+        'session-image:session-bad:0',
+        'session-image:session-good:0',
+      ]);
+      expect(plan.additions.every((item) => item.record.providerId === 'grok')).toBe(true);
+      expect(plan.notes[0]).toMatch(/no Grok usage scan has run yet/);
+      expect(warn).toHaveBeenCalledTimes(5);
+      expect(warn.mock.calls.map((call) => String(call[0]))).toEqual(expect.arrayContaining([
+        expect.stringContaining('summary.json for session session-bad'),
+        expect.stringContaining('broken.metadata.json'),
+        expect.stringContaining('video-history.json'),
+        expect.stringContaining('usage-interactive-scan.json'),
+        expect.stringContaining('providers.json'),
+      ]));
+      for (const [line] of warn.mock.calls) expect(String(line)).not.toContain(home);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not treat an unreadable usage ledger as an empty repair list', async () => {
+    await writeFile(join(dataDir, 'usage.json'), '{not-json');
+    await expect(planGrokUsageRepairFromDisk({ home, dataDir })).rejects.toThrow(SyntaxError);
   });
 });
