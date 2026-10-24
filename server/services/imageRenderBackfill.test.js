@@ -97,4 +97,23 @@ describe('saved Codex image usage recovery', () => {
     await writeFile(join(directory, `${codexRenderReceipt(meta()).id}.json`), '{');
     await expect(planImageRenderBackfill(root)).rejects.toThrow();
   });
+
+  it.each([
+    ['missing session attribution', { identitySource: undefined }],
+    ['invalid session attribution', { identitySource: 'unknown' }],
+    ['missing token evidence', { driverTokens: undefined }],
+    ['empty token evidence', { driverTokens: {} }],
+    ['negative tokens', { driverTokens: { source: 'codex-cli-footer', reportedTotal: -1 } }],
+    ['fractional tokens', { driverTokens: { source: 'codex-cli-footer', reportedTotal: 0.5 } }],
+    ['unsafe token total', { driverTokens: { source: 'codex-cli-footer', reportedTotal: Number.MAX_SAFE_INTEGER + 1 } }],
+    ['unrecognized token source', { driverTokens: { source: 'estimated', reportedTotal: 0 } }],
+    ['missing timestamp provenance', { timestampSource: undefined }],
+    ['invented image cost', { imageCostUsd: 0 }],
+  ])('refuses %s instead of publishing misleading accounting', async (_name, damaged) => {
+    const receipt = codexRenderReceipt(meta());
+    await recordRenderReceipt(receipt, { directory });
+    await writeFile(join(directory, `${receipt.id}.json`), JSON.stringify({ ...receipt, ...damaged }));
+    await expect(getImageRenderUsage({ directory })).rejects.toThrow('Invalid image render usage receipt');
+    await expect(recordRenderReceipt(receipt, { directory })).rejects.toThrow('Conflicting image render receipt');
+  });
 });
