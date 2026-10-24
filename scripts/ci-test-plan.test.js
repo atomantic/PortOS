@@ -2561,7 +2561,7 @@ describe('pregate attestation', () => {
     const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
     // Reading statuses needs the scope; nothing in the impact job may write one.
     expect(jobs.impact).toMatch(/\n    permissions:\n      contents: read\n      statuses: read\n/);
-    const planStep = jobs.impact.slice(jobs.impact.indexOf('id: plan'), jobs.impact.indexOf('run: node scripts/ci-test-plan.js'));
+    const planStep = jobs.impact.slice(jobs.impact.indexOf('id: plan'), jobs.impact.indexOf('run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js'));
     for (const line of [
       "CI_EVENT_NAME: ${{ github.event_name }}",
       'CI_REPOSITORY: ${{ github.repository }}',

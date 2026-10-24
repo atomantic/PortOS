@@ -34,6 +34,8 @@ jobs:
     name: Plan test impact
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PORTOS_CI_IMPACT_DIAGNOSTICS: ${{ runner.temp }}/portos-ci-impact
     # Still live despite the removed push trigger: a called workflow inherits
     # the caller's event, and release.yml calls this one from a push.
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')
@@ -95,13 +97,13 @@ jobs:
       # A red impact job keeps CI Gate red; skipped test jobs are not evidence.
       # Re-running this run is GitHub's writer-only, exact-SHA release control.
       - name: Require maintainer release for Dependabot
-        run: node scripts/ci-dependabot-admission.js
+        run: node scripts/ci-impact-diagnostics.js admission -- node scripts/ci-dependabot-admission.js
 
       # Reads the base commit off HEAD^1 rather than the event payload, so a
       # depth-2 clone is enough for every three-dot diff downstream. Exports
       # CI_BASE_SHA to the rest of the job.
       - name: Resolve the pull-request diff base
-        run: node scripts/ci-base-sha.js
+        run: node scripts/ci-impact-diagnostics.js base -- node scripts/ci-base-sha.js
 
       # Before any reviewer — human or model — reads this diff. Pattern
       # matching over the added lines only: invisible Unicode and compressed or
@@ -109,14 +111,14 @@ jobs:
       # approving it, so a hit fails the run rather than being reported. Every
       # other job needs this one, so the whole suite stops here.
       - name: Scan the diff for hidden content
-        run: node scripts/scan-diff-hidden-content.js
+        run: node scripts/ci-impact-diagnostics.js hidden-content -- node scripts/scan-diff-hidden-content.js
 
       # Linux resolves `./Foo.js` only as spelled; macOS and Windows do not. A
       # pregate attestation lets a macOS run stand in for the Linux test jobs,
       # so the one Linux-only failure it cannot see is checked here, on every
       # pull request, before any job is skipped on its strength.
       - name: Check relative imports match the tracked path case
-        run: node scripts/check-import-case.js
+        run: node scripts/ci-impact-diagnostics.js import-case -- node scripts/check-import-case.js
 
       - name: Select affected test surfaces
         id: plan
@@ -140,7 +142,7 @@ jobs:
           CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CI_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/ci-test-plan.js
+        run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js
 
       # The Node-minimum job proves the lockfiles install and the runtime gate
       # loads on the oldest supported Node. Only these files can change that
@@ -151,12 +153,14 @@ jobs:
         env:
           CI_EVENT: ${{ github.event_name }}
         run: |
+          node scripts/ci-impact-diagnostics.js node-minimum -- bash --noprofile --norc -e -o pipefail -s <<'PORTOS_IMPACT_SCRIPT'
           pattern='^((server/|client/|autofixer/)?(package(-lock)?\.json|\.npmrc)|\.nvmrc|scripts/checkNodeVersion(\.test)?\.js|scripts/lib/directInvocation\.js|scripts/node-version-drift\.test\.js|\.github/workflows/ci\.yml)$'
           if [ "$CI_EVENT" != pull_request ] || git diff --name-only "$CI_BASE_SHA"...HEAD | grep -qE "$pattern"; then
             echo run=true >> "$GITHUB_OUTPUT"
           else
             echo run=false >> "$GITHUB_OUTPUT"
           fi
+          PORTOS_IMPACT_SCRIPT
 
       - name: Publish plan summary
         env:
@@ -182,6 +186,7 @@ jobs:
           SUITE_REASONS: ${{ steps.plan.outputs.suite_reasons }}
           ATTESTATION: ${{ steps.plan.outputs.attestation }}
         run: |
+          node scripts/ci-impact-diagnostics.js summary -- bash --noprofile --norc -e -o pipefail -s <<'PORTOS_IMPACT_SCRIPT'
           {
             echo "### CI impact plan"
             echo
@@ -203,6 +208,7 @@ jobs:
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
             echo "- Pregate attestation: \`${ATTESTATION}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+          PORTOS_IMPACT_SCRIPT
 
       # `autofixer/` is a real install target — its own package.json, its own
       # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
@@ -224,11 +230,17 @@ jobs:
       # scripts/trusted-rebuilds.js deliberately lists no rebuilds for this
       # workspace, because nothing it depends on ships a native addon.
       - name: Install autofixer dependencies
-        run: npm ci --prefix autofixer
+        run: node scripts/ci-impact-diagnostics.js autofixer-install -- npm ci --prefix autofixer
 
       # Same reason: the entry-point syntax check must not ride a skippable job.
       - name: Check server entry-point syntax
-        run: node --check server/index.js
+        run: node scripts/ci-impact-diagnostics.js syntax -- node --check server/index.js
+
+      # This precedes checkout post-actions and runner finalization; it cannot
+      # attest that the hosted runner acknowledged the completed job.
+      - name: Record impact process settlement
+        if: always()
+        run: node scripts/ci-impact-diagnostics.js settlement
 
   prompt-history:
     name: Shipped prompt history
