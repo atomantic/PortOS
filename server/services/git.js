@@ -2131,6 +2131,9 @@ export async function deleteMergedBranches(dir, { excludeBranches, activeAgentId
   const records = new Map();
   const context = await prepareRemoteRetirement(dir, defaultBranch);
   if (context.reason) return { deleted: [], skipped: [`cleanup (${context.reason})`], defaultBranch };
+  const { resolveRetirementApp } = await import('./retirementAppScope.js');
+  const scope = await resolveRetirementApp(dir);
+  if (!scope.app) return { deleted: [], skipped: [`cleanup (${scope.reason})`], defaultBranch };
   const { targetSha } = context;
   const branches = await execGitSafe(['branch', '--format=%(refname:short)'], dir, { ignoreExitCode: true });
   if (branches.exitCode !== 0) return { deleted: [], skipped: ['cleanup (local branches unavailable)'], defaultBranch };
@@ -2146,7 +2149,9 @@ export async function deleteMergedBranches(dir, { excludeBranches, activeAgentId
     const record = { name, local: null, remote: null };
     records.set(name, record);
     if (local.has(name)) {
-      const retired = await cleanupMerged(dir, targetSha, [{ branch: name }], { activeAgentIds });
+      const retired = await cleanupMerged(scope.app.repoPath, targetSha, [{ branch: name }], {
+        activeAgentIds, appId: scope.app.id, forgeAccount: scope.app.forgeAccount ?? null,
+      });
       if (retired.cleaned.includes(name)) record.local = 'deleted';
       else {
         for (const hold of retired.skipped) skipped.push(`${name} (local: ${worktreeHoldReason(hold.reason)}${hold.detail ? `: ${hold.detail}` : ''})`);

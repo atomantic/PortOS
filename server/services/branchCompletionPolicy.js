@@ -3,6 +3,7 @@
  * shared forge logins never authorize reconciliation. No parallel policy store.
  */
 import { readFile, readdir, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -147,6 +148,27 @@ function reviewedOrphanCheckout(policy, input) {
       && row.head === input.tip && row.incarnation?.pointer && row.incarnation?.gitdir);
 }
 
+// An orphan's captured generation may belong to a different checkout of the
+// same delivered head. It cannot transfer its cleanup obligation to an explicit
+// detached-copy review. Keep its result and original cleanup record unchanged.
+const sameReviewedPath = (a, b, input) => samePath(a, b)
+  || (typeof a === 'string' && typeof b === 'string' && Boolean(input.checkoutIdentities?.[a])
+    && input.checkoutIdentities[a] === input.checkoutIdentities[b]);
+
+function completedOrphanSibling(policy, input) {
+  const agent = policy.agent;
+  if (!/^[a-f0-9]{64}$/.test(input.detachedCheckoutIdentity || '')
+    || input.verifiedPrHead !== input.tip || !input.tip || retirementPr(policy) !== input.prUrl
+    || (policy.tip && policy.tip !== input.tip) || agent.status !== 'completed' || agent.result?.orphaned !== true
+    || agent.result.validationPassed === false || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE) return false;
+  return agent.metadata?.completedCheckouts?.some(row => row.version === 2 && completedCheckoutReceiptValid(agent, row)
+    && sameReviewedPath(row.repoPath, input.repoPath, input) && row.branch === input.branch && row.head === input.tip
+    && sameReviewedPath(row.path, agent.metadata.workspacePath, input) && !sameReviewedPath(row.path, input.checkoutPath, input)
+    && !sameReviewedPath(row.path, input.repoPath, input) && row.incarnation?.pointer
+    && createHash('sha256').update(JSON.stringify(['dev', 'ino', 'birthtimeNs'].map(key => row.incarnation.pointer[key])))
+      .digest('hex') !== input.detachedCheckoutIdentity) === true;
+}
+
 function reviewedIncarnation(input, policies) {
   if (!isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)
     || !input.prUrl || input.verifiedPrHead !== input.tip
@@ -215,9 +237,9 @@ export function reviewedRetirementPolicy(input) {
   const incarnation = reviewedIncarnation(input, decision.policies || []);
   const policies = incarnation?.current || decision.policies || [];
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
-  if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input) && !reviewedOrphanCheckout(p, input))
+  if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input) && !reviewedOrphanCheckout(p, input) && !completedOrphanSibling(p, input))
     || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
-    || (retirementPr(p) && (!incarnation || retirementPr(p) !== input.prUrl))
+    || (retirementPr(p) && ((!incarnation && !completedOrphanSibling(p, input)) || retirementPr(p) !== input.prUrl))
     || (reviewTarget(p) && (reviewTarget(p).branch !== input.branch || (p.prUrl && p.prUrl !== reviewTarget(p).url)))
     || (incarnation && p.tip && p.tip !== input.tip))) {
     return { reason: 'retirement-policy-not-legacy-completed' };
@@ -226,6 +248,7 @@ export function reviewedRetirementPolicy(input) {
     id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
     completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
     ...(reviewedOrphanCheckout(p, input) && { orphanedExecution: true }),
+    ...(completedOrphanSibling(p, input) && { orphanedSibling: true, detachedCheckoutIdentity: input.detachedCheckoutIdentity }),
     branch: p.branch, completion: p.completion,
     ...(incarnation && { prUrl: retirementPr(p) ?? null, tip: p.tip ?? null, workspacePath: p.agent.metadata?.workspacePath ?? null }),
   })).sort((a, b) => String(a.id).localeCompare(String(b.id))),

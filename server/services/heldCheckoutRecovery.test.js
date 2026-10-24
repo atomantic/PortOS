@@ -391,6 +391,94 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
   });
 
+  describe('bounded historical evidence', () => {
+    beforeEach(cleanupTempDataRoots);
+    afterEach(cleanupTempDataRoots);
+
+    it('bounds persisted recovery diagnostics across obligations and unrelated archives while verifying the exact matching archive', async () => {
+      const { release, saved } = await historicalArchive();
+      const original = await getBranchReconcileOutcome('app-1');
+      const root = heldCheckoutArchiveRoot(PATHS.cos);
+      const obligations = Array.from({ length: 6 }, (_, i) => ({ ...original.retirementObligations[0],
+        branch: `feature/missing-${i}`, path: join(external, `missing-${i}`),
+        preservationEvidence: { status: 'unresolved', archives: [{ reason: 'legacy-diagnostic' }] } }));
+      const metadata = async (name, identity) => {
+        const dir = join(root, name);
+        await mkdir(dir);
+        await writeFile(join(dir, 'manifest.json'), JSON.stringify({ repoPath: repo, ...identity, archivedAt: '2000-01-01T00:00:00Z' }));
+      };
+      for (let i = 0; i < 80; i++) await metadata(`unrelated-${i}`, { ...release, path: join(external, `unrelated-${i}`) });
+      for (const [i, obligation] of obligations.entries()) {
+        for (let j = 0; j < 8; j++) await metadata(`matching-${i}-${j}`, obligation);
+      }
+      const receipt = { branch: 'feature/settled', path: join(external, 'settled'), head: release.head,
+        archiveDir: 'synthetic-previous-archive', branchDeleted: true, retiredAt: new Date().toISOString() };
+      original.retired = [receipt];
+      const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [],
+        retirementObligations: [...original.retirementObligations, ...obligations] });
+      expect(outcome.recoveredPreservations).toEqual([expect.objectContaining({ path: release.path, archiveDir: saved.archiveDir, verified: true })]);
+      expect(outcome.retirementObligations).toHaveLength(6);
+      expect(outcome.retired).toEqual([receipt]);
+      expect(outcome.preservationDiscovery).toMatchObject({ candidates: 129, indexed: 129, complete: true, errors: 0 });
+      const evidence = outcome.retirementObligations.map(row => row.preservationEvidence);
+      expect(evidence.every(row => row.coverage.matching === 8 && row.coverage.attempted === 8 && row.coverage.unrelated === 121)).toBe(true);
+      const details = evidence.flatMap(row => row.archives);
+      expect(details.length).toBeLessThanOrEqual(20);
+      expect(details.every(row => row.reason === 'archive-generation-mismatch')).toBe(true);
+      expect(evidence.reduce((total, row) => total + row.coverage.detailsOmitted, details.length)).toBe(48);
+      expect(JSON.stringify(outcome).length).toBeLessThan(30000);
+      expect(await getBranchReconcileOutcome('app-1')).toEqual(outcome);
+    });
+
+    it('bounds bytes read from oversized metadata across discovery candidates', async () => {
+      await historicalArchive();
+      const root = heldCheckoutArchiveRoot(PATHS.cos);
+      for (let i = 0; i < 6; i++) {
+        const dir = join(root, `oversized-${i}`);
+        await mkdir(dir);
+        const path = join(dir, 'manifest.json');
+        await writeFile(path, '');
+        await truncate(path, 17 * 1024 * 1024);
+      }
+      const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
+      expect(outcome.recoveredPreservations).toEqual([]);
+      expect(outcome.retirementObligations).toHaveLength(1);
+      expect(outcome.preservationDiscovery).toMatchObject({ complete: false, truncated: true });
+      // Streaming discovery can consume at most one additional 64 KiB chunk.
+      expect(outcome.preservationDiscovery.metadataBytes).toBeLessThanOrEqual(64 * 1024 * 1024 + 64 * 1024);
+      expect(outcome.preservationDiscovery.details).toContainEqual(expect.objectContaining({ reason: 'archive-discovery-budget-exceeded' }));
+    });
+
+    it.each(['ambiguous', 'unreadable-metadata', 'missing-discovery', 'truncated-discovery'])(
+      'retains an explicit hold for %s despite a complete matching archive', async failure => {
+        const { saved } = await historicalArchive();
+        const root = heldCheckoutArchiveRoot(PATHS.cos);
+        if (failure === 'ambiguous') await cp(saved.archiveDir, join(root, 'second-matching-archive'), { recursive: true });
+        if (failure === 'unreadable-metadata') {
+          for (let i = 0; i < 25; i++) {
+            await mkdir(join(root, `broken-metadata-${i}`));
+            await writeFile(join(root, `broken-metadata-${i}`, 'manifest.json'), '{');
+          }
+        }
+        if (failure === 'missing-discovery') await writeFile(join(PATHS.cos, 'initialized-checkout-retirements'), 'unreadable archive root');
+        if (failure === 'truncated-discovery') {
+          for (let i = 0; i < 1001; i++) await writeFile(join(root, `entry-${i}`), '');
+        }
+        const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
+        expect(outcome.recoveredPreservations).toEqual([]);
+        expect(outcome.retirementObligations).toHaveLength(1);
+        expect(outcome.retirementObligations[0].preservationEvidence.reason).toBe(
+          failure === 'ambiguous' ? 'archive-preservation-ambiguous' : 'archive-discovery-incomplete');
+        if (failure !== 'ambiguous') {
+          expect(outcome.preservationDiscovery).toMatchObject({ complete: false, errors: failure === 'unreadable-metadata' ? 25 : 1 });
+          expect(outcome.preservationDiscovery.details).toHaveLength(failure === 'unreadable-metadata' ? 20 : 1);
+          expect(outcome.preservationDiscovery.detailsOmitted).toBe(failure === 'unreadable-metadata' ? 5 : 0);
+          expect(outcome.preservationDiscovery.truncated).toBe(failure === 'truncated-discovery');
+        }
+      });
+
+  });
+
   it.each(['cancel', 'time', 'git-output', 'git-time'])('retains the %s diagnosis when isolated Git proof is interrupted without settling preservation', async mode => {
     const { saved } = await historicalArchive();
     const outcome = await getBranchReconcileOutcome('app-1');
@@ -2106,6 +2194,66 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(c.path)).toBe(false);
     expect((await execGit(['rev-parse', publishedBranch], repo)).stdout.trim()).toBe(c.release.head);
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+  });
+
+  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner'])('keeps an orphan sibling obligation separate from a detached copy: %s', async scenario => {
+    const c = await reviewedCheckout(`orphan-sibling-${scenario}`);
+    const namedPath = c.path;
+    const namedBranch = c.release.branch;
+    await execGit(['worktree', 'unlock', namedPath], repo);
+    const evidence = await import('./completedCheckoutEvidence.js');
+    const agent = { id: 'sibling-owner', status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString(),
+      metadata: { sourceWorkspace: repo, workspacePath: namedPath, isWorktree: true, worktreeBranch: namedBranch,
+        prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: c.forge.prUrl, branch: namedBranch } } };
+    agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
+    agent.status = 'completed'; agent.completedAt = new Date().toISOString();
+    agent.result = { success: false, executionSuccess: false, orphaned: true, validationPassed: null };
+    agent.metadata.completedCheckouts = await evidence.captureSeededCompletionCheckouts(agent);
+    expect(agent.metadata.completedCheckouts).toHaveLength(1);
+    if (scenario === 'owner-alias') {
+      const alias = join(external, 'canonical-owner-alias');
+      await symlink(namedPath, alias, 'junction');
+      agent.metadata.workspacePath = alias;
+    }
+    let path = join(external, `detached-${scenario}`);
+    if (scenario === 'same-incarnation') {
+      const pointerIdentity = await readRetirementCheckoutIdentity(namedPath);
+      await execGit(['worktree', 'move', namedPath, path], repo);
+      await execGit(['switch', '--detach', c.release.head], path);
+      expect(await readRetirementCheckoutIdentity(path)).toBe(pointerIdentity);
+    }
+    else {
+      await execGit(['worktree', 'add', '--detach', path, c.release.head], repo);
+      await writeFile(join(path, 'ignored.txt'), 'distinct detached work\n');
+    }
+    // Real inventories use Git's observed spelling. Windows temp paths can
+    // differ from that registration (including short names and drive casing).
+    path = (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
+    expect(await registered(path)).toBe(true);
+    const release = { path, branch: null, head: c.release.head, locked: false, lockReason: null };
+    c.forge.publishedBranch = namedBranch; c.forge.exactAliasHead = release.head;
+    injected.policies = [agent];
+    if (scenario === 'missing-receipt') agent.metadata.completedCheckouts = [];
+    if (scenario === 'human-handoff') agent.metadata.prCompletionPolicy = 'leave-open';
+    if (scenario === 'active-owner') { agent.status = 'running'; c.opts.readAgents = async () => [agent]; }
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-unmanaged-location' }] });
+    const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
+    if (!['confirmed', 'owner-alias'].includes(scenario)) {
+      const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
+        : 'retirement-policy-not-legacy-completed';
+      expect(prepared).toMatchObject({ ok: false, reason });
+      expect(await registered(path)).toBe(true); expect(await archives()).toEqual([]);
+      return;
+    }
+    expect(prepared.reason).toBeUndefined();
+    expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedSibling: true }] } } });
+    const result = await retireInventoriedCheckout({ appId: 'app-1', release,
+      review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
+    expect(result).toMatchObject({ ok: true, branchDeleted: false });
+    expect(await registered(namedPath)).toBe(true);
+    expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(release.head);
+    expect(agent.result).toEqual({ success: false, executionSuccess: false, orphaned: true, validationPassed: null });
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('distinct detached work\n');
   });
 
   it('preserves archive and checkout when fresh forge evidence changes after archiving', async () => {

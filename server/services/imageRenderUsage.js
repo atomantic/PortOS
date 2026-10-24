@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { link, open, readFile, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { z } from 'zod';
 import { atomicWrite, ensureDir, unlinkGuarded } from '../lib/fileCore.js';
 import { PATHS } from '../lib/paths.js';
 
@@ -14,6 +15,23 @@ const timestamp = value => {
   return Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 };
 const digest = value => createHash('sha256').update(value).digest('hex');
+const hashIdentity = z.string().regex(/^[a-f0-9]{64}$/);
+// Missing evidence must fail the ledger read rather than imply a known session
+// or a measured zero. Use the same contract for new and existing receipts.
+const receiptSchema = z.object({
+  version: z.literal(1), id: hashIdentity, renderKey: hashIdentity,
+  occurredAt: z.string().refine(value => timestamp(value) === value),
+  timestampSource: z.enum(['renderStartedAt', 'createdAt']),
+  identitySource: z.enum(['codex-session', 'portos-job']),
+  driverModel: z.string().nullable(),
+  driverTokens: z.object({
+    reportedTotal: z.number().int().nonnegative().safe(),
+    source: z.literal('codex-cli-footer'),
+  }).nullable(),
+  imageTokens: z.null(), imageCostUsd: z.null(), allowanceUnits: z.null(),
+  source: z.literal('portos-saved-render'),
+  backfillBatch: z.string().regex(uuid).optional(),
+});
 
 // Project only accounting evidence. Never persist prompts, filenames, paths or
 // session contents. A driver session may produce several image-tool outputs.
@@ -48,7 +66,7 @@ export async function readRenderReceipts({ directory = ledgerDir() } = {}) {
   for (const entry of entries) {
     if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) continue;
     const receipt = JSON.parse(await readFile(join(directory, entry.name), 'utf8'));
-    if (receipt.version !== 1 || receipt.id !== entry.name.slice(0, -5) || !timestamp(receipt.occurredAt) || !/^[a-f0-9]{64}$/.test(receipt.renderKey)) {
+    if (!receiptSchema.safeParse(receipt).success || receipt.id !== entry.name.slice(0, -5)) {
       throw new Error('Invalid image render usage receipt');
     }
     receipts.push(receipt);
@@ -81,7 +99,7 @@ export async function publishAccountingFile(path, value) {
 }
 
 export async function recordRenderReceipt(receipt, { directory = ledgerDir() } = {}) {
-  if (!receipt || !/^[a-f0-9]{64}$/.test(receipt.id)) throw new Error('Invalid image render receipt identity');
+  if (!receiptSchema.safeParse(receipt).success) throw new Error('Invalid image render receipt');
   const path = join(directory, `${receipt.id}.json`);
   let existing = await readFile(path, 'utf8').then(JSON.parse).catch(err => {
     if (err.code === 'ENOENT') return undefined;
@@ -91,7 +109,7 @@ export async function recordRenderReceipt(receipt, { directory = ledgerDir() } =
     if (await publishAccountingFile(path, receipt)) return true;
     existing = JSON.parse(await readFile(path, 'utf8'));
   }
-  if (existing?.id !== receipt.id || !/^[a-f0-9]{64}$/.test(existing.renderKey) || existing.version !== 1) throw new Error('Conflicting image render receipt');
+  if (!receiptSchema.safeParse(existing).success || existing.id !== receipt.id) throw new Error('Conflicting image render receipt');
   return false;
 }
 

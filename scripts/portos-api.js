@@ -24,7 +24,7 @@
  * Builtins only, so it runs from any checkout without `npm install`.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PORTS } from '../server/lib/ports.js';
@@ -54,6 +54,7 @@ const PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
 export const USAGE = `Usage:
   portos-api whoami [--timeout <seconds>]
   portos-api <get|post|put|patch|delete> <path> [json | @file | -] [--timeout <seconds>]
+  portos-api fableloom-export <preflight|start|status|watch|download> <loom-id> [job-id] [--episodes id1,id2] [--player true|false] [--characters true|false] [--voice true|false] [--allow-draft true|false] [--profile source|web-720p|web-1080p] [--webm true|false] [--output file.zip] [--timeout seconds]
   portos-api task "<description>" [--app <id>] [--priority LOW|MEDIUM|HIGH|CRITICAL] [--context "<note>"] [--timeout <seconds>]
 
 Requests wait up to 30 minutes by default, including the response body.
@@ -96,6 +97,35 @@ export const parseArgs = (argv) => {
     const seconds = Number(flags.timeout);
     if (!Number.isFinite(seconds) || seconds <= 0 || seconds * 1000 > 2 ** 31 - 1) throw new Error('--timeout must be positive seconds within the timer limit');
     timeout.timeoutMs = seconds * 1000;
+  }
+  if (command === 'fableloom-export') {
+    const [action, loomId, jobId] = rest;
+    if (!['preflight', 'start', 'status', 'watch', 'download'].includes(action) || !loomId) throw new Error('fableloom-export needs an action and loom ID');
+    const allowed = new Set(['timeout', 'episodes', 'player', 'characters', 'voice', 'allow-draft', 'profile', 'webm', 'output']);
+    if (Object.keys(flags).some(key => !allowed.has(key))) throw new Error('Unknown fableloom-export flag');
+    const options = {};
+    for (const [flag, key] of Object.entries({ player: 'includePlayer', characters: 'includeCharacters', voice: 'includeVoice', 'allow-draft': 'allowDraft', webm: 'includeWebm' })) {
+      if (flags[flag] === undefined) continue;
+      if (!['true', 'false'].includes(flags[flag])) throw new Error(`--${flag} must be true or false`);
+      options[key] = flags[flag] === 'true';
+    }
+    if (options.includeVoice && !options.includeCharacters) throw new Error('--voice true needs --characters true');
+    if (flags.episodes !== undefined) options.episodeIds = flags.episodes.split(',');
+    if (flags.profile !== undefined) {
+      if (!['source', 'web-720p', 'web-1080p'].includes(flags.profile)) throw new Error('--profile must be source, web-720p or web-1080p');
+      options.mediaProfile = flags.profile;
+    }
+    const starts = ['preflight', 'start'].includes(action);
+    if (rest.length !== (starts ? 2 : 3)) throw new Error('Unexpected fableloom-export arguments');
+    if (flags.output && action !== 'download') throw new Error('--output must be used with download');
+    if (!starts && !jobId) throw new Error(`${action} needs a job ID`);
+    if (action === 'download' && !flags.output) throw new Error('download needs --output file.zip');
+    if (!starts && Object.keys(options).length) throw new Error('Export options must be supplied to preflight or start');
+    const path = `/api/fableloom/${encodeURIComponent(loomId)}/export`;
+    return { method: starts ? 'POST' : 'GET', path: starts ? `${path}${action === 'preflight' ? '/preflight' : ''}`
+      : `${path}/${encodeURIComponent(jobId)}${action === 'download' ? '/download' : ''}`,
+      body: starts ? JSON.stringify(options) : null, ...(action === 'download' ? { output: flags.output } : {}),
+      ...(action === 'watch' ? { watch: true } : {}), ...timeout };
   }
   if (command === 'whoami') return { method: 'GET', path: '/api/auth/whoami', body: null, ...timeout };
   if (command === 'task') {
@@ -157,7 +187,7 @@ export const requestApi = (url, { method, headers, body, timeoutMs }) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
       response.on('error', reject);
-      response.on('end', () => resolve({ status: response.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+      response.on('end', () => resolve({ status: response.statusCode, text: Buffer.concat(chunks).toString('utf8'), bytes: Buffer.concat(chunks) }));
     });
     request.on('error', reject);
     timer = setTimeout(() => request.destroy(new Error(`Request timed out after ${timeoutMs / 1000} seconds; server work may still be running.`)), timeoutMs);
@@ -180,7 +210,8 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
     headers['X-PortOS-Admission-Session'] = env.PORTOS_ADMISSION_SESSION;
   }
   if (body !== null) headers['Content-Type'] = 'application/json';
-  const { status, text } = await requestApi(`${url}${parsed.path}`, { method: parsed.method, headers, body, timeoutMs: parsed.timeoutMs ?? DEFAULT_TIMEOUT_MS })
+  const deadline = Date.now() + (parsed.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  let { status, text, bytes } = await requestApi(`${url}${parsed.path}`, { method: parsed.method, headers, body, timeoutMs: parsed.timeoutMs ?? DEFAULT_TIMEOUT_MS })
     .catch((error) => {
       const target = new URL(url);
       if (error.code === 'ECONNRESET' && target.protocol === 'http:'
@@ -192,6 +223,24 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
       }
       throw error;
     });
+  if (parsed.watch) {
+    while (status >= 200 && status < 300) {
+      const job = JSON.parse(text);
+      console.log(JSON.stringify(job, null, 2));
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) return job.status === 'completed' ? 0 : 1;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('Export watch timed out; job may still be running.');
+      await new Promise(resolve => setTimeout(resolve, Math.min(1000, remaining)));
+      const left = deadline - Date.now();
+      if (left <= 0) throw new Error('Export watch timed out; job may still be running.');
+      ({ status, text } = await requestApi(`${url}${parsed.path}`, { method: 'GET', headers, body: null, timeoutMs: left }));
+    }
+  }
+  if (parsed.output && status >= 200 && status < 300) {
+    await writeFile(parsed.output, bytes, { flag: 'wx', mode: 0o600 });
+    console.log(`Saved ZIP to ${parsed.output}`);
+    return 0;
+  }
   let out = text;
   try { out = JSON.stringify(JSON.parse(text), null, 2); } catch { /* not JSON: print as-is */ }
   if (status >= 200 && status < 300) {

@@ -283,6 +283,18 @@ function mockWorktreeAgent(overrides = {}) {
 }
 
 describe('cleanupAgentWorktree - PR-creation path', () => {
+  it.each([true, false])('preserves only an accepted runtime prerequisite when accepted=%s', async accepted => {
+    getAgent.mockResolvedValue({ ...mockWorktreeAgent(), result: { success: false,
+      taskOutcome: { status: 'blocked', recovery: { mode: 'runtime' } } } });
+    getTaskById.mockResolvedValue({ id: 'task-runtime', metadata: accepted ? {
+      runtimeVerificationId: 'task-runtime:agent-runtime', runtimeVerification: { agentId: 'agent-runtime' },
+    } : {} });
+    await cleanupAgentWorktree('agent-runtime', false, { originalTask: { id: 'task-runtime', metadata: { discardWorktree: true } } });
+    if (accepted) expect(removeWorktree).not.toHaveBeenCalled();
+    else expect(removeWorktree).toHaveBeenCalled();
+    expect(git.push).not.toHaveBeenCalled();
+  });
+
   it('publishes only after PortOS validation succeeds and persists that distinct outcome', async () => {
     validatePublication.mockResolvedValue({ status: 'passed', head: 'verified-head' });
     git.push.mockImplementation(async () => {
@@ -1742,6 +1754,25 @@ describe('releaseRetryHold', () => {
     expect(updateTask).toHaveBeenCalledWith('task-1', { metadata: expect.objectContaining({
       existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: DEAD_TREE,
     }) }, 'user', { expectedStatus: 'blocked', expectedMetadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
+  });
+
+  it('retains an already-merged checkout for runtime verification and never makes it pending', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: {
+      blockedCategory: 'runtime-verification', blockedAt: 'now', deliveryDecisionAgentId: 'agent-x',
+    } });
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    git.getBranch.mockResolvedValue(DEAD_BRANCH);
+    existsSyncMock.mockReturnValue(true);
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+    expect(updateTask).toHaveBeenCalledWith('task-1', { metadata: {
+      existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: DEAD_TREE,
+      runtimeVerificationReadyAgentId: 'agent-x',
+    } }, 'user', expect.objectContaining({ expectedStatus: 'blocked' }));
+    updateTask.mockClear();
+    git.getBranch.mockResolvedValue('another-owner');
+    await expect(releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata }))
+      .rejects.toThrow('checkout identity');
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   it('records the pointer for a failed run whose task is still pending', async () => {

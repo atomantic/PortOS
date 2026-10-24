@@ -191,3 +191,12 @@ export const applyLoomEpisodeShots = (id, episodeId, body, options = {}) => requ
 export const startLoomEpisodeShotRun = (id, episodeId, body = {}, options = {}) => request(episodePath(id, episodeId, '/shots/start'), { method: 'POST', body: JSON.stringify(body), ...options });
 export const getLoomEpisodeShotRun = (id, episodeId, options = {}) => request(episodePath(id, episodeId, '/shots/status'), options);
 export const cancelLoomEpisodeShotRun = (id, episodeId, options = {}) => request(episodePath(id, episodeId, '/shots/cancel'), { method: 'POST', ...options });
+
+export const preflightLoomExport = (id, body = {}, options = {}) => request(loomPath(id, '/export/preflight'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const startLoomExport = (id, body = {}, options = {}) => request(loomPath(id, '/export'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const getLoomExport = (id, jobId, options = {}) => request(loomPath(id, `/export/${encodeURIComponent(jobId)}`), options);
+export const downloadLoomExport = (id, jobId, options = {}) => request(loomPath(id, `/export/${encodeURIComponent(jobId)}/download`), { ...options, responseType: 'blob' });

@@ -1408,3 +1408,68 @@ git push
 2. Update installation and build commands for your project structure
 3. For monorepos, add package.json update steps for each workspace
 4. Update the changelog file path pattern if different
+
+### Impact job command and finalization evidence
+
+The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
+`import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
+through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
+child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
+command files, environment inputs and nonzero status pass through; a signal or
+spawn failure remains a failure. No additional provider calls or retries occur.
+
+A random marker inherited only by that stage's command lets Linux `/proc` scans
+count surviving same-user owned processes after close and at the final
+`always()` checkpoint. The scan is limited to 4,096 process entries and one second
+per snapshot. Public evidence contains only fixed stage names, numeric statuses,
+signals, elapsed time, counts and coverage. Markers, PIDs, host paths, environment
+values and raw command lines are not published. Private per-stage records stay
+under the runner's temporary directory; they are not uploaded as artifacts.
+
+`coverage=partial|unavailable`, missing records, or missing events mean unknown,
+not clean. Even complete coverage is a point-in-time observation of processes
+that retained their inherited marker; it cannot prove the absence of work that
+removed its marker. Nonzero owned counts are evidence to investigate, not
+permission to kill a process. The observer signals/deletes nothing and does not
+claim to repair an orphan. A settlement change needs a reproduced owner and a
+causal negative control first.
+
+The final checkpoint precedes checkout post-actions and the runner's own
+finalization. Interpret the first unconfirmed boundary in order: stage start →
+command exit → command close → owned-process snapshot → checkout post-action →
+runner `Complete job` → overall job result. A successful repository checkpoint
+cannot attest the later runner/result-service handoff. Keep the ten-minute impact
+timeout, fail-closed `CI Gate`, and real-job-timeout exclusion in cancel recovery.
+
+#### Retained investigation: #13500
+
+The [original attempt-1 impact job](https://github.com/atomantic/PortOS/actions/runs/40115698658/job/120936398030)
+ran head `9ce1866c45a5ae517b81a82bdc31e3cf4af395e9` on merge `47b63aa` with
+base `8b8ffd5e847a6dca5e5c10a479338c94d561195a`. Its planner ran
+17:21:02.180–17:21:02.977 UTC on 2026-10-24. Checkout post-cleanup and job output
+publication ended by 17:21:04.175; the final retained log line begins runner orphan
+cleanup. The job was cancelled at 17:34:22 with the ten-minute timeout annotation.
+
+Initial API reads returned no steps and some reads failed with HTTP 502. Fresh
+reads during this investigation returned successful conclusions for every step,
+including `Complete job`, completed at 17:21:04. That later evidence narrows the
+first unconfirmed boundary to completion of the runner/job-result handoff; the
+log line alone had left orphan cleanup unconfirmed. The API's successful timeline
+record does not prove the overall job result was accepted.
+
+The matching [runner v2.338.0 finalizer](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobExtension.cs)
+performs orphan inspection before completing the `Complete job` context. The
+[runner job completion path](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobRunner.cs)
+then drains its reporting queue and submits job completion. These source paths
+identify possible boundaries, not a demonstrated cause in this job. No retained
+runner transport trace or matching public GitHub Status incident establishes
+which operation failed. Neither a repository-created orphan nor a specific
+upstream incident has been proved.
+
+The [existing attempt-2 impact job](https://github.com/atomantic/PortOS/actions/runs/40115698658/job/120941724098)
+passed at the same head from 17:44:31–17:44:48. That is non-reproduction, not a
+cause-specific fix. The request to rerun attempt 1 with debugging was refused
+because it was no longer the current attempt; no further rerun was started.
+Preserve attempt 1. Future recurrence needs the fixed-stage evidence plus the
+runner's completion/queue/transport diagnostics, with sensitive fields redacted,
+before changing lifecycle behavior or attributing a GitHub incident.

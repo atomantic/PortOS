@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { describe, it as vitestIt, expect, vi, beforeEach, afterAll } from 'vitest';
+import { rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { makePathsProxy, mockNoPeerSync } from '../../lib/mockPathsDataRoot.js';
+import { makePathsProxy, mockNoPeerSync, createTempDataRoot, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 
-const root = mkdtempSync(join(tmpdir(), 'wr-bible-sync-'));
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+const root = createTempDataRoot('wr-bible-sync-');
 vi.mock('../../lib/fileUtils.js', async (original) => makePathsProxy(await original(), { dataRoot: () => root }));
 vi.mock('../instances.js', () => ({ getPeers: vi.fn(async () => [{ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 }]) }));
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
@@ -32,12 +33,18 @@ function serve(value, duringFetch) {
   });
 }
 beforeEach(async () => {
+  await owned.drain();
   rmSync(join(root, 'writers-room'), { force: true, recursive: true });
   rmSync(join(root, 'conflict-journal'), { force: true, recursive: true });
   vi.clearAllMocks();
   await mergeWorksFromSync([{ id: WORK, title: 'Example work', drafts: [], updatedAt: '2026-01-01T00:00:00Z' }]);
 });
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+// Sibling bail settles Vitest's wrapper before the underlying Bible write.
+// Wait for that body or its late failure before removing its data root (#13408).
+afterAll(async () => {
+  try { await owned.drain(); }
+  finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 describe('bible asset delivery', () => {
   it('ships only authored sibling files, pulls missing files, and preserves full cast fields for readers', async () => {

@@ -456,3 +456,38 @@ archive identity and timestamp so a newer checkout obligation cannot be satisfie
 by replaying an older retirement. Interrupted transactions outside the machine-verified continuation above
 require explicit status and recovery; ambiguous identities remain held. The
 private journal and all copies remain available after success or recovery.
+
+## Whole-checkout preservation
+
+For a reviewed checkout that exceeds the ordinary archive byte bounds, the
+explicit `POST /api/cos/schedule/branch-reconcile/whole-checkouts/review` and
+`whole-checkouts/retire` endpoints use the initialized-checkout transaction
+backend without requiring an initialized submodule. They accept the same exact
+inventory tuple, PR URL and review confirmation as the initialized endpoints.
+Their reviews are distinct: a digest from another preservation mode is refused.
+
+This path retains the backend's source-byte and writable-capacity bounds,
+ownership checks, complete metadata capture, standalone object proof, quarantine
+and branch-retirement receipt. Uninitialized gitlink paths may be absent or
+contain ordinary files; all present files are preserved. Actual embedded Git
+stores and external object dependencies retain their existing refusal rules.
+The ordinary archive limits and initialized-only endpoint remain unchanged.
+
+An initialized module may borrow objects through one absolute alternate naming
+its exact corresponding store under this repository's registered module
+administration. Preservation copies the entire dependency store, binds its
+identity and every byte, and rewrites the alternate only in the isolated restore
+copy. The raw archive retains the original pointer. Other roots, relative or
+chained alternates, symlinks and promisor dependencies remain held. Rollback
+additionally checks that the original live stores can still resolve the private
+refs and index; an independent archive never substitutes for that proof.
+
+Transactions with copied dependencies use version 4 manifests. Existing
+immutable version 1–3 archives are read in place, with their original hashes and
+verification rules; they are not rewritten or converted.
+
+Status, rollback, independent archive verification and later branch retirement
+use the existing `initialized-checkouts` transaction endpoints with the returned
+transaction ID and a fresh journal digest. A failed preservation attempt is
+unverified and retains its originals and partial evidence; it is not successful
+cleanup. No archive deletion or retention policy is added by these endpoints.

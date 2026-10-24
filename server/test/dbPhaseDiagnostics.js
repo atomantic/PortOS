@@ -15,7 +15,7 @@ const SNAPSHOT_SQL = `SELECT a.pid = $1 AS fixture, count(*) OVER ()::int AS ses
   ORDER BY fixture DESC, run_lock DESC, a.pid LIMIT 16`;
 const fields = ['fixture', 'session_count', 'state', 'wait_event_type', 'wait_event', 'transaction_ms', 'blockers', 'waiting_locks', 'run_lock'];
 
-/** Opt-in observation; the caller owns the observer connection and its query deadline. */
+/** Opt-in observation; after its test bodies settle, the caller drains before closing the observer. */
 export function createDbPhaseDiagnostics({ onTestFailed, observer, fixturePid, enabled = false,
   write = line => process.stdout.write(`${line}\n`), intervalMs = 1000 } = {}) {
   const track = createTestPhaseDiagnostics(onTestFailed);
@@ -59,9 +59,9 @@ export function createDbPhaseDiagnostics({ onTestFailed, observer, fixturePid, e
         clearInterval(timer);
         record({ phase: name, state: 'settled', ...metrics() });
         active = undefined;
-        await pending;
       }
     }),
+    // Sampling must not extend the timed operation; teardown owns observer settlement.
     drain: () => pending,
   };
 }

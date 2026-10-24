@@ -23,6 +23,7 @@ import { getAgents } from './cosAgentLifecycle.js';
 import * as git from './git.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
+import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { claimContinuationPointer } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -208,6 +209,8 @@ async function worktreeCleanupContext(agentId, options) {
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
+    runtimeVerificationRequested: agentState?.result?.taskOutcome?.recovery?.mode === 'runtime',
+    taskId: agentState?.taskId || normalized.originalTask?.id,
     securityScan: metadata.securityScan,
     securityScanControl: metadata.securityScanControl,
     warnings: [],
@@ -237,6 +240,12 @@ async function probeWorktreePr(context, success) {
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
+  if (context.runtimeVerificationRequested) {
+    const { getTaskById } = await import('./cosTaskStore.js');
+    const held = context.taskId ? await getTaskById(context.taskId) : null;
+    if (held?.metadata?.runtimeVerificationId === `${held.id}:${agentId}`
+      && held.metadata.runtimeVerification?.agentId === agentId) return [];
+  }
   if (['running', 'blocked'].includes(context.publicationValidation?.status)) {
     return [`Publication validation ${context.publicationValidation.status} for ${context.worktreeBranch}; worktree preserved at ${context.worktreePath}. Resume the task after resolving the validation outcome.`];
   }
@@ -991,11 +1000,14 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   });
   if (!persisted) return {};
 
-  if (persisted.status === 'blocked' && ['task-approval', 'task-recovery-exhausted'].includes(persisted.metadata?.blockedCategory)) {
+  if (persisted.status === 'blocked' && ['task-approval', 'task-recovery-exhausted', 'runtime-verification'].includes(persisted.metadata?.blockedCategory)) {
     if (persisted.metadata.deliveryDecisionAgentId !== agentId) return {};
     const metadata = agentMetadata === undefined ? (await getAgentRecord(agentId))?.metadata : agentMetadata;
-    const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
-    const result = await updateTask(task.id, { metadata: patch }, task.taskType || persisted.taskType || 'user', {
+    const patch = persisted.metadata.blockedCategory === 'runtime-verification'
+      ? await runtimeResumePatch({ task: persisted, agentId, agentMetadata: metadata })
+      : await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
+    const result = await updateTask(task.id, { metadata: { ...patch,
+      ...(persisted.metadata.blockedCategory === 'runtime-verification' ? { runtimeVerificationReadyAgentId: agentId } : {}) } }, task.taskType || persisted.taskType || 'user', {
       expectedStatus: 'blocked', expectedMetadata: { blockedCategory: persisted.metadata.blockedCategory, blockedAt: persisted.metadata.blockedAt, deliveryDecisionAgentId: agentId },
     });
     return result?.error || result?.statusChanged ? {} : patch;
@@ -1484,4 +1496,19 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
   if (!pending) throw new Error('cleanup-warning-replay-unavailable');
   emitLog('info', 'Cleanup warning retained for deterministic completion recovery', { agentId, appName });
   return null;
+}
+
+// A verification continuation deliberately retains even an already-merged
+// branch. Ordinary failed-task retry correctly discards those resume pointers.
+async function runtimeResumePatch({ task, agentId, agentMetadata }) {
+  const claim = await resolveClaimContinuationPatch({ task, agentId, agentMetadata });
+  if (claim) return claim;
+  if (hasClaimFlowContract(task)) throw new Error('Runtime verification claim checkout identity is unavailable; retain the prerequisite');
+  if (!agentMetadata?.isWorktree || agentMetadata.isPersistentWorktree) return {};
+  const branch = agentMetadata.worktreeBranch;
+  const path = agentMetadata.workspacePath || join(PATHS.worktrees, agentId);
+  if (!branch || !existsSync(path) || await git.getBranch(path) !== branch) {
+    throw new Error('Runtime verification checkout identity is unavailable; retain the prerequisite');
+  }
+  return { existingBranch: branch, resumeWorktreePath: path, resumedFromAgentId: agentId };
 }

@@ -521,6 +521,15 @@ async function bootDaemon(state) {
   // Existing retirement journals must recover even when branch-reconcile is
   // disabled or every agent slot is occupied. The service reuses its exact cut;
   // it never goes through normal agent/worktree admission.
+  scheduleEvent({
+    id: 'cos-runtime-verification', type: 'interval', intervalMs: 60 * 1000,
+    handler: async () => {
+      if (await pendingMergeSweepBlocked()) return;
+      const { sweepRuntimeVerifications } = await import('./runtimeVerification.js');
+      await sweepRuntimeVerifications().catch(error => console.warn(`⚠️ Runtime verification deferred: ${error.message}`));
+    },
+    metadata: { description: 'Resume runtime verification after a verified boot' },
+  });
   const { INITIALIZED_RECOVERY_INTERVAL_MS, sweepInitializedCheckoutRecoveries } = await import('./initializedCheckoutRecoverySweep.js');
   scheduleEvent({
     id: 'cos-initialized-retirement-recovery',
@@ -630,6 +639,7 @@ async function teardownDaemon() {
   cancelEvent('cos-learning-insights');
   cancelEvent('cos-rehabilitation-check');
   cancelEvent('cos-improvement-check');
+  cancelEvent('cos-runtime-verification');
   cancelEvent('cos-pending-merge-sweep');
   cancelEvent('cos-initialized-retirement-recovery');
   (await import('./prWatcher.js')).cancelHandoffFollowUps();
