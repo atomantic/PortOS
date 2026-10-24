@@ -99,6 +99,9 @@ export function normalizeTaskOutcome(value) {
   if (typeof value.reason !== 'string' || !value.reason.trim()) return null;
   const outcome = { status: value.status, reason: value.reason.trim() };
   if (['blocked', 'incomplete'].includes(value.status)) {
+    if (value.recovery?.mode === 'runtime') outcome.recovery = { mode: 'runtime',
+      prUrl: typeof value.recovery.prUrl === 'string' ? value.recovery.prUrl : '',
+      requiredCommit: typeof value.recovery.requiredCommit === 'string' ? value.recovery.requiredCommit : '' };
     if (value.recovery?.mode === 'cleanup') outcome.recovery = { mode: 'cleanup' };
     if (value.recovery?.mode === 'approval') {
       const options = Array.isArray(value.recovery.options)

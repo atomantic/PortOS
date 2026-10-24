@@ -836,6 +836,13 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     if (!releasesCurrentHold) return { error: 'Deep checkpoint cleanup is still pending; resume after cleanup finishes' };
   }
 
+  const runtimeHeld = current.status === 'blocked' && current.metadata?.blockedCategory === 'runtime-verification';
+  const runtimeRelease = runtimeHeld && updates.status === 'pending'
+    && expectedStatus === 'blocked' && expectedMetadata?.runtimeVerificationId === current.metadata.runtimeVerificationId
+    && updates.metadata?.runtimeVerification?.status === 'resumed';
+  if (runtimeHeld && updates.status && updates.status !== 'blocked' && !runtimeRelease) {
+    return { error: 'Runtime verification prerequisite must be released by its server coordinator' };
+  }
   const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
 
   // Ask "what status transition is this?" ONCE. Every lifecycle rule below reads a
@@ -851,7 +858,10 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // the `blockedCategory` clear feeding the resume-pointer check below.
   for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
     if (!transition[field]) continue;
-    for (const key of keys) delete updatedMetadata[key];
+    for (const key of keys) {
+      if (runtimeRelease && ['failureCount', 'lastErrorCategory', 'lastFailureAt'].includes(key)) continue;
+      delete updatedMetadata[key];
+    }
   }
 
   // Drop the resume pointer once the task reaches a terminal state. `existingBranch`

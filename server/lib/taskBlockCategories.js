@@ -58,6 +58,7 @@ export const TIMED_COOLDOWN_BLOCKED_CATEGORIES = new Set([
  */
 export const PAUSED_BLOCKED_CATEGORIES = new Set([
   ...TIMED_COOLDOWN_BLOCKED_CATEGORIES,
+  'runtime-verification', // Server-owned boot prerequisite; retain work and never expire or auto-retry.
   'task-approval', // A user decision must retain its checkout and never silently expire.
   'task-recovery-exhausted', // Continuing beyond the retry/spawn limit needs an explicit decision.
   'deep-audit-partial', // Explicit resume only; keep retained remediation and never auto-expire.
@@ -88,6 +89,7 @@ export const USER_DECISION_BLOCKED_CATEGORIES = new Set([
   'user-terminated',      // user explicitly stopped the agent
   AGENT_PAUSED_CATEGORY,  // user paused; resumable on demand
   'challenge-escalation', // parked awaiting the user's arbitration
+  'runtime-verification', // Server-owned boot prerequisite; retain work and never expire or auto-retry.
   'task-approval', // A user decision must retain its checkout and never silently expire.
   'task-recovery-exhausted', // Continuing beyond the retry/spawn limit needs an explicit decision.
   'deep-audit-partial', // Explicit resume only; keep retained remediation and never auto-expire.

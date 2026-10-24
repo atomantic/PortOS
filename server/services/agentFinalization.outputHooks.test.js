@@ -475,6 +475,43 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it.each(['normal', 'recovered'])('parks a runtime prerequisite through %s public completion without a provider retry', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: TASK.id, taskType: 'internal', status: 'in_progress', metadata: {
+      isInvestigation: true, totalSpawnCount: 3, failureCount: 1, lastSpawnedAt: '2026-09-10T00:00:00Z',
+    } };
+    persistedAgent.taskId = task.id;
+    mergedTarget.getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'example/PortOS' });
+    const github = await import('./github.js');
+    const git = await import('../lib/execGit.js');
+    const forge = vi.spyOn(github, 'execGh').mockImplementation(async args => JSON.stringify(args[0] === 'pr'
+      ? { state: 'MERGED', url: 'https://github.com/example/PortOS/pull/123', headRefOid: 'a'.repeat(40), mergeCommit: { oid: 'c'.repeat(40) }, baseRefName: 'main' }
+      : { defaultBranchRef: { name: 'main' } }));
+    const gitRead = vi.spyOn(git, 'execGit').mockResolvedValue({ stdout: 'd'.repeat(40), exitCode: 0 });
+    const taskOutcome = { status: 'blocked', reason: 'Update preflight refuses this active investigation; boot is stale.',
+      recovery: { mode: 'runtime', prUrl: 'https://github.com/example/PortOS/pull/123', requiredCommit: 'a'.repeat(40) } };
+    try {
+      persistedAgent.metadata.taskOutcome = taskOutcome;
+      persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+      const order = [];
+      updateTask.mockImplementationOnce(async () => { order.push('prerequisite'); return {}; });
+      completeAgent.mockImplementationOnce(async () => { order.push('terminal'); return null; });
+      const result = mode === 'normal'
+        ? await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+          finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) })
+        : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0 });
+      expect(result).toMatchObject({ success: false, taskOutcome });
+      expect(order).toEqual(['prerequisite', 'terminal']);
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({
+        blockedCategory: 'runtime-verification', failureCount: 1, totalSpawnCount: 3,
+        runtimeVerification: expect.objectContaining({ taskId: task.id, agentId: persistedAgent.id, integratedCommit: 'c'.repeat(40) }),
+      }) }), 'internal', expect.objectContaining({ expectedStatus: 'in_progress' }));
+      expect(completeAgent).toHaveBeenCalledWith(persistedAgent.id, expect.objectContaining({ success: false, deliveryRecoveryOwned: true }));
+      expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+    } finally { forge.mockRestore(); gitRead.mockRestore(); }
+  });
+
   it.each(['worktree', 'pinned-claim'])('hands %s cleanup-only work to completion recovery without another agent or success claim', async mode => {
     const taskOutcome = { status: 'incomplete', reason: 'Verified delivery; owner still holds checkout.', recovery: { mode: 'cleanup' } };
     isProgrammaticIoTaskType.mockReturnValue(false);

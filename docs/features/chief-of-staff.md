@@ -46,6 +46,27 @@ say “Execution completed.” Historical user feedback is unchanged. GitHub
 notification resolution requires explicit completed or verified no-action-needed
 delivery; exit success alone cannot mark a thread done.
 
+### Runtime verification prerequisites
+
+When verification requires a merged PortOS fix to be running, an agent may report
+`blocked` with `recovery: { "mode": "runtime", "prUrl": "https://github.com/example/PortOS/pull/123", "requiredCommit": "<full PR head or merge SHA>" }`.
+The server validates the configured repository, merged PR, default-branch
+integration and captured boot ancestry. A changed disk HEAD or completion
+sentinel does not satisfy this prerequisite.
+
+The original task retains its dispatch identity, merged checkout, receipt
+obligations and remaining retry/spawn budgets in the existing `cos_tasks` record.
+It stays blocked under `runtime-verification`, exempt from stale-failure expiry
+and generic revival. No new store, seed or migration is needed. The configured
+idle updater remains the only automatic update path: disabling it, cooldowns,
+active work and checkout-readiness gates continue to hold updates. A supported
+manual update can also satisfy the prerequisite.
+
+A CoS sweep resumes that same task once after verified boot ancestry and the
+original run's resume-pointer handoff. Concurrent sweeps use a conditional task
+write, and persisted evidence survives restart. This resumes verification; only
+its successful delivery can revive the investigation's affected tasks.
+
 ## Features
 
 1. **Dual Task Lists**: User tasks and system tasks, both stored in `cos_tasks`
