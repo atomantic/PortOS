@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { withDeliveryActivity } from './agentDeliveryActivity.js';
 import { storeCompletionData, readCompletionData, completionReplayInput } from './agentCompletionData.js';
 /**
  * Agent Completion Cleanup
@@ -347,7 +348,8 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
 async function runCompletionCleanupSteps(context, { onStepError }) {
   if (!Object.values(STEP_ERROR_POLICY).includes(onStepError)) throw new Error(`Unknown completion-cleanup step error policy: ${onStepError}`);
   if (cleanupRuns.has(context.agentId)) return cleanupRuns.get(context.agentId);
-  const run = performCompletionCleanupSteps(context, onStepError);
+  const run = withDeliveryActivity(context.agentId, 'Processing completion handoffs and workspace cleanup',
+    () => performCompletionCleanupSteps(context, onStepError));
   cleanupRuns.set(context.agentId, run);
   try { return await run; } finally { cleanupRuns.delete(context.agentId); }
 }

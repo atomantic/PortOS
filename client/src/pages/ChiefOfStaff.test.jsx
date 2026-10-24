@@ -1379,6 +1379,27 @@ describe('ChiefOfStaff active-agent snapshot readiness', () => {
     await act(async () => socketHandler('cos:agent:updated')(archived));
     expect(screen.getByRole('region', { name: 'Finalizing delivery' })).toBeInTheDocument();
 
+    await act(async () => socketHandler('cos:agent:updated')({ id: finalizing.id,
+      metadata: { ...finalizing.metadata, cleanupOutcome: { status: 'blocked', reason: 'preservation-unverified' } } }));
+    expect(within(section).getByText('Last check: preservation unverified.')).toBeInTheDocument();
+    await act(async () => socketHandler('cos:agent:updated')({ id: finalizing.id,
+      deliveryActivity: { label: 'Checking delivery preservation' } }));
+    expect(within(section).getByText('Checking delivery preservation')).toBeInTheDocument();
+    await act(async () => socketHandler('cos:agent:updated')({ id: finalizing.id, deliveryActivity: null }));
+    expect(within(section).getByText(/agent is not running/)).toBeInTheDocument();
+
+    const statusReads = api.getCosStatus.mock.calls.length;
+    await act(async () => {
+      socketHandler('cos:scheduler:changed')({ id: 'unrelated-job' });
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    expect(api.getCosStatus).toHaveBeenCalledTimes(statusReads);
+    await act(async () => {
+      socketHandler('cos:scheduler:changed')({ id: 'cos-pending-merge-sweep' });
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    expect(api.getCosStatus).toHaveBeenCalledTimes(statusReads + 1);
+
     api.getCosAgents.mockResolvedValue([]);
     await act(async () => {
       socketHandler('cos:tasks:changed')({ task: { id: finalizing.taskId, status: 'completed' } });

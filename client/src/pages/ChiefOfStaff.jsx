@@ -597,7 +597,8 @@ export default function ChiefOfStaff() {
 
     const handleAgentUpdated = (updatedAgent) => {
       if (!needsAgents) return;
-      agentReadRef.current?.updates.set(updatedAgent.id, updatedAgent);
+      const updates = agentReadRef.current?.updates;
+      updates?.set(updatedAgent.id, { ...updates.get(updatedAgent.id), ...updatedAgent });
       // Update the specific agent in the agents list without fetching all data
       setAgents(prev => prev.map(agent =>
         agent.id === updatedAgent.id ? { ...agent, ...updatedAgent } : agent
@@ -672,6 +673,10 @@ export default function ChiefOfStaff() {
       }
     };
     socket.on('cos:log', handleCosLog);
+    const handleRecoveryScheduleChanged = event => {
+      if (needsAgents && event?.id === 'cos-pending-merge-sweep') refreshQueue();
+    };
+    socket.on('cos:scheduler:changed', handleRecoveryScheduleChanged);
 
     // Stable reference data has its own invalidation path, independent of the queue.
     const handleAppsChanged = coalesce(() => {
@@ -704,6 +709,7 @@ export default function ChiefOfStaff() {
       socket.off('cos:agent:completed', handleAgentCompleted);
       socket.off('cos:health:check', handleHealthCheck);
       socket.off('cos:log', handleCosLog);
+      socket.off('cos:scheduler:changed', handleRecoveryScheduleChanged);
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
     };
@@ -1449,14 +1455,14 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
             <Suspense fallback={<TabLoadFallback label="tasks" />}>
-              <TasksTab completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+              <TasksTab completionRecovery={status?.completionRecovery} completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
             </Suspense>
           </div>
         )}
         {activeTab === 'agents' && (
           <div role="tabpanel" id="tabpanel-agents" aria-labelledby="tab-agents">
             <Suspense fallback={<TabLoadFallback label="agents" />}>
-              <AgentsTab agentsLoaded={agentsLoaded} agentsError={agentsError} onRetryAgents={fetchQueue} completedRevision={completedRevision} agents={agents} onRefresh={fetchData} liveOutputs={liveOutputs} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+              <AgentsTab completionRecovery={status?.completionRecovery} agentsLoaded={agentsLoaded} agentsError={agentsError} onRetryAgents={fetchQueue} completedRevision={completedRevision} agents={agents} onRefresh={fetchData} liveOutputs={liveOutputs} providers={providers} providersLoaded={providersLoaded} apps={apps} />
             </Suspense>
           </div>
         )}

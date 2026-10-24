@@ -55,7 +55,10 @@ vi.mock('./cosTaskStore.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getAllTasks: vi.fn(async () => ({ user: { tasks: [], grouped: {} }, cos: { tasks: [], grouped: {} } })),
   getCosTasks: vi.fn(async () => ({ tasks: [] })),
+  readPendingTaskIds: vi.fn(async () => []),
 }));
+vi.mock('./providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
+vi.mock('./cosAgentIndex.js', async importOriginal => ({ ...(await importOriginal()), loadAgentIndex: vi.fn(async () => new Map()) }));
 vi.mock('./instanceIdentity.js', async (importOriginal) => ({
   ...(await importOriginal()),
   ensureInstanceId: vi.fn(async () => 'instance-test'),
@@ -99,7 +102,7 @@ vi.mock('./prWatcher.js', () => ({
   cancelHandoffFollowUps: () => { handoffFollowUp.gate = null; },
 }));
 
-const { start, stop } = await import('./cos.js');
+const { start, stop, getStatus } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { isDaemonRunning } = await import('./cosState.js');
 
@@ -132,6 +135,23 @@ afterEach(async () => {
 });
 
 describe('CoS daemon start/stop lifecycle (#11860)', () => {
+  it('exposes recovery gates and the actual scheduled sweep time without promising a job completion time', async () => {
+    persisted = { ...persisted, paused: false, stats: { tasksCompleted: 0 }, config: { ...persisted.config, domainAutonomy: { cos: 'execute' } } };
+    expect((await getStatus()).completionRecovery).toMatchObject({ blockedReason: 'CoS is stopped', nextRunAt: null, batchSize: 10 });
+    const starting = start();
+    await waitFor(() => typeof releaseRecovery === 'function');
+    releaseRecovery(); await starting;
+    // This suite's scheduler registry deliberately has no real timer.
+    expect((await getStatus()).completionRecovery.blockedReason).toBe('Completion recovery is not scheduled');
+    const scheduler = await import('./eventScheduler.js');
+    vi.spyOn(scheduler, 'getEvent').mockReturnValue({ active: true, nextRunAt: 1800000, intervalMs: 1800000 });
+    expect((await getStatus()).completionRecovery).toEqual({ blockedReason: null, nextRunAt: 1800000, intervalMs: 1800000, batchSize: 10 });
+    persisted.paused = true;
+    expect((await getStatus()).completionRecovery).toMatchObject({ blockedReason: 'CoS is paused', nextRunAt: null });
+    persisted.paused = false;
+    persisted.config.domainAutonomy.cos = 'dry-run';
+    expect((await getStatus()).completionRecovery).toMatchObject({ blockedReason: 'CoS auto-run must be in Execute mode', nextRunAt: null });
+  });
   it('a Stop issued while start() is mid-boot leaves no CoS timer armed', async () => {
     const starting = start();
     await waitFor(() => typeof releaseRecovery === 'function');

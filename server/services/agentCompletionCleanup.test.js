@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 vi.mock('./cos.js', () => ({}));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue({}),
   addTask: vi.fn().mockResolvedValue({}),

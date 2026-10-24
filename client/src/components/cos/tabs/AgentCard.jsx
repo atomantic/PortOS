@@ -33,6 +33,7 @@ import { copyToClipboard } from '../../../lib/clipboard';
 import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
 import AgentResultLine, { SecurityScanEvidence } from '../AgentResultLine';
+import DeliveryStatus from '../DeliveryStatus';
 import AuditSourceEvidence from '../AuditSourceEvidence';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay, shortClaudeModelName } from '../../../utils/formatters';
@@ -735,7 +736,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
   return (
     <div className={`min-w-0 bg-port-card border rounded-lg overflow-hidden ${completed && expanded ? 'col-span-full' : ''} ${
-      inactive
+      agent.deliveryPending ? 'border-port-warning/40' : inactive
         ? isSystemAgent ? 'border-port-border opacity-50' : 'border-port-border opacity-75'
         : 'border-port-accent/50'
     }`}>
@@ -1133,6 +1134,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         />
 
         <AuditSourceEvidence evidence={agent.metadata?.auditSourceEvidence} />
+        {agent.deliveryPending && <DeliveryStatus agent={agent} />}
 
         {!agent.result && <SecurityScanEvidence scanner={agent.metadata?.securityScan} control={agent.metadata?.securityScanControl} />}
 

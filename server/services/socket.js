@@ -498,7 +498,7 @@ function setupCosEventForwarding() {
     ['learning:changed', 'cos:learning:changed'],
   ]) {
     cosEvents.on(source, data => {
-      broadcastToCos(target, {});
+      broadcastToCos(target, target === 'cos:scheduler:changed' && typeof data?.id === 'string' ? { id: data.id } : {});
       if (target === 'cos:scheduler:changed' && data?.id === 'backup-daily') {
         ioInstance?.emit('backup:changed', {});
       }
