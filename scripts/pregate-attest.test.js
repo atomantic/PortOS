@@ -296,10 +296,14 @@ describe('runAttest', () => {
         git('-C', cwd, 'commit', '-m', text);
         return git('-C', cwd, 'rev-parse', 'HEAD');
       };
-      commit('initial');
+      const initial = commit('initial');
       git('-C', cwd, 'push', '-u', 'origin', 'main');
       const published = commit('published');
       git('-C', cwd, 'push', remote, 'main');
+      // Git for Windows may recognize this path as the configured origin and
+      // update its tracking ref. Model stale tracking explicitly on every host;
+      // publication must still be proved from the advertised remote, not refs.
+      git('-C', cwd, 'update-ref', 'refs/remotes/origin/main', initial);
       expect(git('-C', cwd, 'branch', '-r', '--contains', published)).toBe('');
       const before = git('-C', cwd, 'show-ref');
       const calls = [];
