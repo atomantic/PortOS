@@ -26,7 +26,7 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 }));
 afterAll(cleanupTempDataRoots);
 
-const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {}, gitSpawns: [] }));
+const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [] }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
@@ -45,6 +45,11 @@ vi.mock('../lib/execGit.js', async (importOriginal) => {
     return actual.execGit(args, cwd, options);
   } };
 });
+vi.mock('./apps.js', () => ({ getAllApps: async () => [injected.app], getAppById: async id => injected.app?.id === id ? injected.app : null }));
+vi.mock('./taskScheduleStore.js', async importOriginal => ({
+  ...await importOriginal(), loadSchedule: async () => injected.schedule,
+  updateSchedule: async mutate => (await mutate(injected.schedule)).result,
+}));
 vi.mock('./cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => ({ trusted: injected.owners !== null,
     agents: injected.owners && Object.fromEntries(injected.owners.map(agent => [agent.id, agent])) }),
@@ -89,12 +94,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   let external;
 
   beforeEach(async () => {
-    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], forge: {}, gitSpawns: [] });
+    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-reconcile-own-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
     await materializeGitRepo(safeRepo, { identity: { email: 'test@example.com', name: 'Test' } });
     repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim() || safeRepo;
+    injected.app = { id: 'app-1', repoPath: repo };
     external = join(scratch, 'elsewhere');
     await mkdir(external);
   });

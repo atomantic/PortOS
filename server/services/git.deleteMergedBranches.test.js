@@ -6,6 +6,7 @@ vi.mock('../lib/execGit.js', () => {
   return { execGit, execGitSafe: (...args) => execGit(...args).catch(error => ({ exitCode: 1, stdout: '', stderr: error.message })) };
 });
 vi.mock('./worktreeManager.js', () => ({ isGitLockError: vi.fn(), listWorktrees: vi.fn(async () => []) }));
+vi.mock('./retirementAppScope.js', () => ({ resolveRetirementApp: vi.fn(async () => ({ app: { id: 'app-1', repoPath: '/repo', forgeAccount: 'example-account' } })) }));
 vi.mock('./branchReconcile.js', () => ({ cleanupMerged: vi.fn() }));
 vi.mock('./cosClaimOwnershipState.js', () => ({ withClaimOwnershipLock: work => work(), readClaimOwnershipAgents: vi.fn(async () => []) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: vi.fn(async () => null) }));
@@ -45,7 +46,7 @@ describe('delete merged branches', () => {
   it('shares local retirement and leases the merged remote head', async () => {
     const result = await deleteMergedBranches('/repo');
     expect(result.deleted).toEqual([{ name: 'feature/done', local: 'deleted', remote: 'deleted' }]);
-    expect(cleanupMerged).toHaveBeenCalledWith('/repo', HEAD, [{ branch: 'feature/done' }], { activeAgentIds: null });
+    expect(cleanupMerged).toHaveBeenCalledWith('/repo', HEAD, [{ branch: 'feature/done' }], { activeAgentIds: null, appId: 'app-1', forgeAccount: 'example-account' });
     expect(execGit).toHaveBeenCalledWith(['push', `--force-with-lease=refs/heads/feature/done:${HEAD}`, '--', REMOTE, ':refs/heads/feature/done'], '/repo', { ignoreExitCode: true });
     expect(readBranchCompletionHold).toHaveBeenCalledWith({ repoPath: '/repo', branch: 'feature/done', tip: HEAD, retirement: true });
   });
