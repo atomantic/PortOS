@@ -3,10 +3,10 @@ import { createDbPhaseDiagnostics } from './dbPhaseDiagnostics.js';
 
 afterEach(() => vi.useRealTimers());
 
-// Pins the observer's privacy boundary and prevents a slow observer from
-// spawning overlapping work or surviving the operation's settlement.
-it('bounds test-only snapshots and drains the observer without exposing query text', async () => {
-  vi.useFakeTimers();
+// A slow observer must not spend a later phase's test budget. Teardown
+// still owns its completion before closing the diagnostic connection.
+it('settles the operation independently and drains bounded private observations before teardown', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
   const snapshot = Promise.withResolvers();
   const operation = Promise.withResolvers();
   const observer = { query: vi.fn(() => snapshot.promise) };
@@ -24,11 +24,22 @@ it('bounds test-only snapshots and drains the observer without exposing query te
   let settled = false;
   void run.then(() => { settled = true; });
   await vi.advanceTimersByTimeAsync(5000);
-  expect(settled).toBe(false);
+  const settledEvidence = lines.map(line => JSON.parse(line.slice('DB phases: '.length))).find(event => event.state === 'settled');
+  expect(settledEvidence.elapsedMs).toBe(5000);
+  expect(settled).toBe(true);
+  expect(await run).toBe('original result');
+  expect(await diagnostics.phase('compact-public-query', () => 'next result')).toBe('next result');
+  const failure = new Error('original operation failure');
+  await expect(diagnostics.phase('compact-explain', () => { throw failure; })).rejects.toBe(failure);
+  expect(observer.query).toHaveBeenCalledOnce();
+  let drained = false;
+  const drain = diagnostics.drain().then(() => { drained = true; });
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(drained).toBe(false);
   snapshot.resolve({ rows: [{ fixture: true, state: 'active', wait_event: 'DataFileRead',
     query: 'private query', client_addr: 'private address' }] });
-  expect(await run).toBe('original result');
-  await diagnostics.drain();
+  await drain;
+  expect(drained).toBe(true);
   await vi.advanceTimersByTimeAsync(5000);
   expect(observer.query).toHaveBeenCalledOnce();
   expect(lines.join('\n')).toContain('DataFileRead');
