@@ -294,8 +294,9 @@ unloaded machine, so a concurrent run can time out cases a sequential run
 passes.
 
 For the intermittent synthetic gallery-page timeout investigation (#13369),
-`PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run pregate` adds wall/CPU timings for fixture
-construction, seeding, public calls, EXPLAINs and result serialization. To obtain
+`PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run pregate -- --full` adds wall/CPU timings
+for fixture construction, seeding, public calls, EXPLAINs and result
+serialization when the plan selects the DB suite. To obtain
 the complete serial DB workload regardless of test-memo reuse, run
 `PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run test:db` after the earlier validation
 stages finish. The observer reads only `portos_test` session state, waits,
