@@ -38,8 +38,8 @@ describe('completed claim checkout evidence', () => {
     expect(await captureCompletedCheckouts({ ...agent, metadata: { ...agent.metadata, workspacePath: repoPath } }, { success: true })).toEqual([]);
   });
 
-  it.each([true, false])('captures a bound claim run from the source checkout, picker=%s', async picker => {
-    agent.metadata = { claimPicksOwnBranch: picker, isWorktree: false, workspacePath: repoPath, claimBranches: [branch] };
+  it.each([false, true])('captures a source-checkout claim without a separate sourceWorkspace (pinned=%s)', async pinned => {
+    agent.metadata = { claimPicksOwnBranch: !pinned, ...(pinned ? { claimBranch: branch } : {}), isWorktree: false, workspacePath: repoPath, claimBranches: [branch] };
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toEqual([expect.objectContaining({ branch, head, path: expect.stringMatching(/claim$/) })]);
     expect(await hasCompletedCheckoutEvidence([completed(receipts)], target())).toBe(true);

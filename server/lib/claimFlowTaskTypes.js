@@ -14,6 +14,8 @@
 // `metadata.analysisType`.
 //
 // Pure leaf: shared by prompt selection, registration and resume authority.
+import { isTruthyMeta } from './metadataFlags.js';
+
 export const CLAIM_FLOW_TASK_TYPES = new Set([
   'plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work'
 ]);
@@ -23,4 +25,12 @@ export function hasClaimFlowContract(task) {
   const metadata = task?.metadata;
   return metadata?.claimFlow === true || metadata?.claimFlow === 'true'
     || CLAIM_FLOW_TASK_TYPES.has(metadata?.analysisType || metadata?.taskAnalysisType || task?.taskType);
+}
+
+/** Registered claim runs include pinned targets as well as issue pickers.
+ * Concrete checkout authority still requires their bound branches and receipts.
+ */
+export function isClaimAgentMetadata(metadata) {
+  return isTruthyMeta(metadata?.claimPicksOwnBranch)
+    || (typeof metadata?.claimBranch === 'string' && metadata.claimBranch.length > 0);
 }
