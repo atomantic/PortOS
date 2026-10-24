@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createDbPhaseDiagnostics } from './dbPhaseDiagnostics.js';
+import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 
 afterEach(() => vi.useRealTimers());
 
@@ -9,7 +10,7 @@ it('settles the operation independently and drains bounded private observations 
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
   const snapshot = Promise.withResolvers();
   const operation = Promise.withResolvers();
-  const observer = { query: vi.fn(() => snapshot.promise) };
+  const observer = { query: vi.fn(() => snapshot.promise), end: vi.fn() };
   const lines = [];
   const diagnostics = createDbPhaseDiagnostics({ onTestFailed: () => {}, observer, fixturePid: 42,
     enabled: true, write: line => lines.push(line) });
@@ -29,17 +30,22 @@ it('settles the operation independently and drains bounded private observations 
   expect(settled).toBe(true);
   expect(await run).toBe('original result');
   expect(await diagnostics.phase('compact-public-query', () => 'next result')).toBe('next result');
-  const failure = new Error('original operation failure');
-  await expect(diagnostics.phase('compact-explain', () => { throw failure; })).rejects.toBe(failure);
+  const failure = new Error('original cancelled operation failure');
+  let registered;
+  const owned = ownTestBodies((_name, body) => { registered = body; });
+  owned.it('cancelled phase', () => diagnostics.phase('compact-explain', () => { throw failure; }));
+  const controller = new AbortController();
+  controller.abort();
+  await expect(registered({ signal: controller.signal })).rejects.toBe(failure);
   expect(observer.query).toHaveBeenCalledOnce();
-  let drained = false;
-  const drain = diagnostics.drain().then(() => { drained = true; });
+  const cleanup = owned.drain().finally(() => diagnostics.drain()).finally(() => observer.end());
+  const cleanupResult = cleanup.catch(error => error);
   await vi.advanceTimersByTimeAsync(5000);
-  expect(drained).toBe(false);
+  expect(observer.end).not.toHaveBeenCalled();
   snapshot.resolve({ rows: [{ fixture: true, state: 'active', wait_event: 'DataFileRead',
     query: 'private query', client_addr: 'private address' }] });
-  await drain;
-  expect(drained).toBe(true);
+  expect(await cleanupResult).toMatchObject({ errors: [failure] });
+  expect(observer.end).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(5000);
   expect(observer.query).toHaveBeenCalledOnce();
   expect(lines.join('\n')).toContain('DataFileRead');
