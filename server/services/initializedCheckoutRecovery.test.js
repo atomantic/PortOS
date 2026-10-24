@@ -201,6 +201,29 @@ const reviewed = async () => {
 };
 
 describe('initialized checkout transaction', () => {
+  it('replays a bound continued-delivery generation after quarantine without recapturing absent originals', async () => {
+    const incarnation = { pointer: { dev: '1', ino: '2', birthtimeNs: '3' },
+      gitdir: { path: '/fixture/private', dev: '1', ino: '4', birthtimeNs: '5' } };
+    const policy = { reason: null, policies: [{ id: 'agent-continued', continuedDelivery: { capturedHead: '1'.repeat(40) } }] };
+    const deps = { ...fixture.deps, readCompletedIdentity: async () => {
+      if (fixture.placement.working !== 'original') throw new Error('original-checkout-already-quarantined');
+      return { incarnation };
+    }, ownership: async input => JSON.stringify(input.reviewIdentity?.checkoutIncarnation) === JSON.stringify(incarnation)
+      ? { ok: true, policy } : { ok: false, reason: 'retirement-policy-not-legacy-completed' } };
+    const service = _createInitializedCheckoutRecovery(deps);
+    const prepared = await service.review({ appId: 'app', release, prUrl });
+    expect(prepared).toMatchObject({ ok: true, review: { checkoutIncarnation: incarnation } });
+    const retired = await service.retire({ appId: 'app', release,
+      review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false } });
+    expect(retired).toMatchObject({ ok: true, originalsQuarantined: true });
+    const restarted = _createInitializedCheckoutRecovery(deps);
+    const status = await restarted.status({ appId: 'app', transactionId: retired.transactionId });
+    const input = { appId: 'app', transactionId: retired.transactionId, journalDigest: status.journalDigest };
+    const branch = await restarted.reviewBranch(input);
+    expect(branch.ok).toBe(true);
+    expect(await restarted.retireBranch({ ...input, review: { digest: branch.review.digest } }))
+      .toMatchObject({ ok: true, branchDeleted: true, receiptRecorded: true });
+  });
   it('binds whole-checkout admission to a distinct review before the existing durable retirement flow', async () => {
     const native = vi.fn(async input => {
       const result = await fixture.deps.native(input);

@@ -1152,6 +1152,78 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return checkout;
   }
 
+  it.each(['delivered', 'recreated-after-removal', 'different-generation', 'unmerged-original', 'unreadable-original', 'unrelated-capture', 'human-handoff'])(
+    'binds a later merged delivery to its captured owner without rewriting history: %s', async scenario => {
+      const c = await reviewedCheckout(`continued-${scenario}`, { normalMerge: true });
+      const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+      const captured = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release, allowLocked: true });
+      expect(captured).not.toBeNull();
+      // Persisted JSON object key order is not part of physical generation.
+      captured.incarnation = { gitdir: { ...captured.incarnation.gitdir }, pointer: { ...captured.incarnation.pointer } };
+      const oldHead = c.release.head;
+      const oldUrl = 'https://github.com/example/repo/pull/41';
+      const agent = { id: 'agent-continued', status: 'completed', startedAt: '2026-01-01T00:00:00.000Z',
+        completedAt: '2026-01-01T00:03:00.000Z', result: { success: true }, metadata: {
+          sourceWorkspace: repo, workspacePath: captured.path, worktreeBranch: c.release.branch,
+          prCompletionPolicy: scenario === 'human-handoff' ? 'leave-open' : 'review-then-merge',
+          reviewLoopMergeTarget: { branch: c.release.branch, url: oldUrl },
+          completedCheckouts: [{ version: 1, agentId: 'agent-continued', startedAt: '2026-01-01T00:00:00.000Z',
+            capturedAt: '2026-01-01T00:02:00.000Z', ...captured }],
+        } };
+      if (scenario === 'different-generation') agent.metadata.completedCheckouts[0].incarnation.gitdir.ino += '0';
+      if (scenario === 'unrelated-capture') {
+        const tree = (await execGit(['rev-parse', `${oldHead}^{tree}`], repo)).stdout.trim();
+        agent.metadata.completedCheckouts[0].head = (await execGit(['commit-tree', tree, '-m', 'unrelated captured history'], repo)).stdout.trim();
+      }
+      injected.policies = [agent];
+      await writeFile(join(c.path, 'continued.txt'), 'later delivered change\n');
+      await execGit(['add', 'continued.txt'], c.path);
+      await execGit(['commit', '-m', 'later delivery on the same checkout'], c.path);
+      c.release.head = (await execGit(['rev-parse', 'HEAD'], c.path)).stdout.trim();
+      await execGit(['merge', '--ff-only', c.release.branch], repo);
+      Object.assign(c.forge, { prHead: c.release.head, mergeCommit: c.release.head, defaultHead: c.release.head,
+        changedPaths: ['continued.txt', 'feature.txt'] });
+      c.opts.readHistoricalMerge = async () => scenario === 'unreadable-original' ? null : ({ url: oldUrl,
+        state: scenario === 'unmerged-original' ? 'OPEN' : 'MERGED', isCrossRepository: false,
+        headRefName: c.release.branch, headRefOid: oldHead, mergeCommit: { oid: oldHead }, baseRefName: 'main' });
+      if (scenario === 'recreated-after-removal') c.opts.readForge = async () => {
+        if (!existsSync(c.path)) {
+          await mkdir(c.path);
+          await writeFile(join(c.path, 'new-owner.txt'), 'unrelated new work\n');
+        }
+        return c.forge;
+      };
+      await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+      const original = structuredClone(agent);
+      const prepared = await c.prepare();
+      if (!['delivered', 'recreated-after-removal'].includes(scenario)) {
+        expect(prepared).toMatchObject({ ok: false, reason: scenario === 'human-handoff'
+          ? 'pr-completion-human-handoff' : 'retirement-policy-not-legacy-completed' });
+        expect(await registered(c.path)).toBe(true);
+        expect(await archives()).toEqual([]);
+      } else {
+        expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ continuedDelivery: {
+          originalPrUrl: oldUrl, capturedHead: oldHead, tip: c.release.head,
+        } }] } } });
+        const retired = await c.confirm(prepared.review);
+        expect(retired).toMatchObject({ ok: true, branchDeleted: scenario === 'delivered' });
+        if (scenario === 'recreated-after-removal') {
+          expect(retired.branchRetainedReason).toBe('retirement-evidence-changed');
+          expect(await readFile(join(c.path, 'new-owner.txt'), 'utf8')).toBe('unrelated new work\n');
+          expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+        }
+        expect(await readFile(join(retired.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+        const restore = join(scratch, 'continued-standalone.git');
+        await execGit(['init', '--bare', restore], scratch);
+        await execGit(['bundle', 'unbundle', join(retired.archiveDir, 'commits.bundle')], restore);
+        await execGit(['fsck', '--full', '--strict', '--no-reflogs', c.release.head], restore);
+        expect(await registered(c.path)).toBe(false);
+        expect((await c.prepare()).ok).toBe(false);
+        expect(await archives()).toHaveLength(1);
+      }
+      expect(agent).toEqual(original);
+    });
+
   it('preserves the checkout when escaped review evidence exceeds the recovery manifest limit', async () => {
     const c = await reviewedCheckout('manifest-byte-limit', {
       superseded: true, featurePath: 'tabs.txt', featureBody: '\t'.repeat(4 * 1024 * 1024 - 512) + '\n',

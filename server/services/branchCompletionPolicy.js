@@ -11,6 +11,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { isDeepStrictEqual } from 'node:util';
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
   && (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
@@ -134,6 +135,20 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
 const reviewTarget = policy => policy.agent.metadata?.reviewLoopMergeTarget;
 const retirementPr = policy => policy.prUrl || reviewTarget(policy)?.url;
 
+function continuedDelivery(policy, input) {
+  if (policy.agent.status !== 'completed' || policy.agent.result?.success !== true
+    || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || input.verifiedPrHead !== input.tip) return null;
+  return input.deliveryContinuations?.find(proof => proof.agentId === policy.agent.id
+    && proof.originalPrUrl === retirementPr(policy) && proof.originalPrUrl !== input.prUrl
+    && proof.prUrl === input.prUrl && proof.tip === input.tip
+    && (!policy.tip || [proof.originalPrHead, proof.capturedHead].includes(policy.tip))
+    && policy.agent.metadata?.completedCheckouts?.some(row => completedCheckoutReceiptValid(policy.agent, row)
+      && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && samePath(row.path, input.checkoutPath)
+      && row.head === proof.capturedHead && row.capturedAt === proof.capturedAt
+      && isDeepStrictEqual(row.incarnation, proof.checkoutIncarnation)
+      && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation))) || null;
+}
+
 /** A process interruption is not a code-delivery verdict. Only a fresh merged
  * exact-head PR and a server-captured original physical generation admit this
  * owner to explicit retirement review. Its execution failure remains unchanged.
@@ -175,9 +190,12 @@ function reviewedIncarnation(input, policies) {
     || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.tip || '')) return null;
   const owners = policies.filter(policy => policy.agent.status === 'completed' && (policy.agent.result?.success === true || completedCleanupForRetirement(policy, input) || reviewedOrphanCheckout(policy, input))
     && policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE
-    && (samePath(policy.agent.metadata?.workspacePath, input.checkoutPath) || completedCleanupForRetirement(policy, input) || reviewedOrphanCheckout(policy, input))
-    && retirementPr(policy) === input.prUrl && (!policy.tip || policy.tip === input.tip)
-    && (!reviewTarget(policy) || (reviewTarget(policy).branch === input.branch && reviewTarget(policy).url === input.prUrl))
+    && (samePath(policy.agent.metadata?.workspacePath, input.checkoutPath) || completedCleanupForRetirement(policy, input)
+      || reviewedOrphanCheckout(policy, input) || continuedDelivery(policy, input))
+    && (retirementPr(policy) === input.prUrl || continuedDelivery(policy, input))
+    && (!policy.tip || policy.tip === input.tip || continuedDelivery(policy, input))
+    && (!reviewTarget(policy) || (reviewTarget(policy).branch === input.branch
+      && (reviewTarget(policy).url === input.prUrl || continuedDelivery(policy, input))))
     && Number.isFinite(Date.parse(policy.agent.startedAt))
     && Date.parse(policy.agent.completedAt) >= Date.parse(policy.agent.startedAt));
   if (!owners.length) return null;
@@ -239,14 +257,16 @@ export function reviewedRetirementPolicy(input) {
   if (policies.some(p => p.completion === PR_COMPLETIONS.LEAVE_OPEN)) return { reason: held };
   if (policies.some(p => p.agent.status !== 'completed' || (p.agent.result?.success !== true && !completedCleanupForRetirement(p, input) && !reviewedOrphanCheckout(p, input) && !completedOrphanSibling(p, input))
     || p.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE
-    || (retirementPr(p) && ((!incarnation && !completedOrphanSibling(p, input)) || retirementPr(p) !== input.prUrl))
+    || (retirementPr(p) && !continuedDelivery(p, input)
+      && ((!incarnation && !completedOrphanSibling(p, input)) || retirementPr(p) !== input.prUrl))
     || (reviewTarget(p) && (reviewTarget(p).branch !== input.branch || (p.prUrl && p.prUrl !== reviewTarget(p).url)))
-    || (incarnation && p.tip && p.tip !== input.tip))) {
+    || (incarnation && p.tip && p.tip !== input.tip && !continuedDelivery(p, input)))) {
     return { reason: 'retirement-policy-not-legacy-completed' };
   }
   return { reason: null, ...(input.integratedCleanupHead && { integratedCleanupHead: input.integratedCleanupHead }), policies: policies.map(p => ({
     id: p.agent.id || p.agent.agentId, startedAt: p.agent.startedAt,
     completedAt: p.agent.completedAt, status: p.agent.status, success: p.agent.result.success,
+    ...(continuedDelivery(p, input) && { continuedDelivery: continuedDelivery(p, input) }),
     ...(reviewedOrphanCheckout(p, input) && { orphanedExecution: true }),
     ...(completedOrphanSibling(p, input) && { orphanedSibling: true, detachedCheckoutIdentity: input.detachedCheckoutIdentity }),
     branch: p.branch, completion: p.completion,

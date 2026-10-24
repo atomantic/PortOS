@@ -459,6 +459,17 @@ private journal and all copies remain available after success or recovery.
 
 ## Whole-checkout preservation
 
+A later merged PR on the same captured checkout generation can satisfy an
+earlier completed review obligation. Explicit retirement review must prove that
+both PRs merged on this repository's default branch, the earlier PR head is an
+ancestor of the captured completion head, and that capture is an ancestor of the
+currently reviewed delivery. The captured pointer and private-administration
+generation must match exactly. Missing evidence, changed generations, active
+owners and human handoffs remain held. The original agent result and policy are
+never rewritten; the new proof is bound into the retirement review and archive.
+After removal, only that archive-bound generation can finish branch retirement;
+a recreated checkout path or new branch holder still refuses.
+
 For a reviewed checkout that exceeds the ordinary archive byte bounds, the
 explicit `POST /api/cos/schedule/branch-reconcile/whole-checkouts/review` and
 `whole-checkouts/retire` endpoints use the initialized-checkout transaction
