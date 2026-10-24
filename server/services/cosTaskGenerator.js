@@ -2015,7 +2015,9 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   const appId = targetApp?.id || null;
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
   const isDetectorDriven = taskConfig?.perpetual === true || request.taskType === 'branch-reconcile';
-  const outcome = parkInfo ? 'parked' : (isDetectorDriven ? 'transient' : 'idle');
+  const outcome = skip?.gate === 'reviewer-identity'
+    ? 'transient'
+    : parkInfo ? 'parked' : (isDetectorDriven ? 'transient' : 'idle');
 
   // Layered Intelligence skips (e.g. a provider that can't drive an agent) record
   // an actionable last-run reason. Surface it so a manual "Run" toasts WHY it
@@ -2023,6 +2025,7 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   // generic "nothing to do". Read the freshest record — the skip's recordRun
   // landed after `targetApp` was loaded. Best-effort; a read failure just omits it.
   let reason = null;
+  if (skip?.gate === 'reviewer-identity') reason = skip.reason;
   if (outcome === 'idle' && appId && request.taskType === 'layered-intelligence') {
     const { getAppById } = await import('./apps.js');
     const app = await getAppById(appId).catch(() => null);
@@ -2048,7 +2051,9 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   // way that won't self-clear, and pass the remedy through. No verdict, an
   // unprobeable CLI, or a healthy one all leave `forge` null and keep the
   // generic copy — the failure really was a blip, or at least not one we can name.
-  let forge = null;
+  let forge = skip?.gate === 'reviewer-identity'
+    ? { cli: 'reviewer identity', remedy: skip.reason }
+    : null;
   const verdict = outcome === 'transient' && skip?.gate === 'perpetual-work' ? skip : null;
   if (verdict?.remedy) {
     // The detector already knew the fault AND the way out — a per-repo permission
@@ -2732,22 +2737,36 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Resolve completion before rendering reviewers, including claim flows that
   // own their PR while intentionally disabling CoS worktree provisioning.
   applyAppWorktreeDefault(metadata, app);
-  const baseDescription = await buildImprovementTaskDescription({
-    promptTemplate: applyAuditModeWrapper(applyDepfreeMode(applyReleaseOptions(promptTemplate, promptTaskType, metadata), promptTaskType, metadata), modeInstructions),
-    app, promptTaskType, metadata,
-    blocks: {
-      referenceData: referenceDataBlock,
-      trackerInstructions: trackerFiling.trackerInstructions,
-      modeInstructions,
-      prData: prDataBlock,
-      inFlightBranches: inFlightBranchesBlock,
-      zombieIssues: zombieIssuesBlock,
-      repoSyncReport: repoSyncReportBlock,
-      repoFullName: prRepoFullName,
-      defaultBranch: prDefaultBranch,
-      planConstraint: planConstraintBlock
-    }
-  });
+  let baseDescription;
+  try {
+    baseDescription = await buildImprovementTaskDescription({
+      promptTemplate: applyAuditModeWrapper(applyDepfreeMode(applyReleaseOptions(promptTemplate, promptTaskType, metadata), promptTaskType, metadata), modeInstructions),
+      app, promptTaskType, metadata,
+      reviewerTaskType: taskType, reviewerOverrideMetadata: appOverride?.taskMetadata,
+      blocks: {
+        referenceData: referenceDataBlock,
+        trackerInstructions: trackerFiling.trackerInstructions,
+        modeInstructions,
+        prData: prDataBlock,
+        inFlightBranches: inFlightBranchesBlock,
+        zombieIssues: zombieIssuesBlock,
+        repoSyncReport: repoSyncReportBlock,
+        repoFullName: prRepoFullName,
+        defaultBranch: prDefaultBranch,
+        planConstraint: planConstraintBlock
+      }
+    });
+  } catch (err) {
+    if (err.code !== 'REVIEWER_IDENTITY_NOT_FOUND') throw err;
+    emitLog('info', err.message, { appId: app.id, analysisType: taskType });
+    const { recordPreflightOutcome } = await import('./preflightTaskCard.js');
+    await recordPreflightOutcome({
+      requestId: preflightCardId?.replace(/^preflight-/, '') || `reviewer-identity-${app.id}-${taskType}-${Date.now().toString(36)}`,
+      taskType, appId: app.id, appName: app.name,
+      outcome: 'failed', reason: err.code, note: err.message,
+    });
+    return skipped('reviewer-identity', { reason: err.message, detail: err.context });
+  }
   const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, {
     app, taskMetadata: metadata, taskType: promptTaskType,
     trustedPullRequestData: prDataBlock,
