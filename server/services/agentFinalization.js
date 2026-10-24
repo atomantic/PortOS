@@ -1301,18 +1301,23 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
     && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
   const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
-  const recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
+  let recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
     ? resolveUndeliveredTaskUpdate(task, recoveryOutcome, agent.id) : null;
+  let recoveryOwnershipLost = false;
   if (recoveryUpdate) {
-    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user');
+    const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', {
+      expectedStatus: task.status || null, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      recoveryOwner: { id: agent.id, startedAt: agent.startedAt },
+    });
     if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
+    if (update?.statusChanged) { recoveryUpdate = null; recoveryOwnershipLost = true; }
   }
   await completeAgent(agent.id, {
     success: effectiveSuccess,
     executionSuccess,
     ...(recoveryUpdate ? { deliveryRecoveryOwned: true } : {}),
     ...(recoveryUpdate?.metadata?.deliveryRecoveryAgentId === agent.id ? { cleanupPending: true } : {}),
-    ...(savedCleanup ? { cleanupDeliveryVerified: true } : {}),
+    ...(savedCleanup && !recoveryOwnershipLost ? { cleanupDeliveryVerified: true } : {}),
     taskOutcome,
     validationPassed,
     ...(claimDisposition ? { claimDisposition } : {}),

@@ -428,7 +428,7 @@ export async function completeAgent(agentId, result = {}) {
       completedCheckouts = [];
       // Identity capture describes the owned physical checkout, not a passing
       // execution verdict. Failed/orphaned runs may already have delivered code.
-      const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+      const { captureCompletedCheckouts, captureSeededCompletionCheckouts } = await import('./completedCheckoutEvidence.js');
       try { completedCheckouts = await captureCompletedCheckouts(agent, { success: true, strict: true }); }
       catch (error) {
         // Ingestion remains terminal. Retry only an originally captured exact
@@ -442,6 +442,12 @@ export async function completeAgent(agentId, result = {}) {
             taskOutcome: { status: 'incomplete', reason: 'Original checkout identity capture is pending; delivery and preservation remain unverified.',
               recovery: { mode: 'cleanup' } } };
         }
+      }
+      if (!completedCheckouts.length && agent.metadata?.checkoutSeeds?.length) {
+        // Capture a terminal head before publishing completion, even when the
+        // ordinary inventory read failed. A later retry must match this head.
+        const targets = await captureSeededCompletionCheckouts(agent, { preterminal: true }).catch(() => null);
+        if (targets?.length) checkoutCapture = { ...(checkoutCapture || { status: 'captured' }), targets, unknown: false };
       }
     }
 

@@ -617,6 +617,7 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   const integrated = forge && (await execGit(['merge-base', '--is-ancestor', forge.prHead, forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   const completed = metadata.completedCheckouts?.find(row => [1, 2].includes(row.version) && row.agentId === agentId
+    && row.startedAt === agentState.startedAt
     && row.repoPath === sourceWorkspace && row.branch === branchName && row.path === worktreePath
     && Number.isFinite(Date.parse(row.startedAt)) && Date.parse(row.capturedAt) >= Date.parse(row.startedAt));
   if (completed?.version === 2) {
