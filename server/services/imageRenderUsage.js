@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { link, readFile, readdir } from 'node:fs/promises';
+import { link, open, readFile, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { atomicWrite, ensureDir, unlinkGuarded, syncDirectory } from '../lib/fileCore.js';
+import { atomicWrite, ensureDir, unlinkGuarded } from '../lib/fileCore.js';
 import { PATHS } from '../lib/paths.js';
 
 const ledgerDir = () => join(PATHS.data, 'image-render-usage');
@@ -59,7 +59,12 @@ export async function publishAccountingFile(path, value) {
   await atomicWrite(staging, value);
   try {
     await link(staging, path);
-    await syncDirectory(dirname(path));
+    // The file bytes were flushed by atomicWrite. Flush the new directory
+    // entry too; Windows does not support opening directories for fsync.
+    if (process.platform !== 'win32') {
+      const directory = await open(dirname(path), 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+    }
     return true;
   } catch (err) {
     if (err.code !== 'EEXIST') throw err;

@@ -56,7 +56,7 @@ const unsyncableDirs = new Set();
  * guarantee with one warning rather than failing a write that succeeded.
  * Windows cannot open a directory for fsync, so it is skipped there.
  */
-export async function syncDirectory(dir) {
+async function syncDirectory(dir) {
   if (isWindows()) return;
   try {
     const handle = await open(dir, 'r');
