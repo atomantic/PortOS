@@ -1468,6 +1468,9 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget
  * retry budget or personal obligation is created by a cleanup warning. */
 export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, sourceWorkspace) {
   if (!cleanupWarnings?.length || !agentId || !sourceWorkspace) return null;
+  // Draft/review-only delivery remains with its explicit owner. A warning
+  // cannot grant the completion sweep authority to retire that checkout.
+  if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) return null;
   const { getAgentRecord, recordCleanupOutcome, recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
   const branch = agent?.metadata?.worktreeBranch || agent?.metadata?.claimBranch
