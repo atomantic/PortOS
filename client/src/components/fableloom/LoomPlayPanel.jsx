@@ -22,6 +22,7 @@ import { playLoomTurn } from '../../services/api';
 import { sceneProseClass } from './fieldStyles';
 import toast from '../ui/Toast';
 import LoomHostedSessionModal from './LoomHostedSessionModal';
+import { abortHostedSpeech, playHostedSpeech } from './hostedSpeechPlayback';
 import { audienceCanParticipate } from '../../../../server/lib/fableLoomParticipation.js';
 import {
   resolveFableLoomProtagonistPresence,
@@ -109,6 +110,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   const [hostedAudienceConnected, setHostedAudienceConnected] = useState(false);
   const [hostedTurnPhase, setHostedTurnPhase] = useState('idle');
   const hostAudioPlayerRef = useRef(null);
+  const hostedSpeechRef = useRef(null);
   const scrollRef = useRef(null);
   const hostedSocketRef = useRef(null);
   // The episode id the server-side hosted session is currently bound to —
@@ -151,14 +153,15 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     });
 
     socket.on('hosted:turn:tts', (data) => {
-      if (data.target === 'host' && data.audio && hostAudioPlayerRef.current) {
-        try {
-          hostAudioPlayerRef.current.src = `data:${data.mimeType || 'audio/wav'};base64,${data.audio}`;
-          hostAudioPlayerRef.current.play().catch(() => null);
-        } catch (err) {
-          console.warn('TTS playback error:', err);
-        }
-      }
+      hostedSpeechRef.current = playHostedSpeech(hostAudioPlayerRef.current, {
+        socket,
+        previous: hostedSpeechRef.current,
+        turnId: data?.turnId,
+        target: data?.target,
+        expectedTarget: 'host',
+        mimeType: data?.mimeType,
+        audioBase64: data?.audio,
+      });
     });
 
     // The server rejects a second `hosted:episode:switch` sent while an
@@ -186,6 +189,8 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     });
 
     socket.on('hosted:session:ended', (data) => {
+      abortHostedSpeech(hostedSpeechRef.current);
+      hostedSpeechRef.current = null;
       setHostedSession(null);
       setHostedAudienceConnected(false);
       setHostedTurnPhase('idle');
@@ -197,6 +202,8 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     });
 
     return () => {
+      abortHostedSpeech(hostedSpeechRef.current);
+      hostedSpeechRef.current = null;
       socket.disconnect();
       hostedSocketRef.current = null;
     };

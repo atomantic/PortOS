@@ -19,6 +19,7 @@ import {
   Smartphone,
   Volume2,
 } from 'lucide-react';
+import { abortHostedSpeech, playHostedSpeech } from '../components/fableloom/hostedSpeechPlayback';
 
 // Guest-facing wording for the live-conversation gates; any other code falls
 // back to the server's own message.
@@ -51,6 +52,7 @@ export default function FableLoomHostedJoin() {
   const mountedRef = useMounted();
   const transcriptScrollRef = useRef(null);
   const audioPlayerRef = useRef(null);
+  const speechPlaybackRef = useRef(null);
   // The socket effect closes over its first render; this ref keeps its
   // `hosted:error` handler pointed at the current recorder state.
   const discardRecordingRef = useRef(null);
@@ -118,21 +120,20 @@ export default function FableLoomHostedJoin() {
     });
 
     s.on('hosted:turn:tts', (data) => {
-      // If audio target is audience, play the TTS audio locally on the phone
-      if (data.target === 'audience' && data.audio) {
-        try {
-          const audioUrl = `data:${data.mimeType || 'audio/wav'};base64,${data.audio}`;
-          if (audioPlayerRef.current) {
-            audioPlayerRef.current.src = audioUrl;
-            audioPlayerRef.current.play().catch(() => null);
-          }
-        } catch (err) {
-          console.warn('Audio playback error:', err);
-        }
-      }
+      speechPlaybackRef.current = playHostedSpeech(audioPlayerRef.current, {
+        socket: s,
+        previous: speechPlaybackRef.current,
+        turnId: data?.turnId,
+        target: data?.target,
+        expectedTarget: 'audience',
+        mimeType: data?.mimeType,
+        audioBase64: data?.audio,
+      });
     });
 
     s.on('hosted:session:ended', (data) => {
+      abortHostedSpeech(speechPlaybackRef.current);
+      speechPlaybackRef.current = null;
       setTurnPhase('ended');
       setAuthError(data?.reason === 'host_ended' ? 'The host has ended this play session.' : 'Session ended.');
     });
@@ -140,6 +141,8 @@ export default function FableLoomHostedJoin() {
     setSocket(s);
 
     return () => {
+      abortHostedSpeech(speechPlaybackRef.current);
+      speechPlaybackRef.current = null;
       s.disconnect();
     };
   }, [sessionId, token]);

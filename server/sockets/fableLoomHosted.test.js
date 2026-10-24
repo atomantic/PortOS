@@ -797,13 +797,98 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(getHostedSession(session.id).episodeId).toBe('ep-1');
     });
 
-    it('returns the turn to listening on hosted:speech:done', () => {
+    it('ignores a hosted:speech:done that is not bound to the current turn', () => {
       _getInternalSession(session.id).turnPhase = 'speaking';
 
       audience.listeners['hosted:speech:done']({});
+      audience.listeners['hosted:speech:done']({
+        turnId: '00000000-0000-4000-8000-000000000000', status: 'ended',
+      });
 
-      expect(getHostedSession(session.id).turnPhase).toBe('listening');
-      expect(roomEvent('hosted:turn:phase')?.data).toMatchObject({ phase: 'listening' });
+      expect(getHostedSession(session.id).turnPhase).toBe('speaking');
+      expect(roomEvent('hosted:turn:phase')).toBeUndefined();
+    });
+
+    it('commits a move only from the designated host output for the current turn', async () => {
+      const host = connectHost();
+      weave.playTurn.mockResolvedValue({
+        action: 'move', transitionId: 'tr-1', narration: 'Onward.', node: { id: 'node-2' }, ended: false,
+      });
+
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+
+      const turnId = roomEvent('hosted:turn:tts')?.data?.turnId;
+      expect(turnId).toEqual(expect.any(String));
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-1', turnPhase: 'speaking' });
+      expect(roomEvent('hosted:story:transition')).toBeUndefined();
+
+      await audience.listeners['hosted:turn:text']({ text: 'overlap' });
+      expect(audience.emitted.find((event) => event.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'TURN_IN_PROGRESS' });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-1');
+
+      await audience.listeners['hosted:speech:done']({ turnId, status: 'ended' });
+      await host.listeners['hosted:speech:done']({
+        turnId: '00000000-0000-4000-8000-000000000000', status: 'ended',
+      });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-1', turnPhase: 'speaking' });
+
+      await host.listeners['hosted:speech:done']({ turnId, status: 'ended' });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
+      expect(roomEvents.filter((event) => event.event === 'hosted:story:transition')).toHaveLength(1);
+
+      await host.listeners['hosted:speech:done']({ turnId, status: 'ended' });
+      expect(roomEvents.filter((event) => event.event === 'hosted:story:transition')).toHaveLength(1);
+    });
+
+    it('lets the audience output commit when playback is aimed at the audience', async () => {
+      _getInternalSession(session.id).audioTarget = 'audience';
+      const host = connectHost();
+      weave.playTurn.mockResolvedValue({
+        action: 'move', transitionId: 'tr-1', narration: 'Onward.', node: { id: 'node-2' }, ended: false,
+      });
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+      const turnId = roomEvent('hosted:turn:tts')?.data?.turnId;
+
+      await host.listeners['hosted:speech:done']({ turnId, status: 'ended' });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-1');
+
+      await audience.listeners['hosted:speech:done']({ turnId, status: 'ended' });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-2');
+    });
+
+    it('drops a pending move when playback fails or the designated host disconnects', async () => {
+      const host = connectHost();
+      weave.playTurn.mockResolvedValue({
+        action: 'move', transitionId: 'tr-1', narration: 'Onward.', node: { id: 'node-2' }, ended: false,
+      });
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+      const failedTurn = roomEvent('hosted:turn:tts')?.data?.turnId;
+
+      await host.listeners['hosted:speech:done']({ turnId: failedTurn, status: 'failed' });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-1', turnPhase: 'idle' });
+      expect(roomEvent('hosted:story:transition')).toBeUndefined();
+
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+      const turnId = roomEvents.filter((event) => event.event === 'hosted:turn:tts').at(-1)?.data?.turnId;
+      host.listeners.disconnect();
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-1', turnPhase: 'idle' });
+      await host.listeners['hosted:speech:done']({ turnId, status: 'ended' });
+      expect(roomEvent('hosted:story:transition')).toBeUndefined();
+    });
+
+    it('commits a text-only turn immediately when synthesis produces no audio', async () => {
+      connectHost();
+      tts.synthesize.mockResolvedValueOnce(null);
+      weave.playTurn.mockResolvedValue({
+        action: 'move', transitionId: 'tr-1', narration: 'Onward.', node: { id: 'node-2' }, ended: false,
+      });
+
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+
+      expect(roomEvent('hosted:turn:tts')).toBeUndefined();
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
+      expect(roomEvent('hosted:story:transition')?.data).toMatchObject({ transitionId: 'tr-1' });
     });
 
     it('drops the in-flight turn on hosted:turn:abort', async () => {
