@@ -257,6 +257,16 @@ describe('initialized checkout removal', () => {
     });
   });
 
+  it('leaves a locked checkout in place', async () => {
+    cleanGit();
+    const input = await reviewed();
+    input.release = { ...release, locked: true };
+    expect(await fixture.service.retire(input)).toEqual({ ok: false, reason: 'checkout-locked' });
+    expect(fixture.deps.execGit).not.toHaveBeenCalled();
+    expect(fixture.deps.deleteRef).not.toHaveBeenCalled();
+    expect(fixture.deps.recordRetirement).not.toHaveBeenCalled();
+  });
+
   it('leaves a review-superseded checkout in place', async () => {
     fixture.superseded = true;
     cleanGit();

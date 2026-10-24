@@ -973,7 +973,11 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     // Display history is bounded; receipt evidence and replay identity are durable. A delayed retry
     // must not become new evidence after its display row has been evicted.
     const identity = receipt => createHash('sha256').update(JSON.stringify([
-      receipt.archiveDir ?? null, receipt.path, receipt.branch ?? null, receipt.head,
+      // A non-empty archive path stays the historical id. In-place removal has no
+      // archive, so the checkout identity distinguishes a recreated tree at the
+      // same path, branch and head. An archive path is never replaced by it.
+      receipt.archiveDir ?? receipt.checkoutIdentity ?? null,
+      receipt.path, receipt.branch ?? null, receipt.head,
       receipt.branchDeleted === true,
     ])).digest('hex');
     const receipts = { ...(outcome.retirementReceiptIdentities || {}) };
@@ -990,7 +994,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     const recordedArchive = archiveDir ?? null;
     const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
     const receiptId = branchDeleted === true && archiveKept
-      ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted }) : null;
+      ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted, checkoutIdentity }) : null;
     if (receiptId && receipts[receiptId]) {
       // Keep the original timestamp. Fill a missing checkout identity so a
       // later inventory row can match the receipt that already settled this tuple.

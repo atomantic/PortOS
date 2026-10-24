@@ -245,6 +245,9 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     return join(root(), id);
   };
   const retire = input => fenced(async () => {
+    // A locked registration is not disposable. worktree remove --force leaves it
+    // registered, and the directory fallback would delete the tree anyway.
+    if (input.release?.locked === true) return { ok: false, reason: 'checkout-locked' };
     const prepared = await makeReview({ ...input, prUrl: input.review.prUrl });
     assertReview(prepared.review, input.review);
     const { ctx } = prepared;
