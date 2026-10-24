@@ -5,6 +5,7 @@ import express from 'express';
 import { rmSync } from 'node:fs';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { withDeliveryActivity } from '../services/agentDeliveryActivity.js';
 
 // The CoS task routes write operator-action rows (#5594) through the ledger's
 // file backend, which resolves under PATHS.data — re-root it so this suite can
@@ -827,6 +828,18 @@ describe('CoS Routes', () => {
       const response = await request(app).delete('/api/cos/agents/agent-999');
 
       expect(response.status).toBe(404);
+    });
+
+    it('should return 409 when agent is still owned by an active task cleanup hold', async () => {
+      deleteAgent.mockRejectedValue(new ServerError(
+        'Agent agent-001 is still owned by an active task delivery or retry cleanup hold and cannot be deleted until cleanup finishes',
+        { status: 409, code: 'AGENT_CLEANUP_OWNED' },
+      ));
+
+      const response = await request(app).delete('/api/cos/agents/agent-001');
+
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('AGENT_CLEANUP_OWNED');
     });
   });
 
@@ -1910,6 +1923,26 @@ describe('CoS scoped collections', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual([{ id: 'agent-running', taskId: 'task-running', status: 'running' }]);
     expect(getAgentRecord.mock.calls.map(([id]) => id).sort()).toEqual(['agent-mismatch', 'agent-missing']);
+  });
+
+  it('reports only live in-process delivery activity and clears it when recovery fails', async () => {
+    const owner = { id: 'agent-cleanup-owner', taskId: 'task-held', status: 'completed' };
+    getAgents.mockResolvedValue([owner]);
+    getTaskView.mockResolvedValue({ user: { tasks: [{ id: owner.taskId, status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: owner.id } }] }, cos: { tasks: [] } });
+    let reject;
+    const recovery = withDeliveryActivity(owner.id, 'Checking preservation', () => new Promise((_, fail) => { reject = fail; }));
+    const outcome = recovery.catch(error => error.message);
+    try {
+      const active = await request(app).get('/api/cos/agents?active=1');
+      expect(active.body[0]).toMatchObject({ status: 'completed', deliveryPending: true,
+        deliveryActivity: { label: 'Checking preservation', startedAt: expect.any(String) } });
+    } finally {
+      reject(new Error('verification-unavailable'));
+      expect(await outcome).toBe('verification-unavailable');
+    }
+    const waiting = await request(app).get('/api/cos/agents?active=1');
+    expect(waiting.body).toEqual([{ ...owner, deliveryPending: true }]);
   });
 
   it('scopes live agents and validates completed page bounds without changing legacy lists', async () => {

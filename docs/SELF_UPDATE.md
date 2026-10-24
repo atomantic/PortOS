@@ -190,12 +190,19 @@ non-conflicting local changes. The unattended readiness gate refuses until the
 checkout is on the default branch and clean, because a stash nobody is told
 about reads as lost work.
 
-Two remedies run without asking, because neither can destroy work:
+These remedies run without asking, because they preserve local work:
 
 - **switch to the default branch** from a CLEAN feature branch (the commits stay on the
   branch ref), and
 - **restore modified auto-generated lockfiles** (`npm install` rewrites them; the update
-  reinstalls anyway). Restored by explicit path, never `-- .`.
+  reinstalls anyway). Restored by explicit path, never `-- .`, and
+- **update stale submodule checkouts to their parent gitlinks** when the checkouts
+  are clean ancestors of the pins, including recursively stale children. Staged
+  gitlinks, edits, untracked files, ahead/divergent commits and unreadable state
+  remain blockers. Repository Sources uses the same read-only classification to
+  offer **Update app** for this drift, even when the parent is already current,
+  rather than requiring **Resolve with agent**. The managed updater then runs
+  its existing pinned submodule update; it never uses `--remote` or `--force`.
 
 Everything else — uncommitted work, a local commit not on origin, an interrupted
 rebase/merge, conflict markers — queues ONE high-priority CoS task (deduped on a constant

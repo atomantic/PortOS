@@ -373,6 +373,49 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
   }
 });
 
+it('projects test-only shared re-exports and retains unresolved consumers without selecting a build', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-client-test-deps-'));
+  const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const leaf = 'scripts/lib/cleanupLeaf.js';
+  const unused = 'scripts/lib/unconsumed.js';
+  const consumer = 'client/src/test/lifecycle.test.js';
+  const unrelated = 'client/src/test/unrelated.test.js';
+  const plan = (source) => JSON.parse(execFileSync(process.execPath, [planner], {
+    cwd: root, encoding: 'utf8',
+    env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
+      CI_CHANGED_FILES: JSON.stringify([source]), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+  }));
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write(unused, 'export const unused = 1;\n');
+    write('scripts/lib/cleanupBridge.js', "export { value } from './cleanupLeaf.js';\n");
+    write('client/src/test/fixture.js', "export { value } from '../../../scripts/lib/cleanupBridge.js';\n");
+    write(consumer, "const fixture = await import('./fixture.js');\n");
+    write(unrelated, 'export const unrelated = 1;\n');
+    git('add', '--all');
+
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+    expect(plan(unused)).toMatchObject({ full: false, build: false, client_mode: 'skip' });
+
+    write('client/src/test/fixture.js', "export { value } from './missing.js';\n");
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+
+    write(consumer, "const fixture = await import(globalThis.fixturePath);\n");
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('resolves local client imports of present untracked modules and still fails closed on missing ones', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-untracked-deps-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -1920,7 +1963,9 @@ describe('cross-workspace browser suites (#10312)', () => {
 
     // Server-only media suites do not mount the changed client component.
     const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
-      'server/services/federatedMedia/sourceAudio.browser.test.js', 'server/services/htmlComposition/index.test.js'];
+      'server/services/federatedMedia/sourceAudio.browser.test.js',
+      'server/services/fableLoom/static-player/player.browser.test.js',
+      'server/services/htmlComposition/index.test.js'];
     expect(plan.full).toBe(false);
     expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));
     for (const suite of runtimeOnly) expect(plan.browserFiles).not.toContain(suite);
@@ -2280,14 +2325,12 @@ describe('pregate attestation', () => {
   const status = (overrides = {}) => ({
     context: 'pregate', state: 'success', creator: { login: 'acme' }, created_at: '2026-10-18T10:00:00Z', description: encode(ALL), ...overrides,
   });
-  const NOW = 1_800_000_000_000;
   /** An execFileSync double: git answers from the options, gh from `statuses`; a thrown entry throws. */
-  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null, drift = [], committedAt = Math.floor(NOW / 1000) - 3600, calls = [] } = {}) => (command, args) => {
+  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null, drift = [], calls = [] } = {}) => (command, args) => {
     const key = `${command} ${args.join(' ')}`;
     calls.push(key);
     if (key === 'git rev-parse --verify --quiet HEAD^2') return `${mergeHead}\n`;
     if (key === `git rev-parse --verify --quiet ${HEAD}^{tree}`) return `${headTree}\n`;
-    if (key === `git show -s --format=%ct ${HEAD}`) return `${committedAt}\n`;
     if (key === 'git diff --name-only HEAD^2 HEAD') {
       if (drift === null) throw new Error('diff failed');
       return `${drift.join('\n')}\n`;
@@ -2301,8 +2344,7 @@ describe('pregate attestation', () => {
     throw new Error(`unexpected ${key}`);
   };
   const quiet = () => {};
-  const clock = () => { let t = NOW; return { now: () => t, sleep: (ms) => { t += ms; } }; };
-  const resolve = (options = {}, env = prEnv, extra = {}) => resolveCiAttestation({ env, exec: fakeExec(options), log: quiet, ...clock(), ...extra });
+  const resolve = (options = {}, env = prEnv, extra = {}) => resolveCiAttestation({ env, exec: fakeExec(options), log: quiet, ...extra });
   const fullPlan = () => buildCiTestPlan(['server/index.js'], { trackedFiles: TRACKED, forceFull: true, forceFullReason: 'full CI requested' });
 
   it('is eligible only for a same-repository, non-bot pull request into a non-release base', () => {
@@ -2328,7 +2370,7 @@ describe('pregate attestation', () => {
     const reasons = [];
     const log = (line) => reasons.push(line);
     const refused = (options, env = prEnv) => {
-      const result = resolveCiAttestation({ env, exec: fakeExec(options), log, ...clock() });
+      const result = resolveCiAttestation({ env, exec: fakeExec(options), log });
       expect(result.attested).toBe(false);
       return result.reason;
     };
@@ -2345,30 +2387,16 @@ describe('pregate attestation', () => {
     expect(reasons).toHaveLength(8);
   });
 
-  it('waits up to 90 s for a status on a head younger than five minutes, and not on an older one', () => {
-    // The status is posted after the push that started this run, so a young
-    // head with no status yet is re-read at 10 s intervals.
+  it('reads an absent attestation once and immediately retains broad CI for focused pushes', () => {
     let reads = 0;
-    const lateStatuses = () => { reads += 1; return reads < 4 ? [] : [status()]; };
-    const calls = [];
-    const young = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: lateStatuses, committedAt: Math.floor(NOW / 1000) - 60, calls }), log: quiet, ...clock() });
-    expect(young).toMatchObject({ attested: true, waitedMs: 30_000 });
-    expect(reads).toBe(4);
-
-    reads = 0;
-    const lines = [];
-    const never = resolveCiAttestation({ env: prEnv, exec: fakeExec({ statuses: () => { reads += 1; return []; }, committedAt: Math.floor(NOW / 1000) - 60 }), log: (line) => lines.push(line), ...clock() });
-    expect(never.attested).toBe(false);
-    expect(reads).toBe(10);
-    expect(lines.some((line) => /^⏳ Waited 90s for a pregate status on the 60s-old head/.test(line))).toBe(true);
-
-    reads = 0;
-    expect(resolve({ statuses: () => { reads += 1; return []; } }).attested).toBe(false);
+    const result = resolveCiAttestation({
+      env: prEnv,
+      exec: fakeExec({ statuses: () => { reads += 1; return []; } }),
+      log: quiet,
+    });
+    expect(result).toMatchObject({ attested: false, reason: 'no "pregate" status on the head' });
     expect(reads).toBe(1);
-    // A revocation or a mismatch is final: no waiting for it to change.
-    reads = 0;
-    expect(resolve({ statuses: () => { reads += 1; return [status({ state: 'failure' })]; }, committedAt: Math.floor(NOW / 1000) - 60 }).attested).toBe(false);
-    expect(reads).toBe(1);
+    expect(applyAttestation(fullPlan(), result)).toMatchObject({ full: true, attestedStages: [] });
   });
 
   it('refuses, per stage, the stages a base-side change could reach', () => {

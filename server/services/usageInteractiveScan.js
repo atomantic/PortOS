@@ -209,9 +209,12 @@ function parseSlice(family, entries, slice, seen) {
       // a later repair of turns already at or behind the watermark does not
       // add that premium a second time.
       repairIds: (parsed.longTurns || []).map((turn) => grokTurnRepairId(turn.sessionId, turn.key)),
+      source: 'measured',
     };
   }
-  return { byModel: { [UNKNOWN_MODEL]: agyEstimatedBuckets(parseAgyTranscript(entries, { from: slice.from, to: slice.to })) }, repairIds: [] };
+  const parsed = parseAgyTranscript(entries, { from: slice.from, to: slice.to });
+  const buckets = agyEstimatedBuckets(parsed);
+  return { byModel: { [UNKNOWN_MODEL]: buckets }, repairIds: [], source: buckets.source };
 }
 
 /** One session file's billed buckets per `{ day, model }` inside `[from, to]`, minus run windows. */
@@ -236,7 +239,7 @@ async function parseSession(family, session, from, to, byCwd, seen) {
         if (totalTranscriptTokens(buckets) <= 0) continue;
         const repairIds = attachedIds ? [] : (parsed.repairIds || []);
         attachedIds = true;
-        results.push({ day: slice.day, model, buckets, repairIds });
+        results.push({ day: slice.day, model, buckets, repairIds, source: parsed.source });
       }
     }
   }
@@ -272,13 +275,14 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       const perDay = new Map();
       const seen = new Set();
       for (const session of await listSessions(family, home, from)) {
-        for (const { day, model, buckets, repairIds } of await parseSession(family, session, from, to, byCwd, seen)) {
-          if (!perDay.has(day)) perDay.set(day, { byModel: {}, repairIds: [] });
+        for (const { day, model, buckets, repairIds, source } of await parseSession(family, session, from, to, byCwd, seen)) {
+          if (!perDay.has(day)) perDay.set(day, { byModel: {}, repairIds: [], sources: new Set() });
           const dayTotals = perDay.get(day);
           addBuckets(dayTotals, buckets);
           dayTotals.byModel[model] ??= {};
           addBuckets(dayTotals.byModel[model], buckets);
           if (repairIds?.length) dayTotals.repairIds.push(...repairIds);
+          if (source) dayTotals.sources.add(source);
         }
         // A first scan parses many multi-MB files back to back; let the server breathe.
         await yieldToEventLoop();
@@ -287,8 +291,10 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       const corrections = [];
       let tokens = 0;
       for (const [day, totals] of perDay) {
-        // Antigravity writes no token counts; every other family's are the CLI's own.
-        const measured = { ...totals, source: family === 'agy' ? 'estimate' : 'measured', model: null };
+        const source = totals.sources?.has('measured') && totals.sources?.has('estimate')
+          ? 'mixed'
+          : totals.sources?.values().next().value || (family === 'agy' ? 'estimate' : 'measured');
+        const measured = { ...totals, source, model: null };
         const provider = resolveFamilyProvider(providerList, family, measured);
         if (!provider) continue;
         tokens += totalTranscriptTokens(totals);

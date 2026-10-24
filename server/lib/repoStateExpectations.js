@@ -85,7 +85,7 @@ export const REPO_STATE_SKIPS = Object.freeze({
  * @param {boolean} [params.isPersistentWorktree] - long-lived feature worktree
  * @param {boolean} [params.discardWorktree] - reasoning agent whose tree is thrown away
  * @param {boolean} [params.followUpPending] - something is already queued to land this branch
- * @param {number} [params.cleanupWarningCount] - cleanup spawns its own recovery when it warned
+ * @param {number} [params.cleanupWarningCount] - warning persistence precedes the durable completion retry
  * @param {string} [params.prCompletion] - resolved `PR_COMPLETIONS` policy
  * @param {boolean} [params.leaveOpen] - the PR is a human's to land (JIRA hand-off)
  * @param {boolean} [params.prExpected] - the task asked for a PR

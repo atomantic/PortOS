@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost,
+  estimateAgyImageCost, AGY_IMAGEN_IMAGE_MODEL,
   pricingAsOfForModel, PRICING_AS_OF, GROK_IMAGINE_IMAGE_MODEL, GROK_IMAGINE_VIDEO_MODEL,
 } from './modelPricing.js';
 
@@ -443,5 +444,28 @@ describe('Grok Imagine rates', () => {
     expect(resolveModelRates('grok', 'grok-imagine-video-1.5-lite').inputPer1M).toBe(0);
     expect(isFreeModelId('grok-imagine-image-2.0')).toBe(false);
     expect(estimateGrokImagineCost('grok-4.7', { images: 1 })).toBe(0);
+  });
+});
+
+describe('Antigravity Imagen rates', () => {
+  it('prices the recommended Imagen 3 model at published rates ($0.03/image)', () => {
+    expect(estimateAgyImageCost(AGY_IMAGEN_IMAGE_MODEL, { images: 1 })).toBeCloseTo(0.03);
+    expect(estimateAgyImageCost(AGY_IMAGEN_IMAGE_MODEL, { images: 5 })).toBeCloseTo(0.15);
+    expect(estimateAgyImageCost('imagen-2', { images: 1 })).toBeCloseTo(0.02);
+    expect(estimateAgyImageCost('gemini-3.8-flash', { images: 1 })).toBe(0);
+  });
+
+  it('resolves Imagen model rates with zero token pricing so images are not billed as text', () => {
+    const r = resolveModelRates('antigravity-cli', AGY_IMAGEN_IMAGE_MODEL);
+    expect(r.rateModel).toBe(AGY_IMAGEN_IMAGE_MODEL);
+    expect(r.inputPer1M).toBe(0);
+    expect(r.outputPer1M).toBe(0);
+  });
+
+  it('resolves gemini-3.8-flash exact and family variants', () => {
+    const exact = resolveModelRates('antigravity-cli', 'gemini-3.8-flash');
+    expect(exact).toMatchObject({ rateModel: 'gemini-3.8-flash', inputPer1M: 1.5, outputPer1M: 9.0, matched: 'exact' });
+    const low = resolveModelRates('antigravity-cli', 'gemini-3.8-flash-low');
+    expect(low).toMatchObject({ rateModel: 'gemini-3.8-flash', inputPer1M: 1.5, outputPer1M: 9.0, matched: 'family' });
   });
 });

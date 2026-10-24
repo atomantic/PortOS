@@ -94,6 +94,7 @@ beforeEach(async () => {
     if (input.command === 'lock') return { assertHeld: () => {}, release: async () => {} };
     if (input.command === 'inspect') {
       if (fixture.inspectRefusal) throw new Error(fixture.inspectRefusal);
+      if (fixture.ownershipRefusal && input.requireOwnership) throw new Error(fixture.ownershipRefusal);
       return { ...fixture.snapshot };
     }
     if (input.command === 'verify-original-placement') {
@@ -200,6 +201,15 @@ const reviewed = async () => {
 };
 
 describe('initialized checkout transaction', () => {
+  it('refuses unrepresentable ownership during preview before reserving or archiving', async () => {
+    fixture.ownershipRefusal = 'ownership-preservation-unavailable:uid=501:gid=0';
+    expect(await fixture.service.review({ appId: 'app', release, prUrl })).toEqual({
+      ok: false, reason: fixture.ownershipRefusal,
+    });
+    expect(fixture.cut).toBeNull();
+    expect(await readdir(root)).toEqual([]);
+  });
+
   it('uses actual Windows filesystem capabilities for mocked workflows without suppressing file fsync', async () => {
     persisted.hostType = 'Windows_NT'; persisted.syntheticModes = true; persisted.rejectDirectoryOpen = true;
     const restorePlatform = pinPlatform('darwin');

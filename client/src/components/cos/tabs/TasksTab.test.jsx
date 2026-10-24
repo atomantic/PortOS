@@ -78,6 +78,33 @@ describe('TasksTab spawning window', () => {
     expect(screen.queryByRole('region', { name: /finalizing delivery/ })).toBeNull();
   });
 
+  it('shows the exact cleanup owner, last check and retry gate, and animates only live recovery', async () => {
+    const task = { id: 'task-held', description: 'Deliver example change', status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
+    const owner = { id: 'agent-owner', taskId: task.id, status: 'completed', metadata: {
+      repoStateVerification: { checkedAt: '2026-01-01T12:00:00Z', reasons: ['cleanup-already-warned'] },
+      cleanupOutcome: { status: 'blocked', reason: 'preservation-unverified', taskId: 'task-recovery' },
+    }, result: { taskOutcome: { reason: 'The archive still needs verification.' } } };
+    const view = activity => <MemoryRouter><TasksTab tasks={{ user: { tasks: [task] }, cos: { tasks: [] } }}
+      agents={[{ ...owner, deliveryActivity: activity }, { id: 'agent-other', taskId: task.id, status: 'completed' }]}
+      completionRecovery={{ blockedReason: 'CoS is paused', nextRunAt: null, intervalMs: 1800000, batchSize: 10 }}
+      onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+    const { rerender } = render(view(null));
+    expect(await screen.findByText(/Automatic recovery is waiting: CoS is paused/)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for delivery recovery — agent is not running/)).toBeInTheDocument();
+    expect(screen.getByText('Last check: preservation unverified.')).toBeInTheDocument();
+    expect(screen.getByText(/Last checked:/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View recovery task/ })).toHaveAttribute('href', '/cos/tasks?task=task-recovery');
+    expect(screen.getByRole('link', { name: /View agent report/ })).toHaveAttribute('href', '/cos/agents/agent-owner');
+    expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).toBeNull();
+    rerender(view({ label: 'Checking repository preservation' }));
+    expect(screen.getByText('Checking repository preservation')).toBeInTheDocument();
+    expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).not.toBeNull();
+    rerender(view(null));
+    expect(screen.getByText(/agent is not running/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Delivery activity').querySelector('.animate-spin')).toBeNull();
+  });
+
   it('moves a pending task with a live agent out of Pending and into Active', async () => {
     renderTab({
       tasks: { user: { tasks: [pendingTask('task-spawning'), pendingTask('task-waiting')] }, cos: { tasks: [] } },

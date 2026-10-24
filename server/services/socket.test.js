@@ -314,6 +314,8 @@ describe('socket.js — initSocket', () => {
     dashboardEvents.emit('cos:day:changed');
     expect(subscriber.emitted).toContainEqual(['cos:day:changed', {}]);
     expect(other.emitted.some(([event]) => event === 'cos:day:changed')).toBe(false);
+    queueListeners.cos.find(([event]) => event === 'scheduler:ran')[1]({ id: 'cos-pending-merge-sweep', privateContent: 'Example private record' });
+    expect(subscriber.emitted).toContainEqual(['cos:scheduler:changed', { id: 'cos-pending-merge-sweep' }]);
     dashboardEvents.emit('cos:decisions:changed');
     expect(subscriber.emitted).toContainEqual(['cos:decisions:changed', {}]);
     expect(other.emitted.some(([event]) => event === 'cos:decisions:changed')).toBe(false);

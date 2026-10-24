@@ -1793,7 +1793,7 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
  *   account pin, so an app whose repo belongs to another GitHub account is
  *   polled with a credential that can actually see it (#7540); unset, the
  *   owner-match in `forgeAuth.resolveForgeForRepo` still applies.
- * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[], orphanRemotes:{reaped:string[],reported:object[]}, forgeUnavailable?:boolean, prStateUnavailable?:boolean }>}
+ * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], merged:object[], skipped:{branch:string,reason:string}[], orphanRemotes:{reaped:string[],reported:object[]}, forgeUnavailable?:boolean, prStateUnavailable?:boolean }>}
  *   A `wip` entry with a `liveOwnerReason` is held because a live agent/claim/lock
  *   owns it — the "leave it alone, this reconcile IS done" case. `superseded` holds
  *   only the verified-superseded branches the reap could NOT take this cycle; the
@@ -1938,6 +1938,9 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     // the coordinator prompt.
     superseded: supersededReap.held,
     wip,
+    // Retained MERGED claims may need their completed owner's cleanup policy
+    // reviewed. They are not WIP, so do not hide them from that second stage.
+    merged: merged.filter(branch => skipped.some(row => row.branch === branch.branch)),
     skipped: [...skipped, ...supersededReap.skipped, ...detachedReap.skipped],
     // Detached trees at merged commits that were NOT removed, managed or not.
     detachedWorktrees: detachedReap.held,

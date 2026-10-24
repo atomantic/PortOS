@@ -203,7 +203,7 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
   const makeReview = async ({ appId, release, prUrl }) => {
     const ctx = await context(appId, release);
     const policy = await ensureOwner(ctx, release);
-    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release });
+    const snapshot = await native({ command: 'inspect', repoPath: ctx.repoPath, release, requireOwnership: true });
     const facts = await forge(ctx, release, prUrl);
     const base = await comparison(ctx, release, prUrl, snapshot, policy, facts);
     const checkoutIdentity = await readRetirementCheckoutIdentity(release.path);

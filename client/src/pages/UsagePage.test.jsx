@@ -168,6 +168,23 @@ describe('UsagePage historical reconciliation', () => {
     expect(await screen.findByText('Grok usage was already recorded.')).toBeInTheDocument();
   });
 
+  it('shows the Antigravity rows reconcile added', async () => {
+    api.startUsageBackfill.mockResolvedValue({
+      status: 'complete',
+      corrected: 1,
+      agy: {
+        added: 4,
+        images: 4,
+        backedUp: true,
+        note: null,
+      },
+    });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile now' }));
+    expect(await screen.findByText('Corrected 1 run.')).toBeInTheDocument();
+    expect(await screen.findByText('Added 4 images.')).toBeInTheDocument();
+  });
+
   it('starts only from the explicit user action and reports completion', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
 

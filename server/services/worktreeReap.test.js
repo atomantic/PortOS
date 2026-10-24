@@ -801,7 +801,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
   // list and drop it, so a clean merged checkout was archived and removed.
   // The disposable sibling is the same shape on an unprotected name, so a
   // sweep that protected every branch would fail here too.
-  it('holds a merged + clean gh-pages worktree in both reapers', async () => {
+  it('holds a merged + clean gh-pages worktree in local reaping', async () => {
     const pagesPath = await addWorktree(dir, 'pages', 'gh-pages');
     const disposablePath = await addWorktree(dir, 'disposable', 'disposable-br');
     await execGit(['merge', '--no-ff', 'gh-pages', '--no-edit'], dir);
@@ -813,7 +813,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(existsSync(pagesPath)).toBe(true);
     expect(reaped.reaped.map(r => r.branch)).toContain('disposable-br');
     expect(existsSync(disposablePath)).toBe(false);
+  });
 
+  // Keep the two public cleanup boundaries independently bounded without
+  // combining both real-Git workflows under one test's 30-second budget.
+  it('holds a merged + clean gh-pages worktree in external cleanup', async () => {
     // cleanupExternalRepoWorktrees only admits agent-* dirs under the shared
     // worktrees root, and that root must be the temp one both PATHS see.
     expect(PATHS.worktrees).toContain('portos-reap-archives-');

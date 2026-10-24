@@ -873,6 +873,8 @@ export async function spawnDirectly({
 
       unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
       activeAgents.delete(agentId);
+      void import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
+        .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
     }
     maintenance.finishResource('agent', agentId);
     } catch (handlerErr) {

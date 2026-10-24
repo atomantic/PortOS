@@ -15,6 +15,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { agentResumeMessage } from '../../../lib/agentResumeOutcome';
 import { isAgentFeedbackEligible } from '../../../lib/cosAgentFeedback';
 import { formatCount } from '../../../utils/formatters';
+import { DeliveryRecoverySchedule } from '../DeliveryStatus';
 
 // What each `resumeAgent` outcome actually did (server modes, agentManagement.js).
 // `already-active` and `superseded` deliberately queue NOTHING — the task is already
@@ -39,7 +40,7 @@ const RESUME_MESSAGES = {
 const needsAgentFeedback = isAgentFeedbackEligible;
 const FEEDBACK_EVENTS = ['cos:agent:feedback', 'cos:agent:completed'];
 
-export default function AgentsTab({ agentsLoaded = true, agentsError = null, onRetryAgents, completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
+export default function AgentsTab({ completionRecovery, agentsLoaded = true, agentsError = null, onRetryAgents, completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
   const { agentId } = useParams();
   const mounted = useMounted();
   const [deletedIds, setDeletedIds] = useState(() => new Set());
@@ -188,7 +189,14 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     setConfirmingClear(false);
     const result = await api.clearCompletedCosAgents({ silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
-    toast.success('Cleared completed agents');
+    if (result.retained > 0) {
+      const retainedWord = result.retained === 1 ? '1 active cleanup owner retained' : `${result.retained} active cleanup owners retained`;
+      toast.success(result.cleared > 0
+        ? `Cleared ${result.cleared} completed agent${result.cleared === 1 ? '' : 's'} (${retainedWord})`
+        : `No completed agents cleared (${retainedWord})`);
+    } else {
+      toast.success('Cleared completed agents');
+    }
     refresh();
   };
 
@@ -303,7 +311,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
       {finalizingAgents.length > 0 && (
         <section aria-label="Finalizing delivery" className="space-y-2">
           <h3 className="text-lg font-semibold text-white">Finalizing delivery</h3>
-          <p className="text-sm text-gray-400">Awaiting delivery verification and workspace cleanup.</p>
+          <DeliveryRecoverySchedule recovery={completionRecovery} />
           {finalizingAgents.map(agent => (
             <div key={agent.id} className="space-y-1">
               <Link to={`/cos/tasks?task=${encodeURIComponent(agent.taskId)}`} className="inline-block text-sm text-port-accent hover:underline [overflow-wrap:anywhere]">

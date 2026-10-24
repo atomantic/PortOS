@@ -217,6 +217,9 @@ are never executed as a substitute.
 
 ### Pregate attestation
 
+Default local pregate is focused validation, not a local CI run. Version 3 focused receipts cannot produce CI-skipping attestations. The following mechanism applies only to explicit `npm run pregate -- --full` validation and compatible legacy receipts. Hosted CI remains authoritative for broad coverage on ordinary pushes; do not rerun locally merely to obtain an attestation.
+
+
 A green pregate on this machine runs the same planner, runners, environment
 and `portos_test` database the Linux jobs do, so repeating those stages in CI
 for the install's own pull requests buys queue time and nothing else (design
@@ -244,7 +247,11 @@ pushed head, and the impact planner skips what it attests to:
   planner compares it with the head commit's tree on the PR. A SHA is never
   compared, for the same reason `scripts/verify-ci-status.js` compares trees:
   the content is what was tested. The commit must already be on the upstream
-  remote (the one `branch.<name>.remote` names); GitHub only accepts a status
+  remote (the one `branch.<name>.remote` names). Local tracking containment is
+  checked first; if stale after a URL/path push, exact advertised branch tips
+  are checked through that remote without fetching or changing the checkout.
+  Unreadable or malformed remote evidence refuses publication verification.
+  GitHub only accepts a status
   on a commit it has, which is why attesting is a step after `git push`, not a
   pregate flag.
 - **The merge ref is not the head tree.** The receipt vouches for the head
@@ -289,10 +296,10 @@ pushed head, and the impact planner skips what it attests to:
 - **When it applies.** Only a same-repository pull request into a non-`release`
   base that was not forced full. The planner verifies the merge-ref checkout's
   second parent is the event's head (so the attested tree is compared with
-  the right commit) and reads `repos/{repo}/commits/{head}/statuses`. A head
-  committed less than five minutes ago with no `pregate` status yet is re-read
-  for up to 90 seconds (10-second interval; the summary says how long it
-  waited), because the status is posted after the push that started the run.
+  the right commit) and reads `repos/{repo}/commits/{head}/statuses`.
+  Statuses are read once: a missing or late attestation immediately leaves
+  broad hosted coverage enabled. Focused pushes intentionally post no
+  attestation, so the planner never waits for one.
   When you open the pull request yourself, the order is push, attest, then
   `gh pr create`, so the status precedes the `pull_request` event. Any
   failure — API error, unreadable description, tree mismatch, wrong creator,

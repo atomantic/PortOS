@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 vi.mock('./cos.js', () => ({}));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue({}),
   addTask: vi.fn().mockResolvedValue({}),
@@ -45,6 +45,7 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorC
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
+import { readCompletionSentinel } from './agentCompletionSentinel.js';
 import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
 import { getAgent } from './cosAgentLifecycle.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
@@ -819,9 +820,7 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     await complete({ appName: 'Example App' });
     expect(updateAgent).toHaveBeenCalledWith('a1', { result: { success: true, warnings } });
     expect(addNotification).not.toHaveBeenCalled();
-    expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Agent cleanup issue: Example App', notes: warnings[0], priority: 'high',
-    }));
+    expect(ensureTaskThread).not.toHaveBeenCalled();
     expect(spawnMergeRecoveryTask).toHaveBeenCalledWith(warnings, 'a1', expect.objectContaining({ id: 't' }), 'Example App', '/example/repo');
   });
 
@@ -831,6 +830,8 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
   it("removes this run's completion sentinel and leaves a concurrent sibling's alone", async () => {
     await writeFile(join(workspace, '.agent-done-a1'), '## Summary\nDid the example work');
     await writeFile(join(workspace, '.agent-done-a2'), '## Summary\nStill working');
+    const state = await getAgent('a1');
+    state.metadata.completionSentinel = (await readCompletionSentinel('a1', workspace)).receipt;
 
     await complete({});
 
@@ -844,19 +845,30 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
   // sequence (runner, handled by its completion handler) or is logged while the
   // remaining steps still run (spawners, which call this from a `finally`).
   // Both still release the retry hold.
-  it('treats a failing early step per entry point: runner propagates and skips worktree cleanup, spawner logs and continues', async () => {
+  it('runs independent worktree cleanup despite pipeline failure, then propagates only for the runner', async () => {
     updateTask.mockRejectedValueOnce(new Error('pipeline unavailable'));
     const pipelineMeta = { pipeline: runningPipeline({ currentStage: 1 }) };
 
     if (path === 'runner') {
       await expect(complete(pipelineMeta)).rejects.toThrow('pipeline unavailable');
-      expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+      expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.any(Object));
     } else {
       await complete(pipelineMeta);
       expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Pipeline progression failed for a1: pipeline unavailable'), expect.any(Object));
       expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.any(Object));
     }
     expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }));
+  });
+
+  it('retains a question when its notification fails and still runs independent checkout cleanup', async () => {
+    const marker = '# Plan Question: Preserve this unanswered question';
+    await writeFile(join(workspace, '.plan-questions.md'), marker);
+    addNotification.mockRejectedValueOnce(new Error('notification write unavailable'));
+    const completion = complete({ analysisType: 'plan-task', app: 'example-app' });
+    if (path === 'runner') await expect(completion).rejects.toThrow('notification write unavailable');
+    else await completion;
+    expect(await readFile(join(workspace, '.plan-questions.md'), 'utf8')).toBe(marker);
+    expect(cleanupAgentWorktree).toHaveBeenCalledTimes(1);
   });
 
   it('turns the plan-question marker into a notification and consumes it before cleanup', async () => {
@@ -884,8 +896,9 @@ describe('completion sentinel survives a finalize that recorded no outcome', () 
   beforeEach(async () => { workspace = await mkdtemp(join(tmpdir(), 'completion-unfinalized-')); });
   afterEach(async () => { await rm(workspace, { recursive: true, force: true }); });
 
-  const cleanupWithStatus = (status) => {
-    getAgent.mockResolvedValue({ status, metadata: { workspacePath: workspace } });
+  const cleanupWithStatus = async (status) => {
+    const ingested = status === 'running' ? null : await readCompletionSentinel('a1', workspace);
+    getAgent.mockResolvedValue({ status, metadata: { workspacePath: workspace, completionSentinel: ingested?.receipt } });
     return runSpawnerCompletionCleanup({
       agentId: 'a1', task: { id: 't', metadata: {} }, success: false, outputBuffer: '',
       prOwnership: { taskOpenPR: false, agentOpensOwnPr: false },

@@ -1,53 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * Run the checks CI will run on this branch — locally, before pushing.
- *
- * CI already decides what to run from the diff (`scripts/ci-test-plan.js`),
- * but nothing could ask it that question outside Actions, so the recurring
- * failures were the ones no local command covers: an import-budget overshoot
- * that only appears after a rebase, a server->client import-purity violation,
- * a doubled catalog row from a union merge, a tree-wide guard that no changed
- * file imports. Each cost a push, a ~20-minute CI round, and a diagnosis from
- * a log. They are all static and take seconds to answer here.
- *
- * This runs CI's hidden-content scan and hands the SAME planner's plan to the
- * SAME runners (`run-ci-lint.js`, `run-ci-tests.js`, the client build, the
- * boot smoke, the browser suites and the serial `portos_test` suite), so a
- * green pregate means the Linux jobs are green for the same reasons — never
- * a second, drifting opinion about which tests matter. Stages run in CI's
- * dependency order after early structural guards, with the DB suite last and
- * alone: its per-case budgets assume no concurrent suite (docs/CONTRIBUTING.md).
- *
- *   node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
- *                           [--skip-db] [--skip-browser] [--skip-build] [--skip-smoke]
- *
- *   --guards-only [--merged-with <ref>]  run tree-wide guards on HEAD or a temporary merged tree
- *
- *   --base <ref>    compare against <ref> instead of the remote default branch
- *   --full          actually run the complete suite when the plan demands it
- *                   (without this, a full plan runs the always-run guards only
- *                   and reports the resource suites as not run)
- *   --skip-lint     skip linting in both client and server workspaces
- *   --skip-db, --skip-browser, --skip-build, --skip-smoke
- *                   leave that suite to CI; it is reported as not run
- *   --plan-only     print the plan and the stages, run nothing
- *
- * A resource suite whose prerequisite this machine lacks (no reachable test
- * Postgres; no Chrome, ffmpeg or client bundler) is reported the same way, with
- * the remedy, and the run continues. The summary and the receipt both name
- * every suite that was NOT run, so a green result never claims a suite it
- * skipped. The Windows job and the Linux worker-containment job (bubblewrap
- * namespaces) are the suites only CI can prove.
- *
- * The receipt (`.cache/pregate/report.json`, see scripts/lib/pregateReport.js)
- * records the plan, each stage's outcome and duration, the skipped suites, the
- * base and HEAD commits, and the hash of the exact working tree validated —
- * untracked and uncommitted files included — so a later attestation can match
- * it to the commit that ships. Attesting is deliberately NOT a flag here:
- * pregate runs before the commit and the push, and a commit status can only
- * be posted on a pushed commit, so `node scripts/pregate-attest.js` is its
- * own step after `git push` (docs/GITHUB_ACTIONS.md "Pregate attestation").
+ * Lightweight local pre-push validation: lint/format, structural invariants
+ * and directly owned tests. Hosted CI keeps its broad impact plan.
+ * `--full` opts into that CI plan locally, including selected resource suites.
+ * `--guards-only [--merged-with <ref>]` retains current-base merge safety.
+ * Receipts describe the exact tree and coverage; focused results never attest
+ * CI suites. Cancellation still settles every owned stage process group.
  */
 
 import { spawn, spawnSync } from 'child_process';
@@ -77,7 +36,7 @@ const IS_WIN32 = process.platform === 'win32';
  */
 export const UNCOVERED_SUITES = Object.freeze({
   db: 'needs a reachable test Postgres: npm run setup:db:test && npm run test:db (never against the real `portos` database)',
-  browser: 'needs Chrome, ffmpeg and the client bundler; run `npm run pregate --full` once they are installed',
+  browser: 'needs Chrome, ffmpeg and the client bundler; run `npm run pregate -- --full` once they are installed',
   build: 'npm run build && npm run test --prefix client -- ApiExplorer.bundle',
   smoke: 'npm run smoke',
   windows: 'CI is the only proof',
@@ -109,7 +68,7 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
     if (!suiteSelected(plan, suite)) continue;
     let reason = null;
     if (flags[suite]) reason = `skipped by --skip-${suite}`;
-    else if (downgraded) reason = 'full plan downgraded; pass --full to run it';
+    else if (downgraded) reason = 'local focused mode; hosted CI runs it (opt in locally with --full)';
     else if (prerequisites[suite]?.ok === false) {
       const { reason: detail, category } = prerequisites[suite];
       const probeOnly = category === 'probe-failed';
@@ -336,6 +295,33 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   };
 }
 
+/** Local selection never expands through the transitive server import graph.
+ * A sibling test or an explicitly edited test owns the focused check; broader
+ * integration coverage and unowned changes remain with hosted CI.
+ */
+export function focusedLocalPlan(plan, trackedFiles, changedFiles) {
+  const local = downgradeFullPlan(plan, trackedFiles, changedFiles);
+  const tracked = new Set(trackedFiles);
+  const browser = new Set(plan.browser.files);
+  const unitTest = path => !browser.has(path) && /\.test\.[cm]?[jt]sx?$/.test(path)
+    && !/(?:\.(?:db|browser|live)\.test\.|\/db\.test\.)/.test(path);
+  const focused = new Set();
+  for (const path of changedFiles) {
+    if (unitTest(path) && tracked.has(path)) focused.add(path);
+    if (!/\.[cm]?[jt]sx?$/.test(path) || /\.test\./.test(path)) continue;
+    const stem = path.replace(/\.[cm]?[jt]sx?$/, '');
+    for (const suffix of ['.test.js', '.test.jsx', '.test.ts', '.test.tsx', '.test.mjs', '.test.cjs']) {
+      const test = `${stem}${suffix}`;
+      if (tracked.has(test) && unitTest(test)) focused.add(test);
+    }
+  }
+  for (const scope of ['server', 'client']) {
+    const files = [...new Set([...local[scope].files, ...[...focused].filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
+    local[scope] = { mode: files.length ? 'files' : 'skip', files, sources: [] };
+  }
+  return local;
+}
+
 const git = (args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
 
 
@@ -448,7 +434,7 @@ export const USAGE = `Usage: node scripts/pregate.js [--base <ref>] [--full] [--
   --guards-only  run only always-run and diff-selected structural guards (no attestation receipt)
   --merged-with <ref>  validate HEAD merged with this fetched ref in an isolated temporary repository
   --base <ref>    compare against <ref> instead of the remote default branch
-  --full          run the complete suite when the plan demands it
+  --full          opt into CI-selected broad suites locally
   --skip-lint     skip linting in both client and server workspaces
   --skip-db       leave the portos_test DB suite to CI (reported as not run)
   --skip-browser  leave the cross-workspace browser suites to CI (reported as not run)
@@ -759,15 +745,15 @@ async function main() {
   };
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
 
-  const downgraded = plan.full && !options.full && !options.guardsOnly;
+  const downgraded = !options.full && !options.guardsOnly;
   const guardPlan = downgradeFullPlan(plan, git(['ls-files', '-z']).split('\0').filter(Boolean), changedFiles);
   if (options.guardsOnly) {
     plan = guardPlan;
     Object.assign(plan, { lint: { mode: 'skip', files: [] }, browser: { files: [] }, db: false, windows: false, build: false, smoke: false, promptHistory: false, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false });
   }
   if (downgraded) {
-    plan = guardPlan;
-    console.log('⚠️ CI will run the FULL suite for this diff — running always-run and diff-selected structural guards only. Pass --full to run everything, including the build, smoke, browser and DB suites.');
+    plan = focusedLocalPlan(plan, git(['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(path => path && existsSync(join(REPO_ROOT, path))), changedFiles);
+    console.log('ℹ️ Local validation: lint, structural guards and focused tests only. Hosted CI owns broad coverage; pass --full for the complete CI plan locally.');
   }
 
   describeBrowserSelection(plan.browser.files).forEach((line) => { console.log(line); });
@@ -777,7 +763,7 @@ async function main() {
     const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites });
     const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
     const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, skip, databaseEnv,
-      guardPlan: options.guardsOnly || downgraded ? null : guardPlan });
+      guardPlan: options.guardsOnly ? null : guardPlan });
     return { uncovered, stages: options.guardsOnly
       ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
         .map(stage => ({ ...stage, env: { ...stage.env, PORTOS_TEST_MEMO: 'off' } }))

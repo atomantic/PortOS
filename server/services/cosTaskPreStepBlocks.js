@@ -534,7 +534,9 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const unresolved = unresolvedRetirements(previousOutcome);
   const absentObligations = unresolved.filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
   let retirementReviews = { candidates: [], held: [] };
-  if (actions.cleanupMerged !== false && result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')) {
+  const { prepareReconcileRetirements, retainedMergedClaims } = await import('./branchReconcileRetirement.js');
+  if (actions.cleanupMerged !== false && (result.wip?.some(branch => branch.rule === 'completion-policy' && branch.completionPolicyReason === 'pr-completion-review-required')
+    || retainedMergedClaims(result).length)) {
     const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
       wip: result.wip, worktreeInventory: result.worktreeInventory,
       detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
@@ -543,12 +545,13 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
       status: 'running', reason: 'preparing-retirement-reviews', remaining: [...inventory.remaining, ...absentObligations],
       nextAction: 'Review completed local work before verified archival retirement.',
     });
-    const { prepareReconcileRetirements } = await import('./branchReconcileRetirement.js');
     retirementReviews = await prepareReconcileRetirements(app, result);
   }
   const retiredNames = new Set((retirementReviews.retired || []).map(row => row.branch));
   if (retiredNames.size) {
     result.wip = result.wip.filter(row => !retiredNames.has(row.branch));
+    result.merged = result.merged?.filter(row => !retiredNames.has(row.branch));
+    result.skipped = result.skipped.filter(row => !retiredNames.has(row.branch));
     result.worktreeInventory = result.worktreeInventory.filter(row => !retiredNames.has(row.branch));
     result.cleaned.push(...retiredNames);
   }

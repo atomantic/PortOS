@@ -28,6 +28,7 @@ import { formatCount } from '../../../utils/formatters';
 import { runningAgentsByTaskId, isSpawningTask } from '../../../lib/cosSpawnWindow';
 import BrailleSpinner from '../../BrailleSpinner';
 import { isDeliveryCleanupHeld } from '../../../../../server/lib/taskRetryHold.js';
+import { DeliveryRecoverySchedule } from '../DeliveryStatus';
 
 // Maps a task-section status → micrographic glyph spec. Animation only on
 // states where motion communicates real work happening (running tasks).
@@ -44,7 +45,7 @@ function SectionGlyph({ status }) {
   return <MicroGlyph variant={spec.variant} state={spec.state} animated={spec.animated} size={13} />;
 }
 
-export default function TasksTab({ completedRevision = 0, tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, apps }) {
+export default function TasksTab({ completionRecovery, completedRevision = 0, tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, apps }) {
   const [searchParams] = useSearchParams();
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [durations, setDurations] = useState(null);
@@ -111,6 +112,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
   // socket agent feed, which lands ~400ms ahead of the next task refetch; the
   // map is what lets an Active row offer relaunch without its own agent fetch.
   const runningAgentByTaskId = useMemo(() => runningAgentsByTaskId(agents), [agents]);
+  const agentById = useMemo(() => new Map(agents.map(agent => [agent.id, agent])), [agents]);
 
   const isSpawning = useCallback(
     (task) => isSpawningTask(task, runningAgentByTaskId),
@@ -251,9 +253,11 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
       <h3 className="px-3 py-2 text-sm font-medium text-gray-400 border-b border-port-border">
         Finalizing delivery ({formatCount(rows.length)})
       </h3>
+      <DeliveryRecoverySchedule recovery={completionRecovery} />
       <div className="p-2 space-y-1.5">
         {rows.map(task => (
           <TaskItem key={task.id} task={task} isSystem={source === 'internal'} selected={isTaskSelected(task, source)}
+            agent={agentById.get(task.metadata.deliveryRecoveryAgentId)}
             onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted}
             providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
         ))}

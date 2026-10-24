@@ -5,7 +5,7 @@
  * its lock and its branch as found.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes, truncate } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { promisify } from 'node:util';
@@ -24,7 +24,7 @@ afterAll(cleanupTempDataRoots);
 
 const SYMLINKS = process.platform !== 'win32';
 const retirementFaults = vi.hoisted(() => ({ onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null }));
-const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] }));
+const injected = vi.hoisted(() => ({ policies: [], schedule: null, app: null, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [] }));
 
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
@@ -38,7 +38,12 @@ vi.mock('../lib/execGit.js', async importOriginal => {
       injected.fetches.push({ args, options });
       if (injected.fetchRemote) args = args.map(arg => arg === 'https://github.com/example/repo.git' ? injected.fetchRemote : arg);
     }
-    try { return await actual.execGit(args, cwd, options); }
+    try {
+      const result = await actual.execGit(args, cwd, options);
+      if (injected.onArchiveRef && args[0] === 'update-ref' && args[1]?.startsWith('refs/portos/archive/')) await injected.onArchiveRef();
+      if (injected.onProof && args.includes('--bare') && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') await injected.onProof();
+      return result;
+    }
     catch (error) {
       const phase = args.includes('unbundle') ? 'unbundle' : args.includes('fsck') ? 'fsck' : args.includes('--bare') ? 'init' : null;
       if (phase && options?.env?.GIT_NO_REPLACE_OBJECTS === '1') {
@@ -85,7 +90,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   beforeEach(async () => {
     Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onEvidence: null, proofFailures: [] });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -386,6 +391,34 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
   });
 
+  it.each(['cancel', 'time', 'git-output', 'git-time'])('retains the %s diagnosis when isolated Git proof is interrupted without settling preservation', async mode => {
+    const { saved } = await historicalArchive();
+    const outcome = await getBranchReconcileOutcome('app-1');
+    const controller = new AbortController();
+    let clock;
+    injected.onProof = () => {
+      if (mode === 'cancel') controller.abort();
+      else if (mode === 'time') clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 11 * 60 * 1000);
+      else throw Object.assign(new Error('synthetic Git resource exhaustion'), mode === 'git-output'
+        ? { code: 'GIT_OUTPUT_LIMIT', limitCodeUnits: 64 * 1024 * 1024, observedCodeUnits: 64 * 1024 * 1024 + 1 }
+        : { code: 'GIT_TIMEOUT', limitMs: 30000, observedMs: 30001 });
+    };
+    try {
+      const result = await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome }, { signal: controller.signal });
+      expect(result.recoveredPreservations || []).toEqual([]);
+      expect(result.retirementObligations).toHaveLength(1);
+      const evidence = result.retirementObligations[0].preservationEvidence.archives.find(row => row.archiveDir === saved.archiveDir);
+      expect(evidence).toMatchObject({ reason: mode === 'cancel' ? 'retirement-archive-cancelled'
+        : mode === 'git-output' ? 'retirement-archive-limit-exceeded' : 'retirement-archive-work-limit-exceeded', nextAction: expect.any(String) });
+      if (mode === 'git-output') expect(evidence.archiveLimit).toEqual({ scope: 'git-output', kind: 'output',
+        limitCodeUnits: 64 * 1024 * 1024, observedCodeUnits: 64 * 1024 * 1024 + 1 });
+      if (mode === 'git-time') expect(evidence.archiveLimit).toEqual({ scope: 'git-command', kind: 'time', limitMs: 30000, observedMs: 30001 });
+      if (mode === 'time') expect(evidence.archiveLimit).toMatchObject({ scope: 'verification', kind: 'time', limitMs: 600000, observedMs: expect.any(Number) });
+      expect(result.retired).toBeUndefined();
+      expect(existsSync(saved.archiveDir)).toBe(true);
+    } finally { clock?.mockRestore(); }
+  });
+
   it('recognizes an absent completion archive without a schedule obligation and rejects changed or older evidence', async () => {
     const { release, saved } = await historicalArchive();
     const outcome = await getBranchReconcileOutcome('app-1');
@@ -393,12 +426,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     injected.schedule = { executions: {} };
     const withoutObligation = await getBranchReconcileOutcome('app-1');
     await execGit(['branch', '-d', release.branch], repo);
-    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: original });
+    const controller = new AbortController();
+    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: original }, { signal: controller.signal });
     expect(proof).toMatchObject({ archiveDir: saved.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(await proof.recheck()).toBe(true);
     await mkdir(release.path);
     expect(await proof.recheck()).toBe(false);
     await rm(release.path, { recursive: true });
+    controller.abort();
+    await expect(proof.recheck()).rejects.toThrow('retirement-archive-cancelled');
     const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
     expect(await findMissingCheckoutPreservation({ repoPath: repo, release: { ...original, createdAt: new Date(Date.parse(manifest.archivedAt) + 1).toISOString() } })).toBeNull();
     await writeFile(join(saved.archiveDir, 'files', 'private.txt'), 'corrupt archived evidence');
@@ -739,8 +775,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await writeFile(join(tree, 'eol.txt'), 'one\r\ntwo\r\n');
     } });
     // Only the index holds this file once its working copy is gone.
-    await writeFile(join(path, 'staged-only.txt'), 'staged work\n');
+    await writeFile(join(path, 'staged-only.txt'), Buffer.concat([Buffer.from(`staged work\n${'界'.repeat(100000)}\n`), Buffer.from([0xff, 10])]));
     await execGit(['add', 'staged-only.txt'], path);
+    const stagedBlob = (await execGit(['rev-parse', ':staged-only.txt'], path)).stdout.trim();
     await rm(join(path, 'staged-only.txt'));
 
     // Make an unchanged tracked file's stat cache stale. Git diff normally
@@ -763,6 +800,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await readFile(join(result.archiveDir, 'worktree.diff'), 'utf8')).toContain('+tracked edit');
     expect(await readFile(join(result.archiveDir, 'index.diff'), 'utf8')).toContain('+staged work');
+    const restored = join(scratch, 'unicode-staged-restore');
+    await mkdir(restored);
+    await execGit(['init'], restored);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD'], restored);
+    await execGit(['checkout', '--detach', 'FETCH_HEAD'], restored);
+    await execGit(['apply', '--index', join(result.archiveDir, 'index.diff')], restored);
+    expect((await execGit(['rev-parse', ':staged-only.txt'], restored)).stdout.trim()).toBe(stagedBlob);
   });
 
   it('bundles a squash-merged branch, retires it with its branch, and drops it from the persisted inventory', async () => {
@@ -913,6 +957,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
+  it('refuses a lexically equal release when the filesystem resolver identifies a different checkout', async () => {
+    const c = await heldCheckout('physical-alias-mismatch', { branch: 'feature/physical-alias-mismatch' });
+    const release = { ...c.release, path: `${c.path}/.` };
+    const originalRealpath = realpathSync.native;
+    // Inject at the filesystem boundary: lexical '..' across a symlink can
+    // name a different physical directory. Windows and POSIX resolve that
+    // syntax differently, so pin the disagreement rather than OS parsing.
+    const resolver = vi.spyOn(realpathSync, 'native').mockImplementation((path, ...args) =>
+      originalRealpath(path === release.path ? external : path, ...args));
+    try {
+      expect(await retire(release)).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    } finally { resolver.mockRestore(); }
+    expect(await registered(c.path)).toBe(true);
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await archives()).toEqual([]);
+  });
+
   it('keeps the checkout, its content and its original lock when an owner appears after the archive', async () => {
     const { path, release } = await heldCheckout('owner-arrives', { lockReason: 'handoff pending' });
     let reads = 0;
@@ -954,6 +1017,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await lockText(release.path)).toBe('synthetic external owner');
     expect(existsSync(join(path, 'nested', '.git'))).toBe(true);
     expect(await archives()).toEqual([]);
+  });
+
+  it.skipIf(!SYMLINKS)('preserves the checkout when a link target cannot be represented losslessly in archive metadata', async () => {
+    const { path, release } = await heldCheckout('opaque-link', { branch: 'feature/opaque-link' });
+    const target = Buffer.from([0xff]);
+    await symlink(target, join(path, 'opaque-link'));
+
+    expect(await retire(release)).toMatchObject({ ok: false, reason: 'archive-failed' });
+    expect(await readlink(join(path, 'opaque-link'), { encoding: 'buffer' })).toEqual(target);
+    expect(await lockText(path)).toBe('synthetic external owner');
+    expect(await registered(path)).toBe(true);
+    expect(await archives()).toEqual([]);
+    expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
   });
 
   // #12682: archive I/O ran inside the shared ownership lock and starved every
@@ -1089,7 +1165,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(Buffer.byteLength(prepared.review.comparison.difference)).toBeLessThan(4 * 1024 * 1024);
     const before = await getBranchReconcileOutcome('app-1');
     const original = await sha256File(join(c.path, 'tabs.txt'));
-    expect(await c.confirm(prepared.review)).toEqual({ ok: false, reason: 'retirement-archive-manifest-limit-exceeded' });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-archive-manifest-limit-exceeded',
+      archiveLimit: { scope: 'manifest', limitBytes: 16 * 1024 * 1024, observedBytes: expect.any(Number) } });
     expect(await sha256File(join(c.path, 'tabs.txt'))).toBe(original);
     expect(await registered(c.path)).toBe(true);
     expect(await lockText(c.path)).toBe(c.release.lockReason);
@@ -1098,31 +1175,57 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
-  it('refuses file-count overflow before preview, reviewed retirement or unattended archive publication', async () => {
-    const c = await reviewedCheckout('file-count-overflow', { normalMerge: true });
+  // Each case includes a failed archive, cleanup, complete retry and repeat request.
+  // At d200ec77d2, measured 16.9–20.9 seconds; the many-file restore took 20.2 seconds.
+  it.each([
+    { mode: 'cancel', phase: 'recovery refs' }, { mode: 'time', phase: 'recovery refs' },
+    { mode: 'cancel', phase: 'bundle' }, { mode: 'time', phase: 'bundle' },
+  ])('preserves originals and can restart after $mode interrupts $phase', async ({ mode, phase }) => {
+    const c = await reviewedCheckout('bounded-interruption', { normalMerge: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
-    await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
-    const directory = join(c.path, 'private-files');
-    await mkdir(directory);
-    // Content alone stays below 1000; its private Git administration crosses the shared limit.
-    const files = Array.from({ length: 995 }, (_, i) => join(directory, `item-${i}`));
-    await Promise.all(files.map(file => writeFile(file, 'preserve every tiny file\n')));
-    const hashes = await Promise.all(files.map(sha256File));
     const before = await getBranchReconcileOutcome('app-1');
-    const refusal = { ok: false, reason: 'retirement-archive-file-limit-exceeded' };
-    expect(await c.prepare()).toEqual(refusal);
-    expect(await c.confirm(prepared.review)).toEqual(refusal);
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, {
-      ...c.opts, settleMergedReviewObligation: true,
-    })).toEqual(refusal);
-    expect(await Promise.all(files.map(sha256File))).toEqual(hashes);
+    const controller = new AbortController();
+    let clock;
+    const interrupt = () => {
+      if (mode === 'cancel') controller.abort();
+      else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 11 * 60 * 1000);
+    };
+    let recoveryRefs = 0;
+    let bundles = 0;
+    injected.onArchiveRef = () => {
+      if (++recoveryRefs === 1 && phase === 'recovery refs') interrupt();
+    };
+    injected.onBundle = () => {
+      bundles++;
+      if (phase === 'bundle') interrupt();
+    };
+    try {
+      const result = await c.confirm(prepared.review, { signal: controller.signal });
+      expect(result).toMatchObject({ ok: false, reason: mode === 'cancel'
+        ? 'retirement-archive-cancelled' : 'retirement-archive-work-limit-exceeded' });
+      if (mode === 'time') expect(result.archiveLimit).toMatchObject({ kind: 'time', limitMs: 600000,
+        observedMs: expect.any(Number) });
+    } finally { clock?.mockRestore(); }
+    if (phase === 'recovery refs') {
+      expect(recoveryRefs).toBe(1);
+      expect(bundles).toBe(0);
+    } else expect(bundles).toBe(1);
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await registered(c.path)).toBe(true);
     expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect((await execGit(['for-each-ref', '--format=%(refname)', 'refs/portos/archive/'], repo)).stdout.trim()).toBe('');
     expect(await archives()).toEqual([]);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-  });
+    // A new attempt takes fresh snapshots; no partial checkpoint grants removal.
+    injected.onArchiveRef = null;
+    injected.onBundle = null;
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    const repeated = await c.confirm(prepared.review);
+    expect(repeated.ok).toBe(false);
+    expect((await archives()).length).toBe(1);
+  }, 30_000);
 
   it('refuses combined content and administration bytes before preview or teardown while each snapshot fits', async () => {
     const c = await reviewedCheckout('combined-byte-limit', { normalMerge: true });
@@ -1143,7 +1246,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     }
     const hashes = await Promise.all(files.map(sha256File));
     const before = await getBranchReconcileOutcome('app-1');
-    const refusal = { ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+    const refusal = { ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
       scope: 'combined', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: expect.any(Number),
     } };
     const preview = await c.prepare();
@@ -1162,19 +1265,23 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
-  describe('near-boundary file-count preservation', () => {
+  describe('many-file resource-bounded preservation', () => {
     let c;
     let createdAt;
     let prepared;
     let retired;
-    // Bound fixture preparation, retirement and independent proof separately;
-    // none of these real-I/O phases may borrow another phase's 30-second budget.
+    // Retain main's separate fixture/retirement/proof phases and their existing
+    // 30-second budgets while exercising more than 1,000 files in both snapshots.
     beforeEach(async () => {
       c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
       await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
       const directory = join(c.path, 'private-files');
       await mkdir(directory);
-      await Promise.all(Array.from({ length: 980 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+      await Promise.all(Array.from({ length: 1050 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+      if (process.platform !== 'win32') await chmod(join(directory, 'item-1049'), 0o755);
+      const privateDir = join(c.admin, 'private-files');
+      await mkdir(privateDir);
+      await Promise.all(Array.from({ length: 60 }, (_, i) => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')));
       createdAt = new Date().toISOString();
       prepared = await c.prepare();
       expect(prepared.ok).toBe(true);
@@ -1185,19 +1292,54 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(retired).toMatchObject({ ok: true, branchDeleted: true });
     });
 
-    it('admits an archive that the missing-checkout verifier can independently recover', async () => {
+    it('retires and independently restores more than 1000 content and private Git files under the resource contract', async () => {
       const manifest = JSON.parse(await readFile(join(retired.archiveDir, 'manifest.json'), 'utf8'));
       const capturedCount = manifest.captured.files.length + manifest.administration.files.length;
-      expect(capturedCount).toBeGreaterThanOrEqual(990);
-      expect(capturedCount).toBeLessThanOrEqual(1000);
+      expect(capturedCount).toBeGreaterThan(1100);
+      expect(manifest.resourceContract).toBe(1);
+      expect(await readFile(join(retired.archiveDir, 'files/private-files/item-1049'), 'utf8')).toBe('retained ignored bytes\n');
+      expect(await readFile(join(retired.archiveDir, 'administration/gitdir/private-files/item-59'), 'utf8')).toBe('private recovery bytes\n');
       const before = await getBranchReconcileOutcome('app-1');
       const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
       expect(proof, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`)
         .toMatchObject({ archiveDir: retired.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
       expect(await proof.recheck()).toBe(true);
       expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-    });
+      const restore = join(scratch, 'independent-restore');
+      await mkdir(restore);
+      await execGit(['init'], restore);
+      await execGit(['fetch', join(retired.archiveDir, 'commits.bundle'), 'HEAD'], restore);
+      await execGit(['checkout', '--detach', 'FETCH_HEAD'], restore);
+      await cp(join(retired.archiveDir, 'files'), restore, { recursive: true });
+      expect(await readFile(join(restore, 'private-files/item-1049'), 'utf8')).toBe('retained ignored bytes\n');
+      if (process.platform !== 'win32') expect((await stat(join(restore, 'private-files/item-1049'))).mode & 0o777).toBe(0o755);
+      const manifestPath = join(retired.archiveDir, 'manifest.json');
+      const original = await readFile(manifestPath, 'utf8');
+      const find = () => findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
+      // Historical unversioned archives use the same full proof, never a count exemption.
+      delete manifest.resourceContract;
+      await writeFile(manifestPath, JSON.stringify(manifest));
+      expect(await find()).toMatchObject({ archiveDir: retired.archiveDir });
+      for (const mutate of [
+        saved => { saved.resourceContract = 999; },
+        saved => { saved.captured.files[0].bytes = -1; },
+        saved => { saved.captured.files.push(saved.captured.files[0]); },
+        saved => { saved.captured.files[0].path = '../administration/gitdir/HEAD'; },
+        saved => { saved.captured.files[0].path = 'x'.repeat(16 * 1024 * 1024); },
+      ]) {
+        const altered = JSON.parse(original);
+        mutate(altered);
+        await writeFile(manifestPath, JSON.stringify(altered));
+        expect(await find()).toBe(null);
+      }
+      await writeFile(manifestPath, original);
+      expect(await find()).toMatchObject({ archiveDir: retired.archiveDir });
+      await writeFile(join(retired.archiveDir, 'administration/gitdir/private-files/item-59'), 'changed private bytes');
+      expect(await find()).toBe(null);
+      expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+    }, 30_000);
   });
+
 
   it.each([
     { scope: 'content', kind: 'file', count: 1, bytes: 25 * 1024 * 1024 + 1 },
@@ -1217,7 +1359,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const hashes = await Promise.all(files.map(sha256File));
     const before = await getBranchReconcileOutcome('app-1');
     const result = await c.prepare();
-    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
       scope, kind, limitBytes: (kind === 'file' ? 25 : 250) * 1024 * 1024, observedBytes: expect.any(Number),
     } });
     expect(Number.isSafeInteger(result.archiveLimit.observedBytes)).toBe(true);
@@ -1253,7 +1395,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const before = await getBranchReconcileOutcome('app-1');
     const result = mode === 'reviewed' ? await c.confirm(prepared.review)
       : await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { ...c.opts, settleMergedReviewObligation: true });
-    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', archiveLimit: {
+    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
       scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes,
     } });
     expect(await sha256File(file)).toBe(hash);
@@ -1261,6 +1403,32 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect(await archives()).toEqual([]);
+    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+  });
+
+  it('retains measured capacity and the exact lock when the final refreshed review exceeds its budget', async () => {
+    const c = await reviewedCheckout('final-review-capacity', { normalMerge: true });
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    const before = await getBranchReconcileOutcome('app-1');
+    const file = join(c.path, 'ignored.txt');
+    const bytes = 25 * 1024 * 1024 + 1;
+    let mutations = 0;
+    let changedHash;
+    const result = await c.confirm(prepared.review, { beforeMutation: async () => {
+      if (++mutations === 2) {
+        await truncate(file, bytes);
+        changedHash = await sha256File(file);
+      }
+    } });
+    expect(result).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String),
+      archiveDir: expect.any(String), archiveLimit: { scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes } });
+    expect(changedHash).toBeTruthy();
+    expect(await sha256File(file)).toBe(changedHash);
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
@@ -1387,13 +1555,82 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
-  it('reviews original changes after an ancestral merged tip is later changed', async () => {
+  it.each(['original', 'repo-alias', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
+    const c = await reviewedCheckout(`orphan-${scenario}`);
+    await execGit(['worktree', 'unlock', c.path], repo);
+    Object.assign(c.release, { locked: false, lockReason: null });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
+    const evidence = await import('./completedCheckoutEvidence.js');
+    const agent = { id: 'original-orphan', status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString(),
+      result: { success: false, executionSuccess: false, orphaned: true, validationPassed: null },
+      metadata: { isWorktree: true, sourceWorkspace: repo, workspacePath: c.path, worktreeBranch: c.release.branch,
+        prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: c.forge.prUrl, branch: c.release.branch } } };
+    agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
+    agent.status = 'completed';
+    agent.completedAt = new Date().toISOString();
+    agent.metadata.completedCheckouts = [];
+    agent.metadata.checkoutCapture = { status: 'captured' };
+    if (scenario === 'repo-alias') injected.app.repoPath = `${repo}/../repo`;
+    if (scenario === 'failed-validation') agent.result.validationPassed = false;
+    injected.policies = [agent];
+    const originalResult = structuredClone(agent.result);
+    let recoveries = 0;
+    c.opts.recoverCheckoutCapture = async (id, { retirement }) => {
+      expect(id).toBe(agent.id);
+      expect(retirement).toMatchObject({ ...c.release, repoPath: realpathSync(repo), path: realpathSync(c.path) });
+      const captured = await evidence.captureSeededCompletionCheckouts(agent);
+      if (!captured) return false;
+      agent.metadata.completedCheckouts = captured;
+      recoveries++;
+      return true;
+    };
+    if (scenario === 'recreated-pointer') {
+      const bytes = await readFile(join(c.path, '.git'));
+      await rename(join(c.path, '.git'), join(scratch, 'original-pointer'));
+      await writeFile(join(c.path, '.git'), bytes);
+    }
+    if (scenario === 'active-owner') c.opts.readAgents = async () => [{ id: 'other', status: 'running', workspacePath: c.path }];
+    if (scenario === 'different-pr-head') c.forge.prHead = 'b'.repeat(40);
+    const prepared = await c.prepare();
+    expect(agent.result).toEqual(originalResult);
+    if (!['original', 'repo-alias'].includes(scenario)) {
+      expect(prepared.ok).toBe(false);
+      expect(await registered(c.path)).toBe(true);
+      expect(await archives()).toEqual([]);
+      expect(recoveries).toBe(0);
+      return;
+    }
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedExecution: true }] } } });
+    const receipt = agent.metadata.completedCheckouts[0];
+    expect(receipt).toMatchObject({ version: 2, head: c.release.head });
+    expect(evidence.completedCheckoutReceiptValid(agent, receipt)).toBe(true);
+    const retired = await c.confirm(prepared.review);
+    expect(retired).toMatchObject({ ok: true, branchDeleted: true });
+    expect(await readFile(join(retired.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    const restored = join(scratch, 'independent-orphan.git');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['bundle', 'unbundle', join(retired.archiveDir, 'commits.bundle')], restored);
+    await execGit(['fsck', '--full', '--strict', '--no-reflogs', c.release.head], restored);
+    expect(await registered(c.path)).toBe(false);
+    expect((await c.prepare()).ok).toBe(false);
+    expect(await archives()).toHaveLength(1);
+    expect(recoveries).toBe(1);
+    expect(agent.result).toEqual(originalResult);
+  });
+
+  it('requires supersession acceptance after an ancestral merged tip is later changed', async () => {
     const c = await reviewedCheckout('ancestral', { normalMerge: true, superseded: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     expect(prepared.review.comparison.disposition).toBe('review-supersession');
     expect(prepared.review.comparison.localPatch).toContain('+original feature');
     expect(prepared.review.comparison.difference).toContain('+strengthened replacement');
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
+      review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts))
+      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect(await archives()).toEqual([]);
   });
 
   it('compares pathspec glob filenames literally', async () => {
@@ -1425,9 +1662,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     expect(prepared.review.comparison.disposition).toBe(superseded ? 'review-supersession' : 'integrated');
-    if (superseded) expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
-      review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts))
-      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
     const result = await c.confirm(prepared.review);
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
@@ -1438,6 +1672,107 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/restored-legacy'], repo);
     expect((await execGit(['rev-parse', 'restored-legacy'], repo)).stdout.trim()).toBe(c.release.head);
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
+  });
+
+  it.each([false, true])('retires legacy pinned cleanup with lagging main and missing remote proof=%s', async missingProof => {
+    const c = await reviewedCheckout('pinned-cleanup', { normalMerge: true });
+    injected.policies[0].result = { success: false, executionSuccess: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    let shippedDefault = c.forge.defaultHead;
+    if (missingProof) {
+      const remote = join(scratch, 'proof-remote');
+      await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
+      await execGit(['config', 'user.email', 'test@example.com'], remote);
+      await execGit(['config', 'user.name', 'Test'], remote);
+      await execGit(['commit', '--allow-empty', '-m', 'new remote default'], remote);
+      shippedDefault = (await execGit(['rev-parse', 'HEAD'], remote)).stdout.trim();
+      expect((await execGit(['cat-file', '-e', `${shippedDefault}^{commit}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+      await execGit(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo);
+      injected.fetchRemote = remote;
+    }
+    await execGit(['reset', '--hard', 'HEAD^'], repo);
+    const localMain = (await execGit(['rev-parse', 'main'], repo)).stdout.trim();
+    c.forge.defaultHead = localMain;
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+    c.forge.defaultHead = shippedDefault;
+    injected.policies[0].result.validationPassed = false;
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+    injected.policies[0].result.validationPassed = null;
+    const prepared = await c.prepare();
+    expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated', difference: '' },
+      policy: { integratedCleanupHead: shippedDefault } } });
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, archiveDir: expect.any(String), branchDeleted: true });
+    expect(await registered(c.path)).toBe(false);
+    expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(localMain);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
+      branch: c.release.branch, head: c.release.head, archiveDir: result.archiveDir, branchDeleted: true,
+    }));
+    expect(injected.fetches).toHaveLength(missingProof ? 1 : 0);
+  });
+
+  it.each(['complete', 'owner-reacquired', 'identity-changed'])('recovers retained merged claims through persisted retirement: %s', async scenario => {
+    external = join(repo, '.claude', 'worktrees');
+    await mkdir(external, { recursive: true });
+    const c = await reviewedCheckout('claim-issue-425', { normalMerge: true });
+    await execGit(['branch', '-m', c.release.branch, 'claim/issue-425'], repo);
+    await execGit(['worktree', 'unlock', c.path], repo);
+    await execGit(['restore', 'initial.txt'], c.path);
+    await mkdir(join(c.admin, 'info'), { recursive: true });
+    await writeFile(join(c.admin, 'info', 'exclude'), 'private fixture exclusion note\n');
+    await writeFile(join(c.path, '.gitignore'), '/.gitignore\n/untracked.txt\n/ignored.txt\n/linked\n');
+    expect((await execGit(['status', '--porcelain'], c.path)).stdout).toBe('');
+    const release = { ...c.release, branch: 'claim/issue-425', locked: false, lockReason: null,
+      checkoutIdentity: await readRetirementCheckoutIdentity(c.path) };
+    injected.policies[0].metadata.claimBranches = [release.branch];
+    injected.policies[0].result = { success: false, executionSuccess: true,
+      taskOutcome: { status: 'incomplete', recovery: { mode: 'cleanup' } } };
+    const merged = { branch: release.branch, tip: release.head, worktreePath: release.path,
+      state: 'MERGED', isMerged: true, worktreeAgeMs: 0, worktreeLocked: false };
+    const { cleanupMerged } = await import('./branchReconcile.js');
+    const initial = await cleanupMerged(repo, 'main', [merged], { appId: 'app-1', activeAgentIds: new Set(),
+      claimOwners: { agents: [], readAgents: noOwners } });
+    expect(initial).toMatchObject({ cleaned: [], skipped: [{ branch: release.branch, reason: 'claim-completion-unverified' }] });
+    const remaining = [{ ...release, reason: 'claim-completion-unverified' }];
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining });
+    const { prepareReconcileRetirements } = await import('./branchReconcileRetirement.js');
+    const input = { wip: [], merged: [merged], skipped: initial.skipped,
+      worktreeInventory: [{ ...release, managed: true }] };
+    const result = await prepareReconcileRetirements(injected.app, input, {
+      readPr: async () => c.forge.prUrl,
+      prepare: async request => {
+        const reviewed = await prepareInventoriedCheckoutRetirement(request, c.opts);
+        if (scenario === 'owner-reacquired') c.opts.readAgents = async () => [{ id: 'new-owner', status: 'running',
+          metadata: { sourceWorkspace: repo, workspacePath: c.path, worktreeBranch: release.branch } }];
+        if (scenario === 'identity-changed') {
+          const pointer = await readFile(join(c.path, '.git'));
+          await rename(join(c.path, '.git'), join(c.path, '.git.previous')); await writeFile(join(c.path, '.git'), pointer);
+        }
+        return reviewed;
+      },
+      // Model the daemon's admitted mutation callback; exercise the actual
+      // inventory, policy, owner, archive, removal and persisted-receipt gates.
+      retire: (request, options) => retireInventoriedCheckout(request, { ...c.opts, ...options, beforeMutation: async () => {} }),
+    });
+    const outcome = await getBranchReconcileOutcome('app-1');
+    if (scenario !== 'complete') {
+      expect(result).toMatchObject({ retired: [], held: [{ reason: scenario === 'owner-reacquired' ? 'claim-owner-active' : 'checkout-identity-changed' }] });
+      expect(await registered(c.path)).toBe(true);
+      expect(outcome.retired || []).toEqual([]);
+      return;
+    }
+    expect(result).toMatchObject({ candidates: [], held: [], retired: [expect.objectContaining({ checkoutIdentity: release.checkoutIdentity })] });
+    expect(await registered(c.path)).toBe(false);
+    const receipt = outcome.retired.find(row => row.branch === release.branch);
+    expect(receipt).toMatchObject({ head: release.head, branchDeleted: true, checkoutIdentity: release.checkoutIdentity });
+    expect(await readFile(join(receipt.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(receipt.archiveDir, 'files/untracked.txt'), 'utf8')).toBe('untracked work\n');
+    expect(await readFile(join(receipt.archiveDir, 'administration/gitdir/portos-review-status'), 'utf8')).toBe('private synthetic review marker');
+    const restored = join(scratch, 'standalone.git');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['bundle', 'unbundle', join(receipt.archiveDir, 'commits.bundle')], restored);
+    await execGit(['fsck', '--full', '--strict', '--no-reflogs', release.head], restored);
   });
 
   it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
@@ -1606,29 +1941,78 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(await archives()).toEqual([]);
     });
 
-  it.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('refuses changed %s evidence between review and confirmation', async change => {
-    const c = await reviewedCheckout('changed-review', { gitlink: true });
+  it('preserves the checkout and inventory when private administration is recreated behind an unchanged Git pointer', async () => {
+    const c = await reviewedCheckout('replaced-administration');
+    const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
+    const identity = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release, allowLocked: true });
+    expect(identity).not.toBeNull();
+    const checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release,
+      checkoutIdentity, checkoutIncarnation: identity.incarnation, reason: 'retirement-review-pending' }] });
+    const before = await getBranchReconcileOutcome('app-1');
     const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    if (change === 'content') await writeFile(join(c.path, 'ignored.txt'), 'new evidence');
-    if (change === 'index') { await writeFile(join(c.path, 'staged.txt'), 'new index'); await execGit(['add', 'staged.txt'], c.path); }
-    if (change === 'administration') await writeFile(join(c.admin, 'portos-review-status'), 'new review');
-    if (change === 'default') {
-      await writeFile(join(repo, 'later.txt'), 'later default');
-      await execGit(['add', 'later.txt'], repo); await execGit(['commit', '-m', 'later default'], repo);
-      c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-    }
-    if (change === 'pr-head') c.forge.prHead = c.forge.defaultHead;
-    if (change === 'unreadable-policy') injected.policies = null;
-    if (change === 'forge') c.forge.remoteHead = c.release.head;
-    if (change === 'policy') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
-    if (change === 'submodule') await writeFile(join(c.path, 'vendor', 'unique.txt'), 'submodule work');
-    if (change === 'inventory') injected.schedule.executions = {};
-    const result = await c.confirm(prepared.review);
-    expect(result.ok).toBe(false);
-    expect(await registered(c.release.path)).toBe(true);
-    expect(await lockText(c.release.path)).toBe(c.release.lockReason);
+    expect(prepared.ok).toBe(true); // Tuple-only clients use the stored full identity.
+    const pointer = await readFile(join(c.path, '.git'));
+    const index = await readFile(join(c.admin, 'index'));
+    const tracked = await readFile(join(c.path, 'initial.txt'));
+    const preserved = join(scratch, 'preserved-administration');
+    await rename(c.admin, preserved);
+    await cp(preserved, c.admin, { recursive: true });
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout.split('\n')
+      .filter(line => line === `branch refs/heads/${c.release.branch}`)).toHaveLength(1);
+    expect(await readRetirementCheckoutIdentity(c.path)).toBe(checkoutIdentity);
+    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    expect(await readFile(join(c.path, '.git'))).toEqual(pointer);
+    expect(await readFile(join(c.admin, 'index'))).toEqual(index);
+    expect(await readFile(join(c.path, 'initial.txt'))).toEqual(tracked);
+    expect(await readFile(join(preserved, 'index'))).toEqual(index);
+    expect(await readFile(join(c.admin, 'portos-review-status'), 'utf8')).toBe('private synthetic review marker');
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(c.path, 'untracked.txt'), 'utf8')).toBe('untracked work\n');
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await registered(c.path)).toBe(true);
     expect(await archives()).toEqual([]);
+    const after = await getBranchReconcileOutcome('app-1');
+    expect(after.remaining).toEqual(before.remaining);
+    expect(after.retired).toEqual(before.retired);
+    expect(after.retirementObligations).toEqual(before.retirementObligations);
+  });
+
+  describe.each(['content', 'index', 'administration', 'default', 'pr-head', 'forge', 'policy', 'unreadable-policy', 'submodule', 'inventory'])('changed %s evidence between review and confirmation', change => {
+    let c;
+    let prepared;
+    // Fixture construction, preview and confirmation are distinct real-Git
+    // workflows; each retains the existing 30-second phase budget.
+    beforeEach(async () => {
+      c = await reviewedCheckout('changed-review', { gitlink: true });
+    });
+    beforeEach(async () => {
+      prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+    });
+    it('refuses confirmation and retains the checkout, lock and archive state', async () => {
+      if (change === 'content') await writeFile(join(c.path, 'ignored.txt'), 'new evidence');
+      if (change === 'index') { await writeFile(join(c.path, 'staged.txt'), 'new index'); await execGit(['add', 'staged.txt'], c.path); }
+      if (change === 'administration') await writeFile(join(c.admin, 'portos-review-status'), 'new review');
+      if (change === 'default') {
+        await writeFile(join(repo, 'later.txt'), 'later default');
+        await execGit(['add', 'later.txt'], repo); await execGit(['commit', '-m', 'later default'], repo);
+        c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+      }
+      if (change === 'pr-head') c.forge.prHead = c.forge.defaultHead;
+      if (change === 'unreadable-policy') injected.policies = null;
+      if (change === 'forge') c.forge.remoteHead = c.release.head;
+      if (change === 'policy') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+      if (change === 'submodule') await writeFile(join(c.path, 'vendor', 'unique.txt'), 'submodule work');
+      if (change === 'inventory') injected.schedule.executions = {};
+      const result = await c.confirm(prepared.review);
+      expect(result.ok).toBe(false);
+      expect(await registered(c.release.path)).toBe(true);
+      expect(await lockText(c.release.path)).toBe(c.release.lockReason);
+      expect(await archives()).toEqual([]);
+    });
   });
 
   it.each(['running', 'paused'])('refuses a %s owner that arrives after preparation', async status => {
@@ -1638,6 +2022,125 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       metadata: { workspacePath: repo, claimBranches: [c.release.branch] } }] });
     expect(result).toMatchObject({ ok: false, reason: 'claim-owner-active' });
     expect(await registered(c.release.path)).toBe(true);
+  });
+
+  it.each(['confirmed', 'unconfirmed', 'human-handoff', 'active-owner', 'changed-default', 'changed-source'])('reviews source-superseded local work through the existing archive fence: %s', async scenario => {
+    const c = await reviewedCheckout(`source-${scenario}`, { superseded: scenario !== 'unconfirmed' });
+    c.forge.prHead = c.forge.firstCommit = c.forge.mergeCommit;
+    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.firstCommit}^`], repo)).stdout.trim();
+    c.forge.sourceSupersessionHead = c.release.head;
+    const prepare = () => prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
+      prUrl: c.forge.prUrl, kind: 'source-supersession' }, c.opts);
+    if (scenario === 'human-handoff') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+    if (scenario === 'active-owner') c.opts.readAgents = async () => [{ id: 'live', status: 'running', metadata: { workspacePath: repo, claimBranches: [c.release.branch] } }];
+    const prepared = await prepare();
+    if (['human-handoff', 'active-owner'].includes(scenario)) {
+      expect(prepared.ok).toBe(false);
+      expect(await archives()).toEqual([]);
+      expect(await registered(c.path)).toBe(true);
+      return;
+    }
+    expect(prepared).toMatchObject({ ok: true, review: { kind: 'source-supersession',
+      forge: { sourceSupersessionHead: c.release.head }, comparison: { disposition: 'review-supersession' } } });
+    if (scenario === 'changed-source') await writeFile(join(c.path, 'ignored.txt'), 'new local work\n');
+    if (scenario === 'changed-default') {
+      await writeFile(join(repo, 'later.txt'), 'new default\n');
+      await execGit(['add', 'later.txt'], repo);
+      await execGit(['commit', '-m', 'later default'], repo);
+      c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
+    }
+    const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release, review: {
+      prUrl: c.forge.prUrl, digest: prepared.review.digest, kind: 'source-supersession', acceptSuperseded: scenario !== 'unconfirmed',
+    } }, c.opts);
+    if (scenario !== 'confirmed') {
+      expect(result).toMatchObject({ ok: false, reason: scenario === 'unconfirmed' ? 'retirement-supersession-not-accepted' : 'retirement-review-changed' });
+      expect(await registered(c.path)).toBe(true);
+      expect(await archives()).toEqual([]);
+      return;
+    }
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
+    expect(manifest).toMatchObject({ head: c.release.head, review: { kind: 'source-supersession' } });
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await registered(c.path)).toBe(false);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([expect.objectContaining({ head: c.release.head, archiveDir: result.archiveDir })]));
+    const restored = join(scratch, 'standalone-source.git');
+    await execGit(['init', '--bare', restored], scratch);
+    await execGit(['bundle', 'unbundle', join(result.archiveDir, 'commits.bundle')], restored);
+    await execGit(['fsck', '--full', '--strict', '--no-reflogs', c.release.head], restored);
+    expect((await execGit(['show', `${c.release.head}:feature.txt`], restored)).stdout).toBe('original feature\n');
+  });
+
+  it.each(['confirmed', 'human-handoff', 'published-owner'])('reviews an exact merged detached checkout without borrowing branch retirement: %s', async scenario => {
+    const c = await reviewedCheckout(`detached-review-${scenario}`);
+    const publishedBranch = c.release.branch;
+    await execGit(['switch', '--detach', c.release.head], c.path);
+    c.release.branch = null;
+    c.forge.publishedBranch = publishedBranch;
+    c.forge.exactAliasHead = c.release.head;
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'worktree-unmanaged-location' }] });
+    if (scenario === 'human-handoff') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
+    if (scenario === 'published-owner') c.opts.readAgents = async () => [{ id: 'live', status: 'running', metadata: { workspacePath: repo, claimBranches: [publishedBranch] } }];
+    const prepared = await c.prepare();
+    if (scenario !== 'confirmed') {
+      expect(prepared.ok).toBe(false);
+      expect(await registered(c.path)).toBe(true);
+      expect(await archives()).toEqual([]);
+      return;
+    }
+    expect(prepared.ok).toBe(true);
+    const result = await c.confirm(prepared.review);
+    expect(result).toMatchObject({ ok: true, branchDeleted: false });
+    expect(await registered(c.path)).toBe(false);
+    expect((await execGit(['rev-parse', publishedBranch], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+  });
+
+  it.each(['confirmed', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner'])('keeps an orphan sibling obligation separate from a detached copy: %s', async scenario => {
+    const c = await reviewedCheckout(`orphan-sibling-${scenario}`);
+    const namedPath = c.path;
+    const namedBranch = c.release.branch;
+    await execGit(['worktree', 'unlock', namedPath], repo);
+    const evidence = await import('./completedCheckoutEvidence.js');
+    const agent = { id: 'sibling-owner', status: 'running', startedAt: new Date(Date.now() - 60_000).toISOString(),
+      metadata: { sourceWorkspace: repo, workspacePath: namedPath, isWorktree: true, worktreeBranch: namedBranch,
+        prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: c.forge.prUrl, branch: namedBranch } } };
+    agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
+    agent.status = 'completed'; agent.completedAt = new Date().toISOString();
+    agent.result = { success: false, executionSuccess: false, orphaned: true, validationPassed: null };
+    agent.metadata.completedCheckouts = await evidence.captureSeededCompletionCheckouts(agent);
+    expect(agent.metadata.completedCheckouts).toHaveLength(1);
+    const path = join(external, `detached-${scenario}`);
+    if (scenario === 'same-incarnation') {
+      const pointerIdentity = await readRetirementCheckoutIdentity(namedPath);
+      await execGit(['worktree', 'move', namedPath, path], repo);
+      await execGit(['switch', '--detach', c.release.head], path);
+      expect(await readRetirementCheckoutIdentity(path)).toBe(pointerIdentity);
+    }
+    else {
+      await execGit(['worktree', 'add', '--detach', path, c.release.head], repo);
+      await writeFile(join(path, 'ignored.txt'), 'distinct detached work\n');
+    }
+    const release = { path, branch: null, head: c.release.head, locked: false, lockReason: null };
+    c.forge.publishedBranch = namedBranch; c.forge.exactAliasHead = release.head;
+    injected.policies = [agent];
+    if (scenario === 'missing-receipt') agent.metadata.completedCheckouts = [];
+    if (scenario === 'human-handoff') agent.metadata.prCompletionPolicy = 'leave-open';
+    if (scenario === 'active-owner') { agent.status = 'running'; c.opts.readAgents = async () => [agent]; }
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-unmanaged-location' }] });
+    const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
+    if (scenario !== 'confirmed') {
+      expect(prepared.ok).toBe(false); expect(await registered(path)).toBe(true); expect(await archives()).toEqual([]);
+      return;
+    }
+    expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedSibling: true }] } } });
+    const result = await retireInventoriedCheckout({ appId: 'app-1', release,
+      review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
+    expect(result).toMatchObject({ ok: true, branchDeleted: false });
+    expect(await registered(namedPath)).toBe(true);
+    expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(release.head);
+    expect(agent.result).toEqual({ success: false, executionSuccess: false, orphaned: true, validationPassed: null });
+    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('distinct detached work\n');
   });
 
   it('preserves archive and checkout when fresh forge evidence changes after archiving', async () => {

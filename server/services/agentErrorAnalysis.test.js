@@ -717,6 +717,13 @@ describe('maybeCreateInvestigationTask', () => {
     expect(addTask).toHaveBeenCalledTimes(1);
   });
 
+  it('does not turn a failed repository cleanup recovery into a new investigation', async () => {
+    await maybeCreateInvestigationTask('agent-1', { id: 'cleanup-review', metadata: {
+      recoveryOrigin: { subsystem: 'repository-cleanup', parentAgentId: 'original' },
+    } }, { category: 'unknown', message: 'synthetic recoverable failure', actionable: true });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('never spawns an investigation for a failed investigation task (meta-cascade guard)', async () => {
     await maybeCreateInvestigationTask('agent-1', { id: 'inv-1', description: '[Auto] Investigate agent failure: x', metadata: { isInvestigation: true } }, { category: 'unknown', message: 'boom' });
     expect(addTask).not.toHaveBeenCalled();

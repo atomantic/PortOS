@@ -30,7 +30,8 @@ import { clearStaleActiveAgents } from './appActivity.js';
 import { drainOnDemandRequests } from './onDemandDrain.js';
 import { logCosScheduleUpdate } from './userActionScheduleLog.js';
 import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
-import { schedule as scheduleEvent, cancel as cancelEvent } from './eventScheduler.js';
+import { schedule as scheduleEvent, cancel as cancelEvent, getEvent } from './eventScheduler.js';
+import { COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
@@ -158,6 +159,10 @@ export async function getStatus() {
   const stateCompletedIds = Object.keys(state.agents).filter(id => state.agents[id].status === 'completed');
   const stateOnlyCompleted = stateCompletedIds.filter(id => !idx.has(id)).length;
   const tasksCompleted = Math.max(state.stats.tasksCompleted, idx.size + stateOnlyCompleted);
+  const recoveryEvent = getEvent('cos-pending-merge-sweep');
+  const recoveryBlocked = !isDaemonRunning() ? 'CoS is stopped' : state.paused ? 'CoS is paused'
+    : getDomainMode(state.config, 'cos') !== 'execute' ? 'CoS auto-run must be in Execute mode'
+      : !recoveryEvent?.active ? 'Completion recovery is not scheduled' : null;
 
   return {
     running: isDaemonRunning(),
@@ -169,6 +174,12 @@ export async function getStatus() {
     activeAgents,
     pendingTasks: unclaimedTaskIds(await readPendingTaskIds(), runningAgentsByTaskId(Object.values(state.agents))).length,
     pausedAgents,
+    completionRecovery: {
+      blockedReason: recoveryBlocked,
+      nextRunAt: recoveryBlocked ? null : recoveryEvent.nextRunAt,
+      intervalMs: recoveryEvent?.intervalMs || null,
+      batchSize: COMPLETION_RECOVERY_BATCH_SIZE,
+    },
     provider: provider ? { id: provider.id, name: provider.name } : null
   };
 }

@@ -8,6 +8,13 @@ async function mergedPrUrl(app, branch, tip) {
   return (await findMergedPullRequest(app.repoPath, branch, tip, { forgeAccount: app.forgeAccount ?? null })).url;
 }
 
+/** The manual-claim grace gate is not a completed run's cleanup handoff. Only
+ * that one refusal is eligible for a fresh, exact-head policy review below. */
+export function retainedMergedClaims(result) {
+  return (result.merged || []).filter(branch => result.skipped?.some(row =>
+    row.branch === branch.branch && row.reason === 'claim-completion-unverified'));
+}
+
 /** Inventory is persisted first: the same preview used by the live endpoint
  * rejects changed owners, policies, checkout identity and missing proof objects.
  */
@@ -17,8 +24,10 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
   const retired = [];
   const readPr = deps.readPr || mergedPrUrl;
   const prepare = deps.prepare || (await import('./heldCheckoutRecovery.js')).prepareInventoriedCheckoutRetirement;
-  for (const branch of result.wip || []) {
-    if (branch.rule !== 'completion-policy' || branch.completionPolicyReason !== 'pr-completion-review-required'
+  const mergedClaims = retainedMergedClaims(result);
+  for (const branch of [...(result.wip || []), ...mergedClaims]) {
+    const mergedClaim = mergedClaims.includes(branch);
+    if ((!mergedClaim && (branch.rule !== 'completion-policy' || branch.completionPolicyReason !== 'pr-completion-review-required'))
       || branch.liveOwnerReason || branch.worktreeDirty || branch.worktreeStatusUnavailable) continue;
     if (branch.openPr && !staleBehindOpenPr(branch)) continue;
     const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
@@ -29,7 +38,7 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
     // Every commit is already on the default branch, so no PR identity or owner
     // history is needed to prove nothing is lost: archive and retire it. The
     // service re-proves merge evidence and ownership under its fence.
-    if (branch.isMerged === true) {
+    if (branch.isMerged === true && !mergedClaim) {
       const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;
       const outcome = await retire({ appId: app.id, release },
         { beforeMutation: assertAutomaticRetirementAllowed, settleMergedReviewObligation: true })
@@ -47,6 +56,14 @@ export async function prepareReconcileRetirements(app, result, deps = {}) {
       // The preview's policy gate requires completed successful legacy review
       // owners. An empty policy set after a concurrent change is not that proof.
       if (!prepared.review?.policy?.policies?.length) { held.push({ ...release, reason: 'retirement-policy-changed' }); continue; }
+      if (mergedClaim) {
+        // The existing review policy requires a terminal exact-bound owner;
+        // an empty registry, merged PR alone or the old grace clock grants
+        // nothing. Keep this digest-bound policy proof through final removal.
+        if (prepared.review.forge?.prHead !== release.head || !prepared.review.policy.integratedCleanupHead) {
+          held.push({ ...release, reason: 'claim-completion-unverified' }); continue;
+        }
+      }
       if (!['integrated', 'review-supersession'].includes(prepared.review.comparison?.disposition)
         || typeof prepared.review.comparison.localPatch !== 'string' || typeof prepared.review.comparison.difference !== 'string') {
         held.push({ ...release, reason: 'retirement-comparison-unavailable' }); continue;

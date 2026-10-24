@@ -1,3 +1,6 @@
+import { storeCompletionData, completionReplayInput } from './agentCompletionData.js';
+import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
+import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { retryHoldMetadata, isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
@@ -131,8 +134,9 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null }) {
   if (terminatedByUser) return null;
+  if (success && mergedReviewFollowUp?.status === 'verified') return true;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
   // the same resolution the programmatic-I/O gate uses, reused for the coordinator
@@ -1171,6 +1175,21 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
   });
 }
 
+/** Server-owned merge evidence settles only the assigned review/merge target. */
+async function completionReviewFollowUp({ task, agentId, workspacePath, reportedOutcome, eligible }) {
+  if (!eligible) return null;
+  const verified = await (await import('./reviewFollowUpCompletion.js')).verifyMergedReviewFollowUp(task, workspacePath)
+    .catch(() => null);
+  if (!verified) return null;
+  const taskOutcome = {
+    status: reportedOutcome?.status === 'completed' ? 'completed' : 'no-action-needed',
+    reason: `The assigned review/merge target is verified MERGED: ${verified.prUrl}. Preserved corrections and checkout retirement remain separate obligations.`,
+  };
+  await updateAgent(agentId, { metadata: { taskOutcome, taskOutcomeSource: 'forge-verification',
+    reportedTaskOutcome: reportedOutcome, mergedReviewFollowUp: verified } });
+  return { ...verified, taskOutcome };
+}
+
 async function completionClaimDisposition({ task, agent, agentId, reportedOutcome, success }) {
   if (!success || reportedOutcome?.status !== 'no-action-needed' || !hasClaimFlowContract(task)) return null;
   return import('./claimDisposition.js').then(async ({ verifyClaimDisposition }) =>
@@ -1224,12 +1243,16 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const isPrivateSecurity = isPrivateSecurityTask(task) || isPrivateSecurityTask(agent);
   const interruption = agent.metadata?.executionInterruption;
   const refused = ['content-refusal', 'content-filtered'].includes(interruption?.category);
-  const reportedOutcome = !isPrivateSecurity && !refused
+  let reportedOutcome = !isPrivateSecurity && !refused
     ? await persistCompletionSummary(agent.id, { workspacePath: agent.metadata?.workspacePath, existingRecord: agent }) : null;
+  const executionSuccess = success && exitCode === 0;
+  const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId: agent.id,
+    workspacePath: agent.metadata?.workspacePath, reportedOutcome,
+    eligible: executionSuccess && !isPrivateSecurity && !interruption });
+  if (mergedReviewFollowUp) reportedOutcome = mergedReviewFollowUp.taskOutcome;
   // Only an explicit hold suppresses orphan recovery; a failed delivery check
   // must retain the caller's normal failure/retry handling.
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
-  const executionSuccess = success && exitCode === 0;
   let effectiveSuccess = isPrivateSecurity || refused || deliveryHeld ? false : success;
   const errorAnalysis = refused ? {
     category: interruption.category, origin: interruption.source || 'provider',
@@ -1251,8 +1274,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     : agent.result?.validationPassed ?? null;
   // A disposition never erases a recorded failed delivery gate. A saved pass,
   // however, cannot replace a fresh selected-issue proof on no-op recovery.
-  const validationPassed = claimDisposition && recoveredValidation !== false
-    ? claimDisposition.status === 'verified' ? true : null
+  const validationPassed = recoveredValidation !== false && (mergedReviewFollowUp || claimDisposition)
+    ? mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null
     : recoveredValidation;
   const taskOutcome = reportedOutcome ? resolveTaskOutcome({ reported: reportedOutcome,
     success: effectiveSuccess, validationPassed }) : null;
@@ -1276,7 +1299,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
 
   const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
   const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
-    && (agent.metadata?.isWorktree === true || isTruthyMeta(agent.metadata?.claimPicksOwnBranch)));
+    && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
   const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
   const recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
     ? resolveUndeliveredTaskUpdate(task, recoveryOutcome, agent.id) : null;
@@ -1710,8 +1733,14 @@ export async function finalizeAgent({
   startedAt = null,
 }) {
   const executionSuccess = reportedSuccess && (typeof exitCode !== 'number' || exitCode === 0);
-  const reportedTaskOutcome = !terminatedByUser && !isPrivateSecurityTask(task)
+  let reportedTaskOutcome = !terminatedByUser && !isPrivateSecurityTask(task)
     ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
+  // A successful process may report a hold after discovering its PR merged.
+  // Verify that exact target before the hold can schedule another run.
+  const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId, workspacePath, reportedOutcome: reportedTaskOutcome,
+    eligible: executionSuccess && !terminatedByUser && !executionInterruption
+      && !isPrivateSecurityTask(task) && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent });
+  if (mergedReviewFollowUp) reportedTaskOutcome = mergedReviewFollowUp.taskOutcome;
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
   if (deliveryHeld && reportedTaskOutcome.recovery?.mode !== 'cleanup'
     && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent) {
@@ -1944,6 +1973,7 @@ export async function finalizeAgent({
     branchProvenEmpty,
     emptyBranchInconclusiveEvidence: prEvidence.emptyBranchInconclusiveEvidence,
     claimDisposition,
+    mergedReviewFollowUp,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
@@ -1959,8 +1989,8 @@ export async function finalizeAgent({
     errorAnalysis: { category: hookResult?.outcome?.reason || `task-${taskOutcome.status}`,
       message: taskOutcome.reason, permanent: true, actionable: false, requiresFallback: false },
   } : verdict;
-  const cleanupOwner = taskOutcome?.recovery?.mode === 'cleanup' ? await getAgentRecord(agentId) : null;
-  const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || isTruthyMeta(cleanupOwner?.metadata?.claimPicksOwnBranch);
+  const cleanupOwner = await getAgentRecord(agentId);
+  const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || hasClaimCheckoutBindings(cleanupOwner?.metadata);
   const terminalFailure = !verdict.success && (verdict.errorAnalysis?.actionable || verdict.errorAnalysis?.permanent)
     && !(verdict.source === 'reported' && verdict.errorAnalysis?.category === `task-${reportedTaskOutcome?.status}`);
   const taskUpdate = (deliveryHeld || (verdict.success && outcomeHeld)) && !terminatedByUser
@@ -1981,20 +2011,39 @@ export async function finalizeAgent({
     }
   }
 
-  // Sequential by design: completeAgent + updateTask share the cosState
-  // mutex (`withStateLock`) so parallelism gains nothing, AND ordering
-  // matters — if completeAgent throws, we must not mark the task completed.
+  // Each write shares the cosState mutex, but separate records are not atomic.
+  // Persist cleanup intent first so a crash after completeAgent can replay only
+  // the guarded task handoff; full finalization and hooks must not run twice.
   // completeAgentRun writes its own runs/<id>/metadata.json (separate lock),
   // so its place in the chain is purely about progress reporting on partial
   // failure.
-  await completeAgent(agentId, { ...completionRecord({
+  await stampLiExecutionVerdict(taskUpdate, task, { success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict.errorAnalysis });
+  const priorCleanup = cleanupOwner?.metadata?.completionCleanup;
+  const settledCleanup = ['completed', 'failed', 'abandoned'].includes(priorCleanup?.status);
+  const replay = priorCleanup?.replay || (!settledCleanup && cleanupOwner?.startedAt ? await storeCompletionData(cleanupOwner, 'replay', completionReplayInput({ task,
+    effectiveSuccess: deliverySuccess, outputBuffer,
+    prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence), branchProvenEmpty: prEvidence.branchProvenEmpty })) : undefined);
+  await updateAgent(agentId, { metadata: { completionCleanup: { ...cleanupOwner?.metadata?.completionCleanup,
+    version: 1, status: priorCleanup?.status || 'pending', stages: priorCleanup?.stages || {}, replay, context: undefined } } });
+  if (cleanupEligible) await prepareCompletionTaskHandoff(await getAgentRecord(agentId),
+    Object.fromEntries(Object.entries(taskUpdate.metadata || {}).filter(([key, value]) =>
+      key !== 'privateSecurityScope' && JSON.stringify(value) !== JSON.stringify(preHookTask.metadata?.[key]))));
+  const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
   }), executionSuccess, taskOutcome,
+    requireCheckoutSettlement: deliverySuccess && taskUpdate.status === 'completed' && cleanupEligible
+      && resolvePrCompletion(task.metadata) === PR_COMPLETIONS.REVIEW_THEN_MERGE,
     ...(claimDisposition ? { claimDisposition } : {}),
     ...(['task-approval', 'task-recovery-exhausted'].includes(taskUpdate.metadata?.blockedCategory)
       || taskUpdate.metadata?.retryPendingCleanup === agentId || taskUpdate.metadata?.deliveryRecoveryAgentId === agentId
       ? { deliveryRecoveryOwned: true } : {}),
     ...(taskUpdate.metadata?.deliveryRecoveryAgentId === agentId ? { cleanupPending: true } : {}) });
+  const capturePending = completedAgent?.result?.cleanupPending === true;
+  if (capturePending) {
+    taskUpdate.status = 'in_progress';
+    taskUpdate.metadata = { ...taskUpdate.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId,
+      taskOutcome: completedAgent.result.taskOutcome };
+  }
 
   if (runId) {
     // Every failed verdict overrides exit-code/commit rescue in run tracking,
@@ -2007,12 +2056,6 @@ export async function finalizeAgent({
     await completeAgentRun(runId, runOutput, exitCode, duration, deliveryVerdict.errorAnalysis, deliverySuccess ? null : false, { executionSuccess, taskOutcome });
   }
 
-  // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome into
-  // the task's FEDERATED metadata as part of this completion write, so the originating peer
-  // (which filed the proposal and runs LI for that app) can derive `recordProposalExecution`
-  // from the terminal synced task — cross-peer parity for the #2765 LOCAL write, which only
-  // lands on the peer that ran the agent.
-  await stampLiExecutionVerdict(taskUpdate, task, { success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict.errorAnalysis });
 
   // The bounded source inventory belongs only to this run and its private
   // report. Task metadata is replicated to peers and reused in later prompts.
@@ -2020,7 +2063,9 @@ export async function finalizeAgent({
     delete task.privateSecurityScope;
     if (taskUpdate.metadata) delete taskUpdate.metadata.privateSecurityScope;
   }
-  const taskResult = await updateTask(task.id, taskUpdate, taskType);
+  const taskResult = capturePending
+    ? await recoverCompletionTaskHandoff(await getAgentRecord(agentId)) || { error: 'Completion cleanup task ownership changed' }
+    : await updateTask(task.id, taskUpdate, taskType);
   if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
@@ -2044,7 +2089,7 @@ export async function finalizeAgent({
   // removed, local branch deleted, and no resume pointer recorded — destroying
   // the state the retry needs to open the PR that is missing.
   return {
-    success: deliverySuccess,
+    success: capturePending ? false : deliverySuccess,
     taskOutcome,
     prClaimVerified: prClaimWasVerified(prEvidence.cleanupEvidence),
     branchProvenEmpty: prEvidence.branchProvenEmpty,
@@ -2321,8 +2366,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
  */
 async function persistCompletionSummary(agentId, { workspacePath, finalSummary = null, existingRecord = null }) {
   const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+  const { readCompletionSentinel } = await import('./agentCompletionSentinel.js');
+  const ingested = await readCompletionSentinel(agentId, workspacePath);
   const sentinelPath = doneSentinelPath(workspacePath, agentId);
-  const contents = sentinelPath ? await tryReadFile(sentinelPath) : null;
+  const contents = ingested?.contents ?? (sentinelPath ? await tryReadFile(sentinelPath) : null);
   let summary = null;
   let source = null;
   let taskOutcome = null;
@@ -2369,6 +2416,8 @@ async function persistCompletionSummary(agentId, { workspacePath, finalSummary =
       && existing.metadata.taskSummary.trim()) return taskOutcome;
   }
   await updateAgent(agentId, { metadata: {
+    ...(ingested ? { completionSentinel: ingested.receipt, completionSentinelData: await storeCompletionData(
+      existingRecord || await getAgentRecord(agentId), 'sentinel', ingested.contents), completionSentinelContents: undefined } : {}),
     taskSummary: summary,
     taskSummarySource: source,
     taskOutcome,

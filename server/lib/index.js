@@ -211,6 +211,7 @@ export * from './agentExecutionProfiles.js';
 export * from './agentApiToken.js';
 export * from './localReviewAttribution.js';
 export * from './localReviewBridge.js';
+export * from './localReviewLifecycle.js';
 export * from './agentCompletionMode.js';
 export * from './localEndpoint.js';
 export * from './localLlmConcurrency.js';

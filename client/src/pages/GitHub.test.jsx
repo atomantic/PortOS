@@ -444,6 +444,7 @@ async function renderInbox(tab = 'inbox') {
 describe('GitHub inbox tab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mock.getProviders.mockResolvedValue({ providers: [] });
     mock.getGitHubAccounts.mockResolvedValue([IMPLICIT]);
     mock.syncGitHubNotifications.mockResolvedValue({ results: [] });
     mock.getGitHubNotifications.mockResolvedValue({ notifications: [NOTIFICATION], sync: {} });

@@ -15,6 +15,7 @@ import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { toAgentListItems } from '../lib/cosAgentListProjection.js';
 import { isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
+import { getDeliveryActivity } from '../services/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
@@ -37,6 +38,27 @@ router.post('/merge-admission', asyncHandler(async (req, res) => {
   const input = validateRequest(mergeAdmissionSchema, req.body ?? {});
   const { claimMergeAdmission } = await import('../services/cosMergeAdmission.js');
   res.json(await claimMergeAdmission(input));
+}));
+
+// Outside operators have no CoS agent record. A per-run secret separates
+// sessions sharing the agent-key credential; only its principal-bound hash is
+// persisted. Neither an agentId nor a PR's prose can select another owner.
+const externalMergeAdmissionSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('acquire'), appId: z.string().min(1).max(200),
+    worktreePath: z.string().min(1).max(4096), prUrl: z.string().url().max(2048),
+    baseBranch: z.string().min(1).max(255),
+    headSha: z.string().regex(/^[a-f0-9]{40}$/), baseSha: z.string().regex(/^[a-f0-9]{40}$/),
+  }).strict(),
+  z.object({ action: z.literal('check'), token: z.string().uuid() }).strict(),
+  z.object({ action: z.literal('release'), token: z.string().uuid(),
+    outcome: z.enum(['merged', 'leave-open', 'resync']) }).strict(),
+]);
+router.post('/merge-admission/external', asyncHandler(async (req, res) => {
+  const input = validateRequest(externalMergeAdmissionSchema, req.body ?? {});
+  const { externalAdmissionOwner } = await import('../services/externalAdmissionAuth.js');
+  const { externalMergeAdmission } = await import('../services/cosMergeAdmission.js');
+  res.json(await externalMergeAdmission(input, () => externalAdmissionOwner(req)));
 }));
 
 // A registered run hands its published, reviewed head to the server's
@@ -128,7 +150,8 @@ router.get('/agents', asyncHandler(async (req, res) => {
     if (visible.has(id)) return;
     const agent = resident.get(id) || await getAgentRecord(id);
     if (agent?.status === 'completed' && agent.taskId === task.id) {
-      visible.set(id, { ...agent, deliveryPending: true });
+      const deliveryActivity = getDeliveryActivity(id);
+      visible.set(id, { ...agent, deliveryPending: true, ...(deliveryActivity && { deliveryActivity }) });
     }
   }));
   res.json(toAgentListItems([...visible.values()]));
