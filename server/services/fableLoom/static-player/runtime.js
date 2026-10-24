@@ -154,6 +154,7 @@ export function createSession(manifest, options = {}) {
   let status = '';
   let clipGeneration = 0;
   let consumedClip = null;
+  let deferredEnd = null;
 
   function notify() {
     if (typeof options.onChange === 'function') options.onChange(snapshot());
@@ -199,7 +200,14 @@ export function createSession(manifest, options = {}) {
   function consumeClip(generation) {
     if (typeof generation === 'number') consumedClip = generation;
   }
+  function replayDeferredEnd() {
+    if (deferredEnd === null) return;
+    const generation = deferredEnd;
+    deferredEnd = null;
+    onMediaEnded(generation);
+  }
   function enterNode(id) {
+    deferredEnd = null;
     invalidate();
     const node = nodes.get(id);
     pendingTransitionId = null;
@@ -311,9 +319,12 @@ export function createSession(manifest, options = {}) {
       settleTurnPhase(node);
       status = 'The turn did not finish speaking, so the scene stayed.';
       notify();
+      replayDeferredEnd();
       return { accepted: false, action: 'stay', reason: outcome.status };
     }
     const moved = beginTransition(node, edge);
+    if (moved.action === 'stay') replayDeferredEnd();
+    else deferredEnd = null;
     notify();
     return { accepted: moved.action !== 'stay', ...moved, speech: outcome.status };
   }
@@ -321,7 +332,12 @@ export function createSession(manifest, options = {}) {
   function onMediaEnded(generation) {
     if (staleClip(generation)) return { action: 'ignore', reason: 'STALE_CLIP' };
     const node = currentNode();
-    if (!node || turnPhase === 'thinking' || turnPhase === 'speaking') return { action: 'ignore', reason: 'HALF_DUPLEX' };
+    // The page removes its ended listener before this returns, so a clip that
+    // finishes during a turn has to be replayed once the turn settles.
+    if (!node || turnPhase === 'thinking' || turnPhase === 'speaking') {
+      if (node && typeof generation === 'number') deferredEnd = generation;
+      return { action: 'ignore', reason: 'HALF_DUPLEX' };
+    }
     consumeClip(generation);
     if (phase === 'exit') {
       const chosen = edgeTarget(node, pendingTransitionId);
@@ -429,6 +445,7 @@ export function createSession(manifest, options = {}) {
         turnPhase = 'listening';
         status = 'The turn could not be resolved.';
         notify();
+        replayDeferredEnd();
         return { accepted: false, reason: 'RESOLVER_FAILED' };
       }
       if (!sameTurn(turn)) return { accepted: false, reason: 'STALE' };
@@ -439,6 +456,7 @@ export function createSession(manifest, options = {}) {
           narration = '';
           status = 'That path is not on this scene.';
           notify();
+          replayDeferredEnd();
           return { accepted: false, action: 'stay', reason: 'ABSENT_TRANSITION' };
         }
         return commitMove(turn, node, chosen.edge);
@@ -451,6 +469,7 @@ export function createSession(manifest, options = {}) {
       if (!sameTurn(turn)) return { accepted: false, reason: 'STALE' };
       turnPhase = 'listening';
       notify();
+      replayDeferredEnd();
       return { accepted: true, action: 'stay', narration, speech: outcome.status };
     },
   };

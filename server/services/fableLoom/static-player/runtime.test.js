@@ -327,6 +327,48 @@ describe('static reference player runtime', () => {
     expect(session.snapshot()).toMatchObject({ nodeId: 'decision-gate', turnPhase: 'listening' });
   });
 
+  it('rotates a hold that ended during a turn and does not carry that end into the next scene', async () => {
+    const manifest = story();
+    const gate = gateOf(manifest);
+    gate.playbackAssets.entry = null;
+    gate.playbackAssets.holds = [clip('a'), clip('b')];
+    let release = () => {};
+    const staying = atGate(manifest, {
+      resolveTurn: () => new Promise((resolve) => { release = () => resolve({ stay: 'Not yet.' }); }),
+    });
+    const before = staying.snapshot();
+    const pendingStay = staying.submit('hello');
+    expect(staying.onMediaEnded(before.media.generation)).toMatchObject({ reason: 'HALF_DUPLEX' });
+    expect(staying.snapshot().media.url).toBe(before.media.url);
+    release();
+    expect(await pendingStay).toMatchObject({ action: 'stay', narration: 'Not yet.' });
+    expect(staying.snapshot()).toMatchObject({ nodeId: 'decision-gate', turnPhase: 'listening' });
+    expect(staying.snapshot().media.url).not.toBe(before.media.url);
+
+    let finishFail = () => {};
+    const failing = atGate(manifest, {
+      onSpeak: (turn) => new Promise((resolve) => { finishFail = () => resolve(echo('failed')(turn)); }),
+    });
+    const held = failing.snapshot();
+    const pendingFail = failing.choose('open');
+    expect(failing.onMediaEnded(held.media.generation)).toMatchObject({ reason: 'HALF_DUPLEX' });
+    finishFail();
+    expect(await pendingFail).toMatchObject({ accepted: false, reason: 'failed' });
+    expect(failing.snapshot()).toMatchObject({ nodeId: 'decision-gate', turnPhase: 'listening' });
+    expect(failing.snapshot().media.url).not.toBe(held.media.url);
+
+    let finish = () => {};
+    const moving = atGate(story(), {
+      onSpeak: (turn) => new Promise((resolve) => { finish = () => resolve(echo('empty')(turn)); }),
+    });
+    const generation = moving.snapshot().media.generation;
+    const pendingMove = moving.choose('open');
+    expect(moving.onMediaEnded(generation)).toMatchObject({ reason: 'HALF_DUPLEX' });
+    finish();
+    expect(await pendingMove).toMatchObject({ nodeId: 'ending-home' });
+    expect(moving.snapshot()).toMatchObject({ nodeId: 'ending-home', phase: 'entry' });
+  });
+
   it('advances a failed entry or exit once and leaves a failed hold in place', async () => {
     const opening = createSession(story());
     const generation = opening.snapshot().media.generation;
