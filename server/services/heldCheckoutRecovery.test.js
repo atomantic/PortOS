@@ -1112,6 +1112,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
+  // Full copies, independent restore, and repeated proof of 1,100+ files need
+  // their own bounded integration budget on the shared CI worker.
   it('retires and independently restores more than 1000 content and private Git files under the resource contract', async () => {
     const c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
     await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
@@ -1169,7 +1171,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(join(retired.archiveDir, 'administration/gitdir/private-files/item-59'), 'changed private bytes');
     expect(await find()).toBe(null);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-  });
+  }, 120_000);
 
   it.each([
     { scope: 'content', kind: 'file', count: 1, bytes: 25 * 1024 * 1024 + 1 },
