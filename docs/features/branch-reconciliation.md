@@ -480,8 +480,8 @@ ancestor of the captured completion head, and that capture is an ancestor of the
 currently reviewed delivery. The captured pointer and private-administration
 generation must match exactly. Missing evidence, changed generations, active
 owners and human handoffs remain held. The original agent result and policy are
-never rewritten; the new proof is bound into the retirement review and archive.
-After removal, only that archive-bound generation can finish branch retirement;
+never rewritten; the new proof is bound into the retirement review and removal receipt.
+Cleanup creates no checkout archive. Only that reviewed generation can finish branch retirement;
 a recreated checkout path or new branch holder still refuses.
 
 An incomplete multi-claim batch does not prevent cleanup of a separately
