@@ -33,6 +33,8 @@ export function observeTestProcesses(getSuite, { root = process.env.PORTOS_TEST_
   const directory = join(root, PROCESS_OWNERS_DIR);
   const path = join(directory, `${randomUUID()}.json`);
   const children = new Map();
+  const pending = new Set();
+  let inspectionTimer;
   const worker = workerIdentity(process.env.VITEST_WORKER_ID);
   let phase = 'suite-active';
   let capped = false;
@@ -44,20 +46,45 @@ export function observeTestProcesses(getSuite, { root = process.env.PORTOS_TEST_
       renameSync(`${path}.tmp`, path);
     } catch { /* missing evidence is explicitly unavailable at containment */ }
   };
+  const inspectPending = () => {
+    clearTimeout(inspectionTimer);
+    inspectionTimer = undefined;
+    const candidates = [...pending];
+    pending.clear();
+    if (!candidates.length) return;
+    try {
+      const records = read(candidates.map(child => child.pid));
+      for (const child of candidates) {
+        const item = children.get(child);
+        const record = records?.find(record => record.pid === child.pid);
+        if (item && record?.start && !record.terminal && record.ppid === process.pid) item.row.identity = processIdentity(record);
+      }
+    } catch { /* attribution remains unavailable, never guess by PID */ }
+    persist();
+  };
   const listener = ({ process: child }) => {
     if (children.size >= limit) { capped = true; persist(); return; }
     let suite = 'unavailable';
     try { suite = suiteIdentity(getSuite()); } catch { /* diagnostic context is optional */ }
     const row = { identity: null, suite, worker, phase, lifecycle: 'constructed' };
     const onSpawn = () => {
-      try {
-        const record = read([child.pid])?.find(item => item.pid === child.pid);
-        if (record?.start && !record.terminal) row.identity = processIdentity(record);
-      } catch { /* attribution remains unavailable, never guess by PID */ }
-      row.lifecycle = 'spawned'; persist();
+      row.lifecycle = 'spawned';
+      pending.add(child);
+      // Most Git children close within milliseconds. Inspect survivors together
+      // rather than starting a synchronous OS reader for every short command.
+      inspectionTimer ??= setTimeout(inspectPending, 250).unref();
     };
-    const onExit = () => { row.lifecycle = 'exit-observed'; persist(); };
-    const onClose = () => { children.delete(child); persist(); };
+    const onExit = () => {
+      pending.delete(child);
+      row.lifecycle = 'exit-observed';
+      if (row.identity) persist();
+    };
+    const onClose = () => {
+      pending.delete(child);
+      children.delete(child);
+      if (row.identity) persist();
+      if (!pending.size) { clearTimeout(inspectionTimer); inspectionTimer = undefined; }
+    };
     children.set(child, { row, onSpawn, onExit, onClose });
     child.once('spawn', onSpawn);
     child.once('exit', onExit);
@@ -66,6 +93,9 @@ export function observeTestProcesses(getSuite, { root = process.env.PORTOS_TEST_
   spawned.subscribe(listener);
   return () => {
     spawned.unsubscribe(listener);
+    // Teardown cannot leave a timer or lose a live child born just before it.
+    if (pending.size) inspectPending();
+    clearTimeout(inspectionTimer);
     phase = 'suite-ended';
     for (const [child, item] of children) {
       item.row.phase = phase;
