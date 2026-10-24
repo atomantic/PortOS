@@ -175,7 +175,11 @@ function reviewedIncarnation(input, policies) {
 function completedCleanupForRetirement(policy, input) {
   const agent = policy.agent;
   const result = agent.result;
-  const integratedLegacyCleanup = result?.executionSuccess === true
+  const metadata = agent.metadata || {};
+  const legacyCapture = metadata.completionCleanup === undefined && metadata.checkoutSeeds === undefined
+    && metadata.checkoutCapture === undefined && (metadata.completedCheckouts === undefined
+      || (Array.isArray(metadata.completedCheckouts) && metadata.completedCheckouts.every(row => row?.version === 1)));
+  const integratedLegacyCleanup = legacyCapture && result?.executionSuccess === true
     && input.verifiedPrHead === input.tip && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.integratedCleanupHead || '');
   return (result?.cleanupPending === true || integratedLegacyCleanup)
     && (result.executionSuccess === true || result.cleanupDeliveryVerified === true) && result.validationPassed !== false

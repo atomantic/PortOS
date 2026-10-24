@@ -1,4 +1,3 @@
-import { isClaimAgentMetadata } from '../lib/claimFlowTaskTypes.js';
 import { storeCompletionData, completionReplayInput } from './agentCompletionData.js';
 import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
@@ -1280,7 +1279,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
 
   const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
   const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
-    && (agent.metadata?.isWorktree === true || isClaimAgentMetadata(agent.metadata)));
+    && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
   const recoveryOutcome = !cleanupAllowed && taskOutcome?.recovery?.mode === 'cleanup' ? { ...taskOutcome, recovery: undefined } : taskOutcome;
   const recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
     ? resolveUndeliveredTaskUpdate(task, recoveryOutcome, agent.id) : null;
