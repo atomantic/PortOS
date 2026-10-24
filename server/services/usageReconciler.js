@@ -380,17 +380,18 @@ function codexDateDirs(root, fromMs, toMs) {
 }
 
 /**
- * Token buckets for a `parseAgyTranscript` result. Antigravity writes no token
- * counts, so every figure is chars/4 — but the model calls' replayed context is
- * priced as cache reads (`contextChars`) rather than dropped, since dropping it
- * is what made the plan read as cheaper than its subscription.
+ * Token buckets for a `parseAgyTranscript` result. When the transcript carries
+ * measured token counts (`input_tokens`, `output_tokens`), those counts are
+ * preserved with source `measured`. Otherwise figures fall back to chars/4
+ * estimates with source `estimate`.
  */
 export const agyEstimatedBuckets = (parsed) => ({
   messages: parsed.messages,
-  tokensIn: estimateTokensFromChars(parsed.charsIn),
-  tokensOut: estimateTokensFromChars(parsed.charsOut),
-  cacheReadTokens: estimateTokensFromChars(parsed.contextChars),
-  cacheWriteTokens: 0
+  tokensIn: parsed.measured ? parsed.tokensIn : estimateTokensFromChars(parsed.charsIn),
+  tokensOut: parsed.measured ? parsed.tokensOut : estimateTokensFromChars(parsed.charsOut),
+  cacheReadTokens: parsed.measured ? parsed.cacheReadTokens : estimateTokensFromChars(parsed.contextChars),
+  cacheWriteTokens: 0,
+  source: parsed.measured ? 'measured' : 'estimate',
 });
 
 const TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
@@ -532,7 +533,7 @@ async function readAgySessions({ home, workspacePath, from, to, fold, reserveFro
     reserveFrom(transcriptPath, parsed);
     // No model is named anywhere in the transcript — the UNKNOWN_MODEL bucket
     // lets the caller attribute it to the provider's own configured model.
-    fold({ ...estimated, models: [], byModel: { [UNKNOWN_MODEL]: { ...estimated } } }, 'estimate');
+    fold({ ...estimated, models: [], byModel: { [UNKNOWN_MODEL]: { ...estimated } } }, estimated.source || 'estimate');
   }
 }
 

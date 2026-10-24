@@ -350,8 +350,8 @@ export default function ChiefOfStaff() {
     agentReadRef.current = null;
     if (Array.isArray(data)) {
       const merged = new Map(data.map(agent => [agent.id, agent]));
-      for (const [id, agent] of request.updates) merged.set(id, agent);
-      const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed');
+      for (const [id, agent] of request.updates) merged.set(id, { ...merged.get(id), ...agent });
+      const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed' || agent.deliveryPending);
       setAgents(snapshot);
       setAgentsLoaded(true);
     } else {
@@ -600,8 +600,8 @@ export default function ChiefOfStaff() {
       agentReadRef.current?.updates.set(updatedAgent.id, updatedAgent);
       // Update the specific agent in the agents list without fetching all data
       setAgents(prev => prev.map(agent =>
-        agent.id === updatedAgent.id ? updatedAgent : agent
-      ).filter(agent => agent.status !== 'completed'));
+        agent.id === updatedAgent.id ? { ...agent, ...updatedAgent } : agent
+      ).filter(agent => agent.status !== 'completed' || agent.deliveryPending));
     };
     socket.on('cos:agent:updated', handleAgentUpdated);
 

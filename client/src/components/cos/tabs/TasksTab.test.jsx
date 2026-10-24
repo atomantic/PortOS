@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
@@ -48,6 +48,35 @@ describe('TasksTab spawning window', () => {
   // `startedAt` is how the settlement tells a live spawn from a zombie record —
   // registerAgent always stamps it. See server/lib/cosSpawnWindow.js.
   const liveAgent = (id, taskId, ageMs = 0) => ({ id, status: 'running', taskId, startedAt: new Date(Date.now() - ageMs).toISOString() });
+
+  it('separates cleanup-held user and system tasks from running work', async () => {
+    const heldTask = id => ({ id, description: `Finalize ${id}`, status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: `agent-${id}` } });
+    renderTab({
+      tasks: { user: { tasks: [heldTask('task-example')] }, cos: { tasks: [heldTask('sys-rl-example')] } },
+      agents: [{ id: 'agent-sys-rl-example', taskId: 'sys-rl-example', status: 'completed' }],
+    });
+
+    const user = await screen.findByRole('region', { name: 'User tasks finalizing delivery' });
+    const system = screen.getByRole('region', { name: 'System tasks finalizing delivery' });
+    expect(within(user).getByText('Finalize task-example')).toBeInTheDocument();
+    expect(within(system).getByText('Finalize sys-rl-example')).toBeInTheDocument();
+    expect(within(system).getByRole('button', { name: /Status: finalizing/ })).toBeInTheDocument();
+    expect(screen.queryByText(/^Active \(/)).toBeNull();
+    expect(screen.queryByText(/^Active agent /)).toBeNull();
+  });
+
+  it('keeps an actual running agent active even if an old cleanup marker remains', async () => {
+    renderTab({
+      tasks: { user: { tasks: [] }, cos: { tasks: [{ ...pendingTask('sys-running'), status: 'in_progress',
+        metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-older' } }] } },
+      agents: [liveAgent('agent-current', 'sys-running')],
+    });
+
+    expect(await screen.findByText('Active (1)')).toBeInTheDocument();
+    expect(screen.getByText('Active agent agent-current')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /finalizing delivery/ })).toBeNull();
+  });
 
   it('moves a pending task with a live agent out of Pending and into Active', async () => {
     renderTab({

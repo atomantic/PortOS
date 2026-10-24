@@ -442,6 +442,8 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
     return;
   }
   if (cosAgent.status === 'completed') {
+    const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
+    await replayAgentCompletionCleanup(cosAgent);
     console.log(`✅ Agent ${agentId} already completed (handled by orphan cleanup)`);
     return;
   }
@@ -511,6 +513,8 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     });
   } finally {
     completingAgents.delete(agentId);
+    void import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
+      .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
   }
 }
 
@@ -563,6 +567,10 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     // classified `startup-failure`. See syncRunnerAgents for how a live TUI came
     // to be in `runnerAgents` at all.
     if (persistedAgent && persistedAgent.status !== 'running') {
+      if (persistedAgent.status === 'completed') {
+        const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
+        await replayAgentCompletionCleanup(persistedAgent);
+      }
       console.log(`✅ Agent ${agentId} already ${persistedAgent.status} — ignoring duplicate completion (exit ${exitCode})`);
       return;
     }

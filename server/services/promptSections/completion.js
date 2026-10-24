@@ -603,6 +603,7 @@ function buildClaimOwnershipSection(agentId) {
     '## Claim ownership binding',
     'Before this run (the parent, never a fan-out child) creates, adopts or checks out ANY claim worktree, bind that exact branch to this run — the pinned issue’s own `claim/…` branch, a tracking epic’s child, a slice split from an oversized issue, each issue a picker or swarm selects, or a claim worktree you are resuming. Replace BRANCH with the branch name and require a parsed JSON response with bound:true:',
     '```bash', command('bind'), '```',
+    'Immediately after creating that worktree, repeat the same bind command and require bound:true BEFORE editing or running work there. This records the server-observed physical checkout generation; a refusal means preserve it and report the blocker. An existing resumed checkout is captured by its initial bind.',
     'A refusal, HTTP/auth/transport error or unreadable JSON means the branch is not yours: do not create or enter that worktree; report the reason. Binding lasts until this run ends, through publication, CI, merge or leave-open handoff and cleanup — never release a branch you are still finishing. Release only a branch you deliberately leave for another owner mid-run:',
     '```bash', command('release'), '```',
   ].join('\n');
