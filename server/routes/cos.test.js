@@ -828,6 +828,18 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(404);
     });
+
+    it('should return 409 when agent is still owned by an active task cleanup hold', async () => {
+      deleteAgent.mockRejectedValue(new ServerError(
+        'Agent agent-001 is still owned by an active task delivery or retry cleanup hold and cannot be deleted until cleanup finishes',
+        { status: 409, code: 'AGENT_CLEANUP_OWNED' },
+      ));
+
+      const response = await request(app).delete('/api/cos/agents/agent-001');
+
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('AGENT_CLEANUP_OWNED');
+    });
   });
 
   describe('GET /api/cos/health', () => {

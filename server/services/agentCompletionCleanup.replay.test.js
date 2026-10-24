@@ -5,8 +5,11 @@ import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 
-const fixture = vi.hoisted(() => ({ recordPath: null, runRoot: null, failWrite: false }));
-vi.mock('./cosAgentIndex.js', () => ({ getAgentDir: id => join(fixture.runRoot, id) }));
+const fixture = vi.hoisted(() => ({ recordPath: null, runRoot: null, failWrite: false, indexReady: true }));
+vi.mock('./cosAgentIndex.js', () => ({
+  loadAgentIndex: async () => { fixture.indexReady = true; return new Map(); },
+  getAgentDir: id => join(fixture.runRoot, ...(fixture.indexReady ? [] : ['unindexed']), id),
+}));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn() }));
@@ -185,6 +188,16 @@ describe('durable post-ingestion cleanup replay', () => {
       sentinel: { status: 'failed', retryable: true }, worktree: { status: 'held' },
     } });
     await expect(readCompletionData(record, reference)).rejects.toThrow('completion-data-size-changed');
+  });
+
+  it('publishes replay bytes in the canonical run directory after cold index initialization', async () => {
+    fixture.indexReady = false;
+    const record = await saved();
+    const value = { task: { id: task.id }, effectiveSuccess: true };
+    const reference = await storeCompletionData(record, 'replay', value);
+    const persisted = JSON.parse(await readFile(join(fixture.runRoot, record.id, 'completion', `replay-${reference.sha256}.json`), 'utf8'));
+    expect(persisted).toMatchObject({ agentId: record.id, kind: 'replay', value });
+    expect(await readCompletionData(record, reference)).toEqual(value);
   });
 
   it('retains the marker if durable continuation persistence fails', async () => {

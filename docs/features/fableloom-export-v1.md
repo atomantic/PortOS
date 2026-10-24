@@ -22,9 +22,11 @@ authority, including valid delegated agent sessions. Jobs cannot be read or
 downloaded through a different loom. Instance authentication retains its existing
 optional policy; no export endpoint is always-public.
 
-This core version explicitly refuses `includePlayer:true`,
-`includeCharacters:true` and `includeVoice:true`. Their implementation belongs
-to the linked export slices. Unknown media profiles are rejected at validation.
+`includePlayer:true`, and `includeWebm:true` on the source profile, are refused
+(`EXPORT_OPTION_UNSUPPORTED`). `includeVoice:true` without
+`includeCharacters:true` is refused (`EXPORT_VOICE_REQUIRES_CHARACTERS`).
+Character files and voice reference audio are explicit opt-ins, off by default.
+Unknown media profiles are rejected at validation.
 `DELETE /api/fableloom/:id/export/:jobId` cancels a queued/running export and
 waits for worker and encoder shutdown before returning its failed status
 (`EXPORT_CANCELLED`). Completed jobs remain completed.
@@ -45,6 +47,54 @@ conditions and records explicit `draftFlags` per media use. It does not relax
 graph, outline, production, missing media, encoding, occupancy, path or size
 failures. Enabled live holds require verified speech-safe occupancy; intervals
 cannot exceed the actual clip duration.
+
+## Character and voice opt-ins
+
+The default package has no `characters/` members and no voice bytes.
+`includeCharacters:true` adds `characters/<id>.json` for the canonical cast:
+the loom protagonist, when one is set, and characters staged on reachable
+scenes (visual appearances and interaction speakers). Unreachable scenes and
+other universe characters stay out. Each file projects persona and speech
+notes (`personality`, `speechAccent`, `speechPattern`, `mannerisms`),
+pronunciation anchors (`term` and `pronunciation` only), safety/never-say
+notes, and play-turn inputs for contract 1.0.0 (prompt id
+`fableloom-play-turn`). Scene prose and choices stay in the manifest.
+Background, secrets, visual identity, engine voice presets, adapters, LoRAs,
+local paths and session history are not projected.
+
+Portable character approval is `voiceCanon.approved`. A missing or unapproved
+canon fails with `EXPORT_CHARACTER_DRAFT` unless `allowDraft:true`, which
+records `draftFlags` of `unapproved` (a voice-canon object exists) or
+`unknown` (it does not) and still does not invent approval. An empty cast
+(`EXPORT_CAST_MISSING`), a character missing from the universe
+(`EXPORT_CHARACTER_MISSING`), or a non-portable id (`EXPORT_CHARACTER_ID`)
+still fails. Those findings do not echo a non-portable id.
+
+`includeVoice:true` requires the character opt-in. For each exported character
+it selects exactly one voice profile whose approval status is `approved`,
+whose universe and character binding match, and whose interactive route is
+enabled. Zero matches fail with `EXPORT_VOICE_UNAPPROVED`. More than one fails
+with `EXPORT_VOICE_AMBIGUOUS`. Reference bytes must be a managed audio
+basename (`wav`, `mp3`, `flac`, `ogg`, or `m4a`) inside that profile's source
+directory, and the bytes must match the recorded sha256. The package stores
+`media/<sha256>.<ext>` plus a `voices` row: character id, relative file,
+content hash, byte count, approval, consent, license posture and voice-canon
+source policy. It does not store the profile id, engine, model, transcript,
+checkpoint, local path or approval timestamp.
+
+A reference is exportable when performer consent is confirmed, or when its
+license posture is `generated-original-voice`, `licensed`, or `designed`. A
+cloned profile, or a `consented-performance` posture, without confirmed
+consent fails with `EXPORT_VOICE_CONSENT_MISSING`. Unlabeled or absent audio
+fails with `EXPORT_VOICE_REFERENCE_MISSING`. A hash mismatch fails with
+`EXPORT_VOICE_REFERENCE_MISMATCH`. A path that leaves the voice library fails
+with `EXPORT_VOICE_REFERENCE_INVALID`. `allowDraft` does not package
+unapproved, unconsented, ambiguous or missing voice bytes.
+
+The host README states that character files and any voice bytes are inputs for
+the host's own resolver and TTS. The package does not grant PortOS access and
+contains no PortOS URL, credential or callback. The reference player remains
+unavailable.
 
 Media reads accept basenames only, resolve inside the appropriate gallery/video
 root, refuse escaping symlinks and snapshot bounded regular-file bytes. No
@@ -94,19 +144,28 @@ accepted as completed encodes. Source media remains untouched.
 - `manifest.json`: export schema, playback runtime and PortOS versions; explicit
   authored metadata, ordered episodes, reachable graphs and playback roles.
   Media uses only content hashes and relative `media/<sha256>.<ext>` references,
-  with `durationMs`, `loopable` and projected audio occupancy.
+  with `durationMs`, `loopable` and projected audio occupancy. With
+  `includeCharacters`, `characters` lists each cast member's id, role and
+  `characters/<id>.json` path. The default manifest omits that key.
+- `characters/<id>.json`: the portable character projection, only when
+  `includeCharacters` is set.
 - `provenance.json`: per-use content hash, provider/model labels, parameter hash,
   approval and conditioning status, draft flags, and encoding provenance.
-- `media/`: deduplicated, metadata-free media.
+  `characters` is present only with the character opt-in. `voices` is present
+  only with `includeVoice`.
+- `media/`: deduplicated, metadata-free scene media, plus approved voice
+  reference audio when `includeVoice` is set.
 - `runtime-v1.md` and `README.md`: the versioned playback and hosting contracts.
+  The README tells the host that it owns TTS and that the package grants no
+  PortOS access.
 
 All JSON object keys and ZIP member order are stable. ZIP timestamps are fixed.
 The same source bytes and authored snapshot, with the same PortOS/media-tool
 versions, produce identical manifest, media hashes and ZIP bytes. There are no
 job IDs, timestamps, instance/peer IDs, local paths, credentials, provider
 configuration, adapters, LoRAs, source prompts, sessions or transcripts in the
-package. Only authored scene/choice text and the documented projections leave
-the authoring record.
+package. Only authored scene/choice text, the documented character projection
+and approved voice-reference bytes leave the authoring record.
 
 ## Lifecycle and failures
 

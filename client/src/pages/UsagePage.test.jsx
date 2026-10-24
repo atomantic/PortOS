@@ -708,3 +708,28 @@ describe('UsagePage report range freshness (#10687)', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
+
+
+describe('UsagePage image accounting', () => {
+  it('shows image accounting as unavailable without hiding the text report or inventing zero usage', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, report: { ...usage.report, totals: { estimatedCost: 12 } }, imageRenders: { error: 'Image render usage is unavailable.' } });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const card = await screen.findByRole('region', { name: 'Codex image usage' });
+    expect(within(card).getByRole('status')).toHaveTextContent('Image render usage is unavailable. Text usage remains available.');
+    expect(within(card).queryByText(/saved outputs|\$0/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('$12.00').length).toBeGreaterThan(0);
+  });
+
+  it('shows saved render activity separately from unknown image cost and allowance', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, imageRenders: { renderGroups: 8, codexSessions: 6, savedOutputs: 10, jobIdentityGroups: 2, imageCostUsd: null } });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const card = await screen.findByRole('region', { name: 'Codex image usage' });
+    expect(within(card).getByText(/6 Codex sessions · 10 saved outputs/)).toBeInTheDocument();
+    expect(within(card).getByText(/Image tokens, image cost and subscription allowance attribution: unknown/)).toBeInTheDocument();
+    expect(within(card).queryByText(/\$0/)).not.toBeInTheDocument();
+    expect(within(card).getByText(/2 additional render groups use saved job IDs/)).toBeInTheDocument();
+    const reads = api.getUsage.mock.calls.length;
+    await act(async () => { socket.emit('image-gen:completed', { mode: 'codex' }); });
+    await waitFor(() => expect(api.getUsage.mock.calls.length).toBe(reads + 1));
+  });
+});

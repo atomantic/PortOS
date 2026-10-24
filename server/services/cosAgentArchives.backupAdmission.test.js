@@ -7,15 +7,15 @@ const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
+  const { createFileWriteQueue } = await import('../lib/fileWriteQueue.js');
   const base = await mkdtemp(join(tmpdir(), 'cos-archive-backup-'));
-  return { base, root: join(base, 'agents'), state: null, tasks: null, beforeIndex: null, bypass: false };
+  return { base, root: join(base, 'agents'), state: null, beforeIndex: null, bypass: false, withStateLock: createFileWriteQueue() };
 });
-vi.mock('./cosTaskStore.js', () => ({ getTaskView: async () => fixture.tasks }));
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: fixture.root,
   loadState: async () => structuredClone(fixture.state),
   saveState: async state => { fixture.state = structuredClone(state); await writeFile(join(fixture.root, 'state.json'), JSON.stringify(state)); },
-  withStateLock: createFileWriteQueue(),
+  withStateLock: fn => fixture.withStateLock(fn),
   readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: fixture.state.agents }),
 }));
 vi.mock('../lib/fileUtils.js', async importOriginal => {
@@ -42,6 +42,8 @@ let index;
 let acquireCut;
 const date = '2001-01-01';
 const id = 'agent-example';
+let taskStore;
+let taskRepo;
 const readIndex = async () => JSON.parse(await readFile(join(fixture.root, 'index.json'), 'utf8'));
 const assertIndexedTrees = async () => {
   for (const [agentId, bucket] of Object.entries(await readIndex())) {
@@ -49,22 +51,34 @@ const assertIndexedTrees = async () => {
     expect(JSON.parse(await readFile(join(fixture.root, bucket, agentId, 'metadata.json'), 'utf8')).id).toBe(agentId);
   }
 };
-async function seed({ completed = false, indexed = false } = {}) {
-  fixture.state.agents[id] = { id, status: completed ? 'completed' : 'running', startedAt: `${date}T01:00:00Z`,
-    ...(completed ? { completedAt: `${date}T02:00:00Z`, result: { success: true } } : {}), metadata: {} };
-  const dir = indexed ? join(fixture.root, date, id) : join(fixture.root, id);
+async function seedAgent(agentId, { completed = false, indexed = false, resident = true, bucketDate = date, result = { success: true } } = {}) {
+  const record = {
+    id: agentId,
+    status: completed ? 'completed' : 'running',
+    startedAt: `${bucketDate}T01:00:00Z`,
+    ...(completed ? { completedAt: `${bucketDate}T02:00:00Z`, result } : {}),
+    metadata: {},
+  };
+  if (resident) fixture.state.agents[agentId] = record;
+  const dir = indexed ? join(fixture.root, bucketDate, agentId) : join(fixture.root, agentId);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'output.txt'), 'Example preserved output');
-  await writeFile(join(dir, 'metadata.json'), JSON.stringify(fixture.state.agents[id]));
-  if (indexed) { (await index.loadAgentIndex()).set(id, date); await index.saveAgentIndex(); }
+  await writeFile(join(dir, 'metadata.json'), JSON.stringify(record));
+  if (indexed) { (await index.loadAgentIndex()).set(agentId, bucketDate); await index.saveAgentIndex(); }
+}
+async function seed({ completed = false, indexed = false } = {}) {
+  await seedAgent(id, { completed, indexed });
 }
 beforeEach(async () => {
   vi.resetModules(); fixture.beforeIndex = null; fixture.bypass = false;
   fixture.state = { agents: {}, config: { completedAgentRetentionMs: 1 }, stats: { tasksCompleted: 0, errors: 0 } };
-  fixture.tasks = { user: { tasks: [] }, cos: { tasks: [] } };
   await rm(fixture.root, { recursive: true, force: true }); await mkdir(fixture.root);
   await writeFile(join(fixture.root, 'index.json'), '{}');
   ({ acquireBackupSnapshotCut: acquireCut } = await import('../lib/backupSnapshotBoundary.js'));
+  taskRepo = await import('./cosTaskRepository.js');
+  taskRepo.__resetCosTaskRepository();
+  taskStore = await import('./cosTaskStore.js');
+  taskStore.__resetTaskCache();
   index = await import('./cosAgentIndex.js');
   api = { ...await import('./cosAgentLifecycle.js'), ...await import('./cosAgentArchive.js') };
 });
@@ -78,35 +92,40 @@ it('preserves pending verification before the task hold is written and after arc
   const metadataPath = join(fixture.root, date, id, 'metadata.json');
   await writeFile(metadataPath, JSON.stringify(agent));
 
-  await expect(api.clearCompletedAgents()).rejects.toMatchObject({ code: 'DELIVERY_CLEANUP_PENDING' });
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 0, retained: 1 });
   expect(fixture.state.agents[id]).toEqual(agent);
   delete fixture.state.agents[id];
-  await expect(api.clearCompletedAgents()).rejects.toMatchObject({ code: 'DELIVERY_CLEANUP_PENDING' });
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 0, retained: 1 });
   await assertIndexedTrees();
 
   agent.metadata.repoStateVerification.status = 'completed';
   await writeFile(metadataPath, JSON.stringify(agent));
-  expect(await api.clearCompletedAgents()).toEqual({ cleared: 1 });
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 1, retained: 0 });
 });
 
 it.each(['user', 'cos'])('preserves cleanup-owner evidence in the %s queue until delivery settles', async source => {
   await seed({ completed: true, indexed: true });
   // An archived owner is absent from resident state but still required after restart.
   delete fixture.state.agents[id];
-  const task = { id: 'task-example', status: 'in_progress', metadata: {
-    deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: id,
-  } };
-  fixture.tasks[source].tasks.push(task);
+  const taskType = source === 'cos' ? 'internal' : 'user';
+  await taskStore.addTask({
+    id: 'task-example',
+    status: 'in_progress',
+    priority: 'MEDIUM',
+    priorityValue: 2,
+    description: 'Cleanup task',
+    metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: id },
+  }, taskType, { raw: true });
   const beforeState = structuredClone(fixture.state);
   const beforeIndex = await readIndex();
 
-  await expect(api.clearCompletedAgents()).rejects.toMatchObject({ status: 409, code: 'DELIVERY_CLEANUP_PENDING' });
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 0, retained: 1 });
   expect(fixture.state).toEqual(beforeState);
   expect(await readIndex()).toEqual(beforeIndex);
   await assertIndexedTrees();
 
-  task.status = 'completed';
-  expect(await api.clearCompletedAgents()).toEqual({ cleared: 1 });
+  await taskStore.updateTask('task-example', { status: 'completed' }, taskType);
+  expect(await api.clearCompletedAgents()).toEqual({ cleared: 1, retained: 0 });
   expect(await readIndex()).toEqual({});
   expect(await readdir(fixture.root)).not.toContain(date);
 });
@@ -211,4 +230,158 @@ it('does not let a cold reader queue its shared initialization ahead of an admit
   const release = await cut;
   try { await assertIndexedTrees(); } finally { release(); }
   await reader;
+});
+
+describe('active cleanup and retry owner preservation (#13430)', () => {
+  async function seedCleanupTask(taskId, metadata, taskType = 'internal') {
+    return taskStore.addTask({
+      id: taskId,
+      status: 'in_progress',
+      priority: 'MEDIUM',
+      priorityValue: 2,
+      description: `Cleanup task ${taskId}`,
+      metadata,
+    }, taskType, { raw: true });
+  }
+
+  it.each([
+    { label: 'resident record', indexed: false, resident: true },
+    { label: 'indexed archive', indexed: true, resident: false },
+  ])('refuses single delete and retains $label while task holds deliveryRecovery cleanup', async ({ indexed, resident }) => {
+    await seedAgent(id, { completed: true, indexed, resident });
+    await seedCleanupTask('sys-rl-example', {
+      deliveryRecovery: 'cleanup',
+      deliveryRecoveryAgentId: id,
+    });
+
+    await expect(api.deleteAgent(id)).rejects.toMatchObject({
+      status: 409,
+      code: 'AGENT_CLEANUP_OWNED',
+    });
+
+    const record = await api.getAgent(id);
+    expect(record?.id).toBe(id);
+    if (resident) expect(fixture.state.agents[id]?.id).toBe(id);
+    if (indexed) await assertIndexedTrees();
+
+    await taskStore.updateTask('sys-rl-example', {
+      status: 'completed',
+      metadata: { deliveryRecovery: undefined, deliveryRecoveryAgentId: undefined },
+    }, 'internal');
+
+    await expect(api.deleteAgent(id)).resolves.toEqual({ success: true, agentId: id });
+    expect(await api.getAgent(id)).toBeNull();
+  });
+
+  it('retains protected resident and archived runs across mixed buckets during clearCompletedAgents', async () => {
+    const protectedResident = 'agent-protected-resident';
+    const protectedArchived = 'agent-protected-archived';
+    const unprotectedSameBucket = 'agent-unprotected-same-bucket';
+    const unprotectedOtherBucket = 'agent-unprotected-other-bucket';
+    const otherDate = '2001-01-02';
+
+    await seedAgent(protectedResident, { completed: true, indexed: false, resident: true });
+    await seedAgent(protectedArchived, { completed: true, indexed: true, resident: false, bucketDate: date });
+    await seedAgent(unprotectedSameBucket, { completed: true, indexed: true, resident: true, bucketDate: date });
+    await seedAgent(unprotectedOtherBucket, { completed: true, indexed: true, resident: false, bucketDate: otherDate });
+
+    await seedCleanupTask('sys-rl-example', {
+      deliveryRecovery: 'cleanup',
+      deliveryRecoveryAgentId: protectedResident,
+    }, 'internal');
+    await seedCleanupTask('task-retry-example', {
+      retryPendingCleanup: protectedArchived,
+      retryPendingSince: `${date}T02:00:00.000Z`,
+    }, 'user');
+
+    const cleared = await api.clearCompletedAgents();
+    expect(cleared).toEqual({ cleared: 2, retained: 2 });
+
+    expect(fixture.state.agents[protectedResident]?.id).toBe(protectedResident);
+    expect(fixture.state.agents[unprotectedSameBucket]).toBeUndefined();
+    expect(await readIndex()).toEqual({ [protectedArchived]: date });
+    await assertIndexedTrees();
+    await expect(readFile(join(fixture.root, date, unprotectedSameBucket, 'metadata.json'), 'utf8')).rejects.toThrow();
+    await expect(readdir(join(fixture.root, otherDate))).rejects.toThrow();
+
+    await taskStore.updateTask('sys-rl-example', { status: 'completed' }, 'internal');
+    await taskStore.updateTask('task-retry-example', { status: 'pending' }, 'user');
+
+    const secondClear = await api.clearCompletedAgents();
+    expect(secondClear).toEqual({ cleared: 2, retained: 0 });
+    expect(fixture.state.agents).toEqual({});
+    expect(await readIndex()).toEqual({});
+  });
+
+  it('does not retain completed history solely because a stale agent result still carries cleanupPending', async () => {
+    await seedAgent(id, {
+      completed: true,
+      indexed: true,
+      resident: true,
+      result: { success: true, cleanupPending: true },
+    });
+    await taskStore.addTask({
+      id: 'sys-rl-settled',
+      status: 'completed',
+      priority: 'MEDIUM',
+      priorityValue: 2,
+      description: 'Already settled task',
+      metadata: {},
+    }, 'internal', { raw: true });
+
+    await expect(api.clearCompletedAgents()).resolves.toEqual({ cleared: 1, retained: 0 });
+    expect(await api.getAgent(id)).toBeNull();
+  });
+
+  it('revalidates current task ownership under the state lock so a concurrent reassignment is not deleted', async () => {
+    const oldOwner = 'agent-old-owner';
+    const newOwner = 'agent-new-owner';
+    await seedAgent(oldOwner, { completed: true, indexed: true, resident: true });
+    await seedAgent(newOwner, { completed: true, indexed: true, resident: true });
+    await seedCleanupTask('sys-rl-race', {
+      deliveryRecovery: 'cleanup',
+      deliveryRecoveryAgentId: oldOwner,
+    }, 'internal');
+
+    // Start clearCompletedAgents while an earlier task reassignment is holding the shared
+    // state lock; clearCompletedAgents must read task ownership AFTER acquiring the lock,
+    // not from a stale pre-lock snapshot.
+    const entered = deferred();
+    const release = deferred();
+    const blocker = fixture.withStateLock(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+
+    const reassign = taskStore.updateTask('sys-rl-race', {
+      status: 'in_progress',
+      metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: newOwner },
+    }, 'internal');
+    await settle();
+    const clear = api.clearCompletedAgents();
+    await settle();
+
+    release.resolve();
+    await blocker;
+    const [, clearResult] = await Promise.all([reassign, clear]);
+    expect(clearResult).toEqual({ cleared: 1, retained: 1 });
+    expect((await api.getAgent(newOwner))?.id).toBe(newOwner);
+    expect(await api.getAgent(oldOwner)).toBeNull();
+  });
+
+  it('preserves evidence when task cleanup ownership cannot be verified', async () => {
+    await seedAgent(id, { completed: true, indexed: true, resident: true });
+    const spy = vi.spyOn(taskStore, 'getTaskView').mockRejectedValueOnce(new Error('task store unavailable'));
+    try {
+      await expect(api.deleteAgent(id)).rejects.toMatchObject({
+        status: 503,
+        code: 'CLEANUP_OWNERSHIP_UNAVAILABLE',
+      });
+      expect((await api.getAgent(id))?.id).toBe(id);
+      await assertIndexedTrees();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
