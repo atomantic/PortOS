@@ -747,6 +747,10 @@ export function parseAgyTranscript(jsonlText, { from = null, to = null, exclude 
   const counted = [];
   // Chars of every step so far (windowed or not): the prompt the NEXT model call replays.
   let runningContext = 0;
+  let tokensIn = 0;
+  let tokensOut = 0;
+  let cacheReadTokens = 0;
+  let hasMeasuredTokens = false;
 
   for (const [index, entry] of parseJsonLines(jsonlText).entries()) {
     if (typeof entry.type !== 'string') continue;
@@ -764,13 +768,31 @@ export function parseAgyTranscript(jsonlText, { from = null, to = null, exclude 
       charsOut += stepChars;
       contextChars += replayed;
       messages += 1;
+      if (typeof entry.input_tokens === 'number' || typeof entry.output_tokens === 'number') {
+        hasMeasuredTokens = true;
+        tokensIn += num(entry.input_tokens);
+        tokensOut += num(entry.output_tokens);
+        cacheReadTokens += num(entry.cache_read_tokens);
+      }
     } else {
       charsIn += stepChars;
     }
     counted.push(key);
   }
 
-  return { charsIn, charsOut, contextChars, messages, countedKeys: counted, steps };
+  return {
+    charsIn,
+    charsOut,
+    contextChars,
+    messages,
+    countedKeys: counted,
+    steps,
+    tokensIn,
+    tokensOut,
+    cacheReadTokens,
+    cacheWriteTokens: 0,
+    measured: hasMeasuredTokens,
+  };
 }
 
 /**
