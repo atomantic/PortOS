@@ -134,6 +134,7 @@ export * from './familySettingsMap.js';
 export * from './fableLoomBoard.js';
 export * from './fableLoomGraph.js';
 export * from './fableLoomExport.js';
+export * from './fableLoomMediaProfiles.js';
 export * from './cameraMovements.js';
 export * from './fableLoomCameraMovements.js';
 export * from './fableLoomPlayback.js';
