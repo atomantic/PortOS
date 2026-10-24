@@ -414,25 +414,31 @@ describe('recovery output-hook dispatch (#3182)', () => {
     reviewLoopPRBranch: 'fix/example', failureCount: 2,
   } });
 
-  it.each(['blocked', 'incomplete', 'no-action-needed'])('completes a verified merged review target reported as %s without retrying', async status => {
+  it.each(['normal', 'restart'])('completes a verified merged review target without retrying during %s completion', async mode => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     mergedTarget.getOriginInfo.mockResolvedValue({ host: 'github.com', fullName: 'atomantic/PortOS' });
     mergedTarget.probeChangeRequestState.mockResolvedValue({ readable: true, prState: 'MERGED' });
     const task = reviewTask();
-    const reported = { status, reason: 'The target is merged; corrections are tracked separately and the checkout is preserved.' };
-    const result = await finalizeAgent({ agentId: 'agent-example', runId: 'run-example', task, success: true,
-      exitCode: 0, duration: 1000, workspacePath: '/example/repo', outputBuffer: '',
-      finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+    const reported = { status: mode === 'normal' ? 'blocked' : 'incomplete', reason: 'The target is merged; corrections are tracked separately and the checkout is preserved.' };
+    persistedAgent.metadata.workspacePath = '/example/repo';
+    persistedAgent.metadata.taskOutcome = reported;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    const result = mode === 'normal'
+      ? await finalizeAgent({ agentId: 'agent-example', runId: 'run-example', task, success: true,
+        exitCode: 0, duration: 1000, workspacePath: '/example/repo', outputBuffer: '',
+        finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) })
+      : await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 1000 });
     expect(mergedTarget.probeChangeRequestState).toHaveBeenCalledWith('/example/repo', { number: 123, branch: 'fix/example' });
     expect(result).toMatchObject({ success: true, taskOutcome: { status: 'no-action-needed' } });
-    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed',
+    if (mode === 'normal') expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed',
       metadata: expect.objectContaining({ failureCount: 2, taskOutcome: expect.objectContaining({ status: 'no-action-needed' }) }) }), 'internal');
     expect(completeAgent).toHaveBeenCalledWith('agent-example', expect.objectContaining({ success: true, validationPassed: true,
       taskOutcome: expect.objectContaining({ status: 'no-action-needed' }) }));
     expect(persistedAgent.metadata).toMatchObject({ taskOutcomeSource: 'forge-verification', reportedTaskOutcome: reported });
     expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
-    expect(processAgentCompletion).toHaveBeenCalledWith('agent-example', task, true, '');
+    if (mode === 'normal') expect(processAgentCompletion).toHaveBeenCalledWith('agent-example', task, true, '');
+    else expect(result.deliveryHeld).toBe(false);
   });
 
   it.each([

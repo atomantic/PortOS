@@ -1175,6 +1175,21 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
   });
 }
 
+/** Server-owned merge evidence settles only the assigned review/merge target. */
+async function completionReviewFollowUp({ task, agentId, workspacePath, reportedOutcome, eligible }) {
+  if (!eligible) return null;
+  const verified = await (await import('./reviewFollowUpCompletion.js')).verifyMergedReviewFollowUp(task, workspacePath)
+    .catch(() => null);
+  if (!verified) return null;
+  const taskOutcome = {
+    status: reportedOutcome?.status === 'completed' ? 'completed' : 'no-action-needed',
+    reason: `The assigned review/merge target is verified MERGED: ${verified.prUrl}. Preserved corrections and checkout retirement remain separate obligations.`,
+  };
+  await updateAgent(agentId, { metadata: { taskOutcome, taskOutcomeSource: 'forge-verification',
+    reportedTaskOutcome: reportedOutcome, mergedReviewFollowUp: verified } });
+  return { ...verified, taskOutcome };
+}
+
 async function completionClaimDisposition({ task, agent, agentId, reportedOutcome, success }) {
   if (!success || reportedOutcome?.status !== 'no-action-needed' || !hasClaimFlowContract(task)) return null;
   return import('./claimDisposition.js').then(async ({ verifyClaimDisposition }) =>
@@ -1228,12 +1243,16 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const isPrivateSecurity = isPrivateSecurityTask(task) || isPrivateSecurityTask(agent);
   const interruption = agent.metadata?.executionInterruption;
   const refused = ['content-refusal', 'content-filtered'].includes(interruption?.category);
-  const reportedOutcome = !isPrivateSecurity && !refused
+  let reportedOutcome = !isPrivateSecurity && !refused
     ? await persistCompletionSummary(agent.id, { workspacePath: agent.metadata?.workspacePath, existingRecord: agent }) : null;
+  const executionSuccess = success && exitCode === 0;
+  const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId: agent.id,
+    workspacePath: agent.metadata?.workspacePath, reportedOutcome,
+    eligible: executionSuccess && !isPrivateSecurity && !interruption });
+  if (mergedReviewFollowUp) reportedOutcome = mergedReviewFollowUp.taskOutcome;
   // Only an explicit hold suppresses orphan recovery; a failed delivery check
   // must retain the caller's normal failure/retry handling.
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
-  const executionSuccess = success && exitCode === 0;
   let effectiveSuccess = isPrivateSecurity || refused || deliveryHeld ? false : success;
   const errorAnalysis = refused ? {
     category: interruption.category, origin: interruption.source || 'provider',
@@ -1255,8 +1274,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     : agent.result?.validationPassed ?? null;
   // A disposition never erases a recorded failed delivery gate. A saved pass,
   // however, cannot replace a fresh selected-issue proof on no-op recovery.
-  const validationPassed = claimDisposition && recoveredValidation !== false
-    ? claimDisposition.status === 'verified' ? true : null
+  const validationPassed = recoveredValidation !== false && (mergedReviewFollowUp || claimDisposition)
+    ? mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null
     : recoveredValidation;
   const taskOutcome = reportedOutcome ? resolveTaskOutcome({ reported: reportedOutcome,
     success: effectiveSuccess, validationPassed }) : null;
@@ -1716,22 +1735,12 @@ export async function finalizeAgent({
   const executionSuccess = reportedSuccess && (typeof exitCode !== 'number' || exitCode === 0);
   let reportedTaskOutcome = !terminatedByUser && !isPrivateSecurityTask(task)
     ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
-  // This task owns one assigned PR, not a new delivery of local corrections.
-  // A successful process may report a hold after discovering that PR merged.
-  // Verify the exact trusted target before that hold can schedule another run.
-  const mergedReviewFollowUp = executionSuccess && !terminatedByUser && !executionInterruption
-    && !isPrivateSecurityTask(task) && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent
-    ? await (await import('./reviewFollowUpCompletion.js')).verifyMergedReviewFollowUp(task, workspacePath)
-      .catch(() => null) : null;
-  if (mergedReviewFollowUp) {
-    const originalOutcome = reportedTaskOutcome;
-    reportedTaskOutcome = {
-      status: originalOutcome?.status === 'completed' ? 'completed' : 'no-action-needed',
-      reason: `The assigned review/merge target is verified MERGED: ${mergedReviewFollowUp.prUrl}. Preserved corrections and checkout retirement remain separate obligations.`,
-    };
-    await updateAgent(agentId, { metadata: { taskOutcome: reportedTaskOutcome, taskOutcomeSource: 'forge-verification',
-      reportedTaskOutcome: originalOutcome, mergedReviewFollowUp } });
-  }
+  // A successful process may report a hold after discovering its PR merged.
+  // Verify that exact target before the hold can schedule another run.
+  const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId, workspacePath, reportedOutcome: reportedTaskOutcome,
+    eligible: executionSuccess && !terminatedByUser && !executionInterruption
+      && !isPrivateSecurityTask(task) && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent });
+  if (mergedReviewFollowUp) reportedTaskOutcome = mergedReviewFollowUp.taskOutcome;
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
   if (deliveryHeld && reportedTaskOutcome.recovery?.mode !== 'cleanup'
     && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent) {
