@@ -1,6 +1,7 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { formatCount, formatDateTime } from '../../../../utils/formatters';
 import { retireBranchReconcileCheckout, reviewBranchReconcileCheckout, refreshBranchReconcileInventory } from '../../../../services/api';
+import useMounted from '../../../../hooks/useMounted';
 
 const STATUS_LABELS = { drained: 'No remaining work in last scan', incomplete: 'Incomplete', running: 'Sweep running' };
 
@@ -104,30 +105,33 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
   // the schedule event's fresh inventory is authoritative once it arrives.
   const [retired, setRetired] = useState({ source: outcomes, keys: NONE });
   const [refreshed, setRefreshed] = useState({ source: outcomes, values: {} });
-  const [refreshStates, setRefreshStates] = useState({});
-  const pending = useRef(new Set());
+  const [refreshStates, setRefreshStates] = useState({ source: outcomes, values: {} });
+  const pending = useRef(new Map());
+  const latestOutcomes = useRef(outcomes);
+  const mounted = useMounted();
+  useLayoutEffect(() => { latestOutcomes.current = outcomes; }, [outcomes]);
+  const refreshStatus = refreshStates.source === outcomes ? refreshStates.values : {};
   const retiredKeys = retired.source === outcomes ? retired.keys : NONE;
   if (!outcomes || !Object.keys(outcomes).length) return null;
   const markRetired = key => setRetired(current => ({
     source: outcomes, keys: new Set(current.source === outcomes ? current.keys : NONE).add(key),
   }));
   const refresh = async appId => {
-    if (pending.current.has(appId)) return;
-    pending.current.add(appId);
-    setRefreshStates(current => ({ ...current, [appId]: { pending: true } }));
-    const result = await refreshBranchReconcileInventory(appId, { silent: true }).catch(err => {
-      setRefreshStates(current => ({ ...current, [appId]: { error: err?.message || 'Inventory refresh failed' } }));
-      return null;
-    });
-    pending.current.delete(appId);
-    if (!result) return;
-    if (!result.outcome || result.appId !== appId) {
-      setRefreshStates(current => ({ ...current, [appId]: { error: 'Refresh returned no matching inventory; previous inventory retained.' } }));
+    if (pending.current.get(appId) === outcomes) return;
+    pending.current.set(appId, outcomes);
+    const setStatus = value => setRefreshStates(current => ({ source: outcomes, values: { ...(current.source === outcomes ? current.values : {}), [appId]: value } }));
+    setStatus({ pending: true });
+    const result = await refreshBranchReconcileInventory(appId, { silent: true })
+      .catch(err => ({ error: err?.message || 'Inventory refresh failed' }));
+    if (pending.current.get(appId) === outcomes) pending.current.delete(appId);
+    if (!mounted.current || latestOutcomes.current !== outcomes) return;
+    if (!result?.outcome || result.appId !== appId) {
+      setStatus({ error: result?.error || 'Refresh returned no matching inventory; previous inventory retained.' });
       return;
     }
     setRefreshed(current => ({ source: outcomes, values: { ...(current.source === outcomes ? current.values : {}), [appId]: result.outcome } }));
     setRetired(current => ({ source: outcomes, keys: new Set([...(current.source === outcomes ? current.keys : NONE)].filter(key => !key.startsWith(`${appId}\0`))) }));
-    setRefreshStates(current => ({ ...current, [appId]: {} }));
+    setStatus({});
   };
   return (
     <div className="mx-4 mb-3 space-y-2 text-xs">
@@ -151,11 +155,11 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
             <div className="mt-2 space-y-2 text-gray-400">
               <p>{outcome.observedAt ? `Last inventory: ${formatDateTime(outcome.observedAt)}` : 'No readable inventory yet.'}</p>
               {appId !== 'null' && <div className="space-y-1">
-                <button type="button" className="rounded border border-port-border px-2 py-1 disabled:opacity-50" disabled={refreshStates[appId]?.pending} onClick={() => refresh(appId)}>
-                  {refreshStates[appId]?.pending ? 'Refreshing inventory…' : 'Refresh inventory'}
+                <button type="button" className="rounded border border-port-border px-2 py-1 disabled:opacity-50" disabled={refreshStatus[appId]?.pending} onClick={() => refresh(appId)}>
+                  {refreshStatus[appId]?.pending ? 'Refreshing inventory…' : 'Refresh inventory'}
                 </button>
                 <p>Rescan this repository without deleting checkouts or starting an AI agent. Missing archive evidence is retained.</p>
-                {refreshStates[appId]?.error && <p role="alert" className="break-words text-port-error">{refreshStates[appId].error}</p>}
+                {refreshStatus[appId]?.error && <p role="alert" className="break-words text-port-error">{refreshStatus[appId].error}</p>}
               </div>}
               {incompleteEmptyInventory && <p>Last sweep: Incomplete</p>}
               {outcome.reason && <p className="break-words">Reason: {outcome.reason}</p>}

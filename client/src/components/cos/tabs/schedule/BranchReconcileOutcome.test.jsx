@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const retire = vi.hoisted(() => vi.fn());
 const prepare = vi.hoisted(() => vi.fn());
@@ -139,4 +139,21 @@ it('keeps the previous inventory and permits retry when a refresh fails', async 
   expect(await screen.findByRole('alert')).toHaveTextContent('Repository scan unavailable');
   expect(screen.getByText('/example/held')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Refresh inventory' })).toBeEnabled();
+});
+
+it('ignores a late refresh from an older schedule generation without discarding another app’s new result', async () => {
+  let finishOld;
+  let finishNew;
+  refresh.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+    .mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
+  const source = { ...outcomes, 'app-2': outcomes['app-1'] };
+  const { rerender } = render(<BranchReconcileOutcome outcomes={source} apps={[]} />);
+  fireEvent.click(within(screen.getByText(/app-1 · Incomplete/).closest('details')).getByRole('button', { name: 'Refresh inventory', hidden: true }));
+  rerender(<BranchReconcileOutcome outcomes={{ ...source }} apps={[]} />);
+  fireEvent.click(within(screen.getByText(/app-2 · Incomplete/).closest('details')).getByRole('button', { name: 'Refresh inventory', hidden: true }));
+  await act(async () => finishNew({ appId: 'app-2', outcome: { status: 'drained', remaining: [] } }));
+  expect(screen.getByText(/app-2 · No remaining work in last scan/)).toBeInTheDocument();
+  await act(async () => finishOld({ appId: 'app-1', outcome: { status: 'drained', remaining: [] } }));
+  expect(screen.getByText(/app-2 · No remaining work in last scan/)).toBeInTheDocument();
+  expect(screen.getByText(/app-1 · Incomplete · 2 remaining/)).toBeInTheDocument();
 });
