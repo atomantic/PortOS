@@ -39,6 +39,7 @@ import {
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
 import { useSocketResource } from '../../../hooks/useSocketResource';
+import useMounted from '../../../hooks/useMounted';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
 import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
@@ -149,13 +150,25 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       matchesEvent: event => !boardChanges?.boardId || event?.id === boardChanges.boardId,
     },
   );
-  const [updatingFromBoard, setUpdatingFromBoard] = useState(null);
+  const mounted = useMounted();
+  const boardUpdateRef = useRef({ issueId: issue.id, generation: 0, pending: false });
+  if (boardUpdateRef.current.issueId !== issue.id) {
+    boardUpdateRef.current = { issueId: issue.id, generation: boardUpdateRef.current.generation + 1, pending: false };
+  }
+  const [boardUpdate, setBoardUpdate] = useState(null);
+  const updatingFromBoard = boardUpdate?.issueId === issue.id && boardUpdate.generation === boardUpdateRef.current.generation
+    ? boardUpdate.shotId : null;
   const changedShots = useMemo(() => new Map((boardChanges?.changed || []).map((c) => [c.shotId, c])), [boardChanges]);
   const boardLocked = stage.locked === true;
   const updateFromBoard = async (shotId = null) => {
-    setUpdatingFromBoard(shotId || 'all');
+    if (boardUpdateRef.current.pending) return;
+    const request = { issueId: issue.id, generation: boardUpdateRef.current.generation + 1, pending: true };
+    boardUpdateRef.current = request;
+    setBoardUpdate({ ...request, shotId: shotId || 'all' });
     const res = await updatePipelineShotsFromBoard(issue.id, shotId).catch(() => null);
-    setUpdatingFromBoard(null);
+    if (!mounted.current || boardUpdateRef.current !== request) return;
+    boardUpdateRef.current = { ...request, pending: false };
+    setBoardUpdate(null);
     if (!res) return;
     const { updated, issue: saved, ...changes } = res;
     setBoardChanges(changes);

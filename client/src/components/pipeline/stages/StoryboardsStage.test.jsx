@@ -91,4 +91,19 @@ describe('StoryboardsStage', () => {
     expect(screen.queryByText(/Storyboard changed/)).not.toBeInTheDocument();
     expect(api.getPipelineStoryboardChanges).toHaveBeenCalledTimes(2);
   });
+
+  it('does not apply an earlier issue’s pending storyboard update after selecting another issue', async () => {
+    const changed = { boardId: 'sb-1', locked: false, changed: [{ sceneId: 'scene-01', shotId: 'shot-01', panelId: 'panel-1', fields: ['description'] }] };
+    const withShot = { ...issue, stages: { storyboards: { status: 'edited', scenes: [{ ...issue.stages.storyboards.scenes[0], shots: [{ id: 'shot-01', description: 'Wide of the lab', durationSeconds: 5 }] }] } } };
+    api.getPipelineStoryboardChanges.mockResolvedValueOnce(changed);
+    let finishUpdate;
+    api.updatePipelineShotsFromBoard.mockImplementationOnce(() => new Promise(resolve => { finishUpdate = resolve; }));
+    const onStageUpdate = vi.fn();
+    const view = render(<MemoryRouter><StoryboardsStage issue={withShot} series={null} onStageUpdate={onStageUpdate} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }));
+    const nextIssue = { ...withShot, id: 'iss-2' };
+    view.rerender(<MemoryRouter><StoryboardsStage issue={nextIssue} series={null} onStageUpdate={onStageUpdate} /></MemoryRouter>);
+    await act(async () => { finishUpdate({ updated: 1, issue: withShot, boardId: 'sb-1', locked: false, changed: [] }); });
+    expect(onStageUpdate).not.toHaveBeenCalled();
+  });
 });
