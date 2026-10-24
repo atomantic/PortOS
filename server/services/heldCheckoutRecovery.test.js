@@ -388,21 +388,29 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(recreated.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir, reason: 'archive-generation-mismatch' });
   });
 
-  it.each(['cancel', 'time'])('retains the %s diagnosis when isolated Git proof is interrupted without settling preservation', async mode => {
+  it.each(['cancel', 'time', 'git-output', 'git-time'])('retains the %s diagnosis when isolated Git proof is interrupted without settling preservation', async mode => {
     const { saved } = await historicalArchive();
     const outcome = await getBranchReconcileOutcome('app-1');
     const controller = new AbortController();
     let clock;
     injected.onProof = () => {
       if (mode === 'cancel') controller.abort();
-      else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 11 * 60 * 1000);
+      else if (mode === 'time') clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 11 * 60 * 1000);
+      else throw Object.assign(new Error('synthetic Git resource exhaustion'), mode === 'git-output'
+        ? { code: 'GIT_OUTPUT_LIMIT', limitCodeUnits: 64 * 1024 * 1024, observedCodeUnits: 64 * 1024 * 1024 + 1 }
+        : { code: 'GIT_TIMEOUT', limitMs: 30000, observedMs: 30001 });
     };
     try {
       const result = await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome }, { signal: controller.signal });
       expect(result.recoveredPreservations || []).toEqual([]);
       expect(result.retirementObligations).toHaveLength(1);
-      expect(result.retirementObligations[0].preservationEvidence.archives).toContainEqual({ archiveDir: saved.archiveDir,
-        reason: mode === 'cancel' ? 'retirement-archive-cancelled' : 'retirement-archive-work-limit-exceeded' });
+      const evidence = result.retirementObligations[0].preservationEvidence.archives.find(row => row.archiveDir === saved.archiveDir);
+      expect(evidence).toMatchObject({ reason: mode === 'cancel' ? 'retirement-archive-cancelled'
+        : mode === 'git-output' ? 'retirement-archive-limit-exceeded' : 'retirement-archive-work-limit-exceeded', nextAction: expect.any(String) });
+      if (mode === 'git-output') expect(evidence.archiveLimit).toEqual({ scope: 'git-output', kind: 'output',
+        limitCodeUnits: 64 * 1024 * 1024, observedCodeUnits: 64 * 1024 * 1024 + 1 });
+      if (mode === 'git-time') expect(evidence.archiveLimit).toEqual({ scope: 'git-command', kind: 'time', limitMs: 30000, observedMs: 30001 });
+      if (mode === 'time') expect(evidence.archiveLimit).toMatchObject({ scope: 'verification', kind: 'time', limitMs: 600000, observedMs: expect.any(Number) });
       expect(result.retired).toBeUndefined();
       expect(existsSync(saved.archiveDir)).toBe(true);
     } finally { clock?.mockRestore(); }
@@ -1140,7 +1148,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const repeated = await c.confirm(prepared.review);
     expect(repeated.ok).toBe(false);
     expect((await archives()).length).toBe(1);
-  }, 120_000);
+  }, 30_000);
 
   it('refuses combined content and administration bytes before preview or teardown while each snapshot fits', async () => {
     const c = await reviewedCheckout('combined-byte-limit', { normalMerge: true });
@@ -1241,7 +1249,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(join(retired.archiveDir, 'administration/gitdir/private-files/item-59'), 'changed private bytes');
     expect(await find()).toBe(null);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-  }, 120_000);
+  }, 30_000);
 
   it.each([
     { scope: 'content', kind: 'file', count: 1, bytes: 25 * 1024 * 1024 + 1 },

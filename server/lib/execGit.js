@@ -80,18 +80,24 @@ export function execGit(args, cwd, options = {}) {
       }, 5000);
     };
 
+    const started = performance.now();
     const timer = setTimeout(() => {
       if (!killed) {
-        terminate(new Error(`git command timed out after ${timeout / 1000}s: git ${args.join(' ')}`));
+        terminate(Object.assign(new Error(`git command timed out after ${timeout / 1000}s: git ${args.join(' ')}`), {
+          code: 'GIT_TIMEOUT', limitMs: timeout, observedMs: Math.ceil(performance.now() - started),
+        }));
       }
     }, timeout);
 
     // Both streams share one overflow guard against the combined code-unit count so
     // a runaway command can't blow past maxBuffer on either channel.
+    const outputLimitError = () => Object.assign(new Error(`git output exceeded maxBuffer (${maxBuffer} code units)`), {
+      code: 'GIT_OUTPUT_LIMIT', limitCodeUnits: maxBuffer, observedCodeUnits: outputUnits,
+    });
     const guardOverflow = () => {
       if (outputUnits > maxBuffer && !killed) {
         clearTimeout(timer);
-        terminate(new Error(`git output exceeded maxBuffer (${maxBuffer} code units)`));
+        terminate(outputLimitError());
       }
     };
 
@@ -122,7 +128,7 @@ export function execGit(args, cwd, options = {}) {
       }
       if (!failure && outputUnits > maxBuffer) {
         markUncertain();
-        failure = new Error(`git output exceeded maxBuffer (${maxBuffer} code units)`);
+        failure = outputLimitError();
       }
       if (failure) { reject(failure); return; }
       if (code === null && signal) {

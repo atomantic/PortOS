@@ -81,7 +81,7 @@ content queries plus the private Git directory lookup. A source growing during a
 
 The existing limits remain 25 MiB per raw file, 250 MiB combined content and
 private administration, 16 MiB serialized manifest, and the existing Git output
-buffer of `64 * 1024 * 1024` JavaScript code units. Patch verification bounds its
+buffer of `64 * 1024 * 1024` JavaScript code units. Git output overflow and command timeout retain measured usage and recovery guidance, without changing either existing limit. Patch verification bounds its
 raw byte representation at three bytes per decoded code unit (192 MiB), preserving older multibyte
 patch admission. Metadata is charged incrementally against the same 16 MiB ceiling,
 including file entries, symlink targets and gitlinks; this also bounds

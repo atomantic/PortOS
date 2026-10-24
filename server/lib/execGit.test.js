@@ -101,7 +101,7 @@ describe('execGit', () => {
     const limited = execGit(['diff'], '/repo', { bufferOutput: true, maxBuffer: 2 });
     overflowing.stdout.emit('data', Buffer.from('abc'));
     overflowing.emit('close', null, 'SIGTERM');
-    await expect(limited).rejects.toThrow(/maxBuffer/);
+    await expect(limited).rejects.toMatchObject({ code: 'GIT_OUTPUT_LIMIT', limitCodeUnits: 2, observedCodeUnits: 3 });
   });
 
   it('rejects with stderr on a non-zero exit', async () => {
@@ -154,7 +154,8 @@ describe('execGit', () => {
     const promise = execGit(['fetch'], '/repo', { timeout: 500 });
     vi.advanceTimersByTime(500);
     child.emit('close', null, 'SIGTERM');
-    await expect(promise).rejects.toThrow(/timed out after 0\.5s/);
+    await expect(promise).rejects.toMatchObject({ code: 'GIT_TIMEOUT', limitMs: 500, observedMs: expect.any(Number),
+      message: expect.stringMatching(/timed out after 0\.5s/) });
     expect(child.kill).toHaveBeenCalled();
   });
 

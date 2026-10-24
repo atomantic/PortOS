@@ -355,7 +355,10 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
           evidence.push({ archiveDir: candidate.dir, reason: 'preservation-verified' });
           break;
         } catch (error) {
-          evidence.push({ archiveDir: candidate.dir, reason: /^[a-z][a-z-]+$/.test(error.message) ? error.message : 'archive-unverifiable' });
+          const refusal = archiveLimitRefusal(error);
+          evidence.push({ archiveDir: candidate.dir, ...(refusal ? { reason: refusal.reason,
+            ...(refusal.archiveLimit && { archiveLimit: refusal.archiveLimit }), nextAction: refusal.nextAction,
+          } : { reason: /^[a-z][a-z-]+$/.test(error.message) ? error.message : 'archive-unverifiable' }) });
         }
       }
       observations.push({ release, proof, evidence, reason: discoveryReason || (candidates.length ? 'archive-evidence-unverified' : 'archive-evidence-missing'), nextAction: historicalNextAction });
@@ -403,10 +406,16 @@ function checkArchiveSize(scope, fileBytes, totalBytes) {
 
 const archiveRecoveryAction = 'Keep the checkout and ref; free resources or preserve large outputs separately, then retry this exact checkout with fresh evidence.';
 const archiveLimitRefusal = error => {
-  const reason = error.message === 'archive-manifest-budget-exceeded' ? 'retirement-archive-manifest-limit-exceeded'
+  const gitLimit = error.code === 'GIT_OUTPUT_LIMIT'
+    ? { scope: 'git-output', kind: 'output', limitCodeUnits: error.limitCodeUnits, observedCodeUnits: error.observedCodeUnits }
+    : error.code === 'GIT_TIMEOUT'
+      ? { scope: 'git-command', kind: 'time', limitMs: error.limitMs, observedMs: error.observedMs } : null;
+  const reason = error.code === 'GIT_TIMEOUT' ? 'retirement-archive-work-limit-exceeded'
+    : error.code === 'GIT_OUTPUT_LIMIT' ? 'retirement-archive-limit-exceeded'
+    : error.message === 'archive-manifest-budget-exceeded' ? 'retirement-archive-manifest-limit-exceeded'
     : ['retirement-archive-cancelled', 'retirement-archive-work-limit-exceeded', 'retirement-archive-limit-exceeded'].includes(error.message)
       ? error.message : null;
-  return reason ? { ok: false, reason, ...(error.archiveLimit && { archiveLimit: error.archiveLimit }), nextAction: archiveRecoveryAction } : null;
+  return reason ? { ok: false, reason, ...((gitLimit || error.archiveLimit) && { archiveLimit: gitLimit || error.archiveLimit }), nextAction: archiveRecoveryAction } : null;
 };
 
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
