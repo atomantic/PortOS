@@ -4,7 +4,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { cleanupZombieAgents, deleteAgent, getAgent, getAgentPrompt, getAgents, sendBtwToAgent } from '../services/cosAgentLifecycle.js';
+import { cleanupZombieAgents, deleteAgent, getAgent, getAgentPrompt, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cosAgentLifecycle.js';
+import { getTaskView } from '../services/cosTaskStore.js';
 import { clearCompletedAgents } from '../services/cosAgentArchive.js';
 import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cosAgentIndex.js';
 import { getFeedbackStats, getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cosAgentFeedback.js';
@@ -13,6 +14,7 @@ import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { toAgentListItems } from '../lib/cosAgentListProjection.js';
+import { isDeliveryCleanupHeld } from '../lib/taskRetryHold.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
@@ -108,8 +110,28 @@ router.get('/agents', asyncHandler(async (req, res) => {
     console.error(`🧹 Background zombie cleanup failed: ${err.message}`);
   });
   const { active } = validateRequest(z.object({ active: z.literal('1').optional() }), req.query);
-  const agents = await getAgents();
-  res.json(toAgentListItems(active ? agents.filter(agent => agent.status !== 'completed') : agents));
+  const [agents, taskView] = await Promise.all([
+    getAgents(),
+    active ? getTaskView({ kind: 'queue' }) : null,
+  ]);
+  if (!active) return res.json(toAgentListItems(agents));
+
+  const resident = new Map(agents.map(agent => [agent.id, agent]));
+  const visible = new Map(agents.filter(agent => agent.status !== 'completed').map(agent => [agent.id, agent]));
+  const runningTasks = new Set(agents.filter(agent => agent.status === 'running').map(agent => agent.taskId));
+  const tasks = [...(taskView.user?.tasks || []), ...(taskView.cos?.tasks || [])];
+  // Execution can finish before delivery does. Follow only the task's exact
+  // cleanup owner, including archived records, without loading transcripts or
+  // changing the run's terminal status (and therefore scheduler capacity).
+  await Promise.all(tasks.filter(task => task.status === 'in_progress' && isDeliveryCleanupHeld(task.metadata) && !runningTasks.has(task.id)).map(async task => {
+    const id = task.metadata.deliveryRecoveryAgentId;
+    if (visible.has(id)) return;
+    const agent = resident.get(id) || await getAgentRecord(id);
+    if (agent?.status === 'completed' && agent.taskId === task.id) {
+      visible.set(id, { ...agent, deliveryPending: true });
+    }
+  }));
+  res.json(toAgentListItems([...visible.values()]));
 }));
 
 // Bounded completed history, including state records not yet archived.

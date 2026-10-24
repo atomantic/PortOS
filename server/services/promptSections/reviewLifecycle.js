@@ -11,7 +11,7 @@ import { forkLocalBranch, forkRemoteName, normalizeForkHead } from '../../lib/fo
 import { shellQuote } from '../../lib/shellQuote.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { agentApiAuthNote, agentApiCurl } from '../../lib/agentApiToken.js';
-import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../../lib/localReviewBridge.js';
+import { LOCAL_REVIEW_BRIDGE_SCRIPT, localReviewAttributionErrorGate } from '../../lib/localReviewBridge.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
 import { buildCliReviewerOutcomeInstructions } from './reviewerOutcome.js';
@@ -348,7 +348,7 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
  * than a fixed `<lmstudio|ollama>` placeholder, so a single configured backend
  * needs no substitution step at all.
  */
-function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand }) {
+function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand, recordAttribution = false }) {
   const backendToken = localLlmBackends.length === 1
     ? localLlmBackends[0]
     : `<${localLlmBackends.join('|')}>`;
@@ -378,10 +378,11 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
     ...(pinnedString(reviewerModelMap, backendToken) ? { model: reviewerModelMap[backendToken] } : {}),
     ...(pinnedString(reviewerEffortMap, backendToken) ? { effort: reviewerEffortMap[backendToken] } : {}),
     timeoutMs: LOCAL_LLM_REVIEW_TIMEOUT_MS,
+    ...(recordAttribution ? { recordAttribution: true } : {}),
   } : null;
   const reviewInput = providerRequest
     ? `${JSON.stringify(providerRequest)} + { diff: . }`
-    : `{ backend: "${backendToken}", timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}, diff: . }`;
+    : `{ backend: "${backendToken}", timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}, ${recordAttribution ? 'recordAttribution: true, ' : ''}diff: . }`;
   const pinNote = pins.map(({ reviewer, model, effort }) => {
     const keys = [
       ...(model ? [`"model": "${model}"`] : []),
@@ -402,6 +403,7 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
     ...(pins.some(p => p.model) ? ['model: "…"'] : []),
     ...(pins.some(p => p.effort) ? ['effort: "…"'] : []),
     `timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}`,
+    ...(recordAttribution ? ['recordAttribution: true'] : []),
     'diff: .'
   ].join(', ');
   const invocation = `Pipe the diff into PortOS's local-review bridge and extract its review text before evaluating it.${backendNote}
@@ -409,7 +411,7 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
 REVIEW_RESPONSE=$(mktemp)
 trap 'rm -f "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT
 ${diffCommand} | jq -Rs ${shellQuote(reviewInput)} | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"
-if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
+${recordAttribution ? `${localReviewAttributionErrorGate()}\n` : ''}if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
   exit 1 # Never treat an absent or malformed response as clean.
 else
@@ -834,7 +836,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const apiBase = localApiBaseUrl();
   const diffCommand = phase.diffCommand(forge);
   const { backendToken: localLlmBackendToken, invocation: localLlmInvocation } = buildLocalLlmInvocation({
-    localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand,
+    localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand, recordAttribution: localOnly,
   });
   const githubUsersInvocation = phase.supportsUsernameReviewers
     ? forge.requestReviewersText(usernames)

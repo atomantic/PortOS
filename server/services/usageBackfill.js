@@ -2,6 +2,7 @@ import { notifyUsageBackfillUpdated } from './usageBackfillEvents.js';
 import { Worker } from 'worker_threads';
 import { homedir } from 'os';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { applyGrokUsageRepair } from './grokUsageBackfill.js';
 import {
   applyHistoricalUsageCorrections,
   getReconciledUsageRunIds,
@@ -10,16 +11,19 @@ import {
 import { listProviders } from './providers.js';
 import { mergeUsageClaims, snapshotUsageClaims } from './usageReconciler.js';
 
-let job = {
+const idleJob = () => ({
   status: 'idle',
   processed: 0,
   total: 0,
   found: 0,
   corrected: 0,
+  grok: null,
   error: null,
   startedAt: null,
   completedAt: null
-};
+});
+
+let job = idleJob();
 
 const publicJob = () => ({ ...job });
 
@@ -62,14 +66,9 @@ export async function startHistoricalUsageBackfill({
   if (job.status === 'running') return publicJob();
 
   job = {
+    ...idleJob(),
     status: 'running',
-    processed: 0,
-    total: 0,
-    found: 0,
-    corrected: 0,
-    error: null,
-    startedAt: new Date().toISOString(),
-    completedAt: null
+    startedAt: new Date().toISOString()
   };
 
   notifyUsageBackfillUpdated();
@@ -96,16 +95,45 @@ export async function startHistoricalUsageBackfill({
     }
   });
 
+  // One repair per click, including when the transcript worker fails. It
+  // writes the in-memory ledger, so it stays on this thread rather than in
+  // the worker (that thread has its own copy of usage.js).
+  let grokOnce = null;
+  const repairGrok = () => {
+    grokOnce ??= applyGrokUsageRepair({ home, providers: providerList })
+      .then((result) => ({
+        grok: {
+          added: result.added || 0,
+          turns: result.turns || 0,
+          images: result.images || 0,
+          videos: result.videos || 0,
+          backedUp: Boolean(result.backedUp),
+          note: result.note || null,
+        },
+        grokError: null,
+      }))
+      .catch((error) => ({ grok: null, grokError: error.message }));
+    return grokOnce;
+  };
+
+  const fail = (error) => {
+    job = { ...job, status: 'error', error, completedAt: new Date().toISOString() };
+    notifyUsageBackfillUpdated();
+  };
+
   let messageTail = Promise.resolve();
   worker.on('message', (message) => {
     messageTail = messageTail.then(async () => {
       if (message?.type === 'progress') {
-        job = { ...job, ...message.progress };
+        job = { ...job, ...message.progress, grok: job.grok ?? null };
         notifyUsageBackfillUpdated();
         return;
       }
       if (message?.type === 'error') {
-        job = { ...job, status: 'error', error: message.error || 'Backfill failed', completedAt: new Date().toISOString() };
+        const repaired = await repairGrok();
+        const error = [message.error || 'Backfill failed', repaired.grokError && `Grok usage repair failed: ${repaired.grokError}`]
+          .filter(Boolean).join('. ');
+        job = { ...job, status: 'error', error, grok: repaired.grok, completedAt: new Date().toISOString() };
         notifyUsageBackfillUpdated();
         return;
       }
@@ -116,6 +144,19 @@ export async function startHistoricalUsageBackfill({
       const appliedCorrections = (result.corrections || [])
         .filter((correction) => applied.correctedRunIds.includes(correction.runId));
       await markRunMetadata(appliedCorrections);
+      const repaired = await repairGrok();
+      if (repaired.grokError) {
+        job = {
+          ...job,
+          status: 'error',
+          error: `Grok usage repair failed: ${repaired.grokError}`,
+          corrected: applied.corrected,
+          grok: null,
+          completedAt: new Date().toISOString()
+        };
+        notifyUsageBackfillUpdated();
+        return;
+      }
       job = {
         ...job,
         status: 'complete',
@@ -123,17 +164,22 @@ export async function startHistoricalUsageBackfill({
         total: result.total || 0,
         found: result.corrections?.length || 0,
         corrected: applied.corrected,
+        grok: repaired.grok,
         completedAt: new Date().toISOString()
       };
       notifyUsageBackfillUpdated();
     }).catch((error) => {
-      job = { ...job, status: 'error', error: error.message, completedAt: new Date().toISOString() };
-      notifyUsageBackfillUpdated();
+      fail(error.message);
     });
   });
   worker.on('error', (error) => {
-    job = { ...job, status: 'error', error: error.message, completedAt: new Date().toISOString() };
-    notifyUsageBackfillUpdated();
+    messageTail = messageTail.then(async () => {
+      const repaired = await repairGrok();
+      const message = [error.message, repaired.grokError && `Grok usage repair failed: ${repaired.grokError}`]
+        .filter(Boolean).join('. ');
+      job = { ...job, status: 'error', error: message, grok: repaired.grok, completedAt: new Date().toISOString() };
+      notifyUsageBackfillUpdated();
+    }).catch((err) => fail(err.message));
   });
   worker.unref();
   return publicJob();
@@ -141,14 +187,5 @@ export async function startHistoricalUsageBackfill({
 
 
 export function __resetHistoricalUsageBackfillForTests() {
-  job = {
-    status: 'idle',
-    processed: 0,
-    total: 0,
-    found: 0,
-    corrected: 0,
-    error: null,
-    startedAt: null,
-    completedAt: null
-  };
+  job = idleJob();
 }

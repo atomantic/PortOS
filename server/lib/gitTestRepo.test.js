@@ -39,6 +39,27 @@ afterEach(async () => {
 });
 
 describe('makeGitSandbox', () => {
+  it('preserves exact LF fixture bytes when the host enables automatic CRLF checkout', async () => {
+    const configRoot = await mkdtemp(join(tmpdir(), 'portos-git-fx-line-endings-'));
+    sandboxes.push(configRoot);
+    const globalConfig = join(configRoot, 'gitconfig');
+    await writeFile(globalConfig, '[core]\n\tautocrlf = true\n');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig);
+    // Build a new template under the inherited host setting rather than reuse
+    // the template that earlier tests initialized in another environment.
+    vi.resetModules();
+    const { makeGitSandbox: freshSandbox } = await import('./gitTestRepo.js');
+    const box = await freshSandbox({ prefix: 'portos-git-fx-lf-' });
+    sandboxes.push(box.scratch);
+    const file = join(box.repo, 'line-endings.txt');
+    await writeFile(file, 'exact fixture bytes\n');
+    await execGit(['add', 'line-endings.txt'], box.repo);
+    await execGit(['commit', '-m', 'Record LF fixture'], box.repo);
+    await rm(file);
+    await execGit(['checkout', '--', 'line-endings.txt'], box.repo);
+    expect(await readFile(file, 'utf8')).toBe('exact fixture bytes\n');
+  });
+
   it('keeps automatic maintenance inside the awaited Git lifetime before fixture removal', async () => {
     const box = await makeGitSandbox({ origin: true, prefix: 'portos-git-fx-maintenance-' });
     sandboxes.push(box.scratch);

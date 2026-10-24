@@ -440,6 +440,14 @@ describe('usage routes', () => {
     expect(startHistoricalUsageBackfill).toHaveBeenCalledTimes(1);
   });
 
+  it('POST /api/usage/backfill returns the Grok repair summary on the job', async () => {
+    const grok = { added: 2, turns: 1, images: 1, videos: 0, backedUp: true, note: null };
+    startHistoricalUsageBackfill.mockResolvedValue({ status: 'complete', corrected: 1, grok });
+    const started = await request(buildApp()).post('/api/usage/backfill');
+    expect(started.status).toBe(202);
+    expect(started.body.grok).toEqual(grok);
+  });
+
   it('POST /api/usage/session records a session and returns its number', async () => {
     usage.recordSession.mockResolvedValue(42);
     const res = await request(buildApp())

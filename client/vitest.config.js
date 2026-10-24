@@ -20,6 +20,8 @@ const config = defineConfig({
     dedupe: ['three'],
   },
   test: {
+    // Vitest 5's module cache is separate from Vite cacheDir; dependencies may be shared by worktrees.
+    fsModuleCachePath: fileURLToPath(new URL('./.cache/vitest/modules', import.meta.url)),
     globalSetup: [fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url))],
     env: {
       TMPDIR: RUN_TEMP_ROOT,

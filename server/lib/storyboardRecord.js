@@ -54,7 +54,7 @@ const refOrNull = (value) => trimTo(value, STORYBOARD_LIMITS.refId) || null;
  * panels send art back to: a FableLoom episode (`loomId`, `episodeId`) or a
  * Series Pipeline issue (`issueId`). Each such panel names its scene in
  * `sourceSceneId`, and a pipeline panel made from a shot that shot in
- * `sourceShotId`.
+ * `sourceShotId`, with `sourceRev` marking what the shot last took from it.
  */
 function sanitizeSource(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -137,6 +137,7 @@ function sanitizePanel(raw) {
     make: sanitizePanelMake(raw.make, takeIds),
     sourceSceneId: refOrNull(raw.sourceSceneId),
     sourceShotId: refOrNull(raw.sourceShotId),
+    sourceRev: trimTo(raw.sourceRev, 16) || null,
   };
 }
 

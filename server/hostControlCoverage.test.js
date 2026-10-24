@@ -1170,6 +1170,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/storyboards/from-pipeline/:issueId', RECORDS],
   ['POST /api/storyboards/music-video/:projectId/shots/:sceneId/panel-art', RECORDS],
   ['POST /api/storyboards/music-video/:projectId/shots/:sceneId/update-from-panel', RECORDS],
+  ['POST /api/storyboards/pipeline/:issueId/update-from-board', RECORDS],
   ['POST /api/storyboards/recipes', RECORDS],
   ['DELETE /api/storyboards/recipes/:recipeId', REMOVES_RECORD],
   // /api/sync
@@ -1231,6 +1232,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/universe-builder/:id/characters/:entryId/augment/apply', RECORDS],
   ['DELETE /api/universe-builder/:id/characters/:entryId/reference-sheet', REMOVES_RECORD],
   ['POST /api/universe-builder/:id/import/markdown', RECORDS],
+  ['POST /api/universe-builder/:id/restore-starter', 'Replaces record text with bundled defaults only; no agent, process or filesystem operation.'],
   ['POST /api/universe-builder/:id/style-references', RECORDS],
   ['DELETE /api/universe-builder/:id/style-references/:referenceId', REMOVES_RECORD],
   ['PATCH /api/universe-builder/:id/variations/lock-all', RECORDS],

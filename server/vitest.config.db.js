@@ -49,6 +49,8 @@ const config = defineConfig({
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest-db', import.meta.url)),
   test: {
+    // Vitest 5's module cache is separate from Vite cacheDir; dependencies may be shared by worktrees.
+    fsModuleCachePath: fileURLToPath(new URL('./.cache/vitest-db/modules', import.meta.url)),
     // Environment teardown also owns collection-only/skipped suite fixtures.
     environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),
     testTimeout: process.platform === 'win32' ? 30000 : 15000,

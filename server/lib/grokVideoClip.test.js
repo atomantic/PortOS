@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION, resolveGrokDuration, nearestGrokDuration,
+  grokVideoBillableUnits,
 } from './grokVideoClip.js';
 
 describe('grokVideoClip', () => {
@@ -78,6 +79,18 @@ describe('nearestGrokDuration — translating another backend\'s continuous leng
     // continuous one. 8s must not silently become 6s.
     expect(resolveGrokDuration(8)).toBe(6);
     expect(nearestGrokDuration(8)).toBe(10);
+  });
+});
+
+describe('grokVideoBillableUnits', () => {
+  it('bills a text-to-video base image plus the delivered seconds and one input image', () => {
+    expect(grokVideoBillableUnits({ requestedSeconds: 6, deliveredSeconds: 6.04, hasSourceImage: false }))
+      .toEqual({ videoSeconds: 6.04, images: 1, inputImages: 1 });
+  });
+
+  it('does not bill a second generated image when the caller supplied the still', () => {
+    expect(grokVideoBillableUnits({ requestedSeconds: 10, deliveredSeconds: null, hasSourceImage: true }))
+      .toEqual({ videoSeconds: 10, images: 0, inputImages: 1 });
   });
 });
 

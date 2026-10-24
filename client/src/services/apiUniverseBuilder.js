@@ -498,3 +498,8 @@ export const autoSortBuckets = (universeId, { providerId, model } = {}, options 
 
 export const getCharacterReferenceSheet = (universeId, entryId, variant, options = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet?variant=${encodeURIComponent(variant)}`, options);
+
+// Explicit text-only restore; record revision protects concurrent edits.
+export const restoreUniverseStarter = (id, expectedUpdatedAt, options = {}) => trackUniverseWrite(id, request(`/universe-builder/${encodeURIComponent(id)}/restore-starter`, {
+  method: 'POST', body: JSON.stringify({ expectedUpdatedAt }), ...options,
+}));

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, PRICING_AS_OF } from './modelPricing.js';
+import {
+  resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost,
+  pricingAsOfForModel, PRICING_AS_OF, GROK_IMAGINE_IMAGE_MODEL, GROK_IMAGINE_VIDEO_MODEL,
+} from './modelPricing.js';
 
 describe('resolveModelRates', () => {
   it('matches exact model ids', () => {
@@ -310,7 +313,7 @@ describe('cache-tier rates on resolveModelRates', () => {
     const rates = resolveModelRates('grok', 'grok-4.7');
     expect(rates).toMatchObject({ inputPer1M: 2, outputPer1M: 6, cacheReadPer1M: 0.5, cacheWritePer1M: 2, matched: 'exact' });
     expect(estimateCostUsd(100_000, 10_000, rates, { cacheReadTokens: 100_000 })).toBeCloseTo(0.31);
-    expect(resolveModelRates('grok-cli', 'grok-4.6')).toMatchObject({ inputPer1M: 2, outputPer1M: 6, cacheReadPer1M: 0.3 });
+    expect(resolveModelRates('grok-cli', 'grok-4.6')).toMatchObject({ inputPer1M: 2, outputPer1M: 6, cacheReadPer1M: 0.5, cacheWritePer1M: 2 });
   });
   it('derives both cache tiers from the input rate on every match tier', () => {
     for (const [providerId, model] of [
@@ -325,10 +328,15 @@ describe('cache-tier rates on resolveModelRates', () => {
     }
   });
 
-  it('uses xAI\'s higher published cached-input ratio for grok', () => {
-    const rates = resolveModelRates('grok', 'grok-4.5');
-    expect(rates.inputPer1M).toBe(2);
-    expect(rates.cacheReadPer1M).toBeCloseTo(0.3); // 0.15x per docs.x.ai
+  it('uses xAI\'s published cached-input prices and does not surcharge cache writes', () => {
+    const grok45 = resolveModelRates('grok', 'grok-4.5');
+    expect(grok45.cacheReadPer1M).toBeCloseTo(0.3);
+    expect(grok45.cacheWritePer1M).toBe(grok45.inputPer1M);
+    expect(resolveModelRates('grok', 'grok-4.3')).toMatchObject({ cacheReadPer1M: 0.2, cacheWritePer1M: 1.25 });
+    expect(resolveModelRates('grok', 'grok-4.20-reasoning')).toMatchObject({ inputPer1M: 1.25, cacheReadPer1M: 0.2, cacheWritePer1M: 1.25 });
+    expect(resolveModelRates('grok', 'grok-build-0.1')).toMatchObject({ cacheReadPer1M: 0.2, cacheWritePer1M: 1 });
+    // Unknown grok ids follow grok-4.7's cache pair, not the old 0.15× / 1.25× guess.
+    expect(resolveModelRates('grok', 'grok-5')).toMatchObject({ cacheReadPer1M: 0.5, cacheWritePer1M: 2, matched: 'family' });
   });
 
   it('keeps the OpenAI/Codex 10% cached-input ratio', () => {
@@ -416,5 +424,24 @@ describe('isFreeModelId', () => {
     expect(isFreeModelId('claude-opus-5')).toBe(false);
     expect(isFreeModelId('gpt-5.3-codex')).toBe(false);
     expect(isFreeModelId('unsloth/Qwen3-30B-free-quant')).toBe(false);
+  });
+});
+
+describe('Grok Imagine rates', () => {
+  it('prices the recommended image and video models at the headline tier', () => {
+    expect(estimateGrokImagineCost(GROK_IMAGINE_IMAGE_MODEL, { images: 1 })).toBeCloseTo(0.04);
+    expect(estimateGrokImagineCost(GROK_IMAGINE_IMAGE_MODEL, { images: 1, inputImages: 2 })).toBeCloseTo(0.06);
+    expect(estimateGrokImagineCost(GROK_IMAGINE_VIDEO_MODEL, { videoSeconds: 6, inputImages: 1 })).toBeCloseTo(0.49);
+    expect(estimateGrokImagineCost('grok-imagine-image', { images: 1 })).toBeCloseTo(0.02);
+    expect(pricingAsOfForModel('grok-4.7')).toBe('2026-10-24');
+  });
+
+  it('does not let the shorter Imagine id swallow a longer one, or bill Imagine as grok-4.7 text', () => {
+    expect(resolveModelRates('grok', 'grok-imagine-image-2.0').rateModel).toBe('grok-imagine-image-2.0');
+    expect(resolveModelRates('grok', 'grok-imagine-image-quality').rateModel).toBe('grok-imagine-image-quality');
+    expect(resolveModelRates('grok', 'grok-imagine-video-1.5').rateModel).toBe('grok-imagine-video-1.5');
+    expect(resolveModelRates('grok', 'grok-imagine-video-1.5-lite').inputPer1M).toBe(0);
+    expect(isFreeModelId('grok-imagine-image-2.0')).toBe(false);
+    expect(estimateGrokImagineCost('grok-4.7', { images: 1 })).toBe(0);
   });
 });

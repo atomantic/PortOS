@@ -151,6 +151,7 @@ describe('test memo through the real runner', () => {
         // The run-level report scripts/vitestRunDiagnostics.js would write; PORTOS_FAKE_LATE_ERROR simulates a rejection after the last test.
         'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: process.env.PORTOS_FAKE_LATE_ERROR ? 1 : 0, errors: [] }));',
         'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
+        'process.stdout.write("ARGS " + JSON.stringify(process.argv.slice(2)) + "\\n");',
       ].join('\n'));
       const test = 'scripts/lib/releaseTitle.test.js';
       const run = (extraEnv = {}) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
@@ -159,7 +160,7 @@ describe('test memo through the real runner', () => {
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([test]), CI_TEST_SOURCES: '[]',
           // An inherited PORTOS_TEST_MEMO=off (a developer's shell, a recording run) must not turn this contract off,
           // and an inherited CI_SHARD (a matrix job) must not slice the one selected file away.
-          PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_VERBOSE: '1', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
+          PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_TEST_MEMO_VERBOSE: '1', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', GITHUB_EVENT_NAME: 'push', ...extraEnv },
       });
       // A green-looking report with a run-level error records nothing.
       const tainted = run({ PORTOS_FAKE_LATE_ERROR: '1' });
@@ -167,18 +168,36 @@ describe('test memo through the real runner', () => {
       expect(tainted.stdout).toContain('RAN ');
       expect(tainted.stdout).not.toContain('recorded');
 
+      // Pull-request jobs restore trusted memos but never publish them. Their
+      // green test result must not pay to compute a disposable replacement.
+      const pullRequestMemo = join(fixture, 'pull-request-memo');
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const pr = run({ GITHUB_EVENT_NAME: 'pull_request', PORTOS_TEST_MEMO_DIR: pullRequestMemo });
+        expect(pr.status, pr.stderr).toBe(0);
+        expect(pr.stdout).toContain('RAN ["../scripts/lib/releaseTitle.test.js"]');
+        expect(pr.stdout).not.toContain('recorded');
+        expect(pr.stdout).not.toContain('--experimental.recordDependencies');
+        expect(existsSync(pullRequestMemo) && readdirSync(pullRequestMemo).length > 0).toBe(false);
+      }
+
       const first = run();
       expect(first.status, first.stderr).toBe(0);
       expect(first.stdout).toContain('🧠 Test memo: skipped 0 of 1 selected files (closure unchanged); running 1.');
       expect(first.stdout).toContain('RAN ["../scripts/lib/releaseTitle.test.js"]');
       // Two entries when this checkout's Vitest cache already holds a depfile for the file (a recorded key), one otherwise.
       expect(first.stdout).toMatch(/recorded [12] green entries for 1 passed files/);
+      expect(first.stdout).toContain('--experimental.recordDependencies');
 
       const second = run();
       expect(second.status, second.stderr).toBe(0);
       expect(second.stdout).toContain('🧠 Test memo: skipped 1 of 1 selected files (closure unchanged); running 0.');
       expect(second.stdout).toMatch(new RegExp(`skipped ${test.replace(/[./]/g, '\\$&')} \\((?:recorded|floor) key\\)`));
       expect(second.stdout).not.toContain('RAN ');
+
+      const trustedPr = run({ GITHUB_EVENT_NAME: 'pull_request' });
+      expect(trustedPr.status, trustedPr.stderr).toBe(0);
+      expect(trustedPr.stdout).toContain('skipped 1 of 1 selected files');
+      expect(trustedPr.stdout).not.toContain('RAN ');
 
       // A gating environment variable is part of the key.
       const other = run({ PORTOS_TEST_QUIET: process.env.PORTOS_TEST_QUIET === '1' ? '' : '1' });

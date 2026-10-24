@@ -71,8 +71,8 @@ async function archiveManifest(dir) {
   return { manifest: JSON.parse(bytes), digest: evidenceHash(bytes) };
 }
 
-/** Reuses the archive's recorded byte hashes and administration fingerprint.
- * Older dirty archives lack patch hashes and cannot prove completeness later.
+/** Reuses recorded byte hashes and independently reconstructs the private index.
+ * Older dirty archives without patch hashes cannot prove completeness later.
  */
 async function verifyHeldArchive(repoPath, dir, release) {
   const { manifest: saved, digest } = await archiveManifest(dir);
@@ -143,14 +143,33 @@ async function verifyHeldArchive(repoPath, dir, release) {
   // (\\.\nul) is not the Git configuration-file contract.
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' };
-  const prove = args => execGit(['--no-optional-locks', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], scratch,
-    { env, maxBuffer: GIT_OUTPUT_BYTES });
+  const prove = (args, index = null) => execGit(['--no-optional-locks', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], scratch,
+    { env: { ...env, ...(index && { GIT_INDEX_FILE: join(scratch, index) }) }, maxBuffer: GIT_OUTPUT_BYTES });
   try {
-    await prove(['init', '--bare', `--object-format=${release.head.length === 64 ? 'sha256' : 'sha1'}`, '.']);
-    await prove(['bundle', 'unbundle', bundle]);
-    await prove(['fsck', '--full', '--strict', '--no-reflogs', '--no-dangling', ...captured.recoveryHeads]);
-  } catch { throw new Error('archive-bundle-object-proof-failed'); }
-  finally { await rmGuarded(scratch, { recursive: true, force: true }); }
+    try {
+      await prove(['init', '--bare', `--object-format=${release.head.length === 64 ? 'sha256' : 'sha1'}`, '.']);
+      await prove(['bundle', 'unbundle', bundle]);
+      await prove(['fsck', '--full', '--strict', '--no-reflogs', '--no-dangling', ...captured.recoveryHeads]);
+    } catch { throw new Error('archive-bundle-object-proof-failed'); }
+    try {
+      // Copy only validated index bytes into our own Git directory. Never run
+      // Git against archived config, commondir, gitdir pointers or object stores.
+      if (!saved.administration.files.some(file => file.path === 'gitdir/index')) throw new Error('missing archived index');
+      for (const file of saved.administration.files.filter(file => file.path === 'gitdir/index'
+        || /^gitdir\/sharedindex\.[a-f0-9]+$/.test(file.path))) {
+        await copyFileGuarded(await archiveFile(dir, join(dir, 'administration', file.path)),
+          join(scratch, file.path === 'gitdir/index' ? 'archived-index' : basename(file.path)));
+      }
+      // Quoted paths make this comparison ASCII and lossless even for opaque
+      // filename bytes. --stage includes modes, object IDs and conflict stages.
+      const entries = ['-c', 'core.quotePath=true', 'ls-files', '--stage'];
+      const expected = await prove(entries, 'archived-index');
+      await prove(['read-tree', release.head]);
+      if (captured.indexDiff) await prove(['apply', '--cached', '--binary', join(dir, 'index.diff')]);
+      const restored = await prove(entries);
+      if (restored.stdout !== expected.stdout) throw new Error('index entries differ');
+    } catch { throw new Error('archive-index-reconstruction-failed'); }
+  } finally { await rmGuarded(scratch, { recursive: true, force: true }); }
   if ((await archiveManifest(dir)).digest !== digest) throw new Error('archive-manifest-changed');
   const recheck = async () => {
     for (const [path, original] of stamps) {

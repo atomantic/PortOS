@@ -8,6 +8,7 @@ export const BROWSER_SUITES = [
   'server/routes/musicVideoRichAuthoring.browser.test.js',
   'server/routes/musicVideoSongRevision.browser.test.js',
   'server/services/federatedMedia/sourceAudio.browser.test.js',
+  'server/services/htmlComposition/index.test.js',
   'server/services/musicVideo/animaticCapture.browser.test.js',
   'server/services/musicVideo/documentRender.browser.test.js',
   'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',
