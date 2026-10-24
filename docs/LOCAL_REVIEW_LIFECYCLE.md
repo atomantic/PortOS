@@ -55,3 +55,34 @@ delivery. A closed/merged PR's receipt cannot authorize another PR. Explicit
 user-requested re-review may likewise archive the previous phase and start a new
 one, recording its own revision/model evidence. Ordinary feedback/CI recovery is
 not an explicit re-review request.
+
+## Persisting the inline local phase
+
+When the local roster exhausts or its configured stop fires, aggregate clean
+required results and clean/optional-inconclusive optional results as `clean`.
+A qualifying configured stop may be `partial`. Only required-review availability,
+quota/provider, transport, timeout, malformed/empty or no-verdict failures may
+produce `review-blocked`; it permits publication but prevents merge. Unresolved
+accepted findings/rejection, failed tests/build, unpushed fixes and persistence
+failures prevent publication. Do not substitute self-review for unavailable review.
+
+Set `LOCAL_STOP_TRIGGERED=true` and `LOCAL_STOP_INDEX` to the configured zero-based
+reviewer position on a qualifying stop, including the final reviewer. Otherwise
+use false/-1. Compute `LOCAL_PHASE_COMMITS` from `LOCAL_PHASE_START_SHA..HEAD`.
+If a stop fired, retain that reviewer's `LOCAL_REVIEWER_COMMITS` in
+`LOCAL_STOP_REVIEW_COMMITS`; otherwise use -1. `on-clean` qualifies only with a
+clean zero-change pass; `on-findings` requires a clean pass that added commits;
+`partial` already records a qualifying configured short-circuit.
+
+After remediation, record `LOCAL_REVIEWED_HEAD_SHA=$(git rev-parse HEAD)` and
+persist all fields together (reload existing state across shell calls):
+
+```bash
+LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"
+printf 'LOCAL_PHASE_START_SHA=%s\nLOCAL_OVERALL_STATUS=%s\nLOCAL_STOP_TRIGGERED=%s\nLOCAL_STOP_INDEX=%s\nLOCAL_STOP_REVIEW_COMMITS=%s\nLOCAL_PHASE_COMMITS=%s\nLOCAL_REVIEWED_HEAD_SHA=%s\n' "$LOCAL_PHASE_START_SHA" "$LOCAL_OVERALL_STATUS" "$LOCAL_STOP_TRIGGERED" "$LOCAL_STOP_INDEX" "$LOCAL_STOP_REVIEW_COMMITS" "$LOCAL_PHASE_COMMITS" "$LOCAL_REVIEWED_HEAD_SHA" > "$LOCAL_REVIEW_STATE_FILE"
+```
+
+A failed write blocks publication. Then use the `complete` command above with
+the resolved base and `LOCAL_OVERALL_STATUS`; that write must also succeed.
+Return to the outer completion workflow for publication; never push/open from a
+local reviewer loop. Preserve these original phase fields after publication.

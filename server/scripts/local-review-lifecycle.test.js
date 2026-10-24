@@ -17,7 +17,8 @@ it('resumes one completed delivery across creation retries, restarts and multipl
   const pr = 'https://github.com/example/repo/pull/1';
   try {
     await git('init', '-q', '-b', 'delivery');
-    await git('remote', 'add', 'origin', 'https://github.com/example/repo.git');
+    await git('init', '--bare', '-q', join(cwd, 'remote.git'));
+    await git('remote', 'add', 'origin', join(cwd, 'remote.git'));
     await commit();
     expect((await run('check', 'main')).reusable).toBe(false);
     expect(await run('check', 'main', pr)).toMatchObject({ reusable: false, legacyPublished: true, receipt: null });
@@ -28,10 +29,12 @@ it('resumes one completed delivery across creation retries, restarts and multipl
     expect((await run('check', 'main')).receipt.reviewedHead).toBe(completed.reviewedHead);
     // A failed create can retry on the same head, in a new process, without review.
     expect((await run('check', 'main')).reusable).toBe(true);
+    await git('push', '-q', '-u', 'origin', 'delivery');
     await run('publish', 'main', pr);
     await run('publish', 'main', pr); // interrupted publication is idempotent
     for (let n = 0; n < 2; n++) {
       await commit();
+      await git('push', '-q', 'origin', 'delivery');
       const resumed = await run('check', 'main', pr);
       expect(resumed.reusable).toBe(true);
       expect(resumed.receipt.reviewedHead).toBe(completed.reviewedHead);

@@ -1027,7 +1027,7 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
   const base = hasBaseBranch ? promptRef(baseBranch, '<base-branch>') : '"$BASE_BRANCH"';
   const gitlab = forgeCli === 'glab';
   return [
-    `${step}. Publish the branch and open the pull request yourself, capturing its URL and number. On resume, resolve an existing PR/MR for this exact branch/base before replaying creation; when the lifecycle receipt matches that URL, skip this initial-publication shell block and continue the PR-side workflow; preserve its original local review and attribution. Once published, later feedback/CI pushes use the PR-side workflow and do not repeat the pre-PR local phase:`,
+    `${step}. Publish the branch and open the pull request yourself, capturing its URL and number. On resume follow the lifecycle guide first; an existing PR continues hosted handling rather than replaying this initial-publication block:`,
     '',
     '   ```bash',
     ...(hasBaseBranch ? [] : [
@@ -1097,7 +1097,7 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
     gitlab
       ? '   Write a real `--description`: a **Summary** section and a **Test plan** section, with no AI-attribution footer. If `glab` reports the merge request already exists, adopt its URL and IID before continuing.'
       : '   Write a real `--body`: a **Summary** section and a **Test plan** section, no AI-attribution footer. Do NOT use `--fill`. If `gh` reports the pull request already exists, adopt it instead of failing: `PR_URL=$(gh pr view --json url -q .url)`.',
-    ...(localReviewStateRequired ? [`   After creating or recovering the PR/MR, bind the receipt with \`node ${shellQuote(LOCAL_REVIEW_LIFECYCLE_SCRIPT)} publish ${base} "$PR_URL"\`. A failed creation may retry without repeating a successful unchanged pre-PR phase. A failed receipt write blocks merge; recover the write without another reviewer call.`] : []),
+    ...(localReviewStateRequired ? [`   Bind the created/recovered PR receipt: \`node ${shellQuote(LOCAL_REVIEW_LIFECYCLE_SCRIPT)} publish ${base} "$PR_URL"\`. Repair write failures without another review; follow the lifecycle guide for retries.`] : []),
     gitlab
       ? '   The GitLab MR URL and IID are captured in `$PR_URL` and `$PR_NUMBER`; use those variables for every review, merge, and verification command below.'
       : `   On a GitLab remote use \`glab mr create --source-branch ${branch} --target-branch ${base} --title "…" --description "…"\` and read the MR URL/IID back with \`glab mr view\`.`,
