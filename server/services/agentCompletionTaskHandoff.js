@@ -2,12 +2,21 @@
 const DISPATCH_KEYS = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'];
 const VERSION_KEYS = [...DISPATCH_KEYS, 'updatedAt', 'deliveryRecovery', 'deliveryRecoveryAgentId'];
 const entries = (metadata, keys) => keys.map(key => [key, metadata?.[key] ?? null]);
-const matches = (metadata, expected) => expected.every(([key, value]) => (metadata?.[key] ?? null) === value);
+// Task persistence round-trips scalar metadata through the markdown contract;
+// dispatch sees a number, while a later read (or a legacy receipt) sees text.
+const spawnCount = value => {
+  if (typeof value !== 'number' && !(typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value))) return null;
+  const count = Number(value);
+  return Number.isSafeInteger(count) && count >= 0 ? count : null;
+};
+const matches = (metadata, expected) => expected.every(([key, value]) => key === 'totalSpawnCount'
+  ? spawnCount(value) !== null && spawnCount(metadata?.[key]) === spawnCount(value)
+  : (metadata?.[key] ?? null) === value);
 
 /** Called by the trusted dispatcher after its task write, before provider launch. */
 export async function bindCompletionTaskDispatch(agentId, task) {
   if (task?.status !== 'in_progress' || !task.metadata?.lastSpawnedAt || !task.metadata?.claimedBy
-    || !Number.isInteger(task.metadata.totalSpawnCount)) return false;
+    || spawnCount(task.metadata.totalSpawnCount) === null) return false;
   const { updateAgent } = await import('./cosAgentLifecycle.js');
   return !!await updateAgent(agentId, { metadata: { completionTaskDispatch: {
     taskId: task.id, taskType: task.taskType || 'user', expected: entries(task.metadata, DISPATCH_KEYS),
@@ -53,6 +62,6 @@ export async function recoverCompletionTaskHandoff(agent) {
     ...Object.fromEntries((intent.metadataPatch || []).map(({ key, value, remove }) => [key, remove ? undefined : value])),
     deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agent.id, taskOutcome: agent.result.taskOutcome,
   } }, intent.taskType, { expectedStatus: 'in_progress',
-    expectedMetadata: Object.fromEntries(intent.expected.map(([key, value]) => [key, value ?? undefined])) });
+    expectedMetadata: Object.fromEntries(intent.expected.map(([key]) => [key, current.metadata?.[key]])) });
   return saved?.error || saved?.statusChanged ? null : saved;
 }
