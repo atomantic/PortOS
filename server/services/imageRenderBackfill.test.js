@@ -57,10 +57,11 @@ describe('saved Codex image usage recovery', () => {
 
   it('publishes complete receipts exactly once across simultaneous writers and does not replace a live receipt during backfill', async () => {
     const receipt = codexRenderReceipt(meta({ driverReportedTokens: codexDriverReportedTokens('result\ntokens used\n1,234\n') }));
-    expect((await Promise.all(Array.from({ length: 8 }, () => recordRenderReceipt(receipt, { directory })))).filter(Boolean)).toHaveLength(1);
     await sidecar('original', meta());
     const plan = await planImageRenderBackfill(root);
-    expect(plan.coverage.alreadyRecorded).toBe(1);
+    expect(plan.coverage.additiveOutputs).toBe(1);
+    expect((await Promise.all(Array.from({ length: 8 }, () => recordRenderReceipt(receipt, { directory })))).filter(Boolean)).toHaveLength(1);
+    expect((await planImageRenderBackfill(root)).coverage.alreadyRecorded).toBe(1);
     expect((await applyImageRenderBackfill(root, plan, join(root, 'journal.json'))).inserted).toBe(0);
     expect(await readRenderReceipts({ directory })).toEqual([receipt]);
     expect(await getImageRenderUsage({ directory })).toMatchObject({ driverTokens: { reportedTotal: 1234, sessionsMeasured: 1 }, driverSessionsUnknown: 0, imageCostUsd: null });
@@ -90,11 +91,55 @@ describe('saved Codex image usage recovery', () => {
     expect(plan.coverage).toMatchObject({ eligibleOutputs: 1, queueOnly: 1, unrecoverable: 3, jobIdentityOutputs: 1, earliest: '2026-06-01T01:02:03.000Z' });
   });
 
+  it('recovers incomplete sidecars from queue evidence while excluding derived outputs and other providers', async () => {
+    await sidecar('incomplete', meta({ id: null, codexSessionId: null, createdAt: null }));
+    await sidecar('derived', meta({ cleanedFrom: 'original.png' }));
+    await sidecar('other-provider', { mode: 'agy' });
+    await writeFile(join(root, 'media-jobs.json'), JSON.stringify({ jobs:
+      ['incomplete', 'derived', 'other-provider'].map(name => ({
+        kind: 'image', status: 'completed', params: { mode: 'codex' },
+        result: { filename: `${name}.png`, generationId: id }, startedAt: '2026-07-01T12:00:00Z',
+      })),
+    }));
+    const plan = await planImageRenderBackfill(root);
+    expect(plan.coverage).toMatchObject({ eligibleOutputs: 1, queueOnly: 1, derived: 1, unrecoverable: 1 });
+    expect((await applyImageRenderBackfill(root, plan, join(root, 'journal.json'))).inserted).toBe(1);
+    expect(await getImageRenderUsage({ directory })).toMatchObject({ savedOutputs: 1, jobIdentityGroups: 1 });
+  });
+
+  it.each([['malformed', '{'], ['unattributed', '{}']])('refuses an apply when %s sidecars change reviewed coverage', async (name, content) => {
+    await sidecar('original', meta());
+    const plan = await planImageRenderBackfill(root);
+    await writeFile(join(root, 'images', `${name}.metadata.json`), content);
+    expect((await planImageRenderBackfill(root)).receipts).toEqual(plan.receipts);
+    await expect(applyImageRenderBackfill(root, plan, join(root, 'journal.json'))).rejects.toThrow('inventory changed');
+    expect(await readdir(root)).not.toContain('image-render-usage');
+  });
+
   it('fails closed on a damaged ledger and reports malformed sidecars without inventing usage', async () => {
     await writeFile(join(root, 'images', 'bad.metadata.json'), '{');
     expect((await planImageRenderBackfill(root)).coverage.unreadable).toBe(1);
     await recordRenderReceipt(codexRenderReceipt(meta()), { directory });
     await writeFile(join(directory, `${codexRenderReceipt(meta()).id}.json`), '{');
     await expect(planImageRenderBackfill(root)).rejects.toThrow();
+  });
+
+  it.each([
+    ['missing session attribution', { identitySource: undefined }],
+    ['invalid session attribution', { identitySource: 'unknown' }],
+    ['missing token evidence', { driverTokens: undefined }],
+    ['empty token evidence', { driverTokens: {} }],
+    ['negative tokens', { driverTokens: { source: 'codex-cli-footer', reportedTotal: -1 } }],
+    ['fractional tokens', { driverTokens: { source: 'codex-cli-footer', reportedTotal: 0.5 } }],
+    ['unsafe token total', { driverTokens: { source: 'codex-cli-footer', reportedTotal: Number.MAX_SAFE_INTEGER + 1 } }],
+    ['unrecognized token source', { driverTokens: { source: 'estimated', reportedTotal: 0 } }],
+    ['missing timestamp provenance', { timestampSource: undefined }],
+    ['invented image cost', { imageCostUsd: 0 }],
+  ])('refuses %s instead of publishing misleading accounting', async (_name, damaged) => {
+    const receipt = codexRenderReceipt(meta());
+    await recordRenderReceipt(receipt, { directory });
+    await writeFile(join(directory, `${receipt.id}.json`), JSON.stringify({ ...receipt, ...damaged }));
+    await expect(getImageRenderUsage({ directory })).rejects.toThrow('Invalid image render usage receipt');
+    await expect(recordRenderReceipt(receipt, { directory })).rejects.toThrow('Conflicting image render receipt');
   });
 });
