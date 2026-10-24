@@ -37,6 +37,14 @@ import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArc
 export const heldCheckoutArchiveRoot = (cosDir = PATHS.cos) => join(cosDir, 'held-checkout-archives');
 
 const evidenceHash = value => createHash('sha256').update(value).digest('hex');
+const MAX_ARCHIVE_FILES = 1000;
+
+function checkArchiveBudget(content, administration) {
+  if (content.files.length + administration.files.length > MAX_ARCHIVE_FILES) throw new Error('archive-file-budget-exceeded');
+  // Creation and recovery share one byte budget across both snapshots.
+  const total = [...content.files, ...administration.files].reduce((bytes, file) => bytes + file.bytes, 0);
+  checkArchiveSize('combined', 0, total);
+}
 const historicalNextAction = 'Locate a complete archive for this exact historical checkout and retry branch reconciliation; if none exists, recover the original data from backup. Checkout or ref absence is not preservation evidence.';
 
 /** Never follow an archive link, including an intermediate directory link. */
@@ -75,7 +83,7 @@ async function verifyHeldArchive(repoPath, dir, release) {
     || !Array.isArray(saved.administration?.files) || !Array.isArray(saved.administration?.symlinks)
     || !saved.administration.files.some(file => file.path === 'gitdir/HEAD')
     || !saved.administration.files.some(file => file.path === 'git-indirection')) throw new Error('archive-preservation-incomplete');
-  if (captured.files.length + saved.administration.files.length > 1000) throw new Error('archive-file-budget-exceeded');
+  checkArchiveBudget(captured, saved.administration);
   const stamps = [];
   const stamp = async path => {
     const info = await lstat(path, { bigint: true });
@@ -273,8 +281,10 @@ function checkArchiveSize(scope, fileBytes, totalBytes) {
   } });
 }
 
-const archiveLimitRefusal = error => error.message === 'retirement-archive-limit-exceeded'
-  ? { ok: false, reason: error.message, archiveLimit: error.archiveLimit } : null;
+const archiveLimitRefusal = error => error.message === 'archive-file-budget-exceeded'
+  ? { ok: false, reason: 'retirement-archive-file-limit-exceeded' }
+  : error.message === 'retirement-archive-limit-exceeded'
+    ? { ok: false, reason: error.message, archiveLimit: error.archiveLimit } : null;
 
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
 const zLines = (stdout) => (stdout || '').split('\0').filter(Boolean);
@@ -361,7 +371,7 @@ async function reviewCurrentCheckout({ repoPath, release, prUrl, unlocked = fals
   if (forge?.error) return { ok: false, reason: /^retirement-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'retirement-forge-unavailable' };
   const policy = await retirementPolicy(repoPath, release.branch, opts, policyReviewIdentity(release, prUrl, forge));
   if (policy.reason) return { ok: false, reason: policy.reason };
-  return Promise.all([snapshotContent(release.path), snapshotAdministration(release.path)])
+  return archiveSnapshots(matched.tree, repoPath)
     .then(([content, administration]) => buildCheckoutRetirementReview({ repoPath, release, prUrl,
       contentFingerprint: content.fingerprint, administrationFingerprint: administration.fingerprint, policy }, { ...opts, readForge: async () => forge }))
     .then(review => ({ ok: true, review }), error => archiveLimitRefusal(error) || ({ ok: false,
@@ -527,7 +537,11 @@ async function missingCheckoutAdministration(repoPath, path) {
 }
 
 async function archiveSnapshots(tree, repoPath, missingRoot) {
-  if (!missingRoot) return Promise.all([snapshotContent(tree.path), snapshotAdministration(tree.path)]);
+  if (!missingRoot) {
+    const snapshots = await Promise.all([snapshotContent(tree.path), snapshotAdministration(tree.path)]);
+    checkArchiveBudget(...snapshots);
+    return snapshots;
+  }
   const present = await lstat(tree.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (present) throw new Error('missing-checkout-reappeared');
   const prefix = ['--git-dir', missingRoot, '--work-tree', tree.path];
@@ -535,7 +549,9 @@ async function archiveSnapshots(tree, repoPath, missingRoot) {
   const indexDiff = await git([...prefix, 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], repoPath);
   const content = { indexDiff, worktreeDiff: '', files: [], symlinks: [], gitlinks: [], missingCheckout: true,
     fingerprint: createHash('sha256').update('missing-checkout\0').update(indexDiff).digest('hex') };
-  return [content, await snapshotAdministration(tree.path, missingRoot)];
+  const administration = await snapshotAdministration(tree.path, missingRoot);
+  checkArchiveBudget(content, administration);
+  return [content, administration];
 }
 
 /** Preserve ignored content and recovery evidence before a clean merged tree
