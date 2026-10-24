@@ -36,12 +36,17 @@ const ownerPath = (agent) => agent?.metadata?.sourceWorkspace || agent?.sourceWo
 const binding = (agent) => ({ agentId: agent.id, startedAt: agent.startedAt, taskId: agent.taskId });
 const sameAgent = (lease, agent) => agent?.id === lease.agentId && agent?.startedAt === lease.startedAt
   && agent?.taskId === lease.taskId;
+const validExternalMergeTarget = (target) => isPlainObject(target)
+  && ['appId', 'repoPath', 'worktreePath', 'gitDir', 'commonDir', 'checkoutIdentity', 'branch', 'prUrl'].every(key =>
+    typeof target[key] === 'string' && target[key].length > 0)
+  && /^[a-f0-9]{40}$/.test(target.headSha || '') && /^[a-f0-9]{40}$/.test(target.baseSha || '');
 const validLease = (lease, repository) => isPlainObject(lease) && lease.repository === repository
   && typeof lease.token === 'string' && lease.token.length > 0 && Number.isFinite(Date.parse(lease.acquiredAt))
   && (lease.kind === 'agent'
     ? typeof lease.agentId === 'string' && typeof lease.startedAt === 'string' && typeof lease.taskId === 'string'
-    : lease.kind === 'sweep' && typeof lease.serverOwner === 'string' && Number.isInteger(lease.pid) && lease.pid > 0);
-const expired = (lease) => lease.kind === 'agent' && Date.now() - Date.parse(lease.acquiredAt) >= AGENT_LEASE_MAX_HOLD_MS;
+    : lease.kind === 'external' ? /^[a-f0-9]{64}$/.test(lease.externalOwner || '') && validExternalMergeTarget(lease.target)
+      : lease.kind === 'sweep' && typeof lease.serverOwner === 'string' && Number.isInteger(lease.pid) && lease.pid > 0);
+const expired = (lease) => ['agent', 'external'].includes(lease.kind) && Date.now() - Date.parse(lease.acquiredAt) >= AGENT_LEASE_MAX_HOLD_MS;
 
 // A settled transaction is logged only at or above this duration; a deadline,
 // pending or failed one always is. See docs/TROUBLESHOOTING.md for the fields.
@@ -152,6 +157,9 @@ async function inactive(lease, state) {
     catch (err) { return err.code === 'ESRCH'; }
   }
   if (expired(lease)) return true;
+  // Outside sessions have no CoS lifecycle record. Only the same bounded hold
+  // deadline can recover an interrupted session, including across restarts.
+  if (lease.kind === 'external') return false;
   let owner = state.agents[lease.agentId];
   if (!owner) {
     const { readAgentRecordOrUnreadable } = await import('./cosAgentLifecycle.js');
@@ -471,6 +479,50 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     await save(state);
     return { admitted: false, released: true, outcome };
   }, ['acquire', 'check', 'release'].includes(action) ? action : 'unknown');
+}
+
+/** A verified operator session owns only the target validated by the server. */
+export async function externalMergeAdmission(input, resolveOwner) {
+  return transaction(async (state, save, measure) => {
+    const externalOwner = await resolveOwner();
+    if (!/^[a-f0-9]{64}$/.test(externalOwner || '')) return refuse('external-owner-unverified');
+    // Validate the whole map before looking up an opaque handle: corruption is
+    // never evidence that a competing owner disappeared.
+    if (Object.entries(state.mergeAdmissions).some(([key, held]) => !validLease(held, key))) {
+      return refuse('lease-unreadable');
+    }
+    const { action, token, outcome } = input;
+    const owned = Object.values(state.mergeAdmissions).find(held => held.kind === 'external'
+      && held.externalOwner === externalOwner && held.token === token);
+    if (action !== 'acquire' && !owned) return refuse('lease-owner-mismatch');
+    // Release remains possible after a merge or a changed/deleted checkout.
+    if (action === 'release') {
+      if (!MERGE_ADMISSION_OUTCOMES.includes(outcome)) return refuse('outcome-required');
+      delete state.mergeAdmissions[owned.repository];
+      await save(state);
+      return { admitted: false, released: true, outcome };
+    }
+    if (action !== 'acquire' && action !== 'check') return refuse('action-invalid');
+    if (owned && expired(owned)) return refuse('lease-expired');
+    const { inspectExternalMergeTarget } = await import('./externalMergeTarget.js');
+    const proof = await measure('origin', () => inspectExternalMergeTarget(
+      action === 'acquire' ? input : owned.target, Object.values(state.agents)));
+    if (proof.reason) return refuse(proof.reason);
+    if (await resolveOwner() !== externalOwner) return refuse('external-owner-changed');
+    if (owned && expired(owned)) return refuse('lease-expired');
+    const { repository, target } = proof;
+    if (owned && (repository !== owned.repository || JSON.stringify(target) !== JSON.stringify(owned.target))) {
+      return refuse('lease-target-changed');
+    }
+    if (action === 'check') return { admitted: true, token, repository, headSha: target.headSha, baseSha: target.baseSha };
+    const held = state.mergeAdmissions[repository];
+    if (held?.kind === 'external' && held.externalOwner === externalOwner && !expired(held)) {
+      if (JSON.stringify(held.target) !== JSON.stringify(target)) return refuse('lease-target-changed');
+      return { admitted: true, token: held.token, repository, headSha: target.headSha, baseSha: target.baseSha };
+    }
+    const admission = await admit(state, save, repository, { kind: 'external', externalOwner, target }, measure);
+    return admission.admitted ? { ...admission, headSha: target.headSha, baseSha: target.baseSha } : admission;
+  }, ['acquire', 'check', 'release'].includes(input.action) ? `external-${input.action}` : 'unknown');
 }
 
 /** A sweep holds admission only around its final read/assessment/merge attempt. */

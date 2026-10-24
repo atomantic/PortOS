@@ -39,6 +39,26 @@ router.post('/merge-admission', asyncHandler(async (req, res) => {
   res.json(await claimMergeAdmission(input));
 }));
 
+// Outside operators have no CoS agent record. A per-run secret separates
+// sessions sharing the agent-key credential; only its principal-bound hash is
+// persisted. Neither an agentId nor a PR's prose can select another owner.
+const externalMergeAdmissionSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('acquire'), appId: z.string().min(1).max(200),
+    worktreePath: z.string().min(1).max(4096), prUrl: z.string().url().max(2048),
+    headSha: z.string().regex(/^[a-f0-9]{40}$/), baseSha: z.string().regex(/^[a-f0-9]{40}$/),
+  }).strict(),
+  z.object({ action: z.literal('check'), token: z.string().uuid() }).strict(),
+  z.object({ action: z.literal('release'), token: z.string().uuid(),
+    outcome: z.enum(['merged', 'leave-open', 'resync']) }).strict(),
+]);
+router.post('/merge-admission/external', asyncHandler(async (req, res) => {
+  const input = validateRequest(externalMergeAdmissionSchema, req.body ?? {});
+  const { externalAdmissionOwner } = await import('../services/externalAdmissionAuth.js');
+  const { externalMergeAdmission } = await import('../services/cosMergeAdmission.js');
+  res.json(await externalMergeAdmission(input, () => externalAdmissionOwner(req)));
+}));
+
 // A registered run hands its published, reviewed head to the server's
 // pending-merge coordinator instead of waiting for CI itself (#12247). The
 // repository, branch, checkout and policy come from the run's registration.
