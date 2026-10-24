@@ -22,6 +22,7 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
   const mounted = useMounted();
 
   useEffect(() => {
+    if (pending.current) return;
     let active = true;
     const current = ++generation.current;
     api.getTimelineSources({ silent: true }).then((r) => {
@@ -43,6 +44,7 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
     generation.current++;
     setBusy(true);
     setError(null);
+    let confirmedGone = false;
     const result = await api.eraseTimelineSource(source, { silent: true })
       .catch(async (err) => {
         if (!mounted.current) return null;
@@ -54,6 +56,7 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
         if (!mounted.current || generation.current !== current || !Array.isArray(fresh?.sources)) return null;
         if (fresh.sources.some(row => row.source === source)) setSources(fresh.sources);
         else {
+          confirmedGone = true;
           const next = [...fresh.sources];
           const index = sources.findIndex(row => row.source === source);
           if (index !== -1) next.splice(Math.min(index, next.length), 0, sources[index]);
@@ -63,7 +66,10 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
         }
         return null;
       });
-    pending.current = false;
+    // A reload requested during deletion must not publish pre-delete counts.
+    // Keep its read lane closed through a successful row's collapse.
+    generation.current++;
+    pending.current = Boolean(result) || confirmedGone;
     if (!mounted.current) return;
     setBusy(false);
     if (!result) return;
@@ -73,8 +79,19 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
   };
 
   const finishRemoval = (source) => {
+    pending.current = false;
+    const current = ++generation.current;
     setSources((list) => list.filter((row) => row.source !== source));
     setRemoving(null);
+    // Reconcile counts after the mutation and animation; keep any lost-ack
+    // warning visible even when this authoritative read succeeds.
+    api.getTimelineSources({ silent: true }).then((fresh) => {
+      if (mounted.current && generation.current === current && !pending.current && Array.isArray(fresh?.sources)) {
+        setSources(fresh.sources);
+      }
+    }).catch((err) => {
+      if (mounted.current && generation.current === current && !pending.current) setError(err.message || 'Could not load imported data.');
+    });
     onChanged?.();
   };
 
