@@ -274,6 +274,53 @@ describe('portable FableLoom export boundary', () => {
     expect(noAudioAssets.holds[0].audioOccupancy).toEqual(silentAssets.holds[0].audioOccupancy);
   });
 
+  videoIt('normalizes short non-silent audio without padding its duration', async () => {
+    const source = join(PATHS.videos, 'short-sfx.mp4');
+    expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: [
+      '-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:r=10:d=1',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=0.2', '-af', 'volume=0.1',
+      '-c:v', 'libx264', '-c:a', 'aac', '-threads', '1', source,
+    ] })).toEqual({ ok: true });
+    loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({ id, filename: 'short-sfx.mp4' })));
+    const result = await archive(await begin({ episodeIds: ['episode-one'], mediaProfile: 'web-720p' }));
+    const assets = JSON.parse(result.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets;
+    expect(assets.entry.durationMs).toBe(1000);
+    const output = join(PATHS.videos, 'short-normalized.mp4');
+    await writeFile(output, result.files.get(assets.entry.file));
+    const streams = JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', output], { timeout: 10_000 }).toString()).streams;
+    const audio = streams.find(stream => stream.codec_type === 'audio');
+    expect(Number(audio.duration)).toBeGreaterThanOrEqual(0.2);
+    expect(Number(audio.duration)).toBeLessThan(0.25);
+    const analyzed = await runFfmpegProcess({ bin, timeoutMs: 10_000, returnStderr: true, stderrTailBytes: 8192,
+      args: ['-nostdin', '-i', output, '-vn', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json', '-f', 'null', '-'] });
+    expect(analyzed.ok).toBe(true);
+    const level = JSON.parse(analyzed.stderr.slice(analyzed.stderr.lastIndexOf('{'), analyzed.stderr.lastIndexOf('}') + 1));
+    expect(Number(level.input_tp)).toBeGreaterThan(-3);
+    expect(Number(level.input_tp)).toBeLessThan(0);
+  });
+
+  videoIt('measures retained streams when discarded subtitle tracks outlast picture and audio', async () => {
+    const subtitle = join(PATHS.videos, 'extended.srt');
+    await writeFile(subtitle, '1\n00:00:00,000 --> 00:00:03,000\nExample subtitle\n');
+    const source = join(PATHS.videos, 'extended-subtitle.mp4');
+    expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: ['-nostdin', '-y', '-v', 'error',
+      '-i', join(PATHS.videos, 'independent-name.mp4'), '-i', subtitle, '-map', '0', '-map', '1:0',
+      '-c', 'copy', '-c:s', 'mov_text', source] })).toEqual({ ok: true });
+    const measured = JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', source], { timeout: 10_000 }).toString());
+    expect(Number(measured.streams.find(stream => stream.codec_type === 'subtitle').duration)).toBe(3);
+    loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({ id, filename: 'extended-subtitle.mp4' })));
+    for (const mediaProfile of ['source', 'web-720p']) {
+      const result = await archive(await begin({ episodeIds: ['episode-one'], mediaProfile }));
+      const assets = JSON.parse(result.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets;
+      expect(assets.entry.durationMs).toBe(1000);
+      expect(assets.holds[0].audioOccupancy.durationMs).toBe(1000);
+      const output = join(PATHS.videos, 'retained.mp4');
+      await writeFile(output, result.files.get(assets.entry.file));
+      const streams = JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', output], { timeout: 10_000 }).toString()).streams;
+      expect(streams.map(stream => stream.codec_type)).toEqual(['video', 'audio']);
+    }
+  });
+
   videoIt('drains cancelled and failed encoder children before exposing terminal failure without an artifact', async () => {
     const realRun = ffmpeg.runFfmpegProcess;
     const started = Promise.withResolvers();

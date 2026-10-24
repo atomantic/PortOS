@@ -57,17 +57,27 @@ async function probe(path, format = 'mov') {
   if (!bin) throw refusal('EXPORT_FFMPEG_REQUIRED', 'Install ffmpeg and ffprobe before exporting video.');
   const { stdout } = await execFileAsync(bin, [
     '-v', 'error', '-protocol_whitelist', 'file', '-f', format, '-i', path,
-    '-show_entries', 'stream=codec_type,codec_name,pix_fmt,width,height:format=duration', '-of', 'json',
+    '-show_entries', 'stream=codec_type,codec_name,pix_fmt,width,height,start_time,duration:format=duration', '-of', 'json',
   ], safeChildProcessOptions({ timeout: 10_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }));
   const result = JSON.parse(stdout);
   const video = result.streams?.filter(s => s.codec_type === 'video') || [];
   const audio = result.streams?.filter(s => s.codec_type === 'audio') || [];
-  const durationMs = Math.round(Number(result.format?.duration) * 1000);
-  if (video.length !== 1 || audio.length > 1 || !Number.isSafeInteger(durationMs) || durationMs <= 0
+  if (video.length !== 1 || audio.length > 1
     || !Number.isSafeInteger(video[0].width * video[0].height) || video[0].width * video[0].height > 16 * 1024 * 1024) {
     throw refusal('EXPORT_MEDIA_INVALID', 'Video must have one bounded picture stream, optional audio and a valid duration.');
   }
-  return { video: video[0], audio: audio[0], durationMs };
+  // MP4 container duration can include discarded subtitles/data. Only retained
+  // picture/audio timelines determine clip length. WebM output has no extra tracks
+  // but may omit stream durations, so its own container is a safe fallback.
+  for (const stream of [...video, ...audio]) {
+    const seconds = stream.duration === undefined && format === 'matroska'
+      ? Number(result.format?.duration) : Number(stream.duration);
+    stream.durationMs = Math.round((seconds + Math.max(0, Number(stream.start_time) || 0)) * 1000);
+    if (!Number.isSafeInteger(stream.durationMs) || stream.durationMs <= 0) {
+      throw refusal('EXPORT_MEDIA_INVALID', 'Retained video/audio duration could not be verified.');
+    }
+  }
+  return { video: video[0], audio: audio[0], durationMs: Math.max(...[...video, ...audio].map(s => s.durationMs)) };
 }
 
 export async function fableLoomExportEncoder(kind) {
@@ -96,6 +106,11 @@ async function audioFilter(bin, inputArgs, profile, signal) {
   const measurement = JSON.parse(stderr.slice(stderr.lastIndexOf('{'), stderr.lastIndexOf('}') + 1));
   // Applying loudnorm to digital silence can emit non-finite samples into AAC.
   if (measurement.input_i === '-inf' && measurement.input_tp === '-inf') return null;
+  // Short SFX may never fill loudnorm's 400 ms window. Peak normalization
+  // preserves their samples/timing without padding them to invent a LUFS value.
+  if (measurement.input_i === '-inf' && Number.isFinite(Number(measurement.input_tp))) {
+    return `volume=${profile.truePeakDb - Number(measurement.input_tp)}dB`;
+  }
   const values = ['input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset'].map(k => Number(measurement[k]));
   if (!values.every(Number.isFinite)) throw refusal('EXPORT_MEDIA_INVALID', 'Audio loudness could not be measured.');
   return `${loudness(profile)}:measured_I=${values[0]}:measured_TP=${values[1]}:measured_LRA=${values[2]}:measured_thresh=${values[3]}:offset=${values[4]}:linear=true`;
@@ -157,7 +172,7 @@ export async function prepareFableLoomExportMedia(bytes, kind, directory, option
   await encode(bin, [...common, ...encoding, '-bsf:v', 'filter_units=remove_types=6',
     '-fflags', '+bitexact', '-movflags', '+faststart', '-fs', String(FABLELOOM_EXPORT_LIMITS.maxAssetBytes), output], signal);
   const encoded = await probe(output);
-  if (encoded.durationMs < source.durationMs - 1) throw refusal('EXPORT_MEDIA_SIZE', 'Encoding truncated the clip. Use a smaller profile or shorter clip.');
+  if (['video', 'audio'].some(kind => source[kind] && (!encoded[kind] || encoded[kind].durationMs < source[kind].durationMs - 1))) throw refusal('EXPORT_MEDIA_SIZE', 'Encoding truncated the clip. Use a smaller profile or shorter clip.');
   const result = { bytes: await outputBytes(output), extension: 'mp4', durationMs: encoded.durationMs };
   if (profile.id !== 'source') {
     const poster = join(directory, 'poster.png');

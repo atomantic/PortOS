@@ -66,7 +66,10 @@ actual byte report, not bitrate multiplied by duration, is the package size.
 
 Two-pass loudness normalization targets −16 LUFS, −1.5 dBTP and LRA 11 for the
 existing authored audio mix (including dialogue and SFX). Silence remains
-silence; clips without audio remain silent. No stem separation, speech synthesis,
+silence; clips without audio remain silent. Audio too short or sparse for a
+finite integrated-loudness measurement uses peak normalization to −1.5 dBTP
+without padding its duration. Discarded subtitle/data tracks do not extend the
+retained picture/audio duration. No stem separation, speech synthesis,
 provider calls or new creative media generation occurs. Normalization changes
 level, not authored occupancy intervals. Oversized, invalid, failed or timed-out
 encodes fail the job visibly; clips are never shortened to fit the byte limit.
