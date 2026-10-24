@@ -1254,13 +1254,6 @@ describe('autonomousJobs', () => {
       expect(opts.activeAgentIds().has('live-agent-99')).toBe(true)
     })
 
-    it('does not fall through to orphan cleanup after a failed merged sweep', async () => {
-      reapMergedWorktrees.mockRejectedValueOnce(new Error('synthetic sweep failure'))
-      await expect(agentDataCleanup()).resolves.toMatchObject({ mergedReaped: 0, worktreesReaped: 0,
-        worktreeHolds: [{ reason: 'merged-worktree-reap-failed' }] })
-      expect(cleanupOrphanedWorktrees).not.toHaveBeenCalled()
-    })
-
     it('skips every reap when the stored statuses cannot be read (a paused agent could look orphaned)', async () => {
       listStoredAgentStatuses.mockRejectedValueOnce(new Error('database unavailable'))
 

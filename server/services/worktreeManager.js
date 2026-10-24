@@ -2187,7 +2187,9 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     { path: claudeTreesRoot, requireAgentId: false },
   ];
 
-  const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
+  // An unreadable inventory is not an empty successful sweep: callers must
+  // retain work rather than falling through to receipt-free orphan cleanup.
+  const worktrees = await listWorktrees(sourceWorkspace);
   const reaped = [];
   const skipped = [];
 

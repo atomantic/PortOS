@@ -10,7 +10,7 @@ import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.j
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { PATHS } from '../lib/paths.js';
 
-const injected = vi.hoisted(() => ({ app: null, apps: null, schedule: null, scheduleWrites: 0, failScheduleWrite: null, failOrphanInventory: false, inventoryFailureArmed: false, inventoryFailures: 0 }));
+const injected = vi.hoisted(() => ({ app: null, apps: null, schedule: null, scheduleWrites: 0, failScheduleWrite: null, failOrphanInventory: false, failMergedInventory: false, inventoryFailureArmed: false, inventoryFailures: 0 }));
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => realpathSync.native(lazyTempDataRoot('portos-cleanup-receipts-')),
   extraOverrides: () => ({ root: injected.app?.repoPath || lazyTempDataRoot('portos-cleanup-receipts-') }),
@@ -19,6 +19,10 @@ afterAll(cleanupTempDataRoots);
 vi.mock('../lib/execGit.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
+    if (injected.failMergedInventory && args[0] === 'fetch') {
+      injected.failMergedInventory = false;
+      injected.inventoryFailureArmed = true;
+    }
     if (injected.inventoryFailureArmed && args[0] === 'worktree' && args[1] === 'list') {
       injected.inventoryFailureArmed = false;
       injected.inventoryFailures++;
@@ -52,7 +56,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
   let scratch;
   let repo;
   beforeEach(async () => {
-    Object.assign(injected, { app: null, apps: null, schedule: { tasks: {}, executions: {} }, scheduleWrites: 0, failScheduleWrite: null, failOrphanInventory: false, inventoryFailureArmed: false, inventoryFailures: 0 });
+    Object.assign(injected, { app: null, apps: null, schedule: { tasks: {}, executions: {} }, scheduleWrites: 0, failScheduleWrite: null, failOrphanInventory: false, failMergedInventory: false, inventoryFailureArmed: false, inventoryFailures: 0 });
     scratch = realpathSync.native(await mkdtemp(join(tmpdir(), 'portos-cleanup-repo-')));
     await mkdir(join(scratch, 'repo'));
     await materializeGitRepo(join(scratch, 'repo'), { identity: { email: 'test@example.com', name: 'Test' } });
@@ -117,6 +121,20 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.retired || []).toEqual([]);
     expect(outcome.retirementObligations, JSON.stringify(result)).toContainEqual(expect.objectContaining({ path: release.path, head: release.head }));
+  });
+
+  it('does not retry a retained checkout through orphan cleanup when the merged inventory read fails', async () => {
+    const { release, run } = await outsideCleanupFixture('daily cleanup');
+    injected.failScheduleWrite = injected.scheduleWrites + 3;
+    expect(await run()).toMatchObject({ mergedReaped: 0, worktreesReaped: 0 });
+    injected.failMergedInventory = true;
+    expect(await run()).toMatchObject({ mergedReaped: 0, worktreesReaped: 0,
+      worktreeHolds: [{ reason: 'merged-worktree-reap-failed' }] });
+    expect(injected.inventoryFailures).toBe(1);
+    expect(existsSync(release.path)).toBe(true);
+    expect(await registered(release.path)).toBe(true);
+    expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
   });
 
   it('retains a failed daily preservation even when orphan inventory fails and external discovery retries it', async () => {
