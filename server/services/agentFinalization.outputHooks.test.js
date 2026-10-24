@@ -57,7 +57,7 @@ vi.mock('./taskTypeHooks.js', () => ({
 }));
 
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
-import { canRunTaskOutputHookWithoutPayload, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
+import { canRunTaskOutputHookWithoutPayload, declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
 import {
   finalizeAgent,
   retireDeadAgent,
@@ -575,6 +575,47 @@ describe('recovery output-hook dispatch (#3182)', () => {
       expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false,
         validationPassed: false, taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' } }));
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
+  it('accepts a coordinator no-op whose commit criterion was never declared', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    declaresNoCommitCriterion.mockReturnValue(true);
+    const taskOutcome = { status: 'no-action-needed', reason: 'Inventory was already drained.' };
+    const task = { id: 'reconcile-example', taskType: 'internal', metadata: { analysisType: 'branch-reconcile', app: 'app-example' } };
+    try {
+      await finalizeAgent({ agentId: 'agent-example', task, success: true, exitCode: 0, outputBuffer: '',
+        finalSummary: JSON.stringify({ summary: 'Nothing left to reconcile.', taskOutcome }) });
+      expect(completeAgent).toHaveBeenLastCalledWith('agent-example', expect.objectContaining({
+        success: true, executionSuccess: true, validationPassed: null, taskOutcome,
+      }));
+      expect(updateTask).toHaveBeenLastCalledWith(task.id, expect.objectContaining({
+        status: 'completed', metadata: expect.objectContaining({ taskOutcome }),
+      }), 'internal');
+      expect(addTask).not.toHaveBeenCalled();
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      declaresNoCommitCriterion.mockReturnValue(false);
+    }
+  });
+
+  it('keeps a failed delivery gate ahead of a coordinator no-op', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    declaresNoCommitCriterion.mockReturnValue(true);
+    const task = { id: 'reconcile-example', taskType: 'internal', metadata: { analysisType: 'branch-reconcile' } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.result = { validationPassed: false };
+    persistedAgent.metadata.taskOutcome = { status: 'no-action-needed', reason: 'Inventory was already drained.' };
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    try {
+      await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({
+        success: false, validationPassed: false,
+        taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' },
+      }));
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      declaresNoCommitCriterion.mockReturnValue(false);
+    }
   });
 
   it('holds an unverified no-op', async () => {

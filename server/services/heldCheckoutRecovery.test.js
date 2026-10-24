@@ -2096,7 +2096,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
-  it.each(['confirmed', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner'])('keeps an orphan sibling obligation separate from a detached copy: %s', async scenario => {
+  it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner'])('keeps an orphan sibling obligation separate from a detached copy: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-sibling-${scenario}`);
     const namedPath = c.path;
     const namedBranch = c.release.branch;
@@ -2110,7 +2110,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     agent.result = { success: false, executionSuccess: false, orphaned: true, validationPassed: null };
     agent.metadata.completedCheckouts = await evidence.captureSeededCompletionCheckouts(agent);
     expect(agent.metadata.completedCheckouts).toHaveLength(1);
-    const path = join(external, `detached-${scenario}`);
+    if (scenario === 'owner-alias') {
+      const alias = join(external, 'canonical-owner-alias');
+      await symlink(namedPath, alias, 'junction');
+      agent.metadata.workspacePath = alias;
+    }
+    let path = join(external, `detached-${scenario}`);
     if (scenario === 'same-incarnation') {
       const pointerIdentity = await readRetirementCheckoutIdentity(namedPath);
       await execGit(['worktree', 'move', namedPath, path], repo);
@@ -2121,6 +2126,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await execGit(['worktree', 'add', '--detach', path, c.release.head], repo);
       await writeFile(join(path, 'ignored.txt'), 'distinct detached work\n');
     }
+    // Real inventories use Git's observed spelling. Windows temp paths can
+    // differ from that registration (including short names and drive casing).
+    path = (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
+    expect(await registered(path)).toBe(true);
     const release = { path, branch: null, head: c.release.head, locked: false, lockReason: null };
     c.forge.publishedBranch = namedBranch; c.forge.exactAliasHead = release.head;
     injected.policies = [agent];
@@ -2129,10 +2138,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     if (scenario === 'active-owner') { agent.status = 'running'; c.opts.readAgents = async () => [agent]; }
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'worktree-unmanaged-location' }] });
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
-    if (scenario !== 'confirmed') {
+    if (!['confirmed', 'owner-alias'].includes(scenario)) {
       expect(prepared.ok).toBe(false); expect(await registered(path)).toBe(true); expect(await archives()).toEqual([]);
       return;
     }
+    expect(prepared.reason).toBeUndefined();
     expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedSibling: true }] } } });
     const result = await retireInventoriedCheckout({ appId: 'app-1', release,
       review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);

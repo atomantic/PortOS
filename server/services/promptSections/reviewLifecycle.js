@@ -931,7 +931,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // file instead. Same trade `buildSlashdoSection` makes: an initial run is
   // already carrying the real task, and pasting 40KB of reviewer recipe up front
   // to be read at step 4 is the wrong place to spend that context.
-  const cliProcedureHeader = `\n### CLI Reviewer Procedure (${cliReviewerHeading})\n\n${phase.procedureNote}Drive each spawnable CLI reviewer EXACTLY as the slashdo local-agent review loop specifies — use its per-CLI invocation and review-only prompt contract verbatim; verify isolation flags with the installed CLI's help before supplying review data. Do not use throwaway provider prompts or invent unsupported flags. Run the reviewer once per round, capture its findings, and (unless reviewer-applies is set) apply the fixes yourself.\n\n`;
+  const cliProcedureHeader = `\n### CLI Reviewer Procedure (${cliReviewerHeading})\n\n${phase.procedureNote}Follow slashdo's per-CLI invocation and review-only prompt contract verbatim; verify isolation flags with the installed CLI's help before supplying review data. Do not invent flags or provider prompts. Run once per round, capture findings, and apply fixes yourself unless reviewer-applies is set.\n\n`;
   //
   // The path IS the decision — it is non-null only when the caller already
   // measured the body over budget and staged it. Re-testing the length here

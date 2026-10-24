@@ -1,3 +1,4 @@
+import { reconcileAssignmentForTask } from '../lib/claimContinuation.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isFalsyMeta, isTruthyMeta } from '../lib/metadataFlags.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
@@ -667,6 +668,43 @@ const REPLACEMENT_RUNTIME_METADATA_KEYS = new Set([
 ]);
 
 /**
+ * A replacement queued because the original task is gone still has to be the same
+ * kind of run. Registration projects `analysisType` onto the agent as
+ * `taskAnalysisType` and does not copy it back, so a missing task became a generic
+ * commit task: the live checkout was probed, a correct no-op failed delivery, and
+ * the retry budget spawned more agents. Fill only keys the task record did not
+ * already carry. The assignment is accepted only when it still validates as this
+ * task's own snapshot — resume prose cannot supply one.
+ */
+function inheritPausedCoordinatorContract(metadata, agentMeta, { app, taskType }) {
+  if (!agentMeta) return;
+  if ((metadata.analysisType == null || metadata.analysisType === '')
+    && typeof agentMeta.taskAnalysisType === 'string' && agentMeta.taskAnalysisType.trim()) {
+    metadata.analysisType = agentMeta.taskAnalysisType;
+  }
+  // `false` and the TASKS.md string `"false"` are the load-bearing values.
+  if (metadata.worktreeChangesExpected == null && agentMeta.worktreeChangesExpected != null) {
+    metadata.worktreeChangesExpected = agentMeta.worktreeChangesExpected;
+  }
+  // Strict boolean: a string `"true"` is not the on-demand lane marker.
+  if (metadata.onDemand == null && agentMeta.taskOnDemand === true) metadata.onDemand = true;
+  if (metadata.analysisType === 'branch-reconcile' && metadata.reconcileAssignment == null) {
+    const validated = reconcileAssignmentForTask({
+      taskType,
+      metadata: {
+        // Top-level `app` overwrites a metadata seed at intake, so a dialog
+        // switch has to win here too. Otherwise the previous app's snapshot
+        // would be stored on the task the replacement actually runs.
+        app: app || metadata.app,
+        analysisType: 'branch-reconcile',
+        reconcileAssignment: agentMeta.reconcileAssignment,
+      },
+    });
+    if (validated) metadata.reconcileAssignment = validated;
+  }
+}
+
+/**
  * The fallback: the paused run's task is gone or completed, so queue the fresh task
  * the caller described instead. Same outcome the pre-fix client always took, kept
  * only for the case where it is actually correct.
@@ -703,11 +741,17 @@ async function replacePausedTask({ agentId, agent, task, taskType, overrides }) 
   }
   for (const key of REPLACEMENT_RUNTIME_METADATA_KEYS) delete inheritedMetadata[key];
   if (agentId) inheritedMetadata.resumedFromAgentId = agentId;
+  // Validate against the app the replacement will actually run, including a
+  // dialog switch, so a snapshot for the previous app is not attached as a grant.
+  const overridesPatch = resumeOverrideMetadata(overrides, task?.metadata || agent?.metadata);
+  inheritPausedCoordinatorContract(inheritedMetadata, agent?.metadata, {
+    app: overridesPatch.app || app, taskType,
+  });
   const created = await addTask({
     description,
     context, prompt, provider, model, effort, app,
     metadata: inheritedMetadata,
-    ...resumeOverrideMetadata(overrides, task?.metadata || agent?.metadata)
+    ...overridesPatch
   }, taskType);
   if (created?.error) {
     throw new ServerError(`Failed to queue resume task: ${created.error}`, {

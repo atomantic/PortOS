@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isAgentHandoff, isQueuedContinuation, agentHandoffReason } from './agentOutcome.js';
+import { isAgentHandoff, isQueuedContinuation, agentHandoffReason, resolveTaskOutcome } from './agentOutcome.js';
 
 // The record `resumeAgent` retires when Relaunch swaps providers mid-run: it
 // carries `success: false` and a summary in `error`, because the pause/requeue
@@ -93,5 +93,30 @@ describe('agentHandoffReason', () => {
   it('falls back through to a generic line', () => {
     expect(agentHandoffReason({ result: { resumed: true, resumedTaskId: 't1' }, metadata: {} })).toBe('Handed off to a new run');
     expect(agentHandoffReason({ result: { resumed: true } })).toBe('Handed off to a new run');
+  });
+});
+
+describe('resolveTaskOutcome', () => {
+  const reported = { status: 'no-action-needed', reason: 'Nothing left to reconcile.' };
+
+  it('keeps a no-commit no-op when validation was never declared', () => {
+    expect(resolveTaskOutcome({
+      reported, success: true, validationPassed: null, noCommitDeclared: true,
+    })).toEqual(reported);
+    expect(resolveTaskOutcome({
+      reported, success: true, noCommitDeclared: true,
+    })).toEqual(reported);
+  });
+
+  it('still rejects an unverified no-op from a committing task', () => {
+    expect(resolveTaskOutcome({
+      reported, success: true, validationPassed: null,
+    })).toEqual({ status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' });
+  });
+
+  it('still rejects a no-commit no-op whose delivery check failed', () => {
+    expect(resolveTaskOutcome({
+      reported, success: true, validationPassed: false, noCommitDeclared: true,
+    })).toEqual({ status: 'incomplete', reason: 'Delivery checks did not pass.' });
   });
 });
