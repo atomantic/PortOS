@@ -1,13 +1,20 @@
 /** No-inventory completion must retain one exact obligation through execution release and real preservation. */
 import { afterEach, afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, sep, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
-const fixture = vi.hoisted(() => ({ root: null, app: null, forge: null, task: null, agents: {}, schedule: null, raceTaskEdit: false }));
+const fixture = vi.hoisted(() => ({ root: null, app: null, forge: null, task: null, agents: {}, schedule: null, raceTaskEdit: false, inventoryAlias: false }));
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-completion-retirement-state-') }));
+// Keep real Git and teardown; vary only the lexical spelling returned by its
+// inventory adapter, like Git-forward versus native Windows separators.
+vi.mock('./worktreeManager.js', async original => {
+  const actual = await original();
+  return { ...actual, listWorktrees: async (...args) => (await actual.listWorktrees(...args)).map(tree =>
+    fixture.inventoryAlias && tree.branch === 'refs/heads/claim/issue-42' ? { ...tree, path: `${tree.path}${sep}.` } : tree) };
+});
 vi.mock('./cos.js', () => ({}));
 vi.mock('./domainUsage.js', () => ({ recordDomainUsage: async () => {} }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
@@ -54,7 +61,7 @@ const { PATHS } = await import('../lib/paths.js');
 const { cosEvents } = await import('./cosEvents.js');
 afterAll(cleanupTempDataRoots);
 let scratch;
-afterEach(async () => { activeAgents.clear(); if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
+afterEach(async () => { fixture.inventoryAlias = false; activeAgents.clear(); if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
 describe('completion to archive retirement (real Git and persisted service state)', () => {
   it('drains context-less legacy handoffs instead of sweeping nonretryable failures forever', async () => {
     scratch = await mkdtemp(join(tmpdir(), 'portos-completion-sweep-'));
@@ -81,9 +88,10 @@ describe('completion to archive retirement (real Git and persisted service state
     expect(fixture.task.status).toBe('completed');
   });
 
-  it.each(['unchanged', 'changed-dispatch', 'concurrent-task-edit', 'claim-reacquired'])('recovers the missing task handoff after restart with exact task CAS (%s)', async scenario => {
-    const changed = scenario !== 'unchanged';
+  it.each(['unchanged', 'lexical-workspace', 'changed-dispatch', 'concurrent-task-edit', 'claim-reacquired'])('recovers the missing task handoff after restart with exact task CAS (%s)', async scenario => {
+    const changed = !['unchanged', 'lexical-workspace'].includes(scenario);
     fixture.raceTaskEdit = false;
+    fixture.inventoryAlias = scenario === 'lexical-workspace';
     cosEvents.emit.mockClear();
     scratch = await mkdtemp(join(tmpdir(), 'portos-completion-retirement-'));
     fixture.root = PATHS.data; await mkdir(fixture.root, { recursive: true });
@@ -162,7 +170,8 @@ describe('completion to archive retirement (real Git and persisted service state
     const restored = join(scratch, 'restored.git'); await execGit(['init', '--bare', restored], scratch);
     await execGit(['bundle', 'unbundle', join(receipt.archiveDir, 'commits.bundle')], restored);
     expect((await execGit(['show', `${head}:feature.txt`], restored)).stdout).toBe('delivered original\n');
-    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).not.toContain(path);
+    const { listWorktrees } = await import('./worktreeManager.js');
+    expect((await listWorktrees(repo)).some(tree => resolve(tree.path) === resolve(path))).toBe(false);
     expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
     expect(JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')).status).toBe('completed');
     await verify(); expect((await getBranchReconcileOutcome(fixture.app.id)).retired).toHaveLength(1);

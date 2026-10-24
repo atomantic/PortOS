@@ -564,8 +564,12 @@ async function resolveCheckoutIncarnation({ metadata, sourceWorkspace, branchNam
   const inventory = await listWorktrees(sourceWorkspace).catch(() => null);
   if (!inventory) return { reason: 'checkout-inventory-unavailable' };
   const holders = inventory.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branchName);
-  const pathHolder = inventory.find(tree => tree.path === worktreePath);
-  if (holders.some(tree => tree.path !== worktreePath)
+  // Git porcelain uses forward slashes on Windows; registration spelling is
+  // not an incarnation change. Resolve only native lexical path syntax here;
+  // the persisted pointer/private-administration identity is still checked below.
+  const samePath = tree => resolve(tree.path) === resolve(worktreePath);
+  const pathHolder = inventory.find(samePath);
+  if (holders.some(tree => !samePath(tree))
     || (pathHolder && pathHolder.branch?.replace(/^refs\/heads\//, '') !== branchName)) {
     return { reason: 'checkout-incarnation-changed' };
   }
@@ -718,13 +722,13 @@ async function prepareRecoveryRetirement({ agentId, app, sourceWorkspace, branch
   if (!app?.id || !app.repoPath || resolve(app.repoPath) !== resolve(sourceWorkspace)) return { reason: 'retirement-app-unavailable' };
   const trees = await listWorktrees(sourceWorkspace);
   const matches = trees.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branchName
-    && (!worktreePath || tree.path === worktreePath));
+    && (!worktreePath || resolve(tree.path) === resolve(worktreePath)));
   if (matches.length !== 1 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(matches[0].head || '')) {
     return { reason: 'retirement-exact-inventory-unavailable' };
   }
   const tree = matches[0];
   const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
-  const release = { branch: branchName, path: tree.path, head: tree.head,
+  const release = { branch: branchName, path: worktreePath || tree.path, head: tree.head,
     ...(checkoutIdentity && { checkoutIdentity, observedAt: new Date().toISOString() }),
     locked: tree.locked === true, lockReason: tree.lockReason ?? null };
   const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');

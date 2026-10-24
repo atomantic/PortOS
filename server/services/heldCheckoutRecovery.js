@@ -834,9 +834,15 @@ async function matchesObservedCheckoutIncarnation(repoPath, release, worktrees =
 async function matchRelease(repoPath, release) {
   const trees = await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return { reason: 'worktree-ownership-unreadable' };
-  const index = trees.findIndex(tree => tree.path === release.path);
+  const index = trees.findIndex(tree => resolve(tree.path) === resolve(release.path));
   if (index === -1) return { reason: 'checkout-not-found' };
   const tree = trees[index];
+  // Lexical equality alone can collapse '..' across a symlink. Different
+  // spellings must also resolve to the same existing filesystem checkout.
+  if (tree.path !== release.path) {
+    try { if (realpathSync.native(tree.path) !== realpathSync.native(release.path)) return { reason: 'checkout-identity-changed' }; }
+    catch { return { reason: 'checkout-identity-changed' }; }
+  }
   if (index === 0 || tree.bare) return { reason: 'checkout-primary' };
   if (tree.prunable) return { reason: 'worktree-prunable' };
   if (tree.head !== release.head) return { reason: 'checkout-head-changed' };
@@ -845,7 +851,10 @@ async function matchRelease(repoPath, release) {
     return { reason: 'checkout-lock-changed' };
   }
   if (!await matchesObservedCheckoutIncarnation(repoPath, release, trees)) return { reason: 'checkout-identity-changed' };
-  return { tree };
+  // Carry the persisted release spelling through archive/receipt publication.
+  // Native lexical resolution above proves it names this registration; fresh
+  // head, lock and incarnation checks still bind the filesystem generation.
+  return { tree: { ...tree, path: release.path } };
 }
 
 /** Shared live policy/owner check for the explicit whole-checkout transaction.

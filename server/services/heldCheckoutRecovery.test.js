@@ -855,6 +855,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
+  it('refuses a lexically equal release when the filesystem resolver identifies a different checkout', async () => {
+    const c = await heldCheckout('physical-alias-mismatch', { branch: 'feature/physical-alias-mismatch' });
+    const release = { ...c.release, path: `${c.path}/.` };
+    const originalRealpath = realpathSync.native;
+    // Inject at the filesystem boundary: lexical '..' across a symlink can
+    // name a different physical directory. Windows and POSIX resolve that
+    // syntax differently, so pin the disagreement rather than OS parsing.
+    const resolver = vi.spyOn(realpathSync, 'native').mockImplementation((path, ...args) =>
+      originalRealpath(path === release.path ? external : path, ...args));
+    try {
+      expect(await retire(release)).toMatchObject({ ok: false, reason: 'checkout-identity-changed' });
+    } finally { resolver.mockRestore(); }
+    expect(await registered(c.path)).toBe(true);
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await archives()).toEqual([]);
+  });
+
   it('keeps the checkout, its content and its original lock when an owner appears after the archive', async () => {
     const { path, release } = await heldCheckout('owner-arrives', { lockReason: 'handoff pending' });
     let reads = 0;
