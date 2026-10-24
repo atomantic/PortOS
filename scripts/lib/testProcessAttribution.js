@@ -6,14 +6,21 @@ import { fileURLToPath } from 'node:url';
 import { readTestProcesses } from './testOwnedProcesses.js';
 
 export const PROCESS_OWNERS_DIR = '.process-owners';
-const repo = fileURLToPath(new URL('../../', import.meta.url));
+// Vitest can load this module from a fixture whose import.meta.url is not a
+// file URL. Suite identity is optional; a missing root must not throw at import.
+const repo = (() => {
+  try {
+    const url = new URL('../../', import.meta.url);
+    return url.protocol === 'file:' ? fileURLToPath(url) : null;
+  } catch { return null; }
+})();
 const spawned = channel('child_process');
 const limit = 64;
 const safeSuite = value => typeof value === 'string' && value.length <= 240
   && /^(?:server|client|scripts|lib|autofixer)\/(?:[\w.-]+\/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?$/.test(value)
   && !value.split('/').includes('..');
 const suiteIdentity = value => {
-  if (typeof value !== 'string') return 'unavailable';
+  if (!repo || typeof value !== 'string') return 'unavailable';
   const path = relative(repo, value).split(sep).join('/');
   return safeSuite(path) ? path : 'unavailable';
 };

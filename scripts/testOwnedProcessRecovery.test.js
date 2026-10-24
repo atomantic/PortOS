@@ -101,6 +101,29 @@ describe('test process ownership boundaries', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
+  it('reclaims a dead owner when an unrelated process row is incomplete', () => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-unrelated-'));
+    const dead = join(host, 'pvt-dead');
+    const aged = join(host, 'pvt-aged');
+    const old = new Date(Date.now() - STALE_ROOT_AGE_MS - 60000);
+    try {
+      mkdirSync(dead);
+      writeFileSync(join(dead, '.owner.pid'), '2147483646 0\n');
+      mkdirSync(aged);
+      utimesSync(aged, old, old);
+      sweepStaleRunRoots(host, {
+        read: () => [
+          { pid: process.pid, ppid: process.ppid, args: [], env: {} },
+          { pid: process.ppid, ppid: 1, args: [], env: {} },
+          { pid: 900003, ownershipComplete: false },
+        ],
+        probe: () => false,
+      });
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(aged)).toBe(true);
+    } finally { rmSync(host, { recursive: true, force: true }); }
+  });
+
   it('retains pending identities through partial inventories until terminal evidence permits root removal', () => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-pending-'));
     const root = join(host, 'pvt-owned'); mkdirSync(root);

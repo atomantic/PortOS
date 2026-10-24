@@ -290,11 +290,13 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
   if (typeof prefix !== 'string' || !/^[a-zA-Z0-9-]+-$/.test(prefix)) {
     throw new Error('Owned temp prefix must be a nonempty name ending in a hyphen');
   }
-  // A dead runner does not prove its children exited. On POSIX, a partial
-  // inventory also cannot recover identities whose pending stamp failed.
-  // Windows has no process reader or signal-based containment here.
+  // No snapshot at all (reader down, or ancestry rejected) cannot prove a
+  // dead owner's children exited, so POSIX keeps those roots. An unrelated
+  // unreadable row inside an otherwise real snapshot must not do the same:
+  // dead owners are still reclaimed, while pid-less roots wait for a complete
+  // inventory. Preserved children and unsettled pending identities stay either way.
   const { inspected, preserved, records } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate });
-  if (!inspected && process.platform !== 'win32') return;
+  if (!records && process.platform !== 'win32') return;
   let names;
   try {
     names = readdirSync(tmpRoot);
