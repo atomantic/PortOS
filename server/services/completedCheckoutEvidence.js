@@ -113,19 +113,29 @@ export function completedCheckoutReceiptValid(agent, receipt) {
 /** Read the final head only inside the pre-existing physical binding. No fetch
  * or branch-name discovery is allowed after terminal ingestion.
  */
-export async function captureSeededCompletionCheckouts(agent) {
+export async function captureSeededCompletionCheckouts(agent, { preterminal = false } = {}) {
+  if (preterminal && !['running', 'paused'].includes(agent.status)) return null;
+  const terminalAt = preterminal ? Date.now() : Date.parse(agent.completedAt);
   const bound = hasClaimCheckoutBindings(agent.metadata) ? agent.metadata.claimBranches : [agent.metadata?.worktreeBranch];
   const seeds = agent.metadata?.checkoutSeeds?.filter(seed => Array.isArray(bound) && bound.includes(seed.branch));
   if (!Array.isArray(seeds) || !seeds.length) return null;
   const receipts = [];
   for (const seed of seeds) {
     if (!checkoutSeedSchema.safeParse(seed).success || seed.agentId !== agent.id || seed.startedAt !== agent.startedAt
-      || Date.parse(seed.seededAt) < Date.parse(agent.startedAt) || Date.parse(seed.seededAt) > Date.parse(agent.completedAt)
+      || Date.parse(seed.seededAt) < Date.parse(agent.startedAt) || Date.parse(seed.seededAt) > terminalAt
       || !same(seed.repository, await filesystemIdentity(seed.repoPath, 'directory'))
       || !same(seed.checkout, await filesystemIdentity(seed.path, 'directory'))) return null;
     const head = (await execGit(['rev-parse', '--verify', 'HEAD^{commit}'], seed.path, {
       env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1' }, timeout: 5000,
     })).stdout.trim();
+    // A physical seed survives later commits in the same checkout. Only a head
+    // observed while this execution still owned it may authorize late capture.
+    const terminal = agent.metadata?.checkoutCapture?.targets?.find(row => row.agentId === agent.id
+      && row.startedAt === agent.startedAt && row.repoPath === seed.repoPath && row.branch === seed.branch
+      && row.path === seed.path && same(row.incarnation, seed.incarnation)
+      && Number.isFinite(Date.parse(row.capturedAt)) && Date.parse(row.capturedAt) >= Date.parse(agent.startedAt)
+      && Date.parse(row.capturedAt) <= terminalAt);
+    if (!preterminal && (!terminal || terminal.head !== head)) return null;
     const target = { repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head };
     const current = await readCompletedCheckoutIdentity(target);
     if (!current || !same(current.incarnation, seed.incarnation)) return null;

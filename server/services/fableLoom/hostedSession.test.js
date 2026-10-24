@@ -602,6 +602,32 @@ describe('fableLoom hostedSession', () => {
       }
     });
 
+    it('bounds acknowledgement processing when its loom read stalls and rejects the late read', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const { session } = await createHostedSession('loom-1', 'ep-1');
+        const io = makeIo();
+        const socketId = connectOutput(session, 'host');
+        const result = await speakMove(session, io);
+        const gate = deferred();
+        records.getLoom.mockImplementationOnce(() => gate.promise);
+        const acknowledgement = acknowledgeHostedSpeech(session.id, {
+          turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+        });
+        await vi.advanceTimersByTimeAsync(HOSTED_SPEECH_ACK_TIMEOUT_MS);
+        expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'idle' });
+        expect(transitions(io)).toHaveLength(0);
+        const next = await startHostedListening(session.id, { io });
+        gate.resolve(mockLoom);
+        await expect(acknowledgement).resolves.toMatchObject({ accepted: false, committed: false });
+        expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'listening' });
+        expect(_getInternalSession(session.id).activeTurn.id).toBe(next.turnId);
+        expect(transitions(io)).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not emit a transition when playback is aborted, the output disconnects, or the session ends', async () => {
       const io = makeIo();
       const { session } = await createHostedSession('loom-1', 'ep-1');

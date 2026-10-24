@@ -646,7 +646,7 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(persisted.metadata.completedCheckouts).toEqual([evidence]);
   });
 
-  it.each(['unchanged', 'physical-generation', 'new-owner', 'orphan-empty', 'orphan-physical-generation', 'orphan-new-owner'])('recovers only the original completion physical seed after restart, scenario=%s', async scenario => {
+  it.each(['unchanged', 'physical-generation', 'new-owner', 'later-head', 'orphan-empty', 'orphan-physical-generation', 'orphan-new-owner', 'orphan-later-head'])('recovers only the original completion physical seed after restart, scenario=%s', async scenario => {
     const orphan = scenario.startsWith('orphan-');
     const changed = !['unchanged', 'orphan-empty'].includes(scenario);
     const scratch = await mkdtemp(join(tmpdir(), 'portos-completion-capture-seed-'));
@@ -674,9 +674,14 @@ describe('completeAgent idempotence (#3384)', () => {
       if (orphan) expect(completed).toMatchObject({ result: { success: false, executionSuccess: false, orphaned: true },
         metadata: { completedCheckouts: [], checkoutCapture: { status: 'captured' } } });
       else expect(completed).toMatchObject({ status: 'completed', result: { cleanupPending: true, executionSuccess: true },
-        metadata: { checkoutCapture: { status: 'pending', unknown: true } } });
+        metadata: { checkoutCapture: { status: 'pending', unknown: false, targets: [expect.objectContaining({ head })] } } });
       expect(cosEvents.listenerCount('agent:completed')).toBeGreaterThan(0);
       delete mockCosState.state.agents[agentId]; // Restart: only the real archived metadata remains.
+      let retainedHead = head;
+      if (scenario.endsWith('later-head')) {
+        await execGit(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'later unrelated writer'], checkout);
+        retainedHead = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+      }
       if (scenario.endsWith('new-owner')) {
         mockCosState.state.agents['new-owner'] = { id: 'new-owner', status: 'completed', startedAt: new Date().toISOString(),
           metadata: { sourceWorkspace: repo, workspacePath: checkout, worktreeBranch: 'feature/seeded' } };
@@ -699,7 +704,7 @@ describe('completeAgent idempotence (#3384)', () => {
       }
       if (orphan) expect(recovered.result).toEqual(completed.result);
       expect(await readFile(join(checkout, 'delivery.txt'), 'utf8')).toBe('wanted original work');
-      expect((await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim()).toBe(head);
+      expect((await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim()).toBe(retainedHead);
       expect(emittedCompletions).toHaveLength(1);
     } finally {
       failFirstRead?.mockRestore();

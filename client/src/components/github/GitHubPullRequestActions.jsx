@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useState } from 'react';
 import { Link } from 'react-router';
 import { MergeAction, PullRequestReviewButton, DEFAULT_MERGE_METHOD, ACTION_STATUS_LABEL, actionStatusForTask } from '../apps/tabs/PullRequestActionControls';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
@@ -6,9 +6,8 @@ import { actOnGitHubNotificationPullRequest } from '../../services/api';
 import toast from '../ui/Toast';
 import { useCosTaskUpdates } from '../../hooks/useCosTaskUpdates';
 
-export default function GitHubPullRequestActions({ notification, onUpdated }) {
+export default function GitHubPullRequestActions({ notification, onUpdated, busy: disabled = false, runMutation }) {
   const id = useId();
-  const inFlight = useRef(false);
   const [busy, setBusy] = useState(null);
   const [armed, setArmed] = useState(false);
   const [method, setMethod] = useState(DEFAULT_MERGE_METHOD);
@@ -29,25 +28,22 @@ export default function GitHubPullRequestActions({ notification, onUpdated }) {
       status: task.metadata?.preflightFailure ? 'failed' : task.metadata?.preflightResultTaskId ? 'active' : actionStatusForTask(task.status) });
   });
 
-  const execute = async (action, pin = {}) => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+  const execute = (action, pin = {}) => runMutation(async () => {
     setBusy(action);
     setError('');
     const result = await actOnGitHubNotificationPullRequest(notification.accountId, notification.threadId, {
       action, ...(action === 'merge' ? { method, deleteBranch } : pin),
     }, { silent: true }).catch(err => { setError(err.message || 'The PR action failed'); return null; });
-    inFlight.current = false;
     setBusy(null);
     if (!result) return;
     setArmed(false);
     setReviewAction(null);
     onUpdated(notification, result.notification);
     toast.success(result.merged ? `Merged PR #${pr.number}` : result.duplicate ? 'A review is already queued' : result.started ? 'Review started' : 'Review queued');
-  };
+  });
 
   return (
-    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-1.5">
+    <fieldset disabled={disabled} className="flex max-w-full min-w-0 flex-wrap items-center gap-1.5">
       {current && !current.merged && (
         current.taskId ? <Link className="text-xs text-port-accent hover:underline" to={`/cos/tasks?task=${encodeURIComponent(current.taskId)}&source=${current.action === 'do-review' ? 'user' : 'internal'}`}>Review: {ACTION_STATUS_LABEL[current.status] || 'View task'}</Link>
           : current.appId ? <Link className="text-xs text-port-accent hover:underline" to={`/apps/${encodeURIComponent(current.appId)}/pull-requests`}>Review requested — view PRs</Link> : null
@@ -64,6 +60,6 @@ export default function GitHubPullRequestActions({ notification, onUpdated }) {
         busy={Boolean(busy)} onSubmit={pin => execute(reviewAction, pin)} onCancel={() => setReviewAction(null)} />}
       {error && <p role="alert" className="w-full break-words text-xs text-port-error">{error}</p>}
       {!error && notification.pullRequestAttempt?.reason === 'GITHUB_PR_NOT_READY' && <p className="w-full text-xs text-gray-400">Auto-merge is waiting for passing checks and merge readiness.</p>}
-    </div>
+    </fieldset>
   );
 }

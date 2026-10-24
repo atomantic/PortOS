@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, uti
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { observeTestProcesses } from './lib/testProcessAttribution.js';
 import { processAncestors, readTestProcesses, testProcessRoot } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
@@ -101,7 +101,7 @@ describe('test process ownership boundaries', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
-  it('reclaims a dead owner when an unrelated process row is incomplete', () => {
+  it.each(['live', 'gone'])('requires terminal proof before ignoring an incomplete %s process row', mode => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-unrelated-'));
     const dead = join(host, 'pvt-dead');
     const aged = join(host, 'pvt-aged');
@@ -118,9 +118,10 @@ describe('test process ownership boundaries', () => {
           { pid: 900003, ownershipComplete: false },
         ],
         probe: () => false,
+        probePid: () => mode === 'live',
       });
-      expect(existsSync(dead)).toBe(false);
-      expect(existsSync(aged)).toBe(true);
+      expect(existsSync(dead)).toBe(mode === 'live');
+      expect(existsSync(aged)).toBe(mode === 'live');
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
@@ -193,6 +194,34 @@ describe('test process ownership boundaries', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', () => {
+  it('retains files used by a live orphan whose ownership is unreadable in the first snapshot', async () => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-unreadable-child-'));
+    const root = join(host, 'pvt-owned');
+    mkdirSync(root);
+    writeFileSync(join(root, '.owner.pid'), '2147483646 0\n');
+    writeFileSync(join(root, 'active-evidence'), 'still in use');
+    const child = spawn(process.execPath, ['-e', "process.stdout.write('ready'); setInterval(()=>{},1000)"], {
+      env: { PATH: process.env.PATH, NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root }, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    try {
+      await new Promise((resolve, reject) => { child.once('error', reject); child.stdout.once('data', resolve); });
+      sweepStaleRunRoots(host, { probe: () => false, read: () => [
+        { pid: process.pid, ppid: process.ppid, args: [], env: {} },
+        { pid: process.ppid, ppid: 1, args: [], env: {} },
+        { pid: child.pid, ppid: 1, start: 'orphan', ownershipComplete: false },
+      ] });
+      expect(isProcessAlive(child.pid)).toBe(true);
+      expect(existsSync(join(root, 'active-evidence'))).toBe(true);
+    } finally {
+      await new Promise(resolve => {
+        if (child.exitCode !== null || child.signalCode !== null) return resolve();
+        child.once('close', resolve);
+        child.kill('SIGKILL');
+      });
+      rmSync(host, { recursive: true, force: true });
+    }
+  });
+
   it('reaps environment-only and script-path children while preserving unrelated and live-owner processes', async () => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-owned-'));
     const children = [];
@@ -223,20 +252,27 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       let ownedLive;
       try { ownedLive = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: live }); }
       finally { dispose(); }
-      const inspected = readTestProcesses([environmentOnly.pid, argumentOnly.pid, unrelated.pid]);
+      // Inspect every process launched by this fixture plus caller ancestry,
+      // using real OS metadata. Ambient unreadable host rows correctly retain
+      // roots; that separate refusal contract is covered above.
+      const fixturePids = [process.pid, process.ppid, ...children.map(child => child.pid)];
+      const read = pids => readTestProcesses(pids ?? fixturePids);
+      const inspected = read([environmentOnly.pid, argumentOnly.pid, unrelated.pid]);
       expect(inspected?.map(record => testProcessRoot(record, host, 'pvt-'))).toEqual([dead, dead, null]);
-      sweepStaleRunRoots(host);
+      sweepStaleRunRoots(host, { read });
       expect(existsSync(dead)).toBe(true); // signal scheduling is not settlement
       await vi.waitFor(() => {
         expect(isProcessAlive(environmentOnly.pid)).toBe(false);
         expect(isProcessAlive(argumentOnly.pid)).toBe(false);
       }, { timeout: 5000 });
-      sweepStaleRunRoots(host); // both individually verified descendants have settled
+      expect(verifyPendingTestProcesses(dead, { read })).toBe(true);
+      sweepStaleRunRoots(host, { read }); // both individually verified descendants have settled
       expect(existsSync(dead)).toBe(false);
+      expect(existsSync(live)).toBe(true);
       expect(isProcessAlive(unrelated.pid)).toBe(true);
       expect(isProcessAlive(ownedLive.pid)).toBe(true);
       const outcomes = [];
-      expect(killTestProcessesUnder(live, { onOutcome: outcome => outcomes.push(outcome) })).toBe(1);
+      expect(killTestProcessesUnder(live, { read, onOutcome: outcome => outcomes.push(outcome) })).toBe(1);
       expect(outcomes).toEqual([expect.objectContaining({ suite: 'scripts/testOwnedProcessRecovery.test.js', phase: 'suite-ended', lifecycle: 'spawned', settlement: 'terminated' })]);
       await vi.waitFor(() => expect(isProcessAlive(ownedLive.pid)).toBe(false));
     } finally {

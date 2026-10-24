@@ -116,18 +116,23 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
     setLocalUpdate({ source: sourceNotification, notification: updated });
     onUpdated?.(row, updated);
   };
-  const onAction = async (row, action, run) => {
-    if (disabled || inFlight.current) return false;
+  const runMutation = async work => {
+    if (disabled || inFlight.current) return null;
     inFlight.current = true;
     setPending(true);
+    try { return await work(); }
+    finally {
+      inFlight.current = false;
+      setPending(false);
+    }
+  };
+  const onAction = (row, action, run) => runMutation(async () => {
     const updated = await (action === 'agent'
       ? resolveGitHubNotificationWithAgent(row.accountId, row.threadId, run)
       : applyGitHubNotificationAction(row.accountId, row.threadId, action)).catch(() => null);
-    inFlight.current = false;
-    setPending(false);
     if (updated) applyUpdate(row, updated);
     return Boolean(updated);
-  };
+  });
   const [reviewing, setReviewing] = useState(false);
   const [picking, setPicking] = useState(false);
   const handled = notification.state !== 'open';
@@ -237,7 +242,8 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
               <Rocket size={13} aria-hidden="true" /> Review deployment
             </button>
           )}
-          {notification.pullRequest && <GitHubPullRequestActions notification={notification} onUpdated={applyUpdate} />}
+          {notification.pullRequest && <GitHubPullRequestActions notification={notification} onUpdated={applyUpdate}
+            busy={busy} runMutation={runMutation} />}
           {agent && !picking && !notification.pullRequest && (
             <button
               type="button"

@@ -8,21 +8,16 @@
  */
 
 import { copyFile, mkdir, readdir, readFile } from 'fs/promises';
-import { homedir } from 'os';
 import { join, resolve } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { agyUsageProviderIdFromList } from './agyMediaUsage.js';
 import {
   galleryAgyImageUsageEvent,
-  imagineEventsFromAgyTranscript,
   planAgyUsageRepair,
   summarizeAgyRepairAdditions,
 } from './agyUsageRepair.js';
 import { addDatedUsage, flushUsageLedger, getUsage, loadUsage } from './usage.js';
-import { listAgyConversations } from './usageReconciler.js';
-
-const yieldToEventLoop = () => new Promise((done) => setImmediate(done));
 
 const faultLabel = (err) => {
   if (err?.code) return String(err.code);
@@ -69,36 +64,6 @@ async function collectGallery(dataDir) {
   return media;
 }
 
-async function collectSessions(home) {
-  const root = join(home, '.gemini', 'antigravity-cli');
-  const media = [];
-  let conversations;
-  try {
-    conversations = await listAgyConversations(root);
-  } catch {
-    return media;
-  }
-  for (const conversation of conversations) {
-    try {
-      const transcriptPath = join(root, 'brain', conversation.conversationId, '.system_generated', 'logs', 'transcript.jsonl');
-      const text = await readFile(transcriptPath, 'utf8').catch(() => '');
-      if (text) {
-        const events = imagineEventsFromAgyTranscript({
-          transcriptText: text,
-          sessionId: conversation.conversationId,
-          cwd: conversation.workspace,
-          day: conversation.timestamp ? new Date(conversation.timestamp).toISOString().slice(0, 10) : null,
-        });
-        media.push(...events);
-      }
-    } catch {
-      // One unreadable session must not abort the scan
-    }
-    await yieldToEventLoop();
-  }
-  return media;
-}
-
 async function providerIdFromFile(dataDir) {
   const stored = await readJson(join(dataDir, 'providers.json'), null, { label: 'providers.json' });
   const list = Array.isArray(stored)
@@ -109,19 +74,19 @@ async function providerIdFromFile(dataDir) {
 }
 
 /**
- * Read the gallery and brain sessions without touching the ledger.
+ * Reconcile saved gallery outputs without touching the ledger. Transcript
+ * requests are not completion evidence, so their files are never scanned.
+ * Callers may still pass the legacy `home` option; it is intentionally ignored.
  */
 export async function planAgyUsageRepairFromDisk({
-  home = homedir(),
   dataDir = PATHS.data,
   repairIds = null,
   providerId = null,
 } = {}) {
   const storedIds = repairIds ?? (await readJson(join(dataDir, 'usage.json'), {}, { strict: true }))?.grokRepairIds;
   const gallery = await collectGallery(dataDir);
-  const sessionMedia = await collectSessions(home);
   return planAgyUsageRepair({
-    media: [...gallery, ...sessionMedia],
+    media: gallery,
     repairIds: Array.isArray(storedIds) ? storedIds : [],
     providerId: providerId || await providerIdFromFile(dataDir),
   });
@@ -148,7 +113,6 @@ async function backupLedger(dataDir) {
  * @returns {Promise<{ added: number, images: number, backedUp: boolean, note: string|null, backupDir: string|null }>}
  */
 export async function applyAgyUsageRepair({
-  home = homedir(),
   dataDir = PATHS.data,
   providers = null,
   providerId = null,
@@ -160,7 +124,6 @@ export async function applyAgyUsageRepair({
   const resolvedProviderId = providerId
     || (providers ? agyUsageProviderIdFromList(providers) : await providerIdFromFile(dataDir));
   const plan = await planAgyUsageRepairFromDisk({
-    home,
     dataDir,
     repairIds: getUsage().grokRepairIds || [],
     providerId: resolvedProviderId,

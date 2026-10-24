@@ -175,7 +175,10 @@ export function createSession(manifest, options = {}) {
     if (!holds.length) return assetFile(node?.playbackAssets?.entry);
     const count = holds.length;
     const mode = node?.interactionWindow?.holdLoopRotation;
-    const index = mode === 'shuffle' ? Math.abs(holdIteration * 17) % count : holdIteration % count;
+    // Seventeen is prime: fall back to a unit stride when it divides the
+    // collection size so every clip is visited before the rotation repeats.
+    const stride = count % 17 === 0 ? 1 : 17;
+    const index = mode === 'shuffle' ? Math.abs(holdIteration * stride) % count : holdIteration % count;
     return holds[index] || holds[0];
   }
   function currentAsset() {

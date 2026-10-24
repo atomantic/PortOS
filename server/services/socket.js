@@ -395,6 +395,8 @@ function setupRecordEventForwarding() {
       ioInstance?.emit('creative-director:project:changed', { id: recordId });
     } else if (recordKind === 'creativeCommission') {
       ioInstance?.emit('commission:changed', { id: recordId });
+    } else if (recordKind === 'storyboard') {
+      ioInstance?.emit('storyboard:changed', { id: recordId });
     }
   };
   recordEvents.on('updated', forward);

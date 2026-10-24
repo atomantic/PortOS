@@ -13,8 +13,9 @@ describe('legacy delivery recovery', () => {
   it('charges the existing retry budget under an owner fence before releasing the preserved checkout', async () => {
     const deps = setup();
     expect(await recoverLegacyDeliveryBlocks([owner], deps)).toEqual({ recovered: 1 });
-    expect(deps.update).toHaveBeenCalledTimes(2);
-    expect(deps.update.mock.calls[1][1].metadata).toMatchObject({ failureCount: 2, totalSpawnCount: 2, retryPendingCleanup: owner.id });
+    expect(deps.update).toHaveBeenCalledTimes(1);
+    expect(deps.update.mock.calls[0][1].metadata).toMatchObject({ failureCount: 2, totalSpawnCount: 2, retryPendingCleanup: owner.id });
+    expect(deps.update.mock.calls[0][3]).toMatchObject({ expectedTask: { metadata: task.metadata }, preserveRetryBudget: true });
     expect(deps.release).toHaveBeenCalledWith({ agentId: owner.id, task, success: false, agentMetadata: owner.metadata });
   });
 

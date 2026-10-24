@@ -171,15 +171,17 @@ CI run that never needed it — they keep the documented skip.
 ### Local equivalent: `npm run pregate`
 
 `scripts/pregate.js` runs the same planner over the committed and uncommitted
-diff and hands its plan to the same runners, so a scoped plan is reproduced
-locally: hidden-content scan, early server and client structural guards, lint,
-server and client tests,
-the client build and its API Explorer bundle pin, the boot smoke, the browser
-suites (smoke profile, prerequisites required rather than skipped), and the
-serial `portos_test` DB suite last and alone. Each stage receives the
-environment the matching job sets. A full plan runs only the always-run guards
-unless `--full` is passed. A suite the machine cannot run (no reachable test
-Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
+diff and hands its plan to the same runners. Default `npm run pregate` runs the
+hidden-content scan, early server and client structural guards, lint, and
+focused unit tests: edited test files and sibling tests for changed sources,
+including untracked tests, without expanding through transitive imports.
+
+`npm run pregate -- --full` opts into the CI-selected broad suites locally:
+server and client tests, the client build and its API Explorer bundle pin, the
+boot smoke, browser suites (smoke profile, prerequisites required rather than
+skipped), and the serial `portos_test` DB suite last and alone. Each stage
+receives the environment the matching job sets. A suite the machine cannot run
+(no reachable test Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
 `--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`, is reported
 as not run — in the summary and in the receipt `.cache/pregate/report.json`,
 which records the plan, stage outcomes and durations, the skipped suites, the

@@ -20,6 +20,14 @@ import { execFileSync } from '../../lib/childProcess.js';
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), {
   dataRoot: () => lazyTempDataRoot('portos-fableloom-export-'),
 }));
+const exportBudget = vi.hoisted(() => ({ maxPackageBytes: null }));
+vi.mock('../../lib/fableLoomExport.js', async original => {
+  const module = await original();
+  return { ...module, FABLELOOM_EXPORT_LIMITS: {
+    ...module.FABLELOOM_EXPORT_LIMITS,
+    get maxPackageBytes() { return exportBudget.maxPackageBytes ?? module.FABLELOOM_EXPORT_LIMITS.maxPackageBytes; },
+  } };
+});
 vi.mock('./records.js', () => ({ getLoom: vi.fn() }));
 vi.mock('../videoGen/history.js', () => ({ loadHistory: vi.fn() }));
 vi.mock('../universeBuilder.js', () => ({ getUniverse: vi.fn() }));
@@ -33,6 +41,7 @@ import { loadHistory } from '../videoGen/history.js';
 import { getUniverse } from '../universeBuilder.js';
 import { listVoiceProfiles } from '../voice/profiles.js';
 import * as media from './exportMedia.js';
+import * as voiceReferences from './exportVoice.js';
 import {
   __testing, preflightFableLoomExport, startFableLoomExport, getFableLoomExport, getFableLoomExportDownload,
 } from './exports.js';
@@ -223,7 +232,7 @@ beforeEach(async () => {
   jobIds.length = 0;
   await rm(join(PATHS.data, 'cache/fableloom-exports'), { recursive: true, force: true });
 });
-afterEach(async () => { await __testing.drain(); vi.restoreAllMocks(); });
+afterEach(async () => { await __testing.drain(); vi.restoreAllMocks(); exportBudget.maxPackageBytes = null; });
 afterAll(async () => { await owned.drain(); await __testing.drain(); cleanupTempDataRoots(); });
 
 describe('portable FableLoom export boundary', () => {
@@ -408,6 +417,46 @@ describe('portable FableLoom export boundary', () => {
       await writeFile(output, result.files.get(assets.entry.file));
       const streams = JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', output], { timeout: 10_000 }).toString()).streams;
       expect(streams.map(stream => stream.codec_type)).toEqual(['video', 'audio']);
+    }
+  });
+
+  videoIt('normalizes a common positive timestamp origin while retaining the audio delay', async () => {
+    const source = join(PATHS.videos, 'offset-timeline.mp4');
+    expect(await runFfmpegProcess({ bin, timeoutMs: 10_000, args: [
+      '-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:r=10:d=1',
+      '-itsoffset', '0.3', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=0.4',
+      '-t', '1', '-c:v', 'libx264', '-c:a', 'aac', '-threads', '1', '-output_ts_offset', '5', source,
+    ] })).toEqual({ ok: true });
+    const inspect = file => JSON.parse(execFileSync(probe, ['-v', 'error', '-show_streams', '-of', 'json', file], { timeout: 10_000 }).toString()).streams;
+    const original = inspect(source);
+    const originalDelay = Number(original.find(stream => stream.codec_type === 'audio').start_time)
+      - Number(original.find(stream => stream.codec_type === 'video').start_time);
+    expect(originalDelay).toBeGreaterThan(0.25);
+    const audibleStart = file => {
+      const pcm = execFileSync(bin, ['-nostdin', '-v', 'error', '-i', file, '-map', '0:a',
+        '-af', 'aresample=async=1:first_pts=0', '-ar', '48000', '-ac', '1', '-f', 'f32le', '-'],
+      { timeout: 10_000, maxBuffer: 1024 * 1024 });
+      for (let offset = 0; offset < pcm.length; offset += 4) {
+        if (Math.abs(pcm.readFloatLE(offset)) > 0.005) return offset / 4 / 48000;
+      }
+      throw new Error('Expected the authored delayed tone.');
+    };
+    const originalStart = audibleStart(source);
+    loadHistory.mockResolvedValue(['entry-record', 'hold-record', 'exit-record'].map(id => ({ id, filename: 'offset-timeline.mp4' })));
+    for (const mediaProfile of ['source', 'web-720p']) {
+      const result = await archive(await begin({ episodeIds: ['episode-one'], mediaProfile }));
+      const asset = JSON.parse(result.files.get('manifest.json')).loom.episodes[0].nodes[0].playbackAssets.entry;
+      expect(asset.durationMs).toBe(1000);
+      const output = join(PATHS.videos, 'normalized-timeline.mp4');
+      await writeFile(output, result.files.get(asset.file));
+      const streams = inspect(output);
+      const picture = streams.find(stream => stream.codec_type === 'video');
+      const audio = streams.find(stream => stream.codec_type === 'audio');
+      expect(Number(picture.duration)).toBe(1);
+      expect(Number(audio.duration)).toBeGreaterThanOrEqual(0.4);
+      // AAC priming changes packet start timestamps; compare the audible
+      // timeline with allowance for the loudness filter's short look-ahead.
+      expect(Math.abs(audibleStart(output) - originalStart)).toBeLessThan(0.01);
     }
   });
 
@@ -679,6 +728,57 @@ describe('portable FableLoom export boundary', () => {
     expect(readme).toContain('Your host owns free-text');
     assertPackageClean(packed);
     expect(listVoiceProfiles).not.toHaveBeenCalled();
+  });
+
+  it('refuses an oversized voice package before reading its remaining references', async () => {
+    useCast();
+    const assets = [];
+    for (let index = 0; index < 4; index++) {
+      const filename = `reference-${index}.wav`;
+      const sha256 = await writeVoiceReference(Buffer.from(`voice-reference-${index}`), filename);
+      assets.push({ filename, sha256, licensePosture: 'generated-original-voice' });
+    }
+    listVoiceProfiles.mockResolvedValue([voiceProfile({ sourceAssets: assets })]);
+    // A small budget exercises the same public worker boundary without large allocations.
+    exportBudget.maxPackageBytes = 25;
+    const readReference = vi.spyOn(voiceReferences, 'readFableLoomVoiceReference');
+    const result = await terminal(await begin({
+      episodeIds: ['episode-one'], includeCharacters: true, includeVoice: true,
+    }));
+    expect(result).toMatchObject({ status: 'failed', error: { code: 'EXPORT_PACKAGE_SIZE' } });
+    expect(readReference).toHaveBeenCalledTimes(2);
+    expect(result).not.toHaveProperty('downloadUrl');
+    await expect(stat(join(PATHS.data, 'cache/fableloom-exports', jobIds.at(-1), 'package.zip')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  videoIt('deduplicates approved voice bytes across the cast within the package budget', async () => {
+    useCast([approvedCharacter(), approvedCharacter({ id: 'example-support' })]);
+    loom.episodes[0].nodes[0].visualCanon.characterAppearances = [{ characterId: 'example-support' }];
+    const bytes = Buffer.alloc(32 * 1024, 7);
+    const digest = await writeVoiceReference(bytes);
+    const supportRoot = join(PATHS.voiceProfiles, 'support-voice', 'source');
+    await mkdir(supportRoot, { recursive: true });
+    await writeFile(join(supportRoot, 'reference.wav'), bytes);
+    const protagonist = voiceProfile({ sha256: digest });
+    const support = { ...voiceProfile({ sha256: digest, id: 'support-voice' }),
+      binding: { universeId: 'example-universe', characterId: 'example-support' } };
+    listVoiceProfiles.mockImplementation(async ({ characterId }) => [protagonist, support]
+      .filter(profile => profile.binding.characterId === characterId));
+    const options = { episodeIds: ['episode-one'], includeCharacters: true, includeVoice: true };
+    const firstId = await begin(options);
+    const first = await archive(firstId);
+    const { sizeReport } = await getFableLoomExport(loom.id, firstId);
+    // Enough for the actual package, but not another copy of the shared reference.
+    exportBudget.maxPackageBytes = sizeReport.archiveBytes + 1;
+    expect(exportBudget.maxPackageBytes).toBeLessThan(bytes.length * 2);
+    const repeated = await archive(await begin(options));
+    expect(repeated.bytes.equals(first.bytes)).toBe(true);
+    expect([...repeated.files.keys()].filter(name => name.endsWith('.wav'))).toEqual([`media/${digest}.wav`]);
+    expect(JSON.parse(repeated.files.get('provenance.json')).voices).toEqual([
+      expect.objectContaining({ characterId: 'example-character', file: `media/${digest}.wav` }),
+      expect.objectContaining({ characterId: 'example-support', file: `media/${digest}.wav` }),
+    ]);
   });
 
   videoIt('exports approved voice references with provenance and stable hashes', async () => {

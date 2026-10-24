@@ -138,6 +138,7 @@ const onDemand = createOnDemandDaemon({
     memoryGb: current?.memoryGb ?? (Number.isFinite(Number(saved.raw?.memoryGb)) ? Number(saved.raw.memoryGb) : null),
   }),
   getConfig: () => currentConfig,
+  parseConfigFromArgs,
   sleep,
   getRelaunchReadyTimeoutMs: () => relaunchReadyTimeoutMs,
   getRelaunchPollMs: () => relaunchPollMs,

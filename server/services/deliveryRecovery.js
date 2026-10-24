@@ -25,16 +25,11 @@ export async function recoverLegacyDeliveryBlocks(agents, deps = {}) {
       || owner.result?.taskOutcome?.status !== outcome.status || owner.metadata?.executionInterruption || owner.result?.executionInterruption || isPrivateSecurityTask(owner)) continue;
     const planned = resolveUndeliveredTaskUpdate(task, outcome, owner.id);
     const result = await update(task.id, { ...planned, metadata: { ...planned.metadata, legacyDeliveryRecovery: owner.id } }, task.taskType || 'user', {
-      expectedStatus: 'blocked', expectedMetadata: { blockedCategory: task.metadata.blockedCategory, blockedAt: task.metadata.blockedAt },
+      expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      recoveryOwner: { id: owner.id, startedAt: owner.startedAt }, preserveRetryBudget: true,
     });
     if (result?.error || result?.statusChanged || result?.status !== planned.status) continue;
     if (planned.metadata.retryPendingCleanup) {
-      // Leaving blocked clears legacy failure fields in the task store. Restore
-      // the charged budget under the hold before making the retry spawnable.
-      const charged = await update(task.id, { metadata: planned.metadata }, task.taskType || 'user', {
-        expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: owner.id },
-      });
-      if (charged?.error || charged?.statusChanged || charged?.status !== 'in_progress') continue;
       await release({ agentId: owner.id, task, success: false, agentMetadata: owner.metadata });
     }
     recovered++;

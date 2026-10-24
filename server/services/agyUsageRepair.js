@@ -1,62 +1,16 @@
 /**
  * Pure plan for repairing Antigravity image usage that was not recorded in the ledger.
  *
- * Media recovered from the gallery is added as image units.
- * Session tool calls inside a PortOS `portos-agy-scratch-` directory are
- * omitted so a gallery job is not billed twice.
+ * Saved gallery outputs are added as image units. Transcript planner requests
+ * do not prove execution or output and cannot establish measured image usage.
  */
 
-import { parseJsonLines } from '../lib/providerTranscriptUsage.js';
 import { AGY_IMAGEGEN_IMAGE_MODEL } from '../lib/imageGenCapabilities.js';
-
-function isPortosAgyScratch(cwd) {
-  return String(cwd || '').includes('portos-agy-scratch-');
-}
 
 function dayFromIso(iso) {
   const ms = Date.parse(iso || '');
   if (!Number.isFinite(ms)) return null;
   return new Date(ms).toISOString().slice(0, 10);
-}
-
-function inputImageCount(args) {
-  if (!args || typeof args !== 'object') return 0;
-  const paths = args.ImagePaths || args.imagePaths || args.image_paths || args.images;
-  if (Array.isArray(paths)) return paths.length;
-  if (typeof paths === 'string' && paths) return 1;
-  return 0;
-}
-
-/**
- * Image generation tool calls from an Antigravity transcript outside PortOS render scratch.
- */
-export function imagineEventsFromAgyTranscript({
-  transcriptText = '', sessionId = 'unknown', cwd = null, day = null,
-} = {}) {
-  if (isPortosAgyScratch(cwd)) return [];
-  const events = [];
-  let index = 0;
-  for (const entry of parseJsonLines(transcriptText)) {
-    if (entry?.type !== 'PLANNER_RESPONSE' || !Array.isArray(entry?.tool_calls)) continue;
-    const entryDay = dayFromIso(entry?.created_at) || day;
-    if (!entryDay) continue;
-    for (const call of entry.tool_calls) {
-      const name = String(call?.name || '').toLowerCase();
-      if (name !== 'generate_image') continue;
-      const id = `session-image:${sessionId}:${index}`;
-      index += 1;
-      events.push({
-        id,
-        day: entryDay,
-        model: AGY_IMAGEGEN_IMAGE_MODEL,
-        images: 1,
-        inputImages: inputImageCount(call?.args),
-        videoSeconds: 0,
-        source: 'measured',
-      });
-    }
-  }
-  return events;
 }
 
 export function galleryAgyImageUsageEvent(meta) {
@@ -84,7 +38,7 @@ export function planAgyUsageRepair({
 } = {}) {
   const known = new Set(repairIds.filter((id) => typeof id === 'string' && id));
   const additions = [];
-  const notes = [];
+  const notes = ['Antigravity transcript image requests are not counted without verified completion evidence. Saved gallery outputs are counted.'];
   for (const item of media) {
     if (!item?.id || !item.day || known.has(item.id)) continue;
     known.add(item.id);

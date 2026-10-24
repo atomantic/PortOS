@@ -617,6 +617,7 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   const integrated = forge && (await execGit(['merge-base', '--is-ancestor', forge.prHead, forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   const completed = metadata.completedCheckouts?.find(row => [1, 2].includes(row.version) && row.agentId === agentId
+    && row.startedAt === agentState.startedAt
     && row.repoPath === sourceWorkspace && row.branch === branchName && row.path === worktreePath
     && Number.isFinite(Date.parse(row.startedAt)) && Date.parse(row.capturedAt) >= Date.parse(row.startedAt));
   if (completed?.version === 2) {
@@ -676,11 +677,11 @@ async function retireIntegratedCheckout({ appId, observed, issues, record, block
   const { assertAutomaticRetirementAllowed } = await import('./branchReconcileRetirement.js');
   const result = await retireInventoriedCheckout({ appId, release: retirement.release,
     review: { prUrl: retirement.prUrl, digest: retirement.digest, acceptSuperseded: false } }, { beforeMutation: assertAutomaticRetirementAllowed }).catch(error => ({ reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-outcome-uncertain' }));
-  if (!result.ok || !result.archiveDir || result.branchDeleted !== true) {
-    return blockWith(result.reason || 'retirement-receipt-unverified', { issues, observed });
+  if (!result.ok || result.branchDeleted !== true) {
+    return blockWith(result.reason || result.branchRetainedReason || 'retirement-receipt-unverified', { issues, observed });
   }
   await record('verified', 'retirement-receipt-verified', { prUrl: observed.prUrl, committedIntegrationVerified: true,
-    preservation: { archiveDir: result.archiveDir, verifiedAt: new Date().toISOString() } });
+    preservation: { verifiedAt: new Date().toISOString() } });
   return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
 }
 
@@ -744,7 +745,7 @@ async function prepareRecoveryRetirement({ agentId, app, sourceWorkspace, branch
   const { recordBranchReconcileOutcome } = await import('./taskSchedule.js');
   const outcome = await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-review-pending',
     retirementObligations: [{ ...release, reason: 'retirement-review-pending' }],
-    nextAction: 'Review this exact checkout through the retirement API; require its verified archive receipt.' });
+    nextAction: 'Review this exact checkout through the retirement API; require ok:true and branchDeleted:true with no archive directory.' });
   const obligation = outcome?.retirementObligations?.find(row => sameRetirementObservation(row, release));
   if (!obligation?.createdAt) return { reason: 'retirement-obligation-unavailable' };
   // Terminal ingestion releases the registry verdict before every spawn path
@@ -784,9 +785,9 @@ async function prepareRecoveryRetirement({ agentId, app, sourceWorkspace, branch
  */
 export const REPO_STATE_REMEDIATIONS = Object.freeze({
   [REPO_STATE_ISSUES.WORKTREE_PRESENT]: ({ worktreePath }) =>
-    `Keep the retained worktree ${worktreePath} intact. Use only the exact inventory, full preview review and digest-bound retirement API described below; preserve every tracked, untracked, ignored and private Git artifact.`,
+    `Keep the retained worktree ${worktreePath} intact until the retirement service removes a merged clean checkout. Use only the exact inventory, full preview review and digest-bound retirement API. Do not copy the checkout into an archive.`,
   [REPO_STATE_ISSUES.LOCAL_BRANCH_PRESENT]: ({ branchName }) =>
-    `Keep local branch ${branchName} until the retirement service returns its exact verified archive receipt. Missing checkout or merged status is not permission for shell deletion.`,
+    `Keep local branch ${branchName} until the retirement service returns ok:true and branchDeleted:true. Missing checkout or merged status is not permission for shell deletion.`,
   [REPO_STATE_ISSUES.REMOTE_BRANCH_PRESENT]: ({ branchName }) =>
     `Leave remote branch ${branchName} to the service's fresh exact-head cleanup. An advanced or unreadable ref is a hold; do not use a generic delete API or merge deletion flag.`,
   [REPO_STATE_ISSUES.BRANCH_UNMERGED]: ({ base }) =>
@@ -815,7 +816,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
 
   const retirementInstructions = retirement
     ? (await import('./branchReconcileRetirement.js')).retirementReviewInstructions({ branch: branchName, retirement }, appId)
-    : `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory/review/retire workflow; report cleanup pending until the archive receipt exists.`;
+    : `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory/review/retire workflow. Report cleanup pending until the retirement service returns ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
   const context = [
     'An agent finished successfully but the repository did not end up in the expected state.',
     '',
@@ -837,7 +838,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     '',
     retirementInstructions,
     '',
-    `Rules: preserve wanted unmerged work until it is delivered. Retirement requires service-verified integration in ${base} or explicitly reviewed supersession, plus exact digest and complete archive verification. `
+    `Rules: preserve wanted unmerged work until it is delivered. Retirement requires service-verified integration in ${base} or explicitly reviewed supersession, plus an exact digest. A merged clean checkout is removed in place; do not copy it into an archive. `
       + `Other agents are running concurrently with their own worktrees and branches; touch ONLY ${branchName} and its worktree. `
       + `Do not switch branches in ${sourceWorkspace} itself.`,
   ].join('\n');

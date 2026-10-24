@@ -28,7 +28,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  * stay honest about what the runner actually executed.
  */
 
-import { LOCAL_LLM_MAX_CONCURRENCY } from '../lib/localLlmConcurrency.js';
+import { LOCAL_LLM_MAX_CONCURRENCY, acquireLocalSlot, releaseLocalSlot } from '../lib/localLlmConcurrency.js';
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
@@ -148,25 +148,6 @@ export function buildRequestCapabilities({ prompt, screenshots, outputReserveTok
 export const isLocalEndpoint = isLoopbackEndpoint;
 
 export { LOCAL_LLM_MAX_CONCURRENCY };
-const localEndpointGates = new Map(); // endpoint -> { active: number, queue: (()=>void)[] }
-
-function acquireLocalSlot(endpoint) {
-  let gate = localEndpointGates.get(endpoint);
-  if (!gate) { gate = { active: 0, queue: [] }; localEndpointGates.set(endpoint, gate); }
-  if (gate.active < LOCAL_LLM_MAX_CONCURRENCY) {
-    gate.active += 1;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => { gate.queue.push(resolve); });
-}
-
-function releaseLocalSlot(endpoint) {
-  const gate = localEndpointGates.get(endpoint);
-  if (!gate) return;
-  const next = gate.queue.shift();
-  if (next) next(); // hand the slot straight to the next waiter (active unchanged)
-  else gate.active = Math.max(0, gate.active - 1);
-}
 
 // Run `fn` under the local-endpoint gate when `provider` is a local API or TUI
 // backend; otherwise run it immediately (cloud / non-local CLI/TUI are

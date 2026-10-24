@@ -10,6 +10,7 @@ import { installDatabaseStubs } from './databaseTransferStubs.js';
 import { installCutoverStubs } from './databaseCutoverStubs.js';
 import { isProcessAlive } from '../processAlive.js';
 import { sweepStaleRunRoots } from '../staleRunRoots.js';
+import { readTestProcesses } from '../../../scripts/lib/testOwnedProcesses.js';
 
 const source = { mode: 'native', host: 'db.example.invalid', port: 5432, database: 'example_test', user: 'example' };
 const target = { ...source, mode: 'docker', port: 5561 };
@@ -72,13 +73,16 @@ setInterval(() => {}, 1000);`;
     await wait(() => expect(booted()).toBe(true));
     surrogate = Number(readFileSync(join(root, 'surrogate.pid'), 'utf8'));
     expect(isProcessAlive(surrogate)).toBe(true);
-    sweepStaleRunRoots(container);
+    // Only these real fixture processes can use this private container.
+    // Unreadable unrelated host rows must not decide this lifecycle assertion.
+    const read = pids => readTestProcesses(pids ?? [process.pid, process.ppid, owner.pid, surrogate]);
+    sweepStaleRunRoots(container, { read });
     expect(existsSync(root)).toBe(true);
     const closed = once(owner, 'close');
     owner.kill('SIGKILL');
     await closed;
     await wait(() => expect(isProcessAlive(surrogate)).toBe(false));
-    sweepStaleRunRoots(container);
+    sweepStaleRunRoots(container, { read });
     expect(existsSync(root)).toBe(false);
   });
 });

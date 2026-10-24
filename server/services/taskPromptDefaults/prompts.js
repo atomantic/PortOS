@@ -4261,7 +4261,7 @@ ${MANAGED_WORKTREE_CLEANUP_CONTRACT}`,
 
   'branch-reconcile': `[Improvement: {appName}] Branch & PR Reconciliation
 
-You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has run deterministic cleanup and handed you only local branches that need judgment. REVIEW_RETIREMENT entries are completed merged work with unresolved historical review obligations: read their exact preview and original/current code, then use their digest-bound live retirement API. Their work is not complete until the verified archive and retirement receipt exist. Preserve active owners, intentional human handoffs, locks, and every refusal. Never remove a checkout with shell commands or bypass the retirement service.
+You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has run deterministic cleanup and handed you only local branches that need judgment. REVIEW_RETIREMENT entries are completed merged work with unresolved historical review obligations: read their exact preview and original/current code, then use their digest-bound live retirement API. Their work is not complete until the service returns ok:true and branchDeleted:true and no archive directory was created. Preserve active owners, intentional human handoffs, locks, and every refusal. Never remove a checkout with shell commands or bypass the retirement service.
 
 Repository: {repoPath}
 

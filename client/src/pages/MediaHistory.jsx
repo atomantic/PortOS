@@ -89,7 +89,7 @@ export default function MediaHistory() {
   const recheckStitch = useCallback(async (jobId) => {
     const current = await getMediaJob(jobId).catch(() => null);
     if (!mounted.current) return;
-    if (!current?.status && stitchJobsRef.current.delete(jobId)) {
+    if (!current?.status && stitchJobsRef.current.has(jobId)) {
       toast('Stitch status unknown — check media history');
     } else if (current?.status === 'completed' && settleStitch(jobId)) refresh();
     else if (current?.status === 'failed' || current?.status === 'canceled') {

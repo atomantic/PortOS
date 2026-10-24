@@ -56,17 +56,17 @@ persisted inventory and a fresh Git read still matches it — a changed lock,
 HEAD or branch is an ownership change. It then requires merge evidence on the
 default branch and no live owner, claim binding or manual completion handoff.
 
-Before any mutation, every unique byte is archived under
-`data/cos/held-checkout-archives/`: a verified Git bundle of commits not on the
-default branch, the staged and unstaged diffs, raw bytes of tracked files that a
-clean filter or line-ending conversion hides from those diffs, verbatim copies
-of untracked and ignored files (all hash-verified), and symlink targets. A nested repository or
-submodule, unmerged or hidden index entries, an oversized file or a write during archiving fails the archive, which leaves the checkout, its lock and its
-branch untouched and removes the partial archive. The lock is released only
-after a second fresh match, and ownership, HEAD and content are rechecked
-immediately before removal; if that recheck refuses, the original lock is
-restored. A retired row leaves the inventory and appears under *Recently
-retired* with its archive path; only the next sweep can report convergence.
+A merged, clean checkout is removed at its original path. Dirty, unmerged,
+protected, and live-owner checkouts stay where they are. Retirement does not
+copy the checkout, its ignored files, or its commit history. The lock is
+released only after a second fresh match, and ownership, HEAD and cleanliness
+are rechecked immediately before removal; if that recheck refuses, the original
+lock is restored. A retired row leaves the inventory and appears under
+*Recently retired*; only the next sweep can report convergence. Older copies
+under `data/cos/held-checkout-archives/`,
+`data/cos/branch-retirement-archives/`, and
+`data/cos/initialized-checkout-retirements/` are not written anymore. Setup
+migration 442 deletes those three directories.
 
 ### Explicit delivery reviews
 
@@ -90,11 +90,17 @@ manual-handoff completion policies, and changed evidence remain holds.
 Confirm through `checkouts/retire` with the same inventory tuple and
 `review: { prUrl, digest, kind: "source-supersession", acceptSuperseded: true }`.
 Explicit acceptance is required even when the affected file bytes now match.
-The existing full archive, private Git proof, ownership/content rechecks and
-persisted receipt remain prerequisites to removal. Initialized checkouts retain
-their separate workflow; this mode does not bypass its preservation guards.
+Ownership, content, and merge rechecks plus a persisted retirement receipt
+remain prerequisites to removal. The checkout is not copied into an archive.
+Initialized checkouts retain their separate workflow; this mode does not bypass
+its gates.
 
 ### Held archive work budgets
+
+Review fingerprints still apply these byte budgets and can refuse with
+`retirement-archive-limit-exceeded`. That refusal keeps the checkout and does
+not write an archive directory. Historical archives that already exist are
+checked with the same budgets.
 
 Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse preservation before removal.
 
@@ -158,13 +164,12 @@ for that exact checkout generation or recover the original data from backup, the
 retry reconciliation. Failure never fabricates a retirement receipt or authorizes
 deletion of a checkout, branch or archive.
 
-## Explicit initialized-checkout preservation
+## Explicit initialized-checkout retirement
 
 Automatic cleanup continues to retain initialized submodules. The separate
 `/api/cos/schedule/branch-reconcile/initialized-checkouts` capability supports
 operator-reviewed private-module checkouts on macOS. Other platforms and unknown
-Git layouts fail closed. It never deinitializes a module, force-removes a checkout,
-or purges an archive.
+Git layouts fail closed. It does not deinitialize a module.
 
 1. `POST /review` accepts the exact inventory tuple (`appId`, `path`, `head`,
    `branch`, `locked`, `lockReason`) and `prUrl`. The response binds the merged PR,
@@ -173,11 +178,20 @@ or purges an archive.
    when its exact tip equals the merged PR head. Superseded work needs an explicit
    `acceptSuperseded` decision after reviewing the full comparison.
 2. `POST /retire` accepts that tuple plus `review: {prUrl, digest,
-   acceptSuperseded}`. It establishes a durable repository reservation and native
-   executor lock, repeats the review, archives the entire checkout and private
-   administration plus the parent common object store, and proves a standalone
-   restore before moving either original directory. Kernel no-replace renames
-   quarantine originals without unlinking them. Each intent/result is fsynced.
+   acceptSuperseded}`. It repeats the review. When the disposition is `integrated`
+   and `git status --porcelain` is empty, it removes the checkout with
+   `git worktree remove --force`. If that fails, it removes the directory only
+   when `rev-parse --show-toplevel` resolves to the release path, then deletes
+   the local branch with the same exact-head lease as other completed branches.
+   Any other disposition, including accepted supersession, returns
+   `not-merged-on-recheck` and leaves the checkout. No transaction directory is
+   created.
+
+Journals already stored under `data/cos/initialized-checkout-retirements/` keep
+the historical quarantine restore path below. Setup migration 442 deletes that
+directory, so those journals do not survive the next setup. The historical steps
+are:
+
 3. The successful phase is **quarantined**, not fully retired. The branch remains
    with reason `quarantined-checkout-rollback-ref`. `POST /review-branch` accepts
    `appId`, `transactionId` and the fresh status `journalDigest`; it verifies the

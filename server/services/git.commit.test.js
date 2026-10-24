@@ -159,4 +159,13 @@ describe('commit outcome readback with real Git', () => {
     expect(observation.results).toHaveLength(1);
     expect(observation.results[0].exitCode).toBe(0);
   });
+
+  it('returns the commit header hash when the subject ends with bracketed hexadecimal text', async () => {
+    const message = 'fix [example deadbeef]';
+    const result = await commit(repo, message);
+    const expected = (await git('rev-parse', '--short', 'HEAD')).stdout.trim();
+    expect(result).toEqual({ hash: expected, message });
+    expect(observation.results).toHaveLength(1);
+    expect(observation.results[0].exitCode).toBe(0);
+  });
 });

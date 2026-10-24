@@ -128,7 +128,7 @@ describe('retireDeadAgent (#8440)', () => {
         task: TASK, success: true, exitCode: 0, duration: 100 });
       expect(result).toEqual({ success: false, taskOutcome, deliveryHeld: true });
       expect(completeAgent).toHaveBeenCalledWith(AGENT.id, expect.objectContaining({ success: false, executionSuccess: true, taskOutcome }));
-      expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress', metadata: expect.objectContaining({ taskOutcome, retryPendingCleanup: AGENT.id, failureCount: 1 }) }), 'user');
+      expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'in_progress', metadata: expect.objectContaining({ taskOutcome, retryPendingCleanup: AGENT.id, failureCount: 1 }) }), 'user', expect.objectContaining({ recoveryOwner: { id: AGENT.id, startedAt: AGENT.startedAt } }));
       expect(order).toEqual(['task', 'remove', 'release']);
     } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
@@ -139,8 +139,24 @@ describe('retireDeadAgent (#8440)', () => {
     } };
     await retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome } }, task: TASK, success: true, exitCode: 0, duration: 100 });
     expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'blocked',
-      metadata: expect.objectContaining({ deliveryDecisionAgentId: AGENT.id }) }), 'user');
+      metadata: expect.objectContaining({ deliveryDecisionAgentId: AGENT.id }) }), 'user', expect.objectContaining({ expectedTask: { description: TASK.description, priority: TASK.priority, metadata: TASK.metadata } }));
     expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: AGENT.id, task: TASK, success: false, agentMetadata: AGENT.metadata });
+  });
+
+  it.each([false, true])('retires only the dead run when the guarded recovery write loses task ownership (cleanup=%s)', async cleanup => {
+    const taskOutcome = { status: 'incomplete', reason: 'Original attempt needs validation.' };
+    const task = { ...TASK, status: 'in_progress', metadata: { claimedBy: 'original', lastSpawnedAt: AGENT.startedAt,
+      ...(cleanup && { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: AGENT.id }) } };
+    updateTask.mockResolvedValueOnce({ statusChanged: true, task: { ...task, metadata: { ...task.metadata, blocker: 'Operator hold' } } });
+    await retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome } }, task, success: true, exitCode: 0, duration: 100 });
+    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.any(Object), 'user', expect.objectContaining({
+      expectedStatus: 'in_progress', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      recoveryOwner: { id: AGENT.id, startedAt: AGENT.startedAt },
+    }));
+    expect(completeAgent.mock.calls.at(-1)[1].deliveryRecoveryOwned).not.toBe(true);
+    expect(completeAgent.mock.calls.at(-1)[1].cleanupPending).not.toBe(true);
+    expect(completeAgent.mock.calls.at(-1)[1].cleanupDeliveryVerified).not.toBe(true);
+    expect(releaseRetryHold).not.toHaveBeenCalled();
   });
 
   it('accepts a recovered no-op only after its output hook verifies delivery', async () => {

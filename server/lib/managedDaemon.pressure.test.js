@@ -12,7 +12,10 @@ import {
   DEFAULT_PRESSURE_CALM_DOWN_MS,
   DEFAULT_SUSTAINED_PRESSURE_MS,
   createDaemonWatcher,
+  createOnDemandDaemon,
+  daemonLastUsedAt,
 } from './managedDaemon.js';
+import { acquireLocalSlot, isLocalEndpointBusy, releaseLocalSlot, _resetLocalLlmSlotsForTests } from './localLlmConcurrency.js';
 
 const MINUTE = 60_000;
 const GB = 1024 * 1024 * 1024;
@@ -25,6 +28,7 @@ describe('managedDaemon memory pressure policy', () => {
   });
   afterEach(() => {
     _resetIdleDaemonsForTests();
+    _resetLocalLlmSlotsForTests();
     vi.restoreAllMocks();
   });
 
@@ -198,6 +202,35 @@ describe('managedDaemon memory pressure policy', () => {
       const daemons = [
         { name: 'mtplx', lastUsedAt: now - 60_000, running: false },
         { name: 'slotstream', lastUsedAt: now - 20_000, running: true },
+      ];
+      const result = evaluateMemoryPressurePolicy({
+        daemons,
+        memoryStats: { total: 64 * GB, used: 62 * GB, free: 2 * GB },
+        history: sustainedHistory,
+        now,
+      });
+      expect(result.shouldRelease).toBe(true);
+      expect(result.target.name).toBe('slotstream');
+    });
+
+    it('never releases a daemon that is currently busy', () => {
+      const daemons = [
+        { name: 'mtplx', lastUsedAt: now - 60_000, busy: true },
+      ];
+      const result = evaluateMemoryPressurePolicy({
+        daemons,
+        memoryStats: { total: 64 * GB, used: 62 * GB, free: 2 * GB },
+        history: sustainedHistory,
+        now,
+      });
+      expect(result.shouldRelease).toBe(false);
+      expect(result.reason).toBe('no eligible daemons to release');
+    });
+
+    it('skips busy daemon and releases the next least recently used idle daemon', () => {
+      const daemons = [
+        { name: 'mtplx', lastUsedAt: now - 60_000, busy: true },
+        { name: 'slotstream', lastUsedAt: now - 20_000, busy: false },
       ];
       const result = evaluateMemoryPressurePolicy({
         daemons,
@@ -405,6 +438,248 @@ describe('managedDaemon memory pressure policy', () => {
       pm2Status = { status: 'online', pid: 1234, args: [] };
       const onlineStatus = await watcher.getStatusBase({ installed: true });
       expect(onlineStatus.releaseReason).toBeNull();
+    });
+
+    it('never stops a busy daemon during idle-timeout or memory-pressure passes, and fail-safes on isBusy errors', async () => {
+      const stopBusy = vi.fn().mockResolvedValue(undefined);
+      const stopFlaky = vi.fn().mockResolvedValue(undefined);
+      registerIdleDaemon({
+        name: 'daemon-busy',
+        getIdleMs: () => 5 * MINUTE,
+        isBusy: () => true,
+        stop: stopBusy,
+      });
+      registerIdleDaemon({
+        name: 'daemon-flaky-busy',
+        getIdleMs: () => 5 * MINUTE,
+        isBusy: () => Promise.reject(new Error('transient busy check error')),
+        stop: stopFlaky,
+      });
+
+      const now = Date.now() + 10 * MINUTE;
+      const stopped = await reapIdleDaemons(now, {
+        memoryStats: { total: 32 * GB, used: 30 * GB, free: 2 * GB },
+        history: [{ at: now - 40_000, free: 2 * GB }, { at: now, free: 2 * GB }],
+        sustainedDurationMs: 30_000,
+      });
+
+      expect(stopped).toEqual([]);
+      expect(stopBusy).not.toHaveBeenCalled();
+      expect(stopFlaky).not.toHaveBeenCalled();
+    });
+
+    it('protects createOnDemandDaemon from pressure eviction while a wake or local-LLM slot is active on its port', async () => {
+      const stop = vi.fn().mockResolvedValue(undefined);
+      let resolveWakeStart;
+      const startPromise = new Promise((r) => { resolveWakeStart = r; });
+      let pm2Status = { status: 'stopped' };
+
+      const onDemand = createOnDemandDaemon({
+        appName: 'portos-mtplx',
+        label: 'MTPLX server',
+        emoji: '⚡',
+        readSection: async () => ({ idleMinutes: 30, keepLoaded: false, launch: { model: 'test-model', port: 8092 } }),
+        endpointFor: (cfg) => `http://127.0.0.1:${cfg?.port || 8092}/v1`,
+        probe: async () => false,
+        start: () => startPromise,
+        stop,
+        getStatusStrict: async () => pm2Status,
+        resolveLaunch: (current, saved) => current || { model: saved.model, port: saved.port || 8092 },
+        getConfig: () => ({ model: 'test-model', port: 8092 }),
+        sleep: async () => {},
+        getRelaunchReadyTimeoutMs: () => 5000,
+        getRelaunchPollMs: () => 10,
+      });
+      onDemand.registerIdle();
+
+      // 1. In-flight wake/load: daemon is online in PM2 while weights load, but ensureRunning has not finished.
+      const wakeCall = onDemand.ensureRunning();
+      pm2Status = { status: 'online' };
+      const now1 = Date.now();
+      const stoppedDuringWake = await reapIdleDaemons(now1, {
+        memoryStats: { total: 32 * GB, used: 30 * GB, free: 2 * GB },
+        history: [{ at: now1 - 40_000, free: 2 * GB }, { at: now1, free: 2 * GB }],
+        sustainedDurationMs: 30_000,
+      });
+      expect(stoppedDuringWake).toEqual([]);
+      expect(stop).not.toHaveBeenCalled();
+
+      resolveWakeStart({ online: true, endpoint: 'http://127.0.0.1:8092/v1' });
+      await expect(wakeCall).resolves.toEqual({ ready: true, reason: null });
+
+      // 2. In-flight inference slot on the daemon's port (even via localhost alias):
+      await acquireLocalSlot('http://localhost:8092/v1');
+      try {
+        const now2 = Date.now() + 1000;
+        const stoppedDuringInference = await reapIdleDaemons(now2, {
+          memoryStats: { total: 32 * GB, used: 30 * GB, free: 2 * GB },
+          history: [{ at: now1 - 40_000, free: 2 * GB }, { at: now2, free: 2 * GB }],
+          sustainedDurationMs: 30_000,
+        });
+        expect(stoppedDuringInference).toEqual([]);
+        expect(stop).not.toHaveBeenCalled();
+      } finally {
+        releaseLocalSlot('http://localhost:8092/v1');
+      }
+
+      // 3. Once the slot is released, sustained memory pressure can evict the now-idle daemon.
+      const now3 = Date.now() + 2000;
+      const stoppedAfterInference = await reapIdleDaemons(now3, {
+        memoryStats: { total: 32 * GB, used: 30 * GB, free: 2 * GB },
+        history: [{ at: now1 - 40_000, free: 2 * GB }, { at: now3, free: 2 * GB }],
+        sustainedDurationMs: 30_000,
+      });
+      expect(stoppedAfterInference).toEqual(['portos-mtplx']);
+      expect(stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats a restarted custom-port daemon as busy for a scheme-less slot', async () => {
+      const stop = vi.fn().mockResolvedValue(undefined);
+      const onDemand = createOnDemandDaemon({
+        appName: 'portos-mtplx',
+        label: 'MTPLX server',
+        emoji: '⚡',
+        readSection: async () => ({ idleMinutes: 30, keepLoaded: false, launch: { port: 8000 } }),
+        endpointFor: (cfg) => `http://127.0.0.1:${cfg?.port ?? 8000}/v1`,
+        probe: async () => true,
+        start: async () => ({ online: true }),
+        stop,
+        getStatusStrict: async () => ({ status: 'online', args: ['serve', '--port', '8010'] }),
+        parseConfigFromArgs: (args) => {
+          const index = args.indexOf('--port');
+          return index === -1 ? null : { port: Number(args[index + 1]) };
+        },
+        resolveLaunch: (current, saved) => ({ port: current?.port ?? saved.port ?? 8000 }),
+        getConfig: () => null,
+        sleep: async () => {},
+        getRelaunchReadyTimeoutMs: () => 50,
+        getRelaunchPollMs: () => 0,
+      });
+      onDemand.registerIdle();
+      await onDemand.ensureRunning();
+      const seeded = daemonLastUsedAt('portos-mtplx');
+      await new Promise((resolve) => { setTimeout(resolve, 5); });
+      await acquireLocalSlot('localhost:8010/v1');
+      try {
+        expect(daemonLastUsedAt('portos-mtplx')).toBeGreaterThan(seeded);
+        const now = Date.now() + 10 * MINUTE;
+        const stopped = await reapIdleDaemons(now, {
+          memoryStats: { total: 32 * GB, used: 30 * GB, free: 2 * GB },
+          history: [{ at: now - 40_000, free: 2 * GB }, { at: now, free: 2 * GB }],
+          sustainedDurationMs: 30_000,
+        });
+        expect(stopped).toEqual([]);
+        expect(stop).not.toHaveBeenCalled();
+      } finally {
+        releaseLocalSlot('localhost:8010/v1');
+      }
+    });
+
+    it('does not stop a daemon whose request starts while status is being read', async () => {
+      const stop = vi.fn().mockResolvedValue(undefined);
+      let runningReads = 0;
+      const endpoint = 'http://127.0.0.1:8093/v1';
+      registerIdleDaemon({
+        name: 'daemon-racy',
+        getIdleMs: () => 30 * MINUTE,
+        isBusy: () => isLocalEndpointBusy(endpoint),
+        isRunning: async () => {
+          runningReads += 1;
+          // The idle pass reads once. The pressure pass reads again after it
+          // has already snapshotted busy=false.
+          if (runningReads === 2) await acquireLocalSlot(endpoint);
+          return true;
+        },
+        stop,
+      });
+      const now = Date.now();
+      try {
+        const stopped = await reapIdleDaemons(now, {
+          memoryStats: { total: 32 * GB, used: 30 * GB, free: 2 * GB },
+          history: [{ at: now - 40_000, free: 2 * GB }, { at: now, free: 2 * GB }],
+          sustainedDurationMs: 30_000,
+        });
+        expect(runningReads).toBeGreaterThanOrEqual(2);
+        expect(stopped).toEqual([]);
+        expect(stop).not.toHaveBeenCalled();
+      } finally {
+        releaseLocalSlot(endpoint);
+      }
+    });
+
+    it('keeps an explicit start busy after launch returns while the checkpoint is still loading', async () => {
+      const stop = vi.fn().mockResolvedValue(undefined);
+      let reachable = false;
+      const onDemand = createOnDemandDaemon({
+        appName: 'portos-loading',
+        label: 'MTPLX server',
+        emoji: '⚡',
+        readSection: async () => ({ idleMinutes: 30, keepLoaded: false }),
+        endpointFor: (cfg) => `http://127.0.0.1:${cfg?.port ?? 8092}/v1`,
+        probe: async () => reachable,
+        start: async () => ({ online: false, endpoint: 'http://127.0.0.1:8092/v1' }),
+        stop,
+        getStatusStrict: async () => ({ status: 'online' }),
+        resolveLaunch: (current) => current || { port: 8092 },
+        getConfig: () => ({ port: 8092 }),
+        sleep: () => new Promise((resolve) => { setTimeout(resolve, 1); }),
+        getRelaunchReadyTimeoutMs: () => 5_000,
+        getRelaunchPollMs: () => 0,
+      });
+      onDemand.registerIdle();
+      const pressure = (now) => ({
+        memoryStats: { total: 32 * GB, used: 30 * GB, free: 2 * GB },
+        history: [{ at: now - 40_000, free: 2 * GB }, { at: now, free: 2 * GB }],
+        sustainedDurationMs: 30_000,
+      });
+
+      await onDemand.runStart(async () => ({ online: false, endpoint: 'http://127.0.0.1:8092/v1' }));
+      const duringLoad = Date.now();
+      const stoppedDuringLoad = await reapIdleDaemons(duringLoad, pressure(duringLoad));
+      expect(stoppedDuringLoad).toEqual([]);
+      expect(stop).not.toHaveBeenCalled();
+
+      reachable = true;
+      await vi.waitFor(async () => {
+        const now = Date.now();
+        const stopped = await reapIdleDaemons(now, pressure(now));
+        expect(stopped).toEqual(['portos-loading']);
+      });
+      expect(stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops slot listeners when idle registrations are reset', async () => {
+      const onDemand = createOnDemandDaemon({
+        appName: 'portos-mtplx',
+        label: 'MTPLX server',
+        emoji: '⚡',
+        readSection: async () => ({ idleMinutes: 30, keepLoaded: false }),
+        endpointFor: () => 'http://127.0.0.1:8092/v1',
+        probe: async () => false,
+        start: async () => ({ online: true }),
+        stop: async () => {},
+        getStatusStrict: async () => ({ status: 'stopped' }),
+        resolveLaunch: () => ({ port: 8092 }),
+        getConfig: () => null,
+        sleep: async () => {},
+        getRelaunchReadyTimeoutMs: () => 50,
+        getRelaunchPollMs: () => 0,
+      });
+      onDemand.registerIdle();
+      _resetIdleDaemonsForTests();
+      registerIdleDaemon({
+        name: 'portos-mtplx',
+        getIdleMs: () => 60 * MINUTE,
+        stop: vi.fn(),
+      });
+      const seeded = daemonLastUsedAt('portos-mtplx');
+      await new Promise((resolve) => { setTimeout(resolve, 5); });
+      await acquireLocalSlot('http://127.0.0.1:8092/v1');
+      try {
+        expect(daemonLastUsedAt('portos-mtplx')).toBe(seeded);
+      } finally {
+        releaseLocalSlot('http://127.0.0.1:8092/v1');
+      }
     });
   });
 });

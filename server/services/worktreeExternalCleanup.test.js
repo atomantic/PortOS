@@ -15,9 +15,9 @@ import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClai
 const archiveGate = vi.hoisted(() => ({ beforeArchive: null }));
 vi.mock('./heldCheckoutRecovery.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, preserveMergedCheckout: async (...args) => {
-    await archiveGate.beforeArchive?.(...args);
-    return actual.preserveMergedCheckout(...args);
+  return { ...actual, releaseCheckoutWithoutArchive: async (context, prepare) => {
+    await archiveGate.beforeArchive?.(context?.repoPath);
+    return prepare();
   } };
 });
 

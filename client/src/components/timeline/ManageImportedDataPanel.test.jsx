@@ -27,6 +27,7 @@ it('keeps the confirmed source fixed during deletion and ignores a pre-delete co
   expect(screen.getByRole('textbox')).toHaveValue('browser');
   expect(api.eraseTimelineSource).toHaveBeenCalledTimes(1);
   expect(api.eraseTimelineSource.mock.calls[0][0]).toBe('browser');
+  api.getTimelineSources.mockResolvedValue({ sources: [sources[1]] });
   await act(async () => { finishDelete({ deleted: 3 }); });
   await waitFor(() => expect(screen.queryByText('browser')).not.toBeInTheDocument());
   expect(screen.getByText('discord')).toBeInTheDocument();
@@ -36,10 +37,34 @@ it('keeps the confirmed source fixed during deletion and ignores a pre-delete co
   const confirm = screen.getByRole('button', { name: 'Confirm delete' });
   confirm.focus();
   fireEvent.click(confirm);
+  api.getTimelineSources.mockResolvedValue({ sources: [] });
   await act(async () => { finishDelete({ deleted: 2 }); });
   await screen.findByText('No imported events.');
   expect(screen.getByRole('list')).toHaveFocus();
 
+});
+
+it('reconciles authoritative counts after deletion without restoring a source from a pending reload', async () => {
+  let finishDelete;
+  let finishCounts;
+  let deleted = false;
+  const staleCounts = new Promise(resolve => { finishCounts = resolve; });
+  api.eraseTimelineSource.mockImplementationOnce(() => new Promise(resolve => { finishDelete = resolve; }));
+  const view = render(<ManageImportedDataPanel reloadKey={0} />);
+  await screen.findByText('browser');
+  api.getTimelineSources.mockImplementation(() => deleted
+    ? Promise.resolve({ sources: [{ source: 'discord', eventCount: 9 }] })
+    : staleCounts);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'browser' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
+  view.rerender(<ManageImportedDataPanel reloadKey={1} />);
+  await act(async () => { deleted = true; finishDelete({ deleted: 3 }); });
+  await waitFor(() => expect(screen.queryByText('browser')).not.toBeInTheDocument());
+  await act(async () => { finishCounts({ sources }); });
+  expect(screen.queryByText('browser')).not.toBeInTheDocument();
+  expect(await screen.findByText('9 events')).toBeInTheDocument();
+  expect(api.eraseTimelineSource).toHaveBeenCalledTimes(1);
 });
 
 it('retains the row and confirmation and shows a refused deletion', async () => {
@@ -63,7 +88,7 @@ it('reconciles a lost delete acknowledgement from a fresh read without repeating
   api.eraseTimelineSource.mockRejectedValueOnce(new Error('Response lost'));
   render(<ManageImportedDataPanel onChanged={onChanged} />);
   await screen.findByText('browser');
-  api.getTimelineSources.mockResolvedValueOnce({ sources: [sources[1]] });
+  api.getTimelineSources.mockResolvedValue({ sources: [sources[1]] });
   fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'browser' } });
   fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
