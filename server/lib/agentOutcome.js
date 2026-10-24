@@ -121,7 +121,7 @@ export function isTaskDeliveryComplete(agent) {
     && ['completed', 'no-action-needed'].includes(outcome?.status);
 }
 
-export function resolveTaskOutcome({ reported, success, validationPassed, branchProvenEmpty, noChangeAllowed }) {
+export function resolveTaskOutcome({ reported, success, validationPassed, branchProvenEmpty, noChangeAllowed, noCommitDeclared = false }) {
   if (reported && ['blocked', 'incomplete'].includes(reported.status)) return reported;
   if (!success) return { status: 'incomplete', reason: 'Delivery checks did not pass.' };
   // Legacy learning criteria include commit probes that are not delivery gates
@@ -130,7 +130,14 @@ export function resolveTaskOutcome({ reported, success, validationPassed, branch
   if (validationPassed === false) return reported
     ? { status: 'incomplete', reason: 'Delivery checks did not pass.' } : null;
   if (branchProvenEmpty && noChangeAllowed) return { status: 'no-action-needed', reason: 'The permitted no-change result was verified against the repository.' };
+  // Coordinators and the other no-commit shapes leave validation null on
+  // purpose: nothing was supposed to be committed, and the exit code already
+  // judged the run. A reported no-action is that run's delivery contract.
+  // Null means undeclared, not failed — an explicit false already lost above.
+  // A committing task must not take this branch; its null means the no-op was
+  // never checked against the repository.
   if (reported?.status === 'no-action-needed' && validationPassed !== true) {
+    if (noCommitDeclared && validationPassed == null) return reported;
     return { status: 'incomplete', reason: 'The reported no-action-needed result was not verified.' };
   }
   if (reported) return reported;

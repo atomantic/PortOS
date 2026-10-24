@@ -1278,7 +1278,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     ? mergedReviewFollowUp || claimDisposition.status === 'verified' ? true : null
     : recoveredValidation;
   const taskOutcome = reportedOutcome ? resolveTaskOutcome({ reported: reportedOutcome,
-    success: effectiveSuccess, validationPassed }) : null;
+    success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
   if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
 
   if (agent.metadata?.runId) {
@@ -1981,7 +1981,8 @@ export async function finalizeAgent({
     });
 
   const taskOutcome = resolveTaskOutcome({ reported: reportedTaskOutcome, success: verdict.success,
-    validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task) });
+    validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
+    noCommitDeclared: declaresNoCommitCriterion(task) });
   const outcomeHeld = ['blocked', 'incomplete'].includes(taskOutcome?.status);
   const deliverySuccess = verdict.success && !outcomeHeld;
   const deliveryVerdict = !deliverySuccess && verdict.success ? { ...verdict, success: false,
