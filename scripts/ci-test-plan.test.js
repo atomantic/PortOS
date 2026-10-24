@@ -2280,14 +2280,12 @@ describe('pregate attestation', () => {
   const status = (overrides = {}) => ({
     context: 'pregate', state: 'success', creator: { login: 'acme' }, created_at: '2026-10-18T10:00:00Z', description: encode(ALL), ...overrides,
   });
-  const NOW = 1_800_000_000_000;
   /** An execFileSync double: git answers from the options, gh from `statuses`; a thrown entry throws. */
-  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null, drift = [], committedAt = Math.floor(NOW / 1000) - 3600, calls = [] } = {}) => (command, args) => {
+  const fakeExec = ({ mergeHead = HEAD, headTree = TREE, statuses = [status()], apiError = null, drift = [], calls = [] } = {}) => (command, args) => {
     const key = `${command} ${args.join(' ')}`;
     calls.push(key);
     if (key === 'git rev-parse --verify --quiet HEAD^2') return `${mergeHead}\n`;
     if (key === `git rev-parse --verify --quiet ${HEAD}^{tree}`) return `${headTree}\n`;
-    if (key === `git show -s --format=%ct ${HEAD}`) return `${committedAt}\n`;
     if (key === 'git diff --name-only HEAD^2 HEAD') {
       if (drift === null) throw new Error('diff failed');
       return `${drift.join('\n')}\n`;
@@ -2301,8 +2299,7 @@ describe('pregate attestation', () => {
     throw new Error(`unexpected ${key}`);
   };
   const quiet = () => {};
-  const clock = () => { let t = NOW; return { now: () => t, sleep: (ms) => { t += ms; } }; };
-  const resolve = (options = {}, env = prEnv, extra = {}) => resolveCiAttestation({ env, exec: fakeExec(options), log: quiet, ...clock(), ...extra });
+  const resolve = (options = {}, env = prEnv, extra = {}) => resolveCiAttestation({ env, exec: fakeExec(options), log: quiet, ...extra });
   const fullPlan = () => buildCiTestPlan(['server/index.js'], { trackedFiles: TRACKED, forceFull: true, forceFullReason: 'full CI requested' });
 
   it('is eligible only for a same-repository, non-bot pull request into a non-release base', () => {
@@ -2328,7 +2325,7 @@ describe('pregate attestation', () => {
     const reasons = [];
     const log = (line) => reasons.push(line);
     const refused = (options, env = prEnv) => {
-      const result = resolveCiAttestation({ env, exec: fakeExec(options), log, ...clock() });
+      const result = resolveCiAttestation({ env, exec: fakeExec(options), log });
       expect(result.attested).toBe(false);
       return result.reason;
     };
@@ -2347,18 +2344,13 @@ describe('pregate attestation', () => {
 
   it('reads an absent attestation once and immediately retains broad CI for focused pushes', () => {
     let reads = 0;
-    const sleeps = [];
-    let time = NOW;
     const result = resolveCiAttestation({
       env: prEnv,
-      exec: fakeExec({ statuses: () => { reads += 1; return []; }, committedAt: Math.floor(NOW / 1000) - 60 }),
+      exec: fakeExec({ statuses: () => { reads += 1; return []; } }),
       log: quiet,
-      now: () => time,
-      sleep: ms => { sleeps.push(ms); time += ms; },
     });
     expect(result).toMatchObject({ attested: false, reason: 'no "pregate" status on the head' });
     expect(reads).toBe(1);
-    expect(sleeps).toEqual([]);
     expect(applyAttestation(fullPlan(), result)).toMatchObject({ full: true, attestedStages: [] });
   });
 

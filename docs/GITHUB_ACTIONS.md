@@ -292,9 +292,10 @@ pushed head, and the impact planner skips what it attests to:
 - **When it applies.** Only a same-repository pull request into a non-`release`
   base that was not forced full. The planner verifies the merge-ref checkout's
   second parent is the event's head (so the attested tree is compared with
-  the right commit) and reads `repos/{repo}/commits/{head}/statuses`. Statuses are read once: missing or late attestations immediately leave broad
-  hosted coverage enabled. Focused pushes intentionally post no attestation,
-  so the planner never waits for one.
+  the right commit) and reads `repos/{repo}/commits/{head}/statuses`.
+  Statuses are read once: a missing or late attestation immediately leaves
+  broad hosted coverage enabled. Focused pushes intentionally post no
+  attestation, so the planner never waits for one.
   When you open the pull request yourself, the order is push, attest, then
   `gh pr create`, so the status precedes the `pull_request` event. Any
   failure — API error, unreadable description, tree mismatch, wrong creator,
