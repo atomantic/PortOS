@@ -2140,7 +2140,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release, prUrl: c.forge.prUrl }, c.opts);
     if (!['confirmed', 'owner-alias'].includes(scenario)) {
       const reason = scenario === 'human-handoff' ? 'pr-completion-human-handoff'
-        : scenario === 'active-owner' ? 'claim-owner-active' : 'retirement-policy-not-legacy-completed';
+        : 'retirement-policy-not-legacy-completed';
       expect(prepared).toMatchObject({ ok: false, reason });
       expect(await registered(path)).toBe(true); expect(await archives()).toEqual([]);
       return;
