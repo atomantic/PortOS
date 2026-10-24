@@ -2206,6 +2206,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       metadata: { sourceWorkspace: repo, workspacePath: namedPath, isWorktree: true, worktreeBranch: namedBranch,
         prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { url: c.forge.prUrl, branch: namedBranch } } };
     agent.metadata.checkoutSeeds = await evidence.captureCheckoutSeeds(agent);
+    // Completion records the exact terminal target before publishing the orphan.
+    const targets = await evidence.captureSeededCompletionCheckouts(agent, { preterminal: true });
+    expect(targets).toEqual([expect.objectContaining({ head: c.release.head, startedAt: agent.startedAt })]);
+    agent.metadata.checkoutCapture = { status: 'captured', targets, unknown: false };
     agent.status = 'completed'; agent.completedAt = new Date().toISOString();
     agent.result = { success: false, executionSuccess: false, orphaned: true, validationPassed: null };
     agent.metadata.completedCheckouts = await evidence.captureSeededCompletionCheckouts(agent);
