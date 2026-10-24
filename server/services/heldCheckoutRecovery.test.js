@@ -709,8 +709,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await writeFile(join(tree, 'eol.txt'), 'one\r\ntwo\r\n');
     } });
     // Only the index holds this file once its working copy is gone.
-    await writeFile(join(path, 'staged-only.txt'), 'staged work\n');
+    await writeFile(join(path, 'staged-only.txt'), `staged work\n${'界'.repeat(100000)}\n`);
     await execGit(['add', 'staged-only.txt'], path);
+    const stagedBlob = (await execGit(['rev-parse', ':staged-only.txt'], path)).stdout.trim();
     await rm(join(path, 'staged-only.txt'));
 
     // Make an unchanged tracked file's stat cache stale. Git diff normally
@@ -733,6 +734,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await readFile(join(result.archiveDir, 'worktree.diff'), 'utf8')).toContain('+tracked edit');
     expect(await readFile(join(result.archiveDir, 'index.diff'), 'utf8')).toContain('+staged work');
+    const restored = join(scratch, 'unicode-staged-restore');
+    await mkdir(restored);
+    await execGit(['init'], restored);
+    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD'], restored);
+    await execGit(['checkout', '--detach', 'FETCH_HEAD'], restored);
+    await execGit(['apply', '--index', join(result.archiveDir, 'index.diff')], restored);
+    expect((await execGit(['rev-parse', ':staged-only.txt'], restored)).stdout.trim()).toBe(stagedBlob);
   });
 
   it('bundles a squash-merged branch, retires it with its branch, and drops it from the persisted inventory', async () => {

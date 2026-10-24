@@ -63,6 +63,30 @@ describe('execGit', () => {
     });
   });
 
+  it('preserves UTF-8 characters split across stdout and stderr chunks, including an incomplete final character', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGit(['diff'], '/repo');
+    const stdout = 'staged:界😀';
+    const stderr = 'diagnostic:é界';
+    for (const byte of Buffer.from(stdout)) child.stdout.emit('data', Buffer.from([byte]));
+    for (const byte of Buffer.from(stderr)) child.stderr.emit('data', Buffer.from([byte]));
+    child.stdout.emit('data', Buffer.from([0xe7]));
+    child.emit('close', 0);
+    await expect(promise).resolves.toEqual({ stdout: `${stdout}\uFFFD`, stderr, exitCode: 0 });
+  });
+
+  it('enforces the output limit when decoder flush completes the final character', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGit(['show'], '/repo', { maxBuffer: 1 });
+    child.stdout.emit('data', Buffer.from([0x61, 0xe7]));
+    child.emit('close', 0);
+    await expect(promise).rejects.toThrow(/maxBuffer/);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('rejects with stderr on a non-zero exit', async () => {
     const child = makeChild();
     spawn.mockReturnValue(child);

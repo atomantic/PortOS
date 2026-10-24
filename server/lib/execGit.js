@@ -5,6 +5,7 @@
 
 import { spawn } from './childProcess.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { StringDecoder } from 'node:string_decoder';
 
 const mutationLifetime = new AsyncLocalStorage();
 /** Admission owners retain their durable permit when Git/helper exit is uncertain. */
@@ -16,7 +17,7 @@ export const withGitMutationLifetime = (work, onUncertain) => mutationLifetime.r
  * @param {string} cwd - Working directory (required — an absent cwd would
  *   silently resolve to process.cwd(), i.e. PortOS's own checkout)
  * @param {object} options - Additional options
- * @param {number} [options.maxBuffer] - Max output buffer size in bytes (default 10 MB)
+ * @param {number} [options.maxBuffer] - Max combined output in JavaScript code units (default 10 * 1024 * 1024)
  * @param {number} [options.timeout] - Timeout in ms (default 30s)
  * @param {boolean} [options.ignoreExitCode] - Resolve instead of reject on non-zero exit
  * @param {object} [options.env] - Explicit child environment; omitted inherits normally
@@ -46,6 +47,8 @@ export function execGit(args, cwd, options = {}) {
     const onUncertain = mutationLifetime.getStore();
     let stdout = '';
     let stderr = '';
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
     let killed = false;
     let failure = null;
     let escalation = null;
@@ -71,30 +74,36 @@ export function execGit(args, cwd, options = {}) {
       }
     }, timeout);
 
-    // Both streams share one overflow guard against the combined byte count so
+    // Both streams share one overflow guard against the combined code-unit count so
     // a runaway command can't blow past maxBuffer on either channel.
     const guardOverflow = () => {
       if (stdout.length + stderr.length > maxBuffer && !killed) {
         clearTimeout(timer);
-        terminate(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
+        terminate(new Error(`git output exceeded maxBuffer (${maxBuffer} code units)`));
       }
     };
 
     child.stdout.on('data', (data) => {
       if (killed) return;
-      stdout += data.toString();
+      stdout += stdoutDecoder.write(typeof data === 'string' ? Buffer.from(data) : data);
       guardOverflow();
     });
 
     child.stderr.on('data', (data) => {
       if (killed) return;
-      stderr += data.toString();
+      stderr += stderrDecoder.write(typeof data === 'string' ? Buffer.from(data) : data);
       guardOverflow();
     });
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       clearTimeout(escalation);
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
+      if (!failure && stdout.length + stderr.length > maxBuffer) {
+        markUncertain();
+        failure = new Error(`git output exceeded maxBuffer (${maxBuffer} code units)`);
+      }
       if (failure) { reject(failure); return; }
       if (code === null && signal) {
         markUncertain();
