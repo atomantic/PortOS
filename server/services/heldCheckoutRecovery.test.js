@@ -2115,7 +2115,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await symlink(namedPath, alias, 'junction');
       agent.metadata.workspacePath = alias;
     }
-    const path = join(external, `detached-${scenario}`);
+    let path = join(external, `detached-${scenario}`);
     if (scenario === 'same-incarnation') {
       const pointerIdentity = await readRetirementCheckoutIdentity(namedPath);
       await execGit(['worktree', 'move', namedPath, path], repo);
@@ -2126,6 +2126,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await execGit(['worktree', 'add', '--detach', path, c.release.head], repo);
       await writeFile(join(path, 'ignored.txt'), 'distinct detached work\n');
     }
+    // Real inventories use Git's observed spelling. Windows temp paths can
+    // differ from that registration (including short names and drive casing).
+    path = (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim();
+    expect(await registered(path)).toBe(true);
     const release = { path, branch: null, head: c.release.head, locked: false, lockReason: null };
     c.forge.publishedBranch = namedBranch; c.forge.exactAliasHead = release.head;
     injected.policies = [agent];
