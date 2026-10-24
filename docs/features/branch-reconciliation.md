@@ -77,8 +77,9 @@ file and worktree-private Git file remains included. Hashing and copying use
 readers. A source growing during a copy aborts rather than expanding disk use.
 
 The existing limits remain 25 MiB per raw file, 250 MiB combined content and
-private administration, 16 MiB serialized manifest, and 64 MiB per Git command
-output. Metadata is charged incrementally against the same 16 MiB ceiling,
+private administration, 16 MiB serialized manifest, and the existing 64-million-code-unit Git
+output buffer. Patch verification bounds its UTF-8 encoding at three bytes per
+code unit (192 MiB), preserving older multibyte patch admission. Metadata is charged incrementally against the same 16 MiB ceiling,
 including file entries, symlink targets and gitlinks; this also bounds
 zero-byte-file trees. Transient sorted directory names have a separate 16 MiB
 scan budget, so directory traversal cannot allocate unbounded name lists. These byte ceilings retain the prior safety envelope
@@ -103,7 +104,10 @@ freeing resources or preserving large outputs separately, then retrying the exac
 checkout with fresh evidence; do not remove it or raise global limits to clear a
 refusal. Existing unversioned archives follow an explicit compatibility path
 through the same bounded verification and complete content/private-Git proof.
-Unknown contract versions fail closed. This does not change initialized-checkout
+Unknown contract versions fail closed. The real-Git regression measured 26–36
+seconds for cancellation/cleanup/retry and 56 seconds for the 1,100-plus-file
+restore on a shared runner; those integration cases have explicit two-minute
+test budgets. Existing tests retain their default timeout. This does not change initialized-checkout
 archives or their separate operational budgets.
 
 ## Explicit initialized-checkout preservation

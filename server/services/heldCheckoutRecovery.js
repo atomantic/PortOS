@@ -62,7 +62,7 @@ function archiveWork(signal, started = performance.now()) {
       archiveLimit: { scope: 'verification', kind: 'time', limitMs: ARCHIVE_WORK_MS, observedMs: elapsed },
     });
   };
-  return { check, metadataScope: () => archiveWork(signal, started), add(value, scope = 'metadata') {
+  return { check, renew: () => archiveWork(signal), metadataScope: () => archiveWork(signal, started), add(value, scope = 'metadata') {
     check();
     usage[scope] += Buffer.byteLength(JSON.stringify(value));
     if (usage[scope] > MAX_MANIFEST_BYTES) throw Object.assign(new Error('archive-manifest-budget-exceeded'), {
@@ -74,8 +74,9 @@ function archiveWork(signal, started = performance.now()) {
 async function archiveSource(path) {
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
-    if (!(await handle.stat()).isFile()) throw new Error('archive-file-invalid');
-    return handle.createReadStream({ highWaterMark: 64 * 1024 });
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error('archive-file-invalid');
+    return { stream: handle.createReadStream({ highWaterMark: 64 * 1024 }), mode: info.mode & 0o7777 };
   } catch (error) { await handle.close(); throw error; }
 }
 
@@ -83,7 +84,8 @@ async function archiveHash(path, work, limitBytes = MAX_FILE_BYTES) {
   work.check();
   let bytes = 0;
   const hash = createHash('sha256');
-  for await (const chunk of await archiveSource(path)) {
+  const { stream } = await archiveSource(path);
+  for await (const chunk of stream) {
     work.check();
     bytes += chunk.length;
     if (bytes > limitBytes) throw Object.assign(new Error('retirement-archive-limit-exceeded'), {
@@ -97,7 +99,7 @@ async function archiveHash(path, work, limitBytes = MAX_FILE_BYTES) {
 
 async function archiveCopy(source, destination, expectedBytes, work) {
   let bytes = 0;
-  const input = await archiveSource(source);
+  const { stream: input, mode } = await archiveSource(source);
   let output;
   try { output = await createWriteStreamGuarded(destination, { flags: 'wx', mode: 0o600 }); }
   catch (error) { input.destroy(); throw error; }
@@ -114,6 +116,7 @@ async function archiveCopy(source, destination, expectedBytes, work) {
     },
     output,
   );
+  await chmod(destination, mode);
 }
 
 function validateArchiveEntries(snapshot, work) {
@@ -148,7 +151,8 @@ async function archiveFile(root, path) {
 async function archiveBytes(path, work, limitBytes, reason = 'retirement-archive-limit-exceeded') {
   const chunks = [];
   let size = 0;
-  for await (const chunk of await archiveSource(path)) {
+  const { stream } = await archiveSource(path);
+  for await (const chunk of stream) {
     work.check();
     if ((size += chunk.length) > limitBytes) throw Object.assign(new Error(reason), {
       archiveLimit: { scope: 'metadata-read', kind: 'file', limitBytes, observedBytes: size },
@@ -215,7 +219,7 @@ async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
     if (!/^[a-f0-9]{64}$/.test(expected || '')) throw new Error('archive-patch-proof-unavailable');
     const path = await archiveFile(dir, join(dir, `${name}.diff`));
     await remember(path);
-    if (await archiveHash(path, work, GIT_OUTPUT_BYTES) !== expected) throw new Error('archive-patch-changed');
+    if (await archiveHash(path, work, MAX_PATCH_BYTES) !== expected) throw new Error('archive-patch-changed');
   }
   const bundle = await archiveFile(dir, join(dir, 'commits.bundle'));
   await remember(bundle);
@@ -261,7 +265,7 @@ async function verifyHeldArchive(repoPath, dir, release, work = archiveWork()) {
   work.check();
   if ((await archiveManifest(dir, work)).digest !== digest) throw new Error('archive-manifest-changed');
   const recheck = async () => {
-    const recheckWork = archiveWork();
+    const recheckWork = work.renew();
     for (const [path, original] of stamps) {
       recheckWork.check();
       if (await stamp(await archiveFile(dir, path)) !== original) return false;
@@ -383,6 +387,9 @@ export async function recoverMissingCheckoutPreservations({ appId, repoPath, out
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 250 * 1024 * 1024;
 const GIT_OUTPUT_BYTES = 64 * 1024 * 1024;
+// execGit bounds JS string length. Three UTF-8 bytes per code unit is its
+// maximum encoded size; retain admission for older multibyte patches too.
+const MAX_PATCH_BYTES = 3 * GIT_OUTPUT_BYTES;
 
 function checkArchiveSize(scope, fileBytes, totalBytes) {
   if (fileBytes <= MAX_FILE_BYTES && totalBytes <= MAX_TOTAL_BYTES) return;
@@ -531,7 +538,8 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
 async function rawBlobId(source, size, format, work) {
   const hash = createHash(format).update(`blob ${size}\0`);
   let bytes = 0;
-  for await (const chunk of await archiveSource(source)) {
+  const { stream } = await archiveSource(source);
+  for await (const chunk of stream) {
     work.check();
     // Clean tracked files are not raw archive inputs; a growing read still
     // cannot consume unbounded work before the next metadata check.

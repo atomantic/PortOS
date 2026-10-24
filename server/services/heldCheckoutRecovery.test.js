@@ -5,7 +5,7 @@
  * its lock and its branch as found.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes, truncate } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -415,12 +415,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     injected.schedule = { executions: {} };
     const withoutObligation = await getBranchReconcileOutcome('app-1');
     await execGit(['branch', '-d', release.branch], repo);
-    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: original });
+    const controller = new AbortController();
+    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: original }, { signal: controller.signal });
     expect(proof).toMatchObject({ archiveDir: saved.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(await proof.recheck()).toBe(true);
     await mkdir(release.path);
     expect(await proof.recheck()).toBe(false);
     await rm(release.path, { recursive: true });
+    controller.abort();
+    await expect(proof.recheck()).rejects.toThrow('retirement-archive-cancelled');
     const manifest = JSON.parse(await readFile(join(saved.archiveDir, 'manifest.json'), 'utf8'));
     expect(await findMissingCheckoutPreservation({ repoPath: repo, release: { ...original, createdAt: new Date(Date.parse(manifest.archivedAt) + 1).toISOString() } })).toBeNull();
     await writeFile(join(saved.archiveDir, 'files', 'private.txt'), 'corrupt archived evidence');
@@ -1066,6 +1069,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
+  // Each case includes a failed archive, cleanup, complete retry and repeat request.
+  // Measured 26–36 seconds on a shared runner; the many-file restore took 56 seconds.
   it.each([
     { mode: 'cancel', phase: 'recovery refs' }, { mode: 'time', phase: 'recovery refs' },
     { mode: 'cancel', phase: 'bundle' }, { mode: 'time', phase: 'bundle' },
@@ -1162,6 +1167,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const directory = join(c.path, 'private-files');
     await mkdir(directory);
     await Promise.all(Array.from({ length: 1050 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+    if (process.platform !== 'win32') await chmod(join(directory, 'item-1049'), 0o755);
     const privateDir = join(c.admin, 'private-files');
     await mkdir(privateDir);
     await Promise.all(Array.from({ length: 60 }, (_, i) => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')));
@@ -1189,6 +1195,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['checkout', '--detach', 'FETCH_HEAD'], restore);
     await cp(join(retired.archiveDir, 'files'), restore, { recursive: true });
     expect(await readFile(join(restore, 'private-files/item-1049'), 'utf8')).toBe('retained ignored bytes\n');
+    if (process.platform !== 'win32') expect((await stat(join(restore, 'private-files/item-1049'))).mode & 0o777).toBe(0o755);
     const manifestPath = join(retired.archiveDir, 'manifest.json');
     const original = await readFile(manifestPath, 'utf8');
     const find = () => findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
@@ -1403,13 +1410,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
-  it('reviews original changes after an ancestral merged tip is later changed', async () => {
+  it('requires supersession acceptance after an ancestral merged tip is later changed', async () => {
     const c = await reviewedCheckout('ancestral', { normalMerge: true, superseded: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     expect(prepared.review.comparison.disposition).toBe('review-supersession');
     expect(prepared.review.comparison.localPatch).toContain('+original feature');
     expect(prepared.review.comparison.difference).toContain('+strengthened replacement');
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
+      review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts))
+      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect(await archives()).toEqual([]);
   });
 
   it('compares pathspec glob filenames literally', async () => {
@@ -1441,9 +1454,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     expect(prepared.review.comparison.disposition).toBe(superseded ? 'review-supersession' : 'integrated');
-    if (superseded) expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
-      review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts))
-      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
     const result = await c.confirm(prepared.review);
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
     const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
