@@ -1,7 +1,9 @@
 /**
- * Explicit initialized-private-module retirement. Original directories are
- * quarantined whole, never unlinked. Immutable journal steps and a durable
- * repository reservation survive an interrupted request or server restart.
+ * Explicit initialized-private-module retirement. A merged, clean checkout is
+ * removed at its original path. An unmerged or dirty checkout stays there.
+ * Retirement does not quarantine the tree or copy it under
+ * data/cos/initialized-checkout-retirements. Historical restore helpers remain
+ * for journals that already exist.
  */
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { spawn } from '../lib/childProcess.js';
@@ -238,12 +240,6 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     if (current.digest !== accepted.digest) fail('retirement-review-changed');
     if (current.comparison.disposition === 'review-supersession' && accepted.acceptSuperseded !== true) fail('retirement-supersession-not-accepted');
   };
-  const verifyFacts = async (ctx, state, registration) => {
-    const policy = await ensureOwner(ctx, state.release, registration, state.review);
-    const facts = await forge(ctx, state.release, state.review.forge.prUrl);
-    if (JSON.stringify(policy) !== JSON.stringify(state.review.policy)
-      || JSON.stringify(facts) !== JSON.stringify(state.review.forge)) fail('retirement-evidence-changed');
-  };
   const location = id => {
     if (!/^[a-f0-9-]{36}$/.test(id)) fail('retirement-transaction-invalid');
     return join(root(), id);
@@ -252,50 +248,27 @@ export function _createInitializedCheckoutRecovery(deps = {}) {
     const prepared = await makeReview({ ...input, prUrl: input.review.prUrl });
     assertReview(prepared.review, input.review);
     const { ctx } = prepared;
-    const id = randomUUID();
-    await privateDirectory(root(), true);
-    const directory = location(id);
-    await mkdir(directory, { mode: 0o700 });
-    await syncDirectory(root());
-    let state = await appendStep(directory, { version: 1, id, appId: input.appId,
-      repoPath: ctx.repoPath, release: input.release, review: prepared.review }, 'intent');
-    const executor = await native({ command: 'lock', transactionDir: directory }, { keepOpen: true });
-    const gate = await admission();
-    try {
-      const reservation = await gate.reserveCheckoutRetirement(ctx.repoPath, id);
-      state = await appendStep(directory, state, 'reserved', { reservation });
-      return await gate.withCheckoutReservation(reservation, async () => {
-        // Draining may have admitted earlier work. The exact review must still match.
-        assertReview((await makeReview({ ...input, prUrl: input.review.prUrl })).review, input.review);
-        executor.assertHeld();
-        const preserved = await native({ command: 'preserve', repoPath: ctx.repoPath, release: input.release,
-          expected: prepared.review.snapshot, transactionDir: directory });
-        state = await appendStep(directory, state, 'preserved', { proof: preserved });
-        await verifyFacts(ctx, state, true);
-        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
-        for (const part of ['working', 'administration']) {
-          executor.assertHeld();
-          state = await appendStep(directory, state, `quarantine-${part}-intent`);
-          await native({ command: 'move', manifestSha256: state.proof?.manifestSha256, transactionDir: directory, part, direction: 'quarantine' });
-          state = await appendStep(directory, state, `quarantined-${part}`);
-        }
-        await native({ command: 'verify', manifestSha256: state.proof?.manifestSha256, transactionDir: directory });
-        await verifyFacts(ctx, state, false);
-        executor.assertHeld();
-        // Keep the original ref available for exact in-place rollback. A later
-        // branch-only retirement uses its own fresh proof and recovery archive.
-        const branchDeleted = false;
-        state = await appendStep(directory, state, 'quarantined', { branchDeleted,
-          branchRetainedReason: 'quarantined-checkout-rollback-ref' });
-        await gate.releaseCheckoutReservation(reservation);
-        return { ok: true, transactionId: id, archiveDir: directory, branchDeleted,
-          branchRetainedReason: state.branchRetainedReason, originalsQuarantined: true };
-      });
-    } catch (error) {
-      // No automatic rollback after uncertainty: status/restore compare both
-      // placements under a new native executor lock before touching either.
-      return { ok: false, reason: error.message, transactionId: id, archiveDir: directory, recoveryRequired: true };
-    } finally { await executor.release(); }
+    if (prepared.review.comparison?.disposition !== 'integrated') return { ok: false, reason: 'not-merged-on-recheck' };
+    const runGit = deps.execGit || execGit;
+    const status = await runGit(['status', '--porcelain'], input.release.path, { ignoreExitCode: true }).catch(() => null);
+    if (!status || status.exitCode !== 0) return { ok: false, reason: 'worktree-status-unavailable' };
+    if (String(status.stdout || '').trim()) return { ok: false, reason: 'worktree-dirty' };
+    const removed = await runGit(['worktree', 'remove', '--force', input.release.path], ctx.repoPath, { ignoreExitCode: true }).catch(() => null);
+    if (!removed || removed.exitCode !== 0) {
+      const top = await runGit(['rev-parse', '--show-toplevel'], input.release.path, { ignoreExitCode: true }).catch(() => null);
+      const toplevel = String(top?.stdout || '').trim();
+      if (!top || top.exitCode !== 0 || !toplevel) return { ok: false, reason: 'checkout-not-removed' };
+      const { resolve } = await import('node:path');
+      const { rm } = await import('node:fs/promises');
+      if (resolve(toplevel) !== resolve(input.release.path)) return { ok: false, reason: 'checkout-not-removed' };
+      await rm(input.release.path, { recursive: true, force: false });
+    }
+    let branchDeleted = false;
+    if (input.release.branch) {
+      const deleteRef = deps.deleteRef || (await import('./worktreeManager.js')).deleteCompletedLocalBranch;
+      branchDeleted = await deleteRef(ctx.repoPath, input.release.branch, input.release.head, {}) === true;
+    }
+    return { ok: true, branchDeleted };
   }).catch(error => ({ ok: false, reason: error.message }));
 
   const loadBoundTransaction = async input => {

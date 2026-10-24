@@ -504,7 +504,7 @@ describe('generic own-PR delivery merges inside repository admission (#11435)', 
     expect(prompt).toContain('Local teardown is API-only');
     expect(prompt).toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
     expect(prompt).toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
-    expect(prompt).toContain('Require ok:true, archiveDir and branchDeleted:true plus the matching persisted retirement receipt');
+    expect(prompt).toContain('Require ok:true and branchDeleted:true plus the matching persisted retirement receipt');
     expect(prompt).not.toContain('git worktree remove');
     expect(prompt).not.toContain('git branch -d');
     expect(prompt).toMatch(/gh pr merge "[^"]+" --merge --match-head-commit <verified-head>/);

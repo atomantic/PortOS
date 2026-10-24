@@ -973,18 +973,24 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     // Display history is bounded; receipt evidence and replay identity are durable. A delayed retry
     // must not become new evidence after its display row has been evicted.
     const identity = receipt => createHash('sha256').update(JSON.stringify([
-      receipt.archiveDir, receipt.path, receipt.branch ?? null, receipt.head,
+      receipt.archiveDir ?? null, receipt.path, receipt.branch ?? null, receipt.head,
       receipt.branchDeleted === true,
     ])).digest('hex');
     const receipts = { ...(outcome.retirementReceiptIdentities || {}) };
     const evidence = { ...(outcome.retirementReceiptEvidence || {}) };
     for (const receipt of outcome.retired || []) {
-      if (receipt.archiveDir && receipt.retiredAt) {
-        receipts[identity(receipt)] ??= receipt.retiredAt;
-        evidence[identity(receipt)] ??= receipt;
+      const recordedArchive = receipt.archiveDir ?? null;
+      const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
+      if (receipt.branchDeleted === true && receipt.retiredAt && archiveKept) {
+        const normalized = { ...receipt, archiveDir: recordedArchive };
+        receipts[identity(normalized)] ??= receipt.retiredAt;
+        evidence[identity(normalized)] ??= normalized;
       }
     }
-    const receiptId = archiveDir ? identity({ path, branch, head, archiveDir, branchDeleted }) : null;
+    const recordedArchive = archiveDir ?? null;
+    const archiveKept = recordedArchive === null || (typeof recordedArchive === 'string' && recordedArchive.length > 0);
+    const receiptId = branchDeleted === true && archiveKept
+      ? identity({ path, branch, head, archiveDir: recordedArchive, branchDeleted }) : null;
     if (receiptId && receipts[receiptId]) {
       // Keep the original timestamp AND any newer inventory incarnation.
       const changed = JSON.stringify(receipts) !== JSON.stringify(outcome.retirementReceiptIdentities || {})
@@ -994,7 +1000,7 @@ export async function recordHeldCheckoutRetirement(appId, { path, branch, branch
     }
     const retiredAt = new Date().toISOString();
     if (receiptId) receipts[receiptId] = retiredAt;
-    const receipt = { path, ...(branch && { branch }), head, branchDeleted, archiveDir, retiredAt, ...(checkoutIdentity && { checkoutIdentity }) };
+    const receipt = { path, ...(branch && { branch }), head, branchDeleted, archiveDir: recordedArchive, retiredAt, ...(checkoutIdentity && { checkoutIdentity }) };
     const retired = [receipt, ...(outcome.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT);
     if (receiptId) evidence[receiptId] = receipt;
     const retirementObligations = unresolvedRetirements({ ...outcome, retired, retirementReceiptEvidence: evidence });

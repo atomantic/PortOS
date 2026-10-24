@@ -56,17 +56,17 @@ persisted inventory and a fresh Git read still matches it — a changed lock,
 HEAD or branch is an ownership change. It then requires merge evidence on the
 default branch and no live owner, claim binding or manual completion handoff.
 
-Before any mutation, every unique byte is archived under
-`data/cos/held-checkout-archives/`: a verified Git bundle of commits not on the
-default branch, the staged and unstaged diffs, raw bytes of tracked files that a
-clean filter or line-ending conversion hides from those diffs, verbatim copies
-of untracked and ignored files (all hash-verified), and symlink targets. A nested repository or
-submodule, unmerged or hidden index entries, an oversized file or a write during archiving fails the archive, which leaves the checkout, its lock and its
-branch untouched and removes the partial archive. The lock is released only
-after a second fresh match, and ownership, HEAD and content are rechecked
-immediately before removal; if that recheck refuses, the original lock is
-restored. A retired row leaves the inventory and appears under *Recently
-retired* with its archive path; only the next sweep can report convergence.
+A merged, clean checkout is removed at its original path. Dirty, unmerged,
+protected, and live-owner checkouts stay where they are. Retirement does not
+copy the checkout, its ignored files, or its commit history. The lock is
+released only after a second fresh match, and ownership, HEAD and cleanliness
+are rechecked immediately before removal; if that recheck refuses, the original
+lock is restored. A retired row leaves the inventory and appears under
+*Recently retired*; only the next sweep can report convergence. Older copies
+under `data/cos/held-checkout-archives/`,
+`data/cos/branch-retirement-archives/`, and
+`data/cos/initialized-checkout-retirements/` are not written anymore. Setup
+migration 442 deletes those three directories.
 
 ### Explicit delivery reviews
 

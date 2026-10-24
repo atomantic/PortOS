@@ -1,8 +1,9 @@
 /**
- * Scoped retirement of held checkouts through real Git (#12002): a release
- * binds to the exact inventory row, every unique byte is archived before any
- * mutation, and an ownership change or archive failure leaves the checkout,
- * its lock and its branch as found.
+ * Scoped retirement of held checkouts through real Git (#12002, #13519): a
+ * release binds to the exact inventory row. A merged clean checkout is removed
+ * in place. Dirty, unmerged, and live-owner checkouts stay, and retirement
+ * does not copy the checkout. Historical archives written by preserveMergedCheckout
+ * remain readable.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
@@ -31,6 +32,10 @@ vi.mock('../lib/execGit.js', async importOriginal => {
   return { ...actual, execGit: async (args, cwd, options) => {
     // Pauses an archive mid-write, after its first snapshot and before its re-read.
     if (injected.onBundle && args.includes('bundle') && args.includes('create')) await injected.onBundle();
+    if (injected.onUnlockedStatus && args[0] === 'status' && args[1] === '--porcelain') {
+      injected.statusReads = (injected.statusReads || 0) + 1;
+      if (injected.statusReads > 1) await injected.onUnlockedStatus();
+    }
     if (injected.onEvidence && args[0] === 'bundle' && args[1] === 'verify') await injected.onEvidence();
     if (retirementFaults.onRemove && args[0] === 'worktree' && args[1] === 'remove') await retirementFaults.onRemove();
     if (retirementFaults.onBranchDelete && args[0] === 'push' && args.some(arg => arg.startsWith(':refs/heads/'))) await retirementFaults.onBranchDelete();
@@ -90,7 +95,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   beforeEach(async () => {
     Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [] });
+    Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, fetchRemote: null, fetches: [], onBundle: null, onArchiveRef: null, onEvidence: null, onProof: null, proofFailures: [], onUnlockedStatus: null, statusReads: 0 });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -136,6 +141,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners, ...opts });
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
+  const makeClean = async (path) => {
+    await execGit(['checkout', '--', '.'], path);
+    await execGit(['clean', '-fdx'], path);
+  };
 
   async function historicalArchive(prepare = async () => {}) {
     const path = join(external, 'historical');
@@ -197,9 +206,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(existsSync(path)).toBe(false);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
     const first = await getBranchReconcileOutcome('app-1');
-    expect(first.retired).toEqual([expect.objectContaining({ branch, path: holder.path, head: holder.head, branchDeleted: true, archiveDir: expect.any(String) })]);
-    const manifest = JSON.parse(await readFile(join(first.retired[0].archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest.captured.files).toContainEqual(expect.objectContaining({ path: 'ignored.txt', sha256: expect.any(String) }));
+    expect(first.retired).toEqual([expect.objectContaining({ branch, path: holder.path, head: holder.head, branchDeleted: true, archiveDir: null })]);
+    expect(await archives()).toEqual([]);
     await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
     const next = await getBranchReconcileOutcome('app-1');
     expect(next).toMatchObject({ remaining: [], retirementObligations: [] });
@@ -217,102 +225,83 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     });
     expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
     const first = await getBranchReconcileOutcome('app-1');
-    expect(first.retired).toEqual([expect.objectContaining({ branch, head, branchDeleted: true, archiveDir: expect.any(String) })]);
+    expect(first.retired).toEqual([expect.objectContaining({ branch, head, branchDeleted: true, archiveDir: null })]);
     expect(first.remaining).toEqual([vanished]);
-    const manifest = JSON.parse(await readFile(join(first.retired[0].archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest).toMatchObject({ repoPath: repo, branch, expectedHead: head, bundleSha256: expect.any(String) });
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/portos/completed/${head}`], repo)).stdout.trim()).toBe(head);
+    expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
     const next = await getBranchReconcileOutcome('app-1');
     expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: vanished.branch, head, reason: 'retirement-provenance-unverified' })]);
     expect(next.remaining).toEqual(next.retirementObligations);
   });
 
-  it('retires a superseded branch without a worktree through its full branch archive without claiming checkout preservation', async () => {
+  it('retires a superseded branch without a worktree and does not claim checkout preservation', async () => {
     const branch = 'feature/no-worktree';
     const head = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'superseded branch-only commit'], repo)).stdout.trim();
     await execGit(['branch', branch, head], repo);
     const missingCheckout = { branch, path: join(external, 'lost-original'), head, locked: false, lockReason: null };
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...missingCheckout, reason: 'retirement-provenance-unverified' }] });
-    let archiveDir;
+    let seenHead = null;
     retirementFaults.onBranchDelete = async () => {
-      for (const name of await readdir(join(PATHS.cos, 'branch-retirement-archives'))) {
-        const dir = join(PATHS.cos, 'branch-retirement-archives', name);
-        const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
-        if (manifest.repoPath === repo && manifest.branch === branch && manifest.expectedHead === head) {
-          archiveDir = dir;
-          expect(manifest.recoveryHeads).toContain(head);
-          expect(manifest.bundleSha256).toMatch(/^[a-f0-9]{64}$/);
-        }
-      }
-      expect(archiveDir).toBeTruthy();
-      expect((await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo)).stdout.trim()).toBe(head);
+      seenHead = (await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo)).stdout.trim();
     };
     const entry = { branch, tip: head, worktreePath: null, dirtyPaths: [], verdict: { branch, tip: head, verdict: 'SUPERSEDED', dirtyPaths: [] } };
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [branch], skipped: [] });
+    expect(seenHead).toBe(head);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
-    const restored = join(scratch, 'branch-restore.git');
-    await execGit(['init', '--bare', restored], scratch);
-    await execGit(['bundle', 'unbundle', join(archiveDir, 'commits.bundle')], restored);
-    expect((await execGit(['cat-file', '-e', `${head}^{commit}`], restored)).exitCode).toBe(0);
+    expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
+    expect(await archives()).toEqual([]);
     const outcome = await getBranchReconcileOutcome('app-1');
-    expect(outcome.retired || []).toEqual([]);
+    expect(outcome.retired).toEqual([expect.objectContaining({ branch, head, branchDeleted: true, archiveDir: null })]);
     expect(outcome.retirementObligations).toContainEqual(expect.objectContaining(missingCheckout));
     expect(await archives()).toEqual([]);
   });
 
-  it('archives every superseded checkout byte and persists its exact generation before removal, then records retirement', async () => {
+  it('removes a superseded checkout after the abandoned-worktree backup without copying the checkout', async () => {
     const { entry, release } = await supersededCheckout();
-    let prepared;
+    const { backupRoot, backupSlug } = await import('./supersededBackup.js');
+    const backupDir = join(backupRoot(cosDir), backupSlug(release.branch));
     retirementFaults.onRemove = async () => {
-      const outcome = await getBranchReconcileOutcome('app-1');
-      const row = outcome.retirementObligations.find(row => row.branch === release.branch);
-      prepared = row.preservationReceipt;
-      expect(row).toMatchObject(release);
-      expect(outcome.retired || []).toEqual([]);
-      expect(await readFile(join(prepared.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
-      expect(await readFile(join(prepared.archiveDir, 'administration', 'gitdir', 'private-note'), 'utf8')).toBe('private administration');
-      expect(await readFile(join(prepared.archiveDir, 'index.diff'), 'utf8')).toContain('tracked edit');
-      expect(await readFile(join(prepared.archiveDir, 'worktree.diff'), 'utf8')).toContain('unstaged original work');
-      expect((await execGit(['bundle', 'verify', join(prepared.archiveDir, 'commits.bundle')], repo)).exitCode).toBe(0);
+      expect(existsSync(release.path)).toBe(true);
+      expect(await readFile(join(backupDir, 'worktree.diff'), 'utf8')).toContain('unstaged original work');
+      expect(existsSync(heldCheckoutArchiveRoot(cosDir))).toBe(false);
     };
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
-    expect(prepared.archiveDir).toBeTruthy();
-    const outcome = await getBranchReconcileOutcome('app-1');
-    expect(outcome.retired).toContainEqual(expect.objectContaining({ path: release.path, branch: release.branch, head: release.head,
-      archiveDir: prepared.archiveDir, branchDeleted: true, retiredAt: expect.any(String) }));
-    expect(outcome.retirementObligations).toEqual([]);
     expect(existsSync(release.path)).toBe(false);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    expect(await archives()).toEqual([]);
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired).toContainEqual(expect.objectContaining({
+      path: release.path, branch: release.branch, head: release.head, archiveDir: null, branchDeleted: true, retiredAt: expect.any(String),
+    }));
   });
 
-  it.each(['archive failure', 'preservation receipt failure', 'new owner', 'ignored bytes change', 'private administration change', 'checkout identity change', 'app scope change'])('keeps superseded originals on %s', async failure => {
+  it('keeps a superseded checkout held by a live owner and writes no checkout archive', async () => {
     const { entry, release } = await supersededCheckout();
-    let owners = [];
-    if (failure === 'preservation receipt failure') retirementFaults.failScheduleWrite = 3;
-    else injected.onBundle = async () => {
-      injected.onBundle = null;
-      if (failure === 'archive failure') throw new Error('synthetic archive failure');
-      if (failure === 'new owner') owners = [{ id: 'new-owner', status: 'running', metadata: { sourceWorkspace: repo, claimBranches: [release.branch] } }];
-      if (failure === 'ignored bytes change') await writeFile(join(release.path, 'ignored.txt'), 'new ignored bytes');
-      if (failure === 'private administration change') {
-        const gitdir = (await execGit(['rev-parse', '--absolute-git-dir'], release.path)).stdout.trim();
-        await writeFile(join(gitdir, 'private-note'), 'new private administration');
-      }
-      if (failure === 'app scope change') injected.app = { ...injected.app, repoPath: join(scratch, 'different-app-repository') };
-      if (failure === 'checkout identity change') {
-        const pointer = join(release.path, '.git');
-        const bytes = await readFile(pointer);
-        await rename(pointer, join(scratch, 'original-indirection'));
-        await writeFile(pointer, bytes);
-      }
-    };
+    const owners = [{ id: 'new-owner', status: 'running', metadata: { sourceWorkspace: repo, claimBranches: [release.branch] } }];
     const result = await reapSuperseded(entry, async () => owners);
     expect(result.reaped).toEqual([]);
     expect(result.skipped).toHaveLength(1);
     expect(existsSync(release.path)).toBe(true);
     expect(await registered(release.path)).toBe(true);
     expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
+    expect(await archives()).toEqual([]);
     expect((await getBranchReconcileOutcome('app-1'))?.retired || []).toEqual([]);
+  });
+
+  it('keeps a superseded checkout when its untracked backup cannot be copied', async () => {
+    const { entry, release } = await supersededCheckout();
+    await chmod(join(release.path, 'untracked.txt'), 0o000);
+    try {
+      const result = await reapSuperseded(entry);
+      expect(result.reaped).toEqual([]);
+      expect(result.skipped[0].reason).toMatch(/backup-failed/);
+      expect(existsSync(release.path)).toBe(true);
+      expect(await registered(release.path)).toBe(true);
+      expect(await archives()).toEqual([]);
+    } finally {
+      await chmod(join(release.path, 'untracked.txt'), 0o644);
+    }
   });
 
   it('preserves a superseded branch whose exact head no longer matches its verdict', async () => {
@@ -325,50 +314,21 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await archives()).toEqual([]);
   });
 
-  it('never substitutes an older compatible archive when the prepared superseded archive is corrupt', async () => {
-    const { entry, release } = await supersededCheckout();
-    let owners = [];
-    injected.onBundle = async () => {
-      injected.onBundle = null;
-      owners = [{ id: 'temporary-owner', status: 'running', metadata: { sourceWorkspace: repo, claimBranches: [release.branch] } }];
-    };
-    expect((await reapSuperseded(entry, async () => owners)).reaped).toEqual([]);
-    const first = await getBranchReconcileOutcome('app-1');
-    const older = { archiveDir: first.retirementObligations[0].preservationReceipt.archiveDir };
-    owners = [];
-    await writeFile(join(release.path, 'ignored.txt'), 'new private ignored work');
-    retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 4;
-    expect((await reapSuperseded(entry)).reaped).toEqual([]);
-    const outcome = await getBranchReconcileOutcome('app-1');
-    const archiveDir = outcome.retirementObligations[0].preservationReceipt.archiveDir;
-    expect(archiveDir).not.toBe(older.archiveDir);
-    expect(await readFile(join(older.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
-    await writeFile(join(archiveDir, 'files', 'ignored.txt'), 'corrupt the exact prepared archive');
-    const recovered = await recoverMissingCheckoutPreservations({ appId: 'app-1', repoPath: repo, outcome }, { cosDir });
-    expect(recovered.retirementObligations).toHaveLength(1);
-    expect(recovered.recoveredPreservations || []).toEqual([]);
-    expect(recovered.retirementObligations[0].preservationReceipt.archiveDir).toBe(archiveDir);
-  });
-
-  it('preserves an existing checkout when its historical obligation has no original incarnation proof', async () => {
+  it('removes a superseded checkout even when an old obligation has no incarnation proof', async () => {
     const { entry, release } = await supersededCheckout();
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...release, reason: 'retirement-review-pending' }] });
-    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'retirement-checkout-generation-unverified' }] });
-    expect(existsSync(release.path)).toBe(true);
-    expect(await registered(release.path)).toBe(true);
-    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toHaveLength(1);
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
+    expect(existsSync(release.path)).toBe(false);
     expect(await archives()).toEqual([]);
   });
 
-  it('keeps a durable preservation obligation when final retirement receipt persistence fails', async () => {
+  it('reports an unverified receipt when retirement persistence fails and writes no checkout archive', async () => {
     const { entry, release } = await supersededCheckout();
-    retirementFaults.failScheduleWrite = 4;
+    retirementFaults.failScheduleWrite = 1;
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'retirement-receipt-unverified' }] });
-    const outcome = await getBranchReconcileOutcome('app-1');
-    expect(outcome.retired || []).toEqual([]);
-    expect(outcome.retirementObligations).toContainEqual(expect.objectContaining({ path: release.path, head: release.head,
-      preservationReceipt: expect.objectContaining({ archiveDir: expect.any(String), preparedAt: expect.any(String) }) }));
+    expect((await getBranchReconcileOutcome('app-1'))?.retired || []).toEqual([]);
     expect(existsSync(release.path)).toBe(false);
+    expect(await archives()).toEqual([]);
   });
 
   it('recovers complete preservation through the schedule boundary with only the primary checkout, without claiming branch deletion', async () => {
@@ -850,54 +810,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(existsSync(join(admin, 'index'))).toBe(true);
   });
 
-  it('archives staged, unstaged, untracked, ignored and symlinked content, then retires a locked detached checkout', async () => {
-    await writeFile(join(repo, 'eol.txt'), 'one\ntwo\n');
-    // No newline: Windows core.autocrlf must not make this stat-only fixture
-    // byte-different when the checkout later installs its LF attributes.
-    await writeFile(join(repo, 'stat-cache.txt'), 'unchanged');
-    await execGit(['add', 'eol.txt', 'stat-cache.txt'], repo);
-    await execGit(['commit', '-m', 'chore: synthetic text file'], repo);
-    const { path, release } = await heldCheckout('detached-held', { beforeLock: async (tree) => {
-      // Normalization hides these CRLF bytes from every diff.
-      await writeFile(join(tree, '.gitattributes'), 'eol.txt text eol=lf\n');
-      await writeFile(join(tree, 'eol.txt'), 'one\r\ntwo\r\n');
-    } });
-    // Only the index holds this file once its working copy is gone.
-    await writeFile(join(path, 'staged-only.txt'), Buffer.concat([Buffer.from(`staged work\n${'界'.repeat(100000)}\n`), Buffer.from([0xff, 10])]));
+  it('keeps a dirty locked detached checkout and does not copy it', async () => {
+    const { path, release } = await heldCheckout('detached-held');
+    await writeFile(join(path, 'staged-only.txt'), 'staged work\n');
     await execGit(['add', 'staged-only.txt'], path);
-    const stagedBlob = (await execGit(['rev-parse', ':staged-only.txt'], path)).stdout.trim();
-    await rm(join(path, 'staged-only.txt'));
-
-    // Make an unchanged tracked file's stat cache stale. Git diff normally
-    // rewrites the index while refreshing it, racing the administration copy.
-    await utimes(join(path, 'stat-cache.txt'), new Date('2020-01-01'), new Date('2020-01-01'));
-    const indexPath = (await execGit(['rev-parse', '--git-path', 'index'], path)).stdout.trim();
-    const originalIndex = await readFile(indexPath);
     const result = await retire(release);
-
-    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: false });
-    expect(existsSync(path)).toBe(false);
-    expect(await registered(release.path)).toBe(false);
-    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest.release).toEqual(release);
-    expect(await readFile(join(result.archiveDir, 'administration', 'gitdir', 'index'))).toEqual(originalIndex);
-    expect(manifest.captured.files.map(file => `${file.path}${file.tracked ? ' (tracked)' : ''}`).sort())
-      .toEqual(['.gitattributes', '.gitignore', 'eol.txt (tracked)', 'ignored.txt', 'initial.txt (tracked)', 'untracked.txt']);
-    expect(await readFile(join(result.archiveDir, 'files', 'eol.txt'), 'utf8')).toBe('one\r\ntwo\r\n');
-    expect(manifest.captured.symlinks).toEqual(SYMLINKS ? [{ path: 'linked', target: '../shared-target' }] : []);
-    expect(await readFile(join(result.archiveDir, 'files', 'ignored.txt'), 'utf8')).toBe('ignored work\n');
-    expect(await readFile(join(result.archiveDir, 'worktree.diff'), 'utf8')).toContain('+tracked edit');
-    expect(await readFile(join(result.archiveDir, 'index.diff'), 'utf8')).toContain('+staged work');
-    const restored = join(scratch, 'unicode-staged-restore');
-    await mkdir(restored);
-    await execGit(['init'], restored);
-    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD'], restored);
-    await execGit(['checkout', '--detach', 'FETCH_HEAD'], restored);
-    await execGit(['apply', '--index', join(result.archiveDir, 'index.diff')], restored);
-    expect((await execGit(['rev-parse', ':staged-only.txt'], restored)).stdout.trim()).toBe(stagedBlob);
+    expect(result).toEqual({ ok: false, reason: 'worktree-dirty' });
+    expect(existsSync(path)).toBe(true);
+    expect(await registered(release.path)).toBe(true);
+    expect(await lockText(release.path)).toBe(release.lockReason);
+    expect(await archives()).toEqual([]);
   });
 
-  it('bundles a squash-merged branch, retires it with its branch, and drops it from the persisted inventory', async () => {
+  it('removes a squash-merged branch with its checkout and drops it from the persisted inventory', async () => {
     const { path, release } = await heldCheckout('branch-held', { branch: 'feature/held', beforeLock: async (tree) => {
       await writeFile(join(tree, 'feature.txt'), 'feature\n');
       await execGit(['add', 'feature.txt'], tree);
@@ -914,28 +839,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await retireInventoriedCheckout({ appId: 'app-1', release: { ...release, checkoutIdentity: '0'.repeat(64) } }, { cosDir, readAgents: noOwners }))
       .toEqual({ ok: false, reason: 'release-not-in-inventory' });
     expect(await isCurrentRetirementCheckout(delayed)).toBe(true);
-    const branchArchiveRoot = join(PATHS.cos, 'branch-retirement-archives');
-    const priorArchives = new Set(await readdir(branchArchiveRoot).catch(() => []));
-    const originalReflog = await readFile(join(repo, '.git', 'logs', 'refs', 'heads', 'feature', 'held'));
+    await makeClean(path);
     const result = await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners });
 
-    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true });
-    const newArchives = (await readdir(branchArchiveRoot)).filter(name => !priorArchives.has(name));
-    expect(newArchives).toHaveLength(1);
-    const branchArchive = join(branchArchiveRoot, newArchives[0]);
-    expect(await readFile(join(branchArchive, 'reflog'))).toEqual(originalReflog);
-    const branchManifest = JSON.parse(await readFile(join(branchArchive, 'manifest.json'), 'utf8'));
-    expect(branchManifest).toMatchObject({ branch: release.branch, expectedHead: release.head });
-    await execGit(['bundle', 'verify', join(branchArchive, 'commits.bundle')], repo);
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true, checkoutIdentity });
+    expect(result.archiveDir).toBeUndefined();
+    expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
+    expect(await archives()).toEqual([]);
     expect(existsSync(path)).toBe(false);
     expect((await execGit(['branch', '--list', 'feature/held'], repo)).stdout.trim()).toBe('');
-    // The original commit stays recoverable after its branch is gone.
-    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/restored'], repo);
-    expect((await execGit(['rev-parse', 'restored'], repo)).stdout.trim()).toBe(release.head);
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.status).toBe('incomplete');
     expect(outcome.remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
-    expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: result.archiveDir, checkoutIdentity });
+    expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: null, checkoutIdentity });
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
     // The stale retired checkout stays settled. The sibling row left this scan, and its
     // branch is absent, so disappearance stays a provenance obligation.
@@ -1070,38 +986,38 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     // Clear for the pre-archive check; a live run occupies the checkout by the removal recheck.
     const readAgents = async () => (++reads === 1 ? [] : [{ id: 'agent-live', status: 'running', workspacePath: release.path }]);
 
+    await makeClean(path);
     const result = await retire(release, { readAgents });
 
     expect(result).toMatchObject({ ok: false, reason: 'claim-owner-active' });
     expect(await registered(release.path)).toBe(true);
     expect(await lockText(release.path)).toBe('handoff pending');
-    for (const name of ['initial.txt', 'untracked.txt', 'ignored.txt']) expect(existsSync(join(path, name))).toBe(true);
-    expect(existsSync(join(result.archiveDir, 'manifest.json'))).toBe(true);
+    expect(existsSync(join(path, 'initial.txt'))).toBe(true);
+    expect(result.archiveDir).toBeUndefined();
+    expect(await archives()).toEqual([]);
   });
 
-  it('keeps the checkout when its content changes between the archive and removal', async () => {
+  it('keeps a clean checkout that becomes dirty before removal', async () => {
     const { path, release } = await heldCheckout('rewritten');
-    let reads = 0;
-    // Same length, so only a content hash can tell the archived copy is stale.
-    const readAgents = async () => {
-      if (++reads === 2) await writeFile(join(path, 'ignored.txt'), 'IGNORED WORK\n');
-      return [];
+    await makeClean(path);
+    injected.onUnlockedStatus = async () => {
+      injected.onUnlockedStatus = null;
+      await writeFile(join(path, 'late.txt'), 'late work\n');
     };
-
-    expect(await retire(release, { readAgents })).toMatchObject({ ok: false, reason: 'checkout-content-changed' });
-    expect(await readFile(join(path, 'ignored.txt'), 'utf8')).toBe('IGNORED WORK\n');
+    expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
+    expect(await readFile(join(path, 'late.txt'), 'utf8')).toBe('late work\n');
     expect(await lockText(release.path)).toBe('synthetic external owner');
+    expect(await archives()).toEqual([]);
   });
 
-  it('keeps everything and leaves no partial archive when the archive cannot be completed', async () => {
+  it('keeps a dirty checkout when a nested repository is present and writes no archive', async () => {
     const { path, release } = await heldCheckout('archive-fails');
-    // A nested repository is listed without its files, so it cannot be archived faithfully.
     await mkdir(join(path, 'nested'));
     await execGit(['init', '-q'], join(path, 'nested'));
 
     const result = await retire(release);
 
-    expect(result).toMatchObject({ ok: false, reason: 'archive-failed' });
+    expect(result).toEqual({ ok: false, reason: 'worktree-dirty' });
     expect(await lockText(release.path)).toBe('synthetic external owner');
     expect(existsSync(join(path, 'nested', '.git'))).toBe(true);
     expect(await archives()).toEqual([]);
@@ -1112,7 +1028,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const target = Buffer.from([0xff]);
     await symlink(target, join(path, 'opaque-link'));
 
-    expect(await retire(release)).toMatchObject({ ok: false, reason: 'archive-failed' });
+    expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
     expect(await readlink(join(path, 'opaque-link'), { encoding: 'buffer' })).toEqual(target);
     expect(await lockText(path)).toBe('synthetic external owner');
     expect(await registered(path)).toBe(true);
@@ -1122,41 +1038,41 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   // #12682: archive I/O ran inside the shared ownership lock and starved every
   // claim-ownership check behind its 15 s queue budget for minutes.
-  it('archives with the ownership queue free while fencing only the checkout being retired', async () => {
+  it('rechecks a clean checkout with the ownership queue free and removes it without a copy', async () => {
     const { path, release } = await heldCheckout('fenced', { branch: 'feature/fenced' });
+    await makeClean(path);
     let paused;
     let resume;
-    const pausedArchive = new Promise(resolve => { paused = resolve; });
-    injected.onBundle = () => new Promise(resolve => { resume = resolve; paused(); });
+    const pausedRecheck = new Promise(resolve => { paused = resolve; });
+    injected.onUnlockedStatus = () => new Promise(resolve => { resume = resolve; paused(); });
     const admission = branch => checkReconcileOwnership({ appId: 'app-1', branch },
       { getAgents: async () => [], getActiveAgentIds: () => [], readCompletionHold: async () => null });
 
     const retiring = retire(release);
-    await pausedArchive;
-    injected.onBundle = null;
+    await pausedRecheck;
+    injected.onUnlockedStatus = null;
     expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
     expect(await admission('feature/fenced')).toEqual({ admitted: false, reason: 'checkout-retirement-reserved' });
     expect(await admission('feature/unrelated')).toEqual({ admitted: true });
     expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners }))
       .toEqual({ ok: false, reason: 'checkout-retirement-reserved' });
-    expect(existsSync(join(path, 'ignored.txt'))).toBe(true);
+    expect(existsSync(path)).toBe(true);
 
     resume();
-    expect(await retiring).toMatchObject({ ok: true });
+    expect(await retiring).toMatchObject({ ok: true, branchDeleted: true });
     expect(existsSync(path)).toBe(false);
+    expect(await archives()).toEqual([]);
     expect(await admission('feature/fenced')).toEqual({ admitted: true });
   });
 
-  it.each([
-    // A file the archive did not see when it started, so only the final re-read catches it.
-    ['content', async (path) => writeFile(join(path, 'late.txt'), 'late work\n'), 'checkout content changed while archiving'],
-    ['administration', async (path) => writeFile(join((await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim(), 'MERGE_MSG'), 'synthetic\n'),
-      'administration changed while archiving'],
-  ])('keeps the checkout when its %s changes while the unlocked archive runs', async (label, change, detail) => {
-    const { path, release } = await heldCheckout(`mid-archive-${label}`);
-    injected.onBundle = () => change(path);
-
-    expect(await retire(release)).toEqual({ ok: false, reason: 'archive-failed', detail });
+  it('keeps a clean checkout that gains a file during the unlocked recheck', async () => {
+    const { path, release } = await heldCheckout('mid-recheck');
+    await makeClean(path);
+    injected.onUnlockedStatus = async () => {
+      injected.onUnlockedStatus = null;
+      await writeFile(join(path, 'late.txt'), 'late work\n');
+    };
+    expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
     expect(await registered(release.path)).toBe(true);
     expect(await lockText(release.path)).toBe('synthetic external owner');
     expect(await archives()).toEqual([]);
@@ -1171,6 +1087,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       .toEqual({ ok: false, reason: 'not-merged-on-recheck' });
 
     const handoff = await heldCheckout('handoff', { branch: 'feature/handoff' });
+    await makeClean(handoff.path);
     injected.policies = [{ id: 'agent-done', status: 'completed', startedAt: '2026-01-01T00:00:00.000Z',
       metadata: { sourceWorkspace: repo, worktreeBranch: 'feature/handoff', prCompletionPolicy: 'leave-open' } }];
     expect(await retire(handoff.release))
@@ -1182,6 +1099,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     let firstCommit;
     let changeBase;
     const { path, release } = await heldCheckout(name, { branch: `feature/${name}`, beforeLock: async tree => {
+      await writeFile(join(tree, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\nprivate-build-output/\nnode_modules\n');
+      await execGit(['add', '.gitignore'], tree);
       await writeFile(join(tree, featurePath), featureBody);
       await execGit(['--literal-pathspecs', 'add', featurePath], tree);
       if (gitlink) {
@@ -1207,6 +1126,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
         await execGit(['commit', '-am', 'strengthen implementation'], repo);
       }
     } });
+    // Ignored bytes stay on disk and out of porcelain. They are not an archive.
+    await execGit(['checkout', '--', '.'], path);
+    await execGit(['clean', '-fd'], path);
     const [main, admin] = (await Promise.all([
       execGit(['rev-parse', 'main'], repo), execGit(['rev-parse', '--absolute-git-dir'], path),
     ])).map(result => result.stdout.trim());
@@ -1307,14 +1229,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
           expect(await readFile(join(c.path, 'new-owner.txt'), 'utf8')).toBe('unrelated new work\n');
           expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
         }
-        expect(await readFile(join(retired.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
-        const restore = join(scratch, 'continued-standalone.git');
-        await execGit(['init', '--bare', restore], scratch);
-        await execGit(['bundle', 'unbundle', join(retired.archiveDir, 'commits.bundle')], restore);
-        await execGit(['fsck', '--full', '--strict', '--no-reflogs', c.release.head], restore);
-        expect(await registered(c.path)).toBe(false);
+        expect(retired.archiveDir).toBeUndefined();
+        expect(await archives()).toEqual([]);
+        if (scenario === 'delivered') expect(await registered(c.path)).toBe(false);
         expect((await c.prepare()).ok).toBe(false);
-        expect(await archives()).toHaveLength(1);
       }
       expect(agent).toEqual(original);
     });
@@ -1330,75 +1248,28 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared.ok).toBe(true);
     expect(Buffer.byteLength(prepared.review.comparison.localPatch)).toBeLessThan(4 * 1024 * 1024);
     expect(Buffer.byteLength(prepared.review.comparison.difference)).toBeLessThan(4 * 1024 * 1024);
-    const before = await getBranchReconcileOutcome('app-1');
-    const original = await sha256File(join(c.path, 'tabs.txt'));
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-archive-manifest-limit-exceeded',
-      archiveLimit: { scope: 'manifest', limitBytes: 16 * 1024 * 1024, observedBytes: expect.any(Number) } });
-    expect(await sha256File(join(c.path, 'tabs.txt'))).toBe(original);
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.path)).toBe(false);
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
     expect(await archives()).toEqual([]);
-    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
-  // Each case includes a failed archive, cleanup, complete retry and repeat request.
-  // At d200ec77d2, measured 16.9–20.9 seconds; the many-file restore took 20.2 seconds.
-  it.each([
-    { mode: 'cancel', phase: 'recovery refs' }, { mode: 'time', phase: 'recovery refs' },
-    { mode: 'cancel', phase: 'bundle' }, { mode: 'time', phase: 'bundle' },
-  ])('preserves originals and can restart after $mode interrupts $phase', async ({ mode, phase }) => {
+  it('removes a merged clean checkout once and does not create an archive', async () => {
     const c = await reviewedCheckout('bounded-interruption', { normalMerge: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
-    const before = await getBranchReconcileOutcome('app-1');
-    const controller = new AbortController();
-    let clock;
-    const interrupt = () => {
-      if (mode === 'cancel') controller.abort();
-      else clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 11 * 60 * 1000);
-    };
-    let recoveryRefs = 0;
-    let bundles = 0;
-    injected.onArchiveRef = () => {
-      if (++recoveryRefs === 1 && phase === 'recovery refs') interrupt();
-    };
-    injected.onBundle = () => {
-      bundles++;
-      if (phase === 'bundle') interrupt();
-    };
-    try {
-      const result = await c.confirm(prepared.review, { signal: controller.signal });
-      expect(result).toMatchObject({ ok: false, reason: mode === 'cancel'
-        ? 'retirement-archive-cancelled' : 'retirement-archive-work-limit-exceeded' });
-      if (mode === 'time') expect(result.archiveLimit).toMatchObject({ kind: 'time', limitMs: 600000,
-        observedMs: expect.any(Number) });
-    } finally { clock?.mockRestore(); }
-    if (phase === 'recovery refs') {
-      expect(recoveryRefs).toBe(1);
-      expect(bundles).toBe(0);
-    } else expect(bundles).toBe(1);
-    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
-    expect((await execGit(['for-each-ref', '--format=%(refname)', 'refs/portos/archive/'], repo)).stdout.trim()).toBe('');
-    expect(await archives()).toEqual([]);
-    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-    // A new attempt takes fresh snapshots; no partial checkpoint grants removal.
-    injected.onArchiveRef = null;
-    injected.onBundle = null;
     expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
-    const repeated = await c.confirm(prepared.review);
-    expect(repeated.ok).toBe(false);
-    expect((await archives()).length).toBe(1);
-  }, 30_000);
+    expect(existsSync(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
+    expect((await c.confirm(prepared.review)).ok).toBe(false);
+    expect(await archives()).toEqual([]);
+  });
 
   it('refuses combined content and administration bytes before preview or teardown while each snapshot fits', async () => {
     const c = await reviewedCheckout('combined-byte-limit', { normalMerge: true });
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
-    await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
     const bytes = 22 * 1024 * 1024;
     const files = [];
     for (const root of [c.path, c.admin]) {
@@ -1421,27 +1292,31 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(preview.archiveLimit.observedBytes).toBeGreaterThanOrEqual(12 * bytes);
     expect(preview.archiveLimit.observedBytes).toBeLessThan(12 * bytes + 1024 * 1024);
     expect(await c.confirm(prepared.review)).toEqual(refusal);
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, {
-      ...c.opts, settleMergedReviewObligation: true,
-    })).toEqual(refusal);
     expect(await Promise.all(files.map(sha256File))).toEqual(hashes);
     expect(await registered(c.path)).toBe(true);
     expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
     expect(await archives()).toEqual([]);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+    // Ignored bytes are not dirt. An unattended merged retirement removes the
+    // checkout instead of copying those bytes into an archive.
+    const removed = await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, {
+      ...c.opts, settleMergedReviewObligation: true,
+    });
+    expect(removed).toMatchObject({ ok: true, branchDeleted: true });
+    expect(removed.archiveDir).toBeUndefined();
+    expect(existsSync(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
   });
 
   describe('many-file resource-bounded preservation', () => {
     let c;
-    let createdAt;
     let prepared;
     let retired;
     // Retain main's separate fixture/retirement/proof phases and their existing
     // 30-second budgets while exercising more than 1,000 files in both snapshots.
     beforeEach(async () => {
       c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
-      await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
       const directory = join(c.path, 'private-files');
       await mkdir(directory);
       await Promise.all(Array.from({ length: 1050 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
@@ -1449,7 +1324,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       const privateDir = join(c.admin, 'private-files');
       await mkdir(privateDir);
       await Promise.all(Array.from({ length: 60 }, (_, i) => writeFile(join(privateDir, `item-${i}`), 'private recovery bytes\n')));
-      createdAt = new Date().toISOString();
       prepared = await c.prepare();
       expect(prepared.ok).toBe(true);
     });
@@ -1459,52 +1333,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(retired).toMatchObject({ ok: true, branchDeleted: true });
     });
 
-    it('retires and independently restores more than 1000 content and private Git files under the resource contract', async () => {
-      const manifest = JSON.parse(await readFile(join(retired.archiveDir, 'manifest.json'), 'utf8'));
-      const capturedCount = manifest.captured.files.length + manifest.administration.files.length;
-      expect(capturedCount).toBeGreaterThan(1100);
-      expect(manifest.resourceContract).toBe(1);
-      expect(await readFile(join(retired.archiveDir, 'files/private-files/item-1049'), 'utf8')).toBe('retained ignored bytes\n');
-      expect(await readFile(join(retired.archiveDir, 'administration/gitdir/private-files/item-59'), 'utf8')).toBe('private recovery bytes\n');
-      const before = await getBranchReconcileOutcome('app-1');
-      const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
-      expect(proof, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`)
-        .toMatchObject({ archiveDir: retired.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
-      expect(await proof.recheck()).toBe(true);
-      expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-      const restore = join(scratch, 'independent-restore');
-      await mkdir(restore);
-      await execGit(['init'], restore);
-      await execGit(['fetch', join(retired.archiveDir, 'commits.bundle'), 'HEAD'], restore);
-      await execGit(['checkout', '--detach', 'FETCH_HEAD'], restore);
-      await cp(join(retired.archiveDir, 'files'), restore, { recursive: true });
-      expect(await readFile(join(restore, 'private-files/item-1049'), 'utf8')).toBe('retained ignored bytes\n');
-      if (process.platform !== 'win32') expect((await stat(join(restore, 'private-files/item-1049'))).mode & 0o777).toBe(0o755);
-      const manifestPath = join(retired.archiveDir, 'manifest.json');
-      const original = await readFile(manifestPath, 'utf8');
-      const find = () => findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
-      // Historical unversioned archives use the same full proof, never a count exemption.
-      delete manifest.resourceContract;
-      await writeFile(manifestPath, JSON.stringify(manifest));
-      expect(await find()).toMatchObject({ archiveDir: retired.archiveDir });
-      for (const mutate of [
-        saved => { saved.resourceContract = 999; },
-        saved => { saved.captured.files[0].bytes = -1; },
-        saved => { saved.captured.files.push(saved.captured.files[0]); },
-        saved => { saved.captured.files[0].path = '../administration/gitdir/HEAD'; },
-        saved => { saved.captured.files[0].path = 'x'.repeat(16 * 1024 * 1024); },
-      ]) {
-        const altered = JSON.parse(original);
-        mutate(altered);
-        await writeFile(manifestPath, JSON.stringify(altered));
-        expect(await find()).toBe(null);
-      }
-      await writeFile(manifestPath, original);
-      expect(await find()).toMatchObject({ archiveDir: retired.archiveDir });
-      await writeFile(join(retired.archiveDir, 'administration/gitdir/private-files/item-59'), 'changed private bytes');
-      expect(await find()).toBe(null);
-      expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
-    }, 30_000);
+    it('removes the checkout without copying more than 1000 ignored files', async () => {
+      expect(retired.archiveDir).toBeUndefined();
+      expect(existsSync(c.path)).toBe(false);
+      expect(await archives()).toEqual([]);
+    });
   });
 
 
@@ -1517,7 +1350,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const c = await reviewedCheckout('archive-capacity');
     const root = join(scope === 'content' ? c.path : c.admin, 'private-build-output');
     await mkdir(root);
-    if (scope === 'content') await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-build-output/\n');
     const files = Array.from({ length: count }, (_, i) => join(root, `private-${i}.bin`));
     for (const file of files) {
       await writeFile(file, 'synthetic preserved bytes');
@@ -1562,15 +1394,22 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const before = await getBranchReconcileOutcome('app-1');
     const result = mode === 'reviewed' ? await c.confirm(prepared.review)
       : await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { ...c.opts, settleMergedReviewObligation: true });
-    expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
-      scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes,
-    } });
-    expect(await sha256File(file)).toBe(hash);
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+    if (mode === 'reviewed') {
+      expect(result).toEqual({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String), archiveLimit: {
+        scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes,
+      } });
+      expect(await sha256File(file)).toBe(hash);
+      expect(await registered(c.path)).toBe(true);
+      expect(await lockText(c.path)).toBe(c.release.lockReason);
+      expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
+      expect(await archives()).toEqual([]);
+      expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+      return;
+    }
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result.archiveDir).toBeUndefined();
+    expect(existsSync(c.path)).toBe(false);
     expect(await archives()).toEqual([]);
-    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
   it('retains measured capacity and the exact lock when the final refreshed review exceeds its budget', async () => {
@@ -1589,13 +1428,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       }
     } });
     expect(result).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded', nextAction: expect.any(String),
-      archiveDir: expect.any(String), archiveLimit: { scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes } });
+      archiveLimit: { scope: 'content', kind: 'file', limitBytes: bytes - 1, observedBytes: bytes } });
+    expect(result.archiveDir).toBeUndefined();
     expect(changedHash).toBeTruthy();
     expect(await sha256File(file)).toBe(changedHash);
     expect(await registered(c.path)).toBe(true);
     expect(await lockText(c.path)).toBe(c.release.lockReason);
     expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await archives()).toEqual([]);
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
@@ -1603,13 +1443,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const c = await receiptCheckout('receipt', { gitlink: true });
     const result = await c.retireReceipt();
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.release.path)).toBe(false);
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
-    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest.captured.gitlinks).toMatchObject([{ path: 'vendor', state: 'empty' }]);
-    expect(manifest.review.policy.receiptHead).toBe(c.release.head);
-    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/receipt-restored'], repo);
-    expect((await execGit(['rev-parse', 'receipt-restored'], repo)).stdout.trim()).toBe(c.release.head);
+    expect(await archives()).toEqual([]);
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
   });
 
   it('refreshes missing operator-review proof objects after remote main moves without accepting the old digest or advancing refs', async () => {
@@ -1647,6 +1484,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await execGit(['commit', '-m', 'feature awaiting remote merge'], tree);
     } });
     await execGit(['worktree', 'unlock', c.path], repo);
+    await makeClean(c.path);
     const release = { ...c.release, locked: false, lockReason: null };
     const remote = join(scratch, 'remote');
     await execGit(['clone', '--no-hardlinks', repo, remote], scratch);
@@ -1675,7 +1513,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     ]));
     expect(injected.fetches[0].options).toMatchObject({ timeout: 30_000,
       env: { GH_TOKEN: 'synthetic-account-token', GIT_TERMINAL_PROMPT: '0' } });
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(result.archiveDir).toBeUndefined();
+    expect(existsSync(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
   });
 
   it.each(['head', 'supersession'])('preserves a receipt checkout when merged evidence has changed: %s', async change => {
@@ -1714,12 +1554,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   it('preserves a receipt checkout when an owner appears during its archive', async () => {
     const c = await receiptCheckout('receipt-new-owner');
     let reads = 0;
-    const result = await c.retireReceipt({ readAgents: async () => (++reads < 4 ? [] : [{
+    const result = await c.retireReceipt({ readAgents: async () => (++reads < 3 ? [] : [{
       id: 'agent-live', status: 'running', workspacePath: c.release.path,
     }]) });
-    expect(result).toMatchObject({ ok: false, reason: 'claim-owner-active', archiveDir: expect.any(String) });
+    expect(result).toMatchObject({ ok: false, reason: 'claim-owner-active' });
+    expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.release.path)).toBe(true);
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await archives()).toEqual([]);
   });
 
   it.each(['original', 'repo-alias', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation', 'missing-terminal-head', 'late-writer'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
@@ -1785,14 +1627,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(evidence.completedCheckoutReceiptValid(agent, receipt)).toBe(true);
     const retired = await c.confirm(prepared.review);
     expect(retired).toMatchObject({ ok: true, branchDeleted: true });
-    expect(await readFile(join(retired.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
-    const restored = join(scratch, 'independent-orphan.git');
-    await execGit(['init', '--bare', restored], scratch);
-    await execGit(['bundle', 'unbundle', join(retired.archiveDir, 'commits.bundle')], restored);
-    await execGit(['fsck', '--full', '--strict', '--no-reflogs', c.release.head], restored);
+    expect(retired.archiveDir).toBeUndefined();
     expect(await registered(c.path)).toBe(false);
     expect((await c.prepare()).ok).toBe(false);
-    expect(await archives()).toHaveLength(1);
+    expect(await archives()).toEqual([]);
     expect(recoveries).toBe(1);
     expect(agent.result).toEqual(originalResult);
   });
@@ -1843,13 +1681,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared.review.comparison.disposition).toBe(superseded ? 'review-supersession' : 'integrated');
     const result = await c.confirm(prepared.review);
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
-    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest.review.digest).toBe(prepared.review.digest);
-    expect(manifest.captured.gitlinks).toMatchObject([{ path: 'vendor', state: 'empty' }]);
-    expect(await readFile(join(result.archiveDir, 'administration/gitdir/portos-review-status'), 'utf8')).toBe('private synthetic review marker');
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
-    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/restored-legacy'], repo);
-    expect((await execGit(['rev-parse', 'restored-legacy'], repo)).stdout.trim()).toBe(c.release.head);
+    expect(result.archiveDir).toBeUndefined();
+    expect(existsSync(c.path)).toBe(false);
+    expect(await archives()).toEqual([]);
     expect(injected.policies[0].metadata.branchCompletionPolicy).toBeUndefined();
   });
 
@@ -1881,12 +1715,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated', difference: '' },
       policy: { integratedCleanupHead: shippedDefault } } });
     const result = await c.confirm(prepared.review);
-    expect(result).toMatchObject({ ok: true, archiveDir: expect.any(String), branchDeleted: true });
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.path)).toBe(false);
     expect((await execGit(['rev-parse', 'main'], repo)).stdout.trim()).toBe(localMain);
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await archives()).toEqual([]);
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
-      branch: c.release.branch, head: c.release.head, archiveDir: result.archiveDir, branchDeleted: true,
+      branch: c.release.branch, head: c.release.head, archiveDir: null, branchDeleted: true,
     }));
     expect(injected.fetches).toHaveLength(missingProof ? 1 : 0);
   });
@@ -1900,7 +1735,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await execGit(['restore', 'initial.txt'], c.path);
     await mkdir(join(c.admin, 'info'), { recursive: true });
     await writeFile(join(c.admin, 'info', 'exclude'), 'private fixture exclusion note\n');
-    await writeFile(join(c.path, '.gitignore'), '/.gitignore\n/untracked.txt\n/ignored.txt\n/linked\n');
     expect((await execGit(['status', '--porcelain'], c.path)).stdout).toBe('');
     const release = { ...c.release, branch: 'claim/issue-425', locked: false, lockReason: null,
       checkoutIdentity: await readRetirementCheckoutIdentity(c.path) };
@@ -1944,14 +1778,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(result).toMatchObject({ candidates: [], held: [], retired: [expect.objectContaining({ checkoutIdentity: release.checkoutIdentity })] });
     expect(await registered(c.path)).toBe(false);
     const receipt = outcome.retired.find(row => row.branch === release.branch);
-    expect(receipt).toMatchObject({ head: release.head, branchDeleted: true, checkoutIdentity: release.checkoutIdentity });
-    expect(await readFile(join(receipt.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
-    expect(await readFile(join(receipt.archiveDir, 'files/untracked.txt'), 'utf8')).toBe('untracked work\n');
-    expect(await readFile(join(receipt.archiveDir, 'administration/gitdir/portos-review-status'), 'utf8')).toBe('private synthetic review marker');
-    const restored = join(scratch, 'standalone.git');
-    await execGit(['init', '--bare', restored], scratch);
-    await execGit(['bundle', 'unbundle', join(receipt.archiveDir, 'commits.bundle')], restored);
-    await execGit(['fsck', '--full', '--strict', '--no-reflogs', release.head], restored);
+    expect(receipt).toMatchObject({ head: release.head, branchDeleted: true, archiveDir: null, checkoutIdentity: release.checkoutIdentity });
+    expect(await archives()).toEqual([]);
   });
 
   it('settles a review obligation for unattended retirement only once every commit is on the default branch', async () => {
@@ -1971,9 +1799,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await registered(release.path)).toBe(true);
     const result = await retire({ settleMergedReviewObligation: true });
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result.archiveDir).toBeUndefined();
     expect(await registered(release.path)).toBe(false);
-    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), 'HEAD:refs/heads/restored-settled'], repo);
-    expect((await execGit(['rev-parse', 'restored-settled'], repo)).stdout.trim()).toBe(release.head);
+    expect(await archives()).toEqual([]);
+    expect((await execGit(['cat-file', '-t', release.head], repo)).stdout.trim()).toBe('commit');
   });
 
   function reusedBranchOwners(c) {
@@ -2012,21 +1841,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const prepared = await c.prepare();
     expect(prepared.ok).toBe(true);
     const result = await c.confirm(prepared.review);
-    expect(result).toMatchObject({ ok: true, branchDeleted: true, archiveDir: expect.any(String) });
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result.archiveDir).toBeUndefined();
     expect(existsSync(c.path)).toBe(false);
-    expect(await readFile(join(result.archiveDir, 'administration/gitdir/portos-pr-review-outcome.json'))).toEqual(metadata);
+    expect(await archives()).toEqual([]);
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
-      path: c.release.path, branch: c.release.branch, head: c.release.head, archiveDir: result.archiveDir, branchDeleted: true,
+      path: c.release.path, branch: c.release.branch, head: c.release.head, archiveDir: null, branchDeleted: true,
     }));
-    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest.captured.recoveryHeads).toEqual(expect.arrayContaining([old, next, fetched]));
-    expect(manifest.captured.recoveryHeads).not.toContain(absent);
-    await rename(repo, `${repo}-unavailable`);
-    const restored = join(scratch, 'metadata-restored');
-    await execGit(['init', '--bare', restored], scratch);
-    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
-    for (const oid of [old, next, fetched]) expect((await execGit(['cat-file', '-t', oid], restored)).stdout.trim()).toBe('commit');
-    await execGit(['fsck', '--full', '--strict'], restored);
+    for (const oid of [old, next, fetched]) expect((await execGit(['cat-file', '-t', oid], repo)).stdout.trim()).toBe('commit');
+    expect((await execGit(['cat-file', '-e', absent], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
   });
 
   it('retires a freshly reviewed reused-branch incarnation with a standalone archive and exact receipt', async () => {
@@ -2036,16 +1859,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await mkdir(shared);
     await writeFile(join(shared, 'untouched'), 'shared installation\n');
     if (SYMLINKS) {
-      await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nnode_modules\n');
       for (const relative of ['node_modules', 'server/node_modules', 'client/node_modules', 'autofixer/node_modules']) {
         await mkdir(dirname(join(c.path, relative)), { recursive: true });
         await symlink(shared, join(c.path, relative), 'dir');
       }
     }
-    await writeFile(join(c.path, 'staged.txt'), 'unique staged content\n');
-    await execGit(['add', 'staged.txt'], c.path);
-    const index = await readFile(join(c.admin, 'index'));
-    const reflog = await readFile(join(c.admin, 'logs/HEAD'));
     const policiesBefore = structuredClone(injected.policies);
     const prepared = await c.prepare();
     expect(prepared).toMatchObject({ ok: true, review: { policy: {
@@ -2054,47 +1872,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared.review.policy.priorCheckouts).toHaveLength(33);
     expect(prepared.review.comparison.localPatch).toContain('original feature');
     const result = await c.confirm(prepared.review);
-    expect(result).toMatchObject({ ok: true, branchDeleted: true, archiveDir: expect.any(String) });
+    expect(result).toMatchObject({ ok: true, branchDeleted: true });
+    expect(result.archiveDir).toBeUndefined();
     expect(existsSync(c.path)).toBe(false);
     expect(await registered(c.release.path)).toBe(false);
     expect((await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${c.release.branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
     expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: c.release.path, branch: c.release.branch, head: c.release.head,
-        archiveDir: result.archiveDir, branchDeleted: true }),
+        archiveDir: null, branchDeleted: true }),
     ]));
     expect(injected.policies).toEqual(policiesBefore);
-    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest.captured.gitlinks).toMatchObject([{ path: 'vendor', state: 'empty' }]);
-    if (SYMLINKS) {
-      expect(manifest.captured.symlinks.filter(link => link.path.endsWith('node_modules'))).toHaveLength(4);
-      expect(manifest.captured.files.some(file => file.path.includes('node_modules/'))).toBe(false);
-    }
+    expect(await archives()).toEqual([]);
     expect(await readFile(join(shared, 'untouched'), 'utf8')).toBe('shared installation\n');
-    expect(await readFile(join(result.archiveDir, 'administration/gitdir/index'))).toEqual(index);
-    expect(await readFile(join(result.archiveDir, 'administration/gitdir/logs/HEAD'))).toEqual(reflog);
-    expect(await readFile(join(result.archiveDir, 'administration/gitdir/portos-review-status'), 'utf8')).toBe('private synthetic review marker');
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
-    expect(await readFile(join(result.archiveDir, 'files/untracked.txt'), 'utf8')).toBe('untracked work\n');
-    await rename(repo, `${repo}-unavailable`);
-    const restored = join(scratch, 'standalone');
-    await execGit(['init', restored], scratch);
-    await execGit(['fetch', join(result.archiveDir, 'commits.bundle'), '+refs/portos/archive/*:refs/recovered/*'], restored);
-    await execGit(['checkout', '--detach', c.release.head], restored);
-    await execGit(['apply', '--index', join(result.archiveDir, 'index.diff')], restored);
-    await execGit(['apply', join(result.archiveDir, 'worktree.diff')], restored);
-    await cp(join(result.archiveDir, 'files'), restored, { recursive: true });
-    for (const link of manifest.captured.symlinks) {
-      await mkdir(dirname(join(restored, link.path)), { recursive: true });
-      await symlink(link.target, join(restored, link.path));
-    }
-    expect((await execGit(['rev-parse', 'HEAD'], restored)).stdout.trim()).toBe(c.release.head);
-    expect(await readdir(join(restored, 'vendor'))).toEqual([]);
-    expect((await execGit(['show', ':staged.txt'], restored)).stdout).toBe('unique staged content\n');
-    expect(await readFile(join(restored, 'initial.txt'), 'utf8')).toBe('tracked edit\n');
-    expect(await readFile(join(restored, 'untracked.txt'), 'utf8')).toBe('untracked work\n');
-    expect(await readFile(join(restored, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
-    if (SYMLINKS) expect(await readFile(join(restored, 'server/node_modules/untouched'), 'utf8')).toBe('shared installation\n');
-    await execGit(['fsck', '--full', '--strict'], restored);
   });
 
   it.each(['head-mismatch', 'same-checkout-failed', 'ambiguous-history', 'current-manual', 'current-active', 'checkout-alias', 'primary-alias'])(
@@ -2122,6 +1911,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
 
   it('preserves the checkout and inventory when private administration is recreated behind an unchanged Git pointer', async () => {
     const c = await reviewedCheckout('replaced-administration');
+    await writeFile(join(c.path, 'untracked.txt'), 'untracked work\n');
     const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
     const identity = await readCompletedCheckoutIdentity({ repoPath: repo, ...c.release, allowLocked: true });
     expect(identity).not.toBeNull();
@@ -2238,16 +2028,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       return;
     }
     expect(result).toMatchObject({ ok: true, branchDeleted: true });
-    const manifest = JSON.parse(await readFile(join(result.archiveDir, 'manifest.json'), 'utf8'));
-    expect(manifest).toMatchObject({ head: c.release.head, review: { kind: 'source-supersession' } });
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.path)).toBe(false);
-    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([expect.objectContaining({ head: c.release.head, archiveDir: result.archiveDir })]));
-    const restored = join(scratch, 'standalone-source.git');
-    await execGit(['init', '--bare', restored], scratch);
-    await execGit(['bundle', 'unbundle', join(result.archiveDir, 'commits.bundle')], restored);
-    await execGit(['fsck', '--full', '--strict', '--no-reflogs', c.release.head], restored);
-    expect((await execGit(['show', `${c.release.head}:feature.txt`], restored)).stdout).toBe('original feature\n');
+    expect(await archives()).toEqual([]);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toEqual(expect.arrayContaining([expect.objectContaining({ head: c.release.head, archiveDir: null })]));
+    expect((await execGit(['show', `${c.release.head}:feature.txt`], repo)).stdout).toBe('original feature\n');
   });
 
   it.each(['confirmed', 'human-handoff', 'published-owner'])('reviews an exact merged detached checkout without borrowing branch retirement: %s', async scenario => {
@@ -2270,9 +2055,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(prepared.ok).toBe(true);
     const result = await c.confirm(prepared.review);
     expect(result).toMatchObject({ ok: true, branchDeleted: false });
+    expect(result.archiveDir).toBeUndefined();
     expect(await registered(c.path)).toBe(false);
     expect((await execGit(['rev-parse', publishedBranch], repo)).stdout.trim()).toBe(c.release.head);
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await archives()).toEqual([]);
   });
 
   it.each(['confirmed', 'owner-alias', 'missing-receipt', 'same-incarnation', 'human-handoff', 'active-owner'])('keeps an orphan sibling obligation separate from a detached copy: %s', async scenario => {
@@ -2333,10 +2119,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const result = await retireInventoriedCheckout({ appId: 'app-1', release,
       review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
     expect(result).toMatchObject({ ok: true, branchDeleted: false });
+    expect(result.archiveDir).toBeUndefined();
+    expect(await registered(path)).toBe(false);
     expect(await registered(namedPath)).toBe(true);
     expect((await execGit(['rev-parse', namedBranch], repo)).stdout.trim()).toBe(release.head);
     expect(agent.result).toEqual({ success: false, executionSuccess: false, orphaned: true, validationPassed: null });
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('distinct detached work\n');
+    expect(await archives()).toEqual([]);
   });
 
   it('preserves archive and checkout when fresh forge evidence changes after archiving', async () => {
@@ -2344,8 +2132,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     const prepared = await c.prepare();
     let reads = 0;
     const result = await c.confirm(prepared.review, { readForge: async () => ({ ...c.forge, remoteHead: ++reads === 1 ? null : c.release.head }) });
-    expect(result).toMatchObject({ ok: false, reason: 'retirement-review-changed', archiveDir: expect.any(String) });
-    expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(result).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(result.archiveDir).toBeUndefined();
+    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+    expect(await archives()).toEqual([]);
     expect(await registered(c.release.path)).toBe(true);
     expect(await lockText(c.release.path)).toBe(c.release.lockReason);
   });
