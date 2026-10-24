@@ -1,6 +1,6 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { formatCount, formatDateTime } from '../../../../utils/formatters';
-import { retireBranchReconcileCheckout, reviewBranchReconcileCheckout } from '../../../../services/api';
+import { retireBranchReconcileCheckout, reviewBranchReconcileCheckout, refreshBranchReconcileInventory } from '../../../../services/api';
 
 const STATUS_LABELS = { drained: 'No remaining work in last scan', incomplete: 'Incomplete', running: 'Sweep running' };
 
@@ -9,6 +9,20 @@ const STATUS_LABELS = { drained: 'No remaining work in last scan', incomplete: '
 const isInventoriedCheckout = entry => Boolean(!entry.checkoutMissing && entry.path && entry.head && typeof entry.locked === 'boolean');
 const checkoutKey = (appId, entry) => `${appId}\0${entry.path}\0${entry.head}`;
 const NONE = new Set();
+
+function InventoryEntry({ appId, entry, onRetired }) {
+  return (
+    <li className="break-words border-t border-port-border pt-2">
+      <p className="text-gray-300">{entry.branch || (entry.detached ? 'Detached checkout' : entry.issue ? `Issue #${entry.issue}` : 'Repository scan')}: {entry.reason}</p>
+      {entry.path && <p className="break-all">{entry.path}</p>}
+      {(entry.checkoutMissing || entry.branchMissing) && <p>Original checkout or branch no longer exists. Its historical archive evidence is unresolved and retained separately from current local work.</p>}
+      {entry.head && <p className="break-all">HEAD: {entry.head}</p>}
+      {entry.locked && <p>Lock: {entry.lockReason || 'No reason recorded'}</p>}
+      {entry.managed === false && <p>Outside managed worktree roots</p>}
+      {appId !== 'null' && isInventoriedCheckout(entry) && <RetireCheckout key={JSON.stringify([appId, entry.path, entry.head, entry.branch, entry.locked, entry.lockReason, entry.reason])} appId={appId} entry={entry} onRetired={onRetired} />}
+    </li>
+  );
+}
 
 // The confirmation IS the scoped release: it names this row's path, HEAD,
 // branch and lock text, and the server refuses if any of them changed since.
@@ -89,37 +103,69 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
   // Hides a retired row at once. Scoped to the outcomes it was retired from:
   // the schedule event's fresh inventory is authoritative once it arrives.
   const [retired, setRetired] = useState({ source: outcomes, keys: NONE });
+  const [refreshed, setRefreshed] = useState({ source: outcomes, values: {} });
+  const [refreshStates, setRefreshStates] = useState({});
+  const pending = useRef(new Set());
   const retiredKeys = retired.source === outcomes ? retired.keys : NONE;
   if (!outcomes || !Object.keys(outcomes).length) return null;
   const markRetired = key => setRetired(current => ({
     source: outcomes, keys: new Set(current.source === outcomes ? current.keys : NONE).add(key),
   }));
+  const refresh = async appId => {
+    if (pending.current.has(appId)) return;
+    pending.current.add(appId);
+    setRefreshStates(current => ({ ...current, [appId]: { pending: true } }));
+    const result = await refreshBranchReconcileInventory(appId, { silent: true }).catch(err => {
+      setRefreshStates(current => ({ ...current, [appId]: { error: err?.message || 'Inventory refresh failed' } }));
+      return null;
+    });
+    pending.current.delete(appId);
+    if (!result) return;
+    if (!result.outcome || result.appId !== appId) {
+      setRefreshStates(current => ({ ...current, [appId]: { error: 'Refresh returned no matching inventory; previous inventory retained.' } }));
+      return;
+    }
+    setRefreshed(current => ({ source: outcomes, values: { ...(current.source === outcomes ? current.values : {}), [appId]: result.outcome } }));
+    setRetired(current => ({ source: outcomes, keys: new Set([...(current.source === outcomes ? current.keys : NONE)].filter(key => !key.startsWith(`${appId}\0`))) }));
+    setRefreshStates(current => ({ ...current, [appId]: {} }));
+  };
   return (
     <div className="mx-4 mb-3 space-y-2 text-xs">
-      {Object.entries(outcomes).map(([appId, outcome]) => {
-        const remaining = Array.isArray(outcome.remaining) ? outcome.remaining.filter(entry => !retiredKeys.has(checkoutKey(appId, entry))) : null;
+      {Object.entries(outcomes).map(([appId, storedOutcome]) => {
+        const outcome = (refreshed.source === outcomes && refreshed.values[appId]) || storedOutcome;
+        const recorded = Array.isArray(outcome.remaining) ? outcome.remaining.filter(entry => !retiredKeys.has(checkoutKey(appId, entry))) : null;
+        const historical = recorded?.filter(entry => entry.checkoutMissing || entry.branchMissing) || [];
+        const remaining = recorded?.filter(entry => !entry.checkoutMissing && !entry.branchMissing && entry.reason !== 'remote-branch-held') ?? null;
+        const remote = [...(outcome.remoteInventory?.reported || []), ...(recorded?.filter(entry => entry.reason === 'remote-branch-held') || [])];
         // Sweep interruptions and retirement can leave an incomplete outcome
         // with no recorded work. This does not establish a newly drained scan.
-        const incompleteEmptyInventory = outcome.status === 'incomplete' && outcome.observedAt && remaining?.length === 0;
+        const incompleteEmptyInventory = outcome.status === 'incomplete' && outcome.observedAt && remaining?.length === 0 && historical.length === 0;
         return (
           <details key={appId} className="rounded border border-port-border p-2">
             <summary className="cursor-pointer text-gray-300">
               {apps?.find(app => app.id === appId)?.name || (appId === 'null' ? 'Repository' : appId)}
               {' · '}{incompleteEmptyInventory ? 'No remaining recorded work' : STATUS_LABELS[outcome.status] || 'Outcome unavailable'}
               {remaining && ` · ${formatCount(remaining.length)} remaining`}
-              {remaining?.some(entry => entry.checkoutMissing) && ' · missing checkout evidence'}
+              {historical.length > 0 && ` · ${formatCount(historical.length)} unresolved archive records`}
             </summary>
             <div className="mt-2 space-y-2 text-gray-400">
               <p>{outcome.observedAt ? `Last inventory: ${formatDateTime(outcome.observedAt)}` : 'No readable inventory yet.'}</p>
+              {appId !== 'null' && <div className="space-y-1">
+                <button type="button" className="rounded border border-port-border px-2 py-1 disabled:opacity-50" disabled={refreshStates[appId]?.pending} onClick={() => refresh(appId)}>
+                  {refreshStates[appId]?.pending ? 'Refreshing inventory…' : 'Refresh inventory'}
+                </button>
+                <p>Rescan this repository without deleting checkouts or starting an AI agent. Missing archive evidence is retained.</p>
+                {refreshStates[appId]?.error && <p role="alert" className="break-words text-port-error">{refreshStates[appId].error}</p>}
+              </div>}
               {incompleteEmptyInventory && <p>Last sweep: Incomplete</p>}
               {outcome.reason && <p className="break-words">Reason: {outcome.reason}</p>}
               {outcome.nextAction && <p>{outcome.nextAction}</p>}
-              {outcome.remoteInventory?.reported?.length > 0 && (
+              {remote.length > 0 && (
                 <details>
-                  <summary className="cursor-pointer">Remote-only inventory · {formatCount(outcome.remoteInventory.reported.length)} informational</summary>
+                  <summary className="cursor-pointer">Remote-only inventory · {formatCount(remote.length)} informational</summary>
                   <p>Local cleanup status covers this machine’s branches and checkouts. Remote-only refs may belong to another instance.</p>
                   <ul className="max-h-48 overflow-y-auto">
-                    {outcome.remoteInventory.reported.map((entry, index) => <li key={index} className="break-all">
+                    {remote.map((entry, index) => <li key={index} className="break-all">
                       {typeof entry === 'string' ? entry : `${entry.branch}: ${entry.reason}`}
                     </li>)}
                   </ul>
@@ -127,18 +173,15 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
               )}
               {!remaining && <p>Remaining work is unknown.</p>}
               <ul className="space-y-2 max-h-64 overflow-y-auto">
-                {(remaining || []).map((entry, index) => (
-                  <li key={`${entry.path || entry.branch || entry.issue || entry.reason}:${index}`} className="break-words border-t border-port-border pt-2">
-                    <p className="text-gray-300">{entry.branch || (entry.detached ? 'Detached checkout' : entry.issue ? `Issue #${entry.issue}` : 'Repository scan')}: {entry.reason}</p>
-                    {entry.path && <p className="break-all">{entry.path}</p>}
-                    {entry.checkoutMissing && <p>Checkout no longer exists. This is a historical preservation obligation, not an extra worktree. Its archive receipt must be recovered or investigated before it can be cleared.</p>}
-                    {entry.head && <p className="break-all">HEAD: {entry.head}</p>}
-                    {entry.locked && <p>Lock: {entry.lockReason || 'No reason recorded'}</p>}
-                    {entry.managed === false && <p>Outside managed worktree roots</p>}
-                    {appId !== 'null' && isInventoriedCheckout(entry) && <RetireCheckout key={JSON.stringify([appId, entry.path, entry.head, entry.branch, entry.locked, entry.lockReason, entry.reason])} appId={appId} entry={entry} onRetired={markRetired} />}
-                  </li>
-                ))}
+                {(remaining || []).map((entry, index) => <InventoryEntry key={`${entry.path || entry.branch || entry.issue || entry.reason}:${index}`} appId={appId} entry={entry} onRetired={markRetired} />)}
               </ul>
+              {historical.length > 0 && <details>
+                <summary className="cursor-pointer">Archive history · {formatCount(historical.length)} unresolved</summary>
+                <p>These records describe missing originals, not current branches or checkouts. Refreshing does not verify their preservation or clear their evidence.</p>
+                <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">
+                  {historical.map((entry, index) => <InventoryEntry key={`${entry.path || entry.branch}:${index}`} appId={appId} entry={entry} onRetired={markRetired} />)}
+                </ul>
+              </details>}
               {(remaining || []).some(isInventoriedCheckout) && (
                 <p>Retiring a checkout is a scoped release of the exact row shown. It needs merged work, no live owner or manual handoff, and a verified archive of unique tracked, untracked and ignored content. Lock age, an absent process, and lock text never release a checkout on their own.</p>
               )}
