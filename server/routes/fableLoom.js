@@ -142,6 +142,11 @@ router.get('/:id/export/:jobId', asyncHandler(async (req, res) => {
   res.json(await getFableLoomExport(req.params.id, req.params.jobId));
 }));
 
+router.delete('/:id/export/:jobId', asyncHandler(async (req, res) => {
+  const { cancelFableLoomExport } = await import('../services/fableLoom/exports.js');
+  res.json(await cancelFableLoomExport(req.params.id, req.params.jobId));
+}));
+
 router.get('/:id/export/:jobId/download', asyncHandler(async (req, res) => {
   let artifact;
   let closed = false;

@@ -54,7 +54,8 @@ export const exportOptionsSchema = z.object({
   includeCharacters: z.boolean().default(false),
   includeVoice: z.boolean().default(false),
   allowDraft: z.boolean().default(false),
-  mediaProfile: z.string().min(1).max(40).default('source'),
+  mediaProfile: z.enum(['source', 'web-720p', 'web-1080p']).default('source'),
+  includeWebm: z.boolean().default(false),
 }).strict();
 
 // The loom's pinned play routing is the shared per-record LLM route pin
