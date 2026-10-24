@@ -1397,3 +1397,18 @@ it('keeps the runner transcript separate when no completion summary was saved', 
   await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
   expect(screen.getByText('exec: example tool output')).toBeInTheDocument();
 });
+
+it('keeps the current cleanup verdict primary and labels stale report and warnings as historical', async () => {
+  const current = { ...agent, result: { success: true, cleanupPending: true, warnings: ['Cleanup queued: old-internal-code'] },
+    metadata: { ...agent.metadata, taskSummary: 'Cleanup is queued with the checkout preserved.',
+      cleanupOutcome: { status: 'already-absent', reason: 'already-absent-preservation-unverified', committedIntegrationVerified: true } } };
+  api.getCosAgent.mockResolvedValue({ ...current, output: [] });
+  render(<MemoryRouter><AgentCard agent={current} completed /></MemoryRouter>);
+  expect(screen.getByText('Code merged.')).toBeInTheDocument();
+  expect(screen.getByText('The local worktree is already gone, but PortOS has not verified its backup yet.')).toBeInTheDocument();
+  expect(screen.getByText('Cleanup queued: old-internal-code').closest('details')).not.toHaveAttribute('open');
+  expect(screen.queryByText('Cleanup is queued with the checkout preserved.')).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  expect(await screen.findByText('Earlier agent report — current delivery and cleanup status shown above')).toBeInTheDocument();
+  expect(screen.getByText('Cleanup is queued with the checkout preserved.')).toBeInTheDocument();
+});
