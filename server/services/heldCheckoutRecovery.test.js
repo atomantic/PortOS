@@ -1166,8 +1166,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     let c;
     let createdAt;
     let prepared;
-    // Fixture construction and preview have their own 30-second hook budget;
-    // retirement plus independent reconstruction retain the test's 30 seconds.
+    let retired;
+    // Bound fixture preparation, retirement and independent proof separately;
+    // none of these real-I/O phases may borrow another phase's 30-second budget.
     beforeEach(async () => {
       c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
       await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
@@ -1179,9 +1180,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       expect(prepared.ok).toBe(true);
     });
 
-    it('admits an archive that the missing-checkout verifier can independently recover', async () => {
-      const retired = await c.confirm(prepared.review);
+    beforeEach(async () => {
+      retired = await c.confirm(prepared.review);
       expect(retired).toMatchObject({ ok: true, branchDeleted: true });
+    });
+
+    it('admits an archive that the missing-checkout verifier can independently recover', async () => {
       const manifest = JSON.parse(await readFile(join(retired.archiveDir, 'manifest.json'), 'utf8'));
       const capturedCount = manifest.captured.files.length + manifest.administration.files.length;
       expect(capturedCount).toBeGreaterThanOrEqual(990);
