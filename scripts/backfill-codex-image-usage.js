@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { publishAccountingFile } from '../server/services/imageRenderUsage.js';
 import { planImageRenderBackfill, applyImageRenderBackfill } from '../server/services/imageRenderBackfill.js';
 
@@ -24,7 +24,7 @@ export async function main(args) {
   return { dryRun: true, inventoryHash: plan.inventoryHash, coverage: plan.coverage, unknown: plan.unknown };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   main(process.argv.slice(2)).then(result => console.log(JSON.stringify(result, null, 2))).catch(err => {
     console.error(`❌ Codex image usage backfill failed: ${err.message}`);
     process.exitCode = 1;
