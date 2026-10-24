@@ -60,6 +60,37 @@ describe('planGrokUsageRepair', () => {
 });
 
 describe('Grok media recovery', () => {
+  it('bills one ACP invocation across partial updates without merging distinct calls', () => {
+    const updatesText = [
+      { toolCallId: 'image-1', name: 'image_edit', rawInput: { image: 'source.png' } },
+      { toolCallId: 'image-1', name: 'image_edit', status: 'in_progress' },
+      { toolCallId: 'image-1', status: 'completed' },
+      { toolCallId: 'video-1', name: 'image_to_video', rawInput: { duration: 10 } },
+      { toolCallId: 'video-1', status: 'completed' },
+    ].map(update => JSON.stringify({ params: { update: { sessionUpdate: 'tool_call_update', ...update } } })).join('\n');
+    const media = imagineEventsFromGrokSession({ updatesText, sessionId: 'acp', day: '2026-10-01' });
+    expect(media).toEqual([
+      expect.objectContaining({ id: 'session-image:acp:0', images: 1, inputImages: 1 }),
+      // Retain the old occurrence ordinal so a previous repair is not rebilled.
+      expect.objectContaining({ id: 'session-video:acp:2', videoSeconds: 10, inputImages: 1 }),
+    ]);
+    expect(planGrokUsageRepair({ media, repairIds: media.map(item => item.id) }).additions).toEqual([]);
+    const anonymous = JSON.stringify({ tool_calls: [{ name: 'image_gen' }, { name: 'image_gen' }] });
+    expect(imagineEventsFromGrokSession({ chatText: anonymous, sessionId: 'chat', day: '2026-10-01' })).toHaveLength(2);
+  });
+
+  it.each([null, '', '  ', 0, -1, 'invalid'])('uses estimated requested duration without positive delivery evidence (%s)', deliveredSec => {
+    expect(videoHistoryUsageEvents({
+      id: 'clip', modelId: 'grok', mode: 'image', duration: 10, deliveredSec, createdAt: '2026-10-03T00:00:00.000Z',
+    })[0]).toMatchObject({ videoSeconds: 10, source: 'estimate' });
+  });
+
+  it('uses measured positive delivered duration', () => {
+    expect(videoHistoryUsageEvents({
+      id: 'clip', modelId: 'grok', mode: 'image', duration: 10, deliveredSec: '5.5', createdAt: '2026-10-03T00:00:00.000Z',
+    })[0]).toMatchObject({ videoSeconds: 5.5, source: 'measured' });
+  });
+
   it('reads a gallery sidecar and a text-to-video history row', () => {
     expect(galleryImageUsageEvent({
       id: 'job-9', mode: 'grok', createdAt: '2026-10-02T03:04:05.000Z',
