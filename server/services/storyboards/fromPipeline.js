@@ -18,12 +18,14 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { STORYBOARD_LIMITS as L, STORYBOARD_PANEL_FRAMINGS } from '../../lib/storyboardVocabulary.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { storyboardRev } from '../../lib/storyboardFit.js';
+import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createStoryboard, getStoryboard, listStoryboards, mutateStoryboard } from './index.js';
 
 const FRAMINGS = new Set(STORYBOARD_PANEL_FRAMINGS);
 const SKETCH_KEY = /^sketch:[A-Za-z0-9-]{1,80}$/;
 
 const SHOT_SECONDS_MAX = 30;
+const queueBoardOpen = createRecordWriteQueue();
 
 const panelRev = (panel) => storyboardRev([panel.action, panel.framing, panel.seconds]);
 
@@ -66,6 +68,10 @@ async function linkedBoardId(issueId) {
 }
 
 export async function openStoryboardForPipelineIssue(issueId) {
+  return queueBoardOpen(issueId, () => openLinkedStoryboard(issueId));
+}
+
+async function openLinkedStoryboard(issueId) {
   const { getIssue } = await import('../pipeline/issues.js');
   const issue = await getIssue(issueId);
   const linked = await linkedBoardId(issue.id);
@@ -164,29 +170,33 @@ export async function updatePipelineShotsFromBoard(issueId, { shotId = null } = 
     .filter((panel) => (!shotId || panel.sourceShotId === shotId) && editedOnBoard(panel))
     .map((panel) => [shotKey(panel.sourceSceneId, panel.sourceShotId), panel]));
   let taken = new Map();
+  let updated = 0;
   const { issue: saved } = await updateStageWithLatest(issue.id, 'storyboards', (stage) => {
     assertStageUnlocked({ stages: { storyboards: stage } }, 'storyboards');
     taken = new Map();
+    updated = 0;
     const scenes = (Array.isArray(stage?.scenes) ? stage.scenes : []).map((scene) => {
       if (!Array.isArray(scene?.shots)) return scene;
       return {
         ...scene,
         shots: scene.shots.map((shot) => {
           const panel = panels.get(shotKey(scene.id, shot?.id));
-          const patch = panel ? panelShotPatch(panel, shot) : {};
-          if (!Object.keys(patch).length) return shot;
+          if (!panel) return shot;
           taken.set(panel.id, panelRev(panel));
+          const patch = panelShotPatch(panel, shot);
+          if (!Object.keys(patch).length) return shot;
+          updated++;
           return { ...shot, ...patch };
         }),
       };
     });
-    return taken.size ? { scenes } : {};
+    return updated ? { scenes } : {};
   });
   if (taken.size) {
     await mutateStoryboard(boardId, (draft) => {
       for (const panel of shotPanels(draft)) if (taken.has(panel.id)) panel.sourceRev = taken.get(panel.id);
     });
-    console.log(`🎬 Pipeline issue ${issue.id}: ${taken.size} shot(s) updated from storyboard ${boardId}`);
+    console.log(`🎬 Pipeline issue ${issue.id}: ${updated} shot(s) updated from storyboard ${boardId}`);
   }
-  return { updated: taken.size, issue: saved, ...(await pipelineStoryboardChanges(issue.id)) };
+  return { updated, issue: saved, ...(await pipelineStoryboardChanges(issue.id)) };
 }

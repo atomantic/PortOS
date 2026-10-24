@@ -6,10 +6,11 @@ const api = vi.hoisted(() => ({
   openStoryboardForPipelineIssue: vi.fn(),
   getPipelineStoryboardChanges: vi.fn(async () => ({ boardId: null, locked: false, changed: [] })),
   updatePipelineShotsFromBoard: vi.fn(),
+  updatePipelineIssue: vi.fn(),
 }));
 vi.mock('../../../services/api', () => {
   const rest = ['generatePipelineVisualImage', 'generatePipelineSceneVideo', 'generatePipelineShotStartFrame',
-    'refinePipelineSceneImagePrompt', 'generatePipelineSceneImagePrompts', 'updatePipelineIssue',
+    'refinePipelineSceneImagePrompt', 'generatePipelineSceneImagePrompts',
     'extractPipelineStoryboardScenes', 'createBlankSketch'];
   return { ...api, ...Object.fromEntries(rest.map((name) => [name, vi.fn()])) };
 });
@@ -105,5 +106,40 @@ describe('StoryboardsStage', () => {
     view.rerender(<MemoryRouter><StoryboardsStage issue={nextIssue} series={null} onStageUpdate={onStageUpdate} /></MemoryRouter>);
     await act(async () => { finishUpdate({ updated: 1, issue: withShot, boardId: 'sb-1', locked: false, changed: [] }); });
     expect(onStageUpdate).not.toHaveBeenCalled();
+  });
+
+  it('holds scene edits and saves while a storyboard update is pending', async () => {
+    const withShot = { ...issue, stages: { storyboards: { status: 'edited', scenes: [{ ...issue.stages.storyboards.scenes[0], shots: [{ id: 'shot-01', description: 'Wide of the lab', durationSeconds: 5 }] }] } } };
+    api.getPipelineStoryboardChanges.mockResolvedValueOnce({ boardId: 'sb-1', locked: false,
+      changed: [{ sceneId: 'scene-01', shotId: 'shot-01', panelId: 'panel-1', fields: ['description'] }] });
+    let finishUpdate;
+    api.updatePipelineShotsFromBoard.mockImplementationOnce(() => new Promise(resolve => { finishUpdate = resolve; }));
+    render(<MemoryRouter><StoryboardsStage issue={withShot} series={null} onStageUpdate={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }));
+    try {
+      expect(screen.getByDisplayValue('Wide of the lab')).toBeDisabled();
+      expect(screen.getByLabelText('Scene 1 slugline')).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Add scene' })).toBeDisabled();
+      fireEvent.blur(screen.getByDisplayValue('Wide of the lab'));
+      expect(api.updatePipelineIssue).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => { finishUpdate({ updated: 1, issue: withShot, boardId: 'sb-1', locked: false, changed: [] }); });
+    }
+    expect(screen.getByDisplayValue('Wide of the lab')).toBeEnabled();
+  });
+
+  it('does not leave the newly selected issue when an earlier Open request finishes', async () => {
+    let finishOpen;
+    api.openStoryboardForPipelineIssue.mockImplementationOnce(() => new Promise(resolve => { finishOpen = resolve; }));
+    const element = selectedIssue => <MemoryRouter><Routes>
+      <Route path="/" element={<StoryboardsStage issue={selectedIssue} series={null} onStageUpdate={vi.fn()} />} />
+      <Route path="/storyboards/:id" element={<p>Earlier issue storyboard</p>} />
+    </Routes></MemoryRouter>;
+    const view = render(element(issue));
+    fireEvent.click(screen.getByRole('button', { name: /Open in storyboard editor/ }));
+    view.rerender(element({ ...issue, id: 'iss-2' }));
+    await act(async () => { finishOpen({ boardId: 'sb-earlier', created: true }); });
+    expect(screen.queryByText('Earlier issue storyboard')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Open in storyboard editor/ })).toBeInTheDocument();
   });
 });

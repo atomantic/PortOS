@@ -120,4 +120,29 @@ describe('storyboard from a pipeline issue', () => {
     const res = await request(app).post('/api/storyboards/from-pipeline/iss-empty');
     expect([res.status, res.body.code]).toEqual([400, 'NO_SCENES']);
   });
+
+  it('acknowledges an edited panel already matching its shot before later stage edits', async () => {
+    seed('iss-equal', { scenes: [{ id: 'scene-equal', shots: [
+      { id: 'shot-equal', description: 'Original action', shotType: 'wide', durationSeconds: 5 },
+    ] }] });
+    const { boardId } = (await request(app).post('/api/storyboards/from-pipeline/iss-equal')).body;
+    const board = (await request(app).get(`/api/storyboards/${boardId}`)).body;
+    const panelId = board.beats[0].panels[0].id;
+    await request(app).patch(`/api/storyboards/${boardId}/panels/${panelId}`).send({ action: 'Matching edit' });
+    const shot = issues.get('iss-equal').stages.storyboards.scenes[0].shots[0];
+    shot.description = 'Matching edit';
+    const update = await request(app).post('/api/storyboards/pipeline/iss-equal/update-from-board').send({ shotId: shot.id });
+    expect(update.body).toMatchObject({ updated: 0, changed: [] });
+    shot.description = 'A newer stage edit';
+    const changes = await request(app).get('/api/storyboards/pipeline/iss-equal/changes');
+    expect(changes.body.changed).toEqual([]);
+  });
+
+  it('returns one linked board for simultaneous opens of the same issue', async () => {
+    seed('iss-concurrent', { scenes: [{ id: 'scene-concurrent', description: 'One scene' }] });
+    const opened = await Promise.all(Array.from({ length: 4 }, () => request(app).post('/api/storyboards/from-pipeline/iss-concurrent')));
+    expect(new Set(opened.map(result => result.body.boardId)).size).toBe(1);
+    expect(opened.filter(result => result.body.created)).toHaveLength(1);
+    expect(opened.map(result => result.status).sort()).toEqual([200, 200, 200, 201]);
+  });
 });
