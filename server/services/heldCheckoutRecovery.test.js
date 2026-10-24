@@ -8,6 +8,8 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes, truncate } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
+import { promisify } from 'node:util';
+import { execFile } from '../lib/childProcess.js';
 import { dirname, join } from 'path';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
@@ -130,13 +132,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
   }
   const archives = async () => (existsSync(heldCheckoutArchiveRoot(cosDir)) ? readdir(heldCheckoutArchiveRoot(cosDir)) : []);
 
-  async function historicalArchive() {
+  async function historicalArchive(prepare = async () => {}) {
     const path = join(external, 'historical');
     const branch = 'feature/historical';
     await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
     await writeFile(join(path, 'initial.txt'), 'staged historical work\n');
     await execGit(['add', 'initial.txt'], path);
     await writeFile(join(path, 'private.txt'), 'synthetic private bytes');
+    await prepare(path);
     const release = { path, branch, head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim(), locked: false, lockReason: null };
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
     const saved = await preserveMergedCheckout(repo, { ...release, branch: `refs/heads/${branch}` }, 'main', { cosDir: PATHS.cos });
@@ -401,6 +404,61 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     await writeFile(join(saved.archiveDir, 'files', 'private.txt'), 'corrupt archived evidence');
     expect(await findMissingCheckoutPreservation({ repoPath: repo, release: original })).toBeNull();
     expect(await getBranchReconcileOutcome('app-1')).toEqual(withoutObligation);
+  });
+
+  // A matching patch hash cannot detect bytes damaged before the old writer hashed them.
+  it.each(['compatible', 'split-index', 'damaged', 'omitted-patch', 'missing-index'])('independently reconstructs a legacy staged-only index: %s', async variant => {
+    let patch;
+    let originalEntries;
+    const { release, saved } = await historicalArchive(async path => {
+      await writeFile(join(path, 'staged-only.txt'), Buffer.concat([Buffer.from('café staged content\n'), Buffer.from([0xff, 0x0a])]));
+      await execGit(['add', 'staged-only.txt'], path);
+      if (variant === 'split-index') await execGit(['update-index', '--split-index'], path);
+      originalEntries = (await execGit(['-c', 'core.quotePath=true', 'ls-files', '--stage'], path)).stdout;
+      // Capture the original bytes independently of the legacy execGit text decoder.
+      patch = (await promisify(execFile)('git', ['diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], { cwd: path, encoding: 'buffer' })).stdout;
+      await rm(join(path, 'staged-only.txt'));
+    });
+    const manifestPath = join(saved.archiveDir, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    delete manifest.resourceContract;
+    if (variant === 'damaged') {
+      const split = patch.indexOf(Buffer.from('é')) + 1;
+      expect(split).toBeGreaterThan(0);
+      patch = Buffer.from(patch.subarray(0, split).toString('utf8') + patch.subarray(split).toString('utf8'));
+    }
+    await writeFile(join(saved.archiveDir, 'index.diff'), patch);
+    manifest.patchHashes.index = await sha256File(join(saved.archiveDir, 'index.diff'));
+    if (variant === 'omitted-patch') manifest.captured.indexDiff = false;
+    if (variant === 'missing-index') {
+      manifest.administration.files = manifest.administration.files.filter(file => file.path !== 'gitdir/index');
+      const { createHash } = await import('node:crypto');
+      manifest.administration.fingerprint = createHash('sha256').update(JSON.stringify({
+        files: manifest.administration.files.filter(file => file.path !== 'gitdir/locked'), symlinks: manifest.administration.symlinks,
+      })).digest('hex');
+    }
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const before = (await execGit(['show-ref'], repo)).stdout;
+    const outcome = await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [] });
+    if (['damaged', 'omitted-patch', 'missing-index'].includes(variant)) {
+      expect(outcome.retirementObligations).toEqual([expect.objectContaining({ ...release,
+        preservationEvidence: expect.objectContaining({ status: 'unresolved', nextAction: expect.stringContaining('backup'),
+          archives: expect.arrayContaining([expect.objectContaining({ reason: 'archive-index-reconstruction-failed' })]) }),
+      })]);
+      expect(outcome.recoveredPreservations).toEqual([]);
+    } else {
+      expect(outcome.retirementObligations, JSON.stringify(injected.proofFailures)).toEqual([]);
+      expect(outcome.recoveredPreservations).toContainEqual(expect.objectContaining({ archiveDir: saved.archiveDir, verified: true }));
+      const restored = join(scratch, 'legacy-restore.git');
+      await execGit(['init', '--bare', restored], scratch);
+      await execGit(['bundle', 'unbundle', join(saved.archiveDir, 'commits.bundle')], restored);
+      await execGit(['read-tree', release.head], restored);
+      await execGit(['apply', '--cached', join(saved.archiveDir, 'index.diff')], restored);
+      expect((await execGit(['-c', 'core.quotePath=true', 'ls-files', '--stage'], restored)).stdout).toBe(originalEntries);
+    }
+    expect(outcome.retired).toBeUndefined();
+    expect((await execGit(['show-ref'], repo)).stdout).toBe(before);
+    expect(existsSync(saved.archiveDir)).toBe(true);
   });
 
   it.each([false, true])('clears the historical diagnosis after recovery retries, with other holds=%s', async otherHolds => {
@@ -1104,27 +1162,41 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
   });
 
-  it('admits a near-boundary file-count archive that the missing-checkout verifier can independently recover', async () => {
-    const c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
-    await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
-    const directory = join(c.path, 'private-files');
-    await mkdir(directory);
-    await Promise.all(Array.from({ length: 980 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
-    const createdAt = new Date().toISOString();
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    const retired = await c.confirm(prepared.review);
-    expect(retired).toMatchObject({ ok: true, branchDeleted: true });
-    const manifest = JSON.parse(await readFile(join(retired.archiveDir, 'manifest.json'), 'utf8'));
-    const capturedCount = manifest.captured.files.length + manifest.administration.files.length;
-    expect(capturedCount).toBeGreaterThanOrEqual(990);
-    expect(capturedCount).toBeLessThanOrEqual(1000);
-    const before = await getBranchReconcileOutcome('app-1');
-    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
-    expect(proof, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`)
-      .toMatchObject({ archiveDir: retired.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
-    expect(await proof.recheck()).toBe(true);
-    expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+  describe('near-boundary file-count preservation', () => {
+    let c;
+    let createdAt;
+    let prepared;
+    let retired;
+    // Bound fixture preparation, retirement and independent proof separately;
+    // none of these real-I/O phases may borrow another phase's 30-second budget.
+    beforeEach(async () => {
+      c = await reviewedCheckout('file-count-admitted', { normalMerge: true });
+      await writeFile(join(c.path, '.gitignore'), 'ignored.txt\nlinked\nprivate-files/\n');
+      const directory = join(c.path, 'private-files');
+      await mkdir(directory);
+      await Promise.all(Array.from({ length: 980 }, (_, i) => writeFile(join(directory, `item-${i}`), 'retained ignored bytes\n')));
+      createdAt = new Date().toISOString();
+      prepared = await c.prepare();
+      expect(prepared.ok).toBe(true);
+    });
+
+    beforeEach(async () => {
+      retired = await c.confirm(prepared.review);
+      expect(retired).toMatchObject({ ok: true, branchDeleted: true });
+    });
+
+    it('admits an archive that the missing-checkout verifier can independently recover', async () => {
+      const manifest = JSON.parse(await readFile(join(retired.archiveDir, 'manifest.json'), 'utf8'));
+      const capturedCount = manifest.captured.files.length + manifest.administration.files.length;
+      expect(capturedCount).toBeGreaterThanOrEqual(990);
+      expect(capturedCount).toBeLessThanOrEqual(1000);
+      const before = await getBranchReconcileOutcome('app-1');
+      const proof = await findMissingCheckoutPreservation({ repoPath: repo, release: { ...c.release, createdAt } }, { cosDir });
+      expect(proof, `Standalone archive proof failures: ${JSON.stringify(injected.proofFailures)}`)
+        .toMatchObject({ archiveDir: retired.archiveDir, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(await proof.recheck()).toBe(true);
+      expect(await getBranchReconcileOutcome('app-1')).toEqual(before);
+    });
   });
 
   it.each([
