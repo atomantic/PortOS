@@ -510,7 +510,16 @@ async function retirementPolicy(repoPath, branch, opts, reviewIdentity = {}) {
       const scopes = [meta.worktreeBranch, meta.jiraBranch, meta.claimBranch, meta.branchCompletionPolicy?.branch,
         ...(Array.isArray(meta.claimBranches) ? meta.claimBranches : []),
         ...(Array.isArray(meta.claimReleasedBranches) ? meta.claimReleasedBranches : [])];
-      if (scopes.includes(branch) && isAbsolute(meta.workspacePath || '')) paths.add(meta.workspacePath);
+      if (scopes.includes(branch)) {
+        if (isAbsolute(meta.workspacePath || '')) paths.add(meta.workspacePath);
+        // Receipt capture canonicalizes filesystem names. Windows short names
+        // and other existing aliases need the same server-observed identity
+        // comparison as the current checkout, never textual guessing.
+        for (const row of Array.isArray(meta.completedCheckouts) ? meta.completedCheckouts : []) {
+          if (row?.version !== 2 || row.branch !== branch) continue;
+          for (const path of [row.repoPath, row.path]) if (isAbsolute(path || '')) paths.add(path);
+        }
+      }
     }
     // A failed identity read or excessive history cannot prove distinctness.
     // Missing paths resolve through their existing canonical ancestor, the same

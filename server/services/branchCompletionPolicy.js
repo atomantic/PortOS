@@ -151,6 +151,10 @@ function reviewedOrphanCheckout(policy, input) {
 // An orphan's captured generation may belong to a different checkout of the
 // same delivered head. It cannot transfer its cleanup obligation to an explicit
 // detached-copy review. Keep its result and original cleanup record unchanged.
+const sameReviewedPath = (a, b, input) => samePath(a, b)
+  || (typeof a === 'string' && typeof b === 'string' && Boolean(input.checkoutIdentities?.[a])
+    && input.checkoutIdentities[a] === input.checkoutIdentities[b]);
+
 function completedOrphanSibling(policy, input) {
   const agent = policy.agent;
   if (!/^[a-f0-9]{64}$/.test(input.detachedCheckoutIdentity || '')
@@ -158,9 +162,9 @@ function completedOrphanSibling(policy, input) {
     || (policy.tip && policy.tip !== input.tip) || agent.status !== 'completed' || agent.result?.orphaned !== true
     || agent.result.validationPassed === false || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE) return false;
   return agent.metadata?.completedCheckouts?.some(row => row.version === 2 && completedCheckoutReceiptValid(agent, row)
-    && samePath(row.repoPath, input.repoPath) && row.branch === input.branch && row.head === input.tip
-    && samePath(row.path, agent.metadata.workspacePath) && !samePath(row.path, input.checkoutPath)
-    && !samePath(row.path, input.repoPath) && row.incarnation?.pointer
+    && sameReviewedPath(row.repoPath, input.repoPath, input) && row.branch === input.branch && row.head === input.tip
+    && sameReviewedPath(row.path, agent.metadata.workspacePath, input) && !sameReviewedPath(row.path, input.checkoutPath, input)
+    && !sameReviewedPath(row.path, input.repoPath, input) && row.incarnation?.pointer
     && createHash('sha256').update(JSON.stringify(['dev', 'ino', 'birthtimeNs'].map(key => row.incarnation.pointer[key])))
       .digest('hex') !== input.detachedCheckoutIdentity) === true;
 }
