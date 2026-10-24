@@ -138,6 +138,7 @@ it('notifies clients when the worker fails', async () => {
   }));
   expect(updated).toHaveBeenCalledWith({});
   expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+  expect(applyAgyUsageRepair).toHaveBeenCalledTimes(1);
 });
 
 it('puts the Grok repair on the reconcile result and runs it once', async () => {
@@ -169,6 +170,7 @@ it('puts the Grok repair on the reconcile result and runs it once', async () => 
   }));
   expect(getHistoricalUsageBackfillStatus().grok.backupDir).toBeUndefined();
   expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+  expect(applyAgyUsageRepair).toHaveBeenCalledTimes(1);
 });
 
 it('keeps a transcript failure from dropping a Grok repair that already landed', async () => {
