@@ -784,7 +784,7 @@ export default function FableLoomStory({ view = 'graph' }) {
         />
       )}
 
-      {exportOpen && <LoomExportModal key={loom.id} loom={loom} onClose={() => setExportOpen(false)} />}
+      <LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} />
 
       <LoomSettingsDrawer
         open={settingsOpen}

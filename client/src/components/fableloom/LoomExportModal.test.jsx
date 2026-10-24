@@ -63,4 +63,28 @@ describe('story export interaction', () => {
     expect(screen.queryByText('error: Old loom')).toBeNull();
     expect(screen.getByText('Build ZIP')).toBeEnabled();
   });
+
+  it('retains the selected job when closed during admission, accepts same-loom edits and resumes completed downloads', async () => {
+    let resolveStart;
+    api.startLoomExport.mockReturnValueOnce(new Promise(resolve => { resolveStart = resolve; }));
+    const close = vi.fn();
+    const { rerender } = render(<LoomExportModal loom={loom} onClose={close} />);
+    await waitFor(() => expect(screen.getByText('Build ZIP')).toBeEnabled());
+    fireEvent.click(screen.getByText('Build ZIP'));
+    fireEvent.click(screen.getByText('Close'));
+    expect(close).toHaveBeenCalled();
+    const changed = { ...loom, name: 'Updated while admitting' };
+    rerender(<LoomExportModal loom={changed} open={false} onClose={close} />);
+    await act(async () => resolveStart({ jobId: 'selected' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    rerender(<LoomExportModal loom={changed} open onClose={close} />);
+    await screen.findByText(/selected: packing/);
+    expect(api.startLoomExport).toHaveBeenCalledTimes(1);
+    rerender(<LoomExportModal loom={changed} open={false} onClose={close} />);
+    await emit(snapshot('selected', 'completed', 2));
+    rerender(<LoomExportModal loom={changed} open onClose={close} />);
+    expect(screen.getByText('Download selected ZIP')).toBeEnabled();
+    await act(async () => {});
+  });
+
 });

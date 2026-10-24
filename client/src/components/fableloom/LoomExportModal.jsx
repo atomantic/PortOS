@@ -10,7 +10,7 @@ import { formatBytes, formatCount } from '../../utils/formatters.js';
 const gates = ['graph', 'outline', 'production', 'media', 'approval', 'cast'];
 const terminal = job => ['completed', 'failed', 'cancelled'].includes(job?.status);
 
-export default function LoomExportModal({ loom, onClose }) {
+export default function LoomExportModal({ loom, open = true, onClose }) {
   const [options, setOptions] = useState({ episodeIds: loom.episodes.map(e => e.id), includePlayer: true,
     includeCharacters: false, includeVoice: false, allowDraft: false, mediaProfile: 'source' });
   const [preflight, setPreflight] = useState(null);
@@ -20,22 +20,20 @@ export default function LoomExportModal({ loom, onClose }) {
   const [busy, setBusy] = useState(false);
   const mounted = useMounted();
   const identity = JSON.stringify([loom, options]);
-  const currentIdentity = useRef(identity);
-  currentIdentity.current = identity;
   const controller = useRef(null);
-  useSocketSubscription('fableloom', { onResubscribe: () => controller.current?.() });
+  useSocketSubscription('fableloom', { enabled: open || !!jobId, onResubscribe: () => controller.current?.() });
 
   useEffect(() => {
     let active = true;
     setPreflight(null);
     setError('');
-    if (options.episodeIds.length) {
+    if (open && options.episodeIds.length) {
       api.preflightLoomExport(loom.id, options, { silent: true }).then(result => {
         if (active) setPreflight({ identity, ...result });
       }).catch(err => { if (active) setError(err.message); });
     }
     return () => { active = false; };
-  }, [loom.id, identity, options]);
+  }, [loom.id, identity, options, open]);
 
   useEffect(() => {
     let active = true;
@@ -57,9 +55,8 @@ export default function LoomExportModal({ loom, onClose }) {
     if (busy || !preflight?.canBuild || preflight.identity !== identity) return;
     setBusy(true);
     setError('');
-    const startedIdentity = identity;
     await api.startLoomExport(loom.id, options, { silent: true }).then(result => {
-      if (mounted.current && currentIdentity.current === startedIdentity) setJobId(result.jobId);
+      if (mounted.current) setJobId(result.jobId);
     }).catch(err => { if (mounted.current) setError(err.message); });
     if (mounted.current) setBusy(false);
   };
@@ -73,7 +70,7 @@ export default function LoomExportModal({ loom, onClose }) {
   const checked = preflight?.identity === identity ? preflight : null;
   const findings = checked?.findings || [];
   const running = jobId && (!job || !terminal(job));
-  return <Modal open onClose={onClose} size="lg" ariaLabel="Export story" panelClassName="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
+  return <Modal open={open} onClose={onClose} size="lg" ariaLabel="Export story" panelClassName="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
     <div className="flex items-center justify-between gap-2"><h2 className="text-lg font-semibold">Export story</h2><button onClick={onClose}>Close</button></div>
     <p className="text-sm text-port-text-muted">Build a static ZIP for handoff. Draft assets are refused by default. Voice requires character opt-in and approved voice references.</p>
     <fieldset disabled={busy || !!running} className="space-y-3">
