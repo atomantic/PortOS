@@ -261,7 +261,7 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
 }
 
 export function sweepOrphanedTestProcesses(tmpRoot, { prefix = 'pvt-', now = Date.now(), probe = isOwnerAlive,
-  read = readTestProcesses, terminate = terminatePid } = {}) {
+  read = readTestProcesses, terminate = terminatePid, probePid = probeTestPid } = {}) {
   const snapshot = ownedSnapshot(tmpRoot, prefix, read);
   if (!snapshot) return { signaled: 0, inspected: false, preserved: new Set(), records: null };
   const preserved = new Set();
@@ -278,7 +278,8 @@ export function sweepOrphanedTestProcesses(tmpRoot, { prefix = 'pvt-', now = Dat
   }
   if (signaled) console.warn(`🧹 Requested termination of ${signaled} interrupted-run test processes; settlement pending`);
   const inspected = snapshot.records.every(record => snapshot.ancestors.has(record.pid) || record.terminal
-    || (record.ownershipComplete !== false && Array.isArray(record.args) && record.env && typeof record.env === 'object'));
+    || (record.ownershipComplete !== false && Array.isArray(record.args) && record.env && typeof record.env === 'object')
+    || probePid(record.pid) === false);
   return { signaled, inspected, preserved, records: snapshot.records };
 }
 
@@ -291,11 +292,11 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
     throw new Error('Owned temp prefix must be a nonempty name ending in a hyphen');
   }
   // No snapshot at all (reader down, or ancestry rejected) cannot prove a
-  // dead owner's children exited, so POSIX keeps those roots. An unrelated
-  // unreadable row inside an otherwise real snapshot must not do the same:
-  // dead owners are still reclaimed, while pid-less roots wait for a complete
-  // inventory. Preserved children and unsettled pending identities stay either way.
-  const { inspected, preserved, records } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate });
+  // dead owner's children exited, so POSIX keeps those roots. A live unreadable
+  // row may be an unobserved orphan using any root. Ancestors, terminal rows and
+  // missing PIDs can be excluded independently; other rows need ownership data.
+  // Preserved children and unsettled pending identities stay either way.
+  const { inspected, preserved, records } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate, probePid });
   if (!records && process.platform !== 'win32') return;
   let names;
   try {
@@ -313,7 +314,8 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
       const owner = readOwner(path);
       const alive = owner ? probe(owner) : null;
       if (alive === true) continue;
-      if (alive === false || (inspected && now - stat.mtimeMs > STALE_ROOT_AGE_MS)) {
+      if ((alive === false && (inspected || (process.platform === 'win32' && !records)))
+        || (inspected && now - stat.mtimeMs > STALE_ROOT_AGE_MS)) {
         rmSync(path, { recursive: true, force: true });
       }
     } catch {

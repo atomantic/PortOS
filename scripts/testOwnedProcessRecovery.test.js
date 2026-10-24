@@ -101,7 +101,7 @@ describe('test process ownership boundaries', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
-  it('reclaims a dead owner when an unrelated process row is incomplete', () => {
+  it.each(['live', 'gone'])('requires terminal proof before ignoring an incomplete %s process row', mode => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-unrelated-'));
     const dead = join(host, 'pvt-dead');
     const aged = join(host, 'pvt-aged');
@@ -118,9 +118,10 @@ describe('test process ownership boundaries', () => {
           { pid: 900003, ownershipComplete: false },
         ],
         probe: () => false,
+        probePid: () => mode === 'live',
       });
-      expect(existsSync(dead)).toBe(false);
-      expect(existsSync(aged)).toBe(true);
+      expect(existsSync(dead)).toBe(mode === 'live');
+      expect(existsSync(aged)).toBe(mode === 'live');
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
@@ -193,6 +194,34 @@ describe('test process ownership boundaries', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', () => {
+  it('retains files used by a live orphan whose ownership is unreadable in the first snapshot', async () => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-unreadable-child-'));
+    const root = join(host, 'pvt-owned');
+    mkdirSync(root);
+    writeFileSync(join(root, '.owner.pid'), '2147483646 0\n');
+    writeFileSync(join(root, 'active-evidence'), 'still in use');
+    const child = spawn(process.execPath, ['-e', "process.stdout.write('ready'); setInterval(()=>{},1000)"], {
+      env: { PATH: process.env.PATH, NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root }, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    try {
+      await new Promise((resolve, reject) => { child.once('error', reject); child.stdout.once('data', resolve); });
+      sweepStaleRunRoots(host, { probe: () => false, read: () => [
+        { pid: process.pid, ppid: process.ppid, args: [], env: {} },
+        { pid: process.ppid, ppid: 1, args: [], env: {} },
+        { pid: child.pid, ppid: 1, start: 'orphan', ownershipComplete: false },
+      ] });
+      expect(isProcessAlive(child.pid)).toBe(true);
+      expect(existsSync(join(root, 'active-evidence'))).toBe(true);
+    } finally {
+      await new Promise(resolve => {
+        if (child.exitCode !== null || child.signalCode !== null) return resolve();
+        child.once('close', resolve);
+        child.kill('SIGKILL');
+      });
+      rmSync(host, { recursive: true, force: true });
+    }
+  });
+
   it('reaps environment-only and script-path children while preserving unrelated and live-owner processes', async () => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-owned-'));
     const children = [];
