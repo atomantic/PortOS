@@ -584,6 +584,26 @@ describe('portable FableLoom export boundary', () => {
     await expectVoiceRefusal([wrongUniverse], 'EXPORT_VOICE_UNAPPROVED');
   });
 
+  it('keeps a voice-profile read failure path-free', async () => {
+    useCast();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    listVoiceProfiles.mockRejectedValue(Object.assign(
+      new Error('password at /example-private/voice.db'), { code: 'ECONNREFUSED' },
+    ));
+    const result = await terminal(await begin({
+      episodeIds: ['episode-one'], includeCharacters: true, includeVoice: true,
+    }));
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      code: 'EXPORT_VOICE_UNAVAILABLE', severity: 'error',
+    }));
+    expect(result).not.toHaveProperty('downloadUrl');
+    const visible = `${JSON.stringify(result)}\n${errorLog.mock.calls.flat().join('\n')}`;
+    expect(visible).not.toContain('/example-private/voice.db');
+    expect(visible).not.toContain('ECONNREFUSED');
+    expect(visible).not.toContain('password');
+    await expect(stat(join(PATHS.data, 'cache/fableloom-exports', jobIds.at(-1), 'package.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('keeps a voice-reference hash mismatch and an escaping symlink out of the package', async () => {
     useCast();
     const bytes = Buffer.from('approved-reference-audio');

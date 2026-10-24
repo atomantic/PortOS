@@ -269,6 +269,8 @@ async function build(job, snapshot, episodes, history, universe, signal) {
       try {
         profiles = await loadVoiceProfiles(universeId, character.id);
       } catch {
+        // The driver error can name a socket or query. The finding stays path-free.
+        console.error('❌ Approved voice profiles could not be read for a FableLoom export.');
         job.findings.push({
           gate: 'approval', severity: 'error', code: 'EXPORT_VOICE_UNAVAILABLE', characterId: character.id,
           message: `Approved voice profiles could not be read for character "${character.id}".`,
