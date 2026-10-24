@@ -451,6 +451,7 @@ export * from './gitCommitProbe.js';
 export * from './gitForge.js';
 export * from './gitOutputParsers.js';
 export * from './gitRemote.js';
+export * from './gitRepositoryIdentity.js';
 export * from './gitStaleLock.js';
 export * from './githubNotificationAudit.js';
 export * from './githubNotificationParse.js';
