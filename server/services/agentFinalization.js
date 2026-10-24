@@ -1306,9 +1306,11 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   let recoveryOwnershipLost = false;
   if (recoveryUpdate) {
     const update = await updateTask(task.id, recoveryUpdate, task.taskType || 'user', {
-      ...runtimeRecoveryFence(recoveryUpdate)[0],
       expectedStatus: task.status || null, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
       recoveryOwner: { id: agent.id, startedAt: agent.startedAt },
+      // Runtime resolution reloads the dispatch; guard its fresh snapshot rather
+      // than the older task initially supplied to this recovered run.
+      ...runtimeRecoveryFence(recoveryUpdate)[0],
     });
     if (update?.error) throw new Error(`Could not persist recovered task outcome: ${update.error}`);
     if (update?.statusChanged && recoveryUpdate.metadata?.blockedCategory === 'runtime-verification') {
@@ -2454,7 +2456,7 @@ async function resolveDeliveryRecoveryUpdate(task, outcome, agentId) {
 function runtimeRecoveryFence(update) {
   if (update.metadata?.blockedCategory !== 'runtime-verification') return [];
   const p = update.metadata.runtimeVerification;
-  return [{ expectedStatus: p.dispatchStatus, expectedMetadata: {
+  return [{ ...update.runtimeRecoveryContext, expectedStatus: p.dispatchStatus, expectedMetadata: {
     ...(p.dispatchStatus === 'blocked' ? { runtimeVerificationId: update.metadata.runtimeVerificationId } : {}),
     ...Object.fromEntries(['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, p.dispatch?.[key]])),
   } }];

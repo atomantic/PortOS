@@ -523,7 +523,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
         blockedCategory: 'runtime-verification', failureCount: 1, totalSpawnCount: 3,
         runtimeVerification: expect.objectContaining({ taskId: task.id, agentId: persistedAgent.id, integratedCommit: 'c'.repeat(40) }),
       }) }), 'internal', expect.objectContaining({ expectedStatus: 'in_progress' }));
-      if (mode === 'recovered') expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked' }), 'internal', {
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked' }), 'internal', {
         expectedStatus: 'in_progress',
         expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
         recoveryOwner: { id: persistedAgent.id, startedAt: persistedAgent.startedAt },
