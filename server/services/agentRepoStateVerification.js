@@ -52,7 +52,6 @@ import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { leavesPrForHuman, prStaysOpen, resolvePrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { probePrForBranch, probeChangeRequestState } from './prProbe.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
-import { ensureTaskThread } from './brainTaskThreads.js';
 import {
   REPO_STATE_ISSUES,
   REPO_STATE_SKIPS,
@@ -323,7 +322,8 @@ export async function verifyAgentRepoState(input) {
       const terminalSkips = [REPO_STATE_SKIPS.DISABLED, REPO_STATE_SKIPS.NOT_WORKTREE,
         REPO_STATE_SKIPS.PERSISTENT_WORKTREE, REPO_STATE_SKIPS.DISCARDED_WORKTREE, REPO_STATE_SKIPS.FAILED_RUN];
       const settled = cleanupPending ? result.verified
-        : outcomes.every(item => item.verified || terminalSkips.includes(item.skipReason)) || leavesPrForHuman(input.task);
+        : outcomes.every(item => item.verified || (terminalSkips.includes(item.skipReason)
+          && !(item.skipReason === REPO_STATE_SKIPS.FAILED_RUN && input.agentState?.metadata?.cleanupOutcome?.status === 'pending'))) || leavesPrForHuman(input.task);
       const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
       await recordRepoStateVerification(input.agentId, { status: settled ? 'completed' : 'pending',
         checkedAt: new Date().toISOString(), reasons: [...new Set(outcomes.map(item => item.skipReason).filter(Boolean))] });
@@ -365,17 +365,22 @@ async function resumeCompletionAudits() {
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  const { reconcileCleanupThreads } = await import('./brainTaskThreads.js');
+  await reconcileCleanupThreads({ dryRun: false }).catch(error => emitLog('warn', `Cleanup thread reconciliation deferred: ${error.message}`));
   const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
   await recoverLegacyDeliveryBlocks(agents);
   const lastAttempt = agent => [agent.metadata.repoStateVerification?.checkedAt, agent.metadata.completionCleanup?.updatedAt,
     agent.metadata.completionCleanup?.lastAttemptAt].filter(value => typeof value === 'string').sort().at(-1) || '';
   const pending = agents.filter(agent => agent.status === 'completed' && (agent.metadata?.repoStateVerification?.status === 'pending'
     || agent.metadata?.completionCleanup?.status === 'pending'))
+    .filter(agent => !agent.metadata.completionCleanup?.retryAt || Date.parse(agent.metadata.completionCleanup.retryAt) <= Date.now())
     .sort((a, b) => lastAttempt(a).localeCompare(lastAttempt(b)));
   let checked = 0;
   for (const original of pending.slice(0, COMPLETION_RECOVERY_BATCH_SIZE)) {
     const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
-    await recordCompletionCleanup(original.id || original.agentId, original.startedAt, { lastAttemptAt: new Date().toISOString() });
+    const attempt = (original.metadata.completionCleanup?.replayAttempts || 0) + 1;
+    await recordCompletionCleanup(original.id || original.agentId, original.startedAt, { lastAttemptAt: new Date().toISOString(),
+      replayAttempts: attempt, retryAt: new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempt - 1, 5))).toISOString() });
     const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
     const { getAgentRecord } = await import('./cosAgentLifecycle.js');
     await replayAgentCompletionCleanup(original).catch(error => emitLog('warn', `Completion cleanup deferred for ${original.id}: ${error.message}`, { agentId: original.id }));
@@ -652,6 +657,10 @@ async function settleDivergedBranch(ctx) {
     return held;
   }
   if (prepared.integrated) return retireIntegratedCheckout(ctx, prepared.retirement);
+  // A recovery successor cannot start a new lineage with a fresh budget.
+  if (ctx.task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
+    return ctx.blockWith('cleanup-successor-review-unresolved', { issues: ctx.issues, observed: ctx.observed });
+  }
   return fileDivergenceRecovery(ctx, prepared.retirement);
 }
 
@@ -705,16 +714,6 @@ async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWo
     emitLog('warn', `Failed to file repo-state recovery task for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
   });
-
-  if (recoveryTaskId) {
-    await ensureTaskThread({
-      taskId: recoveryTaskId,
-      title: `${RECOVERY_TASK_PREFIX} Finish incomplete cleanup for branch ${branchName}`,
-      nextAction: 'Let the recovery task finish, then verify the branch and worktree are clean.',
-      notes: issues.map(issue => issue.message).join('\n'),
-      priority: 'high',
-    }).catch(err => emitLog('warn', `Failed to create repo-state Brain thread for ${branchName}: ${err.message}`, { agentId, branchName }));
-  }
 
   return { verified: false, skipReason: null, issues, observed, recoveryTaskId };
 }
@@ -869,7 +868,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     ...(retirement ? { retirementReview: { appId, release: retirement.release, createdAt: retirement.createdAt } } : {}) },
     context,
     useWorktree: false,
-  }, 'user');
+  }, 'internal');
 
   await recordRepoCleanupRecovery(recoveryOwner, branchName, observation, { phase: created?.id ? 'dispatched' : 'blocked', taskId: created?.id || null });
   await recordCleanupOutcome(agentId, { status: 'pending', reason: 'cognitive-review-pending', branch: branchName, path: worktreePath, taskId: created?.id || null });

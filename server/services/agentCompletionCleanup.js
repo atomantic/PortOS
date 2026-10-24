@@ -48,7 +48,6 @@ import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from '
 import { PR_COMPLETIONS, PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
-import { ensureTaskThread } from './brainTaskThreads.js';
 import { acknowledgeCompletionSentinel, completionSentinelPresent } from './agentCompletionSentinel.js';
 
 const ROOT_DIR = PATHS.root;
@@ -693,18 +692,7 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
     if (currentAgent?.result?.deliveryRecoveryOwned === true) return;
 
     const appName = task?.metadata?.appName || task?.metadata?.app || 'PortOS';
-    void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).then(recoveryTask => {
-      const recoveryTaskId = recoveryTask?.id || recoveryTask;
-      return ensureTaskThread({
-        taskId: recoveryTaskId,
-        title: `Agent cleanup issue: ${appName}`,
-        nextAction: 'Let the recovery task resolve the cleanup warning, then verify the worktree.',
-        notes: cleanupWarnings.join('\n'),
-        priority: 'high',
-      });
-    }).catch(err => {
-      emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
-    });
+    await spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace);
   }
 }
 

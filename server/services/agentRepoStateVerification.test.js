@@ -71,7 +71,7 @@ vi.mock('./notifications.js', () => ({
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { HIGH: 'high' },
 }));
-vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}) }));
+vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}), reconcileCleanupThreads: vi.fn(async () => ({ candidates: 0, archived: 0 })) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
@@ -366,7 +366,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     ]);
     expect(addTask).toHaveBeenCalledTimes(1);
     const [payload, kind] = addTask.mock.calls[0];
-    expect(kind).toBe('user');
+    expect(kind).toBe('internal');
     expect(payload.description).toContain(BRANCH);
     expect(payload.isRecovery).toBe(true);
     expect(payload.metadata.recoveryOrigin).toMatchObject({ subsystem: 'repository-cleanup', attempt: 1, noProgress: false });
@@ -391,9 +391,18 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(recordBranchReconcileOutcome.mock.invocationCallOrder[0]).toBeLessThan(prepareInventoriedCheckoutRetirement.mock.invocationCallOrder[0]);
     expect(prepareInventoriedCheckoutRetirement.mock.invocationCallOrder[0]).toBeLessThan(addTask.mock.invocationCallOrder[0]);
     expect(payload.context).toContain(`touch ONLY ${BRANCH}`);
-    expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({
-      taskId: 'task-recovery-1', priority: 'high',
-    }));
+    expect(ensureTaskThread).not.toHaveBeenCalled();
+  });
+
+  it('retains a recovery successor divergence without starting another lineage', async () => {
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+    const result = await run({ task: task({ recoveryOrigin: { subsystem: 'repository-cleanup', parentAgentId: 'original' } }) });
+    expect(result).toMatchObject({ verified: false, skipReason: 'cleanup-successor-review-unresolved' });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'blocked', reason: 'cleanup-successor-review-unresolved' }));
   });
 
   it('retains a refused preview obligation and retries fresh evidence without dispatching unsafe cleanup', async () => {
@@ -836,6 +845,19 @@ describe('durable completion replay', () => {
     expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'pending' }));
     expect(addTask).not.toHaveBeenCalled();
   });
+  it('backs off repeated machine recovery across restarts without creating tasks', async () => {
+    const prior = archived();
+    prior.metadata.completionCleanup = { replayAttempts: 5, retryAt: new Date(Date.now() + 60_000).toISOString() };
+    readBranchCompletionPolicies.mockResolvedValue([prior]);
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0 });
+    prior.metadata.completionCleanup.retryAt = new Date(Date.now() - 1).toISOString();
+    getTaskById.mockResolvedValue(task());
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
+    const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
+    expect(recordCompletionCleanup).toHaveBeenCalledWith('agent-1', prior.startedAt, expect.objectContaining({ replayAttempts: 6, retryAt: expect.any(String) }));
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('keeps missing policy pending with an updated retry time rather than granting authority or starving other audits', async () => {
     getTaskById.mockResolvedValue(null);
     readBranchCompletionPolicies.mockResolvedValue([archived()]);
