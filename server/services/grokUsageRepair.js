@@ -200,7 +200,7 @@ export function planGrokUsageRepair({
   const additions = [];
   const notes = [];
   if (watermarkMs == null) {
-    notes.push('No interactive-scan watermark for grok. Long-context premiums were not added, because those base tokens may never have been recorded. Start PortOS once so the usage scan can write a watermark, then re-run.');
+    notes.push('Long-context premiums were not added because no Grok usage scan has run yet. The next scan records those turns with the premium included.');
   }
   for (const turn of turns) {
     const promptTokens = turn?.promptTokens ?? ((turn?.tokensIn || 0) + (turn?.cacheReadTokens || 0));
@@ -244,4 +244,16 @@ export function planGrokUsageRepair({
     });
   }
   return { additions, notes };
+}
+
+/** Counts for the reconcile status line. A text-to-video base still counts as an image. */
+export function summarizeGrokRepairAdditions(additions = []) {
+  const summary = { added: 0, turns: 0, images: 0, videos: 0 };
+  for (const item of additions) {
+    summary.added += 1;
+    if (String(item?.repairId || '').startsWith('turn:')) summary.turns += 1;
+    else if (item?.record?.videoSeconds) summary.videos += 1;
+    else summary.images += 1;
+  }
+  return summary;
 }

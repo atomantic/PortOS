@@ -24,6 +24,23 @@ import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods'
 
 const BACKFILL_EVENTS = ['usage-backfill:updated'];
 
+function joinAnd(parts) {
+  if (parts.length <= 1) return parts[0] || '';
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and ${parts.at(-1)}`;
+}
+
+/** What Reconcile now added to the Grok ledger. Absent until that job finishes. */
+function grokRepairLine(grok) {
+  if (!grok) return '';
+  const parts = [];
+  if (grok.turns) parts.push(`${formatCount(grok.turns)} long-context turn${grok.turns === 1 ? '' : 's'}`);
+  if (grok.images) parts.push(`${formatCount(grok.images)} image${grok.images === 1 ? '' : 's'}`);
+  if (grok.videos) parts.push(`${formatCount(grok.videos)} video${grok.videos === 1 ? '' : 's'}`);
+  const added = parts.length ? `Added ${joinAnd(parts)}.` : 'Grok usage was already recorded.';
+  return grok.note ? `${added} ${grok.note}` : added;
+}
+
 // A subscription is one account across every federated instance, but each
 // instance can only read its own CLI's panel. When peers have contributed a
 // reading, say so on the card and name them — the meters are the freshest
@@ -693,7 +710,7 @@ function InternalUsageMetrics() {
             Reconcile historical usage
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Re-read PortOS run transcripts to replace older token estimates. This changes recorded history but makes no provider calls.
+            Re-read saved transcripts and Grok sessions to replace older estimates and record Imagine and long-context charges. This changes recorded history but makes no provider calls.
           </p>
           {backfill?.status === 'running' && (
             <p className="text-xs text-port-accent mt-1" role="status">
@@ -704,6 +721,9 @@ function InternalUsageMetrics() {
             <p className="text-xs text-port-success mt-1" role="status">
               Corrected {backfill.corrected || 0} run{backfill.corrected === 1 ? '' : 's'}.
             </p>
+          )}
+          {backfill?.grok && (backfill.status === 'complete' || backfill.status === 'error') && (
+            <p className="text-xs text-port-success mt-1" role="status">{grokRepairLine(backfill.grok)}</p>
           )}
           {backfill?.status === 'error' && (
             <p className="text-xs text-port-error mt-1" role="alert">{backfill.error}</p>

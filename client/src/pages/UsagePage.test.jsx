@@ -138,6 +138,36 @@ describe('UsagePage historical reconciliation', () => {
     expect(api.startUsageBackfill).toHaveBeenCalledTimes(1);
   });
 
+  it('shows the Grok rows reconcile added', async () => {
+    api.startUsageBackfill.mockResolvedValue({
+      status: 'complete',
+      corrected: 2,
+      grok: {
+        added: 3,
+        turns: 1,
+        images: 2,
+        videos: 0,
+        backedUp: true,
+        note: 'Long-context premiums were not added because no Grok usage scan has run yet.',
+      },
+    });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile now' }));
+    expect(await screen.findByText('Corrected 2 runs.')).toBeInTheDocument();
+    expect(await screen.findByText('Added 1 long-context turn and 2 images. Long-context premiums were not added because no Grok usage scan has run yet.')).toBeInTheDocument();
+  });
+
+  it('says when reconcile found the Grok ledger already repaired', async () => {
+    api.startUsageBackfill.mockResolvedValue({
+      status: 'complete',
+      corrected: 0,
+      grok: { added: 0, turns: 0, images: 0, videos: 0, backedUp: false, note: null },
+    });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile now' }));
+    expect(await screen.findByText('Grok usage was already recorded.')).toBeInTheDocument();
+  });
+
   it('starts only from the explicit user action and reports completion', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
 

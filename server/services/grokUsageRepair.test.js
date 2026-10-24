@@ -4,6 +4,7 @@ import {
   grokTurnRepairId,
   imagineEventsFromGrokSession,
   planGrokUsageRepair,
+  summarizeGrokRepairAdditions,
   videoHistoryUsageEvents,
 } from './grokUsageRepair.js';
 
@@ -45,7 +46,8 @@ describe('planGrokUsageRepair', () => {
       watermarkMs: null,
     });
     expect(plan.additions.map((item) => item.repairId)).toEqual(['gallery:job-1']);
-    expect(plan.notes[0]).toMatch(/watermark/i);
+    expect(plan.notes[0]).toMatch(/no Grok usage scan has run yet/);
+    expect(summarizeGrokRepairAdditions(plan.additions)).toEqual({ added: 1, turns: 0, images: 1, videos: 0 });
   });
 
   it('skips a turn with no timestamp', () => {
