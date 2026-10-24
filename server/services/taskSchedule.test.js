@@ -3387,6 +3387,29 @@ describe('taskSchedule', () => {
 
       });
 
+      it('records a separate receipt when the same checkout tuple is recreated without an archive', async () => {
+        let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => structuredClone(saved));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const row = { branch: 'fix/example', path: '/example/checkout', head: 'a'.repeat(40),
+          checkoutIdentity: 'original', reason: 'retirement-review-pending' };
+        const outcome = () => saved.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [row] });
+        await recordHeldCheckoutRetirement('app-1', { ...row, branchDeleted: true });
+        expect(outcome().retirementObligations).toEqual([]);
+        const recreated = { ...row, checkoutIdentity: 'recreated' };
+        isCurrentRetirementCheckout.mockResolvedValueOnce(true);
+        await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
+        expect(outcome().retirementObligations).toEqual([expect.objectContaining({ checkoutIdentity: 'recreated' })]);
+        await recordHeldCheckoutRetirement('app-1', { ...recreated, branchDeleted: true });
+        expect(outcome().retirementObligations).toEqual([]);
+        expect(Object.values(outcome().retirementReceiptEvidence).map(entry => entry.checkoutIdentity).sort())
+          .toEqual(['original', 'recreated']);
+        expect(Object.keys(outcome().retirementReceiptIdentities)).toHaveLength(2);
+        await recordHeldCheckoutRetirement('app-1', { ...row, branchDeleted: true });
+        expect(Object.keys(outcome().retirementReceiptIdentities)).toHaveLength(2);
+      });
+
       it.each(['scan-first', 'receipt-first'])('does not resurrect a stale scan across serialized %s writes', async order => {
         let saved = { version: 2, tasks: {}, executions: {}, templates: [] };
         readJSONFile.mockImplementation(async () => structuredClone(saved));

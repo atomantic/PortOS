@@ -409,7 +409,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(payload.context).toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
     expect(payload.context).toContain('FULL returned review.comparison.localPatch and difference');
     expect(payload.context).toContain('"digest":"<review.digest>"');
-    expect(payload.context).toContain('archiveDir and branchDeleted:true');
+    expect(payload.context).toContain('ok:true and branchDeleted:true');
     expect(payload.context).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)|--remove-source-branch/);
     expect(payload.metadata.retirementReview).toEqual({ appId: 'demo-app', release: RELEASE, createdAt: CREATED_AT });
     expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({

@@ -17,7 +17,11 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  *   inFlight / wip correctly).
  */
 
-vi.mock('./heldCheckoutRecovery.js', () => ({ preserveSupersededCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null, recordRetirement: async () => {} })), preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })) }));
+vi.mock('./heldCheckoutRecovery.js', () => ({
+  preserveSupersededCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null, recordRetirement: async () => {} })),
+  preserveMergedCheckout: vi.fn(async () => ({ archiveDir: '/archive', verify: async () => null })),
+  releaseCheckoutWithoutArchive: vi.fn(async (_context, prepare) => prepare()),
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 
@@ -137,7 +141,7 @@ import {
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
-import { preserveMergedCheckout } from './heldCheckoutRecovery.js';
+import { preserveMergedCheckout, releaseCheckoutWithoutArchive } from './heldCheckoutRecovery.js';
 import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
 import { execGit } from '../lib/execGit.js';
@@ -155,8 +159,8 @@ async function expectArchiveOutsideOwnershipLock(retirement, fenced) {
   let started;
   let finish;
   const archiving = new Promise(resolve => { started = resolve; });
-  preserveMergedCheckout.mockImplementationOnce(() => new Promise(resolve => {
-    finish = () => resolve({ archiveDir: '/archive', verify: async () => null });
+  releaseCheckoutWithoutArchive.mockImplementationOnce((_context, prepare) => new Promise(resolve => {
+    finish = () => resolve(prepare());
     started();
   }));
   const pending = retirement();
@@ -184,6 +188,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
   preserveMergedCheckout.mockImplementation(async () => ({ archiveDir: '/archive', verify: async () => null }));
+  releaseCheckoutWithoutArchive.mockImplementation(async (_context, prepare) => prepare());
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
   worktreeMtimeMs = 0;
@@ -461,7 +466,7 @@ describe('cleanupMerged', () => {
     expect(res.cleaned).toEqual(['next/issue-2190']);
     expect(res.skipped).toEqual([]);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', worktreePath, expect.any(Object));
-    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'next/issue-2190', RETIRE_HEAD);
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'next/issue-2190', RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
   });
 
   it.each([
@@ -548,7 +553,7 @@ describe('cleanupMerged', () => {
     ]);
     expect(res.cleaned).toEqual(['claim/issue-1933']);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-1933', expect.any(Object));
-    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'claim/issue-1933', RETIRE_HEAD);
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'claim/issue-1933', RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
   });
 
   it('leaves global issue markers untouched after successful local deletion without asserting they exist', async () => {
@@ -599,7 +604,7 @@ describe('cleanupMerged', () => {
 
     expect(res.cleaned).toEqual(['claim/issue-']);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-', expect.any(Object));
-    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'claim/issue-', RETIRE_HEAD);
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'claim/issue-', RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
   });
 
   it('retains a recent unverified claim for snapshot-only callers without a time-based expiry', async () => {
@@ -1766,7 +1771,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
     expect(res.reapedSuperseded).toEqual([]);
     expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'branch-ref-changed-or-delete-failed' });
-    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD);
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
@@ -1783,7 +1788,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.superseded).toEqual([]);
     expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', WORKTREE, expect.anything());
-    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD);
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
   });
 
   it('backs up before it deletes anything', async () => {
@@ -1847,7 +1852,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
     expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', CLAIM_TREE, expect.anything());
-    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', CLAIM, RETIRE_HEAD);
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', CLAIM, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
     expect(res.reapedSuperseded).toEqual([CLAIM]);
     expect(res.superseded).toEqual([]);
   });
@@ -1905,7 +1910,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     const idle = await reapSupersededBranches('/repo', 'main', [entry(SUPERSEDED_UNMANAGED_IDLE_MS)], { activeAgentIds: new Set() });
     expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', TMP_TREE, expect.anything());
-    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD);
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
     expect(idle.reaped).toEqual([BRANCH]);
     expect(idle.held).toEqual([]);
   });
@@ -2086,7 +2091,8 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(res.cleaned).toContain(path);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
     expect(res.detachedWorktrees).toEqual([]);
-    expect(preserveMergedCheckout).toHaveBeenCalledWith('/repo', detachedTree(path), 'main');
+    expect(preserveMergedCheckout).not.toHaveBeenCalled();
+    expect(releaseCheckoutWithoutArchive).toHaveBeenCalled();
   });
 
   it('archives a detached tree outside the ownership lock while fencing its path', async () => {
@@ -2097,21 +2103,14 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(res.cleaned).toContain(path);
   });
 
-  it.each(['archive-failed', 'checkout-content-changed'])('preserves detached recovery evidence on %s', async reason => {
+  it('removes a clean detached tree without copying it', async () => {
     const path = '/repo/data/cos/worktrees/agent-1234abcd';
     wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
     stubGit();
-    if (reason === 'archive-failed') preserveMergedCheckout.mockRejectedValue(new Error('archive unavailable'));
-    else {
-      preserveMergedCheckout.mockResolvedValue({ archiveDir: '/archive', verify: async () => reason });
-      wt.forceRemoveWorktreeDir.mockImplementation(async (_repo, _path, options) => ({
-        removed: false, reason: await options.verifyRemoval(detachedTree(path)),
-      }));
-    }
     const result = await reconcile('/repo');
-    expect(result.cleaned).toEqual([]);
-    expect(result.detachedWorktrees).toContainEqual(expect.objectContaining({ path, reason }));
-    if (reason === 'archive-failed') expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(result.cleaned).toContain(path);
+    expect(preserveMergedCheckout).not.toHaveBeenCalled();
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalled();
   });
 
   it.each([
@@ -2203,7 +2202,7 @@ describe('reconcile — a worktree holding only PortOS runtime scratch', () => {
     expect(res.inFlight).toEqual([]);
     expect(res.cleaned).toContain(BRANCH);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', WORKTREE, expect.anything());
-    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD);
+    expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', BRANCH, RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
   });
 
   it('still holds a worktree carrying one real change alongside the scratch', async () => {
@@ -2419,7 +2418,7 @@ describe('desiredEndState', () => {
       '/checkouts/review',
       'Read the full returned comparison',
       '/checkouts/retire',
-      'Require ok:true, archiveDir and branchDeleted:true',
+      'Require ok:true and branchDeleted:true',
     ].map(step => instruction.indexOf(step));
     expect(cleanupSteps.every(position => position >= 0)).toBe(true);
     expect(cleanupSteps).toEqual([...cleanupSteps].sort((a, b) => a - b));
@@ -2852,7 +2851,7 @@ describe('orphaned remote branches', () => {
       expect(res.orphanRemotes.reaped).toEqual([]);
       expect(res.orphanRemotes.reported).toEqual([{ branch: 'left/behind', reason: 'reap-disabled' }]);
       // Only the local half of the cleanup ran.
-      expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'next/issue-1', RETIRE_HEAD);
+      expect(wt.deleteCompletedLocalBranch).toHaveBeenCalledWith('/repo', 'next/issue-1', RETIRE_HEAD, expect.objectContaining({ onRetired: expect.any(Function) }));
       expect(git.deleteBranch).not.toHaveBeenCalledWith('/repo', 'left/behind', { remote: true });
     });
 

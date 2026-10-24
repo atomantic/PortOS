@@ -295,7 +295,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('Do not retry a successful merge');
     expect(section).toContain('Leave the active managed local worktree and its branch to PortOS cleanup');
     expect(section).toContain('never checkout the default branch');
-    expect(section).toContain('missing remote ref, scratchpad copy or agent success is not an archive receipt');
+    expect(section).toContain('missing remote ref, scratchpad copy or agent success is not deletion authority');
     expect(section).toContain("service's exact-head lease");
     expect(section).toContain('Local teardown is API-only');
     expect(section).toContain('Only while the PR is still unmerged');

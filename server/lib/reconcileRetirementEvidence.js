@@ -7,9 +7,12 @@ export const sameRetirementObservation = (left, right) => sameRetirementCheckout
 export const isRetirementObligation = row => ['retirement-review-pending', 'retirement-receipt-unverified',
   'retirement-provenance-unverified'].includes(row?.reason);
 
+const retirementArchiveRecorded = row => row?.archiveDir == null
+  || (typeof row.archiveDir === 'string' && row.archiveDir.length > 0);
+
 export const matchingRetirementReceipts = (outcome, release) => [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})].filter(row =>
   sameRetirementCheckout(row, release) && row.branchDeleted === true
-  && typeof row.archiveDir === 'string' && row.archiveDir.length > 0
+  && retirementArchiveRecorded(row)
   && Number.isFinite(Date.parse(row.retiredAt)));
 
 export const hasRetirementReceipt = (outcome, release) => {
