@@ -289,6 +289,13 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
   res.json({ success: true, request });
 }));
 
+// Scan without changing Git state or scheduling provider work.
+router.post('/schedule/branch-reconcile/refresh', asyncHandler(async (req, res) => {
+  const { appId } = validateRequest(heldCheckoutReviewBodySchema.pick({ appId: true }).strict(), req.body);
+  const { refreshBranchReconcileInventory } = await import('../services/branchReconcileRefresh.js');
+  res.json(await refreshBranchReconcileInventory(appId));
+}));
+
 // Prepare evidence only; the separate confirmation binds its digest to fresh facts.
 router.post('/schedule/branch-reconcile/checkouts/review', asyncHandler(async (req, res) => {
   const { appId, prUrl, ...release } = validateRequest(heldCheckoutReviewBodySchema, req.body);

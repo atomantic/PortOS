@@ -893,6 +893,10 @@ export async function getBranchReconcileOutcome(appId) {
   return resolveExecutionRecord(schedule, 'branch-reconcile', appId)?.branchReconcileOutcome ?? null;
 }
 
+export async function getBranchReconcileInventory(appId) {
+  return reconcileMissingInventory(appId, await getBranchReconcileOutcome(appId));
+}
+
 const missingPreservationObligation = row => ({ ...row, reason: 'retirement-provenance-unverified' });
 const missingPreservationStatus = {
   status: 'incomplete', reason: 'retirement-provenance-unverified',
@@ -933,6 +937,7 @@ async function reconcileMissingInventory(appId, outcome) {
   return { ...current, remaining: current.remaining.map(row => ({
     ...row,
     ...(row.path && gone.some(missing => sameRetirementCheckout(missing, row)) && { checkoutMissing: true }),
+    ...(!row.path && row.branch && gone.some(missing => sameRetirementCheckout(missing, row)) && { branchMissing: true }),
   })) };
 }
 

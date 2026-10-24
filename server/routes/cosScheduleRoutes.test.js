@@ -9,6 +9,8 @@ const maintenance = vi.hoisted(() => ({ updateMaintenanceStep: vi.fn(), listMain
 vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
+const refreshInventory = vi.hoisted(() => vi.fn());
+vi.mock('../services/branchReconcileRefresh.js', () => ({ refreshBranchReconcileInventory: refreshInventory }));
 
 const initialized = vi.hoisted(() => ({ reviewInitializedCheckout: vi.fn(), retireInitializedCheckout: vi.fn(), initializedCheckoutStatus: vi.fn(), restoreInitializedCheckout: vi.fn(), verifyInitializedCheckoutArchive: vi.fn(), reviewInitializedCheckoutBranch: vi.fn(), retireInitializedCheckoutBranch: vi.fn(), reviewInitializedCheckoutMetadataRestore: vi.fn(), restoreInitializedCheckoutMetadata: vi.fn(), reviewInitializedCheckoutRestoredFinalization: vi.fn(), finalizeInitializedCheckoutRestored: vi.fn(), reviewInitializedCheckoutQuarantineResumption: vi.fn(), resumeInitializedCheckoutQuarantine: vi.fn() }));
 vi.mock('../services/initializedCheckoutRecovery.js', () => initialized);
@@ -45,6 +47,20 @@ describe('CoS Schedule Routes', () => {
     app.use(express.json());
     app.use('/api/cos', scheduleRoutes);
     vi.clearAllMocks();
+  });
+
+  it('refreshes only a validated managed app target', async () => {
+    const result = { appId: 'app-1', outcome: { status: 'drained', remaining: [] } };
+    refreshInventory.mockResolvedValue(result);
+    const response = await request(app).post('/api/cos/schedule/branch-reconcile/refresh').send({ appId: 'app-1' });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(result);
+    expect(refreshInventory).toHaveBeenCalledWith('app-1');
+    refreshInventory.mockClear();
+    for (const body of [{}, { appId: null }, { appId: 4 }, { appId: 'app-1', cleanup: true }]) {
+      expect((await request(app).post('/api/cos/schedule/branch-reconcile/refresh').send(body)).status).toBe(400);
+    }
+    expect(refreshInventory).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('validates retirement review evidence with optional observation identity: %s', async withObservation => {

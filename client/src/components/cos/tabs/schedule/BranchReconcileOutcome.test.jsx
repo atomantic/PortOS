@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const retire = vi.hoisted(() => vi.fn());
 const prepare = vi.hoisted(() => vi.fn());
-vi.mock('../../../../services/api', () => ({ retireBranchReconcileCheckout: retire, reviewBranchReconcileCheckout: prepare }));
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock('../../../../services/api', () => ({ retireBranchReconcileCheckout: retire, reviewBranchReconcileCheckout: prepare, refreshBranchReconcileInventory: refresh }));
 
 import BranchReconcileOutcome from './BranchReconcileOutcome';
 
@@ -21,7 +22,7 @@ function open() {
 }
 
 describe('BranchReconcileOutcome checkout retirement', () => {
-  beforeEach(() => { retire.mockReset(); prepare.mockReset(); });
+  beforeEach(() => { retire.mockReset(); prepare.mockReset(); refresh.mockReset(); });
 
   it('shows peer remote inventory separately from drained local work without offering retirement', () => {
     render(<BranchReconcileOutcome outcomes={{ 'app-1': { status: 'drained', remaining: [], remoteInventory: {
@@ -105,9 +106,54 @@ describe('BranchReconcileOutcome checkout retirement', () => {
   });
 });
 
- it('explains missing historical checkouts without offering retirement or claiming completion', () => {
+it('separates missing historical checkouts from current work without offering retirement or claiming completion', () => {
   render(<BranchReconcileOutcome outcomes={{ 'app-1': { status: 'incomplete', remaining: [{ ...held, checkoutMissing: true, reason: 'retirement-receipt-unverified' }] } }} apps={[{ id: 'app-1', name: 'Example App' }]} />);
-  expect(screen.getByText(/Example App · Incomplete · 1 remaining · missing checkout evidence/)).toBeTruthy();
-  expect(screen.getByText(/historical preservation obligation, not an extra worktree/)).toBeTruthy();
+  expect(screen.getByText(/Example App · Incomplete · 0 remaining · 1 unresolved archive records/)).toBeTruthy();
+  expect(screen.getByText('Archive history · 1 unresolved')).toBeTruthy();
+  expect(screen.getByText(/historical archive evidence is unresolved/)).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Archive and retire checkout…' })).toBeNull();
+});
+
+it('refreshes one app immediately, excludes legacy remote holds, and restores authoritative props on the next event', async () => {
+  let finish;
+  refresh.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const stale = { 'app-1': { status: 'incomplete', remaining: [held, { branch: 'peer-only', reason: 'remote-branch-held' }] } };
+  const { rerender } = render(<BranchReconcileOutcome outcomes={stale} apps={[]} />);
+  fireEvent.click(screen.getByText(/app-1 · Incomplete · 1 remaining/));
+  expect(screen.getByText('Remote-only inventory · 1 informational')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory' }));
+  expect(screen.getByRole('button', { name: 'Refreshing inventory…' })).toBeDisabled();
+  finish({ appId: 'app-1', outcome: { status: 'drained', remaining: [], observedAt: '2026-10-02T00:00:00Z' } });
+  expect(await screen.findByText(/app-1 · No remaining work in last scan · 0 remaining/)).toBeVisible();
+  expect(screen.queryByText('/example/held')).toBeNull();
+  expect(refresh).toHaveBeenCalledWith('app-1', { silent: true });
+  rerender(<BranchReconcileOutcome outcomes={{ ...stale }} apps={[]} />);
+  expect(screen.getByText('/example/held')).toBeVisible();
+});
+
+it('keeps the previous inventory and permits retry when a refresh fails', async () => {
+  refresh.mockRejectedValue(new Error('Repository scan unavailable'));
+  render(<BranchReconcileOutcome outcomes={outcomes} apps={[]} />);
+  fireEvent.click(screen.getByText(/app-1 · Incomplete/));
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Repository scan unavailable');
+  expect(screen.getByText('/example/held')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Refresh inventory' })).toBeEnabled();
+});
+
+it('ignores a late refresh from an older schedule generation without discarding another app’s new result', async () => {
+  let finishOld;
+  let finishNew;
+  refresh.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+    .mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
+  const source = { ...outcomes, 'app-2': outcomes['app-1'] };
+  const { rerender } = render(<BranchReconcileOutcome outcomes={source} apps={[]} />);
+  fireEvent.click(within(screen.getByText(/app-1 · Incomplete/).closest('details')).getByRole('button', { name: 'Refresh inventory', hidden: true }));
+  rerender(<BranchReconcileOutcome outcomes={{ ...source }} apps={[]} />);
+  fireEvent.click(within(screen.getByText(/app-2 · Incomplete/).closest('details')).getByRole('button', { name: 'Refresh inventory', hidden: true }));
+  await act(async () => finishNew({ appId: 'app-2', outcome: { status: 'drained', remaining: [] } }));
+  expect(screen.getByText(/app-2 · No remaining work in last scan/)).toBeInTheDocument();
+  await act(async () => finishOld({ appId: 'app-1', outcome: { status: 'drained', remaining: [] } }));
+  expect(screen.getByText(/app-2 · No remaining work in last scan/)).toBeInTheDocument();
+  expect(screen.getByText(/app-1 · Incomplete · 2 remaining/)).toBeInTheDocument();
 });

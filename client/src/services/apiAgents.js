@@ -391,6 +391,10 @@ export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => 
   body: JSON.stringify({ taskType, appId }),
   ...options
 });
+export const refreshBranchReconcileInventory = (appId, options = {}) => request('/cos/schedule/branch-reconcile/refresh', {
+  method: 'POST', body: JSON.stringify({ appId }), ...options
+});
+
 // Archive and retire one held checkout named exactly as the last branch-reconcile inventory reported it.
 export const retireBranchReconcileCheckout = ({ appId, path, head, branch = null, locked, lockReason = null, review }, options = {}) => request('/cos/schedule/branch-reconcile/checkouts/retire', {
   method: 'POST',
