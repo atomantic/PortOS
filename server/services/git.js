@@ -1167,7 +1167,7 @@ async function updateDefaultBranchAdmitted(dir) {
  * Sync branch - pull then push
  */
 export async function syncBranch(dir, branch = null) {
-  return withCheckoutMutation(dir, () => syncBranchAdmitted(dir, branch));
+  return withCheckoutMutation(dir, () => syncBranchAdmitted(dir, branch), { exclusive: true });
 }
 
 /** Reconcile local default-branch commits with origin without stashing or force-pushing. */
@@ -1230,37 +1230,48 @@ async function rebaseAndPushDefaultBranchAdmitted(dir) {
 
 async function syncBranchAdmitted(dir, branch = null) {
   if (branch) assertSafeRef(branch);
+  const refused = error => ({ success: false, pulled: false, pushed: false, error });
+  const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], dir)).stdout.trim();
+  if ([...SEQUENCER_STATE.map(([marker]) => marker), 'MERGE_HEAD', 'sequencer']
+    .some(marker => existsSync(join(gitDir, marker)))) {
+    return refused('Finish the Git operation already in progress before syncing.');
+  }
   const currentBranch = branch || await getBranch(dir);
-
-  // First pull with rebase
   const pullResult = await execGit(['pull', '--rebase', '--autostash', 'origin', currentBranch], dir, { ignoreExitCode: true });
-  const pullSuccess = !pullResult.stderr?.includes('fatal') && !pullResult.stderr?.includes('CONFLICT');
-
-  if (!pullSuccess) {
-    // A rebase killed mid-flight can leave the repo in a rebase-in-progress
-    // state, so a lock found here is cleared but NOT retried automatically —
-    // surface it so the next explicit sync starts from a lock-free repo.
-    const clearedLock = clearStaleGitLock(pullResult.stderr);
-    return {
-      success: false,
-      error: clearedLock
-        ? `Cleared an abandoned git lock (${clearedLock}) left by a killed git process. The pull did not complete — retry the sync now that the lock is clear.`
-        : (pullResult.stderr || 'Pull failed'),
-      pulled: false,
-      pushed: false
-    };
+  if (pullResult.exitCode !== 0 || pullResult.terminated) {
+    // Only a settled command can own recovery. An interrupted Git process may
+    // still have hooks/helpers running; leave its state for explicit recovery.
+    const settled = Number.isInteger(pullResult.exitCode) && !pullResult.terminated;
+    const clearedLock = settled && clearStaleGitLock(pullResult.stderr);
+    const aborted = settled && await rebaseInProgress(dir)
+      ? await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true }) : null;
+    const recovery = aborted && aborted.exitCode !== 0
+      ? ` Rebase abort failed: ${gitResultError(aborted, 'Inspect the checkout before retrying.')}` : '';
+    const error = clearedLock
+      ? `Cleared an abandoned git lock (${clearedLock}) left by a killed git process. The pull did not complete — inspect the checkout before retrying the sync.`
+      : gitResultError(pullResult, 'Pull failed; nothing was pushed.');
+    return refused(`${error}${recovery}`);
   }
 
-  // Then push
-  const pushResult = await execGit(['push', 'origin', currentBranch], dir, { ignoreExitCode: true });
-  const pushSuccess = !pushResult.stderr?.includes('rejected') && !pushResult.stderr?.includes('fatal');
+  // Autostash reapplication can conflict after Git has exited successfully.
+  // Preserve the conflicted files and Git's saved stash rather than aborting
+  // an already-completed rebase or attempting to apply/drop the stash again.
+  const unmerged = await execGit(['diff', '--name-only', '--diff-filter=U'], dir, { ignoreExitCode: true });
+  if (unmerged.exitCode !== 0) {
+    return refused(gitResultError(unmerged, 'Could not verify local changes after pulling; nothing was pushed.'));
+  }
+  if (unmerged.stdout.trim()) {
+    return refused(`Re-applying autostashed local changes conflicted in: ${unmerged.stdout.trim()}. Resolve the conflicts before syncing again; nothing was pushed.`);
+  }
 
+  const pushResult = await execGit(['push', 'origin', currentBranch], dir, { ignoreExitCode: true });
+  const pushSuccess = pushResult.exitCode === 0 && !pushResult.terminated;
   return {
     success: pushSuccess,
     pulled: true,
     pushed: pushSuccess,
-    output: pullResult.stdout + pushResult.stdout,
-    error: pushSuccess ? null : pushResult.stderr
+    output: gitResultOutput(pullResult) + gitResultOutput(pushResult),
+    error: pushSuccess ? null : gitResultError(pushResult, 'Push failed; local commits remain in the checkout.')
   };
 }
 
