@@ -2,13 +2,16 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   _getInternalSession,
   _resetHostedSessions,
+  HOSTED_SPEECH_ACK_TIMEOUT_MS,
   abortHostedTurn,
+  acknowledgeHostedSpeech,
   checkHostedSessionReadiness,
   createHostedSession,
   endHostedSession,
   getHostedSession,
   initialPhaseForNode,
   processHostedUtterance,
+  releaseHostedSpeechOutput,
   revalidateLiveConversationGate,
   startHostedListening,
   startHostedSessionSweep,
@@ -446,6 +449,291 @@ describe('fableLoom hostedSession', () => {
 
       abortHostedTurn(session.id);
       expect(getHostedSession(session.id).turnPhase).toBe('idle');
+    });
+  });
+
+  describe('speech completion before commitment', () => {
+    const move = {
+      action: 'move',
+      transitionId: 'tr-1',
+      narration: 'We shall enter the dark woods together.',
+      node: { id: 'node-2', title: 'Deep Woods' },
+    };
+
+    const connectOutput = (session, role = 'host') => {
+      const internal = _getInternalSession(session.id);
+      const socketId = `${role}-sock`;
+      if (role === 'audience') {
+        internal.audioTarget = 'audience';
+        internal.audienceSocketId = socketId;
+      } else {
+        internal.hostSocketId = socketId;
+      }
+      return socketId;
+    };
+
+    const speakMove = async (session, io) => {
+      await startHostedListening(session.id, { io });
+      vi.spyOn(weave, 'playTurn').mockResolvedValue(move);
+      return processHostedUtterance(session.id, { textMessage: 'enter the forest', io });
+    };
+
+    const transitions = (io) => io.emits.filter((event) => event.event === 'hosted:story:transition');
+
+    it('keeps the old node and refuses overlapping input until the designated output ends playback', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const io = makeIo();
+      const socketId = connectOutput(session, 'host');
+      const result = await speakMove(session, io);
+
+      expect(result).toMatchObject({ ok: true, awaitingSpeech: true });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'speaking' });
+      expect(transitions(io)).toHaveLength(0);
+      expect(io.emits.some((event) => event.event === 'hosted:turn:tts')).toBe(true);
+
+      await expect(processHostedUtterance(session.id, { textMessage: 'again', io }))
+        .resolves.toMatchObject({ dropped: true, reason: 'NOT_IN_LISTENING_PHASE' });
+      await expect(startHostedListening(session.id, { io })).rejects.toMatchObject({ code: 'TURN_IN_PROGRESS' });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-start');
+
+      await expect(acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'audience', socketId: 'audience-sock', status: 'ended', io,
+      })).resolves.toMatchObject({ accepted: false });
+      await expect(acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId: 'someone-else', status: 'ended', io,
+      })).resolves.toMatchObject({ accepted: false, reason: 'WRONG_SOCKET' });
+      await expect(acknowledgeHostedSpeech(session.id, {
+        turnId: '00000000-0000-4000-8000-000000000000', role: 'host', socketId, status: 'ended', io,
+      })).resolves.toMatchObject({ accepted: false, reason: 'STALE_TURN' });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'speaking' });
+
+      await expect(acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+      })).resolves.toMatchObject({ accepted: true, committed: true });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
+      expect(transitions(io)).toHaveLength(1);
+
+      await expect(acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+      })).resolves.toMatchObject({ accepted: false, reason: 'NO_PENDING_SPEECH' });
+      expect(transitions(io)).toHaveLength(1);
+    });
+
+    it('lets only the audience output commit when audio is aimed at the audience', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1', { audioTarget: 'audience' });
+      const io = makeIo();
+      const socketId = connectOutput(session, 'audience');
+      _getInternalSession(session.id).hostSocketId = 'host-sock';
+      const result = await speakMove(session, io);
+
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId: 'host-sock', status: 'ended', io,
+      });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'speaking' });
+
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'audience', socketId, status: 'ended', io,
+      });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-2');
+      expect(transitions(io)).toHaveLength(1);
+    });
+
+    it('commits immediately on the narration text when synthesis fails', async () => {
+      vi.mocked(tts.synthesize).mockResolvedValueOnce(null);
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const io = makeIo();
+      connectOutput(session, 'host');
+
+      const result = await speakMove(session, io);
+
+      expect(result.awaitingSpeech).toBeUndefined();
+      expect(io.emits.some((event) => event.event === 'hosted:turn:tts')).toBe(false);
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
+      expect(transitions(io)).toHaveLength(1);
+    });
+
+    it('drops the pending move on playback failure without a transition', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const io = makeIo();
+      const socketId = connectOutput(session, 'host');
+      const result = await speakMove(session, io);
+
+      await expect(acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'failed', io,
+      })).resolves.toMatchObject({ accepted: true, committed: false });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'idle' });
+      expect(transitions(io)).toHaveLength(0);
+
+      await startHostedListening(session.id, { io });
+      const next = await processHostedUtterance(session.id, { textMessage: 'enter the forest', io });
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+      });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'speaking' });
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: next.turnId, role: 'host', socketId, status: 'ended', io,
+      });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-2');
+      expect(transitions(io)).toHaveLength(1);
+    });
+
+    it('drops the pending move when acknowledgement times out, and a late ack cannot commit it', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const { session } = await createHostedSession('loom-1', 'ep-1');
+        const io = makeIo();
+        const socketId = connectOutput(session, 'host');
+        const result = await speakMove(session, io);
+        expect(result.awaitingSpeech).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(HOSTED_SPEECH_ACK_TIMEOUT_MS - 1);
+        expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'speaking' });
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'idle' });
+        expect(transitions(io)).toHaveLength(0);
+        await acknowledgeHostedSpeech(session.id, {
+          turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+        });
+        expect(getHostedSession(session.id).currentNodeId).toBe('node-start');
+        expect(transitions(io)).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not emit a transition when playback is aborted, the output disconnects, or the session ends', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const socketId = connectOutput(session, 'host');
+      const aborted = await speakMove(session, io);
+      abortHostedTurn(session.id, { reason: 'client_aborted', io });
+      expect(io.emits.filter((event) => event.event === 'hosted:turn:phase').at(-1)?.payload).toMatchObject({
+        phase: 'idle',
+        turnId: aborted.turnId,
+        reason: 'client_aborted',
+      });
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: aborted.turnId, role: 'host', socketId, status: 'ended', io,
+      });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'idle' });
+
+      const disconnected = await speakMove(session, io);
+      releaseHostedSpeechOutput(session.id, socketId, { io });
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: disconnected.turnId, role: 'host', socketId, status: 'ended', io,
+      });
+      expect(transitions(io)).toHaveLength(0);
+
+      const ending = await speakMove(session, io);
+      endHostedSession(session.id, { reason: 'host_ended', io });
+      expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+      expect(transitions(io)).toHaveLength(0);
+      expect(ending.awaitingSpeech).toBe(true);
+    });
+
+    it('drops a pending move when the host switches episodes', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const socketId = connectOutput(session, 'host');
+      const pending = await speakMove(session, io);
+
+      await switchHostedEpisode(session.id, 'ep-2', { io });
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: pending.turnId, role: 'host', socketId, status: 'ended', io,
+      });
+      expect(getHostedSession(session.id)).toMatchObject({
+        episodeId: 'ep-2', currentNodeId: 'node-ep2-start', turnPhase: 'idle',
+      });
+      expect(transitions(io)).toHaveLength(0);
+    });
+
+    it('refuses to commit after the scene generation changes during acknowledgement', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const socketId = connectOutput(session, 'host');
+      const result = await speakMove(session, io);
+      const gate = deferred();
+      records.getLoom.mockImplementationOnce(() => gate.promise);
+
+      const ack = acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+      });
+      _getInternalSession(session.id).sceneGeneration += 1;
+      gate.resolve(mockLoom);
+
+      await expect(ack).resolves.toMatchObject({ accepted: false, committed: false });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'idle' });
+      expect(transitions(io)).toHaveLength(0);
+    });
+
+    it('returns to listening without a transition when a stay finishes playback', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const io = makeIo();
+      const socketId = connectOutput(session, 'host');
+      await startHostedListening(session.id, { io });
+      vi.spyOn(weave, 'playTurn').mockResolvedValue({
+        action: 'stay',
+        narration: 'We hold the path.',
+        node: { id: 'node-start' },
+      });
+
+      const result = await processHostedUtterance(session.id, { textMessage: 'wait', io });
+
+      expect(result.awaitingSpeech).toBe(true);
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'speaking' });
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+      });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'listening' });
+      expect(transitions(io)).toHaveLength(0);
+    });
+
+    it('drops the pending move when the output reports playback aborted', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const io = makeIo();
+      const socketId = connectOutput(session, 'host');
+      const result = await speakMove(session, io);
+
+      await expect(acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'aborted', io,
+      })).resolves.toMatchObject({ accepted: true, committed: false });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'idle' });
+      expect(io.emits.some((event) => event.payload?.reason === 'playback_aborted')).toBe(true);
+      expect(transitions(io)).toHaveLength(0);
+    });
+
+    it('drops a pending move when the host leaves the scene before playback ends', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const io = makeIo();
+      const socketId = connectOutput(session, 'host');
+      const result = await speakMove(session, io);
+
+      await updateHostedSession(session.id, { currentNodeId: 'node-2' }, { io });
+
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
+      expect(transitions(io)).toHaveLength(0);
+      await acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+      });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-2');
+      expect(transitions(io)).toHaveLength(0);
+    });
+
+    it('does not commit a move whose transition disappeared before playback ended', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const socketId = connectOutput(session, 'host');
+      const result = await speakMove(session, io);
+      const changed = structuredClone(mockLoom);
+      changed.episodes[0].nodes[0].transitions = [];
+      records.getLoom.mockResolvedValue(changed);
+
+      await expect(acknowledgeHostedSpeech(session.id, {
+        turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
+      })).resolves.toMatchObject({ committed: false, reason: 'TRANSITION_UNAVAILABLE' });
+      expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-start', turnPhase: 'idle' });
+      expect(transitions(io)).toHaveLength(0);
     });
   });
 

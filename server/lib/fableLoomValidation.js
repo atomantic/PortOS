@@ -468,6 +468,11 @@ export const hostedPlaybackUpdateSchema = z.object({
   activeHoldIndex: hostedSessionPatchSchema.shape.activeHoldIndex,
 });
 
+export const hostedSpeechDoneSchema = z.object({
+  turnId: z.string().uuid(),
+  status: z.enum(['ended', 'failed', 'aborted']),
+});
+
 export const productionPlanSchema = z.object({
   mode: z.enum(FABLELOOM_PRODUCTION_MODES).optional(),
   imageMode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
