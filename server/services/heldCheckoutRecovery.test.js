@@ -1555,7 +1555,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await readFile(join(result.archiveDir, 'files/ignored.txt'), 'utf8')).toBe('ignored work\n');
   });
 
-  it.each(['original', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
+  it.each(['original', 'repo-alias', 'recreated-pointer', 'active-owner', 'different-pr-head', 'failed-validation'])('recovers a merged orphan only from its exact early generation: %s', async scenario => {
     const c = await reviewedCheckout(`orphan-${scenario}`);
     await execGit(['worktree', 'unlock', c.path], repo);
     Object.assign(c.release, { locked: false, lockReason: null });
@@ -1570,13 +1570,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     agent.completedAt = new Date().toISOString();
     agent.metadata.completedCheckouts = [];
     agent.metadata.checkoutCapture = { status: 'captured' };
+    if (scenario === 'repo-alias') injected.app.repoPath = `${repo}/../repo`;
     if (scenario === 'failed-validation') agent.result.validationPassed = false;
     injected.policies = [agent];
     const originalResult = structuredClone(agent.result);
     let recoveries = 0;
     c.opts.recoverCheckoutCapture = async (id, { retirement }) => {
       expect(id).toBe(agent.id);
-      expect(retirement).toMatchObject({ repoPath: repo, ...c.release });
+      expect(retirement).toMatchObject({ ...c.release, repoPath: realpathSync(repo), path: realpathSync(c.path) });
       const captured = await evidence.captureSeededCompletionCheckouts(agent);
       if (!captured) return false;
       agent.metadata.completedCheckouts = captured;
@@ -1592,14 +1593,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     if (scenario === 'different-pr-head') c.forge.prHead = 'b'.repeat(40);
     const prepared = await c.prepare();
     expect(agent.result).toEqual(originalResult);
-    if (scenario !== 'original') {
+    if (!['original', 'repo-alias'].includes(scenario)) {
       expect(prepared.ok).toBe(false);
       expect(await registered(c.path)).toBe(true);
       expect(await archives()).toEqual([]);
       expect(recoveries).toBe(0);
       return;
     }
-    expect(prepared).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedExecution: true }] } } });
+    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true, review: { policy: { policies: [{ success: false, orphanedExecution: true }] } } });
     const receipt = agent.metadata.completedCheckouts[0];
     expect(receipt).toMatchObject({ version: 2, head: c.release.head });
     expect(evidence.completedCheckoutReceiptValid(agent, receipt)).toBe(true);

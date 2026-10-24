@@ -22,7 +22,7 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
 import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
 import { realpathSync, constants } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { lstat, stat, readlink, readdir, opendir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
+import { lstat, stat, realpath, readlink, readdir, opendir, readFile, chmod, open, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, relative, sep } from 'node:path';
@@ -589,6 +589,10 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
     const forge = await (opts.readForge || readRetirementForgeEvidence)(app.repoPath, release.branch, prUrl,
       { forgeAccount: app.forgeAccount ?? null }).catch(() => null);
     if (forge?.prUrl === prUrl && forge.prHead === release.head) {
+      const [repoPath, checkoutPath] = await Promise.all([
+        realpath(app.repoPath).catch(() => null), realpath(release.path).catch(() => null),
+      ]);
+      if (!repoPath || !checkoutPath) return prepared;
       const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
       const policies = await (opts.readPolicies || (() => readBranchCompletionPolicies({ repairIndex: false })))().catch(() => null);
       const retry = opts.recoverCheckoutCapture || (await import('./cosAgentLifecycle.js')).retryCompletionCheckoutCapture;
@@ -598,8 +602,8 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
         const knownPr = meta.branchCompletionPolicy?.prUrl || meta.reviewLoopMergeTarget?.url;
         if (agent.status !== 'completed' || agent.result?.orphaned !== true || agent.result.validationPassed === false
           || knownPr !== prUrl || meta.checkoutCapture?.status !== 'captured' || meta.completedCheckouts?.length !== 0
-          || !meta.checkoutSeeds?.some(seed => seed.repoPath === app.repoPath && seed.branch === release.branch && seed.path === release.path)) continue;
-        recovered = await retry(agent.id || agent.agentId, { retirement: { repoPath: app.repoPath, ...release } }).catch(() => false) || recovered;
+          || !meta.checkoutSeeds?.some(seed => seed.repoPath === repoPath && seed.branch === release.branch && seed.path === checkoutPath)) continue;
+        recovered = await retry(agent.id || agent.agentId, { retirement: { ...release, repoPath, path: checkoutPath } }).catch(() => false) || recovered;
       }
       if (recovered) prepared = await review();
     }
