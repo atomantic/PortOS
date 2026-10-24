@@ -272,7 +272,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // panel's `sourceSceneId`, which "Use as scene art" sends art back through.
   // v6 = a `source` of kind `pipeline` (a Series Pipeline issue) and a
   // panel's `sourceShotId`; a v5 peer would drop both.
-  storyboards: 6,
+  // v7 = a panel's `sourceRev` (what its pipeline shot last took from it, so
+  // only a panel edited since reads as changed); a v6 peer would drop it.
+  storyboards: 7,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

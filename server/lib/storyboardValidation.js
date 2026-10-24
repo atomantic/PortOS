@@ -155,6 +155,11 @@ export const storyboardFitSchema = z.object({
     .refine((starts) => Object.keys(starts).length <= L.beats, { message: `At most ${L.beats} picked starts` }).optional(),
 }).strict();
 
+// Update a pipeline issue's shots from its board: every edited panel, or one shot's.
+export const storyboardPipelineUpdateSchema = z.object({
+  shotId: z.string().trim().min(1).max(80).optional(),
+}).strict();
+
 // Make storyboard from this FableLoom path: the transition ids picked at forks.
 export const storyboardFromFableLoomSchema = z.object({
   via: z.array(z.string().min(1).max(128)).max(500).default([]),

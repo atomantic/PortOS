@@ -10,7 +10,7 @@ import { validateRequest } from '../lib/validation.js';
 import {
   storyboardBeatCreateSchema, storyboardBeatUpdateSchema, storyboardCreateSchema, storyboardMoveSchema,
   storyboardPanelCreateSchema, storyboardPanelMoveSchema, storyboardPanelNodeUpdateSchema, storyboardPanelUpdateSchema,
-  storyboardBeatsAddSchema, storyboardFitSchema, storyboardFromFableLoomSchema, storyboardVideoStartSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
+  storyboardBeatsAddSchema, storyboardFitSchema, storyboardFromFableLoomSchema, storyboardPipelineUpdateSchema, storyboardVideoStartSchema, storyboardPlotExtractSchema, storyboardRecipeSchema, storyboardSavedRecipeSchema, storyboardTakeCreateSchema, storyboardUpdateSchema,
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
@@ -23,7 +23,7 @@ import {
 import { fitMusicVideoToStoryboard, updateShotFromPanel, sendShotStillToPanel } from '../services/storyboards/fitMusicVideo.js';
 import { makeStoryboardFromMusicVideo } from '../services/storyboards/fromMusicVideo.js';
 import { makeStoryboardFromFableLoom } from '../services/storyboards/fromFableLoom.js';
-import { openStoryboardForPipelineIssue } from '../services/storyboards/fromPipeline.js';
+import { openStoryboardForPipelineIssue, pipelineStoryboardChanges, updatePipelineShotsFromBoard } from '../services/storyboards/fromPipeline.js';
 import { sendPanelArtToSource } from '../services/storyboards/sourceArt.js';
 import { startVideoFromStoryboard } from '../services/storyboards/toVideo.js';
 import { addBeats, extractBeats } from '../services/storyboards/plot.js';
@@ -54,6 +54,14 @@ router.post('/from-fableloom/:loomId/:episodeId', asyncHandler(async (req, res) 
 router.post('/from-pipeline/:issueId', asyncHandler(async (req, res) => {
   const result = await openStoryboardForPipelineIssue(req.params.issueId);
   res.status(result.created ? 201 : 200).json(result);
+}));
+
+// The linked board's edits waiting for the pipeline stage, and Update that copies them to the shots.
+router.get('/pipeline/:issueId/changes', asyncHandler(async (req, res) => {
+  res.json(await pipelineStoryboardChanges(req.params.issueId));
+}));
+router.post('/pipeline/:issueId/update-from-board', asyncHandler(async (req, res) => {
+  res.json(await updatePipelineShotsFromBoard(req.params.issueId, validateRequest(storyboardPipelineUpdateSchema, req.body ?? {})));
 }));
 
 // Fit to song: write the video's shots from its linked board, as previewed.
