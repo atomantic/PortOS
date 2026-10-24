@@ -79,7 +79,7 @@ describe('owned stage group settlement', () => {
       wait: async ms => { elapsed += ms; },
       inspect: group => { expect(group).toBe(pgid); return `${pgid}:Z`; },
     });
-    expect(result.settled).toBe(true);
+    expect(result).toEqual({ settled: true, lingered: true });
     expect(calls).toEqual([[-pgid, 'SIGKILL'], [-pgid, 0], [-pgid, 0]]);
     expect(elapsed).toBe(25);
   });
@@ -790,7 +790,7 @@ describe('pregate hidden-content invocation', () => {
     expect(alive).toBe(false);
     // Later stages are not fixtures here; only the scan stage's outcome matters.
     expect(result.stdout).toContain('hidden-content scan passed');
-    expect(result.stderr).toContain('Stage "hidden-content scan" exited with processes still running in its group; killed them.');
+    expect(result.stderr).toContain('Stage "hidden-content scan" exited before its process group settled; verified group exit.');
   });
 
   // #12833: a stage's exit status is its only verdict; a failing provisioning

@@ -560,9 +560,9 @@ async function cancelStage(stage, child, closed, signal) {
 }
 
 /** Bounded diagnostic only: ps is never evidence that an owned group is absent. */
-function describeStageGroup(pgid) {
+function describeStageGroup(pgid, timeoutMs) {
   const result = spawnSync('ps', ['-A', '-o', 'pid=,pgid=,stat='], {
-    encoding: 'utf8', timeout: 1000, maxBuffer: 1024 * 1024,
+    encoding: 'utf8', timeout: Math.min(1000, timeoutMs), maxBuffer: 1024 * 1024,
   });
   if (result.error || result.status !== 0) return `unavailable (${result.error?.code ?? result.status ?? result.signal ?? 'unknown'})`;
   const members = result.stdout.split('\n').map(line => line.trim().split(/\s+/))
@@ -583,23 +583,26 @@ export async function sweepStageGroup(pgid, {
   kill = process.kill, now = Date.now, wait = delay, inspect = describeStageGroup,
 } = {}) {
   const deadline = now() + STAGE_SETTLE_MS;
+  const membership = () => inspect(pgid, Math.max(1, deadline - now()));
   for (let attempt = 0; ; attempt += 1) {
     try {
       kill(-pgid, 'SIGKILL');
     } catch (error) {
       if (error.code === 'ESRCH') return { settled: true, lingered: attempt > 0 };
       const refusal = `group kill failed (${error.code ?? 'unknown'})`;
-      if (error.code !== 'EPERM') return { settled: false, reason: `${refusal}; pgid=${pgid}; members=${inspect(pgid)}` };
+      if (error.code !== 'EPERM') return { settled: false, reason: `${refusal}; pgid=${pgid}; members=${membership()}` };
       let members;
+      let lingered = attempt > 0;
       for (;;) {
         let probe = 'present';
         try {
           kill(-pgid, 0);
         } catch (probeError) {
-          if (probeError.code === 'ESRCH') return { settled: true, lingered: attempt > 0 };
+          if (probeError.code === 'ESRCH') return { settled: true, lingered };
           probe = probeError.code ?? 'unknown';
         }
-        members ??= inspect(pgid);
+        lingered = true;
+        members ??= membership();
         if (!['present', 'EPERM'].includes(probe) || now() >= deadline) {
           return { settled: false, reason: `${refusal}; pgid=${pgid}; probe=${probe}; members=${members}` };
         }
@@ -637,7 +640,7 @@ async function runStage(stage, owner, { repoRoot = REPO_ROOT } = {}) {
   if (cancellation) return { ...outcome, pid: child.pid, interrupted, ...await cancellation };
   if (IS_WIN32 || !child.pid) return { ...outcome, pid: child.pid };
   const sweep = await sweepStageGroup(child.pid);
-  if (sweep.lingered) writeSync(2, `⚠️ Stage "${stage.name}" exited with processes still running in its group; killed them.\n`);
+  if (sweep.lingered) writeSync(2, `⚠️ Stage "${stage.name}" exited before its process group settled; verified group exit.\n`);
   return { ...outcome, pid: child.pid, ...(sweep.settled ? {} : { unsettled: sweep.reason }) };
 }
 
