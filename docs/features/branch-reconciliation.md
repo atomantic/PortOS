@@ -68,6 +68,32 @@ immediately before removal; if that recheck refuses, the original lock is
 restored. A retired row leaves the inventory and appears under *Recently
 retired* with its archive path; only the next sweep can report convergence.
 
+### Explicit delivery reviews
+
+`POST /api/cos/schedule/branch-reconcile/checkouts/review` accepts the exact
+inventory tuple and `prUrl`. A detached checkout may name its merged PR only
+when its HEAD exactly equals the published PR head. The published branch's
+saved completion policy and live owners still apply. Retirement preserves the
+detached checkout and records checkout-only completion; it never deletes the
+published branch.
+
+Sometimes a completed local branch was delivered through a replacement PR
+instead of its original tip. For that case, add `kind: "source-supersession"`
+to the review request and name the replacement merged PR. The server verifies
+the same repository and default branch, refuses an open delivery for the
+original branch, and binds both original and replacement heads plus current
+source differences. This does not claim that the original commits were merged.
+Inspect the original unique patch and its current replacement before accepting;
+wanted unfinished work still needs delivery. Unknown/active owners, failed or
+manual-handoff completion policies, and changed evidence remain holds.
+
+Confirm through `checkouts/retire` with the same inventory tuple and
+`review: { prUrl, digest, kind: "source-supersession", acceptSuperseded: true }`.
+Explicit acceptance is required even when the affected file bytes now match.
+The existing full archive, private Git proof, ownership/content rechecks and
+persisted receipt remain prerequisites to removal. Initialized checkouts retain
+their separate workflow; this mode does not bypass its preservation guards.
+
 ### Held archive work budgets
 
 Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse preservation before removal.

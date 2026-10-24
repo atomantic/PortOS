@@ -3030,9 +3030,10 @@ export const heldCheckoutRetireBodySchema = z.object({
     prUrl: z.string().url(),
     digest: z.string().regex(/^[a-f0-9]{64}$/),
     acceptSuperseded: z.boolean(),
+    kind: z.literal('source-supersession').optional(),
   }).optional(),
 });
-export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url() });
+export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url(), kind: z.literal('source-supersession').optional() });
 export const initializedCheckoutRetireBodySchema = heldCheckoutRetireBodySchema.extend({
   review: heldCheckoutRetireBodySchema.shape.review.unwrap(),
 }).strict();
