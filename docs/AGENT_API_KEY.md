@@ -109,7 +109,11 @@ node <portos-root>/scripts/portos-api.js post /api/cos/merge-admission/external 
 The app must already exist in the local app registry. The server verifies its
 origin and the checkout's real Git common directory, separate linked checkout,
 branch, identity, local review receipt, live same-repository open PR, head and
-base branch/SHA. An active/uncertain CoS owner, checkout lock, retirement fence, changed
+base branch/SHA. The base SHA is the live `refs/heads/<baseBranch>` commit,
+not GitHub's historical PR `baseRefOid`. Acquire and check read that ref with
+the PR's repository, base branch and head through the app's authorized forge
+transport; a moved or missing ref withholds admission until guards are rerun.
+An active/uncertain CoS owner, checkout lock, retirement fence, changed
 proof or unreadable state withholds admission. Fork PRs and detached/primary
 checkouts are outside this bounded flow. Repository keys are shared with CoS
 parents and the pending-merge sweep, so all three contend on the same lease;

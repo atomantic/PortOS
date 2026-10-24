@@ -9,7 +9,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 
-const fixture = vi.hoisted(() => ({ state: null, disk: null, trusted: true, failSave: false, apps: {}, prs: {}, peers: [], beforeForge: null }));
+const fixture = vi.hoisted(() => ({ state: null, disk: null, trusted: true, failSave: false, apps: {}, prs: {}, refs: {}, peers: [], beforeForge: null }));
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-external-admission-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('../services/cosState.js', () => ({
@@ -23,8 +23,14 @@ vi.mock('../services/cosState.js', () => ({
 }));
 vi.mock('../services/apps.js', () => ({ getAppById: async id => fixture.apps[id] ?? null }));
 vi.mock('../services/github.js', () => ({ execGh: async args => {
-  await fixture.beforeForge?.(args[args.indexOf('--repo') + 1]);
-  return JSON.stringify(fixture.prs[args[args.indexOf('--repo') + 1]] ?? null);
+  const fields = Object.fromEntries(args.filter((_, index) => ['-f', '-F'].includes(args[index - 1]))
+    .map(field => { const split = field.indexOf('='); return [field.slice(0, split), field.slice(split + 1)]; }));
+  const repository = `${args[args.indexOf('--hostname') + 1]}/${fields.owner}/${fields.name}`;
+  await fixture.beforeForge?.(repository);
+  const ref = fixture.refs[repository];
+  return JSON.stringify({ data: { repository: { nameWithOwner: `${fields.owner}/${fields.name}`,
+    pullRequest: Number(fields.number) === 7 ? fixture.prs[repository] : null,
+    ref: ref && `${ref.prefix}${ref.name}` === fields.baseRef ? ref : null } } });
 } }));
 vi.mock('../services/forgeExecOptions.js', () => ({ resolveForgeExecOptions: async cwd => ({ cwd, env: {} }) }));
 vi.mock('../services/instanceIdentity.js', () => ({ loadData: async () => ({ peers: fixture.peers }) }));
@@ -88,17 +94,42 @@ afterAll(cleanup);
 beforeEach(async () => {
   fixture.trusted = true; fixture.failSave = false; fixture.peers = []; fixture.beforeForge = null;
   fixture.state = { agents: {}, mergeAdmissions: {} }; persist();
-  fixture.apps = {}; fixture.prs = {};
+  fixture.apps = {}; fixture.prs = {}; fixture.refs = {};
   for (const repo of [example, other]) {
     const { input } = repo;
     fixture.apps[input.appId] = { id: input.appId, repoPath: repo.repoPath };
     fixture.prs[repo.key] = { url: input.prUrl, number: 7, state: 'OPEN', isDraft: false, isCrossRepository: false,
-      headRefName: 'feature', headRefOid: input.headSha, baseRefName: 'main', baseRefOid: input.baseSha };
+      headRefName: 'feature', headRefOid: input.headSha, baseRefName: 'main', baseRefOid: 'a'.repeat(40) };
+    fixture.refs[repo.key] = { prefix: 'refs/heads/', name: 'main', target: { __typename: 'Commit', oid: input.baseSha } };
     await writeFile(repo.reviewFile, `REVIEW_STATUS=clean\nREVIEW_HEAD=${input.headSha}\n`);
   }
 });
 
 describe('outside merge admission through the authenticated HTTP boundary', () => {
+  it('fences the checked live base independently of the historical PR base on acquire and check', async () => {
+    const historicalBase = fixture.prs[example.key].baseRefOid;
+    expect(historicalBase).not.toBe(example.input.baseSha);
+    expect((await acquire({ ...example, input: { ...example.input, baseSha: historicalBase } })).body)
+      .toMatchObject({ admitted: false, reason: 'external-pr-changed' });
+    expect(fixture.state.mergeAdmissions).toEqual({});
+    const { body: granted } = await acquire();
+    expect(granted).toMatchObject({ admitted: true, baseSha: example.input.baseSha, baseBranch: 'main' });
+    expect((await check(granted.token)).body.admitted).toBe(true);
+    fixture.refs[example.key].target.oid = 'f'.repeat(40);
+    expect((await check(granted.token)).body).toMatchObject({ admitted: false, reason: 'external-pr-changed' });
+    expect((await release(granted.token)).body.released).toBe(true);
+    expect((await acquire()).body).toMatchObject({ admitted: false, reason: 'external-pr-changed' });
+  });
+
+  it.each(['deleted-ref', 'non-commit', 'head', 'repository'])('refuses acquisition with a %s forge target', async mode => {
+    if (mode === 'deleted-ref') fixture.refs[example.key] = null;
+    if (mode === 'non-commit') fixture.refs[example.key].target.__typename = 'Tag';
+    if (mode === 'head') fixture.prs[example.key].headRefOid = 'f'.repeat(40);
+    if (mode === 'repository') fixture.prs[example.key].url = other.input.prUrl;
+    expect((await acquire()).body).toMatchObject({ admitted: false, reason: 'external-pr-changed' });
+    expect(fixture.state.mergeAdmissions).toEqual({});
+  });
+
   it('binds a real operator credential and separate run secret without creating CoS agents', async () => {
     const granted = await acquire();
     expect(granted.status).toBe(200);
@@ -157,7 +188,7 @@ describe('outside merge admission through the authenticated HTTP boundary', () =
     const { body: granted } = await acquire();
     expect(granted.admitted).toBe(true);
     if (mode === 'head') fixture.prs[example.key].headRefOid = 'f'.repeat(40);
-    if (mode === 'base') fixture.prs[example.key].baseRefOid = 'f'.repeat(40);
+    if (mode === 'base') fixture.refs[example.key].target.oid = 'f'.repeat(40);
     if (mode === 'base-branch') fixture.prs[example.key].baseRefName = 'release';
     if (mode === 'repository') fixture.apps.repo.repoPath = other.repoPath;
     if (mode === 'review') await writeFile(example.reviewFile, `REVIEW_STATUS=clean\nREVIEW_HEAD=${'f'.repeat(40)}\n`);

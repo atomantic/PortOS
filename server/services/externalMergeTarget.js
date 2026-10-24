@@ -11,6 +11,13 @@ import { readReviewEvidence } from './mergeReviewEvidence.js';
 const refused = reason => ({ reason });
 const canonical = path => typeof path === 'string' && isAbsolute(path) ? realpath(path).catch(() => null) : null;
 const gitValue = async (path, args) => (await execGit(args, path, { timeout: 10000 }).catch(() => null))?.stdout?.trim();
+const EXTERNAL_MERGE_QUERY = `query($owner:String!,$name:String!,$number:Int!,$baseRef:String!){
+  repository(owner:$owner,name:$name){
+    nameWithOwner
+    pullRequest(number:$number){url number state isDraft isCrossRepository headRefName headRefOid baseRefName}
+    ref(qualifiedName:$baseRef){prefix name target{__typename oid}}
+  }
+}`;
 
 export async function inspectExternalMergeCheckout(input, agents) {
   const [{ getAppById }, { repositoryKey }] = await Promise.all([import('./apps.js'), import('./cosMergeAdmission.js')]);
@@ -86,15 +93,25 @@ export async function inspectExternalMergeTarget(input, agents) {
   const pr = parsePullRequestUrl(input.prUrl);
   const [{ execGh }, { resolveForgeExecOptions }] = await Promise.all([import('./github.js'), import('./forgeExecOptions.js')]);
   const options = await resolveForgeExecOptions(repoPath, { forgeAccount: app.forgeAccount });
-  const raw = await execGh(['pr', 'view', String(pr.number), '--repo', `${pr.host}/${pr.owner}/${pr.repo}`,
-    '--json', 'url,number,state,isDraft,isCrossRepository,headRefName,headRefOid,baseRefName,baseRefOid'],
+  // baseRefOid is the PR's historical base, not the branch guards checked.
+  // Read the exact base ref alongside the PR identity on every acquire/check.
+  const raw = await execGh(['api', 'graphql', '--hostname', pr.host,
+    '-f', `query=${EXTERNAL_MERGE_QUERY}`, '-f', `owner=${pr.owner}`, '-f', `name=${pr.repo}`,
+    '-F', `number=${pr.number}`, '-f', `baseRef=refs/heads/${input.baseBranch}`],
   10000, options).catch(() => null);
-  const live = safeJSONParse(raw, null);
+  const response = safeJSONParse(raw, null);
+  const repo = response?.data?.repository;
+  const live = repo?.pullRequest;
+  const base = repo?.ref;
   const actual = parsePullRequestUrl(live?.url);
-  if (!actual || repositoryKey({ host: actual.host, fullName: `${actual.owner}/${actual.repo}` }) !== repository
+  if (response?.errors?.length || !actual
+    || repositoryKey({ host: pr.host, fullName: repo?.nameWithOwner }) !== repository
+    || repositoryKey({ host: actual.host, fullName: `${actual.owner}/${actual.repo}` }) !== repository
     || actual.number !== pr.number || live.number !== pr.number || live.state !== 'OPEN'
     || live.isDraft !== false || live.isCrossRepository !== false || live.headRefName !== branch
-    || live.headRefOid !== head || live.baseRefOid !== input.baseSha || live.baseRefName !== input.baseBranch || live.baseRefName === branch) {
+    || live.headRefOid !== head || live.baseRefName !== input.baseBranch || live.baseRefName === branch
+    || base?.prefix !== 'refs/heads/' || base.name !== live.baseRefName
+    || base.target?.__typename !== 'Commit' || base.target.oid !== input.baseSha) {
     return refused('external-pr-changed');
   }
   return { repository, target: { ...target, prUrl: live.url } };
