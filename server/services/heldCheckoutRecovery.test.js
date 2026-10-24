@@ -5,7 +5,7 @@
  * its lock and its branch as found.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
+import { cp, mkdtemp, mkdir, rm, rename, writeFile, readFile, readdir, readlink, symlink, utimes, truncate, chmod, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -709,7 +709,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await writeFile(join(tree, 'eol.txt'), 'one\r\ntwo\r\n');
     } });
     // Only the index holds this file once its working copy is gone.
-    await writeFile(join(path, 'staged-only.txt'), `staged work\n${'界'.repeat(100000)}\n`);
+    await writeFile(join(path, 'staged-only.txt'), Buffer.concat([Buffer.from(`staged work\n${'界'.repeat(100000)}\n`), Buffer.from([0xff, 10])]));
     await execGit(['add', 'staged-only.txt'], path);
     const stagedBlob = (await execGit(['rev-parse', ':staged-only.txt'], path)).stdout.trim();
     await rm(join(path, 'staged-only.txt'));
@@ -932,6 +932,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     expect(await lockText(release.path)).toBe('synthetic external owner');
     expect(existsSync(join(path, 'nested', '.git'))).toBe(true);
     expect(await archives()).toEqual([]);
+  });
+
+  it.skipIf(!SYMLINKS)('preserves the checkout when a link target cannot be represented losslessly in archive metadata', async () => {
+    const { path, release } = await heldCheckout('opaque-link', { branch: 'feature/opaque-link' });
+    const target = Buffer.from([0xff]);
+    await symlink(target, join(path, 'opaque-link'));
+
+    expect(await retire(release)).toMatchObject({ ok: false, reason: 'archive-failed' });
+    expect(await readlink(join(path, 'opaque-link'), { encoding: 'buffer' })).toEqual(target);
+    expect(await lockText(path)).toBe('synthetic external owner');
+    expect(await registered(path)).toBe(true);
+    expect(await archives()).toEqual([]);
+    expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
   });
 
   // #12682: archive I/O ran inside the shared ownership lock and starved every

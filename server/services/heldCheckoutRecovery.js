@@ -119,10 +119,11 @@ async function archiveCopy(source, destination, expectedBytes, work) {
   await chmod(destination, mode);
 }
 
-function validateArchiveEntries(snapshot, work) {
+function validateArchiveEntries(snapshot, work, accountMetadata = true) {
   const paths = new Set();
   for (const entries of [snapshot.files, snapshot.symlinks, snapshot.gitlinks || []]) for (const entry of entries) {
-    work.add(entry);
+    if (accountMetadata) work.add(entry);
+    else work.check();
     if (typeof entry.path !== 'string' || !entry.path || (sep === '\\' && entry.path.includes('\\')) || isAbsolute(entry.path)
       || entry.path.split('/').some(part => !part || part === '.' || part === '..') || paths.has(entry.path)) {
       throw new Error('archive-file-proof-invalid');
@@ -410,7 +411,13 @@ const archiveLimitRefusal = error => {
 
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
 const zLines = (stdout) => (stdout || '').split('\0').filter(Boolean);
-const git = (args, cwd) => execGit(args, cwd, { maxBuffer: GIT_OUTPUT_BYTES }).then(r => r.stdout || '');
+const archiveText = bytes => {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) throw new Error('archive metadata is not lossless UTF-8');
+  return text;
+};
+const git = (args, cwd, raw = false) => execGit(args, cwd, { maxBuffer: GIT_OUTPUT_BYTES, bufferOutput: true })
+  .then(r => raw ? r.stdout : archiveText(r.stdout));
 
 /** Preserve worktree-private Git evidence, never follow its links into the
  * common repository. The lock is archived but matched separately by release.
@@ -424,16 +431,17 @@ async function snapshotAdministration(path, missingRoot = null, work = archiveWo
     work.check();
     const info = await lstat(source);
     if (info.isSymbolicLink()) {
-      const link = { path: rel, target: await readlink(source) };
+      const link = { path: rel, target: archiveText(await readlink(source, { encoding: 'buffer' })) };
       work.add(link);
       symlinks.push(link);
       return;
     }
     if (info.isDirectory()) {
       const names = [];
-      for await (const entry of await opendir(source)) {
-        work.add(entry.name, 'directory');
-        names.push(entry.name);
+      for await (const entry of await opendir(source, { encoding: 'buffer' })) {
+        const name = archiveText(entry.name);
+        work.add(name, 'directory');
+        names.push(name);
       }
       for (const name of names.sort()) await visit(join(source, name), rel ? `${rel}/${name}` : name);
       return;
@@ -570,8 +578,8 @@ async function snapshotContent(path, work = archiveWork()) {
     // diff's stat-cache refresh too: an otherwise read-only diff can rewrite
     // the index and race the concurrent administration snapshot. Git's
     // --no-optional-locks alone does not disable diff.autoRefreshIndex.
-    git(['-c', 'diff.autoRefreshIndex=false', 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], path),
-    git(['-c', 'diff.autoRefreshIndex=false', 'diff', '--binary', '--no-textconv', '--no-ext-diff'], path),
+    git(['-c', 'diff.autoRefreshIndex=false', 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], path, true),
+    git(['-c', 'diff.autoRefreshIndex=false', 'diff', '--binary', '--no-textconv', '--no-ext-diff'], path, true),
     git(['rev-parse', '--show-object-format'], path),
     git(['ls-files', '--others', '-z'], path),
   ]);
@@ -620,7 +628,7 @@ async function snapshotContent(path, work = archiveWork()) {
     if (rel.endsWith('/')) throw new Error(`nested repository at ${rel} cannot be archived`);
     const info = await lstat(join(path, rel));
     if (info.isSymbolicLink()) {
-      const link = { path: rel, target: await readlink(join(path, rel)) };
+      const link = { path: rel, target: archiveText(await readlink(join(path, rel), { encoding: 'buffer' })) };
       work.add(link);
       symlinks.push(link);
     }
@@ -696,6 +704,8 @@ async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(
   if (!missingRoot) {
     const snapshots = await Promise.all([snapshotContent(tree.path, work), snapshotAdministration(tree.path, null, work)]);
     work.check();
+    // Capture already charged metadata; apply the reader's layout checks too.
+    for (const snapshot of snapshots) validateArchiveEntries(snapshot, work, false);
     checkArchiveBudget(...snapshots);
     return snapshots;
   }
@@ -703,10 +713,11 @@ async function archiveSnapshots(tree, repoPath, missingRoot, work = archiveWork(
   if (present) throw new Error('missing-checkout-reappeared');
   const prefix = ['--git-dir', missingRoot, '--work-tree', tree.path];
   if ((await git([...prefix, 'ls-files', '-u', '-z'], repoPath)).length) throw new Error('unmerged index entries cannot be archived');
-  const indexDiff = await git([...prefix, 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], repoPath);
-  const content = { indexDiff, worktreeDiff: '', files: [], symlinks: [], gitlinks: [], missingCheckout: true,
+  const indexDiff = await git([...prefix, 'diff', '--cached', '--binary', '--no-textconv', '--no-ext-diff'], repoPath, true);
+  const content = { indexDiff, worktreeDiff: Buffer.alloc(0), files: [], symlinks: [], gitlinks: [], missingCheckout: true,
     fingerprint: createHash('sha256').update('missing-checkout\0').update(indexDiff).digest('hex') };
   const administration = await snapshotAdministration(tree.path, missingRoot, work);
+  validateArchiveEntries(administration, work, false);
   checkArchiveBudget(content, administration);
   return [content, administration];
 }
@@ -918,8 +929,8 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
     await chmod(destination, 0o600);
     if (await archiveHash(destination, work) !== file.sha256) throw new Error('administration archive mismatch');
   }
-  if (snapshot.indexDiff) await writeFileGuarded(join(dir, 'index.diff'), snapshot.indexDiff);
-  if (snapshot.worktreeDiff) await writeFileGuarded(join(dir, 'worktree.diff'), snapshot.worktreeDiff);
+  if (snapshot.indexDiff.length) await writeFileGuarded(join(dir, 'index.diff'), snapshot.indexDiff);
+  if (snapshot.worktreeDiff.length) await writeFileGuarded(join(dir, 'worktree.diff'), snapshot.worktreeDiff);
 
   const { files, symlinks } = snapshot;
   for (const file of files) {
@@ -940,13 +951,13 @@ async function writeArchive(dir, { repoPath, tree, branch, defaultBranch, releas
     release, review, administration: { ...administration, files: administration.files.map(({ source: _source, ...file }) => file) }, archivedAt: new Date().toISOString(),
     bundleSha256: await archiveHash(bundle, work, Infinity),
     patchHashes: { index: evidenceHash(snapshot.indexDiff), worktree: evidenceHash(snapshot.worktreeDiff) },
-    captured: { commitBundle: true, recoveryHeads: [...recoveryHeads], ...(snapshot.missingCheckout ? { missingCheckout: true } : {}), gitlinks: snapshot.gitlinks, indexDiff: Boolean(snapshot.indexDiff), worktreeDiff: Boolean(snapshot.worktreeDiff), files, symlinks },
+    captured: { commitBundle: true, recoveryHeads: [...recoveryHeads], ...(snapshot.missingCheckout ? { missingCheckout: true } : {}), gitlinks: snapshot.gitlinks, indexDiff: Boolean(snapshot.indexDiff.length), worktreeDiff: Boolean(snapshot.worktreeDiff.length), files, symlinks },
     restore: [
       'git -C <repo> fetch commits.bundle HEAD:refs/heads/<restored-branch>',
       'git -C <repo> fetch commits.bundle "+refs/portos/archive/*:refs/portos/recovered/*"',
       `git -C <repo> worktree add <checkout> ${tree.head}`,
-      snapshot.indexDiff ? 'git -C <checkout> apply --index index.diff' : null,
-      snapshot.worktreeDiff ? 'git -C <checkout> apply worktree.diff' : null,
+      snapshot.indexDiff.length ? 'git -C <checkout> apply --index index.diff' : null,
+      snapshot.worktreeDiff.length ? 'git -C <checkout> apply worktree.diff' : null,
       // Last, so raw tracked bytes replace the filtered form the diffs restore.
       files.length ? 'cp -R files/. <checkout>/' : null,
       symlinks.length ? 'recreate manifest.captured.symlinks with ln -s' : null,

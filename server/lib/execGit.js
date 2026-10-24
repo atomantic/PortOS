@@ -18,10 +18,11 @@ export const withGitMutationLifetime = (work, onUncertain) => mutationLifetime.r
  *   silently resolve to process.cwd(), i.e. PortOS's own checkout)
  * @param {object} options - Additional options
  * @param {number} [options.maxBuffer] - Max combined output in JavaScript code units (default 10 * 1024 * 1024)
+ * @param {boolean} [options.bufferOutput] - Return original output bytes; the same decoded code-unit limit applies
  * @param {number} [options.timeout] - Timeout in ms (default 30s)
  * @param {boolean} [options.ignoreExitCode] - Resolve instead of reject on non-zero exit
  * @param {object} [options.env] - Explicit child environment; omitted inherits normally
- * @returns {Promise<{stdout: string, stderr: string, exitCode: number|null, signal?: string, terminated?: boolean}>}
+ * @returns {Promise<{stdout: string|Buffer, stderr: string|Buffer, exitCode: number|null, signal?: string, terminated?: boolean}>}
  */
 export function execGit(args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
@@ -47,6 +48,17 @@ export function execGit(args, cwd, options = {}) {
     const onUncertain = mutationLifetime.getStore();
     let stdout = '';
     let stderr = '';
+    let outputUnits = 0;
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    const collect = (data, decoder, chunks, channel) => {
+      const bytes = typeof data === 'string' ? Buffer.from(data) : data;
+      const decoded = decoder.write(bytes);
+      outputUnits += decoded.length;
+      if (options.bufferOutput) chunks.push(bytes);
+      else if (channel === 'stdout') stdout += decoded;
+      else stderr += decoded;
+    };
     const stdoutDecoder = new StringDecoder('utf8');
     const stderrDecoder = new StringDecoder('utf8');
     let killed = false;
@@ -77,7 +89,7 @@ export function execGit(args, cwd, options = {}) {
     // Both streams share one overflow guard against the combined code-unit count so
     // a runaway command can't blow past maxBuffer on either channel.
     const guardOverflow = () => {
-      if (stdout.length + stderr.length > maxBuffer && !killed) {
+      if (outputUnits > maxBuffer && !killed) {
         clearTimeout(timer);
         terminate(new Error(`git output exceeded maxBuffer (${maxBuffer} code units)`));
       }
@@ -85,22 +97,30 @@ export function execGit(args, cwd, options = {}) {
 
     child.stdout.on('data', (data) => {
       if (killed) return;
-      stdout += stdoutDecoder.write(typeof data === 'string' ? Buffer.from(data) : data);
+      collect(data, stdoutDecoder, stdoutChunks, 'stdout');
       guardOverflow();
     });
 
     child.stderr.on('data', (data) => {
       if (killed) return;
-      stderr += stderrDecoder.write(typeof data === 'string' ? Buffer.from(data) : data);
+      collect(data, stderrDecoder, stderrChunks, 'stderr');
       guardOverflow();
     });
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       clearTimeout(escalation);
-      stdout += stdoutDecoder.end();
-      stderr += stderrDecoder.end();
-      if (!failure && stdout.length + stderr.length > maxBuffer) {
+      const stdoutTail = stdoutDecoder.end();
+      const stderrTail = stderrDecoder.end();
+      outputUnits += stdoutTail.length + stderrTail.length;
+      if (options.bufferOutput) {
+        stdout = Buffer.concat(stdoutChunks);
+        stderr = Buffer.concat(stderrChunks);
+      } else {
+        stdout += stdoutTail;
+        stderr += stderrTail;
+      }
+      if (!failure && outputUnits > maxBuffer) {
         markUncertain();
         failure = new Error(`git output exceeded maxBuffer (${maxBuffer} code units)`);
       }
@@ -115,7 +135,7 @@ export function execGit(args, cwd, options = {}) {
           }));
         }
       } else if (code !== 0 && !options.ignoreExitCode) {
-        reject(new Error(stderr || `git exited with code ${code}`));
+        reject(new Error(stderr.length ? stderr.toString() : `git exited with code ${code}`));
       } else {
         resolve({ stdout, stderr, exitCode: code });
       }

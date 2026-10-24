@@ -70,6 +70,8 @@ retired* with its archive path; only the next sweep can report convergence.
 
 ### Held archive work budgets
 
+Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse preservation before removal.
+
 Held archives use resource contract `1`, recorded as `resourceContract` in the
 manifest. File count is not admission policy: every ignored/untracked content
 file and worktree-private Git file remains included. Hashing and copying use
@@ -80,7 +82,7 @@ content queries plus the private Git directory lookup. A source growing during a
 The existing limits remain 25 MiB per raw file, 250 MiB combined content and
 private administration, 16 MiB serialized manifest, and the existing Git output
 buffer of `64 * 1024 * 1024` JavaScript code units. Patch verification bounds its
-UTF-8 encoding at three bytes per code unit (192 MiB), preserving older multibyte
+raw byte representation at three bytes per decoded code unit (192 MiB), preserving older multibyte
 patch admission. Metadata is charged incrementally against the same 16 MiB ceiling,
 including file entries, symlink targets and gitlinks; this also bounds
 zero-byte-file trees. Transient sorted directory names have a separate 16 MiB

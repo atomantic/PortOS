@@ -87,6 +87,23 @@ describe('execGit', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('returns opaque output bytes while retaining the decoded output budget', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGit(['diff'], '/repo', { bufferOutput: true, maxBuffer: 2 });
+    const bytes = Buffer.from([0xe7, 0x95, 0x8c, 0xff]);
+    for (const byte of bytes) child.stdout.emit('data', Buffer.from([byte]));
+    child.emit('close', 0);
+    await expect(promise).resolves.toEqual({ stdout: bytes, stderr: Buffer.alloc(0), exitCode: 0 });
+
+    const overflowing = makeChild();
+    spawn.mockReturnValue(overflowing);
+    const limited = execGit(['diff'], '/repo', { bufferOutput: true, maxBuffer: 2 });
+    overflowing.stdout.emit('data', Buffer.from('abc'));
+    overflowing.emit('close', null, 'SIGTERM');
+    await expect(limited).rejects.toThrow(/maxBuffer/);
+  });
+
   it('rejects with stderr on a non-zero exit', async () => {
     const child = makeChild();
     spawn.mockReturnValue(child);
