@@ -1,5 +1,6 @@
 import { getMemoryStats } from './memoryStats.js';
 import { localEndpointPort } from './localEndpoint.js';
+import { isLocalEndpointBusy, onLocalEndpointSettled } from './localLlmConcurrency.js';
 import { createSingleFlight } from './singleFlight.js';
 
 /**
@@ -288,12 +289,24 @@ export function createOnDemandDaemon({
     return Boolean(section?.keepLoaded ?? section?.pinned);
   };
 
+  let inFlightStarts = 0;
+  const currentEndpoint = () => endpointFor(getConfig());
+  const isBusy = () => inFlightStarts > 0 || isLocalEndpointBusy(currentEndpoint());
+
+  onLocalEndpointSettled((endpoint) => {
+    const port = localEndpointPort(currentEndpoint());
+    if (port && localEndpointPort(endpoint) === port) {
+      markDaemonUsed(appName);
+    }
+  });
+
   const registerIdle = () => {
     registerIdleDaemon({
       name: appName,
       getIdleMs: async () => idleWindowMs(await configuredIdleMinutes()),
       isPinned: async () => configuredKeepLoaded(),
       isRunning: async () => Boolean((await getStatusStrict())?.status === 'online'),
+      isBusy,
       stop: () => stop(),
     });
   };
@@ -360,10 +373,18 @@ export function createOnDemandDaemon({
    */
   const starts = createSingleFlight({ exclusive: true });
 
-  const ensureRunning = async () => {
+  const trackStart = async (key, fn) => {
+    inFlightStarts += 1;
     markUsed();
-    return starts.run('wake', wake);
+    try {
+      return await starts.run(key, fn);
+    } finally {
+      inFlightStarts = Math.max(0, inFlightStarts - 1);
+      markUsed();
+    }
   };
+
+  const ensureRunning = () => trackStart('wake', wake);
 
   /**
    * Run an explicit start/stop sequence (a user-clicked Start, a tuning
@@ -377,7 +398,7 @@ export function createOnDemandDaemon({
    * @param {() => Promise<T>} fn
    * @returns {Promise<T>}
    */
-  const runStart = (fn) => starts.run(Symbol('start'), fn);
+  const runStart = (fn) => trackStart(Symbol('start'), fn);
 
   const wake = async () => {
     const pm2Status = await getStatusStrict();
@@ -536,18 +557,21 @@ export function idleWindowMs(minutes) {
  *   getIdleMs: () => Promise<number|null>|number|null,
  *   isPinned?: () => Promise<boolean>|boolean,
  *   isRunning?: () => Promise<boolean>|boolean,
+ *   isBusy?: () => Promise<boolean>|boolean,
  *   stop: () => Promise<unknown>
  * }} daemon
  *   `getIdleMs` resolves the CURRENT configured window on every sweep; `null`/`0` = never stop.
  *   `isPinned` returns true if user pinned the server ("keep loaded") — pinned servers are never stopped.
  *   `isRunning` checks if the daemon process is online.
+ *   `isBusy` returns true while a wake/start or inference request is in flight — busy servers are never stopped.
  */
-export function registerIdleDaemon({ name, getIdleMs, isPinned, isRunning, stop }) {
+export function registerIdleDaemon({ name, getIdleMs, isPinned, isRunning, isBusy, stop }) {
   const existing = idleDaemons.get(name);
   idleDaemons.set(name, {
     getIdleMs,
     isPinned: typeof isPinned === 'function' ? isPinned : () => Boolean(isPinned),
     isRunning: typeof isRunning === 'function' ? isRunning : null,
+    isBusy: typeof isBusy === 'function' ? isBusy : () => Boolean(isBusy),
     stop,
     lastUsedAt: existing?.lastUsedAt ?? Date.now(),
     releaseReason: existing?.releaseReason ?? null,
@@ -685,6 +709,7 @@ export function evaluateMemoryPressurePolicy({
   const eligible = list.filter((d) => (
     d
     && d.running !== false
+    && !d.busy
     && !d.pinned
     && !d.keepLoaded
   ));
@@ -723,11 +748,14 @@ export async function reapIdleDaemons(now = Date.now(), options = {}) {
 
   // 1. Normal idle timeout pass
   for (const [name, entry] of idleDaemons) {
-    // Fail-safe to pinned on a transient read error, matching the pressure-aware
-    // pass below — assuming "not pinned" here would risk stopping a keepLoaded
-    // daemon on a flaky settings read.
+    // Fail-safe to pinned/busy on a transient read error, matching the pressure-aware
+    // pass below — assuming "not pinned" or "not busy" here would risk stopping a
+    // keepLoaded or actively serving daemon on a flaky read.
     const isPinned = await Promise.resolve(entry.isPinned?.()).catch(() => true);
     if (isPinned) continue; // Pinned servers are exempt
+
+    const isBusy = await Promise.resolve(entry.isBusy?.()).catch(() => true);
+    if (isBusy) continue; // Active wake/start or in-flight request is exempt
 
     // Already stopped (by the pressure-aware pass, or externally) — skip so this
     // pass doesn't overwrite its release reason and doesn't preempt the
@@ -778,6 +806,7 @@ export async function reapIdleDaemons(now = Date.now(), options = {}) {
     const daemonList = [];
     for (const [name, entry] of idleDaemons) {
       const isPinned = await Promise.resolve(entry.isPinned?.()).catch(() => true);
+      const isBusy = await Promise.resolve(entry.isBusy?.()).catch(() => true);
       const isRunning = entry.isRunning
         ? await Promise.resolve(entry.isRunning()).catch(() => false)
         : true;
@@ -786,6 +815,7 @@ export async function reapIdleDaemons(now = Date.now(), options = {}) {
         entry,
         lastUsedAt: entry.lastUsedAt,
         pinned: isPinned,
+        busy: isBusy,
         running: isRunning,
       });
     }
