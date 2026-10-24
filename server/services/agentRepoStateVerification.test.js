@@ -30,7 +30,7 @@ vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: vi.fn(a
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: vi.fn() }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('./cosAgentLifecycle.js', () => ({ reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('./cosAgentLifecycle.js', () => ({ retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('./taskSchedule.js', () => ({ recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({
@@ -79,7 +79,7 @@ import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
 import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanupObservation.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
-import { recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
+import { retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { verifyAgentRepoState, sweepRepoStateVerifications, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
@@ -146,6 +146,8 @@ const run = (overrides = {}) => verifyAgentRepoState({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  retryCompletionCheckoutCapture.mockReset().mockResolvedValue(false);
+  getAgentRecord.mockReset().mockResolvedValue(null);
   findMissingCheckoutPreservation.mockResolvedValue(null);
   inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'delivery-ci-or-review-pending' });
   readBranchCompletionPolicies.mockResolvedValue([]);
@@ -176,6 +178,20 @@ beforeEach(() => {
 });
 
 describe('verifyAgentRepoState — clean runs', () => {
+  it.each(['pending', 'captured', 'lost-record'])('retries failed-run identity capture without promoting delivery or cleanup: %s', async scenario => {
+    const state = { ...agentState({ checkoutCapture: { status: 'pending' }, repoStateVerification: { status: 'pending' } }),
+      id: 'agent-1', status: 'completed', startedAt: CREATED_AT, result: { success: false, executionSuccess: false, orphaned: true } };
+    retryCompletionCheckoutCapture.mockResolvedValue(scenario !== 'pending');
+    if (scenario === 'captured') getAgentRecord.mockResolvedValue({ ...state,
+      metadata: { ...state.metadata, checkoutCapture: { status: 'captured' }, completedCheckouts: [RELEASE] } });
+    expect(await run({ success: false, agentState: state })).toMatchObject({
+      skipReason: scenario === 'captured' ? REPO_STATE_SKIPS.FAILED_RUN : 'checkout-capture-pending',
+    });
+    expect(state.result).toEqual({ success: false, executionSuccess: false, orphaned: true });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+  });
+
   it('retains unresolved verification after an explicit retry without adopting its task or touching Git', async () => {
     getTaskById.mockResolvedValue({ ...task(), status: 'pending' });
     const state = { ...agentState({ repoStateVerification: { status: 'pending' } }), result: { cleanupPending: true } };

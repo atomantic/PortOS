@@ -135,8 +135,10 @@ export async function captureSeededCompletionCheckouts(agent) {
   return receipts;
 }
 
-/** Called under the agent-state lock while the successful run still owns its
- * current claim bindings. Never manufacture evidence for historical releases.
+/** Called under the agent-state lock while the run still owns its current
+ * bindings. The caller's success flag enables identity capture, as at initial
+ * registration; it never changes the provider's execution/delivery verdict.
+ * Never manufacture evidence for historical releases.
  * Capture errors withhold cleanup authority without breaking completion.
  */
 export async function captureCompletedCheckouts(agent, { success, strict = false, allowUncreated = false } = {}) {

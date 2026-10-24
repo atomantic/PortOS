@@ -582,6 +582,28 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
     if (!fetched.ok) return fetched;
     prepared = await review();
   }
+  if (prepared.reason === 'retirement-policy-not-legacy-completed') {
+    // Recover only a previously registered physical generation after fresh
+    // merged exact-head proof. Never promote an orphan's execution to success.
+    const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+    const forge = await (opts.readForge || readRetirementForgeEvidence)(app.repoPath, release.branch, prUrl,
+      { forgeAccount: app.forgeAccount ?? null }).catch(() => null);
+    if (forge?.prUrl === prUrl && forge.prHead === release.head) {
+      const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+      const policies = await (opts.readPolicies || (() => readBranchCompletionPolicies({ repairIndex: false })))().catch(() => null);
+      const retry = opts.recoverCheckoutCapture || (await import('./cosAgentLifecycle.js')).retryCompletionCheckoutCapture;
+      let recovered = false;
+      for (const agent of Array.isArray(policies) ? policies : []) {
+        const meta = agent.metadata || {};
+        const knownPr = meta.branchCompletionPolicy?.prUrl || meta.reviewLoopMergeTarget?.url;
+        if (agent.status !== 'completed' || agent.result?.orphaned !== true || agent.result.validationPassed === false
+          || knownPr !== prUrl || meta.checkoutCapture?.status !== 'captured' || meta.completedCheckouts?.length !== 0
+          || !meta.checkoutSeeds?.some(seed => seed.repoPath === app.repoPath && seed.branch === release.branch && seed.path === release.path)) continue;
+        recovered = await retry(agent.id || agent.agentId, { retirement: { repoPath: app.repoPath, ...release } }).catch(() => false) || recovered;
+      }
+      if (recovered) prepared = await review();
+    }
+  }
   return prepared;
 }
 

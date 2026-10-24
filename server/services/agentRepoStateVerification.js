@@ -261,7 +261,14 @@ export async function verifyAgentRepoState(input) {
   const verify = async () => {
     if (input.agentState?.metadata?.completionSentinel
       && await completionSentinelPresent(input.agentId, input.agentState.metadata.workspacePath)) return skipped('completion-sentinel-generation-pending');
-    if (input.agentState?.metadata?.checkoutCapture?.status === 'pending') return skipped('checkout-capture-pending');
+    if (input.agentState?.metadata?.checkoutCapture?.status === 'pending') {
+      const { retryCompletionCheckoutCapture, getAgentRecord } = await import('./cosAgentLifecycle.js');
+      if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped('checkout-capture-pending');
+      const recovered = await getAgentRecord(input.agentId).catch(() => null);
+      if (!recovered || recovered.status !== 'completed' || recovered.startedAt !== input.agentState.startedAt
+        || recovered.metadata?.checkoutCapture?.status !== 'captured') return skipped('checkout-capture-pending');
+      input = { ...input, agentState: recovered };
+    }
     if (cleanupPending) {
       const { getTaskById } = await import('./cosTaskStore.js');
       const original = await getTaskById(input.task.id);
