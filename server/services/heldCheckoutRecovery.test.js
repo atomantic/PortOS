@@ -1240,7 +1240,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
     return checkout;
   }
 
-  it.each(['delivered', 'recreated-after-removal', 'different-generation', 'unmerged-original', 'unreadable-original', 'unrelated-capture', 'human-handoff'])(
+  it.each(['delivered', 'recreated-after-removal', 'different-generation', 'unmerged-original', 'unreadable-original', 'unrelated-capture', 'human-handoff', 'failed-validation'])(
     'binds a later merged delivery to its captured owner without rewriting history: %s', async scenario => {
       const c = await reviewedCheckout(`continued-${scenario}`, { normalMerge: true });
       const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
@@ -1258,6 +1258,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
           completedCheckouts: [{ version: 1, agentId: 'agent-continued', startedAt: '2026-01-01T00:00:00.000Z',
             capturedAt: '2026-01-01T00:02:00.000Z', ...captured }],
         } };
+      if (scenario === 'failed-validation') agent.result.validationPassed = false;
       if (scenario === 'different-generation') agent.metadata.completedCheckouts[0].incarnation.gitdir.ino += '0';
       if (scenario === 'unrelated-capture') {
         const tree = (await execGit(['rev-parse', `${oldHead}^{tree}`], repo)).stdout.trim();
@@ -1269,6 +1270,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout recovery (real git)', () 
       await execGit(['commit', '-m', 'later delivery on the same checkout'], c.path);
       c.release.head = (await execGit(['rev-parse', 'HEAD'], c.path)).stdout.trim();
       await execGit(['merge', '--ff-only', c.release.branch], repo);
+      if (scenario === 'unrelated-capture') {
+        const unrelated = agent.metadata.completedCheckouts[0].head;
+        // Virtual replacement history must not turn missing delivery into proof.
+        await execGit(['replace', '--graft', unrelated, oldHead], repo);
+        await execGit(['replace', '--graft', c.release.head, unrelated], repo);
+      }
       Object.assign(c.forge, { prHead: c.release.head, mergeCommit: c.release.head, defaultHead: c.release.head,
         changedPaths: ['continued.txt', 'feature.txt'] });
       c.opts.readHistoricalMerge = async () => scenario === 'unreadable-original' ? null : ({ url: oldUrl,

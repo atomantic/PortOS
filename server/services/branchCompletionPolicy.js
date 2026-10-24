@@ -136,7 +136,7 @@ const reviewTarget = policy => policy.agent.metadata?.reviewLoopMergeTarget;
 const retirementPr = policy => policy.prUrl || reviewTarget(policy)?.url;
 
 function continuedDelivery(policy, input) {
-  if (policy.agent.status !== 'completed' || policy.agent.result?.success !== true
+  if (policy.agent.status !== 'completed' || policy.agent.result?.success !== true || policy.agent.result.validationPassed === false
     || policy.completion !== PR_COMPLETIONS.REVIEW_THEN_MERGE || input.verifiedPrHead !== input.tip) return null;
   return input.deliveryContinuations?.find(proof => proof.agentId === policy.agent.id
     && proof.originalPrUrl === retirementPr(policy) && proof.originalPrUrl !== input.prUrl
