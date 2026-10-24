@@ -55,7 +55,7 @@ npm test --prefix client         # Vitest (happy-dom) — component/unit tests
 # inherits it aims at the real Postgres.
 npm run test:db                  # DB-backed suites → portos_test ONLY (see Security Model)
 
-npm run pregate                  # BEFORE EVERY PUSH — CI's plan run locally; receipt in .cache/pregate/report.json
+npm run pregate                  # BEFORE EVERY PUSH — focused local gate (lint, guards, direct tests); --full for CI's plan
 # Local focused tests and CI skip test files whose every input already passed (the test
 # memo, docs/GITHUB_ACTIONS.md "Test memo"); PORTOS_TEST_MEMO=off runs them all.
 node scripts/pregate-attest.js   # Only after explicit --full validation and the push: posts the green receipt as a `pregate` commit status bound to the

@@ -11,10 +11,10 @@ if [ -z "$STAGED" ]; then
 fi
 
 # Lightweight local policy: lint, structural guards and directly owned tests.
-# Hosted CI owns broad coverage; no transitive server/browser/DB/build suite. The hook deliberately runs nothing
-# else: it used to run the whole server suite and `npm run build --prefix
-# client`, which publishes the branch's build into the dist the running
-# install serves (#12045). Validation never swaps what `npm start` serves.
+# Hosted CI owns broad coverage; no transitive server/browser/DB/build suite.
+#
+# Do not build the client here: that would publish this branch's build into
+# the dist the running install serves (#12045). Validation never swaps it.
 printf -- "\n🔎 pre-commit: running focused local pregate on the PortOS changes\n"
 node scripts/pregate.js
 
