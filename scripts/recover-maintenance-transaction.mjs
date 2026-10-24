@@ -15,6 +15,11 @@ const refuse = message => { throw new Error(message); };
 // closed for explicit operator inspection, as with the migration runner lock.
 function claimRecoveryFence(directory, io, stat) {
   const lock = join(directory, 'recovery');
+  // A takeover marker must not live inside a fence that a winning recovery
+  // could be releasing concurrently. Keep its shared name stable instead.
+  const transition = join(directory, 'recovery-transition');
+  const legacyTransition = join(lock, '.transition');
+  const unfinished = () => refuse('Maintenance recovery has an unfinished transition; stop all recovery processes and inspect its fence.');
   const physical = value => value && [value.dev, value.ino, value.birthtimeMs].join(':');
   const readOwner = path => {
     const file = join(path, 'owner.json');
@@ -34,6 +39,7 @@ function claimRecoveryFence(directory, io, stat) {
   const owner = { version: 1, pid: process.pid, token: randomUUID() };
   const bytes = Buffer.from(`${JSON.stringify(owner)}\n`);
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (stat(transition)) unfinished();
     if (!stat(lock)) {
       const staged = join(directory, `recovery-acquire-${randomUUID()}`);
       io.mkdirSync(staged, { mode: 0o700 });
@@ -70,19 +76,25 @@ function claimRecoveryFence(directory, io, stat) {
     const holder = observed?.isDirectory() ? readOwner(lock) : null;
     if (!holder) refuse('Maintenance recovery ownership is unverified; preserve its fence for inspection.');
     if (!dead(holder.pid)) refuse('Maintenance recovery is already owned by a live or unreadable process.');
-    const transition = join(lock, '.transition');
-    try { io.mkdirSync(transition, { mode: 0o700 }); }
-    catch { refuse('Maintenance recovery has an unfinished transition; stop all recovery processes and inspect its fence.'); }
-    const transitionStat = physical(stat(transition));
-    let retired = false;
+    if (stat(legacyTransition)) unfinished();
+    let transitionFd;
+    try { transitionFd = io.openSync(transition, 'wx', 0o600); }
+    catch { unfinished(); }
+    let transitionStat;
     try {
+      // The descriptor identifies our creation even if its parent or pathname
+      // was replaced before this read; a path stat could identify another owner.
+      transitionStat = physical(io.fstatSync(transitionFd));
+      if (stat(legacyTransition)) unfinished();
       if (physical(stat(lock)) !== physical(observed) || readOwner(lock)?.bytes.equals(holder.bytes) !== true || !dead(holder.pid))
         refuse('Maintenance recovery ownership changed during inspection.');
       io.renameSync(lock, join(directory, `recovery-interrupted-${randomUUID()}`));
-      retired = true;
       syncMaintenanceDirectory(directory, io);
     } finally {
-      if (!retired && physical(stat(lock)) === physical(observed) && physical(stat(transition)) === transitionStat) io.rmdirSync(transition);
+      try {
+        // Release only our exact marker, including after successful retirement.
+        if (transitionStat && physical(stat(transition)) === transitionStat) io.unlinkSync(transition);
+      } finally { io.closeSync(transitionFd); }
     }
   }
   refuse('Maintenance recovery is already owned; retry after its owner finishes.');
