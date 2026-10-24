@@ -473,6 +473,19 @@ contain ordinary files; all present files are preserved. Actual embedded Git
 stores and external object dependencies retain their existing refusal rules.
 The ordinary archive limits and initialized-only endpoint remain unchanged.
 
+An initialized module may borrow objects through one absolute alternate naming
+its exact corresponding store under this repository's registered module
+administration. Preservation copies the entire dependency store, binds its
+identity and every byte, and rewrites the alternate only in the isolated restore
+copy. The raw archive retains the original pointer. Other roots, relative or
+chained alternates, symlinks and promisor dependencies remain held. Rollback
+additionally checks that the original live stores can still resolve the private
+refs and index; an independent archive never substitutes for that proof.
+
+Transactions with copied dependencies use version 4 manifests. Existing
+immutable version 1–3 archives are read in place, with their original hashes and
+verification rules; they are not rewritten or converted.
+
 Status, rollback, independent archive verification and later branch retirement
 use the existing `initialized-checkouts` transaction endpoints with the returned
 transaction ID and a fresh journal digest. A failed preservation attempt is

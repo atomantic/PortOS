@@ -320,11 +320,37 @@ def checked_config(admin):
                 fail('unknown-git-extension')
 
 
-def check_admin(admin, module=False, common=False):
+def checked_alternate(admin, expected):
+    pointer = admin / 'objects/info/alternates'
+    if not stat.S_ISREG(pointer.lstat().st_mode) or pointer.stat().st_size > 65536:
+        fail('external-object-dependency')
+    lines = pointer.read_text().splitlines()
+    # Only this install's exact registered module store is admitted. Relative,
+    # multi-hop and arbitrary external roots retain their preservation hold.
+    if len(lines) != 1 or lines[0] != str(expected):
+        fail('external-object-dependency')
+    return safe_path(lines[0])
+
+
+def check_object_dependency(path):
+    safe_path(str(path))
+    for current, dirs, files in os.walk(path, followlinks=False):
+        for name in [*dirs, *files]:
+            item = Path(current) / name
+            if item.is_symlink() or name.endswith(('.lock', '.promisor')):
+                fail('external-object-dependency')
+    if any(os.path.lexists(path / 'info' / name) for name in ['alternates', 'http-alternates']):
+        fail('external-object-dependency')
+
+
+def check_admin(admin, module=False, common=False, alternate=None):
     if any((admin / name).exists() for name in OPERATIONS):
         fail('active-or-partial-git-state')
     for name in ('objects/info/alternates', 'objects/info/http-alternates', 'info/grafts'):
         if (admin / name).exists():
+            if name == 'objects/info/alternates' and alternate is not None:
+                checked_alternate(admin, alternate)
+                continue
             fail('external-object-dependency')
     if module and any((admin / name).exists() for name in ('commondir', 'worktrees', 'modules')):
         fail('shared-or-nested-module')
@@ -537,7 +563,7 @@ def inspect(request, full=False):
         fail('release-lock-changed')
     if locked and lock.read_text().strip() != (release.get('lockReason') or ''):
         fail('release-lock-reason-changed')
-    modules = []
+    modules, dependencies = [], {}
     whole_checkout = request.get('wholeCheckout') is True or request.get('expected', {}).get('wholeCheckout') is True
     for item in git(admin, work, 'ls-files', '--stage', '-z').split('\0'):
         if not item:
@@ -560,14 +586,21 @@ def inspect(request, full=False):
         module_admin = read_pointer(module_work / '.git', 'gitdir:')
         if not module_admin.is_relative_to(admin / 'modules'):
             fail('external-module-administration')
-        check_admin(module_admin, module=True)
+        dependency = None
+        if os.path.lexists(module_admin / 'objects/info/alternates'):
+            store = checked_alternate(module_admin, common / module_admin.relative_to(admin) / 'objects')
+            check_object_dependency(store)
+            key = hashlib.sha256(str(module_admin.relative_to(admin)).encode('utf-8')).hexdigest()
+            dependencies[key] = {'path': str(store), 'identity': identity(store)}
+            dependency = {'key': key}
+        check_admin(module_admin, module=True, alternate=store if dependency else None)
         facts = git_facts(module_admin, module_work)
         if any(row.startswith('160000 ') for row in git(module_admin, module_work, 'ls-files', '--stage', '-z').split('\0')):
             fail('nested-module-unsupported')
         modules.append({'path': relative, 'gitDir': str(module_admin),
                         'administrationPath': str(module_admin.relative_to(admin)),
                         'identity': {'working': identity(module_work), 'administration': identity(module_admin)},
-                        'gitlink': oid, **facts})
+                        'gitlink': oid, **facts, **({'objectDependency': dependency} if dependency else {})})
     if not modules and not whole_checkout:
         fail('initialized-module-required')
     expected_pointers = {'.git', *(m['path'] + '/.git' for m in modules)}
@@ -583,14 +616,18 @@ def inspect(request, full=False):
                 fail('unregistered-private-module')
     sources = {'working': manifest(work), 'administration': manifest(admin, True),
                'common': {name: manifest(common / name, True) for name in COMMON_PARTS if (common / name).exists()}}
+    if dependencies:
+        sources['dependencies'] = {key: manifest(Path(value['path']), True) for key, value in dependencies.items()}
     if request.get('requireOwnership') is True:
-        for rows in [sources['working'], sources['administration'], *sources['common'].values()]:
+        for rows in [sources['working'], sources['administration'], *sources['common'].values(), *sources.get('dependencies', {}).values()]:
             preflight_copy_ownership(rows)
     facts = {'identity': {'working': identity(work), 'administration': identity(admin), 'common': identity(common)},
              'privateGitDir': str(admin), 'commonGitDir': str(common), 'modules': modules, 'parent': parent,
              'repoPath': request['repoPath'], 'release': release}
     if whole_checkout:
         facts['wholeCheckout'] = True
+    if dependencies:
+        facts['dependencies'] = dependencies
     facts['administrationFingerprint'] = digest(sources['administration'])
     facts['fingerprint'] = digest({'facts': facts, 'sources': sources})
     return {**facts, **({'sources': sources} if full else {})}
@@ -641,7 +678,9 @@ def proof_repositories(root, facts):
     ]]:
         if label != 'parent' and read_pointer(tree / '.git', 'gitdir:') != store:
             fail('restore-module-pointer-escaped')
-        check_admin(store, module=label != 'parent')
+        dependency = expected.get('objectDependency')
+        alternate = restore / 'dependencies' / dependency['key'] if dependency else None
+        check_admin(store, module=label != 'parent', alternate=alternate)
         actual = git_facts(store, tree)
         if any(actual[k] != expected[k] for k in ('head', 'indexSha256', 'stageSha256', 'refs')):
             fail('restored-git-facts-differ')
@@ -651,6 +690,10 @@ def proof_repositories(root, facts):
         prove_index_blobs(store, tree)
         results.append({'path': label, **actual, 'fsck': 'passed'})
     return results
+
+
+def copy_labels(facts):
+    return ('working', 'administration', 'common', *(('dependencies',) if facts.get('dependencies') else ()))
 
 
 def durable_tree(root):
@@ -685,8 +728,8 @@ def preserve(request):
         if root.stat().st_dev != source.stat().st_dev:
             fail('quarantine-cross-device')
     rows = before['sources']['working'] + before['sources']['administration']
-    rows += [r for section in before['sources']['common'].values() for r in section]
-    for section in [before['sources']['working'], before['sources']['administration'], *before['sources']['common'].values()]:
+    rows += [r for section in [*before['sources']['common'].values(), *before['sources'].get('dependencies', {}).values()] for r in section]
+    for section in [before['sources']['working'], before['sources']['administration'], *before['sources']['common'].values(), *before['sources'].get('dependencies', {}).values()]:
         preflight_copy_ownership(section)
     size = sum(r.get('bytes', 0) for r in rows)
     if size > MAX_BYTES or shutil.disk_usage(root).free < size * 2 + 1024 ** 3:
@@ -717,7 +760,19 @@ def preserve(request):
         if added is None:
             fail('shared-archive-metadata-mismatch:' + name)
         augmentations['archive']['common'][name] = added
-    for label in ('working', 'administration', 'common'):
+    if before.get('dependencies'):
+        (root / 'archive/dependencies').mkdir(mode=0o700)
+        augmentations['archive']['dependencies'] = {}
+        for key, dependency in before['dependencies'].items():
+            source = Path(dependency['path'])
+            expected_rows = before['sources']['dependencies'][key]
+            originals = source_provenance(source, expected_rows)
+            copy_tree(source, root / 'archive/dependencies' / key)
+            added = copy_augmentations(manifest(root / 'archive/dependencies' / key, True), expected_rows, originals)
+            if added is None:
+                fail('dependency-archive-metadata-mismatch')
+            augmentations['archive']['dependencies'][key] = added
+    for label in copy_labels(before):
         archived = manifest(root / 'archive' / label)
         originals = source_provenance(root / 'archive' / label, archived)
         copy_tree(root / 'archive' / label, root / 'restore' / label)
@@ -743,15 +798,17 @@ def preserve(request):
         git(store, tree, 'config', '--file', str(scratch), 'core.worktree', str(tree))
         rewrite_copy(store / 'config', scratch.read_bytes())
         scratch.unlink()
+        if m.get('objectDependency'):
+            rewrite_copy(store / 'objects/info/alternates', str(restore / 'dependencies' / m['objectDependency']['key']) + '\n')
     proof = proof_repositories(root, before)
     # Check source metadata again after both full copies and offline proof.
     after = inspect(request, full=True)
     if before != after:
         fail('sources-changed-during-preservation')
-    restored = {label: manifest(restore / label) for label in ('working', 'administration', 'common')}
+    restored = {label: manifest(restore / label) for label in copy_labels(before)}
     durable_tree(root / 'archive')
     durable_tree(restore)
-    saved = {'version': 3, 'transactionIdentity': identity(root), 'facts': before,
+    saved = {'version': 4 if before.get('dependencies') else 3, 'transactionIdentity': identity(root), 'facts': before,
              'copyAugmentations': augmentations, 'restored': restored, 'restoreProof': proof}
     check_restore_augmentations(root, saved)
     manifest_sha = private_json(root / 'manifest.json', saved)
@@ -874,8 +931,20 @@ def load_transaction(request):
     if len(encoded) > limit:
         fail('invalid-archive-manifest')
     saved = json.loads(encoded)
-    if saved['version'] not in (1, 2, 3) or saved['transactionIdentity'] != identity(root):
+    if saved['version'] not in (1, 2, 3, 4) or saved['transactionIdentity'] != identity(root):
         fail('transaction-incarnation-changed')
+    dependencies = saved['facts'].get('dependencies', {})
+    if saved['version'] == 4:
+        keys = {module['objectDependency']['key'] for module in saved['facts']['modules'] if module.get('objectDependency')}
+        if not dependencies or set(dependencies) != keys or set(saved['facts']['sources'].get('dependencies', {})) != keys:
+            fail('dependency-manifest-layout-changed')
+        for key, dependency in dependencies.items():
+            modules = [module for module in saved['facts']['modules'] if module.get('objectDependency', {}).get('key') == key]
+            if (not re.fullmatch('[a-f0-9]{64}', key) or set(dependency) != {'path', 'identity'}
+                    or any(dependency['path'] != str(Path(saved['facts']['commonGitDir']) / module['administrationPath'] / 'objects') for module in modules)):
+                fail('dependency-manifest-layout-changed')
+    elif dependencies or 'dependencies' in saved['facts']['sources']:
+        fail('dependency-manifest-version-required')
     # A bound v2 archive cannot evade its journal proof by declaring itself v1.
     # Hash the exact bytes parsed, never a second path read after parsing.
     if (saved['version'] >= 2 or 'manifestSha256' in request) and request.get('manifestSha256') != hashlib.sha256(encoded).hexdigest():
@@ -907,15 +976,18 @@ def check_restore_augmentations(root, saved):
     if saved['version'] == 1:
         return
     records = saved['copyAugmentations']
+    labels = set(copy_labels(saved['facts']))
     if (set(records) != {'archive', 'restore'}
-            or set(records['archive']) != {'working', 'administration', 'common'}
+            or set(records['archive']) != labels
             or set(records['archive']['common']) != set(saved['facts']['sources']['common'])
-            or set(records['restore']) != {'working', 'administration', 'common'}):
+            or set(records['restore']) != labels
+            or (saved['facts'].get('dependencies') and (saved['version'] != 4
+                or set(records['archive']['dependencies']) != set(saved['facts']['dependencies'])))):
         fail('invalid-copy-augmentation-layout')
-    for label in ('working', 'administration', 'common'):
+    for label in copy_labels(saved['facts']):
         archived = manifest(root / 'archive' / label)
         attrs = lambda rows: [{'path': row['path'], 'xattrs': row['xattrs']} for row in rows]
-        originals = recorded_provenance(records['restore'][label]) if saved['version'] == 3 else None
+        originals = recorded_provenance(records['restore'][label]) if saved['version'] >= 3 else None
         added = copy_augmentations(attrs(saved['restored'][label]), attrs(archived), originals)
         if added is None or added != records['restore'][label]:
             fail('restore-copy-augmentation-changed:' + label)
@@ -927,18 +999,27 @@ def verify_saved_archive(root, saved):
     recorded = saved['copyAugmentations']['archive'] if saved['version'] >= 2 else None
     for label in ('working', 'administration'):
         expected_added = recorded[label] if recorded is not None else []
-        originals = recorded_provenance(expected_added) if saved['version'] == 3 else None
+        originals = recorded_provenance(expected_added) if saved['version'] >= 3 else None
         added = copy_augmentations(manifest(root / 'archive' / label), facts['sources'][label], originals)
         if added is None or added != expected_added:
             fail('archive-changed:' + label)
     for name, expected in facts['sources']['common'].items():
         expected_added = recorded['common'][name] if recorded is not None else []
-        originals = recorded_provenance(expected_added) if saved['version'] == 3 else None
+        originals = recorded_provenance(expected_added) if saved['version'] >= 3 else None
         added = copy_augmentations(manifest(root / 'archive' / 'common' / name, True), expected, originals)
         if added is None or added != expected_added:
             fail('common-archive-changed:' + name)
     if sorted(p.name for p in (root / 'archive/common').iterdir()) != sorted(facts['sources']['common']):
         fail('common-archive-layout-changed')
+    if facts.get('dependencies'):
+        if sorted(p.name for p in (root / 'archive/dependencies').iterdir()) != sorted(facts['dependencies']):
+            fail('dependency-archive-layout-changed')
+        for key, expected in facts['sources']['dependencies'].items():
+            expected_added = recorded['dependencies'][key]
+            added = copy_augmentations(manifest(root / 'archive/dependencies' / key, True), expected,
+                                       recorded_provenance(expected_added))
+            if added is None or added != expected_added:
+                fail('dependency-archive-changed')
     for label, expected in saved['restored'].items():
         if manifest(root / 'restore' / label) != expected:
             fail('restore-proof-changed:' + label)
@@ -1485,12 +1566,33 @@ def verify_live_object_closure(root, common):
 
 def verify_live_common(root, saved, restoring):
     common = verify_common_metadata(saved, {'objects', 'refs', 'logs', 'packed-refs'} if restoring else set(), root)
+    facts = saved['facts']
+    for key, dependency in facts.get('dependencies', {}).items():
+        path = safe_path(dependency['path'])
+        if identity(path) != dependency['identity']:
+            fail('dependency-store-incarnation-changed')
+        check_object_dependency(path)
+        if not restoring and manifest(path, True) != facts['sources']['dependencies'][key]:
+            fail('dependency-store-changed')
     if restoring:
         # Other branches may legitimately advance after quarantine. Rollback
         # never rewrites shared refs or objects: prove the original private index
         # and HEAD still resolve completely against today's shared store.
         verify_live_parent(saved)
         verify_live_object_closure(root, common)
+        placed = placements(root, facts)['administration']['state']
+        original_admin = Path(facts['privateGitDir']) if placed == 'original' else root / 'quarantine/administration'
+        for module in facts['modules']:
+            if not module.get('objectDependency'):
+                continue
+            objects = original_admin / module['administrationPath'] / 'objects'
+            store = root / 'restore/administration' / module['administrationPath']
+            tree = root / 'restore/working' / module['path']
+            # The original absolute alternate still names the registered live
+            # store. Rollback must resolve every private ref/index against that
+            # store today; the independent archive cannot stand in for it.
+            git(store, tree, 'fsck', '--full', '--strict', objects=objects)
+            prove_index_blobs(store, tree, objects=objects)
 
 
 def require_no_packed_ref(common, ref, oid_length):
