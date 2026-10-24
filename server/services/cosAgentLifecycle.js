@@ -24,7 +24,55 @@ import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
 import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
+import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
+
+function hasPendingRepoStateVerification(agent) {
+  return agent?.status === 'completed' && agent?.metadata?.repoStateVerification?.status === 'pending';
+}
+
+export async function readProtectedCleanupOwners({ state = null, index = null, targetAgentId = null } = {}) {
+  const store = await import('./cosTaskStore.js').catch(err => {
+    throw new ServerError(`Cannot verify task cleanup ownership: ${err.message}`, {
+      status: 503, code: 'CLEANUP_OWNERSHIP_UNAVAILABLE',
+    });
+  });
+  const getTaskView = 'getTaskView' in store ? store.getTaskView : null;
+  if (typeof getTaskView !== 'function') {
+    throw new ServerError('Cannot verify task cleanup ownership before deleting agent history', {
+      status: 503, code: 'CLEANUP_OWNERSHIP_UNAVAILABLE',
+    });
+  }
+  const view = await getTaskView({ kind: 'queue' }).catch(err => {
+    throw new ServerError(`Cannot verify task cleanup ownership: ${err.message}`, {
+      status: 503, code: 'CLEANUP_OWNERSHIP_UNAVAILABLE',
+    });
+  });
+  if (!Array.isArray(view?.user?.tasks) || !Array.isArray(view?.cos?.tasks)) {
+    throw new ServerError('Cannot verify task cleanup ownership before deleting agent history', {
+      status: 503, code: 'CLEANUP_OWNERSHIP_UNAVAILABLE',
+    });
+  }
+  const protectedOwners = collectProtectedCleanupOwners([...view.user.tasks, ...view.cos.tasks]);
+  // Completion is persisted before its task hold; pending repo-state verification
+  // on a resident or archived completion record also protects restart evidence.
+  for (const [id, agent] of Object.entries(state?.agents || {})) {
+    if (hasPendingRepoStateVerification(agent)) protectedOwners.ownerIds.add(id);
+  }
+  if (index instanceof Map) {
+    const candidates = targetAgentId
+      ? (index.has(targetAgentId) ? [[targetAgentId, index.get(targetAgentId)]] : [])
+      : [...index.entries()];
+    for (const [id, date] of candidates) {
+      if (protectedOwners.ownerIds.has(id) || state?.agents?.[id] || !date) continue;
+      const content = await tryReadFile(join(AGENTS_DIR, date, id, 'metadata.json'));
+      if (!content) continue;
+      const parsed = safeJSONParse(content, null, { logError: false });
+      if (hasPendingRepoStateVerification(parsed)) protectedOwners.ownerIds.add(id);
+    }
+  }
+  return protectedOwners;
+}
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
   return withStateLock(async () => {
@@ -1043,6 +1091,14 @@ export async function deleteAgent(agentId) {
     const inIndex = idx.has(agentId);
     if (!inState && !inIndex) {
       throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
+    }
+
+    const protectedOwners = await readProtectedCleanupOwners({ state, index: idx, targetAgentId: agentId });
+    if (protectedOwners.isProtected(agentId)) {
+      throw new ServerError(
+        `Agent ${agentId} is still owned by an active task delivery or retry cleanup hold and cannot be deleted until cleanup finishes`,
+        { status: 409, code: 'AGENT_CLEANUP_OWNED' },
+      );
     }
 
     const wasRunning = state.agents[agentId]?.status === 'running';

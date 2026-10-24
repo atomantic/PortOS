@@ -48,6 +48,7 @@ import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { codexDriverReportedTokens, recordCodexRender } from '../imageRenderUsage.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildCodexStartupArgs, buildEffortArgs, resolveCliEffort } from '../../lib/providerModels.js';
 import {
@@ -532,12 +533,17 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
         // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
         // captured, so the spread measures the render itself — not the time the
         // job spent queued behind other renders.
-        await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId, ...(aspectConformed ? { aspectConformed } : {}), ...renderTimingFields(job.renderStartedAtMs) });
+        const renderMeta = { ...meta, codexSessionId: sessionId, driverReportedTokens: codexDriverReportedTokens(stderrTail), ...(aspectConformed ? { aspectConformed } : {}), ...renderTimingFields(job.renderStartedAtMs) };
+        await atomicWrite(sidecar, renderMeta);
         // Cleaners run BEFORE the SSE complete + completed events so subscribers
         // see the cleaned bytes. codex output is the highest-value target for
         // C2PA stripping because gpt-image is the one provider that embeds
         // provenance metadata.
         await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.CODEX });
+        // Accounting failure must preserve the image and its recoverable sidecar.
+        await recordCodexRender(renderMeta).catch(err => {
+          console.error(`❌ Failed to record Codex image usage: ${err.message}`);
+        });
         job.status = 'complete';
         if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
         activeJobs.delete(jobId);

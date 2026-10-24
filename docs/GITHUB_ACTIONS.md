@@ -217,6 +217,9 @@ are never executed as a substitute.
 
 ### Pregate attestation
 
+Default local pregate is focused validation, not a local CI run. Version 3 focused receipts cannot produce CI-skipping attestations. The following mechanism applies only to explicit `npm run pregate -- --full` validation and compatible legacy receipts. Hosted CI remains authoritative for broad coverage on ordinary pushes; do not rerun locally merely to obtain an attestation.
+
+
 A green pregate on this machine runs the same planner, runners, environment
 and `portos_test` database the Linux jobs do, so repeating those stages in CI
 for the install's own pull requests buys queue time and nothing else (design
@@ -289,10 +292,10 @@ pushed head, and the impact planner skips what it attests to:
 - **When it applies.** Only a same-repository pull request into a non-`release`
   base that was not forced full. The planner verifies the merge-ref checkout's
   second parent is the event's head (so the attested tree is compared with
-  the right commit) and reads `repos/{repo}/commits/{head}/statuses`. A head
-  committed less than five minutes ago with no `pregate` status yet is re-read
-  for up to 90 seconds (10-second interval; the summary says how long it
-  waited), because the status is posted after the push that started the run.
+  the right commit) and reads `repos/{repo}/commits/{head}/statuses`.
+  Statuses are read once: a missing or late attestation immediately leaves
+  broad hosted coverage enabled. Focused pushes intentionally post no
+  attestation, so the planner never waits for one.
   When you open the pull request yourself, the order is push, attest, then
   `gh pr create`, so the status precedes the `pull_request` event. Any
   failure — API error, unreadable description, tree mismatch, wrong creator,

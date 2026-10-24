@@ -125,6 +125,8 @@ export const CATEGORIES = {
   'games': { label: 'Games', description: 'Game project records and assets', archivable: true, deletable: false },
   'health': { label: 'Apple Health', description: 'Daily health JSON snapshots', archivable: true, deletable: false },
   'image-clean-tmp': { label: 'Image Cleaner Scratch', description: 'Ephemeral working files for Image Cleaner renders — swept automatically, safe to purge when no render is in flight', archivable: false, deletable: true, purgeScope: 'category', busyCheck: imageCleanTmpBusy },
+  'image-render-usage': { label: 'Image Render Usage', description: 'Durable image accounting receipts — retain historical usage and deduplication identities', archivable: true, deletable: false },
+  'image-render-usage-backfills': { label: 'Image Usage Recovery', description: 'Private historical import plans, preservation fingerprints and recovery journals', archivable: true, deletable: false },
   'image-refs': { label: 'Image References', description: 'Reference images uploaded for multi-reference edits — still served to existing renders', archivable: true, deletable: false },
   'image-to-3d': { label: 'Image to 3D', description: 'Generated GLB meshes — the only copy; records live in Postgres', archivable: false, deletable: false },
   'images': { label: 'Images', description: 'Uploaded and generated images — delete individually; gallery, pipeline, and collection records point at these files', archivable: true, deletable: true, purgeScope: 'items' },

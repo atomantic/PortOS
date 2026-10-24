@@ -28,7 +28,10 @@ vi.mock('./cosState.js', () => ({
 
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi.fn(async () => Object.values(mockCosState.state?.agents || {})) }));
 const recoveryTasks = vi.hoisted(() => new Map());
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn(async id => recoveryTasks.get(id) || null) }));
+vi.mock('./cosTaskStore.js', () => ({
+  getTaskById: vi.fn(async id => recoveryTasks.get(id) || null),
+  getTaskView: vi.fn(async () => ({ user: { tasks: [...recoveryTasks.values()] }, cos: { tasks: [] } })),
+}));
 
 vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {})
