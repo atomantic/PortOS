@@ -63,7 +63,7 @@ export function MergeAction({
     );
   }
   return (
-    <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg">
+    <fieldset disabled={disabled || merging} className="flex min-w-0 flex-wrap items-center gap-2 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg">
       <MergeOptions idPrefix={idPrefix} subject={`#${pullRequest.number}`} method={method} onMethodChange={onMethodChange}
         deleteBranch={deleteBranch} onDeleteBranchChange={onDeleteBranchChange} disabled={disabled || merging} />
       <ConfirmButtonPair
@@ -73,10 +73,10 @@ export function MergeAction({
         busy={merging}
         busyText="Merging…"
         ariaLabel={`Confirm merging #${pullRequest.number}`}
-        onConfirm={onConfirm}
+        onConfirm={() => { if (!disabled && !merging) onConfirm(); }}
         onCancel={onCancel}
       />
-    </div>
+    </fieldset>
   );
 }
 
