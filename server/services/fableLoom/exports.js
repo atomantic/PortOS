@@ -70,6 +70,7 @@ function publicJob(job) {
 
 async function readJob(id, loomId = null) {
   if (!uuid.test(id)) throw missing();
+  const wasActive = active.has(id);
   const job = await readJSONFile(jobFile(id), absentJob, { strict: true, logError: false }).catch(() => {
     throw invalidState();
   });
@@ -92,6 +93,9 @@ async function readJob(id, loomId = null) {
   if (job.status === 'failed' && (typeof job.error?.code !== 'string' || typeof job.error?.message !== 'string')) throw invalidState();
   if (loomId !== null && job.loomId !== loomId) throw missing();
   if (!active.has(id) && !['completed', 'failed'].includes(job.status)) {
+    // The worker publishes its terminal record before releasing ownership. A read
+    // spanning that release may hold an older snapshot; reload before recovery.
+    if (wasActive) return readJob(id, loomId);
     await rmGuarded(join(jobDirectory(id), 'work'), { recursive: true, force: true });
     job.status = 'failed';
     job.error = { code: 'EXPORT_INTERRUPTED', message: 'The server restarted during export. Start a new export.' };
