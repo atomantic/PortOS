@@ -8,8 +8,11 @@
  * the prompt-cache tiers are derived from the input rate by the multipliers in
  * `CACHE_MULTIPLIERS` (every vendor publishes caching as a fixed ratio of the
  * base input rate, so one multiplier per family beats 4 hand-maintained numbers
- * per model). Batch and long-context tier discounts are still ignored, and the
- * UI discloses the approximation.
+ * per model, except Grok rows whose cached-input price is not that ratio).
+ * Batch discounts are still ignored. Grok's ≥200k doubling is NOT a second
+ * rate in this table: it is a per-request subset the usage report prices once
+ * more at these base rates (see GROK_LONG_CONTEXT_PROMPT_TOKENS). The UI
+ * discloses the approximation.
  *
  * Cache tiers are NOT a rounding detail: for agentic CLI use, cache reads are
  * >90% of input volume, so pricing them at the standard input rate (or, as
@@ -45,7 +48,69 @@ const MODEL_RATE_AS_OF = Object.freeze({
   'gpt-6-luna': '2026-09-22',
   'gpt-5.6-sol': '2026-09-22',
   'gpt-5.6-luna': '2026-09-22',
+  // https://docs.x.ai/docs/models — text cache rates and Imagine headline tiers.
+  'grok-4.7': '2026-10-24',
+  'grok-4.6': '2026-10-24',
+  'grok-4.5': '2026-10-24',
+  'grok-4.3': '2026-10-24',
+  'grok-4.20': '2026-10-24',
+  'grok-build-0.1': '2026-10-24',
+  'grok-imagine-image': '2026-10-24',
+  'grok-imagine-image-2.0': '2026-10-24',
+  'grok-imagine-image-quality': '2026-10-24',
+  'grok-imagine-video': '2026-10-24',
+  'grok-imagine-video-1.5': '2026-10-24',
+  'grok-imagine-video-1.5-lite': '2026-10-24',
 });
+
+/**
+ * xAI doubles every token price, including cached input, on a request whose
+ * prompt reaches this size. The doubling applies to that request only — a
+ * day's summed tokens are not a prompt — so the rate table stays at the short
+ * tier and the usage report adds one extra base-rate charge for the subset.
+ */
+export const GROK_LONG_CONTEXT_PROMPT_TOKENS = 200_000;
+
+/** Docs' recommended Imagine models, and what the Grok CLI bills when it names none. */
+export const GROK_IMAGINE_IMAGE_MODEL = 'grok-imagine-image-2.0';
+export const GROK_IMAGINE_VIDEO_MODEL = 'grok-imagine-video-1.5';
+
+/**
+ * Headline / lowest-resolution Imagine rates (USD). Higher resolutions cost
+ * more; PortOS does not request a resolution, so the estimate is this tier.
+ * Longest id first: `grok-imagine-image` is a prefix of the 2.0 and quality ids.
+ */
+const GROK_IMAGINE_RATES = Object.freeze([
+  { id: 'grok-imagine-video-1.5-lite', kind: 'video', perSecond: 0.02, perInputImage: 0.01 },
+  { id: 'grok-imagine-image-quality', kind: 'image', perImage: 0.05, perInputImage: 0.01 },
+  { id: 'grok-imagine-image-2.0', kind: 'image', perImage: 0.04, perInputImage: 0.01 },
+  { id: 'grok-imagine-video-1.5', kind: 'video', perSecond: 0.08, perInputImage: 0.01 },
+  { id: 'grok-imagine-image', kind: 'image', perImage: 0.02, perInputImage: 0.002 },
+  { id: 'grok-imagine-video', kind: 'video', perSecond: 0.05, perInputImage: 0.002 },
+].sort((a, b) => b.id.length - a.id.length));
+
+/** The Imagine rate row a model id names, or null. Longest published id wins. */
+function grokImagineRate(model) {
+  const id = String(model || '').trim().toLowerCase();
+  if (!id.includes('grok-imagine-')) return null;
+  return GROK_IMAGINE_RATES.find((row) => id === row.id || id.includes(row.id)) || null;
+}
+
+/**
+ * USD for one Imagine bucket. Token rates do not apply; input-image fees use
+ * the same model's published input price. Unknown ids cost nothing here so a
+ * text row cannot pick up an image price by substring accident.
+ * @param {string|null|undefined} model
+ * @param {{ images?: number, videoSeconds?: number, inputImages?: number }} [units]
+ * @returns {number}
+ */
+export function estimateGrokImagineCost(model, units = null) {
+  const rate = grokImagineRate(model);
+  if (!rate) return 0;
+  return (units?.images || 0) * (rate.perImage || 0)
+    + (units?.videoSeconds || 0) * (rate.perSecond || 0)
+    + (units?.inputImages || 0) * (rate.perInputImage || 0);
+}
 
 export const pricingAsOfForModel = (model) =>
   MODEL_RATE_AS_OF[String(model || '').trim().toLowerCase()] || PRICING_AS_OF;
@@ -116,9 +181,9 @@ const EXACT_RATES = {
   'gpt-5.4-mini': [0.75, 4.5],
   'gpt-5.4-nano': [0.2, 1.25],
   'gpt-5.3-codex': [1.75, 14.0],
-  // xAI
-  // Verified 2026-09-21: https://docs.x.ai/developers/models/grok-4.7
-  // Standard <=200k input tier; >200k uses $4/$12 and is not modeled here.
+  // xAI. Short-context (prompt <200k) rates. The ≥200k doubling is
+  // GROK_LONG_CONTEXT_PROMPT_TOKENS, applied per request by the usage report.
+  // Verified 2026-10-24: https://docs.x.ai/docs/models
   'grok-4.7': [2.0, 6.0],
   'grok-4.6': [2.0, 6.0],
   'grok-4.5': [2.0, 6.0],
@@ -210,9 +275,13 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  *     Claude Code does not use — `cache_creation_input_tokens` is 5-minute).
  *   - OpenAI: 0.1x cached input; only gpt-5.6 lists a separate cache-write rate
  *     (~1.25x), and Codex reports no cache-write tokens at all.
- *   - xAI: Grok 4.7's cached input is $0.50/M (0.25x), verified 2026-09-21;
- *     Grok 4.5 retains its 0.15x estimate. No published cache-write surcharge
- *     for Grok 4.7: uncached input uses its standard input rate.
+ *   - xAI (2026-10-24, https://docs.x.ai/docs/models): cached input is a
+ *     published price, not one ratio. grok-4.7 and grok-4.6 are $0.50 (0.25x
+ *     of $2), grok-4.5 is $0.30 (0.15x), grok-4.3 / grok-4.20 and
+ *     grok-build-0.1 are $0.20 (absolute — 0.20 is not a binary fraction of
+ *     $1.25). xAI publishes no cache-write product; creation is ordinary
+ *     input, so every Grok write multiplier is 1. An unknown grok* id uses
+ *     the grok-4.7 pair.
  *   - Google: 0.1x cached input, plus an hourly storage fee we do not model
  *     (PortOS records no cache duration to price it against).
  *
@@ -233,7 +302,12 @@ const CACHE_MULTIPLIER_RULES = [
   // GPT-6.1 Sol cached input is $0.10/MTok against a $2 input rate.
   { test: /^gpt-6\.1-sol$/, read: 0.05, write: 1.25 },
   { test: /^grok-4\.7$/, read: 0.25, write: 1 },
-  { test: /^grok/, read: 0.15, write: 1.25 },
+  { test: /^grok-4\.6$/, read: 0.25, write: 1 },
+  { test: /^grok-4\.5$/, read: 0.15, write: 1 },
+  // $0.20 cached input against $1.25 (grok-4.3) and $1 (grok-build-0.1).
+  { test: /^grok-4\.3$/, cacheReadPer1M: 0.20, write: 1 },
+  { test: /^grok-build-0\.1$/, cacheReadPer1M: 0.20, write: 1 },
+  { test: /^grok/, read: 0.25, write: 1 },
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
   // Opus 5.5 cache reads are $0.20/MTok against a $4 input rate.
   { test: /^claude-opus-5-5/, read: 0.05, write: 1.25 },
@@ -254,11 +328,15 @@ const cacheMultipliers = (rateModel) => {
  * tier answered.
  */
 const withCacheRates = (rates) => {
-  const { read, write } = cacheMultipliers(rates.rateModel);
+  const rule = cacheMultipliers(rates.rateModel);
+  const read = rule.cacheReadPer1M != null
+    ? rule.cacheReadPer1M
+    : rates.inputPer1M * (rule.read ?? DEFAULT_CACHE_MULTIPLIERS.read);
+  const write = rates.inputPer1M * (rule.write ?? DEFAULT_CACHE_MULTIPLIERS.write);
   return {
     ...rates,
-    cacheReadPer1M: rates.inputPer1M * read,
-    cacheWritePer1M: rates.inputPer1M * write,
+    cacheReadPer1M: read,
+    cacheWritePer1M: write,
   };
 };
 
@@ -279,6 +357,20 @@ const toRates = (rateModel) => withCacheRates({
  */
 export function resolveModelRates(providerId, model) {
   const id = typeof model === 'string' ? model.trim() : '';
+  // Before the `/grok/i` family rule, which would otherwise price an Imagine
+  // id as grok-4.7 text. Imagine dollars are estimateGrokImagineCost; these
+  // token rates stay zero so a media row is not also billed as chat.
+  const imagine = grokImagineRate(id);
+  if (imagine) {
+    return {
+      rateModel: imagine.id,
+      inputPer1M: 0,
+      outputPer1M: 0,
+      cacheReadPer1M: 0,
+      cacheWritePer1M: 0,
+      matched: id.toLowerCase() === imagine.id ? 'exact' : 'family',
+    };
+  }
   if (id && EXACT_RATES[id]) {
     return { ...toRates(id), matched: 'exact' };
   }

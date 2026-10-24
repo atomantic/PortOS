@@ -324,6 +324,7 @@ async function generateImagePrepared({
   runGrok(job, jobId, bin, baseArgs, {
     fullPrompt, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA, denoise,
     toolName: grokImageTool(inputImages.paths.length > 0),
+    inputImageCount: (inputImages.initPath ? 1 : 0) + inputImages.referencePaths.length,
   });
 
   return {
@@ -342,7 +343,7 @@ async function generateImagePrepared({
 // leaves the close handler to release resources once it has physically exited.
 function runGrok(job, jobId, bin, baseArgs, {
   fullPrompt, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA = false, denoise = false,
-  toolName = grokImageTool(false),
+  toolName = grokImageTool(false), inputImageCount = 0,
 }) {
   let cleanupPromptFile = () => {};
   // Every terminal path releases both job-owned temp resources. A failed
@@ -465,6 +466,12 @@ function runGrok(job, jobId, bin, baseArgs, {
         // Cleaners run BEFORE the SSE complete + completed events so
         // subscribers see the cleaned bytes.
         await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.GROK });
+        try {
+          const { recordGrokImageUsage } = await import('../grokMediaUsage.js');
+          await recordGrokImageUsage({ jobId, createdAt: meta.createdAt, inputImages: inputImageCount });
+        } catch (usageErr) {
+          console.error(`❌ Failed to record Grok image usage [${jobId.slice(0, 8)}]: ${usageErr.message}`);
+        }
         job.status = 'complete';
         if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
         activeJobs.delete(jobId);

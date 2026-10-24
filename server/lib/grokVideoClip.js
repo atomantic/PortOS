@@ -81,3 +81,25 @@ export const nearestGrokDuration = (requested) => {
   if (!Number.isFinite(n) || n <= 0) return GROK_VIDEO_DEFAULT_DURATION;
   return GROK_VIDEO_DURATIONS.find((d) => d >= n) ?? GROK_VIDEO_DURATIONS[GROK_VIDEO_DURATIONS.length - 1];
 };
+
+/**
+ * Billable units for one accepted Grok video.
+ *
+ * Text-to-video has no source image: the agent generates a base still
+ * (`images: 1`) and then feeds that still to `image_to_video` (`inputImages: 1`).
+ * Image-to-video already has a still, so it bills the delivered seconds plus
+ * that one input image and does not bill a second generated image.
+ * Delivered length wins; otherwise the length grok was asked for.
+ * @param {{ requestedSeconds?: number|string, deliveredSeconds?: number|null, hasSourceImage?: boolean }} [opts]
+ * @returns {{ videoSeconds: number, images: number, inputImages: number }}
+ */
+export function grokVideoBillableUnits({ requestedSeconds, deliveredSeconds, hasSourceImage = false } = {}) {
+  const delivered = typeof deliveredSeconds === 'number' && Number.isFinite(deliveredSeconds) && deliveredSeconds > 0
+    ? deliveredSeconds
+    : null;
+  return {
+    videoSeconds: delivered ?? resolveGrokDuration(requestedSeconds),
+    images: hasSourceImage ? 0 : 1,
+    inputImages: 1,
+  };
+}

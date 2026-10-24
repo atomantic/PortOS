@@ -9,6 +9,11 @@ const { statusOp } = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/providers.js', () => ({ getAllProviders: vi.fn() }));
+const { recordRunUsage } = vi.hoisted(() => ({ recordRunUsage: vi.fn(async () => {}) }));
+vi.mock('./usage.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, recordRunUsage };
+});
 vi.mock('../services/aiStatusEvents.js', () => ({ startAIOp: vi.fn(() => statusOp) }));
 vi.mock('../services/ollamaManager.js', () => ({
   ensureProviderReady: vi.fn(),
@@ -238,6 +243,7 @@ describe('callProviderAISimple through the ChatGPT subscription', () => {
     statusOp.update.mockClear();
     statusOp.complete.mockClear();
     statusOp.error.mockClear();
+    recordRunUsage.mockClear();
     runTurn.mockReset();
     bench.mockReset();
     peekBench.mockReset().mockReturnValue(null);
@@ -257,6 +263,7 @@ describe('callProviderAISimple through the ChatGPT subscription', () => {
 
     expect(result).toMatchObject({ text: 'a subscription answer' });
     expect(result.usage.source).toBe('chatgpt-subscription');
+    expect(recordRunUsage).not.toHaveBeenCalled();
     expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'Summarize this.', model: 'model-alpha',
     }));
@@ -619,5 +626,40 @@ describe('provider review preparation deadline', () => {
     expect(await callProviderAISimple({ id: 'deadline-after-ready', type: 'api', endpoint: 'http://localhost:11434/v1' }, 'm', 'prompt', { deadlineMs: 100, allowModelRecovery: false })).toMatchObject({ error: 'Provider request deadline expired.' });
     expect(fetch).not.toHaveBeenCalled();
     vi.mocked(isOllamaProvider).mockReturnValue(false);
+  });
+});
+
+describe('callProviderAISimple xAI usage ledger', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('records cached and reasoning tokens from a successful xAI completion', async () => {
+    recordRunUsage.mockClear();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: {
+          prompt_tokens: 32,
+          completion_tokens: 9,
+          prompt_tokens_details: { cached_tokens: 6 },
+          completion_tokens_details: { reasoning_tokens: 94 },
+        },
+      }),
+    })));
+    const result = await callProviderAISimple(
+      { id: 'grok', type: 'api', endpoint: 'https://api.x.ai/v1' },
+      'grok-4.7',
+      'prompt',
+    );
+    expect(result.usage).toMatchObject({ inputTokens: 26, outputTokens: 103, cacheReadTokens: 6 });
+    await vi.waitFor(() => expect(recordRunUsage).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'grok',
+      model: 'grok-4.7',
+      tokensIn: 26,
+      tokensOut: 103,
+      cacheReadTokens: 6,
+      source: 'measured',
+    })));
   });
 });

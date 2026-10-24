@@ -23,11 +23,18 @@ vi.mock('./providers.js', () => ({
   ])
 }));
 
+vi.mock('./grokUsageBackfill.js', () => ({
+  applyGrokUsageRepair: vi.fn(async () => ({
+    added: 0, turns: 0, images: 0, videos: 0, backedUp: false, note: null, backupDir: null,
+  })),
+}));
+
 const {
   __resetHistoricalUsageBackfillForTests,
   getHistoricalUsageBackfillStatus,
   startHistoricalUsageBackfill
 } = await import('./usageBackfill.js');
+const { applyGrokUsageRepair } = await import('./grokUsageBackfill.js');
 
 class FakeWorker extends EventEmitter {
   static instances = [];
@@ -46,6 +53,10 @@ beforeEach(() => {
   usageBackfillEvents.removeAllListeners();
   FakeWorker.instances = [];
   __resetHistoricalUsageBackfillForTests();
+  applyGrokUsageRepair.mockReset();
+  applyGrokUsageRepair.mockResolvedValue({
+    added: 0, turns: 0, images: 0, videos: 0, backedUp: false, note: null, backupDir: null,
+  });
 });
 
 describe('historical usage backfill job', () => {
@@ -113,6 +124,55 @@ it('notifies clients when the worker fails', async () => {
   await startHistoricalUsageBackfill({ WorkerClass: FakeWorker, providers: [] });
   updated.mockClear();
   FakeWorker.instances[0].emit('error', new Error('Example worker failure'));
+  await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({
+    status: 'error',
+    error: 'Example worker failure',
+    grok: { added: 0 },
+  }));
   expect(updated).toHaveBeenCalledWith({});
-  expect(getHistoricalUsageBackfillStatus()).toMatchObject({ status: 'error', error: 'Example worker failure' });
+  expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+});
+
+it('puts the Grok repair on the reconcile result and runs it once', async () => {
+  applyGrokUsageRepair.mockResolvedValue({
+    added: 3,
+    turns: 1,
+    images: 2,
+    videos: 0,
+    backedUp: true,
+    note: 'Long-context premiums were not added because no Grok usage scan has run yet.',
+    backupDir: '/tmp/grok-usage-backup',
+  });
+  await startHistoricalUsageBackfill({ WorkerClass: FakeWorker, providers: [] });
+  FakeWorker.instances[0].emit('message', {
+    type: 'complete',
+    result: { processed: 1, total: 1, corrections: [] },
+  });
+  await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({
+    status: 'complete',
+    corrected: 1,
+    grok: {
+      added: 3,
+      turns: 1,
+      images: 2,
+      videos: 0,
+      backedUp: true,
+      note: 'Long-context premiums were not added because no Grok usage scan has run yet.',
+    },
+  }));
+  expect(getHistoricalUsageBackfillStatus().grok.backupDir).toBeUndefined();
+  expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+});
+
+it('keeps a transcript failure from dropping a Grok repair that already landed', async () => {
+  applyGrokUsageRepair.mockResolvedValue({
+    added: 1, turns: 0, images: 1, videos: 0, backedUp: true, note: null, backupDir: '/tmp/backup',
+  });
+  await startHistoricalUsageBackfill({ WorkerClass: FakeWorker, providers: [] });
+  FakeWorker.instances[0].emit('error', new Error('Example worker failure'));
+  await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({
+    status: 'error',
+    error: 'Example worker failure',
+    grok: { added: 1, images: 1, backedUp: true },
+  }));
 });
