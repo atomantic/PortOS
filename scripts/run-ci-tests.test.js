@@ -277,7 +277,9 @@ it.each(['files', 'full'])('validates the guard proof before the actual %s Vites
   } finally {
     await destroyGitSandbox(fixture);
   }
-});
+  // Include the child's existing 120s budget plus real Git setup/teardown.
+  // Windows can otherwise expire the outer 30s test while that child is valid.
+}, 150_000);
 
 it('keeps explicit browser selectors with their owner after structural guard reuse', async () => {
   const guard = 'server/lib/index.test.js';
