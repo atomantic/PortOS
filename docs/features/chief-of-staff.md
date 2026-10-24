@@ -20,6 +20,24 @@ is `completed`, `no-action-needed`, `blocked`, or `incomplete`. Reasons describe
 the delivery evidence, remaining work, or unmet prerequisite. A reported no-op
 requires the task's existing delivery checks or permitted empty-branch proof.
 
+Claim workflows can also settle a reported `no-action-needed` result from a
+read-only tracker proof. The server resolves the configured app and repository,
+checks the agent's task and source checkout binding, then verifies the pinned
+`claimTarget` or every server-persisted selected `claimBranches` issue. On
+GitHub, a closed `NOT_PLANNED` issue with a verified repository operator closure
+is a stand-down, not code delivery. A `COMPLETED` issue needs an exact closing
+relationship to a merged PR in the same repository's current default branch,
+with its merge commit recorded. GitLab supports the corresponding delivered
+case through the MR's `closes_issues` relationship. GitLab closure without that
+proof, Jira and file trackers, open or mismatched issues, unreadable responses,
+and arbitrary agent prose remain unverified. Bounded tracker reads may refuse
+when the relevant history or closing relationship is outside their result window.
+
+Normal completion and restart recovery use the same verifier, perform no tracker
+writes, and retain the scoped evidence in the agent's `claimDisposition` result.
+This proof does not bypass existing PR, drift or fidelity checks, or erase a
+recorded failed validation gate during recovery.
+
 Agent results and run history retain `executionSuccess` independently of the
 validated `taskOutcome`; task metadata retains the outcome too. Explicit blocked
 or incomplete reports park the task and preserve work for continuation. Cards
