@@ -1,3 +1,5 @@
+vi.mock('../lib/gitRepositoryIdentity.js', () => ({ readGitCommonDirectory: vi.fn(async () => '/repo/.git') }));
+import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 vi.mock('./branchCompletionPolicy.js', async () => ({
   ...await vi.importActual('./branchCompletionPolicy.js'),
   readBranchCompletionPolicies: vi.fn(async () => []),
@@ -147,6 +149,7 @@ const run = (overrides = {}) => verifyAgentRepoState({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  readGitCommonDirectory.mockReset().mockResolvedValue('/repo/.git');
   retryCompletionCheckoutCapture.mockReset().mockResolvedValue(false);
   getAgentRecord.mockReset().mockResolvedValue(null);
   findMissingCheckoutPreservation.mockResolvedValue(null);
@@ -246,6 +249,37 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect((await run({ success: false, agentState: state, task: own })).skipReason).not.toBe('follow-up-pending');
     queuedTasks([own, { ...own, id: 'other-task' }]);
     expect(await run({ success: false, agentState: state, task: own })).toMatchObject({ skipReason: 'follow-up-pending' });
+  });
+
+  it('ignores independent repositories with the same branch and deduplicates app reads per audit', async () => {
+    getAppById.mockImplementation(async id => ({ id, repoPath: id === 'demo-app' ? '/repo' : '/other' }));
+    readGitCommonDirectory.mockImplementation(async path => `${path}/.git`);
+    queuedTasks(['first', 'second'].map(id => ({ id, status: 'pending', metadata: { app: 'other-app', existingBranch: BRANCH } })));
+    expect((await run()).skipReason).not.toBe(REPO_STATE_SKIPS.FOLLOW_UP_PENDING);
+    expect(getAppById.mock.calls.filter(([id]) => id === 'other-app')).toHaveLength(1);
+    expect(readGitCommonDirectory).toHaveBeenCalledWith('/other');
+  });
+
+  it.each(['/alias', '/linked-worktree'])('preserves another app sharing the common directory through %s', async repoPath => {
+    getAppById.mockImplementation(async id => ({ id, repoPath: id === 'demo-app' ? '/repo' : repoPath }));
+    queuedTasks([{ status: 'pending', metadata: { app: 'alias-app', existingBranch: BRANCH } }]);
+    expect(await run()).toMatchObject({ skipReason: REPO_STATE_SKIPS.FOLLOW_UP_PENDING });
+    expect(readGitCommonDirectory).toHaveBeenCalledWith(repoPath);
+  });
+
+  it.each(['missing-scope', 'missing-app', 'app-read-failed', 'missing-path', 'unreadable-target', 'unreadable-candidate'])('holds when ownership identity is unknown: %s', async failure => {
+    getAppById.mockImplementation(async id => {
+      if (id === 'demo-app') return { id, repoPath: '/repo' };
+      if (failure === 'app-read-failed') throw new Error('unreadable');
+      if (failure === 'missing-app') return null;
+      return { id, repoPath: failure === 'missing-path' ? undefined : '/other' };
+    });
+    readGitCommonDirectory.mockImplementation(async path => !path
+      || path === (failure === 'unreadable-target' ? '/repo' : failure === 'unreadable-candidate' ? '/other' : '') ? null : `${path}/.git`);
+    queuedTasks([{ status: 'pending', metadata: { app: failure === 'missing-scope' ? undefined : 'other-app', existingBranch: BRANCH } }]);
+    expect(await run()).toMatchObject({ skipReason: REPO_STATE_SKIPS.GATE_UNREADABLE });
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it.each([[], ['Branch preserved by ordinary cleanup']])('settles its cleanup handoff after archive and integration proof despite warnings %j', async cleanupWarnings => {
@@ -559,7 +593,7 @@ describe('verifyAgentRepoState — never fires', () => {
   });
 
   it('defers while a review-loop follow-up still owns the branch', async () => {
-    queuedTasks([{ status: 'pending', metadata: { reviewLoopFollowUp: true, reviewLoopPRBranch: BRANCH } }]);
+    queuedTasks([{ status: 'pending', metadata: { app: 'demo-app', reviewLoopFollowUp: true, reviewLoopPRBranch: BRANCH } }]);
     existsSync.mockReturnValue(true);
 
     const result = await run({ task: task({ prCompletion: 'review-then-merge' }) });
@@ -569,7 +603,7 @@ describe('verifyAgentRepoState — never fires', () => {
   });
 
   it('defers while a retry holds the branch as its resume pointer', async () => {
-    queuedTasks([{ status: 'pending', metadata: { existingBranch: BRANCH } }]);
+    queuedTasks([{ status: 'pending', metadata: { app: 'demo-app', existingBranch: BRANCH } }]);
     existsSync.mockReturnValue(true);
     const result = await run();
     expect(result.skipReason).toBe(REPO_STATE_SKIPS.FOLLOW_UP_PENDING);
@@ -667,7 +701,7 @@ describe('verifyAgentRepoState — never fires', () => {
   it('defers while a CHALLENGED task still holds the branch', async () => {
     // `challenged` is a parked-for-dispute status, not a terminal one: the task
     // keeps its branch and resumes on it.
-    queuedTasks([{ status: 'challenged', metadata: { existingBranch: BRANCH } }]);
+    queuedTasks([{ status: 'challenged', metadata: { app: 'demo-app', existingBranch: BRANCH } }]);
     existsSync.mockReturnValue(true);
 
     const result = await run();

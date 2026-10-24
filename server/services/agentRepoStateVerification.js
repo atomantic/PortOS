@@ -1,3 +1,4 @@
+import { readGitCommonDirectory } from '../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
@@ -86,7 +87,7 @@ const PENDING_OWNER_STATUSES = new Set(['pending', 'in_progress', 'blocked', 'ch
  * @param {object|null} app - the managed app record (carries `pendingMergePrs`)
  * @returns {Promise<boolean>}
  */
-async function branchHasPendingOwner(branchName, app, cleanupOwner = null) {
+async function branchHasPendingOwner(branchName, sourceWorkspace, app, cleanupOwner = null) {
   // `resolveTaskTargetBranch` is the canonical "which branch does this task own"
   // reader — matching `reviewLoopPRBranch` by hand here would miss a retry holding
   // the same branch through `existingBranch`.
@@ -97,12 +98,30 @@ async function branchHasPendingOwner(branchName, app, cleanupOwner = null) {
   // is queued to land.
   const tasks = await readAllTasksFlat().catch(() => null);
   if (!tasks) return null;
-  const claimedByTask = tasks.some(t =>
+  const candidates = tasks.filter(t =>
     !(cleanupOwner && t.id === cleanupOwner.taskId && t.metadata?.deliveryRecovery === 'cleanup'
       && t.metadata.deliveryRecoveryAgentId === cleanupOwner.agentId)
     && PENDING_OWNER_STATUSES.has(t.status) && resolveTaskTargetBranch(t.metadata) === branchName
   );
-  if (claimedByTask) return true;
+  if (candidates.length) {
+    const common = await readGitCommonDirectory(sourceWorkspace);
+    if (!common) return null;
+    const { getAppById } = await import('./apps.js');
+    // Audit-local only: each candidate app is read once, with no stale identity
+    // carried into another audit. Different app IDs are not different repos.
+    const identities = new Map();
+    for (const candidate of candidates) {
+      const appId = candidate.metadata?.app;
+      if (!appId) return null;
+      if (!identities.has(appId)) {
+        const ownerApp = await getAppById(appId).catch(() => null);
+        identities.set(appId, await readGitCommonDirectory(ownerApp?.repoPath));
+      }
+      const ownerCommon = identities.get(appId);
+      if (!ownerCommon) return null;
+      if (ownerCommon === common) return true;
+    }
+  }
 
   if (!app) return false;
   const { readPendingMergePrs } = await import('./prWatcher.js');
@@ -520,7 +539,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   const worktreePath = isTruthyMeta(metadata.claimPicksOwnBranch) ? metadata.workspacePath : metadata.workspacePath || join(PATHS.worktrees, agentId);
   const { record, blockWith } = branchLedger(agentId, { branch: branchName, path: worktreePath });
   const enabled = repoStateVerificationEnabled(app);
-  const owned = enabled ? await branchHasPendingOwner(branchName, app, agentState?.result?.cleanupPending === true ? { taskId: task.id, agentId } : null).catch(() => null) : false;
+  const owned = enabled ? await branchHasPendingOwner(branchName, sourceWorkspace, app, agentState?.result?.cleanupPending === true ? { taskId: task.id, agentId } : null).catch(() => null) : false;
   if (owned === null) return blockWith('ownership-unreadable', { skipReason: REPO_STATE_SKIPS.GATE_UNREADABLE });
   if (owned) await record('pending', 'existing-completion-owner');
 
