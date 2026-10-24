@@ -171,3 +171,19 @@ it('does not infer merged delivery or backup existence from successful execution
   expect(screen.queryByText('Code merged.')).not.toBeInTheDocument();
   expect(screen.queryByText('Local cleanup confirmed; preservation verified.')).not.toBeInTheDocument();
 });
+
+it('lets verified current cleanup supersede only a stale cleanup-only handoff', () => {
+  const record = { result: { success: false, executionSuccess: true, cleanupPending: true,
+    taskOutcome: { status: 'incomplete', reason: 'Historical cleanup queued.', recovery: { mode: 'cleanup' } } },
+    metadata: { cleanupOutcome: { status: 'verified', reason: 'retirement-receipt-verified', committedIntegrationVerified: true } } };
+  const view = render(<AgentResultLine agent={record} />);
+  expect(screen.getByText('Completed successfully')).toBeInTheDocument();
+  expect(screen.getByText('Code merged.')).toBeInTheDocument();
+  expect(screen.getByText('Local cleanup confirmed; preservation verified.')).toBeInTheDocument();
+  expect(screen.queryByText('Task incomplete')).not.toBeInTheDocument();
+  view.rerender(<AgentResultLine agent={{ ...record, result: { ...record.result,
+    taskOutcome: { status: 'blocked', reason: 'Choose whether to publish the release.', recovery: { mode: 'approval' } } } }} />);
+  expect(screen.getByText('Task blocked')).toBeInTheDocument();
+  expect(screen.getByText('Choose whether to publish the release.')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});

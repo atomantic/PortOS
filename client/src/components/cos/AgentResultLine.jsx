@@ -9,8 +9,6 @@ export default function AgentResultLine({ agent, className = '' }) {
   if (!agent?.result) return null;
   const handoff = isAgentHandoff(agent);
   const outcome = normalizeTaskOutcome(agent.result.taskOutcome);
-  const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status);
-  const deliveryComplete = isTaskDeliveryComplete(agent);
   const executionSuccess = agent.result.executionSuccess ?? agent.result.success;
   const assessment = [agent.metadata?.auditAssessment, agent.result.auditAssessment]
     .find(value => value?.status === 'recorded') || agent.metadata?.auditAssessment || agent.result.auditAssessment;
@@ -26,6 +24,11 @@ export default function AgentResultLine({ agent, className = '' }) {
   const cleanupTracked = cleanupRecovery || cleanup || agent.result.cleanupPending === true;
   const cleanupPending = cleanupTracked && cleanup?.status !== 'verified';
   const merged = cleanup?.committedIntegrationVerified === true;
+  // A completed cleanup audit supersedes the old cleanup-only handoff, while
+  // unrelated delivery decisions and execution failures keep their own verdict.
+  const cleanupResolved = cleanup?.status === 'verified' && merged && outcome?.recovery?.mode === 'cleanup';
+  const deliveryHeld = ['blocked', 'incomplete'].includes(outcome?.status) && !cleanupResolved;
+  const deliveryComplete = isTaskDeliveryComplete(agent) || cleanupResolved;
   const incomplete = cleanupPending || interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;
   const tone = handoff ? 'text-port-accent' : !executionSuccess ? 'text-port-error' : incomplete || deliveryHeld ? 'text-port-warning'
     : deliveryComplete ? 'text-port-success' : executionSuccess ? 'text-port-text-muted' : 'text-port-error';
@@ -44,7 +47,7 @@ export default function AgentResultLine({ agent, className = '' }) {
       )}
       </span>
       {!handoff && cleanupTracked && <div>{merged ? 'Code merged.' : deliveryComplete ? 'Delivery verified.' : 'Code delivery still needs verification.'}</div>}
-      {!handoff && outcome?.reason && !cleanupTracked && <div>{outcome.reason}</div>}
+      {!handoff && outcome?.reason && (!cleanupTracked || outcome.recovery?.mode === 'approval') && <div>{outcome.reason}</div>}
       {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
       {!handoff && cleanupTracked && <CleanupStatus cleanup={cleanup} outcome={outcome} />}
       <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
