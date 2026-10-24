@@ -1081,6 +1081,9 @@ function buildSuitePlan(changedFiles, {
   // Repository-derived browser dependencies; null means discovery failed and
   // a shared-source change must retain conservative full coverage.
   clientDependencies = [],
+  // Client test → shared dependencies; null conservatively retains that test.
+  // Kept separate from production dependencies so fixtures never force a build.
+  clientTestDependencies = {},
   // Includes literal deferred imports; null means discovery was inconclusive.
   dbDependencies = [],
   // Registered suite → reachable files; null retains that suite conservatively.
@@ -1239,6 +1242,11 @@ function buildSuitePlan(changedFiles, {
     ...fixtureTests,
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
+    ...Object.entries(clientTestDependencies)
+      .filter(([test, dependencies]) => trackedSet.has(test) && runnerForTest(test) === 'client'
+        && jsSources.some((source) => isSharedClientDependency(source)
+          && (dependencies === null || dependencies.includes(source))))
+      .map(([test]) => test),
   ];
 
   for (const script of pythonSources) {
@@ -1591,6 +1599,10 @@ function createDependencySnapshot(files, cwd) {
   return { readText, staticDependencies, testDependencies };
 }
 
+function isSharedClientDependency(path) {
+  return path.startsWith('server/lib/') || path.startsWith('scripts/lib/');
+}
+
 // Start from every browser source, including lazy-loaded pages, then follow
 // relative static imports and re-exports across directory boundaries. Unresolved
 // edges must widen CI rather than disappearing from a negative graph walk.
@@ -1691,6 +1703,16 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     ? collectClientDependencies(dependencyFiles, snapshot)
     : [];
 
+  // Include test fixtures and literal deferred imports, unlike the production
+  // projection. Keep uncertainty per test so one unresolved/computed fixture
+  // retains its consumer without widening every resolved test.
+  const clientTestDependencies = collectedChangedFiles.some((path) => isSharedClientDependency(path)
+    && isExecutable(path) && !isTestFile(path))
+    ? Object.fromEntries(dependencyFiles.filter((path) => path.startsWith('client/src/')
+      && isTestFile(path)).map((test) => [test,
+      collectTestDependencies([test], snapshot.testDependencies)?.filter(isSharedClientDependency) ?? null]))
+    : {};
+
   const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
     && MODULE_SOURCE_RE.test(path) && !isTestFile(path) && !isStructuralBarrel(path));
   const dbDependencies = hasRelatedServerSource
@@ -1748,7 +1770,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   const dockerContainmentLiveInputs = forceFull ? null : collectDockerContainmentLiveInputs(cwd);
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
+    clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
     dockerContainmentLiveInputs, serverReach };
 }
 
@@ -2020,7 +2042,7 @@ function main() {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
   const {
-    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies,
+    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
     dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
   } = collectPlanInputs({
     baseSha: base,
@@ -2034,6 +2056,7 @@ function main() {
     appRouteOnly: isRouteOnlyAppDiff(appDiff),
     pathContractTests,
     clientDependencies,
+    clientTestDependencies,
     dbDependencies,
     browserDependencies,
     dependencyChanges,

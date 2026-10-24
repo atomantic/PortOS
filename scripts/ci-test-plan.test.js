@@ -373,6 +373,49 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
   }
 });
 
+it('projects test-only shared re-exports and retains unresolved consumers without selecting a build', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-client-test-deps-'));
+  const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const leaf = 'scripts/lib/cleanupLeaf.js';
+  const unused = 'scripts/lib/unconsumed.js';
+  const consumer = 'client/src/test/lifecycle.test.js';
+  const unrelated = 'client/src/test/unrelated.test.js';
+  const plan = (source) => JSON.parse(execFileSync(process.execPath, [planner], {
+    cwd: root, encoding: 'utf8',
+    env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
+      CI_CHANGED_FILES: JSON.stringify([source]), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+  }));
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write(unused, 'export const unused = 1;\n');
+    write('scripts/lib/cleanupBridge.js', "export { value } from './cleanupLeaf.js';\n");
+    write('client/src/test/fixture.js', "export { value } from '../../../scripts/lib/cleanupBridge.js';\n");
+    write(consumer, "const fixture = await import('./fixture.js');\n");
+    write(unrelated, 'export const unrelated = 1;\n');
+    git('add', '--all');
+
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+    expect(plan(unused)).toMatchObject({ full: false, build: false, client_mode: 'skip' });
+
+    write('client/src/test/fixture.js', "export { value } from './missing.js';\n");
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+
+    write(consumer, "const fixture = await import(globalThis.fixturePath);\n");
+    expect(plan(leaf)).toMatchObject({ full: false, build: false,
+      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('resolves local client imports of present untracked modules and still fails closed on missing ones', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-untracked-deps-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
