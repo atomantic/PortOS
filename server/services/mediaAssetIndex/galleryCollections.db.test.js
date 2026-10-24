@@ -1,10 +1,14 @@
-import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it as vitestIt, vi } from 'vitest';
 import pg from 'pg';
 import { mediaDdl } from '../../lib/db/schema/media.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { mediaFixture } from '../../../scripts/perf/collectionFixtureData.js';
 import { listGalleryCollectionSummaries, listGalleryFacets, listGalleryPage } from './gallery.js';
 import { compactGalleryRecord } from './logic.js';
+import { ownTestBodies } from '../../lib/mockPathsDataRoot.js';
+import { createDbPhaseDiagnostics } from '../../test/dbPhaseDiagnostics.js';
+
+const { it, drain } = ownTestBodies(vitestIt);
 
 const state = vi.hoisted(() => ({ file: false, images: [], videos: [], collections: [], annotations: {}, query: vi.fn() }));
 vi.mock('../../lib/runtimeEnv.js', () => ({ isTestRunner: () => state.file }));
@@ -18,6 +22,8 @@ vi.mock('../mediaCollections.js', () => ({ listCollections: async () => state.co
 vi.mock('../peerHostedMedia.js', () => ({ resolveMediaLocations: async items => items.map(() => ({ location: 'local' })) }));
 vi.mock('../mediaAnnotations.js', () => ({ listAnnotations: async () => state.annotations }));
 let client;
+let observer;
+let diagnostics;
 let available = false;
 beforeAll(async () => {
   vi.stubEnv('MEMORY_BACKEND', 'db');
@@ -29,6 +35,12 @@ beforeAll(async () => {
     port: Number(process.env.PGPORT || 5432), user: process.env.PGUSER || 'portos',
     password: process.env.PGPASSWORD || 'portos', options: '', connectionTimeoutMillis: 2000 });
   await client.connect();
+  if (process.env.PORTOS_DB_PHASE_DIAGNOSTICS === '1') {
+    observer = new pg.Client({ ...client.connectionParameters, options: '', application_name: 'portos-test-diagnostics',
+      connectionTimeoutMillis: 2000, statement_timeout: 500, query_timeout: 750 });
+    observer.on('error', () => {});
+    await observer.connect();
+  }
   // A session-private table shadows the index, including for EXPLAIN: no live rows.
   const ddl = mediaDdl.filter(sql => /(?:TABLE IF NOT EXISTS media_assets|INDEX IF NOT EXISTS idx_media_assets_)/.test(sql));
   for (const sql of ddl) await client.query(sql.replace('CREATE TABLE IF NOT EXISTS', 'CREATE TEMP TABLE'));
@@ -42,16 +54,25 @@ beforeAll(async () => {
   });
   available = true;
 });
-afterAll(async () => { await client?.end(); vi.unstubAllEnvs(); });
+beforeEach(() => drain());
+afterAll(async () => {
+  try { await drain(); }
+  finally {
+    await diagnostics?.drain();
+    await observer?.end();
+    await client?.end();
+    vi.unstubAllEnvs();
+  }
+});
 
-async function seed(images, indexedVideos = []) {
+async function seed(images, indexedVideos = [], phase = (_name, operation) => operation()) {
   state.images = images;
-  await client.query('TRUNCATE pg_temp.media_assets');
-  const rows = [...images.map(data => ({ kind: 'image', ref: data.filename, data })),
-    ...indexedVideos.map(data => ({ kind: 'video', ref: data.id, data }))];
-  await client.query(`INSERT INTO pg_temp.media_assets (media_key, kind, ref, data, created_at)
+  await phase('seed-truncate', () => client.query('TRUNCATE pg_temp.media_assets'));
+  const rows = await phase('seed-serialize', () => JSON.stringify([...images.map(data => ({ kind: 'image', ref: data.filename, data })),
+    ...indexedVideos.map(data => ({ kind: 'video', ref: data.id, data }))]));
+  await phase('seed-insert', () => client.query(`INSERT INTO pg_temp.media_assets (media_key, kind, ref, data, created_at)
     SELECT kind || ':' || ref, kind, ref, data, COALESCE((data->>'createdAt')::timestamptz, 'epoch')
-    FROM jsonb_to_recordset($1::jsonb) AS r(kind text, ref text, data jsonb)`, [JSON.stringify(rows)]);
+    FROM jsonb_to_recordset($1::jsonb) AS r(kind text, ref text, data jsonb)`, [rows]));
 }
 const member = (kind, ref, addedAt = '2026-01-01') => ({ kind, ref, addedAt });
 const disk = async () => state.images;
@@ -208,24 +229,28 @@ it('projects compact no-search pages before SQL with identical rows, previews an
 
 it('sends no full video detail to SQL and does not spill for the synthetic 2400-image/1200-video page', async context => {
   if (!available) return context.skip();
-  await seed(Array.from({ length: 2400 }, (_, i) => mediaFixture('image', i)));
-  state.videos = Array.from({ length: 1200 }, (_, i) => mediaFixture('video', i));
+  diagnostics = createDbPhaseDiagnostics({ onTestFailed: callback => context.onTestFailed(callback), observer, fixturePid: client.processID });
+  const { phase } = diagnostics;
+  const images = await phase('fixture-images', () => Array.from({ length: 2400 }, (_, i) => mediaFixture('image', i)));
+  await seed(images, [], phase);
+  state.videos = await phase('fixture-videos', () => Array.from({ length: 1200 }, (_, i) => mediaFixture('video', i)));
   state.collections = [];
-  await client.query('RESET work_mem');
+  await phase('reset-work-mem', () => client.query('RESET work_mem'));
   const measure = async compact => {
+    const label = compact ? 'compact' : 'full';
     state.query.mockClear();
-    const page = await listGalleryPage({ media: true, kind: 'all', summary: true, hidden: false, compact, limit: 60 });
+    const page = await phase(`${label}-public-query`, () => listGalleryPage({ media: true, kind: 'all', summary: true, hidden: false, compact, limit: 60 }));
     expect(state.query).toHaveBeenCalledTimes(1);
     const [sql, params] = state.query.mock.calls[0];
     // Measure the actual public-boundary result without executing the same query again.
     const result = await state.query.mock.results[0].value;
-    const explained = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, params);
+    const explained = await phase(`${label}-explain`, () => client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, params));
     const nodes = planNodes(explained.rows[0]['QUERY PLAN'][0].Plan);
-    return { page, params, videoBytes: Buffer.byteLength(params[0]), resultBytes: Buffer.byteLength(JSON.stringify(result.rows)),
+    return phase(`${label}-result-sizes`, () => ({ page, params, videoBytes: Buffer.byteLength(params[0]), resultBytes: Buffer.byteLength(JSON.stringify(result.rows)),
       responseBytes: Buffer.byteLength(JSON.stringify(page)),
       tempReadBlocks: Math.max(...nodes.map(node => node['Temp Read Blocks'] || 0)),
       tempWrittenBlocks: Math.max(...nodes.map(node => node['Temp Written Blocks'] || 0)),
-      executionMs: explained.rows[0]['QUERY PLAN'][0]['Execution Time'] };
+      executionMs: explained.rows[0]['QUERY PLAN'][0]['Execution Time'] }));
   };
   const before = await measure(false);
   const after = await measure(true);

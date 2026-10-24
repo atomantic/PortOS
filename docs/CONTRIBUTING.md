@@ -311,6 +311,19 @@ the database restore suite drains a timed-out case before the next one touches
 unloaded machine, so a concurrent run can time out cases a sequential run
 passes.
 
+For the intermittent synthetic gallery-page timeout investigation (#13369),
+`PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run pregate` adds wall/CPU timings for fixture
+construction, seeding, public calls, EXPLAINs and result serialization. To obtain
+the complete serial DB workload regardless of test-memo reuse, run
+`PORTOS_DB_PHASE_DIAGNOSTICS=1 npm run test:db` after the earlier validation
+stages finish. The observer reads only `portos_test` session state, waits,
+transaction ages and run-lock ownership: no query text, network addresses or
+record contents. It samples at most three times per phase, caps each snapshot
+at 16 sessions, and uses a separate connection with a 500 ms statement timeout.
+Opt-in diagnostics add observation work; original test deadlines stay intact.
+Failure messages retain bounded phase evidence even with quiet reporting.
+A passing run without a reproduced slow phase does not resolve the timeout.
+
 For server watch mode, run this alternative from the repository root:
 
 ```bash
